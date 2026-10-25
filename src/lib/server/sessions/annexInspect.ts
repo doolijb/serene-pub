@@ -11,7 +11,7 @@
  * holds a `secret` is withheld — R61 says such a field cannot be declared,
  * and this checks again rather than trusting that.
  */
-import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
+import { annexWithoutPoints } from "$lib/server/sessions/annexChanges"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declaredAnnexFields, type DeclaredAnnexField } from "$lib/server/sessions/annexFields"

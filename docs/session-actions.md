@@ -46,7 +46,7 @@ Anyone else is refused with *You don't have permission to change this message â€
 Some actions don't follow that rule:
 
 - **Stop** belongs to anyone in the session.
-- **Branch from here**, **Regenerate the last turn** (the Lair), **Narrator Response**, and **Back** and **Forward** (the conversation's history) belong to the session's owner.
+- **Branch from here**, **Narrator Response**, and **Back**, **Forward** and **Regenerate the last turn** (the conversation's history; the three presses sit in the session's header, and Regenerate the last turn is there only in the Lair and the Dungeon Crawler, not in the composer) belong to the session's owner.
 - **Select for summary** is open to anyone in the session, on any message.
 - **Continue** and **Pick who speaks**: a guest may take the turn at the head of the order, or a turn already lined up for their own character. Taking anyone else's turn out of order is refused with *Only the session owner can take somebody else's turn out of order.*
 
@@ -63,6 +63,11 @@ The reasons you'll meet most:
 - *your own line is edited, not regenerated*: these never act on what you wrote.
 - *a greeting is swiped, not regenerated*.
 - *nothing to swipe to*, *finish the edit first*, *unhide it first*, *not yours to change*, *nobody is seated to pick*.
+- *This session is archived. Its owner can unarchive it to play on.*: an [archived session](./sessions.md#archive-and-unarchive) greys every action with this reason, and so refuses a press.
+
+## Close out
+
+**Close out** is not a listed action. It is in the **â‹¯** menu of the session's details, for the session's owner (see [Close out](./sessions.md#close-out)). A genre registers it as `close-out`, which every scene summarizer contributes; that registration picks the summarizer and gives it a minimum age of 0, so it can summarize the newest lines.
 
 ## When an action fails
 

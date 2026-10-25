@@ -22,6 +22,7 @@ import {
 	presetChangesOfRows,
 	rowOfChange,
 	rowsOfPresetChanges,
+	scopeColumns,
 	valuesOfConfigRows,
 	type RegistrationInsert
 } from "$lib/server/pipelines/registrations/rows"
@@ -44,7 +45,7 @@ const isTrigger = (t: unknown): t is Trigger => {
 	return false
 }
 
-const CHANGE_FIELDS = ["values", "mode", "when", "allowStacking", "caps", "order", "label"] as const
+const CHANGE_FIELDS = ["values", "mode", "when", "allowStacking", "minAge", "caps", "order", "label"] as const
 
 /**
  * The wire's changes, checked and keyed: a registration's key is re-derived
@@ -178,7 +179,7 @@ export async function writeLegacyPresetChanges(
 	await replaceRows(
 		db,
 		scope,
-		rows.map((r) => ({ ...r, scopeRef: String(preset.id), presetId: preset.id })),
+		rows.map((r) => ({ ...r, ...scopeColumns(scope) })),
 		[...ADMIN_PRESET_ORIGINS]
 	)
 }

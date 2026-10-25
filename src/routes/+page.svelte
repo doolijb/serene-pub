@@ -602,6 +602,7 @@
 	 * says "Waiting on the model" rather than guessing a name.
 	 */
 	function turnHint(session: SessionListRow): string | null {
+		if ((session as { archivedAt?: unknown }).archivedAt) return null
 		const last = session.lastMessage
 		if (!last) return null
 		// A reply that failed is nobody's wait: the session shows its Retry.

@@ -9,8 +9,8 @@
  *  - `sessionMessage` — `{ sessionMessage: row }`, one row (the live row,
  *    every stream chunk, every edit): the members who may not read its lane
  *    are dropped from the recipients;
- *  - `sessions:get` — the whole session, `{ session: { sessionMessages },
- *    messages }`: each member is sent their own copy with the rows they may
+ *  - `sessions:get` and `sessions:refresh` — the whole session,
+ *    `{ session: { sessionMessages }, messages }`: each member is sent their own copy with the rows they may
  *    not read taken out, and their own channels view (`SessionV1.channels`).
  *
  * Every other event passes through untouched. The common case — a row on
@@ -65,12 +65,12 @@ export async function laneScopedRecipients(
 		const guests = { ...payload, turnOrder: { ...payload.turnOrder, order: payload.turnOrder.order.filter((e: unknown) => !hidden(e)) } }
 		return userIds.map((userId) => ({ userId, data: userId === facts.ownerUserId ? payload : guests }))
 	}
-	if (event !== "sessions:get" && typeof payload.channel === "string" && nonMain({ channel: payload.channel })) {
+	if (event !== "sessions:get" && event !== "sessions:refresh" && typeof payload.channel === "string" && nonMain({ channel: payload.channel })) {
 		const facts = await sessionLaneFacts(db, sessionId)
 		if (facts && isOwnerOnlyChannel(facts.shape, payload.channel))
 			return everyone.filter((r) => r.userId === facts.ownerUserId)
 	}
-	if (event === "sessions:get") {
+	if (event === "sessions:get" || event === "sessions:refresh") {
 		const rows: unknown[] = [
 			...(Array.isArray(payload.messages) ? payload.messages : []),
 			...(Array.isArray(payload.session?.sessionMessages) ? payload.session.sessionMessages : [])

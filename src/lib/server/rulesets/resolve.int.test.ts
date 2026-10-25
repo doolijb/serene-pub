@@ -1,6 +1,6 @@
 /**
  * The ruleset handler against a real database: Story resolved on a session
- * with notes (the phantom lorebook) and ties between its cast; a rigorous
+ * with notes (its own book) and ties between its cast; a rigorous
  * ruleset applied — a check rolled, a change written through the gate, a
  * refused set filed for review with its reason, an unknown slot refused.
  */
@@ -134,8 +134,8 @@ describe("Story, on a session with notes", () => {
 			{ kind: "inline", name: "Rope", description: "Fifty feet of it." },
 			{ kind: "inline", name: "Lantern", description: "Shuttered." }
 		])
-		const { phantomLorebookFor } = await import("$lib/server/lorebooks/phantom")
-		const notes = await phantomLorebookFor(db as any, w.session.id)
+		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+		const notes = await ownBookFor(db as any, w.session.id)
 		const [a, b] = await db
 			.insert(schema.lorebookBindings)
 			.values([
@@ -307,7 +307,7 @@ describe("🚧 every script phase, through the handler (M2, 2026-10-22)", () => 
 		const w = await world({ genreId: PHASED_GENRE, primaryRuleset: PHASED, rigour: "mechanics" })
 		await put(w.session.id, w.ann.id, GRIT, 2)
 		const { seededRandom } = await import("$lib/server/state/expressions")
-		const { resolveRulesetTurn, RULESET_DECKS_KEY } = await import("./resolve")
+		const { resolveRulesetTurn } = await import("./resolve")
 		const peek = { owners: [`session:${w.session.id}`, `character:${w.ann.id}`], mode: "apply", deltas: [{ owner: `character:${w.ann.id}`, op: "use", check: "peek", against: 9 }] }
 		const none = { scripts: { loadSource: async () => null } }
 		const first = await resolveRulesetTurn(db as any, peek, { random: seededRandom("deck-1"), runId: "d1", ...none })
@@ -315,7 +315,7 @@ describe("🚧 every script phase, through the handler (M2, 2026-10-22)", () => 
 		const card = (first.ok.outcomes as any[]).find((o) => o.kind === "check")
 		expect(card.block).toMatchObject({ method: "card-draw", against: 9 })
 		expect(card.block.cards).toHaveLength(1)
-		const meta = async () => ((await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id)))[0]!.metadata as any)?.[RULESET_DECKS_KEY]
+		const meta = async () => ((await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id)))[0]!.annex as any)?.core?.rulesetDecks
 		expect(await meta()).toEqual({ cards: { scene: null, shuffle: 0, drawn: 1 } })
 		const second = await resolveRulesetTurn(db as any, peek, { random: seededRandom("deck-2"), runId: "d2", ...none })
 		if ("halt" in second) throw new Error(second.halt)

@@ -11,24 +11,19 @@
  * half-copied session visible in the list.
  */
 
-import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm"
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	insertLegacyMany,
 	NATIVE_ORDINAL_BASE,
-	updateLegacyWhere
+	updateLegacyWhere,
+	liveMessageWhere
 } from "$lib/server/messages/store"
 import { ATTACHMENT_PART_TYPES } from "$lib/server/attachments/references"
 import { canonicalChannel } from "$lib/server/messages/channels"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 import { playerSeatIdOfSpeaker, playerSeatSpeaker } from "$lib/server/sessions/seatName"
-import {
-	annexWithoutPoints,
-	pointsOf,
-	REVISION_POINTS_OWNER,
-	revisedAnnex
-} from "$lib/server/sessions/annexRevisionPoints"
-import { withBranchOf } from "$lib/shared/sessions/branchOf"
+import { annexAt, annexWithoutPoints } from "$lib/server/sessions/annexChanges"
 
 export class BranchError extends Error {}
 
@@ -75,7 +70,7 @@ export async function branchSession(
 		// took out — its forward stack stays with the session it is in.
 		where: and(
 			eq(schema.sessionMessages.sessionId, sessionId),
-			isNull(schema.sessionMessages.rewindOrdinal)
+			liveMessageWhere()
 		),
 		orderBy: asc(schema.sessionMessages.id)
 	})
@@ -102,13 +97,12 @@ export async function branchSession(
 				scenario: original.scenario,
 				userId: original.userId,
 				isGroup: original.isGroup,
-				// 🚧 Which session and line it was branched from: the marker
-				// the header and the session panel show (`branchOf`).
-				metadata: withBranchOf(original.metadata, {
-					sessionId: original.id,
-					name: original.name ?? null,
-					messageId: fromMessageId
-				}),
+				metadata: original.metadata,
+				// 🚧 Which session and line it was branched from: the branch
+				// marker (`branchOfSession`), shown by the header and the session panel.
+				branchOfSessionId: original.id,
+				branchOfMessageId: fromMessageId,
+				branchOfName: original.name ?? null,
 				lorebookId: original.lorebookId,
 				// The same line of the book, its clock where the parent's
 				// stands (ruling 15, story-time P3): a branched session plays
@@ -137,12 +131,9 @@ export async function branchSession(
 				// other): a branch of a Lair keeps its castellan's
 				// scratchpad, a genre's annex-held world stays its world.
 				// ⚠ Neither was copied before 2026-10-14.
-				// 🚧 …as it stood at the fork (`annexRevisionPoints.ts`): what
-				// the turns after it wrote stays with the parent. The points
-				// themselves follow once the copies have ids (below).
-				annex: annexWithoutPoints(
-					revisedAnnex(structuredClone(original.annex ?? {}), fromMessageId)
-				),
+				// 🚧 …as it stood at the fork (`annexChanges.ts`): what the turns
+				// after it wrote stays with the parent.
+				annex: annexWithoutPoints(await annexAt(tx as unknown as Db, original.id, fromMessageId)),
 				annexAudiences: structuredClone(original.annexAudiences ?? {}),
 				// The state version comes along (U5f): the copied value and
 				// possession rows keep the versions they landed at, and a
@@ -381,22 +372,6 @@ export async function branchSession(
 		})
 		await copyAttachmentParts(tx, remap)
 
-		// 🚧 The annex's revision points up to the fork, onto the copies.
-		const keptPoints = pointsOf(
-			revisedAnnex(original.annex ?? {}, fromMessageId, remap)
-		)
-		if (Object.keys(keptPoints).length)
-			await tx.execute(sql`
-				update ${schema.sessions}
-				set ${sql.identifier("annex")} = jsonb_set(
-					coalesce(${schema.sessions.annex}, '{}'::jsonb),
-					ARRAY[${REVISION_POINTS_OWNER}]::text[],
-					${JSON.stringify(keptPoints)}::jsonb,
-					true
-				)
-				where ${schema.sessions.id} = ${created.id}
-			`)
-
 		// 🚧 A copied table row names its anchor's copy (§30): the source's
 		// id means nothing in the branch, and a delete there must take it.
 		// Its anchor is always copied — a row whose anchor is gone went
@@ -415,9 +390,9 @@ export async function branchSession(
 		}
 
 		// 🚧 The session's own notes branch with it (PLAN-rulesets §28): a
-		// copy as of the fork, anchors remapped (`copyPhantomToBranch`).
-		const { copyPhantomToBranch } = await import("$lib/server/lorebooks/phantom")
-		const notes = await copyPhantomToBranch(tx, {
+		// copy as of the fork, anchors remapped (`copyOwnBookToBranch`).
+		const { copyOwnBookToBranch } = await import("$lib/server/lorebooks/ownBook")
+		const notes = await copyOwnBookToBranch(tx, {
 			sessionId,
 			created,
 			forkMessageId: fromMessageId,
@@ -430,7 +405,7 @@ export async function branchSession(
 			forkMessageId: fromMessageId,
 			remap,
 			seatRemap,
-			entryRemap: notes?.entryRemap ?? new Map()
+			entryRemap: notes.entryRemap
 		})
 
 		// 🚧 The clock as of the fork message (live scenes §15 G15): its
@@ -578,7 +553,7 @@ async function copyStateRows(
 		remap: Map<number, number>
 		/** Old `session_personas.id` → the branch's copy of that seat. */
 		seatRemap: Map<number, number>
-		/** Old notes entry id → the branch's copy (`copyPhantomToBranch`). */
+		/** Old notes entry id → the branch's copy (`copyOwnBookToBranch`). */
 		entryRemap: ReadonlyMap<number, number>
 	}
 ): Promise<void> {

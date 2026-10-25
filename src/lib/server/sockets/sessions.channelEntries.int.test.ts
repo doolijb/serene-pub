@@ -165,16 +165,18 @@ async function session(
 			userId: owner.id,
 			isGroup: false,
 			genreId,
-			metadata: {
-				turnOrder: {
-					v: 1,
-					order,
-					candidates: [],
-					basedOnAt: Date.now(),
-					computedAt: Date.now(),
-					runId: null,
-					event: null,
-					strategy: "core:task/turn-narrator@1"
+			annex: {
+				core: {
+					turnOrder: {
+						v: 1,
+						order,
+						candidates: [],
+						basedOnAt: Date.now(),
+						computedAt: Date.now(),
+						runId: null,
+						event: null,
+						strategy: "core:task/turn-narrator@1"
+					}
 				}
 			}
 		} as any)
@@ -355,6 +357,7 @@ describe("R5 · the entry's name", () => {
 				db: testDb as any,
 				sessionId: steward.session.id,
 				runId: `status-${String(speaker)}`,
+				kind: "reply",
 				live: { status: async () => {} } as any,
 				speaker,
 				onStatus: (_k, text) => said.push((text as any).vars?.speaker ?? "?")

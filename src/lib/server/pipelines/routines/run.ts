@@ -35,6 +35,7 @@ import { eq } from "drizzle-orm"
 import {
 	cadenceClock,
 	inletPortsRead,
+	minAgeOf,
 	type EffectiveRegistration,
 	type Receipt,
 	type RoutineFiring
@@ -190,6 +191,15 @@ export async function routineLine(
  */
 export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 	const db = f.db as Db
+	// 🚧 pr-6 R-k: an archived session is read-only — the firing is skipped, and says so.
+	{
+		const { sessionArchivedRefusal } = await import("$lib/server/sessions/archive")
+		const archived = await sessionArchivedRefusal(db, f.sessionId)
+		if (archived) {
+			await routineLine(db, { firing: f, reason: archived, kind: "skipped" })
+			return
+		}
+	}
 	const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
 	const resolved = await effectiveRegistrations(db, f.sessionId)
 	const reg = resolved?.effective.find((r) => r.key === f.registrationKey && r.trigger.family === "routine")
@@ -269,19 +279,6 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 					.filter((n) => n.kind === "outlet")
 					.map((n) => ({ nodeKey: n.key, slot: "settings", path: "review", value: "on" }))
 			: []
-	/** A duty that writes a lorebook reads Off in a session with none (the duties contracts). */
-	{
-		const [s] = await db
-			.select({ lorebookId: schema.sessions.lorebookId })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, f.sessionId))
-			.limit(1)
-		if (s && s.lorebookId == null) {
-			const { noBookDutyOverrides } = await import("$lib/server/pipelines/runtime/duties")
-			overrides.push(...noBookDutyOverrides(doc.nodes as never))
-		}
-	}
-
 	const runId = uuidv4()
 	const handle = runRegistry.start({ runId, userId: owner, sessionId: f.sessionId, specId: reg.pipeline, kind: "routine" })
 	noteRoutineRun(runId, { sessionId: f.sessionId, registrationKey: reg.key, depth: f.depth })
@@ -297,7 +294,7 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 		...(f.io ? { io: f.io } : {}),
 		signal: handle.controller.signal,
 		cancelSignal: () => runRegistry.cancellation(handle),
-		registration: { family: "routine", key: reg.key },
+		registration: { family: "routine", key: reg.key, minAge: minAgeOf(reg) },
 		meta: {
 			routine: {
 				name,
@@ -350,6 +347,12 @@ export async function runRoutineNow(
 	const access = await checkSessionAccess(req.sessionId, req.userId)
 	if (!access.hasAccess) return { refused: "Session not found." }
 	if (!access.isOwner) return { refused: "Only the session's owner runs a routine by hand." }
+	// 🚧 pr-6 R-k: an archived session is read-only.
+	{
+		const { sessionArchivedRefusal } = await import("$lib/server/sessions/archive")
+		const archived = await sessionArchivedRefusal(db, req.sessionId)
+		if (archived) return { refused: archived }
+	}
 	const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
 	const resolved = await effectiveRegistrations(db, req.sessionId)
 	const reg = resolved?.effective.find((r) => r.key === req.registrationKey && r.trigger.family === "routine")

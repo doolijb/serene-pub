@@ -42,6 +42,19 @@ describe("answerSessionPlaces", () => {
 		expect(read).not.toHaveBeenCalled()
 	})
 
+	it("🚧 names the own book when the reply names none; a shared book stays; no own book stays null", async () => {
+		const noBook = { ...places, lorebookId: null }
+		const read = async () => ({ sessionId: 7, places: noBook })
+		await expect(answerSessionPlaces({}, 7, read, 9)).resolves.toEqual({
+			...noBook,
+			lorebookId: 9
+		})
+		await expect(
+			answerSessionPlaces({}, 7, async () => ({ sessionId: 7, places }), 9)
+		).resolves.toEqual(places)
+		await expect(answerSessionPlaces({}, 7, read)).resolves.toEqual(noBook)
+	})
+
 	it("keys a reply by the token its ask carried", () => {
 		expect(
 			sessionPlacesReplyKey({

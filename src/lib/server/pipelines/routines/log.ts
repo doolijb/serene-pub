@@ -149,11 +149,6 @@ export async function sessionRoutines(
 	if (!resolved) return []
 	const routines = resolved.effective.filter((r) => r.trigger.family === "routine")
 	if (!routines.length) return []
-	const [session] = await db
-		.select({ lorebookId: schema.sessions.lorebookId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
 	const names = new Map(
 		(
 			await db
@@ -184,11 +179,7 @@ export async function sessionRoutines(
 			waiting: queue.waiting.filter((w) => w.registrationKey === r.key).length,
 			running: queue.running?.registrationKey === r.key,
 			...(mode !== "off" && paused ? { paused } : {}),
-			...(unserved.has(r.pipeline)
-				? { needs: unserved.get(r.pipeline)!.sentence }
-				: clock === "story" && session?.lorebookId == null
-					? { needs: "Needs a story clock" }
-					: {}),
+			...(unserved.has(r.pipeline) ? { needs: unserved.get(r.pipeline)!.sentence } : {}),
 			runNow: viewer.isOwner && mode !== "off" && !unserved.has(r.pipeline)
 		}
 	})

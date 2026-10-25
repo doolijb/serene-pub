@@ -14,7 +14,8 @@
  * client, and the `answer-form` commit reads the same block the event named.
  */
 
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, sql } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import {
 	findFormBlock,
@@ -100,7 +101,7 @@ export async function openFormOf(
 				eq(schema.sessionMessages.channel, channel),
 				// 🚧 The live history (RF fix 5): a rewound row's question is
 				// open nowhere.
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))

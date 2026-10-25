@@ -97,7 +97,6 @@ const BARE_EVENTS = [
 	"sessions:layoutPreset:setNewSessionLayout",
 	"sessions:surfaceIntent",
 	"sessions:fireAction",
-	"sessions:genres",
 	"sessions:summarize:error",
 	"sessionMessage:error",
 	"media:changed",
@@ -130,12 +129,15 @@ const SESSION_SCOPED_EVENTS = [
 	"state:changed",
 	"sessionMessage",
 	"sessions:get",
+	// 🚧 pr-6: the member push, split from the reply.
+	"sessions:refresh",
 	"sessions:userTyping",
 	// Who of the session's people has it open (W10). Holding this key IS this
 	// tab having the session open, to the server's attendance push.
 	"sessions:attendance",
 	"sessions:recordedEvent",
 	"sessions:actions",
+	"sessions:genreOf",
 	"sessions:annex",
 	// 🚧 The session's backdrop moved — folded into the page's session.
 	"sessions:backdropChanged",

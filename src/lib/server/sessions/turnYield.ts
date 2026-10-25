@@ -1,11 +1,13 @@
 /**
  * The **turn yield** (lair pass R2, owner 2026-09-28): every message row one
- * turn's run created — on every channel, hidden rows included — and never a
- * person's own line.
+ * run created — on every channel, hidden rows included — and never a
+ * person's own line. 🚧 A run's yield is a run's rows, not a turn: the turn
+ * is the story-lane replay's (`turnUnitOf`, `sessions/rewind.ts`, pr-6 R-c),
+ * one definition for Back and Regenerate; this module gives it the run facts
+ * (`creatingRunOf`, `turnRunOf`, `turnYieldOf`).
  *
- * It is what Regenerate the last turn (`core#retake`) deletes, and what the
- * row regenerate reads to tell a one-row reply (which keeps its swipes) from
- * a turn that wrote several (which is retaken whole). Keyed on facts the host
+ * The yield is what the row regenerate reads to tell a one-row reply (which
+ * keeps its swipes) from a turn that wrote several (which is retaken whole). Keyed on facts the host
  * already records — `pipeline_run_artifacts` (`kind = 'message'`, `action =
  * 'created'`), recorded at every host commit — never on a genre, a speaker or
  * a row's position: the same reading answers for any genre whose turn writes
@@ -37,10 +39,11 @@
  * (layout `span`).
  */
 
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm"
-import { actionsOf, envoySlugOfRef, i18nText, resolveTurnControls, type I18n } from "@serene-pub/sdk"
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm"
+import { envoySlugOfRef, i18nText, resolveTurnControls, type I18n } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import * as schema from "$lib/server/db/schema"
+import { liveMessageWhere } from "$lib/server/messages/store"
 
 /** One row of a turn's yield, as the confirm dialog names it. */
 export interface TurnYieldRow {
@@ -79,11 +82,6 @@ export interface TurnYield {
 	 */
 	entry: { ref: string | null; via: string }
 }
-
-/** Why there is no turn to retake, as a sentence a person can act on. */
-export type LastTurnVerdict =
-	| { ok: true; yield: TurnYield }
-	| { ok: false; reason: "empty" | "own-line" | "action" | "not-a-turn"; refusal: string }
 
 /**
  * The run that CREATED a message — not the latest run to touch it (a
@@ -129,7 +127,7 @@ export async function turnRunOf(
 	const meta = row?.metadata as { planRowId?: unknown; answersForm?: { messageId?: unknown } } | null
 	const planRowId = meta?.planRowId
 	// 🚧 An answer's row is the turn that asked (D3) — never a person's line:
-	// `lastTurnOf` stops at those before it asks.
+	// the story-lane replay stops at those before it asks.
 	const asked = Number(meta?.answersForm?.messageId)
 	if (Number.isInteger(asked) && asked > 0 && asked !== messageId) return turnRunOf(db, asked)
 	return creatingRunOf(db, typeof planRowId === "number" ? planRowId : messageId)
@@ -195,7 +193,7 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 				inArray(schema.sessionMessages.id, ids),
 				ne(schema.sessionMessages.role, "user"),
 				// 🚧 Never a row Back took out of the history (RF fix 5).
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(asc(schema.sessionMessages.id))
@@ -228,7 +226,7 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
  * the session's narrator name, else `UNCLAIMED_LINE_NAME` (`ownVoiceName`,
  * the one rule every reader shares). Read once per yield.
  */
-async function rowNaming(
+export async function rowNaming(
 	db: Db,
 	sessionId: number
 ): Promise<{ envoyName: (ref: unknown) => string | undefined; ownVoice: string }> {
@@ -284,7 +282,7 @@ export async function recordedViaOf(
  * for and how it was reached. The inlet's own published values, so nothing
  * here re-decides whose turn it was.
  */
-function entryOf(receipt: unknown): TurnYield["entry"] {
+export function entryOf(receipt: unknown): TurnYield["entry"] {
 	const out = inletOutputOf(receipt)
 	const ref =
 		typeof out.speaker === "string" && out.speaker
@@ -295,122 +293,6 @@ function entryOf(receipt: unknown): TurnYield["entry"] {
 	return {
 		ref,
 		via: typeof out.via === "string" && out.via ? out.via : "pick"
-	}
-}
-
-/**
- * The newest turn on a channel, resolved to its yield — or why there is none
- * to retake (R2):
- *
- * 1. the newest row on the channel is the person's own → nothing to retake;
- * 2. else the newest row that is not the person's, and the run whose turn
- *    it is (`turnRunOf`: a planned turn's row is its planning run's);
- * 3. that run must be a **reply run** — a fired turn. A run whose spec
- *    contributes an action (Trigger trap, Reveal, a room answer) is refused
- *    by the action's name; a run that is neither (a greeting's create run, a
- *    row no run recorded) is no turn;
- * 4. the yield: every row that run created, on every channel, and every
- *    row the turns it planned wrote.
- */
-export async function lastTurnOf(
-	db: Db,
-	sessionId: number,
-	channel = "main"
-): Promise<LastTurnVerdict> {
-	const [newest] = await db
-		.select({ id: schema.sessionMessages.id, role: schema.sessionMessages.role })
-		.from(schema.sessionMessages)
-		.where(
-			and(
-				eq(schema.sessionMessages.sessionId, sessionId),
-				eq(schema.sessionMessages.channel, channel),
-				// 🚧 The live history (RF fix 5): the newest turn is the
-				// newest one Back left.
-				isNull(schema.sessionMessages.rewindOrdinal)
-			)
-		)
-		.orderBy(desc(schema.sessionMessages.id))
-		.limit(1)
-	if (!newest)
-		return {
-			ok: false,
-			reason: "empty",
-			refusal: "Nothing has been written yet, so there is no turn to regenerate."
-		}
-	if (newest.role === "user")
-		return {
-			ok: false,
-			reason: "own-line",
-			refusal: "Your line is the newest. Press Continue."
-		}
-	return turnOfRow(db, newest.id)
-}
-
-/**
- * The turn one row belongs to, resolved to its yield — steps 2–4 of
- * `lastTurnOf`, for a row that is not a person's: the run whose turn it is
- * must be a reply run (an action's row, a greeting's, a row no run recorded
- * is no turn). 🚧 Also what `latestStoryTurnOf` reads (owner rulings
- * 2026-10-15, deletions and retry).
- */
-export async function turnOfRow(db: Db, messageId: number): Promise<LastTurnVerdict> {
-	const run = await turnRunOf(db, messageId)
-	const notATurn = {
-		ok: false as const,
-		reason: "not-a-turn" as const,
-		refusal: "The newest message did not come from a turn, so there is no turn to regenerate."
-	}
-	if (!run) return notATurn
-	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
-	const doc = await loadPublished(db, run.specSlug).catch(() => null)
-	if (!doc) return notATurn
-	const [action] = actionsOf(doc as { id: string; contributes?: unknown })
-	if (action) {
-		const name = i18nText(action.label as I18n | undefined) || action.key
-		return {
-			ok: false,
-			reason: "action",
-			refusal: `The newest message came from ${name}. Regenerate it from its own menu.`
-		}
-	}
-	const role = ((doc as { taxonomy?: { role?: unknown } }).taxonomy ?? {}).role
-	if (role === "create") return notATurn
-	const rows = await turnYieldOf(db, run.id)
-	const runs = new Map([[run.id, run.runId]])
-	for (const row of rows) {
-		const by = await creatingRunOf(db, row.messageId)
-		if (by && !runs.has(by.id)) runs.set(by.id, by.runId)
-	}
-	// 🚧 And every run that wrote a row of the yield again — a swipe, which
-	// claims the turn's row and re-applies the turn's rules there
-	// (PLAN-rulesets §29): its work is the turn's, and goes with it.
-	if (rows.length) {
-		const rewrote = await db
-			.selectDistinct({ id: schema.pipelineRuns.id, runId: schema.pipelineRuns.runId })
-			.from(schema.pipelineRunArtifacts)
-			.innerJoin(schema.pipelineRuns, eq(schema.pipelineRuns.id, schema.pipelineRunArtifacts.runId))
-			.where(
-				and(
-					eq(schema.pipelineRunArtifacts.kind, "message"),
-					eq(schema.pipelineRuns.isPreview, false),
-					inArray(
-						schema.pipelineRunArtifacts.entityId,
-						rows.map((r) => r.messageId)
-					)
-				)
-			)
-		for (const r of rewrote) if (!runs.has(r.id)) runs.set(r.id, r.runId)
-	}
-	return {
-		ok: true,
-		yield: {
-			runId: run.id,
-			runUuid: run.runId,
-			specSlug: run.specSlug,
-			rows,
-			runs: [...runs].map(([runId, runUuid]) => ({ runId, runUuid })),
-			entry: entryOf(run.receipt)
-		}
 	}
 }
 
@@ -446,7 +328,7 @@ export async function latestStoryTurnOf(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
 				ne(schema.sessionMessages.role, "user"),
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -454,11 +336,26 @@ export async function latestStoryTurnOf(
 	const spoken = replies.filter((r) => !r.isHidden && !r.isNarratorResponse)
 	const head = spoken[0]
 	if (!head) return null
-	const verdict = await turnOfRow(db, head.id)
+	const { turnUnitAt } = await import("$lib/server/sessions/rewind")
+	const verdict = await turnUnitAt(db, sessionId, head.id, { includePersonLines: false })
 	if (!verdict.ok) return null
-	const own = new Set(verdict.yield.rows.map((r) => r.messageId))
-	const previous = spoken.find((r) => r.id < head.id && !own.has(r.id))
-	return { turn: verdict.yield, headId: head.id, previousId: previous?.id ?? null }
+	const { unit } = verdict
+	const { run, entry } = unit
+	if (!run || !entry) return null
+	const own = new Set(unit.ids)
+	const previous = spoken.find((r) => r.id < unit.firstId && !own.has(r.id))
+	return {
+		turn: {
+			runId: run.runId,
+			runUuid: run.runUuid,
+			specSlug: run.specSlug,
+			rows: unit.rows,
+			runs: unit.runs,
+			entry
+		},
+		headId: head.id,
+		previousId: previous?.id ?? null
+	}
 }
 
 /**

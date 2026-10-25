@@ -287,6 +287,28 @@ describe("scopeOfPayload", () => {
 		)
 	})
 
+	test("🚧 reads sessions:refresh's scope off the session, as sessions:get's (pr-6)", () => {
+		expect(isGatedEvent("sessions:refresh")).toBe(true)
+		expect(scopeOfPayload("sessions:refresh", { session: { id: 42 } })).toBe("42")
+		expect(scopeOfPayload("sessions:refresh", { session: null, sessionId: 7 })).toBe("7")
+	})
+
+	test("🚧 gates B's pr-6 events; scopes sessions:genreOf by its sessionId, the rest stay bare", () => {
+		for (const event of [
+			"sessions:genreOf",
+			"sessions:shareAsLorebook",
+			"sessions:cloneWithChanges",
+			"sessions:archive",
+			"sessions:unarchive",
+			"sessions:closeOut",
+			"lorebooks:sessionNotes"
+		])
+			expect(isGatedEvent(event), event).toBe(true)
+		expect(scopeOfPayload("sessions:genreOf", { sessionId: 9, genre: null })).toBe("9")
+		expect(isScopedEvent("sessions:archive")).toBe(false)
+		expect(isScopedEvent("lorebooks:sessionNotes")).toBe(false)
+	})
+
 	test("falls through to sessionId on a not-found sessions:get reply", () => {
 		// The one reply with no session in it. The server puts the requested id
 		// beside the null so this still has a scope: without it the payload

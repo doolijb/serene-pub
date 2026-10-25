@@ -38,6 +38,7 @@
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { sessionReadingOf } from "$lib/server/state/reading"
+import { ownBookOf } from "$lib/server/lorebooks/ownBook"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
 import {
@@ -197,7 +198,9 @@ export async function sessionLoreWrite(
 		throw new SessionWriteRefusal(
 			"Only the session's owner can save lore from it."
 		)
-	if (session.lorebookId !== lorebookId)
+	// 🚧 pr-6 (§B-3a): no shared book — the session reads its own book.
+	const readBook = session.lorebookId ?? (await ownBookOf(db, sessionId))?.id ?? null
+	if (readBook !== lorebookId)
 		throw new SessionWriteRefusal("That session does not read this lorebook.")
 	const noLore = await loreWriteRefusal(db, sessionId)
 	if (noLore) throw new SessionWriteRefusal(noLore)

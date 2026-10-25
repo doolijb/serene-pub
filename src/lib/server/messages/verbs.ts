@@ -28,6 +28,7 @@ import {
 	type TurnControl
 } from "@serene-pub/sdk"
 import { parseChannel } from "$lib/server/messages/channels"
+import { sessionArchivedRefusal } from "$lib/server/sessions/archive"
 
 /** Availability of every forbiddable verb. The floors are not here. */
 export type MessageVerbPolicy = Record<MessageVerb, boolean>
@@ -394,6 +395,9 @@ export async function turnControlRefusal(
 	 */
 	channel?: string
 ): Promise<string | null> {
+	// 🚧 pr-6 R-k: an archived session is read-only.
+	const archived = await sessionArchivedRefusal(db, sessionId)
+	if (archived) return archived
 	let genreId: string
 	let presence: ReturnType<typeof resolveTurnControls>
 	let modeName: string

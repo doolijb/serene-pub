@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest"
+import { SESSION_ARCHIVE_LABELS } from "$lib/shared/sessions/archive"
 import {
 	groupSessions,
 	isAwaitingUser,
@@ -113,5 +114,40 @@ describe("a revision branch's last line", () => {
 		expect(isAwaitingUser({ lastMessage: { isUser: true, revisedTurn: true } })).toBe(true)
 		expect(isAwaitingUser({ lastMessage: { isUser: true } })).toBe(false)
 		expect(isAwaitingUser({ lastMessage: { isUser: true, revisedTurn: true } }, true)).toBe(false)
+	})
+})
+
+describe("the Archived group (pr-6 R-k)", () => {
+	const archivedRow = (id: number, agoMs = HOUR) => ({
+		...row(id, { agoMs }),
+		archivedAt: new Date(NOW - agoMs).toISOString()
+	})
+
+	test("an archived row whose last line was someone else's is archived, not your turn", () => {
+		const groups = groupSessions([archivedRow(1)], { now: NOW })
+		expect(groups.map((g) => g.key)).toEqual(["archived"])
+	})
+
+	test("isAwaitingUser is false for an archived row", () => {
+		expect(isAwaitingUser(archivedRow(1))).toBe(false)
+	})
+
+	test("the order with all four groups", () => {
+		const groups = groupSessions(
+			[
+				archivedRow(4),
+				row(3, { isUser: true, agoMs: RECENT_WINDOW_MS + HOUR }),
+				row(2, { isUser: true }),
+				row(1)
+			],
+			{ now: NOW }
+		)
+		expect(groups.map((g) => g.key)).toEqual(["yourTurn", "recent", "older", "archived"])
+	})
+
+	test("an archived-only list gives one group labelled Archived", () => {
+		const groups = groupSessions([archivedRow(1), archivedRow(2)], { now: NOW })
+		expect(groups).toHaveLength(1)
+		expect(groups[0].label).toBe(SESSION_ARCHIVE_LABELS.group)
 	})
 })

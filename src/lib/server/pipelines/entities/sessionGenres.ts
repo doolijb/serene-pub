@@ -22,6 +22,7 @@ import {
 	effectsOf,
 	isEventId,
 	normalizeEnabledWhen,
+	minAgeOf,
 	sessionEvents,
 	slashNameOf,
 	type ActionEffects,
@@ -360,7 +361,7 @@ export function shapeViolations(
 	bound("persona", session.personas, shape.personas)
 	// ⏳ No "requires a lorebook" (RF fix 2, 2026-10-23): `lorebook: 'required'`
 	// is retired and reads as optional — every session has a world, its own
-	// (the phantom lorebook) when none is attached.
+	// (its own book) when none is attached.
 	if (!shape.lorebook && session.hasLorebook)
 		out.push("this genre has no lorebook attachment — the session has one")
 	return out
@@ -445,16 +446,7 @@ export async function genreFieldsFor(
 			db,
 			session.genreId ?? STANDARD_GENRE_ID
 		)
-		const { genreLayerValues, presetLayerValues } = await import("$lib/server/sessions/exposure")
-		return cascadeFields({
-			declared: ((genre?.shape as any)?.fields ?? {}) as Record<
-				string,
-				{ default?: unknown }
-			>,
-			pinned: await genreLayerValues(session.genreId ?? STANDARD_GENRE_ID, genre?.settings),
-			preset: await presetLayerValues(db, session.presetId),
-			stored: (session.genreFields ?? {}) as Record<string, unknown>
-		})
+		return await cascadeSessionFields(db, session, genre)
 	} catch {
 		return {}
 	}
@@ -495,32 +487,6 @@ export async function playerLabelFor(
 }
 
 /**
- * The cascade (§4.13) over declared ∪ pinned keys, in that order — declared
- * first so the form's order is the document's, pinned-only keys after.
- */
-/**
- * 🚧 The values a session's preset pins (`session_presets.settings`, the
- * `PresetDecl.settings` projection) — the preset layer of the cascade.
- * `null`/unknown preset ⇒ nothing pinned.
- */
-export async function presetPinnedSettings(
-	db: Db,
-	presetId: number | null | undefined
-): Promise<Record<string, unknown> | null> {
-	if (presetId == null) return null
-	try {
-		const [row] = await db
-			.select({ settings: schema.sessionPresets.settings })
-			.from(schema.sessionPresets)
-			.where(eq(schema.sessionPresets.id, presetId))
-			.limit(1)
-		return row?.settings ? presetPinValues(row.settings) : null
-	} catch {
-		return null
-	}
-}
-
-/**
  * 🚧 A preset's pins as plain values (PLAN-layering D4, A10): each layer may
  * set a value, lock it or leave it open — `{ value, lock?, askAtStart? }`
  * (`SettingValue`) — and every reader of a pin's *value* reads it through
@@ -535,6 +501,10 @@ export function presetPinValues(settings: unknown): Record<string, unknown> {
 	return out
 }
 
+/**
+ * The cascade (§4.13) over declared ∪ pinned keys, in that order — declared
+ * first so the form's order is the document's, pinned-only keys after.
+ */
 export function cascadeFields(layers: {
 	declared: Record<string, { default?: unknown }>
 	/**
@@ -581,6 +551,29 @@ export function cascadeFields(layers: {
 		if (v !== undefined) out[key] = v
 	}
 	return out
+}
+
+/** 🚧 The one cascade (§4.13) of a session's genre fields — declared ⊕ the genre layer ⊕ the preset layer ⊕ stored (D7). */
+export async function cascadeSessionFields(
+	db: Db,
+	session: { genreId: string | null; presetId: number | null; genreFields: unknown },
+	genre: Awaited<ReturnType<typeof getSessionGenre>>
+): Promise<Record<string, unknown>> {
+	const { genreLayerValues, presetLayerValues } = await import(
+		"$lib/server/sessions/exposure"
+	)
+	return cascadeFields({
+		declared: ((genre?.shape as any)?.fields ?? {}) as Record<
+			string,
+			{ default?: unknown }
+		>,
+		pinned: await genreLayerValues(
+			session.genreId ?? STANDARD_GENRE_ID,
+			genre?.settings
+		),
+		preset: await presetLayerValues(db, session.presetId ?? null),
+		stored: (session.genreFields ?? {}) as Record<string, unknown>
+	})
 }
 
 /** `ns:kind/name@N` → the bare type and its integer version. */
@@ -1007,6 +1000,8 @@ export interface SubjectResolution {
 	spec: string | null
 	/** 🚧 The registration that answers (PLAN-layering D7) — its key, for the run's record. */
 	registrationKey?: string
+	/** 🚧 That registration's summary depth (`minAgeOf`, pr-6 pass 9 S3) — the run's `HostScope.minAge`. */
+	registrationMinAge?: number
 	/**
 	 * Set when the session's preset bound this event to something this
 	 * instance cannot resolve, so the layers below decided instead. Carried
@@ -1072,14 +1067,14 @@ export async function resolveSubjectVerdict(
 			// A named spec (W1): eligible, or nothing.
 			if (scope.spec != null) {
 				const named = regs.find((r) => r!.pipeline === scope.spec)
-				return named ? { spec: scope.spec, registrationKey: named.key, ...said } : { spec: null, ...said }
+				return named ? { spec: scope.spec, registrationKey: named.key, registrationMinAge: minAgeOf(named), ...said } : { spec: null, ...said }
 			}
 			// An event's registrations run when their `when` holds (R31); an
 			// action's `when` is its enabled-when, judged at its door.
 			const runs = event ? (await whenHolds(db, scope.sessionId, regs as never)).run : regs
 			return {
 				spec: runs[0]?.pipeline ?? null,
-				...(runs[0] ? { registrationKey: runs[0].key } : {}),
+				...(runs[0] ? { registrationKey: runs[0].key, registrationMinAge: minAgeOf(runs[0]) } : {}),
 				...said
 			}
 		}
@@ -1884,65 +1879,4 @@ export async function setPresetActions(
 			"A pipeline configuration no longer carries actions — configurations are retired. " +
 			"Change which actions a session preset offers in the preset itself."
 	}
-}
-
-// ── The preset a session runs on (19 §7, ruled 2026-08-24) ────────────────────
-
-export interface PresetOption {
-	configId: number
-	name: string
-	/** The pipeline's own default — pre-selected when nothing was chosen. */
-	isDefault: boolean
-	/** Whether a non-admin may choose it. Admins see disabled ones too. */
-	enabled: boolean
-	/** Core's shipped preset, or a plugin's: selectable, never edited. */
-	readOnly: boolean
-}
-
-/**
- * The presets a session may run on, and the one it is on.
- *
- * A *preset* is a pipeline configuration a person is allowed to see and use —
- * the two are one idea. What is on offer is
- * therefore the configurations of the pipeline serving this session's mode, minus
- * the ones an administrator has switched off.
- *
- * Disabled presets are still listed **for an admin**, marked, because an admin
- * disabling one and then not finding it in the list would look like it had
- * been deleted. A non-admin never sees them: that is what the switch is for.
- */
-export async function listSessionPresets(
-	db: Db,
-	sessionId: number,
-	genreId: string,
-	viewer: { userId?: number | null; isAdmin?: boolean }
-): Promise<{
-	specSlug: string | null
-	selectedId: number | null
-	options: PresetOption[]
-}> {
-	// ⏳ The session's "Configuration" menu is retired with configurations
-	// (R38, PLAN-layering D7): nothing to pick — a session's values come
-	// from its preset's registrations. The pipeline is still named.
-	const pipeline = await sessionPipeline(db, sessionId, genreId, viewer.userId)
-	return { specSlug: pipeline?.specSlug ?? null, selectedId: null, options: [] }
-}
-
-/** The refusal an old client's Configuration pick gets (R38). */
-export const CONFIGURATION_RETIRED =
-	"Pipeline configurations are retired: a session runs on its preset's settings now. " +
-	"Pick another preset, or ask an administrator to change this one."
-
-/**
- * ⏳ Retired (R38, PLAN-layering D7): a session picks no pipeline
- * configuration. Kept so an old client's pick gets a sentence, not silence.
- */
-export async function chooseSessionPreset(
-	_db: Db,
-	_sessionId: number,
-	_genreId: string,
-	_configId: number,
-	_viewer: { userId?: number | null; isAdmin?: boolean }
-): Promise<{ ok: boolean; error?: string }> {
-	return { ok: false, error: CONFIGURATION_RETIRED }
 }

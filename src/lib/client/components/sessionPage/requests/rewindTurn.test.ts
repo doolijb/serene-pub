@@ -1,7 +1,7 @@
 /** 🚧 `rewind-turn` · `forward-turn` (RF fix 5): Back and Forward, as the page presses them — core's widgets only. */
 import { describe, expect, test } from "vitest"
 import { WIDGET_REQUEST_ASKERS } from "@serene-pub/sdk"
-import { answerForwardTurn, answerRewindTurn } from "./rewindTurn"
+import { answerForwardTurn, answerRewindTurn, rewindPresses } from "./rewindTurn"
 import { guardWidgetRequests } from "./askers"
 import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
 
@@ -33,4 +33,21 @@ describe("answerRewindTurn · answerForwardTurn", () => {
 		await ask("forward-turn", {}, { widgetId: "messages", owner: "core" })
 		expect(pressed).toEqual(["back", "forward"])
 	})
+})
+
+test("rewindPresses: one emit path for Back and Forward; no session id, nothing sent", () => {
+	const sent: Array<[string, unknown]> = []
+	const socket = { emit: (event: string, params: unknown) => void sent.push([event, params]) } as never
+	let id: number | null = 7
+	const presses = rewindPresses(socket, () => id)
+	presses.rewindTurn()
+	presses.forwardTurn()
+	expect(sent).toEqual([
+		["sessions:rewindTurn", { sessionId: 7 }],
+		["sessions:forwardTurn", { sessionId: 7 }]
+	])
+	id = null
+	presses.rewindTurn()
+	presses.forwardTurn()
+	expect(sent).toHaveLength(2)
 })

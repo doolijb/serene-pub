@@ -9,7 +9,7 @@
 	import { v4 as uuid } from "uuid"
 	import { rememberFiredAction } from "$lib/client/components/pipelines/actionRetry"
 	import { avatarSrc } from "$lib/client/utils/media"
-	import { setHostParticipants } from "$lib/client/components/hostElements/context.svelte"
+	import { hostElementContext, setHostParticipants } from "$lib/client/components/hostElements/context.svelte"
 	import ChangeSpriteDialog from "$lib/client/components/sprites/ChangeSpriteDialog.svelte"
 	import { asShownSprite } from "$lib/shared/sprites"
 	import { openSessionState, sessionState } from "$lib/client/state/sessionState.svelte"
@@ -42,8 +42,11 @@
 	import { createSessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
 	import { headerCastKeyOf } from "$lib/client/components/sessionPage/sessionPageProjections"
 	import { presetHeaderNotice } from "$lib/client/components/sessionPage/presetNotice"
+	import { catchUpHeaderNotice } from "$lib/client/components/sessionPage/catchUpNotice"
+	import type { CatchUpOffer } from "$lib/shared/sessions/archive"
 	import { rewindStripState } from "@serene-pub/core-catalog/conversation"
-	import { rewindStateWith } from "$lib/shared/sessions/rewind"
+	import { regeneratePress } from "$lib/shared/sessions/rewind"
+	import { rewindPresses } from "$lib/client/components/sessionPage/requests/rewindTurn"
 	import { createEnvelopeSections } from "$lib/client/components/sessionPage/envelopeSections.svelte"
 	import { createActionList } from "$lib/client/components/sessionPage/actionList.svelte"
 	import {
@@ -70,7 +73,7 @@
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
 	import ConfirmDialog from "$lib/client/components/loadouts/sheet/ConfirmDialog.svelte"
 	import { removeSceneBody } from "$lib/client/components/sessionPage/liveSceneProjection"
-	import { getContext, onDestroy, onMount, setContext, untrack } from "svelte"
+	import { getContext, onDestroy, setContext, untrack } from "svelte"
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BranchSessionModal from "$lib/client/components/modals/BranchSessionModal.svelte"
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
@@ -84,11 +87,11 @@
 	import { terminateAllWorkers } from "$lib/client/components/host/uiWorkers"
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { sessionBookOf } from "$lib/client/sessions/store/derive"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 	import SessionLayout from "$lib/client/sessionLayout/SessionLayout.svelte"
 	import { NARRATE_ACTION } from "$lib/shared/actions/identity"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
-	import { branchOf, branchOfLabel } from "$lib/shared/sessions/branchOf"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -179,31 +182,18 @@
 	 */
 	const loadedSessionId = $derived(session?.id ?? null)
 	const sessionName = $derived(session?.name ?? null)
-	// Streamed reads, narrowed to primitives (the reader stops at a primitive
-	// derived): the effect below builds the branch label from these three.
-	const sessionBranchOfId: number | null = $derived(
-		((session?.metadata as Record<string, any> | null | undefined)?.branchOf?.sessionId as number | undefined) ?? null
-	)
-	const sessionBranchOfName: string | null = $derived(
-		((session?.metadata as Record<string, any> | null | undefined)?.branchOf?.name as string | undefined) ?? null
-	)
-	const sessionBranchOfMessageId: number | null = $derived(
-		((session?.metadata as Record<string, any> | null | undefined)?.branchOf?.messageId as number | undefined) ?? null
-	)
 	const sessionUserId = $derived(session?.userId ?? null)
-	const sessionLorebookId = $derived(session?.lorebookId ?? null)
-	const sessionLorebookBranchId = $derived(session?.lorebookBranchId ?? null)
-	/**
-	 * 🚧 The book lock (PLAN-lorebook-kinds §A): the server's word at load,
-	 * or a line that is not a greeting since — so the Lorebooks view stops
-	 * offering to swap the book the moment play writes.
-	 */
-	const sessionLorebookFixed: boolean = $derived(
-		!!session?.lorebookFixed ||
-			(session?.sessionMessages ?? []).some(
-				(m) => (m.metadata as { isGreeting?: boolean } | null)?.isGreeting !== true
-			)
+	// pr-6 (pass 9 S4): a primitive off the streamed session — the catch-up offer as a key.
+	const sessionCatchUpKey: string = $derived(
+		(session as { catchUp?: unknown } | undefined)?.catchUp
+			? JSON.stringify((session as { catchUp: unknown }).catchUp)
+			: ""
 	)
+	let catchUpDismissedFor = $state<number | null>(null)
+	const sessionLorebookId = $derived(session?.lorebookId ?? null)
+	// 🚧 pr-6 (B §B-3): the session's own book — its Session notes.
+	const sessionOwnBookId: number | null = $derived((session as { ownBookId?: number | null } | undefined)?.ownBookId ?? null)
+	const sessionLorebookBranchId = $derived(session?.lorebookBranchId ?? null)
 	const loadedGenreId: string | null = $derived(
 		typeof (session as any)?.genreId === "string" ? (session as any).genreId : null
 	)
@@ -229,66 +219,71 @@
 	// cast were re-sent to the lorebooks rail and the header with it.
 	// Pinned by `sessionPage/streamedSessionReads.test.ts`.
 	$effect(() => {
-		openSessionCtx.storyClock = sessionStoryClock
-	})
-	$effect(() => {
 		openSessionCtx.cast = headerCast
 	})
 	// The stale-preset notice is the header's one line now (§3.16).
-	const headerNotice = $derived(presetHeaderNotice(data, !!userCtx.user?.isAdmin))
+	const headerNotice = $derived(
+		catchUpHeaderNotice(
+			sessionCatchUpKey ? (JSON.parse(sessionCatchUpKey) as CatchUpOffer) : null,
+			{
+				dismissed: catchUpDismissedFor === loadedSessionId,
+				dismiss: () => (catchUpDismissedFor = loadedSessionId),
+				press: (id) => socket.emit("sessions:closeOut", { sessionId: id })
+			}
+		) ?? presetHeaderNotice(data, !!userCtx.user?.isAdmin)
+	)
 	$effect(() => {
 		openSessionCtx.headerNotice = headerNotice
 	})
 	/**
 	 * 🚧 Back · Forward (RF fix 5) in the header's right cluster (polish
-	 * parity L1, 2026-10-24): the owner's two presses, read by the widget's
-	 * own rule (`rewindStripState`) off the same state the conversation's
-	 * note reads. Kept as a STRING, so the header moves only when a press's
-	 * state does, never per streamed chunk.
+	 * parity L1, 2026-10-24): the owner's three presses, Back, Forward and the
+	 * turn's Regenerate (pr-6 D2), read by the widget's own rule
+	 * (`rewindStripState`) off the ONE rewind state (`data.rewind`) the
+	 * conversation's note reads, and busy as the host's door is
+	 * (`data.generating`). Kept as a STRING, so the header moves only
+	 * when a press's state does, never per streamed chunk.
 	 */
+	const rewindPress = rewindPresses(socket, () => sessionId)
 	const headerRewindKey: string = $derived.by(() => {
 		const strip = rewindStripState({
-			rewind: rewindStateWith(session, session?.sessionMessages ?? []),
+			rewind: data.rewind,
 			isOwner: sessionUserId !== null && sessionUserId === userCtx.user?.id,
-			generating: data.hasGeneratingMessage,
+			generating: data.generating,
 			story: true
 		})
+		const retakeAction = actions.extraActionOn("retake")
+		const retakeChip = retakeAction ? actions.extraChip(retakeAction) : null
+		const regenerate = regeneratePress({
+			offered: !!retakeAction,
+			generating: data.generating,
+			listedReason: retakeChip?.disabled ? (retakeChip.reason ?? null) : null,
+			rewind: data.rewind
+		})
 		return strip.shown
-			? JSON.stringify({ back: strip.back, forward: strip.forward, ahead: strip.ahead, aheadText: strip.aheadText })
+			? JSON.stringify({ back: strip.back, forward: strip.forward, ahead: strip.ahead, aheadText: strip.aheadText, regenerate })
 			: ""
 	})
 	const headerRewind: SessionHeaderRewind | null = $derived(
 		headerRewindKey
-			? {
-					...(JSON.parse(headerRewindKey) as Omit<SessionHeaderRewind, "goBack" | "goForward">),
-					goBack: () => socket.emit("sessions:rewindTurn", { sessionId }),
-					goForward: () => socket.emit("sessions:forwardTurn", { sessionId })
-				}
+			? (() => {
+					const parsed = JSON.parse(headerRewindKey) as Omit<SessionHeaderRewind, "goBack" | "goForward" | "regenerate"> & {
+						regenerate: { disabled: boolean; reason?: string } | null
+					}
+					return {
+						...parsed,
+						goBack: rewindPress.rewindTurn,
+						goForward: rewindPress.forwardTurn,
+						regenerate: parsed.regenerate ? { ...parsed.regenerate, press: () => turns.retake.press() } : null
+					}
+				})()
 			: null
 	)
 	$effect(() => {
 		openSessionCtx.rewind = headerRewind
 	})
-	$effect(() => {
-		openSessionCtx.sessionId = loadedSessionId
-		openSessionCtx.sessionName = sessionName
-		openSessionCtx.genreName = data.genreName
-		openSessionCtx.branchOfLabel =
-			sessionBranchOfId === null || sessionBranchOfMessageId === null
-				? null
-				: branchOfLabel({ sessionId: sessionBranchOfId, name: sessionBranchOfName, messageId: sessionBranchOfMessageId })
-		openSessionCtx.lorebookId = sessionLorebookId
-		openSessionCtx.lorebookBranchId = sessionLorebookBranchId
-		openSessionCtx.lorebookFixed = sessionLorebookFixed
-		openSessionCtx.isOwner =
-			sessionUserId !== null && sessionUserId === userCtx.user?.id
-		// The shell's spine shows it while a view is focused over the story.
-		openSessionCtx.isGenerating = data.hasGeneratingMessage
-	})
-
 	/**
-	 * The session's book for its OWNER only — whose cast
-	 * (`lorebooks:bindingList`) the page reads. The book is the host's: the
+	 * The session's book for its OWNER only — the lorebook it reads, else its own book (`sessionBookOf`) — whose cast (`lorebooks:bindingList`) the page reads. The book is the host's: the
 	 * server refuses anyone else's ask ("Lorebook not found."), which a guest
 	 * was shown on every visit for something they never did. Read through the
 	 * primitives, never `session`: a streamed chunk replaces the object, and
@@ -296,7 +291,7 @@
 	 */
 	const ownLorebookId = $derived(
 		sessionUserId !== null && sessionUserId === userCtx.user?.id
-			? sessionLorebookId
+			? sessionBookOf({ lorebookId: sessionLorebookId, ownBookId: sessionOwnBookId })
 			: null
 	)
 
@@ -543,6 +538,7 @@
 		deleteScene: asks.deleteScene,
 		mergeScene: asks.mergeScene,
 		sceneList: () => scenes.sceneList,
+		ownBookId: () => sessionOwnBookId,
 		ungraphedScenes: () => scenes.ungraphedSceneCount,
 		openExtendGraph: () => scenes.openExtendGraph(),
 		noteStoryClock: (own) => data.setStoryClock(own),
@@ -561,12 +557,8 @@
 		composerTray: () => composer.composerTray,
 		fireTurn: (channel) => turns.handleContinueWithNextCharacter(channel),
 		// 🚧 Back · Forward (RF fix 5): a refusal is the central toast's.
-		rewindTurn: () => {
-			if (sessionId != null) socket.emit("sessions:rewindTurn", { sessionId })
-		},
-		forwardTurn: () => {
-			if (sessionId != null) socket.emit("sessions:forwardTurn", { sessionId })
-		},
+		rewindTurn: rewindPress.rewindTurn,
+		forwardTurn: rewindPress.forwardTurn,
 		stateStore: () => stateStore,
 		scenePins: () => scenePins,
 		writeSpriteSet: asks.writeSpriteSet,
@@ -639,19 +631,13 @@
 			socket.emit("sessions:presetStatus", { sessionId })
 			socket.emit("sessions:view", { sessionId })
 			socket.emit("sessions:panelLayout:get", { sessionId })
+			socket.emit("sessions:genreOf", { sessionId })
+			// Asked once per session open, a switch included: the scenes, and the
+			// action list (R-15) — the buttons are rows — whose shape gates what
+			// the view renders at all (19 §2).
+			scenes.refreshScenes()
+			socket.emit("sessions:actions", { sessionId })
 		}
-	})
-
-	onMount(() => {
-		// Every reply's key is held by the inbox (declared above; effects run
-		// in declaration order) — plan ruling 3, so no ack is needed.
-		scenes.refreshScenes()
-		// The action list (R-15) — the buttons are rows — and the shape,
-		// which gates what the view renders at all (19 §2).
-		socket.emit("sessions:actions", { sessionId })
-		socket.emit("sessions:view", { sessionId })
-		socket.emit("sessions:panelLayout:get", { sessionId })
-		socket.emit("sessions:genres", {})
 	})
 
 	/**
@@ -675,22 +661,24 @@
 
 	// `sp-avatar` asks the page who a participant reference is (C0b): the
 	// session's characters and the personas people speak as, one lookup.
-	setHostParticipants((ref) => {
+	// Set in an effect, not at init: a session page that replaces this one
+	// (another session opened) is made before this one is destroyed, and a
+	// clear at destroy wiped the new page's lookup — every avatar fell back
+	// to "?" (H's walk, 2026-10-25). Effects run after the old page's teardown.
+	const participantOf = (ref: string) => {
 		const who = data.characterForRef(ref)
 		return who ? { name: resolveCharacterName(who, who.name ?? ""), avatarUrl: avatarSrc(who) ?? null } : null
+	}
+	$effect(() => {
+		setHostParticipants(participantOf)
+		return () => {
+			if (hostElementContext.participant === participantOf) setHostParticipants(undefined)
+		}
 	})
-	onDestroy(() => setHostParticipants(undefined))
 
 	onDestroy(() => {
 		sceneImages.set({ left: null, right: null })
-		openSessionCtx.sessionId = null
-		openSessionCtx.sessionName = null
 		openSessionCtx.cast = []
-		openSessionCtx.genreName = null
-		openSessionCtx.branchOfLabel = null
-		openSessionCtx.lorebookId = null
-		openSessionCtx.isOwner = false
-		openSessionCtx.isGenerating = false
 		openSessionCtx.headerNotice = null
 		openSessionCtx.rewind = null
 	})
@@ -832,7 +820,8 @@
 		}}
 		resumeActivity={scenes.resumeSummarizeActivity}
 		{sessionId}
-		lorebookId={session?.lorebookId ?? null}
+		lorebookId={sessionBookOf({ lorebookId: sessionLorebookId, ownBookId: sessionOwnBookId })}
+		ownBookId={sessionOwnBookId}
 		branchId={sessionLorebookBranchId}
 		storyClock={sessionStoryClock}
 		selectedMessageIds={[...scenes.selectedMessageIds]}

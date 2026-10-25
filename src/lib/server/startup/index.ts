@@ -227,6 +227,22 @@ export const startupTasks: StartupTask[] = [
 		}
 	},
 	{
+		/**
+		 * ⏳ pr-6 (B §B-3, pass 11): every session owns a book — the ones made
+		 * before pr-6 get theirs here, once; idempotent. Delete at the RC1
+		 * squash.
+		 */
+		name: "own-books",
+		run: async () => {
+			const { ensureOwnBooks } = await import("$lib/server/lorebooks/ownBook")
+			const r = await ensureOwnBooks(db)
+			if (r.made || r.overlaysSet)
+				console.log(
+					`[own-books] ${r.made} session(s) given an own book, ${r.overlaysSet} overlay(s) set`
+				)
+		}
+	},
+	{
 		// Plugins load after every core startup task, so a plugin sees a fully
 		// bootstrapped core. Inert unless SP_PLUGINS_ENABLED is set.
 		name: "plugins",

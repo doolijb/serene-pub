@@ -45,6 +45,7 @@
 import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm"
 import { getAttributeSlot, i18nText, parseStoryTime, slotField } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { attachedOrOwnBookOf, ownBookOf } from "$lib/server/lorebooks/ownBook"
 import { HISTORY_TYPE_ID, LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	datedOnReading,
@@ -354,9 +355,12 @@ async function sessionStoryClockRow(db: Db, sessionId: number) {
  */
 export async function sessionStoryNowOf(db: Db, sessionId: number): Promise<StoryNow | null> {
 	const row = await sessionStoryClockRow(db, sessionId)
-	if (!row?.lorebookId) return null
+	if (!row) return null
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+	const book = row.lorebookId ?? (await ownBookOf(db, sessionId))?.id ?? null
+	if (book == null) return null
 	const reading = await sessionReadingOf(db, sessionId)
-	return storyNowOf(db, row.lorebookId, reading?.branchId ?? null, {
+	return storyNowOf(db, book, reading?.branchId ?? null, {
 		sessionStoryClock: clockOf(row),
 		line: reading?.line ?? null
 	})
@@ -382,9 +386,9 @@ export async function advanceSessionStoryClock(
 ): Promise<{ clock: StoryClock; label: string; from: StoryClock }> {
 	const found = await sessionStoryClockRow(db, sessionId)
 	if (!found) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
-	if (!found.lorebookId)
-		throw new StoryClockRefusal("This session has no lorebook, so it has no story clock to advance.")
-	const lorebookId = found.lorebookId
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+	const lorebookId = found.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
+	if (lorebookId == null) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
 	// Read, stepped through the calendar and written under the book's lock
 	// (`lockBookCalendar`, A18(d)), as every dated write is — and the
 	// session's row locked with it. Read apart from the write, two advances
@@ -397,7 +401,7 @@ export async function advanceSessionStoryClock(
 		)
 		const row = await sessionStoryClockRow(tx, sessionId)
 		if (!row) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
-		if (row.lorebookId !== lorebookId)
+		if ((row.lorebookId ?? (await ownBookOf(tx, sessionId))?.id ?? null) !== lorebookId)
 			throw new StoryClockRefusal(
 				"This session's lorebook changed while its clock was being advanced. Try again."
 			)
@@ -430,7 +434,7 @@ export async function advanceSessionStoryClock(
  * moved the clock since keeps their move.
  *
  * Null — and nothing written — when there is nothing of the session's to
- * move back: no lorebook, or no clock of its own (it follows its line's
+ * move back: no clock of its own (it follows its line's
  * present, so the move is already gone from what it reads). Throws
  * `StoryClockRefusal` with a sentence when the calendar cannot place the
  * result.
@@ -442,8 +446,9 @@ export async function stepBackSessionStoryClock(
 	unit: StoryTimeUnit
 ): Promise<{ clock: StoryClock; from: StoryClock } | null> {
 	const found = await sessionStoryClockRow(db, sessionId)
-	if (!found?.lorebookId || !clockOf(found)) return null
-	const lorebookId = found.lorebookId
+	if (!found || !clockOf(found)) return null
+	const lorebookId = found.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
+	if (lorebookId == null) return null
 	return await db.transaction(async (tx) => {
 		await lockBookCalendar(tx, lorebookId)
 		await tx.execute(
@@ -451,7 +456,8 @@ export async function stepBackSessionStoryClock(
 		)
 		const row = await sessionStoryClockRow(tx, sessionId)
 		const start = clockOf(row)
-		if (!row || row.lorebookId !== lorebookId || !start) return null
+		if (!row || !start) return null
+		if ((row.lorebookId ?? (await ownBookOf(tx, sessionId))?.id ?? null) !== lorebookId) return null
 		const moved = advanceStoryTime(start, -by, unit, await bookCalendarOf(tx, lorebookId))
 		if (moved.problem !== undefined)
 			throw new StoryClockRefusal(

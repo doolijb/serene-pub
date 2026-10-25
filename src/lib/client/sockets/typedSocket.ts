@@ -1154,6 +1154,16 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Get.Params
 		response: Sockets.Sessions.Get.Response
 	}
+	// 🚧 pr-6: the member push, split from the paginated `sessions:get` reply.
+	"sessions:refresh": {
+		params: Sockets.Sessions.Refresh.Params
+		response: Sockets.Sessions.Refresh.Response
+	}
+	// 🚧 pr-6 (B §B-2): the session's ONE genre row (scoped on sessionId).
+	"sessions:genreOf": {
+		params: Sockets.Sessions.GenreOf.Params
+		response: Sockets.Sessions.GenreOf.Response
+	}
 	"sessions:genres": {
 		params: Sockets.Sessions.Genres.Params
 		response: Sockets.Sessions.Genres.Response
@@ -1526,14 +1536,6 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.FireAction.Params
 		response: Sockets.Sessions.FireAction.Response
 	}
-	"sessions:presets": {
-		params: Sockets.Sessions.PresetOptions.Params
-		response: Sockets.Sessions.PresetOptions.Response
-	}
-	"sessions:choosePreset": {
-		params: Sockets.Sessions.ChoosePreset.Params
-		response: Sockets.Sessions.ChoosePreset.Response
-	}
 	"sessions:functions": {
 		params: Sockets.Sessions.Functions.Params
 		response: Sockets.Sessions.Functions.Response
@@ -1751,13 +1753,47 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.ErrorResponse
 	}
-	"sessions:createLorebookFromPhantom": {
-		params: Sockets.Sessions.CreateLorebookFromPhantom.Params
-		response: Sockets.Sessions.CreateLorebookFromPhantom.Response
+	// 🚧 pr-6 (B §B-4): Share as a lorebook (was createLorebookFromPhantom) and Clone with changes and attach.
+	"sessions:shareAsLorebook": {
+		params: Sockets.Sessions.ShareAsLorebook.Params
+		response: Sockets.Sessions.ShareAsLorebook.Response
 	}
-	"sessions:createLorebookFromPhantom:error": {
+	"sessions:shareAsLorebook:error": {
 		params: never
-		response: Sockets.ErrorResponse
+		response: Sockets.Sessions.ShareAsLorebook.Response
+	}
+	"sessions:cloneWithChanges": {
+		params: Sockets.Sessions.CloneWithChanges.Params
+		response: Sockets.Sessions.CloneWithChanges.Response
+	}
+	"sessions:cloneWithChanges:error": {
+		params: never
+		response: Sockets.Sessions.CloneWithChanges.Response
+	}
+	// 🚧 pr-6 (B §B-5, §B-6): Archive · Unarchive · Close out (also the catch-up offer's press).
+	"sessions:archive": {
+		params: Sockets.Sessions.Archive.Params
+		response: Sockets.Sessions.Archive.Response
+	}
+	"sessions:archive:error": {
+		params: never
+		response: Sockets.Sessions.Archive.Response
+	}
+	"sessions:unarchive": {
+		params: Sockets.Sessions.Unarchive.Params
+		response: Sockets.Sessions.Unarchive.Response
+	}
+	"sessions:unarchive:error": {
+		params: never
+		response: Sockets.Sessions.Unarchive.Response
+	}
+	"sessions:closeOut": {
+		params: Sockets.Sessions.CloseOut.Params
+		response: Sockets.Sessions.CloseOut.Response
+	}
+	"sessions:closeOut:error": {
+		params: never
+		response: Sockets.Sessions.CloseOut.Response
 	}
 	"sessions:revisionNotice": {
 		params: Sockets.Sessions.RevisionNotice.Params
@@ -3467,6 +3503,11 @@ export type SocketEventMap = {
 	}
 
 	// Lorebook events
+	// 🚧 pr-6 (B §B-3, R-f): the viewer's own books, for the Lorebooks view's "Session notes" — never a picker's.
+	"lorebooks:sessionNotes": {
+		params: Sockets.Lorebooks.SessionNotes.Params
+		response: Sockets.Lorebooks.SessionNotes.Response
+	}
 	"lorebooks:list": {
 		params: Sockets.Lorebooks.List.Params
 		response: Sockets.Lorebooks.List.Response

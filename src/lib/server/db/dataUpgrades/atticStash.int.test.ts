@@ -63,9 +63,10 @@ describe("0.5.3 database", () => {
 
 		// Every anchored upgrade on the chain runs once; 0107 (Story,
 		// 2026-10-19), 0108 (registrations), 0109 (model kinds,
-		// 2026-10-20/21), 0110 (instance values, 2026-10-21) and 0112 (the
-		// Lair rewrite, 2026-10-21) find nothing to move on a database just
-		// stashed.
+		// 2026-10-20/21), 0110 (instance values, 2026-10-21), 0112 (the
+		// Lair rewrite, 2026-10-21) and 0127 (the mirror's rewind column,
+		// pr-6) and 0128 (core's runtime keys, pr-6s2) find nothing to move
+		// on a database just stashed.
 		expect(res.upgradesRun).toEqual([
 			"0095_schema_0_6_0",
 			"0107_story_genre",
@@ -77,7 +78,9 @@ describe("0.5.3 database", () => {
 			"0119_rulesets_functions",
 			"0120_rulesets_reply_changes",
 			"0123_story_reply_tail",
-			"0126_genre_slots_retire"
+			"0126_genre_slots_retire",
+			"0127_pr6_settle_line",
+			"0128_pr6s2_core_annex"
 		])
 		expect(await atticExists(client)).toBe(true)
 		expect(await count(client, `${ATTIC_SCHEMA}.chats`)).toBe(1)

@@ -5,7 +5,7 @@ Summarization turns stretches of a session into lorebook entries: what happened 
 It runs only when you ask. Nothing is summarized in the background, and nothing costs tokens until you start it.
 
 :::note Before you start
-The session needs a [lorebook](./lorebooks.md) to save into, and neither your [Lorebook writes from sessions](./lorebooks.md#what-a-session-may-write) setting nor the book's own may be **Off**.
+What you save goes into the session's [lorebook](./lorebooks.md), or into its own [Session notes](./lorebooks.md#your-sessions-own-notes) when it reads no shared lorebook. Neither your [Lorebook writes from sessions](./lorebooks.md#what-a-session-may-write) setting nor the book's own may be **Off**.
 :::
 
 ## From a session to the graph
@@ -31,7 +31,7 @@ The details depend on the kind:
 - **Character lore** needs a **Focus topic**, such as *her debts* or *relationship with Kira*, and can be **bound to a character** (your personas included) so the lore is private to them. Binding adds that character to the book's cast when you save.
 - **Scene** needs a **History entry** to file the scene under. Pick one, or press **New** to make a blank one dated where the session's story stands. The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again, including every line of a scene started in the conversation (the open one's too). After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
 
-If the session doesn't read a lorebook yet, the window offers to pick one or make a new one first.
+The window says where it saves: **Saving to:** the lorebook the session reads, or *Session notes*.
 
 Images and files on the selected messages are read as their names: each file is written after its message's text, such as `[image: cat.png — a grey cat]` (with the description you gave it) or `[file: notes.txt]`. In a scene that reads side talk as asides (the Lair's Sanctum), an aside's files are named after its text the same way. A message that is only a picture is summarized as that picture rather than skipped. The names count toward how much chat each drafting part holds. No summary step sends the files themselves to the model, and a text file's contents are not read into it.
 
@@ -50,6 +50,22 @@ A scene started and ended in the conversation can also be summarized from the se
 A finished run waits for you. Until you decide, the scene's divider and its Chronicle row say **Ready to review**; click it to open the review in the **Scene summary** window. The summary is written only when you press **Apply**. **Discard** (or dismissing its card in the Activity view) leaves the scene as it was before the run: summarized, not summarized or out of date. Stopping a run does the same. **Summarize all (N)** skips a scene that's waiting for review, so it never replaces a result you haven't looked at.
 
 When a scene's boundaries move afterwards (its start nudged or dragged, its end moved, the scene reopened, or another scene joined to it with **Remove boundary**), its summary no longer matches its lines. The summary is kept, and its divider says **Summary out of date** until you **Summarize** it again (**Summarize all (N)** counts only scenes with no summary at all). A scene that joins the one before it takes its own summary with it.
+
+## Which summarizer runs
+
+World and character summaries run the pipeline that the session's genre (or preset) registers on the summarize action. A genre that registers its own replacement runs its own. The summary is written into the lorebook the session reads or, when it reads none, into the session's **Session notes** (see [Your session's own notes](./lorebooks.md#your-sessions-own-notes)).
+
+A routine that summarizes (see [Routines](./pipelines.md#routines)) reads only lines at least 20 messages old, so the newest lines are left to the story. Summaries you ask for yourself, from an action or an event, have no such minimum, and neither does a closed scene or [Close out](#close-out-and-the-catch-up-offer). See [Summaries and the lorebook](./pipelines.md#summaries-and-the-lorebook) for how a registration sets it.
+
+## What an applied summary fixes
+
+Saving a reviewed summary, or applying a scene's summary, puts that part of the story in the lorebook. From then on [Back](./sessions.md#back-and-forward) stops at the newest line the summary was written from, and says *This part of the story is in the lorebook now.* The conversation marks the spot with *In the lorebook up to here*, and for a scene's summary the scene's row in Chronicle says *Written from the story up to 3 Oct, 14:20*: when the newest line it was written from was written. What you save is kept; to change it, edit the lorebook entry.
+
+## Close out and the catch-up offer
+
+**Close out** turns what was played since the last scene into a closing scene and summarizes it with the session's scene summarizer, with no minimum age. The summary is held for your review before it reaches the lorebook; it is never applied by itself. It is in the session's details, in the **⋯** menu, for the session's owner, where the genre offers it, and [archiving a session](./sessions.md#archive-and-unarchive) runs it once.
+
+When you start a session on the same lorebook line as an older session of yours whose last lines never reached the lorebook, the new session's header offers **Catch up on ‹session›**, which closes the older session out the same way. See [Close out](./sessions.md#close-out) and [Catching up on an older session](./sessions.md#catching-up-on-an-older-session).
 
 ## Compiling scenes into a history entry
 

@@ -56,6 +56,7 @@ import {
 	declOfRow,
 	presetChangesOfRows,
 	registers,
+	registrationScopeWhere,
 	sessionRowsOf,
 	type RegistrationRow
 } from "$lib/server/pipelines/registrations/rows"
@@ -334,11 +335,9 @@ async function layerRows(
 	presetId: number | null,
 	sessionId: number | null
 ): Promise<SessionRegistrations["rows"]> {
-	const clauses = [and(eq(schema.registrations.scopeKind, "genre"), eq(schema.registrations.scopeRef, genreId))]
-	if (presetId != null)
-		clauses.push(and(eq(schema.registrations.scopeKind, "preset"), eq(schema.registrations.scopeRef, String(presetId))))
-	if (sessionId != null)
-		clauses.push(and(eq(schema.registrations.scopeKind, "session"), eq(schema.registrations.scopeRef, String(sessionId))))
+	const clauses = [registrationScopeWhere({ kind: "genre", genreId })]
+	if (presetId != null) clauses.push(registrationScopeWhere({ kind: "preset", presetId }))
+	if (sessionId != null) clauses.push(registrationScopeWhere({ kind: "session", sessionId }))
 	const rows = (await db
 		.select()
 		.from(schema.registrations)

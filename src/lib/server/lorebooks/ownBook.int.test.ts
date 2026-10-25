@@ -1,11 +1,14 @@
 /**
- * 🚧 A session's own notes (PLAN-rulesets §26) — the phantom lorebook.
+ * 🚧 A session's own book (PLAN-rulesets §26; pr-6 B §B-3).
  *
- * Claims: made lazily and invisible to every listing; deleted with its
- * session; branched with it; read in the union, marked `sessionOnly`; the
- * routing rule (no book → notes; Full → the book; Review/Off → the notes,
- * anchored); "Create lorebook from session" makes it real and attached; and
- * every lorebook that existed before rulesets reads Story.
+ * Claims: `ownBookFor` is the safety net for a session a path skipped, and the
+ * own book is invisible to `lorebooks:list`; deleted with its session;
+ * branched with it; read in the union, marked `sessionOnly`; the routing rule
+ * (no book → own book; Full → the book; Review/Off → the own book, anchored);
+ * "Share as a lorebook" makes it real, attached, and gives the session a fresh
+ * one; `insertOwnBook` and `ensureOwnBooks` make it Gregorian with its clock
+ * unset; Session notes list it; and every lorebook that existed before
+ * rulesets reads Story.
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -18,6 +21,7 @@ import { defineAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
 import { genreKeeping } from "$lib/server/utils/testGenre"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { SHARE_REFUSALS } from "$lib/shared/lorebooks/sessionNotes"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -31,7 +35,7 @@ vi.mock("$lib/server/db", async () => {
 })
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-vitest-phantom-"))
+	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-vitest-ownBook-"))
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
@@ -42,7 +46,7 @@ afterAll(async () => {
 })
 
 const WEATHER = "core:slot/weather@1"
-const GENRE = "test:genre/phantom"
+const GENRE = "test:genre/own-book"
 const STORY = "core:ruleset/freeform@1"
 
 function declareSlots() {
@@ -55,7 +59,7 @@ function declareSlots() {
 			config: { of: ["clear", "storm"] }
 		})
 	]
-	genreKeeping(GENRE, { name: { en: "Phantom" }, family: "test", slots: declared, events: {} })
+	genreKeeping(GENRE, { name: { en: "Own book" }, family: "test", slots: declared, events: {} })
 }
 
 let n = 0
@@ -63,7 +67,7 @@ let n = 0
 async function world(opts: { lorebook?: boolean; mode?: "full" | "review" | "off" } = {}) {
 	const suffix = `${++n}`
 	const { createTestUser } = await import("$lib/server/utils/testDb")
-	const user = await createTestUser(testDb, `phantom-${suffix}`)
+	const user = await createTestUser(testDb, `ownBook-${suffix}`)
 	if (opts.mode)
 		await testDb.insert(schema.userSettings).values({ userId: user.id, loreWriteMode: opts.mode })
 	const [session] = await testDb
@@ -116,27 +120,27 @@ async function place(lorebookId: number, title: string, sourceMessageId: number 
 describe("the session's own notes", () => {
 	test("made lazily, once; invisible in lorebooks:list", async () => {
 		const w = await world()
-		const { phantomOf, phantomLorebookFor } = await import("./phantom")
-		expect(await phantomOf(testDb as any, w.session.id)).toBeNull()
-		const made = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookOf, ownBookFor } = await import("./ownBook")
+		expect(await ownBookOf(testDb as any, w.session.id)).toBeNull()
+		const made = await ownBookFor(testDb as any, w.session.id)
 		expect(made.sessionId).toBe(w.session.id)
 		expect(made.name).toBe(w.session.name)
 		expect(made.primaryRuleset).toBe(STORY)
 		expect(made.overlayOf).toBeNull()
 		// Twice is the same row.
-		expect((await phantomLorebookFor(testDb as any, w.session.id)).id).toBe(made.id)
+		expect((await ownBookFor(testDb as any, w.session.id)).id).toBe(made.id)
 		// A19: the session changes ruleset; the notes follow it on the next resync.
 		await testDb
 			.update(schema.sessions)
 			.set({ primaryRuleset: "core:ruleset/vis-itineris@1", rulesetVersion: "2" })
 			.where(eq(schema.sessions.id, w.session.id))
-		const moved = await phantomLorebookFor(testDb as any, w.session.id)
+		const moved = await ownBookFor(testDb as any, w.session.id)
 		expect(moved).toMatchObject({ id: made.id, primaryRuleset: "core:ruleset/vis-itineris@1", rulesetVersion: "2" })
 		await testDb
 			.update(schema.sessions)
 			.set({ primaryRuleset: STORY, rulesetVersion: null })
 			.where(eq(schema.sessions.id, w.session.id))
-		expect((await phantomLorebookFor(testDb as any, w.session.id)).primaryRuleset).toBe(STORY)
+		expect((await ownBookFor(testDb as any, w.session.id)).primaryRuleset).toBe(STORY)
 
 		const [real] = await testDb
 			.insert(schema.lorebooks)
@@ -152,11 +156,11 @@ describe("the session's own notes", () => {
 	test("readable by the session's members and nobody else; never read into another session", async () => {
 		const w = await world()
 		const { createTestUser } = await import("$lib/server/utils/testDb")
-		const guest = await createTestUser(testDb, `phantom-guest-${n}`)
-		const stranger = await createTestUser(testDb, `phantom-stranger-${n}`)
+		const guest = await createTestUser(testDb, `ownBook-guest-${n}`)
+		const stranger = await createTestUser(testDb, `ownBook-stranger-${n}`)
 		await testDb.insert(schema.sessionGuests).values({ sessionId: w.session.id, userId: guest.id })
-		const { phantomLorebookFor } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		const { lorebookAccessFor, findOwnedBook } = await import("$lib/server/utils/ownedBook")
 		expect(await lorebookAccessFor(notes.id, w.user.id, { db: testDb as any })).toBe("owner")
 		expect(await lorebookAccessFor(notes.id, guest.id, { db: testDb as any })).toBe("owner")
@@ -167,17 +171,17 @@ describe("the session's own notes", () => {
 
 	test("deleted with its session", async () => {
 		const w = await world()
-		const { phantomLorebookFor, purgePhantomOf } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor, purgeOwnBookOf } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		await place(notes.id, "The cellar")
-		await purgePhantomOf(testDb as any, w.session.id)
+		await purgeOwnBookOf(testDb as any, w.session.id)
 		await testDb.delete(schema.sessions).where(eq(schema.sessions.id, w.session.id))
 		expect(
 			await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, notes.id))
 		).toHaveLength(0)
 		// The FK alone cascades too.
 		const v = await world()
-		const other = await phantomLorebookFor(testDb as any, v.session.id)
+		const other = await ownBookFor(testDb as any, v.session.id)
 		await testDb.delete(schema.sessions).where(eq(schema.sessions.id, v.session.id))
 		expect(
 			await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, other.id))
@@ -189,8 +193,8 @@ describe("the session's own notes", () => {
 		const first = await w.message()
 		const fork = await w.message()
 		const after = await w.message()
-		const { phantomLorebookFor, phantomOf } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor, ownBookOf } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		await place(notes.id, "Before anything")
 		await place(notes.id, "The hall", first.id)
 		await place(notes.id, "The stair", fork.id)
@@ -198,7 +202,7 @@ describe("the session's own notes", () => {
 
 		const { branchSession } = await import("$lib/server/sessions/branch")
 		const branch = await branchSession(testDb as any, { sessionId: w.session.id, fromMessageId: fork.id })
-		const copy = await phantomOf(testDb as any, branch.id)
+		const copy = await ownBookOf(testDb as any, branch.id)
 		expect(copy).toBeTruthy()
 		expect(copy!.id).not.toBe(notes.id)
 		const rows = await testDb
@@ -228,8 +232,8 @@ describe("the session's own notes", () => {
 	test("the union read: the book's places, then the notes' marked sessionOnly", async () => {
 		const w = await world({ lorebook: true })
 		await place(w.lorebook!.id, "The square")
-		const { phantomLorebookFor, lorebooksReadBy, sessionEntriesAsRead } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor, lorebooksReadBy, sessionEntriesAsRead } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		expect(notes.overlayOf).toBe(w.lorebook!.id)
 		await place(notes.id, "The secret door")
 
@@ -248,10 +252,10 @@ describe("the session's own notes", () => {
 
 describe("where a session's world write lands", () => {
 	test("no book → the notes; Full → the book; Review → the notes, anchored; Off → the notes", async () => {
-		const { loreWriteTargetFor } = await import("./phantom")
+		const { loreWriteTargetFor } = await import("./ownBook")
 		const none = await world()
 		const t0 = await loreWriteTargetFor(testDb as any, none.session.id)
-		expect(t0.route).toBe("phantom")
+		expect(t0.route).toBe("own-book")
 
 		const full = await world({ lorebook: true, mode: "full" })
 		const t1 = await loreWriteTargetFor(testDb as any, full.session.id)
@@ -260,18 +264,18 @@ describe("where a session's world write lands", () => {
 		const review = await world({ lorebook: true, mode: "review" })
 		const said = await review.message()
 		const t2 = await loreWriteTargetFor(testDb as any, review.session.id)
-		expect(t2.route).toBe("phantom")
+		expect(t2.route).toBe("own-book")
 		expect(t2.lorebookId).not.toBe(review.lorebook!.id)
 		expect(t2.sourceMessageId).toBe(said.id)
 
 		const off = await world({ lorebook: true, mode: "off" })
-		expect((await loreWriteTargetFor(testDb as any, off.session.id)).route).toBe("phantom")
+		expect((await loreWriteTargetFor(testDb as any, off.session.id)).route).toBe("own-book")
 	})
 
 	test("recordToTimeline files the world's values where the route says", async () => {
 		declareSlots()
 		const { recordToTimeline } = await import("$lib/server/state/durable")
-		const { phantomOf } = await import("./phantom")
+		const { ownBookOf } = await import("./ownBook")
 		const storm = async (sessionId: number) =>
 			await testDb.insert(schema.attributeValues).values({
 				ownerKind: "session",
@@ -297,8 +301,8 @@ describe("where a session's world write lands", () => {
 		const none = await world()
 		await storm(none.session.id)
 		const r0 = await recordToTimeline(testDb as any, none.session.id, { reason: "mark" })
-		expect(r0.route).toBe("phantom")
-		const notes0 = await phantomOf(testDb as any, none.session.id)
+		expect(r0.route).toBe("own-book")
+		const notes0 = await ownBookOf(testDb as any, none.session.id)
 		expect(await worldRows(notes0!.id)).toHaveLength(1)
 
 		const full = await world({ lorebook: true, mode: "full" })
@@ -306,16 +310,16 @@ describe("where a session's world write lands", () => {
 		const r1 = await recordToTimeline(testDb as any, full.session.id, { reason: "mark" })
 		expect(r1.route).toBe("book")
 		expect(await worldRows(full.lorebook!.id)).toHaveLength(1)
-		expect(await phantomOf(testDb as any, full.session.id)).toBeNull()
+		expect(await ownBookOf(testDb as any, full.session.id)).toBeNull()
 
 		const review = await world({ lorebook: true, mode: "review" })
 		await storm(review.session.id)
 		const said = await review.message()
 		const r2 = await recordToTimeline(testDb as any, review.session.id, { reason: "mark" })
-		expect(r2.route).toBe("phantom")
+		expect(r2.route).toBe("own-book")
 		expect(r2.proposed).toBe(0)
 		expect(await worldRows(review.lorebook!.id)).toHaveLength(0)
-		const notes2 = await phantomOf(testDb as any, review.session.id)
+		const notes2 = await ownBookOf(testDb as any, review.session.id)
 		expect(notes2!.overlayOf).toBe(review.lorebook!.id)
 		const rows2 = await worldRows(notes2!.id)
 		expect(rows2).toHaveLength(1)
@@ -324,7 +328,7 @@ describe("where a session's world write lands", () => {
 		const off = await world({ lorebook: true, mode: "off" })
 		await storm(off.session.id)
 		const r3 = await recordToTimeline(testDb as any, off.session.id, { reason: "mark" })
-		expect(r3.route).toBe("phantom")
+		expect(r3.route).toBe("own-book")
 		expect(await worldRows(off.lorebook!.id)).toHaveLength(0)
 	})
 })
@@ -340,15 +344,15 @@ describe("a room in the session's own notes reads by its name", () => {
 	})
 })
 
-describe("Create lorebook from session", () => {
+describe("Share as a lorebook", () => {
 	test("the notes become a real lorebook the session reads", async () => {
 		const w = await world()
-		const { phantomLorebookFor } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		await place(notes.id, "The cellar")
-		const { sessionsCreateLorebookFromPhantomHandler } = await import("$lib/server/sockets/sessions")
+		const { sessionsShareAsLorebookHandler } = await import("$lib/server/sockets/sessions")
 		const emitted: { event: string; data: any }[] = []
-		const res: any = await sessionsCreateLorebookFromPhantomHandler.handler(
+		const res: any = await sessionsShareAsLorebookHandler.handler(
 			fakeSocket(w.user.id),
 			{ sessionId: w.session.id, name: "Kept world" },
 			(event: string, data: any) => emitted.push({ event, data })
@@ -356,7 +360,7 @@ describe("Create lorebook from session", () => {
 		expect(res.lorebookId).toBe(notes.id)
 		// One toast, through the central `success` path.
 		expect(emitted.filter((e) => e.event === "success").map((e) => e.data)).toEqual([
-			{ title: "Lorebook created: Kept world" }
+			{ title: "Shared as a lorebook: Kept world" }
 		])
 		const [book] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, notes.id))
 		expect(book).toMatchObject({ name: "Kept world", sessionId: null, overlayOf: null })
@@ -372,20 +376,21 @@ describe("Create lorebook from session", () => {
 		])
 		// The list goes out again, so a book view open in the rail hears it.
 		expect(emitted.some((e) => e.event === "lorebooks:list")).toBe(true)
+		expect(emitted.some((e) => e.event === "lorebooks:sessionNotes")).toBe(true)
 	})
 
 	test("refused to a guest, and for a session that already reads a lorebook", async () => {
 		const w = await world({ lorebook: true })
-		const { createLorebookFromPhantom, CREATE_LOREBOOK_FROM_SESSION_REFUSALS } = await import("./phantom")
+		const { shareAsLorebook } = await import("./ownBook")
 		await expect(
-			createLorebookFromPhantom(testDb as any, { sessionId: w.session.id, userId: w.user.id })
-		).rejects.toThrow(CREATE_LOREBOOK_FROM_SESSION_REFUSALS.attached)
+			shareAsLorebook(testDb as any, { sessionId: w.session.id, userId: w.user.id })
+		).rejects.toThrow(SHARE_REFUSALS.attached)
 		const v = await world()
 		const { createTestUser } = await import("$lib/server/utils/testDb")
-		const guest = await createTestUser(testDb, `phantom-g2-${n}`)
+		const guest = await createTestUser(testDb, `ownBook-g2-${n}`)
 		await expect(
-			createLorebookFromPhantom(testDb as any, { sessionId: v.session.id, userId: guest.id })
-		).rejects.toThrow(CREATE_LOREBOOK_FROM_SESSION_REFUSALS.notOwner)
+			shareAsLorebook(testDb as any, { sessionId: v.session.id, userId: guest.id })
+		).rejects.toThrow(SHARE_REFUSALS.notOwner)
 	})
 })
 
@@ -404,7 +409,7 @@ describe("rulesets on existing rows", () => {
 })
 
 describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
-	const GENRE3 = "test:genre/phantom-places"
+	const GENRE3 = "test:genre/own-book-places"
 	const LAMP = "core:slot/lamp-test@1"
 
 	async function way(lorebookId: number, from: number, to: number) {
@@ -419,8 +424,8 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 
 	test("the places listing and the links read are the union: the notes' places, and the ways between them", async () => {
 		const w = await world()
-		const { phantomLorebookFor } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		const hall = await place(notes.id, "The hall")
 		const stair = await place(notes.id, "The stair")
 		await way(notes.id, hall.id, stair.id)
@@ -451,7 +456,7 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 		const w = await world()
 		const turn = await w.message()
 		const later = await w.message()
-		const { loreWriteTargetFor } = await import("./phantom")
+		const { loreWriteTargetFor } = await import("./ownBook")
 		expect(
 			(await loreWriteTargetFor(testDb as any, w.session.id, { anchorMessageId: turn.id })).sourceMessageId
 		).toBe(turn.id)
@@ -474,12 +479,12 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 				config: { of: ["lit", "dark"] }
 			})
 		]
-		genreKeeping(GENRE3, { name: { en: "Phantom places" }, family: "test", slots, events: {} })
+		genreKeeping(GENRE3, { name: { en: "Own book places" }, family: "test", slots, events: {} })
 		const w = await world()
 		await testDb.update(schema.sessions).set({ genreId: GENRE3 }).where(eq(schema.sessions.id, w.session.id))
 		const said = await w.message()
-		const { phantomLorebookFor } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		const hall = await place(notes.id, "The hall")
 		await testDb.insert(schema.attributeValues).values({
 			ownerKind: "session_location",
@@ -492,7 +497,7 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 		})
 		const { recordToTimeline } = await import("$lib/server/state/durable")
 		const report = await recordToTimeline(testDb as any, w.session.id, { reason: "mark" })
-		expect(report.route).toBe("phantom")
+		expect(report.route).toBe("own-book")
 		expect(report.owners).toContain(`location:${hall.id}`)
 		const rows = await testDb
 			.select()
@@ -511,11 +516,11 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 	test("Review changes: an overlay item, applied to the lorebook with its provenance, leaves the overlay", async () => {
 		const w = await world({ lorebook: true, mode: "review" })
 		const said = await w.message()
-		const { loreWriteTargetFor, overlayItemsOf, applyOverlayItems, phantomOf, APPLY_OVERLAY_REFUSALS } =
-			await import("./phantom")
+		const { loreWriteTargetFor, overlayItemsOf, applyOverlayItems, ownBookOf, APPLY_OVERLAY_REFUSALS } =
+			await import("./ownBook")
 		const target = await loreWriteTargetFor(testDb as any, w.session.id)
-		expect(target.route).toBe("phantom")
-		const notes = await phantomOf(testDb as any, w.session.id)
+		expect(target.route).toBe("own-book")
+		const notes = await ownBookOf(testDb as any, w.session.id)
 		expect(notes!.overlayOf).toBe(w.lorebook!.id)
 		const door = await place(target.lorebookId, "The secret door", target.sourceMessageId)
 		const nook = await place(target.lorebookId, "The nook", target.sourceMessageId)
@@ -529,7 +534,7 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 
 		// A stranger may not apply.
 		const { createTestUser } = await import("$lib/server/utils/testDb")
-		const stranger = await createTestUser(testDb, `phantom-apply-${n}`)
+		const stranger = await createTestUser(testDb, `ownBook-apply-${n}`)
 		await expect(
 			applyOverlayItems(testDb as any, { sessionId: w.session.id, userId: stranger.id })
 		).rejects.toThrow(APPLY_OVERLAY_REFUSALS.notOwner)
@@ -561,7 +566,7 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 		expect((await links())[0]!.lorebookId).toBe(w.lorebook!.id)
 
 		// Read as the session reads: in the book, no longer "this session only".
-		const { sessionEntriesAsRead } = await import("./phantom")
+		const { sessionEntriesAsRead } = await import("./ownBook")
 		const read = await sessionEntriesAsRead(testDb as any, w.session.id, "session", [LOCATION_TYPE_ID])
 		expect(read.map((e) => [e.name, e.sessionOnly ?? false]).sort()).toEqual([
 			["The nook", false],
@@ -569,15 +574,15 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 		])
 	})
 
-	test("Create lorebook from session carries the ruleset; the marks go", async () => {
+	test("Share as a lorebook carries the ruleset; the marks go", async () => {
 		const w = await world()
-		const { phantomLorebookFor, createLorebookFromPhantom, sessionEntriesAsRead } = await import("./phantom")
-		const notes = await phantomLorebookFor(testDb as any, w.session.id)
+		const { ownBookFor, shareAsLorebook, sessionEntriesAsRead } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
 		await place(notes.id, "The cellar")
 		expect(
 			(await sessionEntriesAsRead(testDb as any, w.session.id, "session", [LOCATION_TYPE_ID]))[0]!.sessionOnly
 		).toBe(true)
-		await createLorebookFromPhantom(testDb as any, { sessionId: w.session.id, userId: w.user.id })
+		await shareAsLorebook(testDb as any, { sessionId: w.session.id, userId: w.user.id })
 		const [book] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, notes.id))
 		expect(book).toMatchObject({ primaryRuleset: STORY, kind: "book", sessionId: null })
 		const [session] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
@@ -585,4 +590,132 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 		const read = await sessionEntriesAsRead(testDb as any, w.session.id, "session", [LOCATION_TYPE_ID])
 		expect(read.map((e) => [e.name, e.sessionOnly ?? false])).toEqual([["The cellar", false]])
 	})
+})
+
+describe("every session owns a book (pr-6, B §B-3)", () => {
+	test("insertOwnBook is born Gregorian with its clock unset", async () => {
+		const w = await world()
+		const { insertOwnBook, OWN_BOOK_CALENDAR } = await import("./ownBook")
+		const made = await insertOwnBook(testDb as any, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			name: "  ",
+			overlayOf: null,
+			primaryRuleset: w.session.primaryRuleset,
+			rulesetVersion: null
+		})
+		expect(made.kind).toBe("book")
+		expect(made.name).toBe("Untitled session")
+		expect(made.storyCalendar).toEqual(OWN_BOOK_CALENDAR)
+		expect(made).toMatchObject({
+			storyClockYear: null,
+			storyClockMonth: null,
+			storyClockDay: null,
+			storyClockHour: null,
+			storyClockMinute: null
+		})
+	}, 60_000)
+
+	test("ensureOwnBooks gives older sessions one, sets overlays, and is idempotent", async () => {
+		const { ensureOwnBooks, ownBookOf, ownBookFor } = await import("./ownBook")
+		// Earlier tests leave sessions with no own book; start from a clean count.
+		await ensureOwnBooks(testDb as any)
+		const a = await world()
+		const b = await world()
+		const attached = await world({ lorebook: true })
+		const kept = await world()
+		const keptBook = await ownBookFor(testDb as any, kept.session.id)
+		const customCalendar = { ...(keptBook.storyCalendar as any), yearLabel: "Era" }
+		await testDb
+			.update(schema.lorebooks)
+			.set({ storyCalendar: customCalendar, storyClockYear: 7 })
+			.where(eq(schema.lorebooks.id, keptBook.id))
+		const entry = await place(keptBook.id, "The keep")
+		const first = await ensureOwnBooks(testDb as any)
+		expect(first.made).toBe(3)
+		const own = await ownBookOf(testDb as any, attached.session.id)
+		expect(own!.overlayOf).toBe(attached.lorebook!.id)
+		expect((await ownBookOf(testDb as any, a.session.id))!.overlayOf).toBeNull()
+		expect(await ownBookOf(testDb as any, b.session.id)).not.toBeNull()
+		const [keptAfter] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, keptBook.id))
+		expect(keptAfter!.storyCalendar).toEqual(customCalendar)
+		expect(keptAfter!.storyClockYear).toBe(7)
+		const entries = await testDb
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.lorebookId, keptBook.id))
+		expect(entries.map((e) => e.id)).toEqual([entry.id])
+		expect(await ensureOwnBooks(testDb as any)).toEqual({ made: 0, overlaysSet: 0 })
+	}, 60_000)
+
+	test("shareAsLorebook promotes the own book and makes a fresh one", async () => {
+		const w = await world()
+		const { ownBookFor, ownBookOf, shareAsLorebook } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
+		const done = await shareAsLorebook(testDb as any, { sessionId: w.session.id, userId: w.user.id })
+		expect(done.lorebookId).toBe(notes.id)
+		const [promoted] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, notes.id))
+		expect(promoted!.sessionId).toBeNull()
+		const [session] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		expect(session!.lorebookId).toBe(notes.id)
+		const fresh = await ownBookOf(testDb as any, w.session.id)
+		expect(fresh!.id).toBe(done.ownBookId)
+		expect(fresh!.id).not.toBe(notes.id)
+		expect(fresh!.overlayOf).toBe(notes.id)
+		const again = await world({ lorebook: true })
+		await expect(
+			shareAsLorebook(testDb as any, { sessionId: again.session.id, userId: again.user.id })
+		).rejects.toThrow(SHARE_REFUSALS.attached)
+		const stranger = await world()
+		await expect(
+			shareAsLorebook(testDb as any, { sessionId: stranger.session.id, userId: w.user.id })
+		).rejects.toThrow(SHARE_REFUSALS.notOwner)
+	}, 60_000)
+
+	test("copyOwnBookToBranch gives a branch of a session with no own book a fresh one", async () => {
+		const parent = await world()
+		const child = await world()
+		const { copyOwnBookToBranch, ownBookOf } = await import("./ownBook")
+		expect(await ownBookOf(testDb as any, parent.session.id)).toBeNull()
+		const out = await testDb.transaction(async (tx) =>
+			copyOwnBookToBranch(tx as any, {
+				sessionId: parent.session.id,
+				created: {
+					id: child.session.id,
+					name: child.session.name,
+					userId: child.user.id,
+					lorebookId: null,
+					primaryRuleset: child.session.primaryRuleset,
+					rulesetVersion: null
+				},
+				forkMessageId: 0,
+				remap: new Map()
+			})
+		)
+		const made = await ownBookOf(testDb as any, child.session.id)
+		expect(out.lorebookId).toBe(made!.id)
+		expect(out.entryRemap.size).toBe(0)
+	}, 60_000)
+
+	test("lorebooks:get serves an own book to its owner; sessionNotes lists it, list does not", async () => {
+		const w = await world({ lorebook: true })
+		const { ownBookFor } = await import("./ownBook")
+		const notes = await ownBookFor(testDb as any, w.session.id)
+		const lorebooks = await import("$lib/server/sockets/lorebooks")
+		const got: any = await (lorebooks as any).lorebooksGetHandler.handler(
+			fakeSocket(w.user.id),
+			{ id: notes.id } as any,
+			noopEmit
+		)
+		expect(got?.lorebook?.id ?? got?.id).toBe(notes.id)
+		const listed: any = await lorebooks.lorebooksSessionNotesHandler.handler(fakeSocket(w.user.id), {} as any, noopEmit)
+		const row = listed.books.find((b: any) => b.id === notes.id)
+		expect(row).toMatchObject({
+			sessionId: w.session.id,
+			sessionName: w.session.name,
+			attached: { id: w.lorebook!.id, name: w.lorebook!.name }
+		})
+		const main: any = await lorebooks.lorebooksListHandler.handler(fakeSocket(w.user.id), {} as any, noopEmit)
+		expect(main.lorebookList.map((b: any) => b.id)).not.toContain(notes.id)
+	}, 60_000)
 })

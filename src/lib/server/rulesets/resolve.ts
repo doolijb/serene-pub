@@ -43,6 +43,7 @@ import { bridgesFor, getRuleset, i18nText, RIGOURS, type Rigour, type RulesetDec
 import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { stateFor } from "$lib/server/state/resolve"
+import { coreAnnexIn, coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 import { minutesPer } from "./common"
 import { conventionsOf, earlyPhases, runApply, runApplyAsync, runResolve } from "./engine"
 import { conventionsFor, presetOf, settingValues } from "./conventions"
@@ -176,18 +177,18 @@ export interface RulesetResolveDeps {
 }
 
 /**
- * 🚧 The session metadata key a ruleset's `card-draw` decks live under
- * (2026-10-22): `{ [methodKey]: DeckState }` — the scene each was shuffled
- * for, its shuffle count and how many cards are drawn.
+ * 🚧 A ruleset's `card-draw` decks live under annex owner `core`'s
+ * `rulesetDecks` (a core runtime key, `sessions/coreAnnex.ts`):
+ * `{ [methodKey]: DeckState }` — the scene each was shuffled for, its
+ * shuffle count and how many cards are drawn.
  */
-export const RULESET_DECKS_KEY = "rulesetDecks"
 
 /** 🚧 The session's decks and open scene, for a ruleset with a `card-draw` method; nothing otherwise. */
 async function decksFor(db: Db, sessionId: number, input: EngineInput): Promise<Pick<EngineInput, "decks" | "scene" | "deckSeed">> {
 	const draws = Object.values(conventionsOf(input).methods).some((m) => m?.kind === "card-draw")
 	if (!draws) return {}
-	const [row] = await db.select({ metadata: schema.sessions.metadata }).from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1)
-	const stored = (row?.metadata as Record<string, unknown> | null)?.[RULESET_DECKS_KEY]
+	const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1)
+	const stored = coreAnnexIn(row?.annex).rulesetDecks
 	const decks: Record<string, DeckState> = {}
 	if (stored && typeof stored === "object" && !Array.isArray(stored))
 		for (const [k, v] of Object.entries(stored as Record<string, unknown>)) {
@@ -200,19 +201,20 @@ async function decksFor(db: Db, sessionId: number, input: EngineInput): Promise<
 	return { decks, scene: open.length ? Math.max(...open) : null, deckSeed: `deck:${sessionId}` }
 }
 
-/** 🚧 Store the decks a moment drew from, key by key — the session's other metadata untouched. */
+/** 🚧 Store the decks a moment drew from, key by key — the `core` annex document's other keys untouched. */
 async function writeDecks(db: Db, sessionId: number, decks: Record<string, DeckState> | undefined): Promise<void> {
 	if (!decks || !Object.keys(decks).length) return
-	await db.execute(sql`
-		update ${schema.sessions}
-		set ${sql.identifier("metadata")} = jsonb_set(
-			coalesce(${schema.sessions.metadata}, '{}')::jsonb,
-			${`{${RULESET_DECKS_KEY}}`}::text[],
-			coalesce(${schema.sessions.metadata}::jsonb -> ${RULESET_DECKS_KEY}, '{}'::jsonb) || ${JSON.stringify(decks)}::jsonb,
-			true
-		)::json
-		where ${schema.sessions.id} = ${sessionId}
-	`)
+	await db.transaction(async (tx: Db) => {
+		await lockSessionAnnex(tx, sessionId)
+		await tx.execute(sql`
+			update ${schema.sessions}
+			set ${sql.identifier("annex")} = ${coreAnnexSetSql(
+				"rulesetDecks",
+				sql`coalesce(${coreAnnexKeySql("rulesetDecks")}, '{}'::jsonb) || ${JSON.stringify(decks)}::jsonb`
+			)}
+			where ${schema.sessions.id} = ${sessionId}
+		`)
+	})
 }
 
 /** The task's out-ports. */
@@ -493,13 +495,13 @@ async function buildEngineInput(
 async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<string, unknown> | undefined> {
 	try {
 		const [row] = await db
-			.select({ metadata: schema.sessions.metadata })
+			.select({ annex: schema.sessions.annex })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		if (!row) return undefined
 		const { publishedTurns } = await import("$lib/server/pipelines/routines/turnTally")
-		return publishedTurns(row.metadata)
+		return publishedTurns(coreAnnexIn(row.annex))
 	} catch {
 		return undefined
 	}
@@ -797,7 +799,7 @@ async function writeOutcome(db: Db, sessionId: number, out: EngineOutput, deps: 
 	// the rest of its turn (`WriteContext.ownAnchor`).
 	const turnRow =
 		deps.turnMessageId != null
-			? await (await import("$lib/server/lorebooks/phantom")).turnAnchorOf(db, sessionId, deps.turnMessageId)
+			? await (await import("$lib/server/lorebooks/ownBook")).turnAnchorOf(db, sessionId, deps.turnMessageId)
 			: null
 	const anchored = turnRow != null ? { ...ctx, messageId: turnRow, ownAnchor: true } : ctx
 	const ctxFor = (c: EngineChange) => (c.owner.kind === "session_cast" ? ctx : anchored)
@@ -878,7 +880,7 @@ export async function resolveRulesetTurn(
 			built.mode === "propose"
 				? null
 				: deps.turnMessageId != null
-					? await (await import("$lib/server/lorebooks/phantom")).turnAnchorOf(db, built.sessionId, deps.turnMessageId)
+					? await (await import("$lib/server/lorebooks/ownBook")).turnAnchorOf(db, built.sessionId, deps.turnMessageId)
 					: null
 		const landed: import("./ties").LandingFact[] = []
 		// D5: the zones the moment moved — written as the rest is, held on Review (nothing moves until accepted).

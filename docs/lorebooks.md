@@ -171,7 +171,7 @@ See [Cast and relationships](./lorebook-cast.md) for private lore, relationships
 
 **Read into this session**, beside the book's name or in **Book settings**, makes the open session read this book. It's offered for sessions you own. A session reads one book at a time; reading this one into a session that reads another asks first. **Stop reading** takes the book out of the session and leaves the book untouched.
 
-A session chooses its book before the story starts. Until anything has been played (a line beyond the greetings, or anything in the session's own notes), you can read a book in, switch to another or stop reading, and the session takes the book's [rules](./rulesets.md) with it. Once the story is underway the session keeps reading its book: the buttons say *This story is underway with ‹book›, so it keeps reading it*, and a new session can read another book. A story that started with no lorebook keeps its own notes; make them a lorebook with **Create lorebook from session** (see [Your session's own notes](#your-sessions-own-notes)).
+A session chooses its book before the story starts. Until anything has been played (a line beyond the greetings, or anything in the session's own notes), you can read a book in, switch to another or stop reading, and the session takes the book's [rules](./rulesets.md) with it. Once the story is underway, **Read into this session** and **Stop reading** are hidden, and the session keeps reading its book. The session's edit form says why. For a session with no shared book: *This story is already under way in its session notes, so it can't start reading a lorebook now. Share its notes as a lorebook to keep building on them.* For a session that reads a book: *This story is under way with 'Brackenvale', so it keeps reading it. Use Share to carry its session notes into 'Brackenvale', or to clone 'Brackenvale' with them.* (with the book's name). A new session can read another book. A story that started with no shared lorebook keeps its own notes; make them a lorebook with **Share as a lorebook** (see [Your session's own notes](#your-sessions-own-notes)).
 
 You can also choose a session's book in its settings, along with its **Line** and **Story clock** (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)).
 
@@ -217,10 +217,10 @@ Only the lorebook's owner can revert or keep; anyone else reading the book sees 
 
 ## Your session's own notes
 
-Every session has somewhere to keep the world it plays out, even with no lorebook. When a session has no lorebook, or isn't allowed to write to the one it reads (**Review changes**, **Off**, or a book shared with you), the rooms, people and facts it writes go into notes that belong to the session alone.
+Every session owns a lorebook of its own, its **Session notes**, from the moment it is made, even with no shared lorebook. It is born with the Gregorian calendar and no clock set. A session that reads no shared lorebook keeps its world there: its clock, its scenes, its summaries, and the rooms, people and facts it writes. A session that reads a lorebook but isn't allowed to write to it (**Review changes**, **Off**, or a book shared with you) writes its rooms, people and facts there too, on top of the book it reads.
 
-- You don't manage them: the session creates them the first time it needs them, and they are deleted with the session.
-- They aren't listed anywhere: not in **Lorebooks**, not in any picker. The session reads them alongside its lorebook, and what comes from them is marked **this session only**.
+- You don't manage them: the session makes them, and they are deleted with the session.
+- They are never in a picker. The Lorebooks view lists them in their own section, **Session notes**, for your sessions only. A row opens like any other book, but its menu holds only its share verbs and **Book settings**. The session reads them alongside its lorebook, and what comes from them is marked **this session only**.
 - Only the session's owner and guests can see them.
 - Each note remembers the turn that wrote it. Deleting, regenerating or swiping a turn takes back the notes it wrote and the changes it made to others, even ones you edited since; [branching](./sessions.md#on-revision) a session copies its notes up to the branch point.
 - Places in the notes work like any other: the session's places list shows them with the ways between them, and their stats stay in the notes with them.
@@ -229,7 +229,14 @@ Every session has somewhere to keep the world it plays out, even with no loreboo
 
 When a session reads your lorebook but keeps its changes in its own notes (**Review changes**, or **Off**), select the session in **Sessions**: its panel has a **This session only** card listing what it added. Choose **Apply to the lorebook** beside one to move it into the lorebook, or **Apply all to the lorebook**. An applied entry keeps the turn that wrote it, the links between applied entries come with them, and the item leaves the card. Only the lorebook's owner can apply changes to it.
 
-To keep that world, select the session in **Sessions**, open the **⋯** menu on its panel and choose **Create lorebook from session**. A note says *Lorebook created:* and its name, and the new lorebook opens. The notes become an ordinary lorebook, named after the session, listed in **Lorebooks** and read by the session from then on. It is offered while the session reads no lorebook, and only to its owner. The new lorebook plays the session's ruleset, and nothing in the session is marked **this session only** after that.
+Three verbs carry a session's notes further. They are in the **Session notes** row's menu and in the **⋯** menu of the session's details, and each asks first. Only the session's owner has them.
+
+- **Share as a lorebook**, when the notes sit on top of no book. It asks *Share this session's notes as a lorebook? They become a lorebook of your own in Lorebooks, the session reads it from now on, and its notes start again empty.* The notes move to the main list as a lorebook of yours, the session reads it, and the session gets fresh notes. A note says *Shared as a lorebook:* and the new name. The session's edit form has the same button.
+- When the notes sit on top of a book the session reads, the row says *Kept on top of ‹book›*, and the menu offers two verbs instead, named by that book:
+  - **Share to ‹book›** carries every change in the notes into that book, all at once. It asks *Share this session's notes to ‹book›? Every change in them is written into ‹book› at once.* With nothing waiting in the notes, it says *Nothing to share*.
+  - **Clone with changes and attach** copies the book with the notes' changes written in, into a new lorebook of yours, and the session reads that copy in place of the original. The original is never written. It asks *Clone ‹book› with this session's notes? The copy is a lorebook of your own with every change written in, and the session reads it in place of ‹book›. ‹book› itself is not changed.* A note says *Cloned with this session's notes:* and the new name.
+
+**Share** here carries a session's notes into a book. It is not the **Share…** in a book's menu, which shares a book with the people on the pub (see [Sharing a lorebook](#sharing-a-lorebook)); a session-notes row never offers that one.
 
 ## Starter lorebooks
 
@@ -238,7 +245,7 @@ A **starter lorebook** is a ready-made world to start from: entries, places, a c
 Each starter lorebook in a list shows its name, *Rules:* and the rules it plays, a line about it, what it holds (*Holds 12 entries, 3 places and 2 cast members*) and where it comes from: *Comes with Serene Pub*, *Comes with a plugin*, or *Made by* the admin who made it.
 
 - **A lorebook from a starter lorebook.** In **Lorebooks**, press **New**, choose **Start from a starter lorebook** and pick one. The name fills in with the starter lorebook's (change it if you like), and in place of the Rules list the dialog says which rules the book plays. Press **Create**: the new book opens, with its cast's character cards made for you.
-- **A session from a starter lorebook.** On the start screen, a genre with a lorebook step offers **Start from a starter lorebook** beside your books. The session plays the starter lorebook's rules and keeps the starter lorebook in its [own notes](#your-sessions-own-notes), ready to play, and nothing appears in **Lorebooks**. Because the story starts with notes already in them, the session keeps those notes as its world; when you want to keep them as a lorebook and build on them, use **Make a lorebook from its notes** in the session's settings (or **Create lorebook from session** on its panel).
+- **A session from a starter lorebook.** On the start screen, a genre with a lorebook step offers **Start from a starter lorebook** beside your books. The session plays the starter lorebook's rules and keeps the starter lorebook in its [own notes](#your-sessions-own-notes), ready to play, and nothing appears in the main list of **Lorebooks** (its notes sit under **Session notes**). Because the story starts with notes already in them, the session keeps those notes as its world; when you want to keep them as a lorebook and build on them, use **Share as a lorebook** in the session's settings (or in the **⋯** menu of its details).
 
 ### Making and managing starter lorebooks (admins)
 

@@ -27,15 +27,9 @@ import path from "node:path"
 import { QuickJsSandbox } from "./QuickJsSandbox"
 import { SesWorkerSandbox } from "./SesWorkerSandbox"
 import { HookGracePolicy, type RunStop } from "./hookGrace"
-import {
-	rowQuotaFor,
-	type PermissionConfig,
-	type PluginRowSnapshotEntry
-} from "./storageHost"
-import type { PluginRowPort } from "./rowStore"
+import { type PermissionConfig } from "./storageHost"
 import type { HookRunResult, PluginSandbox, SandboxKind } from "./types"
 import { hookCtxGrants, type HookCtxKind } from "./hookCtx"
-import { messageWithoutQueryText } from "$lib/server/db/errors"
 
 /** What the manager needs to know about an installed, enabled plugin. Persisted
  * elsewhere; the manager holds the projection it dispatches against. */
@@ -275,25 +269,14 @@ export class SandboxManager {
 	private readonly onInvocation?: (rec: InvocationRecord) => void
 	/** Root under which each plugin's `extensions_data/<id>` dir lives. */
 	private readonly dataDir?: string
-	/**
-	 * The row half of `ctx.storage`, as a port rather than a db handle: the
-	 * manager stays database-free, and a manager built without one simply runs
-	 * every hook with no rows — which is what the sandbox already does for a
-	 * plugin that has no storage grant, so there is no second behaviour to
-	 * reason about. See `rowStore.ts` for why the host does this work at all.
-	 */
-	private readonly rows?: PluginRowPort
-
 	constructor(
 		opts: {
 			onInvocation?: (rec: InvocationRecord) => void
 			dataDir?: string
-			rows?: PluginRowPort
 		} = {}
 	) {
 		this.onInvocation = opts.onInvocation
 		this.dataDir = opts.dataDir ?? process.env.SERENE_PUB_DATA_DIR
-		this.rows = opts.rows
 	}
 
 	/** The permission grants for a plugin, or undefined when it has none. */
@@ -317,10 +300,6 @@ export class SandboxManager {
 				)
 			config.storageDir = dir
 			config.quotaBytes = desc.storageQuotaBytes
-			// Derived here, at grant-derivation, for the same reason the quota
-			// itself is clamped there: a manifest declares one storage number
-			// and everything else about the grant is computed from it.
-			config.rowQuotaBytes = rowQuotaFor(desc.storageQuotaBytes!)
 		}
 		if (hasNetwork) config.networkHosts = desc.networkHosts
 		return config
@@ -842,36 +821,6 @@ export class SandboxManager {
 			}
 		}
 
-		// This plugin's rows, read before the call and handed in with the job.
-		// Loaded here, beside the bundle load and before `startedAt`, because it
-		// is setup rather than hook time — and failed the same way a bundle load
-		// is: a hook that ran against an empty snapshot would read `undefined`
-		// for keys it wrote yesterday and act on it.
-		let rows: PluginRowSnapshotEntry[] | undefined
-		if (this.rows && desc.storageQuotaBytes && this.dataDir) {
-			try {
-				rows = await this.rows.load(desc.id)
-			} catch (e) {
-				return this.record(
-					{
-						ok: false,
-						reason: `failed to read extension rows: ${String((e as Error)?.message || e)}`,
-						logs: [],
-						durationMs: Date.now() - queuedAt,
-						backend,
-						outcome: "load"
-					},
-					desc,
-					hookName,
-					opts,
-					callId,
-					mode,
-					queuedAt,
-					queuedAt
-				)
-			}
-		}
-
 		const startedAt = Date.now()
 		const active: ActiveCall = {
 			callId,
@@ -927,7 +876,6 @@ export class SandboxManager {
 						opts.seedLabel ?? `${desc.id}:${hookName}:${callId}`,
 					nowMs: opts.nowMs ?? startedAt,
 					maxOutputBytes: opts.maxOutputBytes,
-					rows,
 					// For the fetch bridge alone, host-side (R63): everything
 					// for the plugin's own work, only what it lends when its
 					// node runs in another package's pipeline.
@@ -976,72 +924,11 @@ export class SandboxManager {
 			this.grace.settled(callId)
 		}
 
-		// The row half of the commit, and the ordering is a decision rather
-		// than an accident.
-		//
-		// By the time this line runs the sandbox has ALREADY applied its files:
-		// it commits them the instant `evaluate` resolves, inside the worker,
-		// which is the only place a killed hook's writes can be made
-		// all-or-nothing. So the two stores commit in the order files-then-rows,
-		// and what that buys is:
-		//  - rows are atomic (one transaction);
-		//  - files are per-file atomic, as they always were;
-		//  - **the two are not atomic with respect to each other**, and the
-		//    window is exactly here: a process death between the sandbox's file
-		//    apply and this transaction leaves FILES AHEAD OF ROWS.
-		//
-		// That direction is chosen. Orphaned bytes are self-healing — the next
-		// call sees no row, redoes the work and overwrites the file — where rows
-		// ahead of files is a dangling reference an extension has to be written
-		// to survive. The alternative order (stage files, commit rows, then
-		// rename) would put the file apply *after* the result has crossed the
-		// worker boundary, which opens a window in which a call reported as
-		// `killed` has nonetheless committed rows — and "a killed hook commits
-		// nothing" is the guarantee the whole transaction exists for.
-		//
-		// A file commit that threw never reaches here: it fails the call inside
-		// the worker and carries no `rowChanges`, so rows can never land for a
-		// call whose files did not.
-		// No secret leaves the manager (R63): whatever the hook returned, threw,
-		// logged or wrote to its rows — a response that echoed a key, a bug
-		// that printed one — has every one of this plugin's secret values (and
-		// every handle) replaced before it reaches storage, a node, an event, a
-		// log or a receipt. Before the row commit, so no value is persisted.
+		// No secret leaves the manager (R63): whatever the hook returned, threw or
+		// logged — a response that echoed a key, a bug that printed one — has
+		// every one of this plugin's secret values (and every handle) replaced
+		// before it reaches a node, an event, a log or a receipt.
 		result = scrubSecrets(result, callSecrets)
-		if (result.ok && result.rowChanges?.length && this.rows) {
-			try {
-				await this.rows.commit(desc.id, result.rowChanges)
-			} catch (e) {
-				// The hook believes its rows landed and they did not. That is a
-				// failed call, not a success with a footnote — the same ruling
-				// the file half makes when its own commit cannot be applied.
-				// The reason is stored and shown, so a failed query in it is
-				// the plain sentence — its message is the SQL and the rows'
-				// values (`db/errors.ts`) — and the whole error is logged here.
-				console.error(
-					`[plugins] ${desc.id}.${hookName}: its rows could not be committed:`,
-					e
-				)
-				result = {
-					ok: false,
-					reason:
-						`the hook returned but its rows could not be committed — ` +
-						(messageWithoutQueryText(e) || String(e)),
-					logs: result.logs,
-					durationMs: result.durationMs,
-					backend: result.backend,
-					outcome: "error"
-				}
-			}
-		}
-		// Consumed here and nowhere else: the diff is transport between the
-		// sandbox and this line, and no caller above the manager has any use for
-		// it or any right to re-apply it.
-		if (result.ok && result.rowChanges) {
-			const { rowChanges: _committed, ...rest } = result
-			result = rest
-		}
-
 
 		// Why core stopped it, when core stopped it. Only ever replaces the
 		// reason on a call that was actually killed: a hook that woke on its
@@ -1182,8 +1069,7 @@ export function scrubSecrets<T extends HookRunResult>(result: T, secrets?: Recor
 		? ({
 				...result,
 				value: deep(result.value),
-				logs,
-				...(result.rowChanges ? { rowChanges: deep(result.rowChanges) } : {})
+				logs
 			} as T)
 		: ({ ...result, reason: clean(result.reason), logs } as T)
 }

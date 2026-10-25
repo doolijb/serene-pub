@@ -29,8 +29,8 @@
  *      the hook surfaces declare were endowed by nothing, and two of them were
  *      `@deprecated` in favour of members that did not exist either — an SDK
  *      directing authors away from what works and towards what is not there.
- *      (Fourteen of the eighteen are wired now: rows live in `plugin_rows`,
- *      `files.*` is the same transactional store under the SDK's spelling, and
+ *      (Those the SDK still declares are wired now: `ctx.storage` is `usage`
+ *      and `files.*`, the same transactional store under the SDK's spelling, and
  *      the deprecation tags point somewhere real. A fifteenth, `readEvent`, was
  *      closed the other way — deleted, because the payload had always arrived
  *      as argument 0 and the SDK moved to the `(input, ctx)` convention both
@@ -420,6 +420,30 @@ const unfilledInPorts = (): string[] => {
  * shipped run can reach.
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
+	{
+		subject: "core:outlet/create-lore-entry@1.match",
+		reason:
+			"🚧 pr-6 (2026-10-25, pass 8, R-h): how a create finds the entry it would " +
+			"otherwise make — `{ entryId }`, `{ name }` or `{ key }`, matched in the book " +
+			"it writes to; two answers refuse, naming each. Optional, declared for a " +
+			"pipeline that re-files what it wrote; no core spec re-files yet. Closes when " +
+			"one does."
+	},
+	{
+		subject: "core:outlet/create-lore-entry@1.bind",
+		reason:
+			"🚧 pr-6 (2026-10-25): the cast member an entry is filed under " +
+			"(`character:<id>`, the entry type's `anchor` role). Optional; no core spec " +
+			"files an entry under a cast member yet. Closes when one does."
+	},
+	{
+		subject: "core:outlet/link-lore-entries@1.sources",
+		reason:
+			"🚧 pr-6 (2026-10-25, pass 6): the story lines a generated link was written " +
+			"from; present, the write is committed and the settle line moves. Core's " +
+			"generated writes that make links pass `sources` on their create or graph " +
+			"proposal; no core spec links on its own from a span yet. Closes when one does."
+	},
 	{
 		subject: "core:outlet/delete-message@1.asked",
 		reason:
@@ -1344,12 +1368,9 @@ describe("§4 socket events — every declared event is one some code uses", () 
  * type threw. An earlier instance from the same blind spot was `signal:
  * AbortSignal`, declared on both surfaces while the runtime provided none.
  *
- * Both are endowed now, and this section is what keeps them endowed. The row
- * store is a shared, plugin-scoped table (`plugin_rows`) the host loads before
- * a call and commits after it, because the sandbox is synchronous on both
- * backends and QuickJS — the default — has no asynchronous capability bridge;
- * `files.*` is the store that was already there, under the spelling the SDK
- * declares. The older six survive beside it and are listed in
+ * Both are endowed now, and this section is what keeps them endowed.
+ * `ctx.storage` is the extension's own files: `usage` and `files.*`, the store
+ * that was already there, under the spelling the SDK declares. The older six survive beside it and are listed in
  * `UNDECLARED_HOOK_CTX`, which is the same finding read from the other end.
  *
  * ## Both sides are read, neither is listed
@@ -1881,7 +1902,7 @@ describe("§5 hook context — every declared member is one the runtime endows",
 		// built — `npm run sdk:build`.
 		expect(declaredPaths.length).toBeGreaterThan(0)
 		expect(declaredPaths).toContain("signal")
-		expect(declaredPaths).toContain("storage.query")
+		expect(declaredPaths).toContain("storage.files.stat")
 		expect(endowed.length).toBeGreaterThan(0)
 		expect(endowed).toContain("storage")
 

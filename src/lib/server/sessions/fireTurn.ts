@@ -32,9 +32,10 @@
  * order says who, and firing is a dispatch.
  */
 
-import { readTurnOrder, type TurnEntryV1 } from "@serene-pub/sdk"
+import { type TurnEntryV1 } from "@serene-pub/sdk"
 import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { readStoredTurnOrder } from "$lib/server/sessions/turnOrder"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import type { EventCause } from "@serene-pub/sdk"
@@ -58,13 +59,7 @@ export async function headTurnEntry(
 	db: Db,
 	sessionId: number
 ): Promise<TurnEntryV1 | null> {
-	const [row] = await db
-		.select({ metadata: schema.sessions.metadata })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	if (!row) return null
-	return readTurnOrder(row.metadata).order[0] ?? null
+	return (await readStoredTurnOrder(db, sessionId)).order[0] ?? null
 }
 
 /**

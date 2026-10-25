@@ -56,6 +56,17 @@ describe("answerStartHistoryEntry", () => {
 		expect(started).toEqual([{ lorebookId: 4, id: 2, branchId: 12 }])
 	})
 
+	test("a session with no shared book and an own book starts the next entry in the own book", async () => {
+		const { d, started } = deps({
+			r: reading({ lorebookId: null, branchId: 12 }),
+			ownBookId: () => 9
+		})
+		await expect(answerStartHistoryEntry({}, d)).resolves.toEqual({
+			entryId: 99
+		})
+		expect(started).toEqual([{ lorebookId: 9, id: 1, branchId: null }])
+	})
+
 	test("refuses, in words and starting nothing: no book, not the owner, nothing to step from", async () => {
 		for (const [r, why] of [
 			[reading({ lorebookId: null }), /no lorebook/],

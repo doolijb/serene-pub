@@ -253,11 +253,16 @@ describe("a story with no clock yet", () => {
 		expect(line.text).toBe(`Time passes: 3 hours, not on the clock. ${NO_STORY_CLOCK_YET}`)
 	})
 
-	test("a session reading no lorebook says that instead", async () => {
-		const w = await world({ book: false })
-		const out: any = await (await host(w)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
-		const { NO_STORY_CLOCK_BOOK } = await import("./clockMoves")
-		expect(out.skipped).toBe(NO_STORY_CLOCK_BOOK)
+	test("a session with no shared lorebook keeps its clock in its own book: unset, so it skips as any unset clock does", async () => {
+		const unset = await world({ book: false, clock: false })
+		const skipped: any = await (await host(unset)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
+		const { NO_STORY_CLOCK_YET } = await import("./clockMoves")
+		expect(skipped.skipped).toBe(NO_STORY_CLOCK_YET)
+		// Set, it moves: the session's clock is its own, whatever book it reads.
+		const set = await world({ book: false })
+		const moved: any = await (await host(set)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
+		expect(moved.skipped ?? "").toBe("")
+		expect((await clockOf(set.session.id)).day).toBe(6)
 	})
 
 	test("unwired, a refusal still halts with the sentence and writes nothing", async () => {

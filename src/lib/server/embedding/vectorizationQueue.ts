@@ -45,6 +45,7 @@ import {
 	sql,
 	type SQL
 } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import type { PgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { castEdgeOnly } from "$lib/server/utils/narrativeEdges"
@@ -1841,7 +1842,7 @@ export async function scopedMissingVectors(
 						eq(schema.sessionMessages.sessionId, sessionId),
 						messageChannel,
 						// 🚧 The live history (RF fix 5).
-						sql`${schema.sessionMessages.rewindOrdinal} is null`
+						liveMessageWhere()
 					)
 				)
 				.orderBy(desc(schema.sessionMessages.id))

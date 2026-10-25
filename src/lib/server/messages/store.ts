@@ -109,19 +109,12 @@ async function withStoryClockStamp<
 /* ── the forward stack (RF fix 5, 2026-10-23) ───────────────────────────── */
 
 /**
- * 🚧 **The live history** (RF fix 5, NOMENCLATURE §24 **rewound turn**): a
- * row Back took out (`rewind_ordinal` set) is not in it. Pass the
- * relational query's own column (`cm.rewindOrdinal`) where the table is
- * aliased. Every read of a
- * session's history ANDs this in — the page's log and its pages, the
- * newest message an anchor or a turn reads, the turn yield, the branch's
- * copy, retrieval — so a rewound row reaches no reader. The prompt's own
- * read needs nothing more: a rewound row is also `is_hidden`, which it
- * already leaves out.
+ * 🚧 **The live history** — the ONE predicate, `liveMessageWhere`, lives in
+ * `./liveHistory` (a leaf module, so `./channels` can read it without an
+ * import cycle through this store) and is re-exported here, where every
+ * reader imports it.
  */
-export const liveMessageWhere = (
-	column: AnyPgColumn = schema.sessionMessages.rewindOrdinal
-): SQL => isNull(column)
+export { liveMessageWhere } from "./liveHistory"
 
 /**
  * 🚧 **Replace on write** (owner ruling 2026-10-23: "On continue/new write,
@@ -178,14 +171,6 @@ export async function insertLegacy(
 		.values(trimCommittedContent(stamped))
 		.returning()
 	await mirrorRow(db, row)
-	// 🚧 The annex as it stood before this line (`annexRevisionPoints.ts`):
-	// what a revision puts back. Never the reason an insert fails.
-	try {
-		const { takeRevisionPoint } = await import("$lib/server/sessions/annexRevisionPoints")
-		await takeRevisionPoint(db, row)
-	} catch (err) {
-		console.warn("[messages] annex revision point skipped:", err)
-	}
 	return row
 }
 
@@ -198,9 +183,11 @@ export async function insertLegacyMany(
 	// 🚧 New rows while rewound replace the forward stack (RF fix 5).
 	for (const sessionId of new Set(values.map((v) => v.sessionId)))
 		await discardForwardStack(db, sessionId)
+	const stamped: typeof values = []
+	for (const v of values) stamped.push(await withStoryClockStamp(db, v))
 	const rows = await db
 		.insert(schema.sessionMessages)
-		.values(values.map(trimCommittedContent))
+		.values(stamped.map(trimCommittedContent))
 		.returning()
 	for (const row of rows) await mirrorRow(db, row)
 	return rows
@@ -417,6 +404,7 @@ async function upsertProjection(
 				isEdited: message.isEdited,
 				debugMeta: message.debugMeta,
 				queueItemId: message.queueItemId,
+				rewindOrdinal: message.rewindOrdinal,
 				updatedAt: message.updatedAt
 			}
 		})

@@ -181,6 +181,8 @@ export interface WidgetRequestDeps {
 	// ── Chronicle (W3): the story clock, the history, the scenes ──
 	/** This session's scenes, as the page holds them. */
 	sceneList(): readonly SceneRow[]
+	/** 🚧 The session's own book (its Session notes): what Chronicle and Places read when it reads no shared lorebook (pr-6 B §B-3). */
+	ownBookId?(): number | null
 	/** This session's scenes on its line not yet in the lorebook's graph. */
 	ungraphedScenes(): number
 	/** Open the page's Extend graph review. */
@@ -267,6 +269,7 @@ const chronicleReads = (d: WidgetRequestDeps): HistoryEntriesDeps => ({
 	readHistory: d.readHistory,
 	readLines: d.readLines,
 	sceneList: d.sceneList,
+	ownBookId: d.ownBookId,
 	opensScenes: d.opensScenes,
 	noteStoryClock: d.noteStoryClock,
 	noteStoryCalendar: d.noteStoryCalendar,
@@ -482,7 +485,7 @@ export const WIDGET_REQUEST_ANSWERS: {
 	// 🚧 Places (W4): the session's places and the ways between them, as
 	// the server reads the session's book; who stands where is the widget's.
 	"session-places": (p, _from, d) =>
-		answerSessionPlaces(p, d.sessionId(), d.readSessionPlaces),
+		answerSessionPlaces(p, d.sessionId(), d.readSessionPlaces, d.ownBookId?.() ?? null),
 	// 🚧 Scene Portraits (W6): a page of a session member's gallery — only
 	// a member of the cast the page projects.
 	"character-images": (p, _from, d) => answerCharacterImages(p, d),

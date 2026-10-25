@@ -5,10 +5,10 @@
  * `$derived` or a handler of the page's, so whatever it reads is tracked
  * there, exactly where it is read.
  */
-import { rewindStateWith } from "$lib/shared/sessions/rewind"
 import { avatarSrc } from "$lib/client/utils/media"
 import { composerClosuresFor, DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { castFaceOf } from "./projections/characters"
+import { sessionBookOf } from "$lib/client/sessions/store/derive"
 import {
 	resolveSprite,
 	shownSpriteOf,
@@ -642,10 +642,11 @@ export function projectConversationDossier(
 		extendRefusal,
 		// 🚧 Back · Forward (RF fix 5): the server's state off the session; the
 		// strip adds the owner rule and a reply being written.
-		...(() => {
-			const rewind = rewindStateWith(session, session.sessionMessages ?? [])
-			return rewind ? { rewind } : {}
-		})(),
+		...(src.data.rewind
+			? { rewind: { ahead: src.data.rewind.ahead, back: src.data.rewind.back, forward: src.data.rewind.forward } }
+			: {}),
+		// 🚧 pr-6s2 (I §I-1): the settle line — the conversation marks the newest settled line it shows.
+		settledThrough: typeof (session as { settledLine?: unknown }).settledLine === "number" ? (session as { settledLine: number }).settledLine : null,
 		isOwner: !isGuest,
 		cast: {
 			sessionPersonas: (session.sessionPersonas ?? []).map((cp) => ({
@@ -662,7 +663,8 @@ export function projectConversationDossier(
 		// 🚧 Scene boundaries (§7): the server's refusals, mirrored.
 		sceneBoundaries: sceneBoundariesFor({
 			isOwner: !isGuest,
-			readsLorebook: session.lorebookId != null,
+			// 🚧 Every session has a book (own or shared): the server's openScene falls back to the own book.
+			readsLorebook: sessionBookOf(session) != null,
 			opensScenes: offersWrite("scenes"),
 			// Off at either level (Personal > Lorebook > Session, 2026-10-21):
 			// the owner's own setting, or the book's (on the joined row).
@@ -803,7 +805,9 @@ export function projectConversationDossier(
 			candidates: snapshot(
 				turnOrder?.candidates ?? []
 			) as ConversationDossierV1["turn"]["candidates"],
-			show: shouldShowNextCharacterBlock,
+			// 🚧 pr-6 (R-k): an archived session offers no next turn — its
+			// composer is closed by the server, and the turn line goes with it.
+			show: shouldShowNextCharacterBlock && !(session as { archivedAt?: unknown }).archivedAt,
 			canChoose: canChooseDifferentCharacter,
 			ownVoiceName: ownVoice,
 			// 🚧 Who the round waits on once the viewer has had their say

@@ -615,9 +615,9 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		expect(refusal).toMatch(/question its turn stopped on/)
 		expect(refusal).toMatch(/Use Regenerate in the composer/)
 		// The composer's Regenerate takes exactly that turn again: the knock alone.
-		const { lastTurnOf } = await import("$lib/server/sessions/turnYield")
-		const turn = await lastTurnOf(testDb as any, w.session.id)
-		expect(turn.ok && turn.yield.rows.map((r) => [r.messageId, r.name])).toEqual([
+		const { turnUnitOf } = await import("$lib/server/sessions/rewind")
+		const turn = await turnUnitOf(testDb as any, w.session.id, { includePersonLines: false })
+		expect(turn.ok && turn.unit.rows.map((r) => [r.messageId, r.name])).toEqual([
 			[knock.messageId, "Oracle"]
 		])
 	})

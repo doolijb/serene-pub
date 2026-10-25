@@ -890,6 +890,20 @@
       "when": 1792827085866,
       "tag": "0126_genre_slots_retire",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1792913487394,
+      "tag": "0127_pr6_settle_line",
+      "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1792947597840,
+      "tag": "0128_pr6s2_core_annex",
+      "breakpoints": true
     }
   ]
 }

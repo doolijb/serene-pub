@@ -26,32 +26,6 @@ const DUTIES_CONTRACTS: ReadonlySet<string> = new Set([C.replyDuties.id, C.recko
 export const isDutiesContract = (definition: string): boolean => DUTIES_CONTRACTS.has(definition)
 
 /**
- * 🚧 The duties that write a lorebook, by contract — Off in a session with
- * none, as each contract says (lane 6, replacing the retired tasks'
- * `LOREBOOK_TASKS`): *Describe new places*; *Summarize the story*, *Add to
- * the lore*, *Note new people*, *Keep the world*, *File the places*.
- */
-export const LOREBOOK_DUTIES: Readonly<Record<string, readonly string[]>> = {
-	[C.reckoningDuties.id]: ["placesOnMove"],
-	[C.sweepDuties.id]: ["summary", "lore", "cast", "worldState", "scenes"]
-}
-
-/**
- * 🚧 What a run forces on a document's duties steps in a session with no
- * lorebook: each lorebook duty Off (the routine runtime's run-time override,
- * at the session layer; nothing is stored).
- */
-export function noBookDutyOverrides(
-	nodes: ReadonlyArray<{ key: string; definitionId: string; definitionVersion: number }>
-): Array<{ nodeKey: string; slot: string; path: string; value: unknown }> {
-	const out: Array<{ nodeKey: string; slot: string; path: string; value: unknown }> = []
-	for (const n of nodes)
-		for (const duty of LOREBOOK_DUTIES[`${n.definitionId}@${n.definitionVersion}`] ?? [])
-			out.push({ nodeKey: n.key, slot: "params", path: duty, value: false })
-	return out
-}
-
-/**
  * 🚧 **What a reply that carries changes takes over** (PLAN-genres-seams S2,
  * ★B, 2026-10-23), by the duties contract that cedes: while the session's
  * reply carries changes at Full (*Replies carry changes*, the reply's

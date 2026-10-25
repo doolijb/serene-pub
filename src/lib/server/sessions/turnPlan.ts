@@ -22,7 +22,9 @@
  */
 
 import { and, desc, eq, isNull } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import type { RotationMessage } from "$lib/server/pipelines/runtime/speakerRotation"
 
 /** What a planner's row stores as `metadata.turnPlan`. */
@@ -238,7 +240,7 @@ export async function standingPlanRowId(
 			and(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				// 🚧 The live history (RF fix 5): a rewound plan stands for nobody.
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -295,11 +297,12 @@ export async function skipWaitingTurn(
 		.where(eq(schema.sessionMessages.id, planRowId))
 	const { readTurnOrder } = await import("@serene-pub/sdk")
 	const [session] = await db
-		.select({ metadata: schema.sessions.metadata })
+		.select({ annex: schema.sessions.annex })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const stored = readTurnOrder(session?.metadata)
+	const core = coreAnnexIn(session?.annex)
+	const stored = readTurnOrder(core)
 	const next = {
 		...stored,
 		order: stored.order.filter((e) => !(e.ref === ref && e.via === "plan")),
@@ -314,7 +317,7 @@ export async function skipWaitingTurn(
 	 */
 	{
 		const { readTurnTally, writeLaneTally, STORY_LANE } = await import("$lib/server/pipelines/routines/turnTally")
-		const lane = readTurnTally(session?.metadata).lanes[STORY_LANE]
+		const lane = readTurnTally(core).lanes[STORY_LANE]
 		if (lane && !(lane.turnsBy[ref] >= 1))
 			await writeLaneTally(db, sessionId, STORY_LANE, { ...lane, turnsBy: { ...lane.turnsBy, [ref]: 1 } })
 	}

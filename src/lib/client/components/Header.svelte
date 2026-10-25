@@ -5,6 +5,7 @@
 		type RowMenuEntries
 	} from "$lib/client/components/menus/RowMenu.svelte"
 	import { getContext, tick } from "svelte"
+	import { SESSION_ARCHIVE_LABELS } from "$lib/shared/sessions/archive"
 	// Rolled up or not (note 29): a per-device shell preference.
 	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
 	// The way into the session layout editor: this bar's Layout button asks,
@@ -81,6 +82,7 @@
 	const sessionName = $derived(openSessionCtx?.sessionName ?? null)
 	const genreName = $derived(openSessionCtx?.genreName ?? null)
 	const branchMark = $derived(openSessionCtx?.branchOfLabel ?? null)
+	const archived = $derived(openSessionCtx?.archived === true)
 	const cast = $derived((openSessionCtx?.cast ?? []).slice(0, CAST_SHOWN))
 
 	/**
@@ -99,8 +101,8 @@
 	}
 
 	/**
-	 * 🚧 **Back · Forward** (RF fix 5): the story's history, one turn at a
-	 * time — two icon buttons at the head of the trailing cluster since
+	 * 🚧 **Back · Forward · Regenerate** (RF fix 5): the story's history, one turn at a
+	 * time — icon buttons at the head of the trailing cluster since
 	 * polish parity L1 (2026-10-24; they were a row of their own above the
 	 * log). The page writes what they read and do (`openSessionCtx.rewind`);
 	 * absent, they are not drawn. Greyed, never disabled (the chips' rule):
@@ -118,6 +120,11 @@
 			: rewind?.aheadText
 				? `Forward one turn (${rewind.aheadText})`
 				: "Forward one turn"
+	)
+	const regenerateTitle = $derived(
+		rewind?.regenerate?.reason
+			? `Regenerate the last turn — ${rewind.regenerate.reason}`
+			: "Regenerate the last turn"
 	)
 
 	/**
@@ -141,6 +148,13 @@
 			disabled: rewind.forward.disabled,
 			title: forwardTitle,
 			onSelect: () => rewind.goForward()
+		},
+		rewind?.regenerate && {
+			label: "Regenerate the last turn",
+			icon: Icons.RefreshCw,
+			disabled: rewind.regenerate.disabled,
+			title: regenerateTitle,
+			onSelect: () => rewind.regenerate!.press()
 		},
 		rewind && { separator: true },
 		openSessionCtx?.sessionId != null &&
@@ -249,6 +263,16 @@
 						{branchMark}
 					</span>
 				{/if}
+				{#if archived}
+					<span class="sp-head-genre" data-archived>
+						<Icons.Archive
+							size={12}
+							class="inline align-[-1px]"
+							aria-hidden="true"
+						/>
+						{SESSION_ARCHIVE_LABELS.mark}
+					</span>
+				{/if}
 			</div>
 
 			<!-- The trailing cluster. Measured, because `.sp-head-lead` mirrors it:
@@ -292,6 +316,23 @@
 						<span id="{rewindId}-forward" class="sr-only">
 							{rewind.forward.reason ?? rewind.aheadText}
 						</span>
+					{/if}
+					{#if rewind.regenerate}
+						<button
+							type="button"
+							class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
+							aria-label="Regenerate the last turn"
+							title={regenerateTitle}
+							aria-disabled={rewind.regenerate.disabled}
+							aria-describedby={rewind.regenerate.reason ? `${rewindId}-regenerate` : undefined}
+							data-header-rewind="regenerate"
+							onclick={(e) => (rewind.regenerate!.disabled ? e.preventDefault() : rewind.regenerate!.press())}
+						>
+							<Icons.RefreshCw aria-hidden="true" />
+						</button>
+						{#if rewind.regenerate.reason}
+							<span id="{rewindId}-regenerate" class="sr-only">{rewind.regenerate.reason}</span>
+						{/if}
 					{/if}
 					</span>
 				{/if}
@@ -398,6 +439,16 @@
 					<a class="shrink-0 underline" href={notice.link.href}>
 						{notice.link.label}
 					</a>
+				{/if}
+				{#if notice.action}
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal shrink-0"
+						data-header-notice-action
+						onclick={() => notice?.action?.press()}
+					>
+						{notice.action.label}
+					</button>
 				{/if}
 				<button
 					type="button"

@@ -24,6 +24,7 @@
  * entries have not happened yet for it. An undated entry is a loose end of
  * the book, not a moment, and is left out.
  */
+import { realDateTime } from "$lib/client/utils/realTime.svelte"
 import type {
 	HistoryEntriesV1,
 	HistoryEntryV1,
@@ -80,6 +81,8 @@ export interface SceneRow {
 	closedAtMessageId?: number | null
 	/** 🚧 Where its summary stands (`none` · `running` · `review` · `done` · `failed`). */
 	summaryStatus?: string | null
+	/** 🚧 What its applied summary was written from (`scenes:list`, pr-6s2); null or absent: nothing recorded. */
+	loreSources?: Sockets.Scenes.List.SceneLoreSources | null
 }
 
 /**
@@ -124,6 +127,8 @@ export interface HistoryEntriesDeps {
 	readLines(lorebookId: number): Promise<LineBranch[]>
 	/** This session's scenes, as the page holds them. */
 	sceneList(): readonly SceneRow[]
+	/** 🚧 The session's own book: read when the clock reading names no lorebook (pr-6 B §B-3). */
+	ownBookId?(): number | null
 	/** The session's genre captures scenes. */
 	opensScenes(): boolean
 	/** The page keeps its copy of the session's own clock current. */
@@ -177,6 +182,14 @@ const sceneStart = (s: SceneRow) =>
 			: Number.POSITIVE_INFINITY
 
 /**
+ * 🚧 When the newest line a scene's summary was written from was written, as Chronicle says it: a day and a time in the
+ * viewer's zone ("3 Oct, 14:20"); "" when unknown, and Chronicle then draws no line (pr-6s2, I §I-2).
+ */
+export function throughLabelOf(throughAt: string | null | undefined): string {
+	return realDateTime(throughAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })
+}
+
+/**
  * Everything the Chronicle reads, composed (the module note). Also what
  * `start-history-entry` starts from: `currentRow` and the line.
  */
@@ -198,8 +211,13 @@ export async function readChronicle(
 	deps.noteStoryClock?.(ownClockOf(reading))
 	deps.noteStoryCalendar?.(reading.calendar ?? null)
 	const clock = storyClockV1(reading)
+	// 🚧 No shared lorebook: the session's own book (its Session notes, one line) — the clock reading
+	// names none (the server's storyClock read does not look at it; its clock reads unset there).
+	const own = reading.lorebookId == null ? (deps.ownBookId?.() ?? null) : null
+	const lorebookId = reading.lorebookId ?? own
+	const branchId = own != null ? null : (reading.branchId ?? null)
 	const empty: HistoryEntriesV1 = {
-		lorebookId: reading.lorebookId ?? null,
+		lorebookId,
 		ownerOnly: reading.isOwner !== true,
 		clock,
 		current: null,
@@ -209,8 +227,6 @@ export async function readChronicle(
 		ungraphedScenes: 0,
 		opensScenes: deps.opensScenes()
 	}
-	const lorebookId = reading.lorebookId ?? null
-	const branchId = reading.branchId ?? null
 	if (lorebookId == null || reading.isOwner !== true)
 		return { answer: empty, currentRow: null, branchId }
 
@@ -304,7 +320,16 @@ export async function readChronicle(
 								order: order.get(s.id) ?? 0,
 								summarized: !!s.summary?.trim(),
 								graphed: s.graphed === true,
-								summaryStatus: summaryStatusOf(s)
+								summaryStatus: summaryStatusOf(s),
+								...(s.loreSources
+									? {
+											loreSources: {
+												fromMessageId: s.loreSources.fromMessageId,
+												throughMessageId: s.loreSources.throughMessageId,
+												throughLabel: throughLabelOf(s.loreSources.throughAt)
+											}
+										}
+									: {})
 							})
 						)
 				: [],

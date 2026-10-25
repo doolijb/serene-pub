@@ -12,10 +12,10 @@ const theirs = { role: "user", userId: 1, channel: "main" }
 
 describe("may a member press Continue", () => {
 	test("the owner always may", () => {
-		expect(mayContinue({ isOwner: true, userId: 1, rows: [reply], sessionMetadata: {} })).toBe(true)
+		expect(mayContinue({ isOwner: true, userId: 1, rows: [reply], turnOrder: { order: [] } })).toBe(true)
 	})
 	test("a member with a line since the last reply may; one without may not", () => {
-		const base = { isOwner: false, userId: GUEST, sessionMetadata: {} }
+		const base = { isOwner: false, userId: GUEST, turnOrder: { order: [] } }
 		expect(mayContinue({ ...base, rows: [reply, mine, theirs] })).toBe(true)
 		expect(mayContinue({ ...base, rows: [mine, reply, theirs] })).toBe(false)
 		expect(mayContinue({ ...base, rows: [] })).toBe(false)
@@ -32,11 +32,11 @@ describe("may a member press Continue", () => {
 	})
 	test("off main, only a prepared entry there lets a member continue", () => {
 		const base = { isOwner: false, userId: GUEST, rows: [reply, mine], channel: "parley:2" }
-		expect(mayContinue({ ...base, sessionMetadata: {} })).toBe(false)
+		expect(mayContinue({ ...base, turnOrder: { order: [] } })).toBe(false)
 		expect(
 			mayContinue({
 				...base,
-				sessionMetadata: { turnOrder: { v: 1, order: [{ ref: null, via: "rotation", channel: "parley:2" }], candidates: [], basedOnAt: 0, computedAt: 0, runId: null, event: null, strategy: null } }
+				turnOrder: { order: [{ ref: null, via: "rotation", channel: "parley:2" }] } as never
 			})
 		).toBe(true)
 	})

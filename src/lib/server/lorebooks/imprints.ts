@@ -42,17 +42,22 @@
  * its `tx` (the outer `db` deadlocks PGlite). Never statically imports
  * `$lib/server/db`.
  */
-import { and, desc, eq, gt, inArray, or } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm"
 import { i18nText } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { KeptImprint } from "$lib/shared/entries/types"
+import { assertRetractable, settledLineOf } from "$lib/server/sessions/settle"
 
 /** What an imprint is written on: its subject's kind. */
 export const IMPRINT_SUBJECTS = ["entry", "relationship", "member", "overlay"] as const
 export type ImprintSubject = (typeof IMPRINT_SUBJECTS)[number]
 
-/** `standing` — in force; `kept` — its reply was replaced, and the book had moved on. */
-export const IMPRINT_STATUSES = ["standing", "kept"] as const
+/**
+ * `standing` — in force; `kept` — its reply was replaced, and the book had
+ * moved on (or a person edited the field); `settled` — the settle line passed
+ * it, so it cannot be taken back (pr-6 A3).
+ */
+export const IMPRINT_STATUSES = ["standing", "kept", "settled"] as const
 export type ImprintStatus = (typeof IMPRINT_STATUSES)[number]
 
 export type LoreImprintRow = typeof schema.loreImprints.$inferSelect
@@ -360,7 +365,7 @@ export async function imprintAnchorFor(
 	sessionId: number,
 	opts: { turnMessageId?: number | null; runId?: string | null }
 ): Promise<ImprintAnchor> {
-	const { turnAnchorOf } = await import("$lib/server/lorebooks/phantom")
+	const { turnAnchorOf } = await import("$lib/server/lorebooks/ownBook")
 	return {
 		sessionId,
 		messageId: await turnAnchorOf(db, sessionId, opts.turnMessageId ?? null),
@@ -403,13 +408,23 @@ async function isNotes(db: Db, lorebookId: number, cache: Map<number, boolean>):
  */
 export async function retractImprints(db: Db, selection: ImprintSelection): Promise<TakenImprint[]> {
 	const I = schema.loreImprints
+	// The settle line (pr-6 A3): a message selection refuses at or below it;
+	// a run selection leaves settled stretches alone.
+	if ("messageIds" in selection) {
+		for (const id of selection.messageIds) await assertRetractable(db, id)
+	}
+	const line = "messageIds" in selection ? null : await settledLineOf(db, selection.sessionId)
 	const where =
 		"messageIds" in selection
 			? selection.messageIds.length
 				? inArray(I.messageId, [...selection.messageIds])
 				: undefined
 			: selection.runIds.length
-				? and(eq(I.sessionId, selection.sessionId), inArray(I.runId, [...selection.runIds]))
+				? and(
+						eq(I.sessionId, selection.sessionId),
+						inArray(I.runId, [...selection.runIds]),
+						line != null ? or(isNull(I.messageId), gt(I.messageId, line)) : undefined
+					)
 				: undefined
 	if (!where) return []
 	const batch = (await db
@@ -612,6 +627,32 @@ export const KEPT_IMPRINT_REFUSALS = Object.freeze({
 	missing: "That change is no longer waiting on a decision.",
 	notYours: "Only someone who may edit this lorebook can revert it."
 })
+
+/**
+ * A person wrote these fields of a lorebook row: every `standing` imprint on
+ * them becomes `kept` now, and the made-row imprint (`field IS NULL`) of that
+ * row too. Returns how many.
+ */
+export async function markImprintsKept(
+	db: Db,
+	at: { subjectKind: ImprintSubject; subjectId: number; fields: readonly string[] }
+): Promise<number> {
+	if (!at.fields.length) return 0
+	const I = schema.loreImprints
+	const rows = await db
+		.update(I)
+		.set({ status: "kept" })
+		.where(
+			and(
+				eq(I.subjectKind, at.subjectKind),
+				eq(I.subjectId, at.subjectId),
+				eq(I.status, "standing"),
+				or(inArray(I.field, [...at.fields]), isNull(I.field))
+			)
+		)
+		.returning({ id: I.id })
+	return rows.length
+}
 
 /**
  * The note's two buttons: **Revert** puts the field back to what it held

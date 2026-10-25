@@ -178,7 +178,8 @@ describe("the header's Back · Forward", () => {
 			ahead: 0,
 			aheadText: "",
 			goBack,
-			goForward
+			goForward,
+			regenerate: null
 		})
 		const back = press("Back one turn")!
 		const forward = press("Forward one turn")!
@@ -204,13 +205,65 @@ describe("the header's Back · Forward", () => {
 			ahead: 2,
 			aheadText: "2 turns ahead",
 			goBack: vi.fn(),
-			goForward
+			goForward,
+			regenerate: null
 		})
 		const forward = press("Forward one turn")!
 		expect(forward.getAttribute("title")).toBe("Forward one turn (2 turns ahead)")
 		forward.click()
 		expect(goForward).toHaveBeenCalledOnce()
 		expect(press("Back one turn")!.getAttribute("aria-disabled")).toBe("true")
+	})
+
+	test("pr-6 D2: Regenerate sits third, grey with its reason; enabled, it presses", () => {
+		const grey = vi.fn()
+		mountWith({
+			back: { disabled: false },
+			forward: { disabled: false },
+			ahead: 0,
+			aheadText: "",
+			goBack: vi.fn(),
+			goForward: vi.fn(),
+			regenerate: { disabled: true, reason: "Your line is the newest. Press Continue.", press: grey }
+		})
+		const regenerate = press("Regenerate the last turn")!
+		expect(regenerate.getAttribute("data-header-rewind")).toBe("regenerate")
+		expect(regenerate.getAttribute("aria-disabled")).toBe("true")
+		expect(regenerate.getAttribute("title")).toBe(
+			"Regenerate the last turn — Your line is the newest. Press Continue."
+		)
+		const note = document.getElementById(regenerate.getAttribute("aria-describedby")!)
+		expect(note?.textContent?.trim()).toBe("Your line is the newest. Press Continue.")
+		regenerate.click()
+		expect(grey).not.toHaveBeenCalled()
+		if (app) unmount(app)
+		app = null
+		document.body.innerHTML = ""
+		const go = vi.fn()
+		mountWith({
+			back: { disabled: false },
+			forward: { disabled: false },
+			ahead: 0,
+			aheadText: "",
+			goBack: vi.fn(),
+			goForward: vi.fn(),
+			regenerate: { disabled: false, press: go }
+		})
+		press("Regenerate the last turn")!.click()
+		expect(go).toHaveBeenCalledOnce()
+	})
+
+	test("pr-6 D2: no Regenerate where the genre offers none", () => {
+		mountWith({
+			back: { disabled: false },
+			forward: { disabled: false },
+			ahead: 0,
+			aheadText: "",
+			goBack: vi.fn(),
+			goForward: vi.fn(),
+			regenerate: null
+		})
+		expect(press("Regenerate the last turn") === null).toBe(true)
 	})
 })
 
@@ -236,5 +289,61 @@ describe("the banners host view keeps only who is typing", () => {
 		})
 		flushSync()
 		expect(document.body.textContent?.trim()).toBe("")
+	})
+})
+
+describe("pr-6 D4: the notice's action and the Archived mark", () => {
+	const mountCtx = (extra: Partial<OpenSessionCtx>) => {
+		vi.stubGlobal("localStorage", {
+			getItem: () => null,
+			setItem: () => {},
+			removeItem: () => {}
+		})
+		const ctx = $state<Partial<OpenSessionCtx>>({
+			sessionId: 1,
+			sessionName: "The Lantern Inn",
+			genreName: "Chat",
+			cast: [],
+			...extra
+		})
+		app = mount(Header, {
+			target: document.body,
+			props: {},
+			context: new Map<string, unknown>([["openSessionCtx", ctx]])
+		})
+		flushSync()
+		return ctx
+	}
+	afterEach(() => vi.unstubAllGlobals())
+
+	test("a notice with an action draws its button; pressing calls press once", () => {
+		const press = vi.fn()
+		mountCtx({
+			headerNotice: {
+				text: "Catch up?",
+				link: null,
+				dismiss: vi.fn(),
+				action: { label: "Catch up on Inn", press }
+			}
+		})
+		const button = document.querySelector<HTMLButtonElement>("[data-header-notice-action]")!
+		expect(button.textContent?.trim()).toBe("Catch up on Inn")
+		button.click()
+		expect(press).toHaveBeenCalledOnce()
+	})
+
+	test("a notice without an action draws no such button", () => {
+		mountCtx({ headerNotice: { text: "Plain", link: null, dismiss: vi.fn() } })
+		expect(document.querySelector("[data-header-notice-action]") === null).toBe(true)
+	})
+
+	test("archived draws the mark; absent, none", () => {
+		mountCtx({ archived: true })
+		expect(document.querySelector("[data-archived]")?.textContent?.trim()).toBe("Archived")
+		if (app) unmount(app)
+		app = null
+		document.body.innerHTML = ""
+		mountCtx({})
+		expect(document.querySelector("[data-archived]") === null).toBe(true)
 	})
 })

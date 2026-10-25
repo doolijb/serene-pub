@@ -273,7 +273,7 @@ export interface EngineInput {
 	checkAsks?: { preRoll?: boolean; postRoll?: boolean }
 	/**
 	 * 🚧 The session's `card-draw` decks as this moment finds them, by check
-	 * method key (`sessions.metadata.rulesetDecks`); a deck absent, or of
+	 * method key (`annex.core.rulesetDecks`); a deck absent, or of
 	 * another scene, is shuffled anew. `scene` is the open scene the decks
 	 * belong to (null: none open — the session is one scene); `deckSeed`
 	 * seeds each shuffle, so a deck's order is fixed by session, scene and

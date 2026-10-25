@@ -61,10 +61,11 @@
  * `writeSessionGreetings`.
  */
 
-import { and, desc, eq, isNull, like, or, sql, type SQL } from "drizzle-orm"
+import { and, desc, eq, like, or, sql, type SQL } from "drizzle-orm"
 import type { PgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
+import { liveMessageWhere } from "./liveHistory"
 import {
 	DEFAULT_CHANNEL as SDK_DEFAULT_CHANNEL,
 	formatChannel,
@@ -306,7 +307,7 @@ export async function channelHead(
 				eq(schema.sessionMessages.channel, channel),
 				// 🚧 The live history (RF fix 5): after Back, the newest row
 				// Back left is the head — the one Regenerate acts on.
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -346,7 +347,7 @@ export async function stalenessHead(
 				// after the question it follows must not overtake it.
 				sql`coalesce((${schema.sessionMessages.metadata} ->> 'tableLine')::boolean, false) = false`,
 				// 🚧 The live history (RF fix 5).
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))

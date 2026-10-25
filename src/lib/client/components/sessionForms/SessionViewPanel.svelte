@@ -7,10 +7,19 @@
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { declareInterest, requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { lastActivityAt, timeAgo } from "$lib/client/utils/timeAgo"
-	import { branchOf, branchOfLabel } from "$lib/shared/sessions/branchOf"
+	import { branchOfLabel, branchOfSession } from "$lib/shared/sessions/branchOf"
+	import ActionConfirm from "$lib/client/components/sessionPage/ActionConfirm.svelte"
+	import { askingOf } from "$lib/client/components/sessionPage/actionConfirmAsking"
+	import {
+		CLOSE_OUT_CONFIRM,
+		CLOSE_OUT_LABEL,
+		SESSION_ARCHIVE_CONFIRM,
+		SESSION_ARCHIVE_LABELS
+	} from "$lib/shared/sessions/archive"
+	import { SHARE_CONFIRMS, SHARE_LABELS } from "$lib/shared/lorebooks/sessionNotes"
 
 	interface Props {
 		sessionId: number
@@ -92,10 +101,17 @@
 			interestKey("sessions:get", id),
 			handleSessionsGet
 		)
+		const releaseRefresh = declareInterest<"sessions:refresh">(
+			interestKey("sessions:refresh", id),
+			handleSessionsGet
+		)
 		socket.emit("sessions:get", {
 			id
 		} satisfies Sockets.Sessions.Get.Params)
-		return release
+		return () => {
+			release()
+			releaseRefresh()
+		}
 	})
 
 	/**
@@ -141,9 +157,8 @@
 	let lorebookId = $derived((session as any)?.lorebookId ?? null)
 
 	/**
-	 * 🚧 Set when "Create lorebook from session" is chosen: the reply re-sends
-	 * the session, and the book it now reads is opened once it lands (the
-	 * toast is the server's, through the central `success` path).
+	 * 🚧 Set when Share as a lorebook is confirmed: the server re-sends the
+	 * session, and the book it now reads is opened once it lands.
 	 */
 	let openCreatedBook = $state(false)
 	$effect(() => {
@@ -157,6 +172,39 @@
 	 * the action alone.
 	 */
 	let lorebookName = $derived((session as any)?.lorebook?.name ?? null)
+	/**
+	 * 🚧 pr-6 (R-p): the attached book's name for Share's two verbs. The
+	 * session payload joins no lorebook row, so it is read off the session's
+	 * own-book row (`lorebooks:sessionNotes`, its `attached`), the owner's only.
+	 */
+	let attachedName = $state<string | null>(null)
+	$effect(() => {
+		if (!isOwner || lorebookId == null) {
+			attachedName = null
+			return
+		}
+		const id = sessionId
+		return requestWithInterest("lorebooks:sessionNotes", {}, (res) => {
+			const row = res.books?.find((b) => b.sessionId === id)
+			if (row) attachedName = row.attached?.name ?? null
+		})
+	})
+	let shareBookName = $derived(attachedName ?? lorebookName ?? "its lorebook")
+	let archived = $derived(
+		!!(session as { archivedAt?: unknown } | null)?.archivedAt
+	)
+	let closeOutRegistered = $derived(
+		(session as { closeOutRegistered?: boolean } | null)
+			?.closeOutRegistered === true
+	)
+	/** The question before a verb; Confirm runs `go`. */
+	let asking = $state<{
+		asking: { question: string; description?: string; confirmLabel: string }
+		go: () => void
+	} | null>(null)
+	function ask(sentence: string, label: string, go: () => void) {
+		asking = { asking: askingOf(sentence, label), go }
+	}
 	let guests = $derived(
 		((session as any)?.sessionGuests ?? [])
 			.map((g: any) => g?.user)
@@ -178,8 +226,9 @@
 	let heroMeta = $derived.by(() => {
 		const parts: string[] = []
 		if (genreName) parts.push(genreName)
+		if (archived) parts.push(SESSION_ARCHIVE_LABELS.mark)
 		// 🚧 The branch marker: which session this one was branched from.
-		const branchMark = branchOfLabel(branchOf((session as any)?.metadata))
+		const branchMark = branchOfLabel(branchOfSession(session as any))
 		if (branchMark) parts.push(branchMark)
 		if (messageCount != null) {
 			parts.push(
@@ -220,20 +269,69 @@
 					icon: isFavorite ? Icons.StarOff : Icons.Star,
 					onSelect: () => onToggleFavorite?.(sessionId, !isFavorite)
 				},
-			// 🚧 Create lorebook from session (PLAN-rulesets §26): the
-			// session's own notes become a lorebook it reads. Owner-only,
-			// and only while it reads none; the reply re-sends the session,
-			// so "View lorebook" takes this item's place.
+			// Share (pass 11): one verb while the own book overlays nothing,
+			// two once it overlays an attached book.
 			isOwner &&
 				lorebookId == null && {
-					label: "Create lorebook from session",
+					label: SHARE_LABELS.asLorebook,
 					icon: Icons.BookPlus,
+					onSelect: () =>
+						ask(SHARE_CONFIRMS.asLorebook, SHARE_LABELS.asLorebook, () => {
+							openCreatedBook = true
+							socket.emit("sessions:shareAsLorebook", { sessionId })
+						})
+				},
+			isOwner &&
+				lorebookId != null && {
+					label: SHARE_LABELS.toAttached(shareBookName),
+					icon: Icons.BookUp,
 					onSelect: () => {
-						openCreatedBook = true
-						socket.emit("sessions:createLorebookFromPhantom", {
-							sessionId
-						} satisfies Sockets.Sessions.CreateLorebookFromPhantom.Params)
+						const book = shareBookName
+						ask(SHARE_CONFIRMS.toAttached(book), SHARE_LABELS.toAttached(book), () =>
+							socket.emit("sessions:applyOverlay", { sessionId, entryIds: null })
+						)
 					}
+				},
+			isOwner &&
+				lorebookId != null && {
+					label: SHARE_LABELS.cloneWithChanges,
+					icon: Icons.CopyPlus,
+					onSelect: () => {
+						const book = shareBookName
+						ask(
+							SHARE_CONFIRMS.cloneWithChanges(book),
+							SHARE_LABELS.cloneWithChanges,
+							() => socket.emit("sessions:cloneWithChanges", { sessionId })
+						)
+					}
+				},
+			isOwner &&
+				closeOutRegistered && {
+					label: CLOSE_OUT_LABEL,
+					icon: Icons.ScrollText,
+					onSelect: () =>
+						ask(CLOSE_OUT_CONFIRM, CLOSE_OUT_LABEL, () =>
+							socket.emit("sessions:closeOut", { sessionId })
+						)
+				},
+			isOwner &&
+				!archived && {
+					label: SESSION_ARCHIVE_LABELS.archive,
+					icon: Icons.Archive,
+					onSelect: () =>
+						ask(
+							closeOutRegistered
+								? SESSION_ARCHIVE_CONFIRM.withCloseOut
+								: SESSION_ARCHIVE_CONFIRM.plain,
+							SESSION_ARCHIVE_LABELS.archive,
+							() => socket.emit("sessions:archive", { sessionId })
+						)
+				},
+			isOwner &&
+				archived && {
+					label: SESSION_ARCHIVE_LABELS.unarchive,
+					icon: Icons.ArchiveRestore,
+					onSelect: () => socket.emit("sessions:unarchive", { sessionId })
 				},
 			isOwner && onDelete && { separator: true },
 			isOwner &&
@@ -478,6 +576,16 @@
 		</button>
 	{/if}
 {/snippet}
+
+<ActionConfirm
+	asking={asking?.asking ?? null}
+	onConfirm={() => {
+		const g = asking?.go
+		asking = null
+		g?.()
+	}}
+	onCancel={() => (asking = null)}
+/>
 
 {#snippet tagChips()}
 	{#each tags as tag}

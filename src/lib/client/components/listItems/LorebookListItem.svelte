@@ -5,7 +5,7 @@
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import Avatar from "../Avatar.svelte"
 	import { lorebookCoverSrc } from "$lib/client/utils/media"
-	import RowMenu from "../menus/RowMenu.svelte"
+	import RowMenu, { type RowMenuEntries } from "../menus/RowMenu.svelte"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import {
 		CHARACTER_LORE_TYPE_ID,
@@ -45,6 +45,10 @@
 		onOpenSettings?: (id: number) => void
 		/** Asks for a copy; the prompt names it. A shared row's one verb. */
 		onDuplicate?: (id: number, name: string) => void
+		/** 🚧 pr-6 (R-f): set on a session-notes row — "Kept on top of ‹book›" in place of the description. */
+		sessionNotesOf?: { attached: { id: number; name: string } | null } | null
+		/** 🚧 pr-6 (R-p): the Share verbs, right after View. */
+		shareItems?: RowMenuEntries
 	}
 
 	let {
@@ -62,7 +66,9 @@
 		onAttachToSession,
 		onDetachFromSession,
 		onOpenSettings,
-		onDuplicate
+		onDuplicate,
+		sessionNotesOf = null,
+		shareItems
 	}: Props = $props()
 
 	/** 🚧 A starter lorebook's row: badged, and never read into a session. */
@@ -136,6 +142,12 @@
 						<div class="text-surface-600-400 truncate text-left text-xs">
 							{sharedFromLine(lorebook)}
 						</div>
+					{:else if sessionNotesOf}
+						{#if sessionNotesOf.attached}
+							<div class="text-surface-600-400 truncate text-left text-xs">
+								Kept on top of {sessionNotesOf.attached.name}
+							</div>
+						{/if}
 					{:else if lorebook.description}
 						<div
 							class="text-surface-600-400 line-clamp-2 text-left text-xs"
@@ -179,6 +191,7 @@
 						icon: Icons.Eye,
 						onSelect: handleClick
 					},
+					...(shareItems ?? []),
 					sessionActions &&
 						isOpenSessionLorebook && {
 							label: STOP_READING,
@@ -211,7 +224,8 @@
 					},
 					// Paused (owner ruling 2026-09-28): shown, disabled, with
 					// the reason on the row.
-					!lorebook.isSharedWithMe && {
+					!lorebook.isSharedWithMe &&
+						!sessionNotesOf && {
 						label: "Export (paused)",
 						icon: Icons.Download,
 						disabled: true,

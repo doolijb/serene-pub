@@ -14,7 +14,7 @@
  *  3. **No socket, no broadcast** — a run started by a test or a CLI has
  *     nobody to tell.
  *  4. An order a session has never had pushes as the empty order: the store
- *     is a `metadata.turnOrder` key that does not exist yet.
+ *     is annex owner `core`'s `turnOrder` key, which does not exist yet.
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest"
@@ -31,6 +31,7 @@ import {
 	type TurnOrderV1
 } from "@serene-pub/sdk"
 import { writeTurnOrder } from "./turnOrder"
+import { coreAnnexIn } from "./coreAnnex"
 
 let db: TestDb
 let userId: number
@@ -94,10 +95,10 @@ describe("pushTurnOrder", () => {
 		const { pushTurnOrder } = await import("./turnOrderPush")
 		await pushTurnOrder(io, session.id, order(2000, "explicit"))
 		const [row] = await db
-			.select({ metadata: schema.sessions.metadata })
+			.select({ annex: schema.sessions.annex })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, session.id))
-		expect(readTurnOrder(row!.metadata)).toEqual(
+		expect(readTurnOrder(coreAnnexIn(row!.annex))).toEqual(
 			readTurnOrder({ turnOrder: order(2000, "explicit") })
 		)
 	})

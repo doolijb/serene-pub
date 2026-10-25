@@ -13,6 +13,7 @@
  *    the seat that tried it, and the Narrator hears what it did (★2);
  */
 
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -578,8 +579,8 @@ describe("R1-3: no Continue bar after a solo round", () => {
 		await settle()
 		const narrated = (await rowsOf(sessionId)).filter((r) => r.channel === "main" && r.role === "assistant").at(-1)!
 		expect(narrated.content).toBe(NARRATION)
-		const [row] = await db.select({ metadata: schema.sessions.metadata }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
-		expect((row!.metadata as any)?.turnOrder?.order ?? []).toEqual([])
+		const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+		expect((coreAnnexIn(row!.annex) as any)?.turnOrder?.order ?? []).toEqual([])
 		const heard = pushes.filter((p) => p.sessionId === sessionId && p.event === "sessions:turnOrder")
 		expect(heard.length).toBeGreaterThan(0)
 		expect(heard.at(-1)!.payload.turnOrder?.order ?? []).toEqual([])

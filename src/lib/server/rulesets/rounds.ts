@@ -12,6 +12,7 @@
  */
 
 import { and, count, eq, sql } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { DEFAULT_CHANNEL } from "$lib/server/messages/channels"
 
@@ -30,7 +31,7 @@ export async function roundOf(db: any, sessionId: number): Promise<number> {
 				eq(schema.messages.role, "assistant"),
 				eq(schema.messages.channel, DEFAULT_CHANNEL),
 				// 🚧 The live history (RF fix 5): a rewound reply is no round.
-				sql`not exists (select 1 from ${schema.sessionMessages} sm where sm.id = ${schema.messages.id} and sm.rewind_ordinal is not null)`
+				liveMessageWhere(schema.messages.rewindOrdinal)
 			)
 		)
 	return Number(row?.n ?? 0)

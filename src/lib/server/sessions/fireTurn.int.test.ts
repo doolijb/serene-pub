@@ -21,6 +21,7 @@
  *     the owner's, and a stranger has no session at all.
  */
 
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -340,12 +341,12 @@ describe("sessions:fireTurn — who may fire (§4.7)", () => {
 		)
 		expect(
 			readTurnOrder(
-				(
+				coreAnnexIn((
 					await db
-						.select({ metadata: schema.sessions.metadata })
+						.select({ annex: schema.sessions.annex })
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, s.id))
-				)[0]!.metadata
+				)[0]!.annex)
 			).order
 		).toEqual([{ ref: "character:7", via: "strategy" }])
 		// Firing does not consume the order: it is the same document a view
@@ -361,12 +362,12 @@ describe("sessions:fireTurn — who may fire (§4.7)", () => {
 		expect(replies).toHaveLength(1)
 		expect(
 			readTurnOrder(
-				(
+				coreAnnexIn((
 					await db
-						.select({ metadata: schema.sessions.metadata })
+						.select({ annex: schema.sessions.annex })
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, s.id))
-				)[0]!.metadata
+				)[0]!.annex)
 			).order
 		).toEqual([{ ref: "character:7", via: "strategy" }])
 	})

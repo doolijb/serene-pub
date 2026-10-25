@@ -35,6 +35,8 @@ import {
 	active,
 	cancellation,
 	setRunStopObserver,
+	runKindOf,
+	runKindOfFamily,
 	_reset,
 	type RunStop
 } from "$lib/server/pipelines/runtime/runRegistry"
@@ -379,5 +381,22 @@ describe("a message's Stop stops what the released rows were about — and only 
 		})
 		expect(cancelSession(SESSION, `user:${USER}`, [41])).toBe(0)
 		expect(elsewhere.controller.signal.aborted).toBe(false)
+	})
+})
+
+describe("a run's kind (sprint 2)", () => {
+	it("runKindOf answers a started run's kind, and undefined after finish or for an unknown id", () => {
+		start({ runId: "k1", userId: USER, kind: "reply" })
+		expect(runKindOf("k1")).toBe("reply")
+		finish("k1")
+		expect(runKindOf("k1")).toBeUndefined()
+		expect(runKindOf("never-started")).toBeUndefined()
+	})
+
+	it("runKindOfFamily maps a trigger family to the kind it runs as", () => {
+		expect(runKindOfFamily("event")).toBe("reply")
+		expect(runKindOfFamily("action")).toBe("action")
+		expect(runKindOfFamily("routine")).toBe("routine")
+		expect(runKindOfFamily("anything")).toBe("maintenance")
 	})
 })

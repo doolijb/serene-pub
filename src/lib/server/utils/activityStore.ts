@@ -184,6 +184,10 @@ export type SceneSummarizeActivity = {
 		suggestedParticipantCharacters?: string[]
 		suggestedMentionedCharacters?: string[]
 		raw: string
+		/** 🚧 pr-6 (B §B-7): the messages the draft was written from (its save node's `sources`), for the Save/Apply that commits it. */
+		sourceIds?: number[]
+		/** 🚧 pr-6: the draft run's id (`pipeline_runs.run_id`), recorded on its `lore_sources` row. */
+		runId?: string
 	}
 	startedAt: string
 }
@@ -260,6 +264,10 @@ export type SessionSummarizeActivity = {
 		 * so a review reopened from the Activity panel would save unbound.
 		 */
 		lorebookBindingCharacterId?: number | null
+		/** 🚧 pr-6 (B §B-7): the messages the draft was written from (its save node's `sources`), for the Save/Apply that commits it. */
+		sourceIds?: number[]
+		/** 🚧 pr-6: the draft run's id (`pipeline_runs.run_id`), recorded on its `lore_sources` row. */
+		runId?: string
 	}
 	startedAt: string
 }

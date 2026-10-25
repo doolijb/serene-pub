@@ -111,7 +111,7 @@ The **clock** is where the story stands: its present. With no clock set, the pre
 
 If the calendar can't place the step back (the clock was set somewhere the step would run off the calendar), the delete, regenerate or swipe is refused and says why.
 
-When a move was asked for but the story had no clock yet (nothing in the lorebook is dated and no clock is set, or the session reads no lorebook), the line says so instead: *Time passes: 3 hours, not on the clock. This story has no clock yet: set one in the lorebook to track time.* That goes for **Time passes…** in every genre, a reply's tick, and the state-keeper's move or suggestion in Story. Nothing else stops: the reply stands, the press finishes, and the keeper's other changes are kept.
+When a move was asked for but the story had no clock yet (nothing in the lorebook is dated and no clock is set; a session that reads no shared lorebook keeps its clock in its Session notes, unset until a person or a pipeline sets one), the line says so instead: *Time passes: 3 hours, not on the clock. This story has no clock yet: set one in the lorebook to track time.* That goes for **Time passes…** in every genre, a reply's tick, and the state-keeper's move or suggestion in Story. Nothing else stops: the reply stands, the press finishes, and the keeper's other changes are kept.
 
 A move made before the session has any line at all, not even a greeting, shows at the head of the conversation, above the first message. Once there is a line, a move shows under the newest one, a greeting included.
 

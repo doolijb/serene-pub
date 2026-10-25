@@ -41,6 +41,7 @@
  *     looked past.
  */
 
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -69,12 +70,12 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	ensureSessionMessageEmbedded: async () => {},
 	autoEnqueueSession: async () => {}
 }))
-/** Every whole-session push to the members (`sessions:get`), its thunk kept. */
+/** Every whole-session push to the members (`sessions:refresh`), its thunk kept. */
 const sessionPushes = vi.hoisted(() => [] as Array<{ sessionId: number; build: () => Promise<any> }>)
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 	emitToUserRedacted: async () => {},
 	broadcastToSessionUsers: async (_io: unknown, sessionId: number, event: string, data: unknown) => {
-		if (event === "sessions:get" && typeof data === "function")
+		if (event === "sessions:refresh" && typeof data === "function")
 			sessionPushes.push({ sessionId, build: data as () => Promise<any> })
 	}
 }))
@@ -763,10 +764,10 @@ describe("the Planner talks in a lane", () => {
 			wait: true
 		})
 		const [row] = await db
-			.select({ metadata: schema.sessions.metadata })
+			.select({ annex: schema.sessions.annex })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
-		const order = readTurnOrder(row!.metadata).order
+		const order = readTurnOrder(coreAnnexIn(row!.annex)).order
 		expect(order).toEqual([expect.objectContaining({ ref: null, channel: "parley" })])
 
 		calls.length = 0

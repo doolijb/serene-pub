@@ -33,6 +33,7 @@ import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
 import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { loreSourceIdsOf } from "$lib/server/pipelines/runtime/loreSources"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
 import {
 	compareDates,
@@ -234,9 +235,15 @@ async function buildSceneList(
 		(scenes as Array<{ id: number }>).map((s) => s.id),
 		db
 	)
+	const { sceneLoreSourcesOf } = await import("$lib/server/scenes/liveScenes")
+	const sources = await sceneLoreSourcesOf(
+		db,
+		(scenes as Array<{ id: number }>).map((s) => s.id)
+	)
 	const sceneList = (scenes as any[]).map((s) => ({
 		...s,
 		...castFor(casts, s.id),
+		loreSources: sources.get(s.id) ?? null,
 		historyEntry: s.historyEntry
 			? {
 					id: s.historyEntry.id,
@@ -564,6 +571,57 @@ export const sceneUpdateHandler: Handler<
 			)
 		}
 
+		// 🚧 pr-6 (B §B-7): an APPLIED summary commits. Applied = this update
+		// writes a non-blank summary to a session's scene whose summary was not
+		// already done, or that names this scene's own review.
+		const reviewActivity = params.activityId
+			? activityStore.getById(params.activityId)
+			: undefined
+		const namesOwnReview =
+			reviewActivity?.kind === "scene_summarize" &&
+			reviewActivity.userId === userId &&
+			reviewActivity.sceneId === existing.id
+		const applied =
+			summary !== undefined &&
+			!!summary?.trim() &&
+			existing.sessionId != null &&
+			(existing.summaryStatus !== "done" || namesOwnReview)
+		let appliedIds: number[] = []
+		if (applied) {
+			const parked =
+				namesOwnReview && reviewActivity?.kind === "scene_summarize"
+					? reviewActivity.pendingResult
+					: undefined
+			if (parked?.sourceIds?.length) appliedIds = parked.sourceIds
+			else if (existing.openedAtMessageId != null) {
+				const { storyLinesInRange } = await import("$lib/server/scenes/liveScenes")
+				appliedIds = (
+					await storyLinesInRange(
+						db,
+						existing.sessionId!,
+						existing.channel,
+						existing.openedAtMessageId,
+						existing.closedAtMessageId
+					)
+				).map((m) => m.id)
+			} else appliedIds = existing.selectedMessageIds ?? []
+			if (appliedIds.length) {
+				const { checkLoreSources } = await import(
+					"$lib/server/pipelines/runtime/loreSources"
+				)
+				await checkLoreSources(
+					db,
+					{ sessionId: existing.sessionId!, minAge: 0 },
+					"save",
+					appliedIds.map((id) => ({ id }))
+				)
+			}
+		}
+		let span: { fromMessageId: number; throughMessageId: number } | undefined
+		let settled:
+			| Awaited<ReturnType<typeof import("$lib/server/sessions/settle").settleThrough>>
+			| undefined
+
 		await db.transaction(async (tx) => {
 			// The same two capture rules `scenes:create` holds — this session's
 			// messages only, none already in another scene — minus this scene's
@@ -608,7 +666,64 @@ export const sceneUpdateHandler: Handler<
 					tx
 				)
 			}
+
+			if (applied && appliedIds.length) {
+				const { recordLoreSources } = await import(
+					"$lib/server/pipelines/runtime/loreSources"
+				)
+				const { settleThrough } = await import("$lib/server/sessions/settle")
+				const parkedRunId =
+					namesOwnReview && reviewActivity?.kind === "scene_summarize"
+						? reviewActivity.pendingResult?.runId
+						: undefined
+				span = await recordLoreSources(tx, {
+					sessionId: existing.sessionId!,
+					runId: parkedRunId ?? null,
+					lorebookId: existing.lorebookId,
+					subjectKind: "scene",
+					subjectId: existing.id,
+					ids: appliedIds
+				})
+				settled = await settleThrough(tx, existing.sessionId!, span.throughMessageId, {
+					userId
+				})
+			}
 		})
+
+		if (span && settled) {
+			const { announceHistorySettled } = await import("$lib/server/sessions/settle")
+			await announceHistorySettled(db, {
+				sessionId: existing.sessionId!,
+				userId,
+				...settled,
+				io: socket.io
+			})
+			try {
+				const [{ sessionEvents }, { emitSessionEvent }] = await Promise.all([
+					import("@serene-pub/sdk"),
+					import("$lib/server/pipelines/runtime/sessionEvents")
+				])
+				await emitSessionEvent(db, {
+					sessionId: existing.sessionId!,
+					userId,
+					event: sessionEvents.sceneSummaryApplied,
+					payload: {
+						event: sessionEvents.sceneSummaryApplied,
+						sessionId: existing.sessionId!,
+						at: Date.now(),
+						sceneId: existing.id,
+						...(existing.historyEntryId != null
+							? { entryId: existing.historyEntryId }
+							: {}),
+						loreSources: span,
+						cause: { kind: "user", userId }
+					},
+					io: socket.io
+				})
+			} catch (err) {
+				console.warn("[scenes:update] scene-summary-applied emit failed:", err)
+			}
+		}
 
 		const [updated] = await db
 			.select()
@@ -1011,6 +1126,7 @@ export const sceneCompileHandler: Handler<
 		const { resolveStepConfigs } = await import(
 			"$lib/server/pipelines/config/stepConfig"
 		)
+		// 🚧 Book-scoped: the history compile has no session to resolve through — book-scoped registrations come after pr-6 (A12, ruled 2026-10-24).
 		const { SUMMARIZE_HISTORY_SPEC_ID, SUMMARIZE_VERSION } = await import(
 			"$lib/server/pipelines/specs/summarize"
 		)
@@ -1202,479 +1318,512 @@ export const sceneCompileHandler: Handler<
  * listens on `scenes:process:error#<sceneId>`: a refusal naming no scene never
  * reaches it, and the modal would spin at "running".
  */
-export const sceneProcessHandler: Handler<
-	Sockets.Scenes.Process.Params,
-	Sockets.Scenes.Process.Response
-> = refusable(
-	"scenes:process",
-	async (socket, params: Sockets.Scenes.Process.Params, emitToUser) => {
-		const userId = socket.user!.id
+/** The scene summary run — `scenes:process`'s body. `via` runs a registration's pipeline (Close out) instead of the genre's summarize-scene. */
+export async function processScene(
+	userId: number,
+	params: Sockets.Scenes.Process.Params,
+	emitToUser: (event: string, data: any) => void,
+	opts: { via?: { specId: string; registrationKey: string; minAge: number } } = {}
+): Promise<Sockets.Scenes.Process.Response | undefined> {
 
-		const scene = await db.query.scenes.findFirst({
-			where: eq(schema.scenes.id, params.sceneId)
+	const scene = await db.query.scenes.findFirst({
+		where: eq(schema.scenes.id, params.sceneId)
+	})
+	if (!scene) throw new Error("Scene not found.")
+
+	const lorebook = await findOwnedBook(db, userId, scene.lorebookId)
+	if (!lorebook) throw new Error("Scene not found or access denied.")
+	// Nothing drafted here could be saved with lore writes Off, so none is
+	// drafted — refused before a card starts, as a summarize is (plan A22).
+	if (scene.sessionId != null) {
+		const off = await loreWritesOffRefusal(db, scene.sessionId)
+		if (off) throw new Error(off)
+	}
+
+	// Register the activity BEFORE any queued work.
+	//
+	// The message read below takes the session trigger lock, which is a FIFO
+	// queue — so a summarize started while a generation is in flight waits
+	// that generation out. Registering first means the card appears
+	// immediately as "running" instead of the user staring at nothing, makes
+	// cancel-during-the-wait reachable through the abort check further down,
+	// and gives the early-return failures below something to terminalize
+	// rather than failing card-less.
+	// Re-runs come from the review modal, which only knows the sceneId — so
+	// inherit the flag from the activity being superseded. Without this a
+	// regenerate would quietly downgrade a session-created scene to permanent,
+	// and cancelling afterwards would leave an empty scene behind.
+	const inheritedEphemeral = activityStore
+		.getFor(userId, false)
+		.some(
+			(a) =>
+				a.kind === "scene_summarize" &&
+				a.sceneId === params.sceneId &&
+				a.ephemeralOnCancel === true
+		)
+	/**
+	 * 🚧 The status a cancel or a discarded review puts back (§15 G8): the
+	 * scene's own, unless a run or review of this scene is being
+	 * superseded — then that run's, so a regenerate then discard restores
+	 * what the scene was before the FIRST run. A `running` or `review`
+	 * left with no run behind it (a restart) is no status to restore:
+	 * `none`.
+	 */
+	const supersededRun = activityStore
+		.getFor(userId, false)
+		.find(
+			(a) =>
+				a.kind === "scene_summarize" &&
+				a.sceneId === params.sceneId &&
+				a.summaryStatusBefore != null
+		) as { summaryStatusBefore?: schema.SceneSummaryStatus } | undefined
+	const statusBefore: schema.SceneSummaryStatus =
+		supersededRun?.summaryStatusBefore ??
+		(scene.summaryStatus === "running" || scene.summaryStatus === "review"
+			? "none"
+			: (scene.summaryStatus ?? "none"))
+
+	const abortController = new AbortController()
+	const activityId = activityStore.startScene(
+		{
+			userId,
+			sceneId: params.sceneId,
+			sceneName: scene.name ?? undefined,
+			lorebookId: scene.lorebookId,
+			lorebookLabel: lorebook.name,
+			historyEntryId: scene.historyEntryId ?? undefined,
+			ephemeralOnCancel:
+				params.ephemeralOnCancel === true || inheritedEphemeral,
+			summaryStatusBefore: statusBefore
+		},
+		abortController
+	)
+
+	/**
+	 * The card ends in `error` whatever stopped the run — a sentence of its
+	 * own (`failRun`) or a failure it did not word (a query, the model's
+	 * service) — and the throw is the refusal `refusable()` names by
+	 * scene. A card left "running" refuses every retry.
+	 */
+	let ended = false
+	/**
+	 * 🚧 `summary_status` (PROPOSAL-live-scenes §14 B, §15 G8): `running`
+	 * while the run goes, `review` once it produced a summary — the
+	 * result waits for the person in the Scene summary window, and only
+	 * **Apply** (`scenes:update` carrying the summary) makes it `done`;
+	 * `failed` when it produced none. A cancelled run, and a review
+	 * discarded unapplied (`activityStore.setSceneReviewDiscarded`), put
+	 * back what the scene was. Best-effort: a status that could not be
+	 * written never fails the run.
+	 */
+	const setSummaryStatus = async (
+		status: schema.SceneSummaryStatus,
+		extra: Partial<typeof schema.scenes.$inferInsert> = {}
+	) => {
+		try {
+			await db
+				.update(schema.scenes)
+				.set({ summaryStatus: status, ...extra })
+				.where(eq(schema.scenes.id, params.sceneId))
+		} catch (e) {
+			console.warn("[scenes:process] summary status not written:", e)
+			return
+		}
+		// The session's scene list follows the status (lazy, as every
+		// scene write's cascade), so a divider and a Chronicle dot read
+		// *Summarizing…*, *Ready to review* and *failed* as they happen.
+		const sessionId = scene.sessionId
+		if (sessionId != null)
+			try {
+				await emitToUser("scenes:list", () => buildSceneList(sessionId, userId))
+			} catch (e) {
+				console.warn("[scenes:process] scene list not sent:", e)
+			}
+	}
+	const failRun = (error: string): never => {
+		ended = true
+		activityStore.updateScene(activityId, {
+			status: "error",
+			errorMessage: error
 		})
-		if (!scene) throw new Error("Scene not found.")
+		void setSummaryStatus("failed")
+		throw new Error(error)
+	}
 
-		const lorebook = await findOwnedBook(db, userId, scene.lorebookId)
-		if (!lorebook) throw new Error("Scene not found or access denied.")
-		// Nothing drafted here could be saved with lore writes Off, so none is
-		// drafted — refused before a card starts, as a summarize is (plan A22).
-		if (scene.sessionId != null) {
-			const off = await loreWritesOffRefusal(db, scene.sessionId)
-			if (off) throw new Error(off)
+	try {
+		/**
+		 * The scene's messages: a live scene's are its range — the story
+		 * lines of its channel between its boundaries (to the newest line
+		 * while it is open); a scene captured by selection keeps its
+		 * picked list.
+		 */
+		let sceneMessageIds: number[] = scene.selectedMessageIds ?? []
+		if (scene.sessionId && scene.openedAtMessageId != null) {
+			const { storyLinesInRange } = await import(
+				"$lib/server/scenes/liveScenes"
+			)
+			sceneMessageIds = (
+				await storyLinesInRange(
+					db,
+					scene.sessionId,
+					scene.channel,
+					scene.openedAtMessageId,
+					scene.closedAtMessageId
+				)
+			).map((m) => m.id)
+		}
+		if (!scene.sessionId || !sceneMessageIds.length) {
+			return failRun("Scene has no linked messages to process.")
+		}
+		await setSummaryStatus("running")
+
+		// Snapshot inside the lock, LLM outside it.
+		//
+		// This is the only sessionMessages read in the whole path and it is pinned
+		// to selectedMessageIds — no surrounding window, no "all" fallback — and
+		// the summarize-scene run reads no messages itself. So the lock only has to cover
+		// the read, closing the TOCTOU against a concurrent delete or
+		// generation. Holding it across the run would instead queue the user's
+		// next message behind minutes of LLM calls, which is precisely the trap
+		// a minimize-first flow must not set.
+		const rawMessages = await withSessionGenerationLock(
+			scene.sessionId,
+			async () =>
+				db.query.sessionMessages.findMany({
+					where: (cm, { and, eq, inArray }) =>
+						and(
+							eq(cm.sessionId, scene.sessionId!),
+							inArray(cm.id, sceneMessageIds)
+						),
+					orderBy: (cm, { asc }) => asc(cm.id)
+				})
+		)
+
+		if (abortController.signal.aborted) {
+			await setSummaryStatus(statusBefore)
+			return null as any
 		}
 
-		// Register the activity BEFORE any queued work.
-		//
-		// The message read below takes the session trigger lock, which is a FIFO
-		// queue — so a summarize started while a generation is in flight waits
-		// that generation out. Registering first means the card appears
-		// immediately as "running" instead of the user staring at nothing, makes
-		// cancel-during-the-wait reachable through the abort check further down,
-		// and gives the early-return failures below something to terminalize
-		// rather than failing card-less.
-		// Re-runs come from the review modal, which only knows the sceneId — so
-		// inherit the flag from the activity being superseded. Without this a
-		// regenerate would quietly downgrade a session-created scene to permanent,
-		// and cancelling afterwards would leave an empty scene behind.
-		const inheritedEphemeral = activityStore
-			.getFor(userId, false)
-			.some(
-				(a) =>
-					a.kind === "scene_summarize" &&
-					a.sceneId === params.sceneId &&
-					a.ephemeralOnCancel === true
-			)
-		/**
-		 * 🚧 The status a cancel or a discarded review puts back (§15 G8): the
-		 * scene's own, unless a run or review of this scene is being
-		 * superseded — then that run's, so a regenerate then discard restores
-		 * what the scene was before the FIRST run. A `running` or `review`
-		 * left with no run behind it (a restart) is no status to restore:
-		 * `none`.
-		 */
-		const supersededRun = activityStore
-			.getFor(userId, false)
-			.find(
-				(a) =>
-					a.kind === "scene_summarize" &&
-					a.sceneId === params.sceneId &&
-					a.summaryStatusBefore != null
-			) as { summaryStatusBefore?: schema.SceneSummaryStatus } | undefined
-		const statusBefore: schema.SceneSummaryStatus =
-			supersededRun?.summaryStatusBefore ??
-			(scene.summaryStatus === "running" || scene.summaryStatus === "review"
-				? "none"
-				: (scene.summaryStatus ?? "none"))
+		if (rawMessages.length === 0) {
+			return failRun("No messages found for this scene.")
+		}
 
-		const abortController = new AbortController()
-		const activityId = activityStore.startScene(
-			{
-				userId,
-				sceneId: params.sceneId,
-				sceneName: scene.name ?? undefined,
-				lorebookId: scene.lorebookId,
-				lorebookLabel: lorebook.name,
-				historyEntryId: scene.historyEntryId ?? undefined,
-				ephemeralOnCancel:
-					params.ephemeralOnCancel === true || inheritedEphemeral,
-				summaryStatusBefore: statusBefore
-			},
-			abortController
+		const charIds = [
+			...new Set(
+				rawMessages
+					.filter((m) => m.characterId)
+					.map((m) => m.characterId!)
+			)
+		]
+		const personaIds = [
+			...new Set(
+				rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
+			)
+		]
+
+		const knownCast = await buildSceneCastList(
+			params.sceneId,
+			scene.lorebookId,
+			scene.sessionId ?? null
 		)
 
 		/**
-		 * The card ends in `error` whatever stopped the run — a sentence of its
-		 * own (`failRun`) or a failure it did not word (a query, the model's
-		 * service) — and the throw is the refusal `refusable()` names by
-		 * scene. A card left "running" refuses every retry.
+		 * The scene summarize pipeline — its own namespace, with the cast
+		 * extraction step the other three lore types do not carry. Stopped
+		 * before its `save` consumer: this handler's result goes to the
+		 * Review & Save screen, and the save there is the person's act.
 		 */
-		let ended = false
-		/**
-		 * 🚧 `summary_status` (PROPOSAL-live-scenes §14 B, §15 G8): `running`
-		 * while the run goes, `review` once it produced a summary — the
-		 * result waits for the person in the Scene summary window, and only
-		 * **Apply** (`scenes:update` carrying the summary) makes it `done`;
-		 * `failed` when it produced none. A cancelled run, and a review
-		 * discarded unapplied (`activityStore.setSceneReviewDiscarded`), put
-		 * back what the scene was. Best-effort: a status that could not be
-		 * written never fails the run.
-		 */
-		const setSummaryStatus = async (
-			status: schema.SceneSummaryStatus,
-			extra: Partial<typeof schema.scenes.$inferInsert> = {}
-		) => {
-			try {
-				await db
-					.update(schema.scenes)
-					.set({ summaryStatus: status, ...extra })
-					.where(eq(schema.scenes.id, params.sceneId))
-			} catch (e) {
-				console.warn("[scenes:process] summary status not written:", e)
-				return
-			}
-			// The session's scene list follows the status (lazy, as every
-			// scene write's cascade), so a divider and a Chronicle dot read
-			// *Summarizing…*, *Ready to review* and *failed* as they happen.
-			const sessionId = scene.sessionId
-			if (sessionId != null)
-				try {
-					await emitToUser("scenes:list", () => buildSceneList(sessionId, userId))
-				} catch (e) {
-					console.warn("[scenes:process] scene list not sent:", e)
-				}
+		let result: {
+			content: string
+			name?: string
+			raw: string
+			batchCount: number
+			participantCharacters?: any[]
+			mentionedCharacters?: any[]
 		}
-		const failRun = (error: string): never => {
-			ended = true
+		// A failure here — the model's service, a query — reaches the catch
+		// that ends this run's card, in the card's own sentence.
+		const { runSpec } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		// The spec is the session's genre's (`summarize.scene`), else
+		// core's default — resolved here, never by the view (§13 item 2).
+		const { resolveSummarizeSceneSpec, sceneHeaderOf } = await import(
+			"$lib/server/scenes/liveScenes"
+		)
+		// `via` (Close out): a registration's own pipeline, not the genre's summarize-scene.
+		const resolvedSpec: { specId: string; note?: string } = opts.via
+			? { specId: opts.via.specId }
+			: await resolveSummarizeSceneSpec(db, scene.sessionId)
+
+		let batchesSeen = 0
+		const progress = (data: {
+			phase: "drafting" | "synthesizing" | "naming" | "extracting"
+			batch: number
+			totalBatches: number
+		}) => {
 			activityStore.updateScene(activityId, {
-				status: "error",
-				errorMessage: error
+				phase: data.phase,
+				batch: data.batch,
+				totalBatches: data.totalBatches
 			})
-			void setSummaryStatus("failed")
-			throw new Error(error)
-		}
-
-		try {
-			/**
-			 * The scene's messages: a live scene's are its range — the story
-			 * lines of its channel between its boundaries (to the newest line
-			 * while it is open); a scene captured by selection keeps its
-			 * picked list.
-			 */
-			let sceneMessageIds: number[] = scene.selectedMessageIds ?? []
-			if (scene.sessionId && scene.openedAtMessageId != null) {
-				const { storyLinesInRange } = await import(
-					"$lib/server/scenes/liveScenes"
-				)
-				sceneMessageIds = (
-					await storyLinesInRange(
-						db,
-						scene.sessionId,
-						scene.channel,
-						scene.openedAtMessageId,
-						scene.closedAtMessageId
-					)
-				).map((m) => m.id)
-			}
-			if (!scene.sessionId || !sceneMessageIds.length) {
-				return failRun("Scene has no linked messages to process.")
-			}
-			await setSummaryStatus("running")
-
-			// Snapshot inside the lock, LLM outside it.
-			//
-			// This is the only sessionMessages read in the whole path and it is pinned
-			// to selectedMessageIds — no surrounding window, no "all" fallback — and
-			// the summarize-scene run reads no messages itself. So the lock only has to cover
-			// the read, closing the TOCTOU against a concurrent delete or
-			// generation. Holding it across the run would instead queue the user's
-			// next message behind minutes of LLM calls, which is precisely the trap
-			// a minimize-first flow must not set.
-			const rawMessages = await withSessionGenerationLock(
-				scene.sessionId,
-				async () =>
-					db.query.sessionMessages.findMany({
-						where: (cm, { and, eq, inArray }) =>
-							and(
-								eq(cm.sessionId, scene.sessionId!),
-								inArray(cm.id, sceneMessageIds)
-							),
-						orderBy: (cm, { asc }) => asc(cm.id)
-					})
-			)
-
-			if (abortController.signal.aborted) {
-				await setSummaryStatus(statusBefore)
-				return null as any
-			}
-
-			if (rawMessages.length === 0) {
-				return failRun("No messages found for this scene.")
-			}
-
-			const charIds = [
-				...new Set(
-					rawMessages
-						.filter((m) => m.characterId)
-						.map((m) => m.characterId!)
-				)
-			]
-			const personaIds = [
-				...new Set(
-					rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
-				)
-			]
-
-			const knownCast = await buildSceneCastList(
-				params.sceneId,
-				scene.lorebookId,
-				scene.sessionId ?? null
-			)
-
-			/**
-			 * The scene summarize pipeline — its own namespace, with the cast
-			 * extraction step the other three lore types do not carry. Stopped
-			 * before its `save` consumer: this handler's result goes to the
-			 * Review & Save screen, and the save there is the person's act.
-			 */
-			let result: {
-				content: string
-				name?: string
-				raw: string
-				batchCount: number
-				participantCharacters?: any[]
-				mentionedCharacters?: any[]
-			}
-			// A failure here — the model's service, a query — reaches the catch
-			// that ends this run's card, in the card's own sentence.
-			const { runSpec } = await import(
-				"$lib/server/pipelines/runtime/runTurn"
-			)
-			// The spec is the session's genre's (`summarize.scene`), else
-			// core's default — resolved here, never by the view (§13 item 2).
-			const { resolveSummarizeSceneSpec, sceneHeaderOf } = await import(
-				"$lib/server/scenes/liveScenes"
-			)
-			const resolvedSpec = await resolveSummarizeSceneSpec(
-				db,
-				scene.sessionId
-			)
-
-			let batchesSeen = 0
-			const progress = (data: {
-				phase: "drafting" | "synthesizing" | "naming" | "extracting"
-				batch: number
-				totalBatches: number
-			}) => {
-				activityStore.updateScene(activityId, {
-					phase: data.phase,
-					batch: data.batch,
-					totalBatches: data.totalBatches
-				})
-				emitToUser("scenes:process:progress", {
-					sceneId: params.sceneId,
-					partial: {},
-					...data
-				} satisfies Sockets.Scenes.Process.Progress)
-			}
-
-			const receipt = await runSpec({
-				db,
-				sessionId: scene.sessionId,
-				userId,
-				specId: resolvedSpec.specId,
-				input: {
-					scope: { sessionId: scene.sessionId },
-					request: {
-						// `summarize-source@1` reads the ids; `@2` the range
-						// (`sceneId`, `channel`, `openedAt`, `closedAt`) and
-						// the asides beside it.
-						messageIds: sceneMessageIds,
-						knownCast,
-						sceneId: scene.id,
-						channel: scene.channel,
-						// What the transcript's preamble names (`render`'s
-						// `scene` port reads `request.scene`).
-						scene: await sceneHeaderOf(db, scene),
-						...(scene.openedAtMessageId != null
-							? {
-									openedAt: scene.openedAtMessageId,
-									closedAt:
-										scene.closedAtMessageId ??
-										sceneMessageIds[sceneMessageIds.length - 1]
-								}
-							: {})
-					}
-				},
-				signal: abortController.signal,
-				preview: { atNode: "save" },
-				// The executor's inherent node events (F34) — see the same
-				// mapping in sessions:summarize.
-				onNode: (e) => {
-					if (e.phase !== "start") return
-					if (e.definitionId.startsWith("core:oracle/summarize-batch"))
-						progress({
-							phase: "drafting",
-							batch: ++batchesSeen,
-							totalBatches: batchesSeen
-						})
-					else if (
-						e.definitionId.startsWith("core:oracle/summarize-synth")
-					)
-						progress({
-							phase: "synthesizing",
-							batch: 1,
-							totalBatches: 1
-						})
-					else if (e.definitionId.startsWith("core:oracle/name-entry"))
-						progress({ phase: "naming", batch: 1, totalBatches: 1 })
-					else if (e.definitionId.startsWith("core:oracle/extract-cast"))
-						progress({
-							phase: "extracting",
-							batch: 1,
-							totalBatches: 1
-						})
-				}
-			})
-
-			const nodeOut = (key: string) =>
-				(receipt.nodes.find((n: any) => n.nodeKey === key) as any)
-					?.output
-			const content: string | undefined = nodeOut("synth")?.content
-			const castOut = nodeOut("cast")?.cast
-
-			if (!content) {
-				const why =
-					receipt.haltReason ??
-					"the pipeline stopped without producing a summary"
-				return failRun(
-					receipt.haltNodeKey
-						? `${why} (at '${receipt.haltNodeKey}')`
-						: why
-				)
-			}
-
-			result = {
-				content,
-				name: nodeOut("naming")?.name,
-				raw: content,
-				batchCount: receipt.nodes.filter((n: any) =>
-					String(n.typeId ?? "").startsWith(
-						"core:oracle/summarize-batch"
-					)
-				).length,
-				participantCharacters: castOut?.participants,
-				mentionedCharacters: castOut?.mentioned
-			}
-
-			// Cooperating abort can make the call above resolve normally (with a
-			// truncated/partial result) rather than throw — see
-			// runQueuedLLMCall/runGeneration. Bail out here, before any of the
-			// binding-creation/DB-write work below runs against a cancelled
-			// generation's partial result.
-			if (abortController.signal.aborted) {
-				await setSummaryStatus(statusBefore)
-				return null as any
-			}
-			// The run's receipt is the spec that processed it, applied or not.
-			await setSummaryStatus("review", {
-				processedBySpecId: resolvedSpec.specId
-			})
-
-			// Resolve the LLM's raw name output against the same knownCast built
-			// above — a name that matches nothing becomes a suggested name
-			// instead of an immediate new binding, so the user gets to accept or
-			// reject it on the Review & Save screen before anything is created
-			// (see resolveOrCreateBindingByName, called at Save time).
-			const {
-				participantIds,
-				mentionedIds,
-				suggestedParticipants,
-				suggestedMentioned
-			} = (() => {
-				const participants = resolveCharacterRefs(
-					result.participantCharacters ?? [],
-					knownCast
-				)
-				// ⚠ ICED (plan §1/§6). `result.mentionedCharacters` is deliberately
-				// not resolved: `mentioned` is derived from `message_annotations`
-				// now (utils/sceneMentions.ts) and is internal — §6 ruled it is not
-				// surfaced — so the Review & Save screen has nothing to write back.
-				// The field is left on `result` so reviving the extraction is a
-				// one-line change rather than a re-derivation.
-				const suggested = reconcileSuggestedNames(
-					participants.suggestedNames,
-					[]
-				)
-				return {
-					participantIds: participants.ids,
-					mentionedIds: [] as number[],
-					suggestedParticipants: suggested.participants,
-					suggestedMentioned: suggested.mentioned
-				}
-			})()
-
-			// Guarantee: whoever actually sent a message in this scene is a
-			// participant, regardless of what the extraction LLM decided —
-			// charIds/personaIds (every distinct sender) were already computed
-			// above for building sender names.
-			//
-			// A sender whose card was deleted, and no member has, is left out
-			// rather than given a member (null).
-			const senderBindingIds = new Set<number>()
-			for (const characterId of [...charIds, ...personaIds]) {
-				const memberId = await resolveOrCreateBinding({
-					lorebookId: scene.lorebookId,
-					characterId
-				})
-				if (memberId != null) senderBindingIds.add(memberId)
-			}
-
-			const {
-				participants: resolvedParticipants,
-				mentioned: resolvedMentioned
-			} = reconcileParticipantsAndMentioned(
-				participantIds,
-				mentionedIds,
-				senderBindingIds
-			)
-
-			const pendingResult = {
-				content: result.content ?? result.raw ?? "",
-				name: result.name ?? scene.name ?? undefined,
-				participantCharacters: resolvedParticipants,
-				mentionedCharacters: resolvedMentioned,
-				suggestedParticipantCharacters: suggestedParticipants,
-				suggestedMentionedCharacters: suggestedMentioned,
-				raw: result.raw
-			}
-
-			activityStore.updateScene(activityId, {
-				status: "review",
-				sceneName: pendingResult.name,
-				pendingResult
-			})
-
-			const response: Sockets.Scenes.Process.Response = {
+			emitToUser("scenes:process:progress", {
 				sceneId: params.sceneId,
-				activityId,
-				...pendingResult,
-				specId: resolvedSpec.specId,
-				...(resolvedSpec.note ? { note: resolvedSpec.note } : {})
-			}
-			emitToUser("scenes:process:complete", response)
-			return response
-		} catch (err) {
-			// Deliberately narrower than narrativeGraph.ts's equivalent guard
-			// — do NOT add `|| isQueueCancellation(err) || err.name ===
-			// "AbortError"`. activityStore.cancel() aborts our controller
-			// synchronously, so signal.aborted is already true for every
-			// exception that's actually our own cancel; the extra disjuncts
-			// only add a way to misfire on a cancellation from somewhere else
-			// and strand this activity at "running" forever.
-			if (abortController.signal.aborted) {
-				await setSummaryStatus(statusBefore)
-				return null as any // already removed by activityStore.cancel() — nothing to update
-			}
-			if (ended) throw err
-			await setSummaryStatus("failed")
-			// The card's sentence, never `err.message`: this record is served
-			// back to a non-admin by `activityStore.getFor`, and an adapter
-			// failure's words are the base URL and the model file; a failed
-			// query's are its SQL. The modal is told the card's own sentence;
-			// the log keeps the whole error, as the cause.
-			const failure = activityError(err)
-			activityStore.updateScene(activityId, {
-				status: "error",
-				...failure
-			})
-			throw new Error(failure.errorMessage, { cause: err })
+				partial: {},
+				...data
+			} satisfies Sockets.Scenes.Process.Progress)
 		}
-	},
-	"The scene could not be summarized.",
-	undefined,
-	(params) => ({ sceneId: (params as { sceneId?: unknown } | undefined)?.sceneId })
-)
+
+		const receipt = await runSpec({
+			db,
+			sessionId: scene.sessionId,
+			userId,
+			specId: resolvedSpec.specId,
+			...(opts.via
+				? {
+						registration: {
+							family: "action",
+							key: opts.via.registrationKey,
+							minAge: opts.via.minAge
+						}
+					}
+				: {}),
+			input: {
+				scope: { sessionId: scene.sessionId },
+				request: {
+					// `summarize-source@1` reads the ids; `@2` the range
+					// (`sceneId`, `channel`, `openedAt`, `closedAt`) and
+					// the asides beside it.
+					messageIds: sceneMessageIds,
+					knownCast,
+					sceneId: scene.id,
+					channel: scene.channel,
+					// What the transcript's preamble names (`render`'s
+					// `scene` port reads `request.scene`).
+					scene: await sceneHeaderOf(db, scene),
+					...(scene.openedAtMessageId != null
+						? {
+								openedAt: scene.openedAtMessageId,
+								closedAt:
+									scene.closedAtMessageId ??
+									sceneMessageIds[sceneMessageIds.length - 1]
+							}
+						: {})
+				}
+			},
+			signal: abortController.signal,
+			preview: { atNode: "save" },
+			// The executor's inherent node events (F34) — see the same
+			// mapping in sessions:summarize.
+			onNode: (e) => {
+				if (e.phase !== "start") return
+				if (e.definitionId.startsWith("core:oracle/summarize-batch"))
+					progress({
+						phase: "drafting",
+						batch: ++batchesSeen,
+						totalBatches: batchesSeen
+					})
+				else if (
+					e.definitionId.startsWith("core:oracle/summarize-synth")
+				)
+					progress({
+						phase: "synthesizing",
+						batch: 1,
+						totalBatches: 1
+					})
+				else if (e.definitionId.startsWith("core:oracle/name-entry"))
+					progress({ phase: "naming", batch: 1, totalBatches: 1 })
+				else if (e.definitionId.startsWith("core:oracle/extract-cast"))
+					progress({
+						phase: "extracting",
+						batch: 1,
+						totalBatches: 1
+					})
+			}
+		})
+
+		const nodeOut = (key: string) =>
+			(receipt.nodes.find((n: any) => n.nodeKey === key) as any)
+				?.output
+		const content: string | undefined = nodeOut("synth")?.content
+		const castOut = nodeOut("cast")?.cast
+
+		if (!content) {
+			const why =
+				receipt.haltReason ??
+				"the pipeline stopped without producing a summary"
+			return failRun(
+				receipt.haltNodeKey
+					? `${why} (at '${receipt.haltNodeKey}')`
+					: why
+			)
+		}
+
+		result = {
+			content,
+			name: nodeOut("naming")?.name,
+			raw: content,
+			batchCount: receipt.nodes.filter((n: any) =>
+				String(n.typeId ?? "").startsWith(
+					"core:oracle/summarize-batch"
+				)
+			).length,
+			participantCharacters: castOut?.participants,
+			mentionedCharacters: castOut?.mentioned
+		}
+
+		// Cooperating abort can make the call above resolve normally (with a
+		// truncated/partial result) rather than throw — see
+		// runQueuedLLMCall/runGeneration. Bail out here, before any of the
+		// binding-creation/DB-write work below runs against a cancelled
+		// generation's partial result.
+		if (abortController.signal.aborted) {
+			await setSummaryStatus(statusBefore)
+			return null as any
+		}
+		// The run's receipt is the spec that processed it, applied or not.
+		await setSummaryStatus("review", {
+			processedBySpecId: resolvedSpec.specId
+		})
+
+		// Resolve the LLM's raw name output against the same knownCast built
+		// above — a name that matches nothing becomes a suggested name
+		// instead of an immediate new binding, so the user gets to accept or
+		// reject it on the Review & Save screen before anything is created
+		// (see resolveOrCreateBindingByName, called at Save time).
+		const {
+			participantIds,
+			mentionedIds,
+			suggestedParticipants,
+			suggestedMentioned
+		} = (() => {
+			const participants = resolveCharacterRefs(
+				result.participantCharacters ?? [],
+				knownCast
+			)
+			// ⚠ ICED (plan §1/§6). `result.mentionedCharacters` is deliberately
+			// not resolved: `mentioned` is derived from `message_annotations`
+			// now (utils/sceneMentions.ts) and is internal — §6 ruled it is not
+			// surfaced — so the Review & Save screen has nothing to write back.
+			// The field is left on `result` so reviving the extraction is a
+			// one-line change rather than a re-derivation.
+			const suggested = reconcileSuggestedNames(
+				participants.suggestedNames,
+				[]
+			)
+			return {
+				participantIds: participants.ids,
+				mentionedIds: [] as number[],
+				suggestedParticipants: suggested.participants,
+				suggestedMentioned: suggested.mentioned
+			}
+		})()
+
+		// Guarantee: whoever actually sent a message in this scene is a
+		// participant, regardless of what the extraction LLM decided —
+		// charIds/personaIds (every distinct sender) were already computed
+		// above for building sender names.
+		//
+		// A sender whose card was deleted, and no member has, is left out
+		// rather than given a member (null).
+		const senderBindingIds = new Set<number>()
+		for (const characterId of [...charIds, ...personaIds]) {
+			const memberId = await resolveOrCreateBinding({
+				lorebookId: scene.lorebookId,
+				characterId
+			})
+			if (memberId != null) senderBindingIds.add(memberId)
+		}
+
+		const {
+			participants: resolvedParticipants,
+			mentioned: resolvedMentioned
+		} = reconcileParticipantsAndMentioned(
+			participantIds,
+			mentionedIds,
+			senderBindingIds
+		)
+
+		const pendingResult = {
+			content: result.content ?? result.raw ?? "",
+			name: result.name ?? scene.name ?? undefined,
+			participantCharacters: resolvedParticipants,
+			mentionedCharacters: resolvedMentioned,
+			suggestedParticipantCharacters: suggestedParticipants,
+			suggestedMentionedCharacters: suggestedMentioned,
+			raw: result.raw
+		}
+
+		// 🚧 pr-6 (B §B-7): the draft keeps its save node's sources, for the Apply that commits it.
+		const saveInput = (receipt.nodes.find((n: any) => n.nodeKey === "save") as any)?.input
+		activityStore.updateScene(activityId, {
+			status: "review",
+			sceneName: pendingResult.name,
+			pendingResult: {
+				...pendingResult,
+				sourceIds: loreSourceIdsOf(saveInput?.sources),
+				runId: receipt.runId
+			}
+		})
+
+		const response: Sockets.Scenes.Process.Response = {
+			sceneId: params.sceneId,
+			activityId,
+			...pendingResult,
+			specId: resolvedSpec.specId,
+			...(resolvedSpec.note ? { note: resolvedSpec.note } : {})
+		}
+		emitToUser("scenes:process:complete", response)
+		return response
+	} catch (err) {
+		// Deliberately narrower than narrativeGraph.ts's equivalent guard
+		// — do NOT add `|| isQueueCancellation(err) || err.name ===
+		// "AbortError"`. activityStore.cancel() aborts our controller
+		// synchronously, so signal.aborted is already true for every
+		// exception that's actually our own cancel; the extra disjuncts
+		// only add a way to misfire on a cancellation from somewhere else
+		// and strand this activity at "running" forever.
+		if (abortController.signal.aborted) {
+			await setSummaryStatus(statusBefore)
+			return null as any // already removed by activityStore.cancel() — nothing to update
+		}
+		if (ended) throw err
+		await setSummaryStatus("failed")
+		// The card's sentence, never `err.message`: this record is served
+		// back to a non-admin by `activityStore.getFor`, and an adapter
+		// failure's words are the base URL and the model file; a failed
+		// query's are its SQL. The modal is told the card's own sentence;
+		// the log keeps the whole error, as the cause.
+		const failure = activityError(err)
+		activityStore.updateScene(activityId, {
+			status: "error",
+			...failure
+		})
+		throw new Error(failure.errorMessage, { cause: err })
+	}
+}
+
+/**
+ * `scenes:process` as a handler, optionally through a registration (`via`, Close
+ * out): one refusal path, so a run that fails says so on `scenes:process:error`
+ * whether a person pressed it or `runSceneSummaries` started it.
+ */
+const sceneProcessHandlerVia = (
+	via?: { specId: string; registrationKey: string; minAge: number }
+): Handler<Sockets.Scenes.Process.Params, Sockets.Scenes.Process.Response> =>
+	refusable(
+		"scenes:process",
+		async (socket, params: Sockets.Scenes.Process.Params, emitToUser) =>
+			(await processScene(socket.user!.id, params, emitToUser, via ? { via } : {})) as Sockets.Scenes.Process.Response,
+		"The scene could not be summarized.",
+		undefined,
+		(params) => ({ sceneId: (params as { sceneId?: unknown } | undefined)?.sceneId })
+	)
+
+export const sceneProcessHandler: Handler<
+	Sockets.Scenes.Process.Params,
+	Sockets.Scenes.Process.Response
+> = sceneProcessHandlerVia()
 
 /**
  * Delete a scene that existed only to carry a summarize run, when that run is
@@ -1929,6 +2078,88 @@ async function recordClose(
 	}
 }
 
+/**
+ * 🚧 Close out's scene half (pr-6 R-d): the closing scene(s) over a stretch of `main`, filed as `scenes:open` (closeAt)
+ * and `scenes:close` file them — the timeline record (`recordClose`), then `scenes:list`, `scenes:scenedMessageIds` and
+ * `scenes:cues` to the caller — but never the On-close summary (Close out summarizes them itself). Oldest first.
+ */
+export async function fileClosingScenes(
+	userId: number,
+	stretch: { sessionId: number; fromMessageId: number; throughMessageId: number },
+	emitToUser: (event: string, data: any) => void | Promise<void>
+): Promise<number[]> {
+	const { openScene, closeScene } = await import("$lib/server/scenes/liveScenes")
+	const [{ liveMessageWhere }, { DEFAULT_CHANNEL }] = await Promise.all([
+		import("$lib/server/messages/store"),
+		import("$lib/server/messages/channels")
+	])
+	const { sessionId, fromMessageId, throughMessageId } = stretch
+	const cause = { kind: "user" as const, userId }
+	const [open] = await db
+		.select({ id: schema.scenes.id, openedAt: schema.scenes.openedAtMessageId })
+		.from(schema.scenes)
+		.where(
+			and(
+				eq(schema.scenes.sessionId, sessionId),
+				eq(schema.scenes.channel, DEFAULT_CHANNEL),
+				sql`${schema.scenes.openedAtMessageId} IS NOT NULL AND ${schema.scenes.closedAtMessageId} IS NULL`
+			)
+		)
+		.limit(1)
+	const results: import("$lib/server/scenes/liveScenes").LiveSceneResult[] = []
+	const scenesFiled: number[] = []
+	if (open && open.openedAt != null) {
+		const m = schema.sessionMessages
+		const [gap] = await db
+			.select({ newest: sql<number | null>`max(${m.id})` })
+			.from(m)
+			.where(
+				and(
+					eq(m.sessionId, sessionId),
+					eq(m.channel, DEFAULT_CHANNEL),
+					liveMessageWhere(m.rewindOrdinal),
+					sql`${m.id} >= ${fromMessageId} AND ${m.id} < ${open.openedAt}`
+				)
+			)
+		if (gap?.newest != null) {
+			const before = await openScene(db, {
+				sessionId,
+				userId,
+				channel: DEFAULT_CHANNEL,
+				atMessageId: fromMessageId,
+				closeAt: Number(gap.newest),
+				cause
+			})
+			results.push(before)
+			scenesFiled.push(before.scene.id)
+		}
+		const closed = await closeScene(db, {
+			sceneId: open.id,
+			userId,
+			atMessageId: throughMessageId,
+			cause
+		})
+		results.push(closed)
+		scenesFiled.push(closed.scene.id)
+	} else {
+		const one = await openScene(db, {
+			sessionId,
+			userId,
+			channel: DEFAULT_CHANNEL,
+			atMessageId: fromMessageId,
+			closeAt: throughMessageId,
+			cause
+		})
+		results.push(one)
+		scenesFiled.push(one.scene.id)
+	}
+	for (const r of results) await recordClose(r)
+	await emitToUser("scenes:list", () => buildSceneList(sessionId, userId))
+	await emitToUser("scenes:scenedMessageIds", () => buildScenedMessageIds(sessionId, userId))
+	await emitToUser("scenes:cues", () => buildSceneCuesReply(sessionId))
+	return scenesFiled
+}
+
 // ── 🚧 Scene cues, summary modes and the open scene (live scenes §4–§7, lane D) ──
 
 /**
@@ -1961,12 +2192,13 @@ export async function buildSceneCuesReply(
 export function runSceneSummaries(
 	sceneIds: readonly number[],
 	userId: number,
-	emitToUser: (event: string, data: any) => void | Promise<void>
+	emitToUser: (event: string, data: any) => void | Promise<void>,
+	opts?: { via?: { specId: string; registrationKey: string; minAge: number } }
 ): Promise<void> {
 	return (async () => {
 		for (const sceneId of sceneIds) {
 			try {
-				await sceneProcessHandler.handler(
+				await sceneProcessHandlerVia(opts?.via).handler(
 					{ user: { id: userId } },
 					{ sceneId },
 					emitToUser as (event: string, data: any) => void

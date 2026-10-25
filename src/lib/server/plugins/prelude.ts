@@ -337,7 +337,7 @@ var AbortController = (function () {
 // with file bytes as Uint8Array. The object each backend hands in is
 // synchronous and carries bytes as base64 — synchronous because a QuickJS guest
 // has no async capability bridge to the host that holds the database (see
-// storageHost.ts, which explains why rows arrive as a snapshot), base64 because
+// storageHost.ts), base64 because
 // a typed array cannot cross the QuickJS bridge. This adapter is the whole of
 // that difference, and it lives here rather than in either backend for the same
 // reason __fmtLog does: one implementation is what makes the two
@@ -375,12 +375,6 @@ function __wrapStorage(host) {
 	var files = host.files || {};
 	return {
 		usage: function () { return __spCall(host, host.usage, []); },
-		get: function (k) { return __spCall(host, host.get, [k]); },
-		keys: function (p) { return __spCall(host, host.keys, [p]); },
-		query: function (q) { return __spCall(host, host.query, [q]); },
-		put: function (k, v) { return __spCall(host, host.put, [k, v]); },
-		delete: function (k) { return __spCall(host, host.delete, [k]); },
-		deleteAll: function (p) { return __spCall(host, host.deleteAll, [p]); },
 		files: {
 			list: function (p) { return __spCall(files, files.list, [p]); },
 			stat: function (p) { return __spCall(files, files.stat, [p]); },

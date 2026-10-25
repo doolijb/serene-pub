@@ -22,7 +22,6 @@ import { registerPluginEvents } from "./pluginEvents"
 import { registerPluginHookPoints } from "./pluginHookPoints"
 import { registerPluginAnnex } from "./pluginAnnex"
 import { syncPluginVariables } from "./pluginVariables"
-import { makePluginRowPort } from "./rowStore"
 import { pluginsEnabled } from "./flag"
 import { syncPluginEngines } from "./engineHost"
 import { pluginEvents, syncPluginEventHooks } from "./eventHost"
@@ -48,12 +47,7 @@ function persist(rec: InvocationRecord): void {
 export function getManager(): SandboxManager {
 	if (!manager)
 		manager = new SandboxManager({
-			onInvocation: persist,
-			// The handle is resolved per call, exactly as the invocation log's
-			// is: the manager can be constructed by an admin route long before
-			// `bootstrapPlugins` has attached a database, and a store that
-			// captured `dbRef` at construction would be permanently null.
-			rows: makePluginRowPort(() => dbRef)
+			onInvocation: persist
 		})
 	return manager
 }

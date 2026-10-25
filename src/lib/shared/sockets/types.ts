@@ -4165,6 +4165,12 @@ declare global {
 					status: import("@serene-pub/sdk").StatusText | null
 					/** A reply run, on this channel (`RunStatusFrame.reply`). */
 					reply?: { channel: string }
+					/**
+					 * 🚧 pr-6s2 (G3): what the run is FOR — the run registry's own
+					 * kind (`RunKind`), the fact the busy door reads; on every
+					 * frame, the end frame too.
+					 */
+					kind: import("@serene-pub/sdk").RunKind
 				}
 			}
 			/**
@@ -4276,6 +4282,28 @@ declare global {
 								 * key = the card's own avatar.
 								 */
 								castFaces?: Record<number, number>
+								/**
+								 * 🚧 pr-6 (B §B-1): the settle line — `settledLineOf`: the
+								 * stored line or a done scene's close/selection. Null = nothing
+								 * settled.
+								 */
+								settledLine?: number | null
+								/**
+								 * 🚧 pr-6 (B §B-3): the session's own book — the "Session notes"
+								 * lorebook (`lorebooks.session_id` = this session). Null only while
+								 * the boot pass has not reached a pre-pr-6 session.
+								 */
+								ownBookId?: number | null
+								/**
+								 * 🚧 pr-6 (B §B-6): the catch-up offer, for the session's owner;
+								 * null when none.
+								 */
+								catchUp?: import("$lib/shared/sessions/archive").CatchUpOffer | null
+								/**
+								 * 🚧 pr-6 (B §B-6): the session's genre registers a close-out —
+								 * Close out is offered, and Archive runs it once.
+								 */
+								closeOutRegistered?: boolean
 						  })
 						| null
 					messages?: SelectSessionMessage[] | null // Legacy field
@@ -4302,6 +4330,30 @@ declare global {
 					 * session.
 					 */
 					sessionId?: number
+				}
+			}
+			/**
+			 * 🚧 The member push (pr-6): the session as `sessions:get` carries
+			 * it, sent to every member after a change none of them asked for
+			 * (a member added, a seat renamed, Back, Forward). Never a reply and
+			 * never paginated: a page merges it and keeps its own pages.
+			 */
+			namespace Refresh {
+				interface Params {}
+				/**
+				 * Carries `session` (never null), `messages` and `coversFromId` —
+				 * never `pagination`, `beforeId` or `userDraft` (B §B-1).
+				 */
+				interface Response extends Get.Response {
+					/**
+					 * 🚧 pr-6 (B §B-1): the push holds EVERY live row the member
+					 * reads with id ≥ this — the session's newest live rows across
+					 * every lane, narrowed to the member's. A page row with id ≥ it
+					 * that the push lacks was taken back or deleted. Null = the
+					 * session has no live row. Always sent; optional on the type only
+					 * so a fixture may leave it out (read `?? null`).
+					 */
+					coversFromId?: number | null
 				}
 			}
 			namespace SaveDraft {
@@ -5447,7 +5499,7 @@ declare global {
 			}
 			/**
 			 * 🚧 **Read to here** on one channel lane (2026-10-17): moves the
-			 * asker's last-read mark forward (`sessions.metadata.laneReads`),
+			 * asker's last-read mark forward (annex owner `core`'s `laneReads`),
 			 * which `SessionV1.channels[].unseen` counts from. `messageId`
 			 * absent: the lane's newest line. Answered with the asker's fresh
 			 * channels view.
@@ -5986,45 +6038,6 @@ declare global {
 				}
 			}
 			/**
-			 * The presets a session may run on, and the one it is on (19 §7).
-			 *
-			 * A *preset* is a pipeline configuration a person is allowed to
-			 * see and use — the presets a non-admin is offered are the enabled
-			 * ones. Admins additionally see the disabled, marked, because a
-			 * preset an admin just switched off vanishing entirely would read
-			 * as deleted.
-			 */
-			namespace PresetOptions {
-				interface Params {
-					sessionId: number
-				}
-				interface Response {
-					sessionId: number
-					/** The pipeline whose presets these are. Null when none serves. */
-					specSlug: string | null
-					selectedId: number | null
-					options: {
-						configId: number
-						name: string
-						isDefault: boolean
-						enabled: boolean
-						readOnly: boolean
-					}[]
-				}
-			}
-			/** Put this session on a preset. */
-			namespace ChoosePreset {
-				interface Params {
-					sessionId: number
-					configId: number
-				}
-				interface Response {
-					sessionId: number
-					configId?: number
-					error?: string
-				}
-			}
-			/**
 			 * The mode's functions and each one's state on this session (19 §3).
 			 *
 			 * Everything the mode was offered, not only what is in force —
@@ -6166,7 +6179,7 @@ declare global {
 			}
 			namespace Update {
 				interface Params {
-					session: UpdateSession
+					session: Omit<UpdateSession, "metadata" | "drafts">
 					characterIds?: number[]
 					personaIds?: number[]
 					characterPositions?: Record<number, number>
@@ -6715,24 +6728,6 @@ declare global {
 				}
 			}
 			/**
-			 * 🚧 "Create lorebook from session" (PLAN-rulesets §26): the
-			 * session's own notes become a real lorebook the session reads.
-			 * Owner-only; refused when the session already reads a lorebook.
-			 */
-			namespace CreateLorebookFromPhantom {
-				interface Params {
-					sessionId: number
-					/** The new lorebook's name; absent takes the session's. */
-					name?: string | null
-				}
-				interface Response {
-					sessionId: number
-					lorebookId?: number
-					name?: string
-					error?: string
-				}
-			}
-			/**
 			 * 🚧 What deleting a message does to the timeline (§28), for the
 			 * delete confirmation: null when the delete is no revision.
 			 */
@@ -6810,6 +6805,97 @@ declare global {
 				}
 				interface Response {
 					session: SelectSession
+				}
+			}
+			/**
+			 * 🚧 pr-6 (B §B-2): the session's ONE genre row, built as
+			 * `sessions:genres` builds each of its rows. Null = the session's
+			 * genre is not offered here, or the asker has no access.
+			 */
+			namespace GenreOf {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					genre: Genres.Response["genres"][number] | null
+				}
+			}
+			/**
+			 * 🚧 pr-6 (B §B-4): **Share as a lorebook** — the session's own book
+			 * becomes a lorebook of the owner's, the session reads it, and a fresh
+			 * own book overlays it. Only while the session reads no lorebook.
+			 * Replaces `sessions:createLorebookFromPhantom`.
+			 */
+			namespace ShareAsLorebook {
+				interface Params {
+					sessionId: number
+					/** The new lorebook's name; absent takes the session's. */
+					name?: string | null
+				}
+				interface Response {
+					sessionId: number
+					lorebookId?: number
+					name?: string
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 pr-6 (B §B-4): **Clone with changes and attach** — the attached
+			 * book copied with the own book's changes written in, read by the
+			 * session in place of the original (R-p).
+			 */
+			namespace CloneWithChanges {
+				interface Params {
+					sessionId: number
+					/** The copy's name; absent: "<book> (with <session>'s notes)". */
+					name?: string | null
+				}
+				interface Response {
+					sessionId: number
+					lorebookId?: number
+					name?: string
+					error?: string
+				}
+			}
+			/** 🚧 pr-6 (B §B-5, R-k): the owner archives the session — read-only until unarchived. */
+			namespace Archive {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					/** ISO. */
+					archivedAt?: string
+					/** What the archive's one close-out started; null when there was nothing to close out, or the genre registers none. */
+					closeOut?: { sceneIds: number[] } | null
+					error?: string
+				}
+			}
+			/** 🚧 pr-6 (B §B-5): the owner reopens an archived session. Raises no event. */
+			namespace Unarchive {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 pr-6 (B §B-6, R-d): **Close out** — what was played since the
+			 * last scene becomes a closing scene, summarized and held for review.
+			 * Also the catch-up offer's press (`sessionId` = the older session).
+			 */
+			namespace CloseOut {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					/** The scenes it filed and is summarizing, oldest first. */
+					sceneIds?: number[]
+					error?: string
 				}
 			}
 			namespace Summarize {
@@ -7295,6 +7381,23 @@ declare global {
 						 * reads it is open. Newest first.
 						 */
 						readBy?: { id: number; name: string | null }[]
+					})[]
+				}
+			}
+			/**
+			 * 🚧 pr-6 (B §B-3, R-f): the asker's own books — each session's
+			 * "Session notes" — for the Lorebooks view's own section. Never in
+			 * `lorebooks:list`, so never in a picker.
+			 */
+			namespace SessionNotes {
+				interface Params {}
+				interface Response {
+					books: (List.Response["lorebookList"][number] & {
+						/** The session this book is the own book of. */
+						sessionId: number
+						sessionName: string | null
+						/** The shared book it overlays; null when the session reads none. */
+						attached: { id: number; name: string } | null
 					})[]
 				}
 			}
@@ -12849,6 +12952,19 @@ declare global {
 				interface Params {
 					sessionId: number
 				}
+				/**
+				 * 🚧 pr-6s2 (G5, the D5 server half): what a scene's applied
+				 * summary was written from — its `lore_sources` rows (subject
+				 * `scene`), folded (`sceneLoreSourcesOf`).
+				 */
+				interface SceneLoreSources {
+					/** min(`from_message_id`) over the scene's rows — the span's start. */
+					fromMessageId: number
+					/** max(`through_message_id`) — the newest line it was written from (R-a). */
+					throughMessageId: number
+					/** That line's write time (the mirror's `messages.created_at`), ISO; null when the row is gone (no FK). */
+					throughAt: string | null
+				}
 				/** Scene enriched with its history entry data for session display */
 				interface SceneWithEntry extends SceneListRow, SceneCast {
 					historyEntry: {
@@ -12858,6 +12974,8 @@ declare global {
 						day: number | null
 						isCompleted: boolean
 					} | null
+					/** 🚧 pr-6s2 (G5): what its applied summary was written from; null when nothing was. */
+					loreSources: SceneLoreSources | null
 				}
 				interface Response {
 					/**

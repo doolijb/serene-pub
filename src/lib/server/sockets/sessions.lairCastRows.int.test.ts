@@ -532,10 +532,10 @@ describe("R8 · Narrate is the Castellan fired, and lands on main", () => {
 			expect(inlet.via).toBe("narrate")
 			expect(inlet.channel).toBe(pressedOn)
 			// R5: the own voice — the row is the Castellan's by name.
-			const { lastTurnOf } = await import("$lib/server/sessions/turnYield")
-			const last = await lastTurnOf(testDb as any, w.session.id)
-			expect(last.ok && last.yield.rows.map((r) => r.name)).toEqual(["Castellan"])
-			expect(last.ok && last.yield.entry).toEqual({ ref: null, via: "narrate" })
+			const { turnUnitOf } = await import("$lib/server/sessions/rewind")
+			const last = await turnUnitOf(testDb as any, w.session.id, { includePersonLines: false })
+			expect(last.ok && last.unit.rows.map((r) => r.name)).toEqual(["Castellan"])
+			expect(last.ok && last.unit.entry).toEqual({ ref: null, via: "narrate" })
 			// No books are kept in the turn: the keeper is a routine (Lair rewrite D7).
 			expect(keeperCalls()).toBe(0)
 		})
@@ -563,12 +563,12 @@ describe("R8 × R2 · retake of the Castellan's turn", () => {
 		const w = await session({})
 		await reply(w, "the turn to retake")
 		const rows = await turnRows(w.session.id)
-		const { lastTurnOf } = await import("$lib/server/sessions/turnYield")
-		const last = await lastTurnOf(testDb as any, w.session.id)
+		const { turnUnitOf } = await import("$lib/server/sessions/rewind")
+		const last = await turnUnitOf(testDb as any, w.session.id, { includePersonLines: false })
 		expect(last.ok).toBe(true)
 		if (!last.ok) return
-		expect(last.yield.rows.map((r) => r.messageId)).toEqual(rows.map((r) => r.id))
-		expect(last.yield.rows.map((r) => [r.channel, r.name])).toEqual([
+		expect(last.unit.rows.map((r) => r.messageId)).toEqual(rows.map((r) => r.id))
+		expect(last.unit.rows.map((r) => [r.channel, r.name])).toEqual([
 			["sanctum", "Castellan"],
 			["main", "Brannoc"],
 			["main", "Vell"]

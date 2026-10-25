@@ -276,6 +276,49 @@ describe("the sweep", () => {
 		expect(out.brief).toContain("- [x] the goal")
 		expect(out.crib).toContain("- [ ] Find the key")
 	})
+
+	it("🚧 Notice when the scene moves on: asked only when the check is due, its lines numbered (sprint 2)", async () => {
+		const base = {
+			session: { cast: { sessionCharacters: [{ character: { id: 4, name: "Rell" } }] } },
+			state: {},
+			modes: { "scene-moved-on": "full" },
+			check: { due: true, channel: "main", lines: [11, 12] },
+			history: [
+				{ id: 11, role: "user", content: "We pay and leave." },
+				{ id: 12, role: "assistant", characterId: 4, content: "The road north is empty." }
+			]
+		}
+		const on = await run(SWEEP_CRIB, base)
+		expect(on.brief).toContain("sceneMovedOn:")
+		expect(on.crib).toContain("[1] A player: We pay and leave.")
+		expect(on.crib).toContain("[2] Rell: The road north is empty.")
+		expect((await run(SWEEP_CRIB, { ...base, check: { due: false, why: "x" } })).brief).not.toContain("sceneMovedOn")
+		expect((await run(SWEEP_CRIB, { ...base, modes: { "scene-moved-on": "off" } })).brief).not.toContain("sceneMovedOn")
+	})
+
+	it("🚧 the new scene lands on the check's own line, by the duty's mode; out of range or not moved, nothing (sprint 2)", async () => {
+		const empty = { summary: { name: "", content: "" }, lore: [], cast: [], worldState: [], relationships: [], scenes: [], goals: "" }
+		const check = { due: true, channel: "main", lines: [11, 12] }
+		const json = (over: object = {}) => ({ ...empty, sceneMovedOn: { moved: true, line: 2, reason: "they left the inn", ...over } })
+		const cue = { at: 12, channel: "main", reason: "they left the inn" }
+		const full = await run(SWEEP, { json: json(), modes: { "scene-moved-on": "full" }, check })
+		expect(full.sceneCueFull).toEqual(cue)
+		expect(full.sceneCueReview).toBeUndefined()
+		const review = await run(SWEEP, { json: json(), modes: { "scene-moved-on": "review" }, check })
+		expect(review.sceneCueReview).toEqual(cue)
+		expect(review.sceneCueFull).toBeUndefined()
+		const none = (out: any) => {
+			expect(out.sceneCueFull).toBeUndefined()
+			expect(out.sceneCueReview).toBeUndefined()
+		}
+		const modes = { "scene-moved-on": "full" }
+		none(await run(SWEEP, { json: json({ line: 3 }), modes, check }))
+		none(await run(SWEEP, { json: json({ line: 0 }), modes, check }))
+		none(await run(SWEEP, { json: json({ moved: false }), modes, check }))
+		none(await run(SWEEP, { json: json({ reason: "" }), modes, check }))
+		none(await run(SWEEP, { json: json(), modes, check: { due: false, why: "x" } }))
+		none(await run(SWEEP, { json: json(), modes: { "scene-moved-on": "off" }, check }))
+	})
 })
 
 describe("Read the scene", () => {

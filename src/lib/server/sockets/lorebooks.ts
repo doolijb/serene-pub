@@ -278,18 +278,37 @@ async function coverMediaOf(
 	return media ?? null
 }
 
+/**
+ * The lorebook rows as the Lorebooks view draws them. `"books"` is the main
+ * list; `"sessionNotes"` (pr-6, B §B-3) is the asker's own books — the ones
+ * with a `session_id` — each also naming its session and the shared book it
+ * overlays, newest session first. One row mapping for both.
+ */
+function buildLorebooksList(userId: number): Promise<Sockets.Lorebooks.List.Response>
+function buildLorebooksList(
+	userId: number,
+	which: "sessionNotes"
+): Promise<Sockets.Lorebooks.SessionNotes.Response>
+function buildLorebooksList(
+	userId: number,
+	which: "books"
+): Promise<Sockets.Lorebooks.List.Response>
 async function buildLorebooksList(
-	userId: number
-): Promise<Sockets.Lorebooks.List.Response> {
-	if (!userId) return { lorebookList: [] }
+	userId: number,
+	which: "books" | "sessionNotes" = "books"
+): Promise<Sockets.Lorebooks.List.Response | Sockets.Lorebooks.SessionNotes.Response> {
+	if (!userId) return which === "books" ? { lorebookList: [] } : { books: [] }
 	// Books other people **shared** with the asker (PLAN-private-messages
 	// §6.7) ride the same read, each marked and named by its owner.
-	const sharedIds = await sharedLorebookIdsFor(db as unknown as Db, userId)
+	const sharedIds =
+		which === "books" ? await sharedLorebookIdsFor(db as unknown as Db, userId) : []
 	const books = await db.query.lorebooks.findMany({
-		// 🚧 Never a session's own notes (PLAN-rulesets §26): they are
-		// found only through their session.
-		where: (l, { and, eq, inArray, isNull, or }) =>
-			and(
+		// 🚧 Never a session's own book in the main list (PLAN-rulesets §26):
+		// they are listed apart, as Session notes (`which: "sessionNotes"`).
+		where: (l, { and, eq, inArray, isNotNull, isNull, or }) =>
+			which === "sessionNotes"
+				? and(isNotNull(l.sessionId), eq(l.userId, userId))
+				: and(
 				isNull(l.sessionId),
 				// 🚧 Starter lorebooks (PLAN-lorebook-kinds §B): the asker's own come
 				// back marked by their book kind, for a group of their own; no
@@ -395,7 +414,49 @@ async function buildLorebooksList(
 		}
 	})
 
-	return { lorebookList: booksWithTags }
+	if (which === "books") return { lorebookList: booksWithTags }
+
+	// Session notes: each own book names its session and the shared book it
+	// overlays.
+	const sessionIds = booksWithTags.map((b) => b.sessionId!).filter((id) => id != null)
+	const sessionRows = sessionIds.length
+		? await db
+				.select({
+					id: schema.sessions.id,
+					name: schema.sessions.name,
+					updatedAt: schema.sessions.updatedAt
+				})
+				.from(schema.sessions)
+				.where(inArray(schema.sessions.id, sessionIds))
+		: []
+	const sessionOf = new Map(sessionRows.map((r) => [r.id, r]))
+	const overlayIds = [...new Set(booksWithTags.map((b) => b.overlayOf).filter((id): id is number => id != null))]
+	const overlayRows = overlayIds.length
+		? await db
+				.select({ id: schema.lorebooks.id, name: schema.lorebooks.name })
+				.from(schema.lorebooks)
+				.where(inArray(schema.lorebooks.id, overlayIds))
+		: []
+	const overlayName = new Map(overlayRows.map((r) => [r.id, r.name]))
+	const notes = booksWithTags
+		.filter((b) => b.sessionId != null && sessionOf.has(b.sessionId))
+		.map((b) => {
+			const session = sessionOf.get(b.sessionId!)!
+			return {
+				updatedAt: session.updatedAt?.getTime() ?? 0,
+				row: {
+					...b,
+					sessionId: b.sessionId!,
+					sessionName: session.name ?? null,
+					attached:
+						b.overlayOf != null && overlayName.has(b.overlayOf)
+							? { id: b.overlayOf, name: overlayName.get(b.overlayOf)! }
+							: null
+				}
+			}
+		})
+		.sort((a, b) => b.updatedAt - a.updatedAt)
+	return { books: notes.map((n) => n.row) }
 }
 
 /**
@@ -414,6 +475,32 @@ export function relistLorebooks(
 		buildLorebooksList(socket.user!.id)
 	)
 }
+
+/**
+ * 🚧 The asker's Session notes, re-sent after a Share verb, a session made or
+ * deleted (pr-6, B §B-3) — the lazy form of `relistLorebooks`.
+ */
+export function relistSessionNotes(
+	socket: any,
+	emitToUser: (event: string, data: any) => void
+) {
+	return emitToUser("lorebooks:sessionNotes", () =>
+		buildLorebooksList(socket.user!.id, "sessionNotes")
+	)
+}
+
+export const lorebooksSessionNotesHandler: Handler<
+	Sockets.Lorebooks.SessionNotes.Params,
+	Sockets.Lorebooks.SessionNotes.Response
+> = refusable(
+	"lorebooks:sessionNotes",
+	async (socket, _params: Sockets.Lorebooks.SessionNotes.Params, emitToUser) => {
+		const res = await buildLorebooksList(socket.user!.id, "sessionNotes")
+		emitToUser("lorebooks:sessionNotes", res)
+		return res
+	},
+	"Your session notes could not be listed."
+)
 
 export const lorebooksListHandler: Handler<
 	Sockets.Lorebooks.List.Params,
@@ -1582,6 +1669,16 @@ export const updateLorebookBindingHandler: Handler<
 				.where(eq(schema.lorebookBindings.id, params.lorebookBinding.id!))
 				.returning()
 		})
+
+		// A person's edit settles the fields' standing imprints at once (pr-6 A3).
+		{
+			const { markImprintsKept } = await import("$lib/server/lorebooks/imprints")
+			await markImprintsKept(db, {
+				subjectKind: "member",
+				subjectId: params.lorebookBinding.id!,
+				fields: Object.keys(set)
+			})
+		}
 
 		// Attach-time sync: a fresh characterId attachment should
 		// pull in that entity's name/aliases immediately, not wait for an
@@ -4310,6 +4407,7 @@ export function registerLorebookHandlers(
 ) {
 	// Core lorebook handlers
 	register(socket, lorebooksListHandler, emitToUser)
+	register(socket, lorebooksSessionNotesHandler, emitToUser)
 	register(socket, lorebooksCreateHandler, emitToUser)
 	register(socket, lorebooksRulesChoicesHandler, emitToUser)
 	register(socket, lorebooksLibraryHandler, emitToUser)

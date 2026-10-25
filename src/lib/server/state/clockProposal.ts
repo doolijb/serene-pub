@@ -36,6 +36,7 @@ import {
 	clockOfNow,
 	sessionStoryNowOf
 } from "$lib/server/state/storyTime"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { stateVersionOf } from "$lib/server/state/resolve"
 import { advanceStoryTime, type StoryTimeUnit } from "$lib/shared/lorebooks/storyDate"
 
@@ -94,14 +95,15 @@ export async function clockMoveProblem(
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!row) return `There is no session ${sessionId}.`
-	if (!row.lorebookId)
-		return "This session has no lorebook, so it has no story clock for the keeper to move."
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+	const book = row.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
+	if (book == null) return `There is no session ${sessionId}.`
 	const start =
 		clockOf(row) ??
 		(await sessionStoryNowOf(db, sessionId).then((n) => (n ? clockOfNow(n) : null)))
 	if (!start)
 		return "This session's lorebook has no present to start from: nothing on its line is dated and no clock is set, so the keeper's clock move has nowhere to start."
-	const moved = advanceStoryTime(start, by, unit, await bookCalendarOf(db, row.lorebookId))
+	const moved = advanceStoryTime(start, by, unit, await bookCalendarOf(db, book))
 	return moved.problem ?? null
 }
 

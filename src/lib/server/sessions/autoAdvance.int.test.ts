@@ -24,6 +24,7 @@
  *     the fire road's own (pinned in `fireTurn.int.test.ts`).
  */
 
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -297,11 +298,11 @@ describe("auto-advance — the listener", () => {
 		const head = entry("character:3")
 		await on(s.id, sendOf(userId), orderWith(head, 8000))
 		const [row] = await db
-			.select({ metadata: schema.sessions.metadata })
+			.select({ annex: schema.sessions.annex })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, s.id))
 		// The listener wrote no order of its own — the recompute did.
-		expect(readTurnOrder(row!.metadata).order).toEqual([])
+		expect(readTurnOrder(coreAnnexIn(row!.annex)).order).toEqual([])
 	})
 })
 

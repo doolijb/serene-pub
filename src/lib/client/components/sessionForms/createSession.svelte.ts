@@ -179,7 +179,7 @@ export function firstUnmetStartRule(r: StartReadiness): string | null {
 			: `Add at least ${r.floors.characters} characters.`
 	if (r.personaCount < r.floors.personas) return "Choose who you play as."
 	// No lorebook rule (RF fix 2, 2026-10-23): a session may always start
-	// without a book — its own (the phantom lorebook) is its world.
+	// without a book — its own book (its session notes) is its world.
 	return null
 }
 

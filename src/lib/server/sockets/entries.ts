@@ -336,11 +336,19 @@ async function applyEntryUpdate(
 			.select()
 			.from(schema.lorebookEntries)
 			.where(entryOfType(id, typeId))
-	return dbOrTx
+	const updated = await dbOrTx
 		.update(schema.lorebookEntries)
 		.set(set)
 		.where(entryOfType(id, typeId))
 		.returning()
+	// A person's edit settles the field's standing imprints at once (pr-6 A3).
+	const { markImprintsKept, entryFieldAddress } = await import("$lib/server/lorebooks/imprints")
+	await markImprintsKept(dbOrTx, {
+		subjectKind: "entry",
+		subjectId: id,
+		fields: [...Object.keys(columns), ...Object.keys(fields).map(entryFieldAddress)]
+	})
+	return updated
 }
 
 /**
@@ -586,15 +594,29 @@ function summarizerSave(
 	params: Sockets.Entries.Create.Params,
 	userId: number,
 	lorebookId: number
-): { provenance?: EntryProvenance } {
+): {
+	provenance?: EntryProvenance
+	/** 🚧 pr-6 (B §B-7): the review's messages and run, when its save commits. */
+	sources?: { ids: number[]; runId: string | null }
+} {
 	if (typeof params.activityId !== "string") return {}
 	const activity = activityStore.getById(params.activityId)
-	return activity?.kind === "session_summarize" &&
-		activity.userId === userId &&
-		activity.lorebookId === lorebookId &&
-		activity.status === "review"
-		? { provenance: "summarizer" }
-		: {}
+	if (
+		!(
+			activity?.kind === "session_summarize" &&
+			activity.userId === userId &&
+			activity.lorebookId === lorebookId &&
+			activity.status === "review"
+		)
+	)
+		return {}
+	const ids = activity.pendingResult?.sourceIds ?? []
+	return {
+		provenance: "summarizer",
+		...(ids.length && params.sessionId != null
+			? { sources: { ids, runId: activity.pendingResult?.runId ?? null } }
+			: {})
+	}
 }
 
 export const createEntryHandler: Handler<
@@ -714,8 +736,21 @@ async function createEntry(
 	// Same fix, same reason, as resolveOrCreateBinding's already-fixed race
 	// — and the same lock, so the cast member a character-lore entry adds
 	// is found or inserted under it and commits with the entry.
-	const provenance = summarizerSave(params, userId, data.lorebookId)
-	const { newEntry, member } = await db.transaction(async (tx) => {
+	const { provenance, sources } = summarizerSave(params, userId, data.lorebookId)
+	// A reviewed summary's Save commits (B §B-7): the five checks first, so
+	// their sentences reach the person as the save's refusal.
+	if (sources) {
+		const { checkLoreSources } = await import(
+			"$lib/server/pipelines/runtime/loreSources"
+		)
+		await checkLoreSources(
+			db,
+			{ sessionId: params.sessionId!, minAge: 0 },
+			"save",
+			sources.ids.map((id) => ({ id }))
+		)
+	}
+	const { newEntry, member, settled } = await db.transaction(async (tx) => {
 		await lockBookCalendar(tx, data.lorebookId)
 		// A dated entry's date must land in the book's calendar, once it
 		// declares one (DESIGN-story-time §0: validated at entry, so the
@@ -749,12 +784,41 @@ async function createEntry(
 						data.lorebookId,
 						typeId
 					)
-				}, provenance),
+				}, { provenance }),
 				...(opts.derivedFrom ? { derivedFrom: opts.derivedFrom } : {})
 			})
 			.returning()
-		return { newEntry, member }
+		let settled:
+			| Awaited<ReturnType<typeof import("$lib/server/sessions/settle").settleThrough>>
+			| undefined
+		if (sources) {
+			const { recordLoreSources } = await import(
+				"$lib/server/pipelines/runtime/loreSources"
+			)
+			const { settleThrough } = await import("$lib/server/sessions/settle")
+			const span = await recordLoreSources(tx, {
+				sessionId: params.sessionId!,
+				runId: sources.runId,
+				lorebookId: data.lorebookId,
+				subjectKind: "entry",
+				subjectId: newEntry.id,
+				ids: sources.ids
+			})
+			settled = await settleThrough(tx, params.sessionId!, span.throughMessageId, {
+				userId
+			})
+		}
+		return { newEntry, member, settled }
 	})
+	if (settled) {
+		const { announceHistorySettled } = await import("$lib/server/sessions/settle")
+		await announceHistorySettled(db, {
+			sessionId: params.sessionId!,
+			userId,
+			...settled,
+			io: socket?.io
+		})
+	}
 	// A member added here is named from the card, and the cast list
 	// re-sent, as `lorebooks:createBinding` does for one added there.
 	if (member?.created) {
@@ -1104,15 +1168,21 @@ export const entrySessionEntriesHandler: Handler<
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
-		if (!session?.lorebookId) return answer({ ...base, lorebookId: null })
+		// 🚧 pr-6 (B §B-3): a session that reads no book reads its own.
+		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+		const sessionBookId = session
+			? (session.lorebookId ?? (await ownBookOf(db, params.sessionId))?.id ?? null)
+			: null
+		if (sessionBookId == null) return answer({ ...base, lorebookId: null })
 		const [book] = await db
 			.select({ userId: schema.lorebooks.userId, name: schema.lorebooks.name })
 			.from(schema.lorebooks)
-			.where(eq(schema.lorebooks.id, session.lorebookId))
+			.where(eq(schema.lorebooks.id, sessionBookId))
 			.limit(1)
 		if (!book) return answer({ ...base, lorebookId: null })
-		if (book.userId !== userId && !socket.user?.isAdmin)
-			return answer({ ...base, lorebookId: session.lorebookId, ownerOnly: true })
+		// The own book is the session's: the owner-only line is for an attached book.
+		if (session?.lorebookId != null && book.userId !== userId && !socket.user?.isAdmin)
+			return answer({ ...base, lorebookId: sessionBookId, ownerOnly: true })
 
 		const limit = Math.min(Math.max(params.limit ?? 50, 1), 200)
 		let offset = Math.max(params.offset ?? 0, 0)
@@ -1150,7 +1220,7 @@ export const entrySessionEntriesHandler: Handler<
 			: []
 		const overlays = await entryOverlaysFor(
 			db,
-			session.lorebookId,
+			sessionBookId,
 			at,
 			entryIds.length ? entryIds : undefined
 		)
@@ -1166,7 +1236,7 @@ export const entrySessionEntriesHandler: Handler<
 		const resolvedPaging =
 			moved.archived || moved.search || moved.pinned || moved.off || moved.byName
 		const wheres = [
-			eq(e.lorebookId, session.lorebookId),
+			eq(e.lorebookId, sessionBookId),
 			moved.archived ? undefined : eq(e.archived, false),
 			onLineAtSql(
 				e.branchId,
@@ -1307,7 +1377,7 @@ export const entrySessionEntriesHandler: Handler<
 		const { rows, total } = resolvedPaging ? await resolved() : await inSql()
 		return answer({
 			sessionId: params.sessionId,
-			lorebookId: session.lorebookId,
+			lorebookId: sessionBookId,
 			bookName: book.name,
 			offset,
 			total,

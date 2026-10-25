@@ -116,7 +116,8 @@ describe("what a session runs", () => {
 		const added = await resolveSessionEventVerdict(db as any, STORY, ADDED, { sessionId })
 		expect(added).toMatchObject({ spec: "core:spec/story-turn-order", registrationKey: "member-added→story-turn-order" })
 		const reply = await resolveSubjectVerdict(db as any, STORY, RESPOND, { sessionId })
-		expect(reply).toEqual({ spec: "core:spec/story-respond", registrationKey: "message-respond→story-respond" })
+		// pr-6 (pass 9 S3): the resolution carries the registration's summary depth — 0 on an event.
+		expect(reply).toEqual({ spec: "core:spec/story-respond", registrationKey: "message-respond→story-respond", registrationMinAge: 0 })
 		const narrate = await resolveSubjectVerdict(db as any, STORY, "core:spec/story-narrate#narrate", {
 			sessionId,
 			spec: "core:spec/story-narrate"
@@ -175,6 +176,28 @@ describe("what a session runs", () => {
 		).toMatchObject({ preset: { reading: { params: { scene: false } } }, genre: null, session: null })
 	}, 60_000)
 
+	it("a preset change carrying minAge reaches the effective registration and its row's min_age", async () => {
+		const [p] = await db
+			.insert(schema.sessionPresets)
+			.values({ name: "Min age preset", genreId: STORY, bindings: {}, enabled: true, isDefault: false, isImmutable: false } as any)
+			.returning()
+		const key = "message-respond→story-respond"
+		const { writePresetChanges } = await import("./presetRows")
+		await writePresetChanges(db as any, p!.id, { change: [{ key, minAge: 7 }] })
+		const [s] = await db
+			.insert(schema.sessions)
+			.values({ userId, genreId: STORY, isGroup: false, name: "min age", presetId: p!.id })
+			.returning()
+		const { effectiveRegistrations } = await import("./resolve")
+		const resolved = (await effectiveRegistrations(db as any, s!.id))!
+		expect(resolved.effective.find((r) => r.key === key)?.minAge).toBe(7)
+		const rows = await db
+			.select()
+			.from(schema.registrations)
+			.where(and(eq(schema.registrations.scopeKind, "preset"), eq(schema.registrations.scopeRef, String(p!.id)), eq(schema.registrations.key, key)))
+		expect(rows.map((r) => r.minAge)).toEqual([7])
+	}, 60_000)
+
 	it("several registrations on one event run in order, each when its condition holds (R24, R31)", async () => {
 		const sessionId = await sessionOn("core-story-living")
 		const { rowOfDecl } = await import("./rows")
@@ -204,7 +227,7 @@ describe("what a session runs", () => {
 		const sessionId = await sessionOn("core-story-living")
 		const { sessionDutiesOf, sessionRoutineMode } = await import("$lib/server/pipelines/routines/sessionRoutines")
 		const { reckoningDuties, sweepDuties } = await import("@serene-pub/contracts")
-		const { ASSISTANT_MEMORY_SPEC_ID, STORY_ILLUSTRATE_NEW_SCENE_SPEC_ID, STORY_RECKONING_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const { ASSISTANT_MEMORY_SPEC_ID, STORY_ILLUSTRATE_NEW_SCENE_SPEC_ID } = await import("@serene-pub/core-catalog")
 		expect(await sessionDutiesOf(db as any, sessionId, reckoningDuties.id)).toMatchObject({
 			attributes: "full",
 			conditions: "full",
@@ -219,11 +242,6 @@ describe("what a session runs", () => {
 		})
 		expect(await sessionRoutineMode(db as any, sessionId, STORY_ILLUSTRATE_NEW_SCENE_SPEC_ID)).toBe("off")
 		expect(await sessionRoutineMode(db as any, sessionId, ASSISTANT_MEMORY_SPEC_ID)).toBeNull()
-		// A duty that writes a lorebook reads Off in a session with none — at run time, on the run.
-		const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
-		const { noBookDutyOverrides } = await import("$lib/server/pipelines/runtime/duties")
-		const doc = await loadPublished(db as any, STORY_RECKONING_SPEC_ID)
-		expect(noBookDutyOverrides(doc!.nodes as any)).toEqual([{ nodeKey: expect.any(String), slot: "params", path: "placesOnMove", value: false }])
 	}, 60_000)
 
 	it("caches until something it read changes", async () => {

@@ -74,6 +74,7 @@ import { entrySourceHash } from "$lib/server/annotations"
 import type { EntryTypeId } from "$lib/shared/entries/types"
 import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 import { askerOf } from "./refusable"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import {
 	pipelinesCatalogue,
 	pipelinesDraftDiscard,
@@ -4852,10 +4853,12 @@ export async function retrievalEntriesFor(
 		.limit(1)
 	if (
 		!session ||
-		(!opts.asAdmin && session.userId !== userId) ||
-		!session.lorebookId
+		(!opts.asAdmin && session.userId !== userId)
 	)
 		return { entries, read: false }
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+	const lorebookId = session.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
+	if (lorebookId == null) return { entries, read: false }
 
 	const rows = await db
 		.select({
@@ -4877,13 +4880,13 @@ export async function retrievalEntriesFor(
 			content: schema.lorebookEntries.content
 		})
 		.from(schema.lorebookEntries)
-		.where(eq(schema.lorebookEntries.lorebookId, session.lorebookId))
+		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
 
 	for (const r of rows as any[])
 		entries.set(`${bandOfType(r.typeId)}:${r.id}`, {
 			id: r.id,
 			typeId: r.typeId,
-			lorebookId: session.lorebookId,
+			lorebookId,
 			title: r.title?.trim() || datedTitle(r.fields),
 			keys: Array.isArray(r.keys) ? r.keys : [],
 			constant: !!r.constant,
@@ -5058,14 +5061,8 @@ export const pipelinesPreviewRetrieval: Handler<
 
 		const session = await previewCastFor(sessionId)
 		if (!session) return refuse("No such conversation.")
-		// Answered here rather than by running the turn: retrieval reads the
-		// session's own book, so this is not a "nothing fires" but a question that cannot be
-		// asked — and spending a whole turn to report an absence with no
-		// reason attached is the failure this surface exists to remove.
-		if (!session.lorebookId)
-			return refuse(
-				"This session reads no lorebook, so there is no lore to fire."
-			)
+		// 🚧 pr-6 (§B-3a): every session has a book (its own, when none is
+		// shared), so there is always lore to look at.
 
 		const activeCharacters = session.sessionCharacters.filter(
 			(cc) => cc.character !== null && cc.isActive

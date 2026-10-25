@@ -397,8 +397,9 @@ describe("sessions:addGuest — the session broadcast and the guest's list", () 
 		const h = fresh()
 		const owner = h.connect("s1", OWNER)
 		const elsewhere = h.connect("s2", SECOND_TAB)
-		await owner.declare("sessions:get#1")
-		await elsewhere.declare("sessions:get#7")
+		// 🚧 pr-6: the member push is `sessions:refresh` (B §B-1), scoped as `sessions:get` is.
+		await owner.declare("sessions:refresh#1")
+		await elsewhere.declare("sessions:refresh#7")
 
 		await owner.fire("sessions:addGuest", { sessionId: 1, guestUserId: 2 })
 
@@ -406,7 +407,7 @@ describe("sessions:addGuest — the session broadcast and the guest's list", () 
 		// Read once for the owner, once for the guests — the roster reads the
 		// gate was skipping.
 		expect(seam.queries).toContain("sessionGuests.findMany")
-		const get = h.emits.filter((e) => e.event === "sessions:get")
+		const get = h.emits.filter((e) => e.event === "sessions:refresh")
 		expect(get.map((e) => e.target)).toEqual(["s1"])
 		expect(get[0].data.session.id).toBe(1)
 	})

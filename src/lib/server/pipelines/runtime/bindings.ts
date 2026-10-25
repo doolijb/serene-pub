@@ -6661,9 +6661,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * `full`. Publishes `modes` keyed as the steps that read
 		 * them name them (`dutyModes`), `any`, and `main` (both).
 		 *
-		 * A duty that writes a lorebook reads Off in a session with none — the
-		 * routine runtime forces it off on the run (`noBookDutyOverrides`,
-		 * lane 6); the reply's duties write nothing.
+		 * The reply's duties write no lorebook.
 		 */
 		"core:task/reply-duties@1": reads<typeof C.replyDuties>(
 			async (input: NodeInput<typeof C.replyDuties>) =>
@@ -6695,12 +6693,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			},
 			{ ports: ["routine"], params: ["attributes", "conditions", "time", "placesOnMove", "timedExpiry"] }
 		),
+		/** 🚧 Sprint 2 (pass 7, R-i): *Notice when the scene moves on* is asked only when the host's judged scene check is due (`judgedSceneDuty.ts`); its `sceneCheck` rides on the output. */
 		"core:task/sweep-duties@1": reads<typeof C.sweepDuties>(
-			async (input: NodeInput<typeof C.sweepDuties>) =>
-				ok(dutyModes("core:task/sweep-duties@1", input?.params, input?.routine)),
+			async (input: NodeInput<typeof C.sweepDuties>) => {
+				const out = dutyModes("core:task/sweep-duties@1", input?.params, input?.routine)
+				const { judgedSceneCheckFor, withJudgedSceneCheck } = await import("$lib/server/pipelines/runtime/judgedSceneDuty")
+				const db = (await import("$lib/server/db")).db as never
+				return ok(withJudgedSceneCheck(out, await judgedSceneCheckFor(db, out.modes, run.runId ?? "")))
+			},
 			{
 				ports: ["routine"],
-				params: ["summary", "lore", "cast", "relationships", "worldState", "scenes", "goals", "goalReached"]
+				params: ["summary", "lore", "cast", "relationships", "worldState", "scenes", "goals", "goalReached", "sceneMovedOn"]
 			}
 		),
 		"core:query/available-tools@1": reads<typeof C.availableTools>(
@@ -8009,6 +8012,25 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["channel", "open", "reason", "person"] }
 		),
 		/**
+		 * 🚧 The judged scene check's answer (sprint 2, pass 7, R-i): the host's
+		 * commit is `offerJudgedSceneCue` (`scenes/boundaryWatcher.ts`), which
+		 * re-checks the check's conditions and leaves a `judged` scene cue — the
+		 * chip, or under Automatic the placed boundary. A malformed value halts
+		 * with its sentence; a cue the conditions do not allow now is `skipped`,
+		 * never a halt. `cue` is a `ProposedSceneCue`.
+		 */
+		"core:outlet/propose-scene-cue@1": reads<typeof C.proposeSceneCue>(
+			async (input: NodeInput<typeof C.proposeSceneCue>, ctx: OutletCtx) => {
+				const { cue, halt: halted, ...ids } = (await ctx.commit(input)) as {
+					cue?: unknown
+					halt?: unknown
+				}
+				if (typeof halted === "string") return halt(halted)
+				return ok({ status: "committed", ids, cue: cue ?? null })
+			},
+			{ ports: ["at", "channel", "reason"], params: ["ask"] }
+		),
+		/**
 		 * 🚧 A stat configured by a pipeline (owner ruling 2026-10-15): the
 		 * host's commit is `setStatConfig` (`state/write.ts`), the writer a
 		 * person's `state:configure` takes; a refusal halts with its sentence.
@@ -8413,7 +8435,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			) => ok(await ctx.commit(input)),
 			// 🚧 `fields` (Lair rewrite D2): the entry type's typed fields,
 			// checked against the type at the review gate and the commit.
-			{ ports: ["name", "content", "links", "fields"], params: ["entryType"] }
+			// 🚧 pr-6 C1: `sources` (and create's `match`, `bind`) are read by the
+			// commit (host.ts, `checkLoreSources` / `resolveBind`).
+			{
+				ports: ["name", "content", "links", "fields", "sources", "match", "bind"],
+				params: ["entryType"]
+			}
 		),
 		/**
 		 * 🚧 Change an entry of this session's lorebook (Lair rewrite D2,
@@ -8427,7 +8454,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.updateLoreEntry>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["entry", "name", "content", "fields"] }
+			// 🚧 pr-6 C1: `sources` is read by the commit (`checkLoreSources`).
+			{ ports: ["entry", "name", "content", "fields", "sources"] }
 		),
 		/**
 		 * One link between two entries of this session's lorebook.
@@ -8449,7 +8477,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
 			{
-				ports: ["from", "to", "name", "description"],
+				// 🚧 pr-6 C1: `sources` is read by the commit (`checkLoreSources`).
+				ports: ["from", "to", "name", "description", "sources"],
 				params: ["linkType", "reverseLinkType"]
 			}
 		),
@@ -8460,7 +8489,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.graphProposal>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["proposal"] }
+			// 🚧 pr-6 C1: `sources` is read by the commit (`checkLoreSources`).
+			{ ports: ["proposal", "sources"] }
 		)
 	}
 

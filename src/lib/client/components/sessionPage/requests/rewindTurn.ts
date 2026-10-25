@@ -7,6 +7,8 @@
  * session (`session.rewind`, the dossier's `rewind`).
  */
 
+import type { TypedSocket } from "$lib/client/sockets/typedSocket"
+
 /** What these answers need of the page. */
 export interface RewindTurnDeps {
 	/** Back: the newest turn out of the history. */
@@ -23,4 +25,12 @@ export function answerRewindTurn(_params: unknown, deps: RewindTurnDeps): void {
 /** Answer one `forward-turn`. */
 export function answerForwardTurn(_params: unknown, deps: RewindTurnDeps): void {
 	deps.forwardTurn()
+}
+
+/** 🚧 The page's ONE Back and ONE Forward emit (audit R4): the header's presses and a widget's `rewind-turn` / `forward-turn` both call these. A press before the route has a session id sends nothing. */
+export function rewindPresses(socket: Pick<TypedSocket, "emit">, sessionId: () => number | null | undefined): RewindTurnDeps {
+	return {
+		rewindTurn() { const id = sessionId(); if (id != null) socket.emit("sessions:rewindTurn", { sessionId: id }) },
+		forwardTurn() { const id = sessionId(); if (id != null) socket.emit("sessions:forwardTurn", { sessionId: id }) }
+	}
 }

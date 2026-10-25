@@ -80,6 +80,8 @@ export interface LegacyMessageRow {
 	queueItemId?: string | null
 	isHidden?: boolean | null
 	debugMeta?: Record<string, any> | null
+	/** The forward stack: set while Back holds the row out of the live history. */
+	rewindOrdinal?: number | null
 }
 
 export type NewMessage = typeof messages.$inferInsert
@@ -210,6 +212,7 @@ export function projectLegacy(row: LegacyMessageRow): {
 			isEdited: !!row.isEdited,
 			debugMeta: row.debugMeta ?? null,
 			queueItemId: row.queueItemId ?? null,
+			rewindOrdinal: row.rewindOrdinal ?? null,
 			// The legacy created_at is day-precision; updated_at is the best
 			// truthful timestamp available (20 §5).
 			createdAt: updatedAt,

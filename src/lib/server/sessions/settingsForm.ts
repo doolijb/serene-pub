@@ -61,6 +61,7 @@ import {
 	type SettingValue
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { registrationScopeWhere } from "$lib/server/pipelines/registrations/rows"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 
 type Form = Sockets.Sessions.SettingsForm.Response
@@ -326,8 +327,7 @@ async function sessionRow(db: Db, sessionId: number, key: string) {
 		.from(schema.registrations)
 		.where(
 			and(
-				eq(schema.registrations.scopeKind, "session"),
-				eq(schema.registrations.scopeRef, String(sessionId)),
+				registrationScopeWhere({ kind: "session", sessionId }),
 				eq(schema.registrations.key, key)
 			)
 		)

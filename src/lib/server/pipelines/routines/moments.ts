@@ -33,6 +33,8 @@
 import { and, eq, inArray, sql } from "drizzle-orm"
 import { readTurnOrder, sessionEvents as sdkSessionEvents, type EventCause } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { liveMessageWhere } from "$lib/server/messages/store"
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import {
@@ -116,17 +118,18 @@ async function turnNumber(db: Db, sessionId: number, messageId: number, lane: st
  * pipeline's own voice). Read after the line's own event work, so the order
  * is the one its recompute wrote.
  */
-async function seatedOf(db: Db, sessionId: number): Promise<{ seated: string[]; metadata: unknown }> {
+async function seatedOf(db: Db, sessionId: number): Promise<{ seated: string[]; core: Record<string, unknown> }> {
 	const [s] = await db
-		.select({ metadata: schema.sessions.metadata })
+		.select({ annex: schema.sessions.annex })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const order = readTurnOrder(s?.metadata ?? null)
+	const core = coreAnnexIn(s?.annex ?? null)
+	const order = readTurnOrder(core)
 	const seated = new Set<string>()
 	for (const c of order.candidates) seated.add(c.ref)
 	for (const e of order.order) seated.add(speakerKey(e.ref))
-	return { seated: [...seated], metadata: s?.metadata ?? null }
+	return { seated: [...seated], core }
 }
 
 /**
@@ -142,10 +145,7 @@ async function seatedOf(db: Db, sessionId: number): Promise<{ seated: string[]; 
 export async function replayStoryLane(
 	db: Db,
 	sessionId: number
-): Promise<{
-	tally: LaneTallyOf | undefined
-	lines: Array<{ id: number; round: number; person: boolean; speaker: string }>
-}> {
+): Promise<{ tally: LaneTallyOf | undefined; lines: ReplayedLine[] }> {
 	const m = schema.sessionMessages
 	const rows = await db
 		.select({
@@ -163,7 +163,7 @@ export async function replayStoryLane(
 			and(
 				eq(m.sessionId, sessionId),
 				inArray(m.channel, STORY_LANES),
-				sql`${m.rewindOrdinal} is null`,
+				liveMessageWhere(),
 				sql`not exists (
 					select 1 from ${schema.pipelineRunArtifacts} a
 					join ${schema.pipelineRuns} r on r.id = a.run_id
@@ -176,17 +176,64 @@ export async function replayStoryLane(
 	const { seated } = await seatedOf(db, sessionId)
 	let tally: LaneTallyOf | undefined
 	let turn = 0
-	const lines: Array<{ id: number; round: number; person: boolean; speaker: string }> = []
-	for (const row of rows) {
-		if (!takesTurn(row as LineRow)) continue
+	const taking = rows.filter((row) => takesTurn(row as LineRow))
+	const planOf = (row: { metadata: unknown }): number | null => {
+		const p = (row.metadata as { planRowId?: unknown } | null)?.planRowId
+		return typeof p === "number" ? p : null
+	}
+	const answersOf = (row: { metadata: unknown }): number | null => {
+		const q = Number((row.metadata as { answersForm?: { messageId?: unknown } } | null)?.answersForm?.messageId)
+		return Number.isInteger(q) && q > 0 ? q : null
+	}
+	// Pass 1: how far each standing plan's turn reaches.
+	const spanEnd = new Map<number, number>()
+	for (const row of taking) {
+		const p = planOf(row)
+		if (p !== null) spanEnd.set(p, Math.max(spanEnd.get(p) ?? 0, row.id))
+	}
+	// Pass 2: the line that opens each line's turn (R-c).
+	const lines: ReplayedLine[] = []
+	const turnOfLine = new Map<number, number>()
+	/** The turn of the newest replayed line before `id`, else `fallback`. */
+	const openerOf = (id: number, fallback: number): number => {
+		for (let i = lines.length - 1; i >= 0; i--) if (lines[i]!.id < id) return lines[i]!.turnOf
+		return fallback
+	}
+	let current: number | null = null
+	for (const row of taking) {
 		turn++
 		const speaker = speakerKey(lineSpeaker(row as LineRow))
 		const person = row.role === "user"
 		const step = tallyTurn(tally, { messageId: row.id, turn, speaker, person }, seated)
 		tally = step.next
-		lines.push({ id: row.id, round: step.round ?? 1, person, speaker })
+		const plan = planOf(row)
+		const answered = answersOf(row)
+		let turnOf: number
+		if (plan !== null) turnOf = openerOf(plan, row.id)
+		else if (answered !== null) turnOf = turnOfLine.get(answered) ?? openerOf(answered, row.id)
+		else {
+			const standing = person
+				? [...spanEnd].find(([p, end]) => p < row.id && row.id < end)?.[0]
+				: undefined
+			if (standing !== undefined) turnOf = openerOf(standing, row.id)
+			else if (person) turnOf = row.id
+			else turnOf = current ?? row.id
+		}
+		current = turnOf
+		turnOfLine.set(row.id, turnOf)
+		lines.push({ id: row.id, round: step.round ?? 1, person, speaker, turnOf })
 	}
 	return { tally, lines }
+}
+
+/** One replayed line of the story lane (see `replayStoryLane`). */
+export interface ReplayedLine {
+	id: number
+	round: number
+	person: boolean
+	speaker: string
+	/** The id of the line that opens this line's turn (R-c). */
+	turnOf: number
 }
 
 /** One lane's tally (`turnTally.ts`), as the replay builds it. */
@@ -250,8 +297,8 @@ export async function noteLineLanded(
 		const lane = laneOf(row.channel)
 		const turn = await turnNumber(db, at.sessionId, at.messageId, lane)
 		const speaker = lineSpeaker(row as LineRow)
-		const { seated, metadata } = await seatedOf(db, at.sessionId)
-		const prev = readTurnTally(metadata).lanes[lane]
+		const { seated, core } = await seatedOf(db, at.sessionId)
+		const prev = readTurnTally(core).lanes[lane]
 		const step = tallyTurn(
 			prev,
 			{ messageId: at.messageId, turn, speaker: speakerKey(speaker), person: row.role === "user" },
@@ -274,6 +321,15 @@ export async function noteLineLanded(
 				round: step.roundEnded.round,
 				speakers: step.roundEnded.speakers
 			})
+		// 🚧 pr-6 G2 (R-m): a genre whose history settles `on-write` settles
+		// each line as it lands (`sessions/settle.ts`; never throws).
+		const { settleOnWrite } = await import("$lib/server/sessions/settle")
+		await settleOnWrite(db, {
+			sessionId: at.sessionId,
+			messageId: at.messageId,
+			userId: at.userId,
+			...(at.io ? { io: at.io } : {})
+		})
 	} catch (err) {
 		console.warn(`[routines] the turn of message ${at.messageId} was not noted:`, err)
 	}

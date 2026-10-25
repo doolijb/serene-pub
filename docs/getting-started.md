@@ -121,7 +121,7 @@ That's it: you're playing. Not happy with a reply? Hover it and press **Regenera
 
 Once you've started a session (and, if you run the pub, a model can reply), the home page stops showing the wizard. Instead it shows what you were doing:
 
-- One quiet line at the top: _Beta, pre-release 0.6.0-pr-5. Expect changes; keep backups of anything you can't lose._ (it names the version you run). The **×** puts it away in this browser until the next version. The wizard doesn't show it.
+- One quiet line at the top: _Beta, pre-release 0.6.0-pr-6. Expect changes; keep backups of anything you can't lose._ (it names the version you run). The **×** puts it away in this browser until the next version. The wizard doesn't show it.
 - A greeting, with how many sessions are waiting on your reply, an **Import a card** button and a **New session** button.
 - **Pick up where you left off**: your most recent sessions, newest first. A **Your turn** label with a gold dot marks one waiting on you; **Continue** opens it.
 - **Characters**: your characters as a list in two columns, each with its picture, its name and one line about it, ending with **New or import**. Click one to see its sessions; **All** opens the Characters view. The two icons beside **All** switch to a shelf of portrait cards and back; this browser remembers which.

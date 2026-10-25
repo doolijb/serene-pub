@@ -245,7 +245,7 @@ export const GUIDE_ORDER = [
 	},
 	{
 		group: "Reference and help",
-		pages: ["environment-variables", "troubleshooting", "release-notes/0.6.0-pr-3", "release-notes/0.6.0-pr-1"]
+		pages: ["environment-variables", "troubleshooting", "release-notes/0.6.0-pr-6", "release-notes/0.6.0-pr-3", "release-notes/0.6.0-pr-1"]
 	}
 ]
 
@@ -257,7 +257,7 @@ export const GUIDE_ORDER = [
  * A guide missing from this list is appended alphabetically and reported as a
  * warning — the compiler's rule, not a special case for this source.
  */
-const SDK_GUIDE_ORDER = ["extending", "vocabulary", "your-first-plugin", "widgets", "widget-examples", "frames", "channels", "events", "genres-presets-and-routines", "rulesets", "storage", "forms-and-effects", "plugin-permissions", "where-values-come-from"]
+const SDK_GUIDE_ORDER = ["extending", "vocabulary", "your-first-plugin", "widgets", "widget-examples", "frames", "channels", "events", "genres-presets-and-routines", "rulesets", "storage", "writing-lore-from-a-pipeline", "forms-and-effects", "plugin-permissions", "where-values-come-from"]
 
 /**
  * Reading order for the catalog-and-laws source, derived from its own pages.

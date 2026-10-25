@@ -6,8 +6,8 @@
  * reason every other push has one: the socket layer is where a frame's
  * shape and its interest gate live, and the emitter should not have to know
  * either. `emitSessionEvent` calls this on `turn-order-changed`; the view
- * handler calls it alongside `sessions:view`, so a client that has just
- * joined renders the same state as one that was already there.
+ * does not: `sessions:view` sends `turnOrderFrameOf` to the viewer
+ * alone (pr-6 A9).
  *
  * ⚠ **Page load is not an event** (§3). Nothing here recomputes: the push
  * carries what is stored, and a session that has never had an event yet
@@ -18,9 +18,30 @@
 import { readTurnOrder, type TurnOrderV1 } from "@serene-pub/sdk"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { db } from "$lib/server/db"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
+
+/**
+ * The `sessions:turnOrder` frame for one session, as the push sends it; null
+ * when the session is gone. `turnOrder` is the document when the caller has
+ * it; otherwise it is read off the row, the same value by construction.
+ */
+export async function turnOrderFrameOf(
+	sessionId: number,
+	turnOrder?: unknown
+): Promise<{ sessionId: number; turnOrder: TurnOrderV1 } | null> {
+	if (turnOrder && typeof turnOrder === "object")
+		return { sessionId, turnOrder: readTurnOrder({ turnOrder }) }
+	const [row] = await db
+		.select({ annex: schema.sessions.annex })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!row) return null
+	return { sessionId, turnOrder: readTurnOrder(coreAnnexIn(row.annex)) }
+}
 
 /**
  * Push a session's turn order. `turnOrder` is the document when the caller
@@ -41,21 +62,10 @@ export async function pushTurnOrder(
 	opts?: { autoAdvancing?: boolean }
 ): Promise<void> {
 	if (!io) return
-	let document: TurnOrderV1
-	if (turnOrder && typeof turnOrder === "object")
-		document = readTurnOrder({ turnOrder })
-	else {
-		const [row] = await db
-			.select({ metadata: schema.sessions.metadata })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-			.limit(1)
-		if (!row) return
-		document = readTurnOrder(row.metadata)
-	}
+	const frame = await turnOrderFrameOf(sessionId, turnOrder)
+	if (!frame) return
 	await broadcastToSessionUsers(io, sessionId, "sessions:turnOrder", {
-		sessionId,
-		turnOrder: document,
+		...frame,
 		...(opts?.autoAdvancing !== undefined
 			? { autoAdvancing: opts.autoAdvancing }
 			: {})

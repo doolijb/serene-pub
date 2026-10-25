@@ -21,7 +21,9 @@
 	import {
 	composerClosedOn,
 	composerClosedPlaceholder,
-	composerClosuresFor
+	composerClosuresFor,
+	DEFAULT_CHANNEL,
+	parseChannel
 } from "@serene-pub/sdk"
 	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
 	import { newestRowIdOn } from "$lib/client/components/pipelines/runCardScope"
@@ -282,7 +284,7 @@
 					userId: userCtx.user?.id,
 					channel,
 					rows: session?.sessionMessages,
-					sessionMetadata: session?.metadata
+					turnOrder: turns.turnOrderDoc
 				}),
 				NOT_YOUR_CONTINUE
 			]
@@ -368,11 +370,10 @@
 			</span>
 		{/if}
 	{/if}
-	<!-- Regenerate the last turn, as a whole (`retake`, R2): where
-	     the genre offers it, the server lists it here and takes the
-	     row regenerate (`retry`) off this venue, so one chip reads
-	     Regenerate. -->
-	{#if extraActionOn("retake", channel)}
+	<!-- Regenerate the last turn, as a whole (`retake`, R2): on the
+	     story it is the header's, beside Back and Forward (pr-6 D2) —
+	     drawn here only for another channel that lists it. -->
+	{#if extraActionOn("retake", channel) && channel != null && parseChannel(channel).slug !== DEFAULT_CHANNEL}
 		{@const t = extraActionOn("retake", channel)!}
 		{@const chip = extraChip(t)}
 		<button
@@ -492,7 +493,7 @@
 		{@const chip = shut
 			? { disabled: true, reason: composerClosedPlaceholder(shut) }
 			: paletteRowState(chipVerdict(t), {
-					generating: !session || !!lastMessage?.isGenerating,
+					generating: data.generating,
 					newest: newestItem,
 					statusText
 				})}

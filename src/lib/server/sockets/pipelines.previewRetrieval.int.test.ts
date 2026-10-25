@@ -129,17 +129,16 @@ describe("pipelines:previewRetrieval — permission and preconditions", () => {
 		expect(res.explanation).toBeUndefined()
 	}, 60_000)
 
-	it("refuses a conversation with no lorebook, with the reason", async () => {
+	it("a conversation with no shared lorebook is no refusal: it reads its own book, so it gets as far as its cast", async () => {
 		const { pipelinesPreviewRetrieval } = await import("./pipelines")
 		const res: any = await pipelinesPreviewRetrieval.handler(
 			fakeSocket(ownerId, true),
 			{ sessionId: booklessSessionId, content: "hello" } as any,
 			noop
 		)
-		// Not "nothing fires" — a question that cannot be asked, said in
-		// words. An absence with no reason attached is the failure this whole
-		// surface exists to remove.
-		expect(res.error).toContain("reads no lorebook")
+		// 🚧 pr-6 (§B-3a): "reads no lorebook" is no longer said anywhere.
+		expect(res.error).not.toContain("lorebook")
+		expect(res.error).toContain("no active characters")
 		expect(res.explanation).toBeUndefined()
 	}, 60_000)
 

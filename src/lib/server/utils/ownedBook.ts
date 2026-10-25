@@ -58,8 +58,8 @@ export async function findOwnedBook(
 	// 🚧 A session's own notes (PLAN-rulesets §26): its members', nobody
 	// else's — the owner of the row included only as a member.
 	if (book.sessionId != null) {
-		const { phantomAccessFor } = await import("$lib/server/lorebooks/phantom")
-		if (!(await phantomAccessFor(db, book.id, userId))) return undefined
+		const { ownBookAccessFor } = await import("$lib/server/lorebooks/ownBook")
+		if (!(await ownBookAccessFor(db, book.id, userId))) return undefined
 	}
 	return { id: book.id, name: book.name, userId: book.userId }
 }
@@ -103,8 +103,8 @@ export async function lorebookAccessFor(
 	if (!book) return null
 	// 🚧 A session's own notes: its members read them as their own, and no
 	// share or administrator exception reaches them (PLAN-rulesets §26).
-	const { phantomAccessFor } = await import("$lib/server/lorebooks/phantom")
-	const member = await phantomAccessFor(db, lorebookId as number, userId)
+	const { ownBookAccessFor } = await import("$lib/server/lorebooks/ownBook")
+	const member = await ownBookAccessFor(db, lorebookId as number, userId)
 	if (member !== undefined) return member ? "owner" : null
 	if (book.userId === userId) return "owner"
 	if (await isSharedWith(db, "lorebook", lorebookId as number, userId))

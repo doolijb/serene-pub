@@ -138,7 +138,7 @@ describe("resolve-state-changes@1 — the clock port", () => {
 		expect((await resolveWith(w.session.id, { clock: [{ by: 2, unit: "fortnights" }] })).refused[0]).toMatch(
 			/counts in/
 		)
-		const { NO_STORY_CLOCK_YET, NO_STORY_CLOCK_BOOK } = await import("./clockMoves")
+		const { NO_STORY_CLOCK_YET } = await import("./clockMoves")
 		const unset = await world({ clock: false })
 		const nowhere = await resolveWith(unset.session.id, { clock: [{ by: 2, unit: "hours" }] })
 		// 🚧 §15 G16: well-formed, so it rides `changes` marked skipped — for
@@ -146,10 +146,11 @@ describe("resolve-state-changes@1 — the clock port", () => {
 		expect(nowhere.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: NO_STORY_CLOCK_YET }])
 		expect(nowhere.clock).toBeNull()
 		expect(nowhere.refused[0]).toMatch(/no present to start from/)
-		const bookless = await world({ book: false })
+		const bookless = await world({ book: false, clock: false })
 		const noBook = await resolveWith(bookless.session.id, { clock: [{ by: 2, unit: "hours" }] })
-		expect(noBook.refused[0]).toMatch(/no lorebook/)
-		expect(noBook.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: NO_STORY_CLOCK_BOOK }])
+		// 🚧 pr-6 (§B-3a): no shared book is the session's own book, clock unset.
+		expect(noBook.refused[0]).toMatch(/no present to start from/)
+		expect(noBook.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: NO_STORY_CLOCK_YET }])
 		// A malformed ask is the keeper's mistake: a sentence, and no line at all.
 		expect(back.clock).toBeNull()
 	}, 60_000)

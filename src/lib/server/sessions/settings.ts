@@ -63,7 +63,8 @@
  * projection of the same document.
  */
 
-import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
+import { annexWithoutPoints } from "$lib/server/sessions/annexChanges"
+import { annexForPipelines, coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -75,11 +76,10 @@ import {
 	type TurnOrderV1
 } from "@serene-pub/sdk"
 import {
-	cascadeFields,
+	cascadeSessionFields,
 	getSessionGenre,
 	STANDARD_GENRE_ID
 } from "$lib/server/pipelines/entities/sessionGenres"
-import { genreLayerValues, presetLayerValues } from "$lib/server/sessions/exposure"
 import { channelsOf } from "$lib/server/messages/channels"
 import {
 	resolvePlayerLabel,
@@ -213,7 +213,7 @@ export async function resolveSessionSettings(
 	// The state only (R28): what the session chose is in `pipelines[slug]
 	// .rebinds`, and what it may choose is on the registry — the document
 	// carries no turn-order special case and keys on no spec slug.
-	const turnOrder = readTurnOrder(metadata)
+	const turnOrder = readTurnOrder(coreAnnexIn(session.annex))
 	// What the person's own lines are called (R4): the session's override
 	// (`metadata.playerLabel`), else the genre's, else absent — the one
 	// cascade the page and the prompt also resolve through.
@@ -231,12 +231,7 @@ export async function resolveSessionSettings(
 		...(typeof session.userId === "number" ? { ownerUserId: session.userId } : {}),
 		genreId,
 		presetId: session.presetId ?? null,
-		fields: cascadeFields({
-			declared: (shape?.fields ?? {}) as Record<string, { default?: unknown }>,
-			pinned: await genreLayerValues(genreId, genre?.settings),
-			preset: await presetLayerValues(db, session.presetId ?? null),
-			stored: (session.genreFields ?? {}) as Record<string, unknown>
-		}),
+		fields: await cascadeSessionFields(db, session, genre),
 		...(playerLabel ? { playerLabel } : {}),
 		scenario: session.scenario ?? null,
 		lorebookId: session.lorebookId ?? null,
@@ -251,10 +246,11 @@ export async function resolveSessionSettings(
 		// The cast and the `?? {}` are left over from before the schema
 		// carried it and are inert now; every value is still in here, secrets
 		// included, so never hand this to a widget (`annexViewFor`, R57).
-		// 🚧 Never the revision points (`annexRevisionPoints.ts`): sixteen
+		// 🚧 Never the revision points (`annexWithoutPoints`): the legacy
 		// copies of the annex, which a script reading this document would
 		// carry into its sandbox on every evaluation.
-		annex: annexWithoutPoints((session as { annex?: unknown }).annex),
+		// 🚧 Never the core runtime keys (`annexForPipelines`): host-held, never a pipeline's to read.
+		annex: annexForPipelines(annexWithoutPoints((session as { annex?: unknown }).annex)),
 		// 🚧 The composer states (owner ruling 2026-10-15) — only when the
 		// genre has closed something, so a document with none is unchanged.
 		...(() => {

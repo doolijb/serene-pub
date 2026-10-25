@@ -104,6 +104,7 @@
  */
 
 import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import {
@@ -166,7 +167,7 @@ import {
 } from "$lib/server/state/storyTime"
 import { dateProblem, type StoryTimeUnit } from "$lib/shared/lorebooks/storyDate"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
-import { lorebooksReadBy } from "$lib/server/lorebooks/phantom"
+import { lorebooksReadBy } from "$lib/server/lorebooks/ownBook"
 import {
 	LORE_WRITES_OFF,
 	type LoreWriteMode
@@ -286,21 +287,11 @@ export async function newestMessageId(
 	const rows = await db
 		.select({ id: schema.messages.id })
 		.from(schema.messages)
-		.where(and(eq(schema.messages.sessionId, sessionId), liveMirrorSql()))
+		.where(and(eq(schema.messages.sessionId, sessionId), liveMessageWhere(schema.messages.rewindOrdinal)))
 		.orderBy(desc(schema.messages.id))
 		.limit(1)
 	return rows[0]?.id ?? null
 }
-
-/**
- * 🚧 A `messages` row whose legacy row is in the live history (RF fix 5):
- * the forward stack lives on `session_messages.rewind_ordinal`, and the new
- * model shares its ids.
- */
-const liveMirrorSql = () => sql`not exists (
-	select 1 from ${schema.sessionMessages} sm
-	where sm.id = ${schema.messages.id} and sm.rewind_ordinal is not null
-)`
 
 /**
  * The session's messages, in session order, reduced to what the lock reads.
@@ -335,7 +326,7 @@ export async function turnMessages(
 				eq(schema.messages.sessionId, sessionId),
 				// 🚧 The live history only (RF fix 5): a rewound row never
 				// holds an anchor open, nor seals one.
-				liveMirrorSql()
+				liveMessageWhere(schema.messages.rewindOrdinal)
 			)
 		)
 		.orderBy(asc(schema.messages.id))
@@ -562,12 +553,28 @@ export async function retractStateAnchoredTo(
 	 * does — and comes back with the rest on **Forward**
 	 * (`restoreRetractedState` steps the clock forward by each move taken).
 	 * Absent: a replacement's rule above, the tick stands.
+	 *
+	 * 🚧 `scenes: 'take'` (pr-6 C9, **Back**): the scene boundaries anchored
+	 * to the message go too — a scene opened at it, a close at it, its place
+	 * in a selection (`takeSceneBoundariesAt`) — and come back on Forward.
+	 * Absent: a replacement keeps every boundary where it is.
+	 *
+	 * 🚧 `annex: 'keep'` (pr-6, a **swipe**): the turn is told again from what
+	 * it decided, so what it wrote in the annex stands — a swipe re-tells,
+	 * never re-plans (Dungeon Crawler, ruled 2026-10-17). Absent: every annex
+	 * delta anchored to the message is taken.
 	 */
-	opts: { ticks?: "keep" | "take" } = {}
+	opts: { ticks?: "keep" | "take"; scenes?: "keep" | "take"; annex?: "keep" | "take" } = {}
 ): Promise<{ clockMoved: boolean; changed: boolean; taken: RetractedState }> {
+	// 🚧 The settle line (pr-6 B4): nothing at or before it is taken back —
+	// throws `SettledRefusal` with the sentence, before anything is written.
+	const { assertRetractable } = await import("$lib/server/sessions/settle")
+	await assertRetractable(db, messageId)
 	const { notATickSql, revertClockMovesAnchoredTo } = await import(
 		"$lib/server/state/clockMoves"
 	)
+	const { retractAnnexDeltasAnchoredTo } = await import("$lib/server/sessions/annexChanges")
+	const { takeSceneBoundariesAt } = await import("$lib/server/scenes/liveScenes")
 	const takeTicks = opts.ticks === "take"
 	return await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
@@ -596,6 +603,10 @@ export async function retractStateAnchoredTo(
 			.delete(schema.zoneContents)
 			.where(eq(schema.zoneContents.validFromMessageId, messageId))
 			.returning()
+		// 🚧 The annex deltas anchored to it (pr-6 B5), and — on Back — its
+		// scene boundaries (pr-6 C9).
+		const annexDeltas = opts.annex === "keep" ? [] : await retractAnnexDeltasAnchoredTo(t, messageId)
+		const scenes = opts.scenes === "take" ? await takeSceneBoundariesAt(t, messageId) : []
 		const [message] = await t
 			.select({ sessionId: schema.messages.sessionId })
 			.from(schema.messages)
@@ -603,7 +614,7 @@ export async function retractStateAnchoredTo(
 			.limit(1)
 		const lore = message
 			? await retractLoreAnchoredTo(t, message.sessionId, [messageId])
-			: { imprints: [], phantomEntries: [], changed: false }
+			: { imprints: [], ownBookEntries: [], changed: false }
 		const clockMoved = sessionIds.length > 0
 		return {
 			clockMoved,
@@ -613,6 +624,8 @@ export async function retractStateAnchoredTo(
 				configs.length > 0 ||
 				proposals.length > 0 ||
 				zones.length > 0 ||
+				annexDeltas.length > 0 ||
+				scenes.length > 0 ||
 				lore.changed,
 			taken: {
 				messageId,
@@ -621,8 +634,10 @@ export async function retractStateAnchoredTo(
 				proposals,
 				zones,
 				imprints: lore.imprints,
-				phantomEntries: lore.phantomEntries,
-				clockSessions: sessionIds
+				ownBookEntries: lore.ownBookEntries,
+				clockSessions: sessionIds,
+				annexDeltas,
+				scenes
 			}
 		}
 	})
@@ -643,18 +658,18 @@ export async function retractLoreAnchoredTo(
 	messageIds: readonly number[]
 ): Promise<{
 	imprints: import("$lib/server/lorebooks/imprints").TakenImprint[]
-	phantomEntries: (typeof schema.lorebookEntries.$inferSelect)[]
+	ownBookEntries: (typeof schema.lorebookEntries.$inferSelect)[]
 	changed: boolean
 }> {
-	if (!messageIds.length) return { imprints: [], phantomEntries: [], changed: false }
+	if (!messageIds.length) return { imprints: [], ownBookEntries: [], changed: false }
 	const { retractImprints, imprintsChanged } = await import("$lib/server/lorebooks/imprints")
-	const { takePhantomEntriesAnchoredTo } = await import("$lib/server/lorebooks/phantom")
+	const { takeOwnBookEntriesAnchoredTo } = await import("$lib/server/lorebooks/ownBook")
 	const imprints = await retractImprints(tx, { messageIds })
-	const phantomEntries = await takePhantomEntriesAnchoredTo(tx, sessionId, messageIds)
+	const ownBookEntries = await takeOwnBookEntriesAnchoredTo(tx, sessionId, messageIds)
 	return {
 		imprints,
-		phantomEntries,
-		changed: imprintsChanged(imprints) || phantomEntries.length > 0
+		ownBookEntries,
+		changed: imprintsChanged(imprints) || ownBookEntries.length > 0
 	}
 }
 
@@ -669,9 +684,13 @@ export interface RetractedState {
 	/** 🚧 What became of each lore imprint (reverted, spliced, kept, unmade). */
 	imprints: import("$lib/server/lorebooks/imprints").TakenImprint[]
 	/** 🚧 The notes' entries anchored to it with no imprint, as they were. */
-	phantomEntries: (typeof schema.lorebookEntries.$inferSelect)[]
+	ownBookEntries: (typeof schema.lorebookEntries.$inferSelect)[]
 	/** The sessions whose own clock was stepped back. */
 	clockSessions: number[]
+	/** 🚧 The annex deltas anchored to it (pr-6 B5, `sessions/annexChanges.ts`). */
+	annexDeltas: import("$lib/server/sessions/annexChanges").AnnexDeltaTaken[]
+	/** 🚧 What Back did to the scene boundaries anchored to it, in the order taken (pr-6 C9). */
+	scenes: import("$lib/server/scenes/liveScenes").SceneBoundaryTaken[]
 }
 
 /**
@@ -691,7 +710,9 @@ export function takenSummaryOf(taken: RetractedState, clockMoved: boolean) {
 		proposals: taken.proposals.length,
 		zones: (taken.zones ?? []).length,
 		imprints,
-		notesEntries: (taken.phantomEntries ?? []).length,
+		notesEntries: (taken.ownBookEntries ?? []).length,
+		annexDeltas: (taken.annexDeltas ?? []).length,
+		scenes: (taken.scenes ?? []).length,
 		clockMoved
 	}
 }
@@ -718,14 +739,25 @@ export function reviveRetractedState(raw: unknown): RetractedState | null {
 		configs: rows(schema.attributeConfigs, r.configs),
 		proposals: rows(schema.stateProposals, r.proposals),
 		zones: rows(schema.zoneContents, r.zones),
-		phantomEntries: rows(schema.lorebookEntries, r.phantomEntries),
+		ownBookEntries: rows(schema.lorebookEntries, r.ownBookEntries),
 		imprints: list(r.imprints).map((t) => {
 			const taken = { ...(t as Record<string, unknown>) }
 			taken.imprint = imprintRow(taken.imprint)
 			if (Array.isArray(taken.orphans)) taken.orphans = taken.orphans.map(imprintRow)
 			return taken
 		}) as RetractedState["imprints"],
-		clockSessions: list(r.clockSessions).filter((n): n is number => typeof n === "number")
+		clockSessions: list(r.clockSessions).filter((n): n is number => typeof n === "number"),
+		// 🚧 pr-6: absent on a record written before them.
+		annexDeltas: list(r.annexDeltas).map((d) => {
+			const taken = { ...(d as Record<string, unknown>) }
+			taken.row = reviveDates(schema.annexDeltas, taken.row)
+			return taken
+		}) as unknown as RetractedState["annexDeltas"],
+		scenes: list(r.scenes).map((d) => {
+			const taken = { ...(d as Record<string, unknown>) }
+			taken.row = reviveDates(schema.scenes, taken.row)
+			return taken
+		}) as unknown as RetractedState["scenes"]
 	}
 }
 
@@ -756,14 +788,18 @@ export async function restoreRetractedState(db: Db, taken: RetractedState): Prom
 	const undone = await retractStateAnchoredTo(db, taken.messageId)
 	const zones = taken.zones ?? []
 	const imprints = taken.imprints ?? []
-	const phantomEntries = taken.phantomEntries ?? []
+	const ownBookEntries = taken.ownBookEntries ?? []
+	const annexDeltas = taken.annexDeltas ?? []
+	const scenes = taken.scenes ?? []
 	if (
 		!taken.values.length &&
 		!taken.configs.length &&
 		!taken.proposals.length &&
 		!zones.length &&
 		!imprints.length &&
-		!phantomEntries.length
+		!ownBookEntries.length &&
+		!annexDeltas.length &&
+		!scenes.length
 	)
 		return undone.changed
 	await db.transaction(async (tx) => {
@@ -772,10 +808,19 @@ export async function restoreRetractedState(db: Db, taken: RetractedState): Prom
 		if (taken.values.length) await t.insert(schema.attributeValues).values(taken.values as any)
 		if (taken.proposals.length) await t.insert(schema.stateProposals).values(taken.proposals as any)
 		if (zones.length) await t.insert(schema.zoneContents).values(zones as any)
-		if (phantomEntries.length) await t.insert(schema.lorebookEntries).values(phantomEntries as any)
+		if (ownBookEntries.length) await t.insert(schema.lorebookEntries).values(ownBookEntries as any)
 		if (imprints.length) {
 			const { restoreImprints } = await import("$lib/server/lorebooks/imprints")
 			await restoreImprints(t, imprints)
+		}
+		// 🚧 pr-6: the annex deltas (B5), then the scene boundaries (C9).
+		if (annexDeltas.length) {
+			const { restoreAnnexDeltas } = await import("$lib/server/sessions/annexChanges")
+			await restoreAnnexDeltas(t, annexDeltas)
+		}
+		if (scenes.length) {
+			const { restoreSceneBoundaries } = await import("$lib/server/scenes/liveScenes")
+			await restoreSceneBoundaries(t, scenes)
 		}
 	})
 	if (!taken.clockSessions.length) return true
@@ -989,7 +1034,7 @@ export async function assertLoreRefsInSession(
 	const entryTypes =
 		decl && decl.type !== "list" ? (resolveSlotConfig(decl).entryTypes ?? null) : null
 	// The books the session reads (PLAN-rulesets §26, "reads are the
-	// union"): its attached lorebook and its own notes (the phantom), so a
+	// union"): its attached lorebook and its own notes (its own book), so a
 	// place or thing the session wrote only to its notes is one it may hold.
 	const readBy = await lorebooksReadBy(db, sessionId)
 	const books = new Set(readBy.ids)
@@ -999,7 +1044,7 @@ export async function assertLoreRefsInSession(
 	// every union reader reads them (`sessionEntriesAsRead`).
 	const sessionReading = (await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
 	const readingOf = (lorebookId: number) =>
-		lorebookId === readBy.phantomId ? MAIN_HEAD : sessionReading
+		lorebookId === readBy.ownBookId ? MAIN_HEAD : sessionReading
 	const rows = await db
 		.select({
 			id: schema.lorebookEntries.id,
@@ -1042,7 +1087,7 @@ export async function assertLoreRefsInSession(
 					`can hold it.`
 			)
 		const reading = readingOf(row.lorebookId)
-		if (!(row.lorebookId === readBy.phantomId ? row.onHead : row.onLine))
+		if (!(row.lorebookId === readBy.ownBookId ? row.onHead : row.onLine))
 			throw new StateRefusal(
 				`lore entry ${id} was written on another line of this lorebook, so this session's ` +
 					`story does not have it.`
@@ -1379,12 +1424,12 @@ export async function assertSessionOwner(
 		// 🚧 Or a place the session's own notes hold (PLAN-rulesets §26), at
 		// the notes' head — the union `sessionLinks` lists.
 		if (book == null) {
-			const { phantomId } = await lorebooksReadBy(db, sessionId)
+			const { ownBookId } = await lorebooksReadBy(db, sessionId)
 			if (
-				phantomId != null &&
-				(await placesOnReading(db, phantomId, MAIN_HEAD, "session", [owner.id])).length
+				ownBookId != null &&
+				(await placesOnReading(db, ownBookId, MAIN_HEAD, "session", [owner.id])).length
 			)
-				book = phantomId
+				book = ownBookId
 		}
 		if (book == null)
 			throw new StateRefusal(

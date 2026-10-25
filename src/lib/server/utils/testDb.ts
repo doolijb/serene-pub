@@ -317,7 +317,7 @@ export async function setRoutineCadenceOptions(
 	key: string,
 	options: Record<string, unknown>
 ): Promise<void> {
-	const { rowOfChange } = await import("$lib/server/pipelines/registrations/rows")
+	const { rowOfChange, registrationScopeWhere } = await import("$lib/server/pipelines/registrations/rows")
 	const { invalidateRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
 	// Onto the session's own row when it has one (its mode and values stay).
 	const updated = await db
@@ -325,8 +325,7 @@ export async function setRoutineCadenceOptions(
 		.set({ cadenceOptions: options })
 		.where(
 			and(
-				eq(schema.registrations.scopeKind, "session"),
-				eq(schema.registrations.scopeRef, String(sessionId)),
+				registrationScopeWhere({ kind: "session", sessionId }),
 				eq(schema.registrations.key, key)
 			)
 		)

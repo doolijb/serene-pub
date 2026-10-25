@@ -11,6 +11,7 @@ import { toaster } from "$lib/client/utils/toaster"
 import { extendCountsOf } from "$lib/shared/lorebooks/graphBuildScope"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
+import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
 import type { SessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
 import {
 	capturedLineIds,
@@ -44,9 +45,9 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 	let showSummarizeModal = $state(false)
 	let summarizeLoreType = $state<"world" | "character" | "scene">("world")
 	/** Message IDs already captured in a scene — hard-blocked from selection */
-	let scenedMessageIds = $state(new Set<number>())
+	const scenedMessageIds = $derived(new Set(sessionStore.scenedOf(sessionId)))
 	/** Full scene list for this session — used for in-session scene/history-entry indicators */
-	let sceneList = $state<Sockets.Scenes.List.SceneWithEntry[]>([])
+	const sceneList = $derived(sessionStore.scenesOf(sessionId))
 
 	/**
 	 * 🚧 The lines a tick selection may not take (live scenes §14 C): what
@@ -244,7 +245,7 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 	function handleScenesScenedMessageIds(
 		msg: Sockets.Scenes.SenedMessageIds.Response
 	) {
-		scenedMessageIds = new Set(msg.scenedMessageIds)
+		sessionStore.mergeScenedMessageIds(msg)
 	}
 
 	function handleScenesScenedMessageIdsError() {
@@ -252,9 +253,7 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 	}
 
 	function handleScenesList(msg: Sockets.Scenes.List.Response) {
-		if (!msg.sceneList.length || msg.sceneList[0].sessionId === sessionId) {
-			sceneList = msg.sceneList
-		}
+		sessionStore.mergeSceneList(msg)
 	}
 
 	function handleScenesListError() {

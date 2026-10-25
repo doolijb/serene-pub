@@ -168,8 +168,8 @@ const maraRow = async () =>
 const pierCategory = async () =>
 	((await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId)))[0]!.fields as any).category
 const notesNamed = async (title: string) => {
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const notes = await phantomOf(db as any, s.sessionId)
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const notes = await ownBookOf(db as any, s.sessionId)
 	if (!notes) return []
 	return db
 		.select({ id: schema.lorebookEntries.id })

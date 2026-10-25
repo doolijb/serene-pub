@@ -31,6 +31,7 @@
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
 	import { lineOf } from "$lib/shared/lorebooks/lineReading"
+	import { SESSION_NOTES_LABEL } from "$lib/shared/lorebooks/sessionNotes"
 	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 	import { historyEntriesOnReading } from "$lib/client/lorebooks/time/historyOnReading"
 
@@ -50,6 +51,8 @@
 		onOpenChange: (e: { open: boolean }) => void
 		sessionId: number
 		lorebookId: number | null
+		/** 🚧 The session's own book (its Session notes): "Saving to" names it so when `lorebookId` is it. */
+		ownBookId?: number | null
 		/**
 		 * The session's line of that book, null for main. What it saves lands
 		 * there (the server decides from the session), and the history
@@ -88,6 +91,7 @@
 		onOpenChange,
 		sessionId,
 		lorebookId = $bindable(),
+		ownBookId = null,
 		branchId = null,
 		storyClock = null,
 		selectedMessageIds,
@@ -1122,7 +1126,7 @@
 					/>
 					<span class="text-surface-600-400">Saving to:</span>
 					<span class="font-semibold">
-						{book?.name ?? `Lorebook #${lorebookId}`}
+						{lorebookId === ownBookId ? SESSION_NOTES_LABEL : (book?.name ?? `Lorebook #${lorebookId}`)}
 					</span>
 				</div>
 			{:else}

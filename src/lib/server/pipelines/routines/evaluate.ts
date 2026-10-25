@@ -44,6 +44,7 @@ import {
 	type StoryTime
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { cadenceStateOf, saveCadenceState } from "$lib/server/pipelines/routines/state"
 import { routinesEnabled, type RoutineRunFact } from "$lib/server/pipelines/routines/runs"
@@ -205,6 +206,9 @@ export async function evaluateMoments(
 	if (!routinesEnabled() || !moments.length) return queued
 	if (ctx.fromRoutine && ctx.fromRoutine.depth >= 1) return queued
 	try {
+		// 🚧 pr-6 R-k: an archived session is read-only — nothing wakes.
+		const { sessionArchivedRefusal } = await import("$lib/server/sessions/archive")
+		if (await sessionArchivedRefusal(db, sessionId)) return queued
 		const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
 		const regs = resolved === undefined ? await effectiveRegistrations(db, sessionId) : resolved
 		if (!regs) return queued
@@ -281,11 +285,11 @@ async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<strin
 	const { publishedTurns } = await import("$lib/server/pipelines/routines/turnTally")
 	try {
 		const [s] = await db
-			.select({ metadata: schema.sessions.metadata })
+			.select({ annex: schema.sessions.annex })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
-		return publishedTurns(s?.metadata ?? null)
+		return publishedTurns(coreAnnexIn(s?.annex ?? null))
 	} catch {
 		// Never the reason a cadence is not judged: the script sees no turn facts.
 		return publishedTurns(null)

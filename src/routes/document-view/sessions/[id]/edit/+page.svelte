@@ -312,10 +312,18 @@
 	 */
 	$effect(() => {
 		if (!Number.isFinite(sessionId)) return
-		return declareInterest<"sessions:get">(
+		const release = declareInterest<"sessions:get">(
 			interestKey("sessions:get", sessionId),
 			handleSessionsGet
 		)
+		const releaseRefresh = declareInterest<"sessions:refresh">(
+			interestKey("sessions:refresh", sessionId),
+			handleSessionsGet
+		)
+		return () => {
+			release()
+			releaseRefresh()
+		}
 	})
 
 	/**

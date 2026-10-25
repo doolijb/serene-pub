@@ -14,6 +14,7 @@ import os from "os"
 import path from "path"
 import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { readTurnOrder, sessionEvents } from "@serene-pub/sdk"
 
@@ -162,7 +163,7 @@ async function recompute(sessionId: number) {
 		wait: true
 	})
 	const [row] = await db
-		.select({ metadata: schema.sessions.metadata })
+		.select({ annex: schema.sessions.annex })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 	const [run] = await db
@@ -178,7 +179,7 @@ async function recompute(sessionId: number) {
 		.limit(1)
 	const receipt = (run as any)?.receipt
 	return {
-		turnOrder: readTurnOrder(row!.metadata),
+		turnOrder: readTurnOrder(coreAnnexIn(row!.annex)),
 		ran: (receipt?.nodes ?? []).map((n: any) => n.nodeKey) as string[],
 		notes: (receipt?.nodes ?? []).flatMap((n: any) => n.notes ?? []) as string[],
 		/** The stored receipt's row for one node — its `swap` and `configLayers` (F2). */

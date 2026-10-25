@@ -38,6 +38,7 @@ import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { storyTimePartsOf, type StoryTimeParts } from "@serene-pub/core-catalog/session-state"
 import { anchorFor } from "$lib/server/state/write"
+import { ownBookOf } from "$lib/server/lorebooks/ownBook"
 import {
 	bookCalendarOf,
 	clockOf,
@@ -82,25 +83,18 @@ export interface ClockMovePayload {
 /** 🚧 The sentence a skipped move leaves when the story has no clock to move (§15 G7). */
 export const NO_STORY_CLOCK_YET =
 	"This story has no clock yet: set one in the lorebook to track time."
-/** … and when the session reads no lorebook at all. */
-export const NO_STORY_CLOCK_BOOK =
-	"This session reads no lorebook, so it has no story clock: give it one to track time."
 
 /**
- * Why a refused move is skipped, in the person's words: no book, no clock
- * yet, else the clock's own sentence (a result the calendar cannot place).
+ * Why a refused move is skipped, in the person's words: no clock yet, else
+ * the clock's own sentence (a result the calendar cannot place). Every
+ * session has a book (its own, when none is shared), so there is no
+ * "no lorebook" reason.
  */
 export async function clockSkipReason(
 	db: Db,
 	sessionId: number,
 	refusal: string
 ): Promise<string> {
-	const [row] = await db
-		.select({ lorebookId: schema.sessions.lorebookId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	if (!row?.lorebookId) return NO_STORY_CLOCK_BOOK
 	if (!(await sessionStoryNowOf(db, sessionId))) return NO_STORY_CLOCK_YET
 	return refusal
 }
@@ -262,8 +256,10 @@ export async function clockRetractProblem(
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		let clock = clockOf(row)
-		if (!row?.lorebookId || !clock) continue
-		const calendar = await bookCalendarOf(db, row.lorebookId)
+		if (!row || !clock) continue
+		const book = row.lorebookId ?? (await ownBookOf(db, sessionId))?.id ?? null
+		if (book == null) continue
+		const calendar = await bookCalendarOf(db, book)
 		for (const move of list) {
 			const step = stepOf(move.payload)
 			if (!step) continue

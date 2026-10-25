@@ -21,6 +21,7 @@
  */
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { collectAliases, namesMatch } from "$lib/server/utils/summarizer/availableSceneCast"
 import { RELATIONSHIP_TEXT_LIMITS } from "$lib/shared/lorebooks/linkVocabulary"
 
@@ -73,12 +74,14 @@ export async function fileSweptRelationships(db: Db, sessionId: number, raw: unk
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (!session?.lorebookId || session.userId == null)
-		return { filed: 0, skipped: ["this session has no lorebook to keep a graph in"] }
+	if (!session || session.userId == null) return { filed: 0, skipped: ["this session has no owner to file for"] }
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book (main line only).
+	const lorebookId = session.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
+	if (lorebookId == null) return { filed: 0, skipped: ["this session is gone"] }
 	const [book] = await db
 		.select({ name: schema.lorebooks.name })
 		.from(schema.lorebooks)
-		.where(eq(schema.lorebooks.id, session.lorebookId))
+		.where(eq(schema.lorebooks.id, lorebookId))
 		.limit(1)
 	const bindings = await db
 		.select({
@@ -89,7 +92,7 @@ export async function fileSweptRelationships(db: Db, sessionId: number, raw: unk
 			parentNodeId: schema.lorebookBindings.parentNodeId
 		})
 		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, session.lorebookId))
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 	const members = bindings
 		.filter((b: { parentNodeId: number | null; name: string }) => b.parentNodeId === null && b.name.trim())
 		.map((b: { id: number; name: string; aliases: string[] | null; absorbedAliases: string[] | null }) => ({
@@ -131,7 +134,7 @@ export async function fileSweptRelationships(db: Db, sessionId: number, raw: unk
 	const { activityStore } = await import("$lib/server/utils/activityStore")
 	const waiting = activityStore
 		.getFor(session.userId, false)
-		.find((a) => a.kind === "graph_build" && a.lorebookId === session.lorebookId)
+		.find((a) => a.kind === "graph_build" && a.lorebookId === lorebookId)
 	if (waiting?.kind === "graph_build" && waiting.status === "building")
 		return {
 			filed: 0,
@@ -153,10 +156,10 @@ export async function fileSweptRelationships(db: Db, sessionId: number, raw: unk
 	}
 	const id = activityStore.start({
 		userId: session.userId,
-		lorebookId: session.lorebookId,
+		lorebookId,
 		lorebookLabel: book?.name ?? "Lorebook",
 		mode: "extend",
-		branchId: session.branchId ?? null
+		branchId: session.lorebookId != null ? (session.branchId ?? null) : null
 	})
 	activityStore.update(id, {
 		status: "review",

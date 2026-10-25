@@ -20,9 +20,9 @@ import {
 	eq,
 	inArray,
 	isNotNull,
-	isNull,
 	type SQL
 } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import type { PgTable } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
@@ -96,7 +96,7 @@ export async function getSessionRagContext(
 	// 🚧 The union (PLAN-rulesets §26): the attached book, then the
 	// session's own notes — whose rows are all on their main line, so the
 	// attached book's reading reads them whole.
-	const { lorebooksReadBy } = await import("$lib/server/lorebooks/phantom")
+	const { lorebooksReadBy } = await import("$lib/server/lorebooks/ownBook")
 	const allLorebookIds: number[] = (
 		await lorebooksReadBy(db, { id: sessionId, lorebookId })
 	).ids
@@ -450,7 +450,7 @@ export async function fetchScopedCandidates(
 						eq(schema.sessionMessages.sessionId, context.sessionId),
 						messageChannel,
 						// 🚧 The live history (RF fix 5): the window the history read built.
-						isNull(schema.sessionMessages.rewindOrdinal)
+						liveMessageWhere()
 					)
 				)
 				.orderBy(desc(schema.sessionMessages.id))

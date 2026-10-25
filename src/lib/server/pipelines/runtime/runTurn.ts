@@ -89,6 +89,7 @@ import {
 } from "$lib/server/pipelines/runtime/liveRow"
 import { noteRun } from "$lib/server/pipelines/runtime/capPause"
 import { createStatusRelay } from "$lib/server/pipelines/runtime/runStatus"
+import { runKindOf, runKindOfFamily } from "$lib/server/pipelines/runtime/runRegistry"
 import {
 	messageStreamSteps,
 	stepStatuses,
@@ -245,7 +246,7 @@ export interface TurnRequest {
 	/** Run-level facts the dispatch decided — see `SpecRunRequest.meta`. */
 	meta?: ReceiptMeta
 	/** 🚧 The registration that answers — see `SpecRunRequest.registration`. */
-	registration?: { family: string; key: string }
+	registration?: { family: string; key: string; minAge?: number }
 	/** 🚧 LS2 — see `SpecRunRequest.triggerFamily`. A turn is the reply's event (`message-respond`) unless said. */
 	triggerFamily?: string
 }
@@ -450,7 +451,7 @@ export interface SpecRunRequest {
 	 * its trigger family and derived key, stamped on the receipt and its
 	 * `pipeline_runs` row. Absent for a run no registration started.
 	 */
-	registration?: { family: string; key: string }
+	registration?: { family: string; key: string; minAge?: number }
 	/**
 	 * 🚧 The trigger family of a run no registration started (LS2): every
 	 * run records one. Absent, the registration's family; with neither, an
@@ -810,6 +811,8 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					sideCharacterName: request.sideCharacter?.name ?? null,
 					userId: request.userId,
 					onStatus: request.onStatus,
+					// 🚧 The registry's kind for this run (the door's fact), else its trigger family's (sprint 2, G3).
+					kind: runKindOf(runId) ?? runKindOfFamily(triggerFamilyOf(request)),
 					// What each step says while it runs, as the spec declared
 					// it (lair pass B18 / D5) — never a node key.
 					declared: stepStatuses(doc),
@@ -831,6 +834,8 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		runId,
 		sessionId: request.sessionId,
 		userId: request.userId,
+		// The depth below which this run's `sources` may not reach (its registration's `minAgeOf`).
+		minAge: request.registration?.minAge ?? 0,
 		currentCharacterId: request.currentCharacterId,
 		draftMessage: request.draftMessage,
 		portrayals,

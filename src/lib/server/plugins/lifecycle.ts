@@ -23,7 +23,11 @@
  */
 
 import { eq } from "drizzle-orm"
-import type { LifecycleMoment, LifecycleUpdateInput } from "@serene-pub/sdk"
+import type {
+	LifecycleMigrateInput,
+	LifecycleMoment,
+	LifecycleUpdateInput
+} from "@serene-pub/sdk"
 import { plugins } from "$lib/server/db/schema"
 import type { SandboxManager } from "./SandboxManager"
 import type { HookRunFailure } from "./types"
@@ -108,6 +112,74 @@ export async function fireLifecycle(
 	return firing
 }
 
+/** The document a `migrate` callback answered with, if it answered with one. */
+function migratedDocumentOf(value: unknown): Record<string, unknown> | undefined {
+	const plain = (v: unknown): v is Record<string, unknown> =>
+		!!v && typeof v === "object" && !Array.isArray(v)
+	if (!plain(value)) return undefined
+	// `ok({ document })` arrives as the Result itself; `halt` / `err` carry none.
+	const inner = typeof value.kind === "string" && "value" in value ? value.value : value
+	if (value.kind === "halt" || value.kind === "err" || value.kind === "cancelled")
+		return undefined
+	return plain(inner) && plain(inner.document) ? inner.document : undefined
+}
+
+/**
+ * Call one plugin's `migrate` callback for one session's document. Same bounds
+ * and posture as {@link fireLifecycle} (never throws, never waits past
+ * `boundMs`); additionally returns the document the callback answered with, a
+ * plain object, or none. A plugin with no `migrate` callback is `missing`:
+ * nothing stored, nothing logged as a failure.
+ */
+export async function fireMigrate(
+	mgr: SandboxManager,
+	pluginId: string,
+	input: LifecycleMigrateInput,
+	bounds: { timeoutMs?: number; boundMs?: number } = {}
+): Promise<{ firing: LifecycleFiring; document?: Record<string, unknown> }> {
+	const moment = "migrate" as HostFiredMoment
+	if (!mgr.isRegistered(pluginId))
+		return { firing: { pluginId, moment, outcome: "skipped" } }
+	const timeoutMs = bounds.timeoutMs ?? LIFECYCLE_BOUNDS.timeoutMs
+	const boundMs = bounds.boundMs ?? LIFECYCLE_BOUNDS.boundMs
+	let timer: ReturnType<typeof setTimeout> | undefined
+	let firing: LifecycleFiring
+	let document: Record<string, unknown> | undefined
+	try {
+		const bounded = new Promise<"bounded">((resolve) => {
+			timer = setTimeout(() => resolve("bounded"), boundMs)
+		})
+		const r = await Promise.race([
+			mgr.callHook(pluginId, moment, { ...input }, {
+				kind: "lifecycle",
+				timeoutMs,
+				lifecycle: true
+			}),
+			bounded
+		])
+		if (r === "bounded")
+			firing = {
+				pluginId,
+				moment,
+				outcome: "bounded",
+				reason: `no answer within ${boundMs} ms — not waited for`
+			}
+		else if (r.ok) {
+			firing = { pluginId, moment, outcome: "ok" }
+			document = migratedDocumentOf(r.value)
+		} else firing = { pluginId, moment, outcome: r.outcome, reason: r.reason }
+	} catch (e) {
+		firing = { pluginId, moment, outcome: "error", reason: String(e) }
+	} finally {
+		if (timer) clearTimeout(timer)
+	}
+	if (firing.outcome !== "ok" && firing.outcome !== "missing")
+		console.warn(
+			`[plugins] '${pluginId}' ${moment} callback failed (${firing.outcome}): ${firing.reason}`
+		)
+	return document ? { firing, document } : { firing }
+}
+
 /**
  * Fire a replaced bundle's pending `update`, once. The pending version is
  * cleared whatever the callback answered — "exactly once" is the promise, and
@@ -149,8 +221,25 @@ export async function afterEnable(
 ): Promise<LifecycleFiring[]> {
 	const out: LifecycleFiring[] = []
 	try {
+		// Read before `firePendingUpdate` clears it.
+		const [row] = await db
+			.select({
+				version: plugins.version,
+				updateFromVersion: plugins.updateFromVersion
+			})
+			.from(plugins)
+			.where(eq(plugins.pluginId, pluginId))
 		const update = await firePendingUpdate(db, mgr, pluginId)
-		if (update) out.push(update)
+		if (update) {
+			out.push(update)
+			if (row?.updateFromVersion != null) {
+				const { migrateAnnexOwner } = await import("./annexMigrate")
+				await migrateAnnexOwner(db, mgr, pluginId, {
+					fromVersion: row.updateFromVersion,
+					version: row.version
+				})
+			}
+		}
 	} catch (e) {
 		console.warn(`[plugins] '${pluginId}' pending update failed:`, e)
 	}

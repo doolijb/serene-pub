@@ -402,6 +402,6 @@ export async function sessionEntryNamed(
 	// 🚧 The union (PLAN-rulesets §26): the session's book on its reading,
 	// then its own notes — a session with no book still names the rooms its
 	// notes hold. One name rule over both, so a tie across them refuses.
-	const { sessionEntriesAsRead } = await import("$lib/server/lorebooks/phantom")
+	const { sessionEntriesAsRead } = await import("$lib/server/lorebooks/ownBook")
 	return entryNamed(name, await sessionEntriesAsRead(db, sessionId, "session", typeIds))
 }

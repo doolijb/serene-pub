@@ -137,10 +137,10 @@ describe("On revision", () => {
 
 	test("overwrite: the notes' entries the deleted turn wrote go with it", async () => {
 		const p = await played("overwrite")
-		const { phantomLorebookFor, retractPhantomEntriesAnchoredTo } = await import(
-			"$lib/server/lorebooks/phantom"
+		const { ownBookFor, retractOwnBookEntriesAnchoredTo } = await import(
+			"$lib/server/lorebooks/ownBook"
 		)
-		const notes = await phantomLorebookFor(testDb as any, p.session.id)
+		const notes = await ownBookFor(testDb as any, p.session.id)
 		const entry = (title: string, at: number) =>
 			testDb
 				.insert(schema.lorebookEntries)
@@ -155,7 +155,7 @@ describe("On revision", () => {
 				.returning()
 		await entry("Kept", p.ids[1]!)
 		await entry("Gone", p.ids[2]!)
-		const gone = await retractPhantomEntriesAnchoredTo(testDb as any, p.session.id, [p.ids[2]!])
+		const gone = await retractOwnBookEntriesAnchoredTo(testDb as any, p.session.id, [p.ids[2]!])
 		expect(gone).toHaveLength(1)
 		const left = await testDb
 			.select({ title: schema.lorebookEntries.title })

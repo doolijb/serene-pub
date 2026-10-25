@@ -62,7 +62,7 @@ const BANNED: Readonly<Record<string, string>> = {
 	primer: "Starter lorebook",
 	bestow: "what it does, in words (Add a line for the model, Add to a number)",
 	"render depth": "Detail: One line · Short · Full",
-	phantom: "nothing; the action Create lorebook from session and the badge This session only",
+	phantom: "nothing; the Lorebooks view's section Session notes, and the verb Share as a lorebook",
 	"table channel": "Dice"
 }
 

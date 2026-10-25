@@ -60,10 +60,14 @@
  * write of its own: Automatic mode places through the same `openScene` a
  * person's *Start scene here* does.
  */
-import { and, asc, desc, eq, gte, isNull, lt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, sql } from "drizzle-orm"
+import type { ProposedSceneCue, JudgedSceneCheck } from "@serene-pub/contracts"
+import { routineRunOf } from "$lib/server/pipelines/routines/runs"
+import { routineLog } from "$lib/server/pipelines/routines/log"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { canonicalChannel } from "$lib/server/messages/channels"
-import { parseChannel } from "@serene-pub/sdk"
+import { parseChannel, JUDGED_SCENE_TRIGGER } from "@serene-pub/sdk"
 import { clockOf } from "$lib/server/state/storyTime"
 import { compareDates, type StoryClock } from "$lib/shared/lorebooks/storyDate"
 import { sceneCueReason } from "$lib/shared/sessions/sceneSettings"
@@ -517,21 +521,10 @@ async function watchesLane(db: Db, sessionId: number, channel: string): Promise<
 	return !!row
 }
 
-/** One read first: a session that reads no lorebook places no scene, whatever its settings. */
-async function readsABook(db: Db, sessionId: number): Promise<boolean> {
-	const [row] = await db
-		.select({ lorebookId: schema.sessions.lorebookId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	return row?.lorebookId != null
-}
-
 async function watch(
 	db: Db,
 	params: { sessionId: number; messageId: number; io?: unknown; runIds?: readonly string[] }
 ): Promise<WatchResult | null> {
-	if (!(await readsABook(db, params.sessionId))) return null
 	const ctx = await sessionSceneContext(db, params.sessionId)
 	if (!ctx || !ctx.mayPlace || ctx.settings.mode === "manual") return null
 	const [line] = await db
@@ -675,7 +668,6 @@ export async function noteTimeAction(
 ): Promise<void> {
 	if (params.cause === "tick") return
 	try {
-		if (!(await readsABook(db, params.sessionId))) return
 		const ctx = await sessionSceneContext(db, params.sessionId)
 		if (!ctx || !ctx.mayPlace || ctx.settings.mode === "manual") return
 		if (!ctx.settings.triggers.timeAction) return
@@ -797,14 +789,19 @@ export async function offeredSceneCues(
 	const order = triggerOrder(declared)
 	const { i18nText } = await import("@serene-pub/sdk")
 	const labels = Object.fromEntries(declared.map((d) => [d.key, i18nText(d.label) ?? d.key]))
+	// A cue at a rewound row is not offered (pr-6 A2).
 	const cues = await db
-		.select()
+		.select(getTableColumns(schema.sceneCues))
 		.from(schema.sceneCues)
+		.innerJoin(
+			schema.sessionMessages,
+			eq(schema.sessionMessages.id, schema.sceneCues.atMessageId)
+		)
 		.where(
 			and(
 				eq(schema.sceneCues.sessionId, sessionId),
 				eq(schema.sceneCues.state, "open"),
-				sql`${schema.sceneCues.atMessageId} IS NOT NULL`
+				liveMessageWhere()
 			)
 		)
 		.orderBy(asc(schema.sceneCues.atMessageId), asc(schema.sceneCues.id))
@@ -828,10 +825,13 @@ export async function offeredSceneCues(
 		latest.set(s.channel, Math.max(latest.get(s.channel) ?? 0, edge))
 	}
 	const byLine = new Map<string, OfferedSceneCue>()
+	const judgedReason = new Map<string, string>()
 	for (const c of cues as CueRow[]) {
 		const at = c.atMessageId!
 		if (at <= (latest.get(c.channel) ?? 0)) continue
 		const key = `${c.channel}#${at}`
+		if (c.trigger === JUDGED_SCENE_TRIGGER)
+			judgedReason.set(key, c.reason?.trim() || JUDGED_CUE_FALLBACK_REASON)
 		const had = byLine.get(key)
 		if (had) {
 			if (!had.triggers.includes(c.trigger)) had.triggers.push(c.trigger)
@@ -851,7 +851,14 @@ export async function offeredSceneCues(
 	}
 	return [...byLine.values()].map((cue) => {
 		cue.triggers.sort((a, b) => rank(a) - rank(b))
-		return { ...cue, reason: sceneCueReason(cue.triggers, labels) }
+		const judged = judgedReason.get(`${cue.channel}#${cue.messageId}`)
+		return {
+			...cue,
+			reason: sceneCueReason(
+				cue.triggers,
+				judged === undefined ? labels : { ...labels, [JUDGED_SCENE_TRIGGER]: judged }
+			)
+		}
 	})
 }
 
@@ -876,6 +883,12 @@ export async function decideSceneCue(
 		.limit(1)
 	if (!cue || cue.atMessageId == null)
 		throw new SceneCueRefusal("That suggestion is gone.")
+	const [live] = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(and(eq(schema.sessionMessages.id, cue.atMessageId), liveMessageWhere()))
+		.limit(1)
+	if (!live) throw new SceneCueRefusal("That suggestion is gone.")
 	const [session] = await db
 		.select({ userId: schema.sessions.userId })
 		.from(schema.sessions)
@@ -921,6 +934,225 @@ export async function pushSceneCues(io: unknown, sessionId: number): Promise<voi
 		)
 	} catch (err) {
 		console.warn("[scenes] the scene cues were not pushed:", err)
+	}
+}
+
+/**
+ * 🚧 The judged scene check's length condition (pr-6s2, pass 7: "default 6"):
+ * a scene shorter than this is never worth a call.
+ */
+export const JUDGED_SCENE_MIN_LINES = 6
+
+/** What a judged cue's chip says when its stored reason is empty (defensive: the commit refuses a blank reason). */
+export const JUDGED_CUE_FALLBACK_REASON = "the story moved on"
+
+/** The live lines of a session on one lane: the rows the judged duty reads and places a cue at. */
+function liveLinesWhere(sessionId: number, channel: string) {
+	return and(
+		eq(schema.sessionMessages.sessionId, sessionId),
+		eq(schema.sessionMessages.channel, channel),
+		liveMessageWhere(),
+		eq(schema.sessionMessages.isHidden, false),
+		eq(schema.sessionMessages.isGenerating, false)
+	)
+}
+
+/**
+ * 🚧 The judged scene check, asked before the model is (pass 7, R-i;
+ * pr6s2-G-shapes.md §G-5a, I's §I-4 conditions). Read-only: due with the
+ * lines the model reads, or not due with a receipt note.
+ */
+export async function judgedSceneCheckOf(
+	db: Db,
+	sessionId: number,
+	opts: { runId?: string | null }
+): Promise<JudgedSceneCheck> {
+	const channel = "main"
+	const ctx = await sessionSceneContext(db, sessionId)
+	if (!ctx || !ctx.mayPlace) return { due: false, why: "off: this session places no scenes" }
+	if (ctx.settings.mode === "manual") return { due: false, why: "off: scenes are Manual here" }
+
+	const open = await openSceneOn(db, sessionId, channel)
+	let base: number
+	let inclusive: boolean
+	if (open) {
+		base = open.openedAtMessageId
+		inclusive = true
+	} else {
+		const rows = await db
+			.select({ closed: schema.scenes.closedAtMessageId })
+			.from(schema.scenes)
+			.where(
+				and(
+					eq(schema.scenes.sessionId, sessionId),
+					eq(schema.scenes.channel, channel),
+					sql`${schema.scenes.openedAtMessageId} IS NOT NULL`
+				)
+			)
+		base = rows.reduce((m, r) => Math.max(m, r.closed ?? 0), 0)
+		inclusive = false
+	}
+	const live = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(liveLinesWhere(sessionId, channel))
+		.orderBy(asc(schema.sessionMessages.id))
+	const sinceBase = live.map((r) => r.id).filter((id) => (inclusive ? id >= base : id > base))
+	if (sinceBase.length < JUDGED_SCENE_MIN_LINES)
+		return { due: false, why: `off: fewer than ${JUDGED_SCENE_MIN_LINES} lines since the scene began` }
+
+	// The routine's previous firing bounds what the model has already seen.
+	let lastLook = 0
+	let lastLookAt: Date | null = null
+	const key = routineRunOf(opts.runId)?.registrationKey
+	if (key) {
+		const log = await routineLog(db, sessionId, { limit: 50 })
+		const prev = log.find(
+			(e) => e.registrationKey === key && e.kind === "ran" && e.runId !== opts.runId
+		)
+		if (prev) {
+			const at = new Date(prev.startedAt)
+			const [row] = await db
+				.select({ id: schema.sessionMessages.id })
+				.from(schema.sessionMessages)
+				.innerJoin(schema.messages, eq(schema.messages.id, schema.sessionMessages.id))
+				.where(and(liveLinesWhere(sessionId, channel), lte(schema.messages.createdAt, at)))
+				.orderBy(desc(schema.sessionMessages.id))
+				.limit(1)
+			if (row) {
+				lastLook = row.id
+				lastLookAt = await writtenAt(db, row.id).then((t) => (t == null ? null : new Date(t)))
+			}
+		}
+	}
+	// A new scene begins after the open one's opening (or the last boundary), never at it.
+	const from = Math.max(base, lastLook)
+	const lines = sinceBase.filter((id) => id > from).slice(-20)
+	if (!lines.length) return { due: false, why: "off: nothing new since the last look" }
+
+	const cues = await db
+		.select({
+			atMessageId: schema.sceneCues.atMessageId,
+			trigger: schema.sceneCues.trigger,
+			state: schema.sceneCues.state,
+			decidedAt: schema.sceneCues.decidedAt
+		})
+		.from(schema.sceneCues)
+		.where(
+			and(eq(schema.sceneCues.sessionId, sessionId), eq(schema.sceneCues.channel, channel))
+		)
+	const inLines = new Set(lines)
+	if (cues.some((c) => c.trigger !== JUDGED_SCENE_TRIGGER && c.atMessageId != null && inLines.has(c.atMessageId)))
+		return { due: false, why: "off: a scene trigger already fired in these lines" }
+	if (cues.some((c) => c.state === "open" || c.state === "pending"))
+		return { due: false, why: "off: a scene cue is already waiting" }
+	if (
+		cues.some(
+			(c) =>
+				c.trigger === JUDGED_SCENE_TRIGGER &&
+				c.state === "dismissed" &&
+				(lastLook === 0 ||
+					(c.decidedAt != null && lastLookAt != null && c.decidedAt.getTime() > lastLookAt.getTime()))
+		)
+	)
+		return { due: false, why: "off: the last suggestion was set aside" }
+	return { due: true, channel, lines }
+}
+
+/**
+ * 🚧 The judged scene check's answer, committed (pass 7, R-i;
+ * pr6s2-G-shapes.md §G-5a): a `judged` scene cue at its line, the scene mode
+ * deciding — Automatic places the boundary, Suggested (or `ask`) offers the
+ * chip, Manual records nothing.
+ */
+export async function proposeJudgedSceneCue(
+	db: Db,
+	params: {
+		sessionId: number
+		channel: string
+		atMessageId: number
+		reason: string
+		ask?: boolean
+		io?: unknown
+	}
+): Promise<ProposedSceneCue> {
+	const { sessionId, atMessageId } = params
+	const channel = canonicalChannel(params.channel)
+	const reason = String(params.reason ?? "").trim().slice(0, 200)
+	const ctx = await sessionSceneContext(db, sessionId)
+	if (!ctx || !ctx.mayPlace) return { outcome: "skipped", note: "this session places no scenes" }
+	if (ctx.settings.mode === "manual")
+		return { outcome: "skipped", note: "the scene mode is Manual, so a judged cue is never placed or offered" }
+	if (!reason) return { outcome: "refused", note: "a judged cue needs its reason" }
+	const [line] = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(and(liveLinesWhere(sessionId, channel), eq(schema.sessionMessages.id, atMessageId)))
+		.limit(1)
+	if (!line)
+		return { outcome: "refused", note: `message ${atMessageId} is not a live line of this lane` }
+	const scenes = await db
+		.select({
+			opened: schema.scenes.openedAtMessageId,
+			closed: schema.scenes.closedAtMessageId
+		})
+		.from(schema.scenes)
+		.where(and(eq(schema.scenes.sessionId, sessionId), eq(schema.scenes.channel, channel)))
+	const boundary = scenes.reduce((m, s) => Math.max(m, s.opened ?? 0, s.closed ?? 0), 0)
+	if (atMessageId <= boundary)
+		return { outcome: "refused", note: `message ${atMessageId} is already inside a placed scene` }
+	const [waiting] = await db
+		.select({ id: schema.sceneCues.id })
+		.from(schema.sceneCues)
+		.where(
+			and(
+				eq(schema.sceneCues.sessionId, sessionId),
+				eq(schema.sceneCues.channel, channel),
+				inArray(schema.sceneCues.state, ["open", "pending"])
+			)
+		)
+		.limit(1)
+	if (waiting) return { outcome: "skipped", note: "a scene cue is already waiting on this lane" }
+
+	const [cue] = await db
+		.insert(schema.sceneCues)
+		.values({ sessionId, channel, atMessageId, trigger: JUDGED_SCENE_TRIGGER, reason, state: "open" })
+		.onConflictDoNothing()
+		.returning({ id: schema.sceneCues.id })
+	if (!cue) return { outcome: "skipped", note: "this line was already judged" }
+	const cueId = cue.id
+	if (ctx.settings.mode !== "automatic" || params.ask === true) {
+		await pushSceneCues(params.io, sessionId)
+		return { outcome: "suggested", cueId }
+	}
+
+	const { openScene, SceneBoundaryRefusal } = await import("$lib/server/scenes/liveScenes")
+	let opened
+	try {
+		opened = await openScene(db, {
+			sessionId,
+			userId: ctx.ownerId,
+			channel,
+			atMessageId,
+			cause: { kind: "system" }
+		})
+	} catch (err) {
+		if (!(err instanceof SceneBoundaryRefusal)) throw err
+		await pushSceneCues(params.io, sessionId)
+		return { outcome: "refused", cueId, note: err.message }
+	}
+	await markCuesAt(db, sessionId, channel, atMessageId, "placed")
+	const { afterBoundaryPlaced } = await import("$lib/server/sockets/scenes")
+	await afterBoundaryPlaced(params.io, {
+		sessionId,
+		userId: ctx.ownerId,
+		closedSceneIds: opened.closedScene ? [opened.closedScene.id] : []
+	})
+	return {
+		outcome: "placed",
+		cueId,
+		openedSceneId: opened.scene.id,
+		...(opened.closedScene ? { closedSceneId: opened.closedScene.id } : {})
 	}
 }
 

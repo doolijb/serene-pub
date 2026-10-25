@@ -31,6 +31,7 @@ import {
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 import { sessionReadingOf } from "$lib/server/state/reading"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import {
 	advanceSessionStoryClock,
 	bookCalendarOf,
@@ -152,10 +153,10 @@ export async function setSessionStoryClock(
 			"Say one way to move the clock: follow its line, a date, or a step."
 		)
 	const before = await clockRow(sessionId)
-	if (!before?.lorebookId)
-		throw new StoryClockRefusal(
-			"This session has no lorebook, so it has no story clock."
-		)
+	if (!before) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+	const book = before.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
+	if (book == null) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
 	const was = clockOf(before)
 
 	if (stepping) {
@@ -183,7 +184,7 @@ export async function setSessionStoryClock(
 	if (clock) {
 		const problem = clockProblem(
 			clock,
-			await bookCalendarOf(db, before.lorebookId)
+			await bookCalendarOf(db, book)
 		)
 		if (problem)
 			throw new StoryClockRefusal(
@@ -200,6 +201,7 @@ export async function setSessionStoryClock(
 				lorebookId: before.lorebookId,
 				lorebookBranchId: before.lorebookBranchId
 			},
+			session: { id: sessionId, name: null },
 			clock
 		})
 		await tx

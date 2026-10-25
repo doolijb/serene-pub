@@ -23,6 +23,7 @@ function relayWith(opts: { sideCharacterName?: string | null } = {}) {
 		db: {} as any,
 		sessionId: 1,
 		runId: "run-reasoning",
+		kind: "reply",
 		live: live as any,
 		sideCharacterName: opts.sideCharacterName,
 		// A run with a speaker reference but nobody to look up: the side

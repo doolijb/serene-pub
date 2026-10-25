@@ -21,6 +21,7 @@
  *  - Regenerate the last turn takes the roll forms and the dice with it.
  */
 
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -188,9 +189,9 @@ async function blocksOf(messageId: number): Promise<any[]> {
 }
 
 async function turnOrder() {
-	const [row] = await db.select({ metadata: schema.sessions.metadata }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+	const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
 	const { readTurnOrder } = await import("@serene-pub/sdk")
-	return readTurnOrder(row!.metadata).order
+	return readTurnOrder(coreAnnexIn(row!.annex)).order
 }
 
 /** A person's line through the real send. */
@@ -630,12 +631,12 @@ describe("the Lair, rewritten: a walk", () => {
 	})
 
 	test("Regenerate the last turn takes the roll forms and the dice with it", async () => {
-		const { turnOfRow } = await import("$lib/server/sessions/turnYield")
-		const verdict = await turnOfRow(db as any, diceRowId)
+		const { turnUnitAt } = await import("$lib/server/sessions/rewind")
+		const verdict = await turnUnitAt(db as any, sessionId, diceRowId, { includePersonLines: false })
 		expect(verdict.ok).toBe(true)
 		if (!verdict.ok) return
-		expect(verdict.yield.specSlug).toBe("core:spec/lair-reply")
-		const ids = verdict.yield.rows.map((r) => r.messageId)
+		expect(verdict.unit.run?.specSlug).toBe("core:spec/lair-reply")
+		const ids = verdict.unit.rows.map((r) => r.messageId)
 		expect(ids).toContain(rollRowId)
 		expect(ids).toContain(diceRowId)
 	})

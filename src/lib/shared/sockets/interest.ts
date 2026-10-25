@@ -99,7 +99,18 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 			(payload) => payload?.session?.id ?? payload?.sessionId
 		],
 
+		// 🚧 pr-6: the member push, split from `sessions:get` so a push never
+		// takes a page's reply branch. The same payload, so the same field:
+		// the session's own id, else `sessionId` beside a null.
+		[
+			"sessions:refresh",
+			(payload) => payload?.session?.id ?? payload?.sessionId
+		],
+
 		// `{ sessionId, personaId, personaName }`.
+		// 🚧 pr-6 (B §B-2): `{ sessionId, genre }` — the one-genre read.
+		["sessions:genreOf", (payload) => payload?.sessionId],
+
 		["sessions:userTyping", (payload) => payload?.sessionId],
 
 		// `{ sessionId, runId, status }` — a run's status changed or ended
@@ -601,13 +612,21 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:adminList",
 	"sessions:bindFunction",
 	"sessions:branch",
-	"sessions:choosePreset",
 	"sessions:create",
-	// 🚧 Create lorebook from session — consumer: SessionViewPanel's ⋯ menu.
-	"sessions:createLorebookFromPhantom",
 	// 🚧 The overlay review (§26) — consumer: SessionViewPanel's changes card.
 	"sessions:overlayItems",
 	"sessions:applyOverlay",
+	// 🚧 pr-6 (B §B-4): Share as a lorebook (replaces createLorebookFromPhantom)
+	// and Clone with changes and attach — consumers: the Session notes row's ⋯,
+	// SessionViewPanel's ⋯, EditSessionForm's notes button. Bare, not scoped.
+	"sessions:shareAsLorebook",
+	"sessions:cloneWithChanges",
+	// 🚧 pr-6 (B §B-5, §B-6): Archive / Unarchive / Close out — consumer:
+	// SessionViewPanel's ⋯; Close out also the session page's catch-up notice.
+	// Bare, not scoped.
+	"sessions:archive",
+	"sessions:unarchive",
+	"sessions:closeOut",
 	// 🚧 On revision's sentence for the delete confirmation (§28) —
 	// consumer: the session page's message controls, through its inbox.
 	"sessions:revisionNotice",
@@ -615,7 +634,13 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:functionCandidates",
 	"sessions:functions",
 	"sessions:genres",
+	// 🚧 pr-6 (B §B-2): the one-genre read — consumer: the session page,
+	// SCOPED (`sessions:genreOf#<id>`).
+	"sessions:genreOf",
 	"sessions:get",
+	// 🚧 pr-6: the member push (`pushSessionToParticipants`) — consumer: the
+	// session page's inbox, SCOPED (`sessionPageData.svelte.ts`).
+	"sessions:refresh",
 	"sessions:getNarratorName",
 	"sessions:setFavorite",
 	// The L4 verbs (brief 6a: make a copy, share, save changes to, the
@@ -650,7 +675,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:panelLayout:startedFromUpdated",
 	"sessions:pipelines",
 	"sessions:presetStatus",
-	"sessions:presets",
 	"sessions:promptTokenCount",
 	"sessions:reassignRemovedParticipant",
 	// A package's recorded event (R56, E1d) — consumer: the session page,
@@ -885,6 +909,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"lorebooks:lines",
 	"lorebooks:list",
 	"lorebooks:listMemberFaces",
+	// 🚧 pr-6 (B §B-3, R-f): the asker's own books — consumer: the Lorebooks
+	// view's "Session notes" group (LorebooksWorkspace). Bare, not scoped.
+	"lorebooks:sessionNotes",
 	"lorebooks:resolveOrCreateBindingByName",
 	"lorebooks:rulesChoices",
 	"lorebooks:setCalendar",

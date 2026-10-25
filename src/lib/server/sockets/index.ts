@@ -43,6 +43,8 @@ import { registerPresetEditorHandlers } from "./presetEditor"
 import { registerSessionPlacesHandlers } from "./sessionPlaces"
 import { registerStatTrailHandlers } from "./statTrail"
 import { registerSessionHandlers } from "./sessions"
+import { registerOwnBookHandlers } from "./ownBooks"
+import { registerSessionArchiveHandlers } from "./sessionArchive"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLanguageHandlers } from "./language"
@@ -323,6 +325,8 @@ export function connectSockets(io: {
 		registerStatTrailHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
 		registerSessionHandlers(socket, emitToUser, register)
+		registerOwnBookHandlers(socket, emitToUser, register)
+		registerSessionArchiveHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		// 🚧 Starter lorebooks (PLAN-lorebook-kinds §B): the list and the admin verbs.
 		registerStarterKitHandlers(socket, emitToUser, register)

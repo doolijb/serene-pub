@@ -97,7 +97,7 @@ export async function readSessionPlaces(
 	// 🚧 The session's own notes' places come after the book's, marked
 	// "this session only" (PLAN-rulesets §26) — and are all a session with
 	// no book has.
-	const own = await phantomPlaces(sessionId)
+	const own = await ownBookPlaces(sessionId)
 	const ownPlaces = own.places
 	const lorebookId = reading?.lorebookId ?? null
 
@@ -173,8 +173,8 @@ export async function readSessionPlaces(
 		...(reading && farEntryIds.length
 			? await entriesAsRead(db, reading.lorebookId, reading, "session", null, farEntryIds)
 			: []),
-		...(own.phantomId != null && farEntryIds.length
-			? await entriesAsRead(db, own.phantomId, MAIN_HEAD, "session", null, farEntryIds)
+		...(own.ownBookId != null && farEntryIds.length
+			? await entriesAsRead(db, own.ownBookId, MAIN_HEAD, "session", null, farEntryIds)
 			: [])
 	]
 	const farTypes = new Map(
@@ -272,27 +272,27 @@ export async function readSessionPlaces(
  * session sees them, each `sessionOnly`. Their category is the entry's own;
  * the ways between them are drawn by the caller, from the union links read.
  */
-async function phantomPlaces(sessionId: number): Promise<{
-	phantomId: number | null
+async function ownBookPlaces(sessionId: number): Promise<{
+	ownBookId: number | null
 	places: (PlaceV1 & { sessionOnly: true })[]
 }> {
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const phantom = await phantomOf(db, sessionId)
-	if (!phantom) return { phantomId: null, places: [] }
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const ownBook = await ownBookOf(db, sessionId)
+	if (!ownBook) return { ownBookId: null, places: [] }
 	const seen = (
-		await entriesAsRead(db, phantom.id, MAIN_HEAD, "session", [LOCATION_TYPE_ID])
+		await entriesAsRead(db, ownBook.id, MAIN_HEAD, "session", [LOCATION_TYPE_ID])
 	).filter((p) => !p.unseen)
-	if (!seen.length) return { phantomId: phantom.id, places: [] }
+	if (!seen.length) return { ownBookId: ownBook.id, places: [] }
 	const e = schema.lorebookEntries
 	const rows = await db
 		.select({ id: e.id, fields: e.fields })
 		.from(e)
-		.where(and(eq(e.lorebookId, phantom.id), inArray(e.id, seen.map((p) => p.entryId))))
+		.where(and(eq(e.lorebookId, ownBook.id), inArray(e.id, seen.map((p) => p.entryId))))
 	const category = new Map(
 		rows.map((r) => [r.id, trimmed(((r.fields ?? {}) as Record<string, unknown>).category) || null])
 	)
 	return {
-		phantomId: phantom.id,
+		ownBookId: ownBook.id,
 		places: seen.map((p) => ({
 			id: p.entryId,
 			name: p.name.trim() || `#${p.entryId}`,

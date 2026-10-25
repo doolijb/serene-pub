@@ -1328,6 +1328,18 @@ export const importExecuteSillyTavern: Handler<
 								...sessionLine
 							})
 							.returning()
+						// Every session owns a book from its birth (pr-6, pass 11).
+						{
+							const { insertOwnBook } = await import("$lib/server/lorebooks/ownBook")
+							await insertOwnBook(tx as unknown as Db, {
+								sessionId: row.id,
+								userId,
+								name: row.name,
+								overlayOf: row.lorebookId ?? null,
+								primaryRuleset: row.primaryRuleset,
+								rulesetVersion: row.rulesetVersion ?? null
+							})
+						}
 						if (characterId) {
 							await tx.insert(schema.sessionCharacters).values({
 								sessionId: row.id,
@@ -1453,6 +1465,18 @@ export const importExecuteSillyTavern: Handler<
 								...groupLine
 							})
 							.returning()
+						// Every session owns a book from its birth (pr-6, pass 11).
+						{
+							const { insertOwnBook } = await import("$lib/server/lorebooks/ownBook")
+							await insertOwnBook(tx as unknown as Db, {
+								sessionId: row.id,
+								userId,
+								name: row.name,
+								overlayOf: row.lorebookId ?? null,
+								primaryRuleset: row.primaryRuleset,
+								rulesetVersion: row.rulesetVersion ?? null
+							})
+						}
 						const members = groupItem.memberNames
 							.map((_, i) => ({
 								sessionId: row.id,

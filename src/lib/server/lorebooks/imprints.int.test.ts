@@ -239,7 +239,7 @@ describe("the session's own notes", () => {
 			{ name: "A gull", content: "It watches.", params: { entryType: LOCATION_TYPE_ID } },
 			CREATE
 		)
-		expect(filed.route).toBe("phantom")
+		expect(filed.route).toBe("own-book")
 		const m2 = await w.message()
 		await (await w.host("run-g")).commit!({ entry: filed.id, content: "It steals a fish.", fields: { category: "Birds" } }, UPDATE)
 		await testDb.update(schema.lorebookEntries).set({ content: "Edited by hand." }).where(eq(schema.lorebookEntries.id, filed.id))
@@ -299,12 +299,12 @@ describe("a retake", () => {
 		await w.message()
 		await (await w.host("run-m")).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
 		const later = await w.message()
-		const { dropTurnWritesElsewhere } = await import("$lib/server/sessions/retakeTurn")
+		const { takeRunWritesElsewhere } = await import("$lib/server/sessions/rewind")
 		await testDb.transaction(async (tx) =>
-			dropTurnWritesElsewhere(tx as unknown as Db, {
+			takeRunWritesElsewhere(tx as unknown as Db, {
 				sessionId: w.session.id,
 				runs: [{ runId: -1, runUuid: "run-m" }],
-				yieldIds: [later.id]
+				unitIds: [later.id]
 			})
 		)
 		expect(await categoryOf(vault.id)).toBe("Rooms")

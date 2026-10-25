@@ -370,6 +370,12 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		const modeCheck = await sessionGenreAvailable(db, sessionId)
 		if (!modeCheck.available) return await refuse(modeCheck.reason!)
 	}
+	// 🚧 pr-6 R-k: an archived session is read-only — no generation, whatever asked.
+	{
+		const { sessionArchivedRefusal } = await import("$lib/server/sessions/archive")
+		const archived = await sessionArchivedRefusal(db, sessionId)
+		if (archived) return await refuse(archived)
+	}
 
 	/**
 	 * 🚧 **Replace on write** (RF fix 5, owner ruling 2026-10-23): a turn,
@@ -421,7 +427,14 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 			: {}),
 		// 🚧 The registration that answers (D7, LS2) — on the receipt and its row.
 		...(routed.spec && routed.registrationKey
-			? { registration: { family: "event", key: routed.registrationKey } }
+			? {
+					registration: {
+						family: "event",
+						key: routed.registrationKey,
+						// The registration's summary depth (pass 9 S3), off the resolution.
+						minAge: routed.registrationMinAge ?? 0
+					}
+				}
 			: {})
 	}
 

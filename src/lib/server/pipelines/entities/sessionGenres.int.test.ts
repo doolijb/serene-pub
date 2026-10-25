@@ -19,8 +19,6 @@ import {
 	getSessionGenre,
 	listSessionGenres,
 	listSessionFunctions,
-	listSessionPresets,
-	chooseSessionPreset,
 	sessionPipeline,
 	enabledSessionFunctions,
 	setSessionFunction,
@@ -896,17 +894,6 @@ describe("a session runs on a preset", () => {
 			.returning()
 		sessionId = c.id
 	}, 30_000)
-
-	it("offers no configuration, and still names the serving pipeline", async () => {
-		const r = await listSessionPresets(db, sessionId, STANDARD_GENRE_ID, { userId, isAdmin: false })
-		expect(r).toEqual({ specSlug: STORY_RESPOND_SPEC_ID, selectedId: null, options: [] })
-	})
-
-	it("refuses a pick, in a sentence", async () => {
-		const r = await chooseSessionPreset(db, sessionId, STANDARD_GENRE_ID, 1, { userId, isAdmin: true })
-		expect(r.ok).toBe(false)
-		expect(r.error).toMatch(/configurations are retired/)
-	})
 
 	it("changing preset changes which actions the session includes", async () => {
 		const narrateOn = async () =>

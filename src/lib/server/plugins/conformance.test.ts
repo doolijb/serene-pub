@@ -49,7 +49,7 @@ describe("conformance harness", () => {
 describe("conformance harness — the task reach", () => {
 	const REACHES = `module.exports = { hooks: {
 		t: async function (input, ctx) { return await ctx.fetch("https://example.com/") },
-		s: function (input, ctx) { return ctx.storage.get("k") },
+		s: function (input, ctx) { return ctx.storage.usage() },
 		pure: function (input) { return (input.n || 0) + 1 },
 		broken: function (input) { return input.missing.field }
 	} }`

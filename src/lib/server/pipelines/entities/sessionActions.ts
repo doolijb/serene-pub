@@ -54,6 +54,7 @@
  * because a list is presentation and a refusal is the law.
  */
 
+import { SESSION_ARCHIVED_SENTENCE } from "$lib/shared/sessions/archive"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -291,7 +292,7 @@ export async function listSessionActions(
 	const venues = emptyVenues()
 
 	const [session] = await db
-		.select({ genreId: schema.sessions.genreId })
+		.select({ genreId: schema.sessions.genreId, archivedAt: schema.sessions.archivedAt })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
@@ -359,6 +360,8 @@ export async function listSessionActions(
 		identity: string,
 		own: ReadonlyArray<EnabledWhen> | undefined
 	): Pick<SessionAction, "enabled" | "reason" | "itemPredicates"> => {
+		// 🚧 pr-6 R-k: an archived session is read-only — every action listed, greyed with its sentence.
+		if (session.archivedAt) return { enabled: false, reason: { i18n: { en: SESSION_ARCHIVED_SENTENCE } } }
 		const verdict = withConditions(
 			enablementOf(
 				effectiveEnabledWhen(

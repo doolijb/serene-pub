@@ -59,7 +59,7 @@ import {
 } from "$lib/server/pipelines/runtime/capPause"
 import { saveReceipt } from "$lib/server/pipelines/runtime/receipts"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
-import { sessionEvents as sdkSessionEvents, type EventCause, type Receipt } from "@serene-pub/sdk"
+import { minAgeOf, sessionEvents as sdkSessionEvents, type EventCause, type Receipt } from "@serene-pub/sdk"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -83,7 +83,12 @@ const OFF_LEDGER: ReadonlySet<string> = new Set([
 	sdkSessionEvents.roundEnded,
 	sdkSessionEvents.sceneOpened,
 	sdkSessionEvents.sceneClosed,
-	sdkSessionEvents.storyClockMoved
+	sdkSessionEvents.storyClockMoved,
+	// 🚧 pr-6 (supervisor C, 2026-10-25): host moments too — a reply is told
+	// nothing by the line settling, a summary landing or the session closing.
+	sdkSessionEvents.historySettled,
+	sdkSessionEvents.sceneSummaryApplied,
+	sdkSessionEvents.sessionArchived
 ])
 
 /**
@@ -633,8 +638,10 @@ export interface SessionEventResolution {
 	spec: string | null
 	/** The first registration's key — the one `spec` is. */
 	registrationKey?: string
+	/** That registration's `minAgeOf` (pass 9 S3) — what its run may not reach into. */
+	minAge?: number
 	/** Every registration that runs, in order (R24). */
-	registrations?: Array<{ spec: string; key: string }>
+	registrations?: Array<{ spec: string; key: string; minAge?: number }>
 	/** Registrations on the event whose `when` did not hold (R31). */
 	skipped?: Array<{ spec: string; key: string }>
 	/**
@@ -657,12 +664,13 @@ export async function resolveSessionEventVerdict(
 		if (scope?.sessionId != null && (await sessionGenreIs(db, scope.sessionId, genreId))) {
 			const on = await registrationsOn(db, scope.sessionId, event)
 			const said = on.fallback ? { fallback: on.fallback } : {}
-			const registrations = on.run.map((r) => ({ spec: r.pipeline, key: r.key }))
+			const registrations = on.run.map((r) => ({ spec: r.pipeline, key: r.key, minAge: minAgeOf(r) }))
 			const skipped = on.skipped.map((r) => ({ spec: r.pipeline, key: r.key }))
 			if (registrations.length)
 				return {
 					spec: registrations[0]!.spec,
 					registrationKey: registrations[0]!.key,
+					minAge: registrations[0]!.minAge,
 					registrations,
 					...(skipped.length ? { skipped } : {}),
 					...said
@@ -814,6 +822,7 @@ export async function dispatchSessionEvent(
 	const first = await dispatchOne(db, opts, {
 		spec: list[0]!.spec,
 		registrationKey: list[0]!.key || undefined,
+		minAge: (list[0] as { minAge?: number }).minAge,
 		...(resolved.fallback ? { fallback: resolved.fallback } : {})
 	})
 	const others: SessionEventDispatch[] = []
@@ -822,7 +831,7 @@ export async function dispatchSessionEvent(
 			const d = await dispatchOne(
 				db,
 				{ ...opts, runId: undefined, expectSpec: undefined, onParked: undefined },
-				{ spec: next.spec, registrationKey: next.key || undefined }
+				{ spec: next.spec, registrationKey: next.key || undefined, minAge: (next as { minAge?: number }).minAge }
 			)
 			if (d) others.push(d)
 		} catch (err) {
@@ -866,7 +875,7 @@ async function dispatchOne(
 		expectSpec?: string
 	}
 ,
-	resolved: { spec: string | null; registrationKey?: string; fallback?: PresetFallback }
+	resolved: { spec: string | null; registrationKey?: string; minAge?: number; fallback?: PresetFallback }
 ): Promise<SessionEventDispatch | null> {	if (opts.expectSpec && resolved.spec !== opts.expectSpec && opts.lineage) {
 		const reason =
 			`the pipeline answering ${opts.event} changed while this waited at the cycle cap ` +
@@ -988,7 +997,7 @@ async function dispatchOne(
 			// 🚧 The registration that started it (D7, LS2) — an event run
 			// either way (LS2: every run records its family).
 			...(resolved.registrationKey
-				? { registration: { family: "event", key: resolved.registrationKey } }
+				? { registration: { family: "event", key: resolved.registrationKey, minAge: resolved.minAge ?? 0 } }
 				: { triggerFamily: "event" }),
 			// 🚧 A session's creation waits first in the model queue (R26).
 			...(opts.event === sdkSessionEvents.sessionCreated ? { creation: true } : {}),

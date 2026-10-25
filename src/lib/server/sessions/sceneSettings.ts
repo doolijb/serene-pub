@@ -136,14 +136,12 @@ export async function sessionSceneContext(
 		on: states[t.key] !== false,
 		words: i18nText(t.label) ?? t.key
 	}))
-	let mayPlace = row.lorebookId != null
-	if (mayPlace) {
-		const { resolveWrites, loreWritesOffRefusal } = await import(
-			"$lib/server/messages/writes"
-		)
-		mayPlace =
-			resolveWrites(shape).scenes && !(await loreWritesOffRefusal(db, sessionId))
-	}
+	// 🚧 pr-6 (§B-3a): every session has a book, so a scene always has a home.
+	const { resolveWrites, loreWritesOffRefusal } = await import(
+		"$lib/server/messages/writes"
+	)
+	const mayPlace =
+		resolveWrites(shape).scenes && !(await loreWritesOffRefusal(db, sessionId))
 	return {
 		sessionId,
 		ownerId: row.userId,

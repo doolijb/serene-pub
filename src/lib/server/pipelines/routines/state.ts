@@ -20,6 +20,7 @@ import { and, eq } from "drizzle-orm"
 import { cadenceClock, type CadenceRef, type CadenceState } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { processStartedAt } from "$lib/server/pipelines/routines/runs"
+import { registrationScopeWhere, scopeColumns } from "$lib/server/pipelines/registrations/rows"
 
 /** The origin of a session row that holds only a routine's runtime state. */
 export const ROUTINE_STATE_ORIGIN = "routine-state"
@@ -39,8 +40,7 @@ const states = ((globalThis as Record<symbol, unknown>)[KEY] ??= new Map<number,
 
 const sessionRowWhere = (sessionId: number, key: string) =>
 	and(
-		eq(schema.registrations.scopeKind, "session"),
-		eq(schema.registrations.scopeRef, String(sessionId)),
+		registrationScopeWhere({ kind: "session", sessionId }),
 		eq(schema.registrations.key, key)
 	)
 
@@ -105,10 +105,7 @@ export async function saveCadenceState(db: Db, sessionId: number, key: string, s
 		await db
 			.insert(schema.registrations)
 			.values({
-				scopeKind: "session",
-				scopeRef: String(sessionId),
-				sessionId,
-				presetId: null,
+				...scopeColumns({ kind: "session", sessionId }),
 				key,
 				origin: ROUTINE_STATE_ORIGIN,
 				state: value

@@ -60,10 +60,10 @@
  * batched — and `entity-link` embeds each entry name it compares them with
  * once, for its index. That is the descriptive-mentions mechanism's cost, not
  * Search by meaning's, and it happens only where there is a lorebook to link
- * to (no book: the mechanism is unavailable and skipped). So the switch's
- * cases below count the SEARCH's probe embed (`searchEmbeds`, the call
- * carrying the probe text); the mechanism's own cost is pinned in its own
- * describe at the end.
+ * to (no book, or only the session's own book while it is empty: the
+ * mechanism is unavailable and skipped). So the switch's cases below count
+ * the SEARCH's probe embed (`searchEmbeds`, the call carrying the probe
+ * text); the mechanism's own cost is pinned in its own describe at the end.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -731,7 +731,7 @@ describe("Descriptions to follow up: on by default, and only where there is a bo
 		expect(others.flat()).toContain("The Ashguard")
 	})
 
-	it("without a lorebook: no embed beyond the search — nothing to link a description to", async () => {
+	it("with an empty own book: no embed beyond the search — nothing to link a description to", async () => {
 		modelReady = true
 		await starEmbedding("local")
 		const sessionId = await makeSession({ lorebook: false })

@@ -166,15 +166,16 @@ export async function declaredAudiences(db: Db, genreId: string): Promise<DataAu
 	return out
 }
 
-/** The genre a session runs, for the declarations above — Chat when it names none. */
+/** The genre a session runs, for the declarations above — Story when it names none. */
 export async function sessionGenreOf(db: Db, sessionId: number): Promise<string> {
 	const { eq } = await import("drizzle-orm")
+	const { STANDARD_GENRE_ID } = await import("$lib/server/pipelines/entities/sessionGenres")
 	const [row] = await db
 		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return row?.genreId ?? "core:genre/chat"
+	return row?.genreId ?? STANDARD_GENRE_ID
 }
 
 /**

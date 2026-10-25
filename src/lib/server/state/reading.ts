@@ -241,15 +241,20 @@ export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineR
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
+	// The reading is the line a session reads in its SHARED book. A session
+	// with none has its own book alone, which every union reader adds itself
+	// (`lorebooksReadBy`, `sessionEntriesAsRead`, the places read) — returning
+	// it here as well would read it twice (pr-6 B review).
 	if (!session?.lorebookId) return null
+	const bookId = session.lorebookId
 	const own = momentOf(session)
 	try {
-		const reading = await readingOf(db, session.lorebookId, {
+		const reading = await readingOf(db, bookId, {
 			branch: session.lorebookBranchId ?? "main",
 			moment: own
 		})
 		// Following its line: the line's present when the line sets one.
-		if (!own) reading.moment = await linePresentOf(db, session.lorebookId, reading.branchId)
+		if (!own) reading.moment = await linePresentOf(db, bookId, reading.branchId)
 		return reading
 	} catch (e) {
 		// A stale branch id (it cannot be another book's: the handler checks,
@@ -257,9 +262,9 @@ export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineR
 		// main rather than failing a turn.
 		if (e instanceof BranchRefusal)
 			return {
-				lorebookId: session.lorebookId,
+				lorebookId: bookId,
 				branchId: null,
-				moment: own ?? (await linePresentOf(db, session.lorebookId, null)),
+				moment: own ?? (await linePresentOf(db, bookId, null)),
 				forkedAt: null,
 				line: MAIN_LINE
 			}

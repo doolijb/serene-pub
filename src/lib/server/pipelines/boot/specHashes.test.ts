@@ -1172,7 +1172,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "17b311b14fdba7")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "8bc929819eff7")
 	// Moved 2026-10-21 (lane F1): declares its `summarize-world` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "16b18ff001d740")
-	"core:spec/summarize-world@1.3.0": "5761942287ba5",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the transcript, `entryType` world lore declared. (was "5761942287ba5")
+	"core:spec/summarize-world@1.3.0": "14f8e9c687ee1e",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1184,7 +1185,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1832ba27d42a06")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "28cbabf6ea61b")
 	// Moved 2026-10-21 (lane F1): declares its `summarize-character` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "a1ba26c4e2971")
-	"core:spec/summarize-character@1.3.0": "6db76b9e73bdc",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the transcript, `entryType` character lore declared. (was "6db76b9e73bdc")
+	"core:spec/summarize-character@1.3.0": "1b9730f33d1b7f",
 	// ⚠ `summarize-scene@1.3.0`'s hash MOVED a SECOND time, again under an
 	// unchanged version, and again paired with a migration —
 	// `drizzle/0104_ice_scene_cast_extraction.sql` deletes its published
@@ -1210,7 +1212,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "7469e93c1c11c")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "e0c98ab5632b4")
 	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "d99dc8578d801")
-	"core:spec/summarize-scene@1.3.0": "1507a157e60f91",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the transcript, `entryType` history declared. (was "1507a157e60f91")
+	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "bcb17811f1334")
+	"core:spec/summarize-scene@1.3.0": "62e0969c66c68",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1222,7 +1226,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1f93de35465e8c")
 	// I12 (2026-10-12): the Default config names its loadouts. (was "49cbc8b7ae8dc")
 	// Moved 2026-10-21 (lane F1): declares its `summarize-history` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "1a30e9b006458")
-	"core:spec/summarize-history@1.3.0": "1940840a09ff76",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the transcript, `entryType` history declared. (was "1940840a09ff76")
+	"core:spec/summarize-history@1.3.0": "cd13d24d4094b",
 	// 🚧 New 2026-10-13 (live scenes §13–§14): each core genre's own
 	// summarize-scene, built by `summarizeScene()` — the scene's range
 	// (`summarize-source@2`), its story rows' files (`history-attachments`),
@@ -1240,22 +1245,29 @@ const PUBLISHED: Record<string, string> = {
 	// never shows two steps headed "History attachments". (were
 	// "d6d9936a441b" / "150185e62c94a9" / "69c16d2df4303" / "d410ef541cb80")
 	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "119ee8ce3f667f")
-	"core:spec/story-summarize-scene@1.0.0": "1ad856ab45f64f",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the scene's story rows, `entryType` history declared. (was "1ad856ab45f64f")
+	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "16ed70b70a8b40")
+	"core:spec/story-summarize-scene@1.0.0": "a6aee5af27e2f",
 	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "9c19042ad22a0")
-	"core:spec/guide-summarize-scene@1.0.0": "1f9d6798655f8b",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the scene's story rows, `entryType` history declared. (was "1f9d6798655f8b")
+	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "1f16042b617a7")
+	"core:spec/guide-summarize-scene@1.0.0": "1f1ee56640bf36",
 	// The Lair's reads the Sanctum as asides, through its own template.
 	// Moved 2026-10-13 (live scenes §15 G1, ★9): it carries the Lair's own
 	// boundary trigger, `contributes.boundaryTriggers` (a new floor on main).
 	// (was "14ef483fc1f337")
 	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "69777beaaf6a6")
 	// Moved 2026-10-21 (Lair rewrite L3): the floor boundary trigger is gone (no dungeon-floor tracking). (was "485ef62767a03")
-	"core:spec/lair-summarize-scene@1.0.0": "249eb28ab0204",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the scene's story rows, `entryType` history declared. (was "249eb28ab0204")
+	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "eadef3540cfdf")
+	"core:spec/lair-summarize-scene@1.0.0": "8217737712bc2",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
 	// core-catalog/src with only this lane's edits reverted hashes back to the
 	// old pin. (was "1cb6f0d989e99c")
-	"core:spec/graph-build@1.2.0": "17b96dc6b3f539",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `propose` wires `sources` from the scenes it walked. (was "17b96dc6b3f539")
+	"core:spec/graph-build@1.2.0": "26ee0f1d808d5",
 	// 1.12.0: the session rename (0141) — session-scope/-history/-cast ids
 	// and sessionId/sessionScope ports ripple into every pinned type.
 	"core:spec/respond@1.12.0": "72df744027f6d",
@@ -1460,8 +1472,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-22 (rulesets M2): the embedded shape's *Show dice* reads *Show outcomes* (the field id `showDice` kept). (was "9eeaaa394f17f")
 	// Moved 2026-10-22 (rulesets M3): Auto roll's description says "When the rules decide", never "Under Rules and dice". (was "799554471956d")
 	// Moved 2026-10-23 (core genres on the seams, merge GM): the Lair's relabels (_Ask me before each check_, _Decide checks at once_, _Show the outcomes_) and its recommended rulesets, in the genre shape it carries (lane G0, S6–S7). Edited in place. (was "c46bd3f8d3a77")
-	// Moved 2026-10-23 (RF fix 2): the genre shape it carries says `lorebook: 'optional'` — 'required' is retired; a Lair session may start without a book (its phantom lorebook is the dungeon). Edited in place. (was "1cb73ccca537ee")
-	"core:spec/lair-create@1.0.0": "1a7932ed813f14",
+	// Moved 2026-10-23 (RF fix 2): the genre shape it carries says `lorebook: 'optional'` — 'required' is retired; a Lair session may start without a book (its own book is the dungeon). Edited in place. (was "1cb73ccca537ee")
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the genre it carries declares the Sanctum `lore: 'aside'` (pass 9 S1); the document is otherwise byte-identical. (was "1a7932ed813f14")
+	"core:spec/lair-create@1.0.0": "d927ed6661005",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -1656,7 +1669,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-21 (Lair rewrite L2, D1/D9): the sheet's class, difficulty and goal are their slots' own schemas (`jsonSchemaOf`, descriptions and options read, '' kept for "not asked"); genesis's ways out read the ruleset's exit piece (kinds, standings, the trap's condition). Edited in place. (was "1544203ee9975e")
 	// Moved 2026-10-23 (core genres on the seams, merge GM): kits as the session's rules' class rows, read at run time (lane G3, S4). Edited in place. (was "62087cf4de501")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "1ff08425d1064c")
-	"core:spec/dungeon-crawler-interview@1.0.0": "563a02b06d940",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the world writes are `fileLore`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "563a02b06d940")
+	"core:spec/dungeon-crawler-interview@1.0.0": "fe64892e7ed",
 	// NEW 2026-10-15 (the multiplayer lane): Reveal the planning notes (D8). 🚧
 	// Moved 2026-10-15 (walkthrough fixes): a quick action — a button among
 	// the composer's actions. (was "ded39ad9f077b")
@@ -1703,7 +1717,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-21 (Lair rewrite L2, D9): a way out's grammar reads the ruleset's exit piece — its kinds and standings and what a trap may leave (`jsonSchemaOf`). Edited in place. (was "1d07b704852bb6")
 	// Moved 2026-10-23 (core genres on the seams, merge GM): the Planner's grammar laid over the session's rules (`core:script/dungeon-crawler-shape`, lane G3, S1, S4), and its two resolve steps headed by their branch (_(dice)_ · _(words)_, GM). Edited in place. (was "7514f5a052a56")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "bb0ea113263db")
-	"core:spec/dungeon-crawler-respond@1.0.0": "9ec5ea8729236",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the world writes are `fileLore`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "9ec5ea8729236")
+	"core:spec/dungeon-crawler-respond@1.0.0": "1a18135c4edb35",
 	// NEW 2026-10-15 (the story-turn lane): Rest (no model call) and what
 	// follows the goal (its form; one call for a new goal). 🚧
 	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the rest's
@@ -1852,7 +1867,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "155e7dcd4aa7d")
 	"core:spec/story-reckoning@1.0.0": "10867c2eda2502",
 	// Moved 2026-10-23 (core genres on the seams, merge GM): _Look back over the story_ titles its duties card (lane G0, S7); its model call labelled _File what is worth keeping_, never the routine's name its duties card carries (GM). Edited in place. (was "17981ba0e2bec5")
-	"core:spec/story-sweep@1.0.0": "1baa5f325cd667",
+	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the lore writes are `fileLore` / `rememberNote`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "1baa5f325cd667")
+	// Moved 2026-10-25 (sprint 2 lane I2, pass 7 / R-i): the crib and the sort read the duties step's `sceneCheck` (and the crib the history), and a `sceneCue` junction offers `propose-scene-cue@1` — Full as the scene mode decides, Review with `ask`. Edited in place. (was "131df6899cf85d")
+	"core:spec/story-sweep@1.0.0": "2f4aae4332c2b",
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1989d733a38b8')
 	"core:spec/story-illustrate-new-scene@1.0.0": "9b8440cff74d8",
 	"core:spec/assistant-memory@1.0.0": "1811e7b16e1c3",

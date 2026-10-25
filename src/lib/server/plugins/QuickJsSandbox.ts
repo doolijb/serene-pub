@@ -33,8 +33,7 @@ import { AMBIENT_PRELUDE } from "./prelude"
 import {
 	STORAGE_HOST_SOURCE,
 	permissionKey,
-	type PermissionConfig,
-	type PluginRowChange
+	type PermissionConfig
 } from "./storageHost"
 import { CRYPTO_HOST_SOURCE } from "./cryptoHost"
 import { FETCH_HOST_SOURCE } from "./fetchHost"
@@ -64,7 +63,7 @@ interface StoredBundle {
 }
 
 type EvalOutcome =
-	| { ok: true; json: string; rows?: PluginRowChange[] | null }
+	| { ok: true; json: string }
 	| {
 			ok: false
 			reason: string
@@ -97,15 +96,15 @@ var __DENIED_STORAGE = (function () {
 	// Every method the real store has, refusing by name — a plugin without the
 	// grant must hear "permission not granted", never "is not a function".
 	var files = { list: d, stat: d, read: d, write: d, delete: d, deleteAll: d };
-	return { usage: d, get: d, keys: d, query: d, put: d, delete: d, deleteAll: d, files: files, read: d, write: d, exists: d, remove: d, list: d, size: d };
+	return { usage: d, files: files, read: d, write: d, exists: d, remove: d, list: d, size: d };
 })();
 // Marshal a host value into the guest, by value and to the bottom. Objects and
 // arrays cross as fresh guest objects — the storage host answers with
-// StorageUsage, WriteReceipt and RowPage, and a bridge that could only carry
+// StorageUsage and WriteReceipt, and a bridge that could only carry
 // scalars would have silently returned undefined for every one of them.
 //
-// null and undefined stay distinct: a stored row value of null is not a missing
-// row, and files.stat answers null where get answers undefined. The three
+// null and undefined stay distinct: files.stat answers null for a missing
+// file. The three
 // constant handles are StaticLifetimes whose dispose() is a no-op, so the
 // recursive caller can dispose uniformly without special-casing them.
 function toGuest(context, r) {
@@ -371,17 +370,14 @@ module.exports = {
 		// dropped with the frame on every other ending. The kill flag unwinds
 		// the guest between VM instructions, which is precisely the moment a
 		// write-through store would be caught half-done.
-		// The host loaded this plugin's rows before it posted the job; they seed
-		// the transaction's row projection, and its diff comes back with the
-		// result for the host to commit. Nothing in here holds a database
-		// handle. The one async permission that now exists on this backend —
-		// fetch — reaches the network and never a database, so there is still
-		// nothing in here that could use one.
+		// Nothing in here holds a database handle. The one async permission on
+		// this backend — fetch — reaches the network and never a database, so
+		// there is nothing in here that could use one.
 		// Only for a kind granted storage (R-3): a task's call opens no
-		// transaction and commits no rows.
+		// transaction and commits nothing.
 		const tx =
 			job.grants.storage && bundle.config && bundle.config.storageDir
-				? makeStorageHost(bundle.config, job.rows, job.nowMs)
+				? makeStorageHost(bundle.config, job.nowMs)
 				: null
 		const runtime = qjs.newRuntime()
 		try {
@@ -487,11 +483,9 @@ module.exports = {
 							// real. A commit that cannot be applied throws, and
 							// the worker reports the call as failed rather than
 							// letting it pass as a success whose data never
-							// landed. Files land here; the ROW diff only rides
-							// back on the outcome, so a file commit that threw
-							// carries no rows and the host commits none.
-							const rows = tx ? tx.commit() : null
-							return { ok: true, json: json, rows: rows }
+							// landed. Files land here.
+							if (tx) tx.commit()
+							return { ok: true, json: json }
 						}
 						if (state.type === "rejected") {
 							const detail = context.dump(state.error)
@@ -732,7 +726,6 @@ export class QuickJsSandbox implements PluginSandbox {
 			nowMs: opts.nowMs,
 			timeoutMs: opts.timeoutMs,
 			memoryLimitBytes: this.memoryLimitBytes,
-			rows: opts.rows,
 			secrets: opts.secrets,
 			// Derived here, on the host, from the kind the caller named — the
 			// worker never sees the kind, only what it grants (R-3). Throws on
@@ -886,11 +879,7 @@ export class QuickJsSandbox implements PluginSandbox {
 			value: parsed.u ? undefined : parsed.v,
 			logs: parsed.logs ?? [],
 			durationMs: Date.now() - started,
-			backend: this.kind,
-			// What the hook decided about its rows, for the manager to commit.
-			// A call that ended any other way carries nothing, which is what
-			// makes "a killed hook commits neither half" true.
-			rowChanges: outcome.rows ?? undefined
+			backend: this.kind
 		}
 	}
 

@@ -226,7 +226,7 @@ interface Routing {
 	sessionId: number
 	books: number[]
 	attachedId: number | null
-	target: { route: "book" | "phantom"; lorebookId: number }
+	target: { route: "book" | "own-book"; lorebookId: number }
 	branchId: number | null
 }
 
@@ -236,7 +236,7 @@ async function routingOf(
 	anchorMessageId: number | null
 ): Promise<Routing> {
 	const { lorebooksReadBy, loreWriteTargetFor } = await import(
-		"$lib/server/lorebooks/phantom"
+		"$lib/server/lorebooks/ownBook"
 	)
 	const t = await loreWriteTargetFor(db, sessionId, { anchorMessageId })
 	const books = await lorebooksReadBy(db, sessionId)
@@ -795,7 +795,7 @@ export async function writeLandings(
 		if (!entry) fact.skipped = "its entry is gone"
 		else if (
 			entry.lorebookId !== r.target.lorebookId &&
-			r.target.route === "phantom" &&
+			r.target.route === "own-book" &&
 			entry.lorebookId === r.attachedId
 		) {
 			await overlayInNotes(
@@ -919,7 +919,7 @@ export async function writeAttributeLandings(
 			const overlaid =
 				!!b &&
 				b.lorebookId !== r.target.lorebookId &&
-				r.target.route === "phantom" &&
+				r.target.route === "own-book" &&
 				b.lorebookId === r.attachedId
 			if (overlaid) {
 				if (typeof value !== "string" || !NODE_STATES.has(value))
@@ -980,7 +980,7 @@ export async function writeAttributeLandings(
 			if (
 				e &&
 				e.lorebookId !== r.target.lorebookId &&
-				r.target.route === "phantom" &&
+				r.target.route === "own-book" &&
 				e.lorebookId === r.attachedId
 			) {
 				// 🚧 ★5: the attached book's place, overlaid in the notes.

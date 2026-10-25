@@ -182,12 +182,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// entry's typed fields, checked against its entry type
 	// (`fieldsFindings`) at the review gate and at the commit; review fields
 	// `name`, `content`, `fields`. Additive. (was "15401f006df68c")
-	"core:outlet/create-lore-entry@1": "57d4f78aa9d7c",
+	"core:outlet/create-lore-entry@1": "4906326bc8f09", // pr-6 §C-1: `sources` (+ `match`, `bind` on create)
 	// NEW 2026-10-21 (Lair rewrite D2, L1): change an entry of the session's
 	// lorebook — `entry` (id | write result | name), `name?`, `content?`,
 	// `fields?` (a patch; null clears a field); out `entryId`;
 	// `effects: 'write'`, no `causesEvent`.
-	"core:outlet/update-lore-entry@1": "1a064e69b9ff51",
+	"core:outlet/update-lore-entry@1": "1b8f899b227ba2", // pr-6 §C-1: `sources` (+ `match`, `bind` on create)
 	// NEW (L2, 2026-09-17): one link between two entries of the session's
 	// lorebook — an entry-ended `narrative_relationships` row, the same edge
 	// the lorebook's own graph draws, which no pipeline could write. `to`
@@ -201,7 +201,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// idempotent (host-side, not hashed). Proven: the snapshot entry with only
 	// those undone (ports `from`/`to`/`label`, no `reverseLinkType`, the old
 	// review fields) hashes back to the old pin. (was "685d35ac8c432")
-	"core:outlet/link-lore-entries@1": "1f418ee9febeaa",
+	"core:outlet/link-lore-entries@1": "147de71fae13c7", // pr-6 §C-1: `sources` (+ `match`, `bind` on create)
 	// Re-projected by 0174: a `media` in-port, so an image can be posted AS a new
 	// message. `attach-image` could not do it — a message created inside a run is
 	// not a valid target for a later node — which left no path at all from a
@@ -240,7 +240,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// another lane's `tableLine`. Additive. (was "648433d37fbc8")
 	// Moved 2026-10-18: 🚧 `kind` in-port (a folio line's kind, `metadata.kind`). Additive. (was "c68faae53ae85")
 	"core:outlet/create-message@1": "8b312519bebc4",
-	"core:outlet/graph-proposal@1": "68c1f10a8eb0c",
+	"core:outlet/graph-proposal@1": "818196d4c3a99", // pr-6 §C-1: `sources` (+ `match`, `bind` on create)
 	// Moved (09-B B4, 2026-09-15): a `thinking` in-port, so the reply's
 	// reasoning trace lands on the row it fills; the `target` port now takes
 	// the placeholder's write result (`write-result@1` is assignable to
@@ -1567,7 +1567,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-23 (rulesets as functions D7, lane A2): the `changes` duty — *Replies carry changes*, off, owner reach; its mode key `reply-changes`. (was "813e35d0b16fc")
 	"core:task/reply-duties@1": "95072a19b7e5b",
 	"core:task/reckoning-duties@1": "1ff656be4784e3",
-	"core:task/sweep-duties@1": "1c9d02b72a380e",
+	// Moved 2026-10-25 (sprint 2 lane I2, pass 7 / R-i): the duty *Notice when the scene moves on* (`sceneMovedOn`, mode key `scene-moved-on`) and the out-port `sceneCheck`. Edited in place. (was "1c9d02b72a380e")
+	"core:task/sweep-duties@1": "1eb9149e0bda84",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
 	// dead `strategy` and `dedup` parameters are gone — the binding read
 	// neither, `strategy` was 0.5's engine choice that wiring replaced, and
@@ -1795,6 +1796,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-18 (owner ruling ★6, P3-1): the `retire` in-port — a new character after a death is a NEW seat, the fallen's retired. `@1` evolves in place. (was "8f8583a68b71d")
 	"core:outlet/set-seat-name@1": "15bb5329e236d5",
 	"core:outlet/set-composer-state@1": "18ea9105b85500",
+	// 🚧 Sprint 2 Phase 0 (supervisor I, 2026-10-25): new — the judged scene check's outlet (pass 7, R-i).
+	"core:outlet/propose-scene-cue@1": "7db9f1b5dab36",
 	// NEW (2026-10-15, owner ruling): a stat configured by a pipeline — one
 	// owner's { owner, slot, config } through `setStatConfig`. 🚧
 	"core:outlet/set-stat-config@1": "a7ec91e849f91",

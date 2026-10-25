@@ -15,9 +15,10 @@
  * dialog names the mode in effect without knowing the rule.
  */
 
-import { and, desc, eq, isNull, like, lt } from "drizzle-orm"
+import { and, desc, eq, like, lt } from "drizzle-orm"
 import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { liveMessageWhere } from "$lib/server/messages/store"
 
 export const ON_REVISION_MODES = ["overwrite", "branch"] as const
 export type OnRevision = (typeof ON_REVISION_MODES)[number]
@@ -92,7 +93,7 @@ export async function messageBefore(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				lt(schema.sessionMessages.id, messageId),
 				// 🚧 The live history (RF fix 5).
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))
@@ -179,8 +180,8 @@ export async function branchForRevision(
 	if (!branched.ok || id === null)
 		return { ok: false, error: branched.error ?? "The session could not be branched." }
 	if (opts.runs?.length) {
-		const { dropTurnWritesElsewhere } = await import("$lib/server/sessions/retakeTurn")
-		await dropTurnWritesElsewhere(db, { sessionId: id, runs: opts.runs, landedBefore: false })
+		const { takeRunWritesElsewhere } = await import("$lib/server/sessions/rewind")
+		await takeRunWritesElsewhere(db, { sessionId: id, runs: opts.runs, unitIds: [], landedBefore: false })
 	}
 	await markRevisedTurn(db, id)
 	return { ok: true, sessionId: id }

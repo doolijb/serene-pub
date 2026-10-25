@@ -14,11 +14,12 @@
  * the push on its own, and a test on the one it built.
  */
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm"
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
 import { isFailedReplySql } from "$lib/server/messages/failedReply"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import {
 	resolveCharacterName,
 	resolvePersonaName
@@ -192,4 +193,25 @@ export async function lastVisibleMessages(
 		}
 	}
 	return lastMessages
+}
+
+/** 🚧 Each session's live message count (rewound rows not counted: `liveMessageWhere()`), one grouped read; a session with none is absent. */
+export async function liveMessageCounts(
+	handle: Db,
+	sessionIds: readonly number[]
+): Promise<Map<number, number>> {
+	const counts = new Map<number, number>()
+	if (sessionIds.length === 0) return counts
+	const rows = await handle
+		.select({ sessionId: schema.sessionMessages.sessionId, n: count() })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				inArray(schema.sessionMessages.sessionId, [...sessionIds]),
+				liveMessageWhere()
+			)
+		)
+		.groupBy(schema.sessionMessages.sessionId)
+	for (const row of rows) counts.set(row.sessionId, Number(row.n))
+	return counts
 }

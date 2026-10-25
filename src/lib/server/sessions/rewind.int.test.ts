@@ -27,6 +27,7 @@
  * And on rows written straight (no model): a group's round is the unit, and
  * a branch's fork is the floor.
  */
+import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -178,8 +179,8 @@ const maraRow = async () =>
 const pierCategory = async () =>
 	((await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId)))[0]!.fields as any).category
 const notesNamed = async (title: string) => {
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const notes = await phantomOf(db as any, s.sessionId)
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const notes = await ownBookOf(db as any, s.sessionId)
 	if (!notes) return []
 	return db
 		.select({ id: schema.lorebookEntries.id })
@@ -253,8 +254,8 @@ async function alsoWrote(runId: string, reply: number, category: string, note: s
 /** The story lane's turn tally, as the session holds it. */
 async function storyTally() {
 	const { readTurnTally } = await import("$lib/server/pipelines/routines/turnTally")
-	const [row] = await db.select({ metadata: schema.sessions.metadata }).from(schema.sessions).where(eq(schema.sessions.id, s.sessionId))
-	return readTurnTally(row?.metadata).lanes.main
+	const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, s.sessionId))
+	return readTurnTally(coreAnnexIn(row?.annex)).lanes.main
 }
 
 async function back() {
@@ -453,7 +454,7 @@ describe("🚧 RF fix 5: Back · Forward", () => {
 		const got: any = await sessionsGetHandler.handler(fakeSocket(ownerId), { id: s.sessionId } as any, emit)
 		const ids = (got.session.sessionMessages as Array<{ id: number }>).map((m) => m.id)
 		for (const id of [t.one.person.id, t.one.reply.id, t.two.person.id, t.two.reply.id]) expect(ids).not.toContain(id)
-		expect(got.session.rewind).toEqual({ ahead: 2, back: "There is nothing to go back to yet.", forward: null })
+		expect(got.session.rewind).toEqual({ ahead: 2, back: "There is nothing to go back to yet.", forward: null, regenerate: "Nothing has been written yet, so there is no turn to regenerate." })
 		const { forwardStackRows } = await import("$lib/server/sessions/rewind")
 		const stack = await forwardStackRows(db as any, s.sessionId)
 		expect(stack.map((r) => r.ordinal)).toEqual([2, 2, 1, 1])
@@ -539,16 +540,18 @@ describe("🚧 the unit Back takes, on rows written straight", () => {
 				userId: ownerId,
 				isGroup: true,
 				name,
-				metadata: {
-					turnOrder: {
-						v: 1,
-						order: [],
-						candidates: [a!, b!].map((c, position) => ({ ref: `character:${c.id}`, kind: "character", name: c.name, position })),
-						basedOnAt: 1,
-						computedAt: 1,
-						runId: null,
-						event: null,
-						strategy: null
+				annex: {
+					core: {
+						turnOrder: {
+							v: 1,
+							order: [],
+							candidates: [a!, b!].map((c, position) => ({ ref: `character:${c.id}`, kind: "character", name: c.name, position })),
+							basedOnAt: 1,
+							computedAt: 1,
+							runId: null,
+							event: null,
+							strategy: null
+						}
 					}
 				}
 			} as any)
@@ -643,4 +646,96 @@ describe("🚧 the unit Back takes, on rows written straight", () => {
 		expect(await rewindTurn(db as any, { sessionId: g.session.id, userId: guest })).toEqual({ ok: false, error: REWIND_REFUSALS.notOwner })
 		expect(await forwardTurn(db as any, { sessionId: g.session.id, userId: guest })).toEqual({ ok: false, error: REWIND_REFUSALS.notOwner })
 	}, 120_000)
+})
+
+describe("🚧 pr-6 R-c: one turn reader — a Lair planned turn", () => {
+	/** A Lair-shaped turn written straight: GM line, plan (sanctum), roll form, dice, two planned replies and a waiting player's line. */
+	async function plannedTurn(name: string) {
+		const [a, b] = await db
+			.insert(schema.characters)
+			.values(["Brannoc", "Verity"].map((n) => ({ userId: ownerId, name: `${n} ${name}`, description: n, isPersona: false })))
+			.returning()
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId: ownerId, isGroup: true, name } as any)
+			.returning()
+		const { insertLegacy } = await import("$lib/server/messages/store")
+		const sessionId = session!.id
+		const run = async (label: string, created: number[] = []) => {
+			const [r] = await db
+				.insert(schema.pipelineRuns)
+				.values({
+					runId: `r-${name}-${label}`,
+					specSlug: "core:spec/lair-reply",
+					specVersion: "1",
+					sessionId,
+					userId: ownerId,
+					outcome: "ok",
+					triggerSource: "test",
+					seed: "s",
+					startedAt: new Date(),
+					endedAt: new Date(),
+					receipt: { nodes: [{ kind: "inlet", output: { via: "pick" } }] }
+				} as any)
+				.returning()
+			return r!
+		}
+		const made = async (r: { id: number }, ids: number[]) => {
+			let seq = 0
+			for (const id of ids)
+				await db.insert(schema.pipelineRunArtifacts).values({ runId: r.id, seq: seq++, kind: "message", entityId: id, action: "created" })
+		}
+		const row = (values: Record<string, unknown>) =>
+			insertLegacy(db as any, { sessionId, userId: ownerId, ...values } as any)
+		const gm = await row({ role: "user", content: "We go in." })
+		const R = await run("plan")
+		const plan = await row({ role: "assistant", channel: "sanctum", content: "The plan." })
+		const roll = await row({ role: "assistant", content: "Roll for it." })
+		await made(R, [plan.id, roll.id])
+		const rDice = await run("dice")
+		const dice = await row({ role: "assistant", content: "A 14.", metadata: { answersForm: { messageId: roll.id } } })
+		await made(rDice, [dice.id])
+		const r1 = await run("brannoc")
+		const brannoc = await row({ role: "assistant", characterId: a!.id, content: "Brannoc.", metadata: { planRowId: plan.id } })
+		await made(r1, [brannoc.id])
+		const rook = await row({ role: "user", content: "I hold the lamp.", metadata: { speaker: "player-seat:2" } })
+		const r2 = await run("verity")
+		const verity = await row({ role: "assistant", characterId: b!.id, content: "Verity.", metadata: { planRowId: plan.id } })
+		await made(r2, [verity.id])
+		return { sessionId, gm, plan, roll, dice, brannoc, rook, verity }
+	}
+
+	it("Back takes all seven rows, Regenerate the five that are not a person's, and Forward brings Back's seven home", async () => {
+		const t = await plannedTurn("planned")
+		const { turnUnitOf, rewindTurn, forwardTurn } = await import("$lib/server/sessions/rewind")
+		const back = await turnUnitOf(db as any, t.sessionId, { includePersonLines: true })
+		expect(back.ok).toBe(true)
+		if (!back.ok) return
+		const all = [t.gm, t.plan, t.roll, t.dice, t.brannoc, t.rook, t.verity].map((r) => r.id)
+		expect(back.unit.ids).toEqual(all)
+		const regen = await turnUnitOf(db as any, t.sessionId, { includePersonLines: false })
+		expect(regen.ok).toBe(true)
+		if (!regen.ok) return
+		expect(regen.unit.ids).toEqual([t.plan, t.roll, t.dice, t.brannoc, t.verity].map((r) => r.id))
+		expect(regen.unit.planRowId).toBe(t.plan.id)
+		expect(regen.unit.entry).not.toBeNull()
+		expect(regen.unit.run?.specSlug).toBe("core:spec/lair-reply")
+
+		const taken = await rewindTurn(db as any, { sessionId: t.sessionId, userId: ownerId })
+		expect(taken).toMatchObject({ ok: true })
+		const gone = await db
+			.select({ id: schema.sessionMessages.id, ordinal: schema.sessionMessages.rewindOrdinal })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, t.sessionId))
+		expect(gone.every((r) => r.ordinal !== null)).toBe(true)
+		const forward = await forwardTurn(db as any, { sessionId: t.sessionId, userId: ownerId })
+		expect(forward).toMatchObject({ ok: true })
+		const home = await db
+			.select({ id: schema.sessionMessages.id, ordinal: schema.sessionMessages.rewindOrdinal })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, t.sessionId))
+			.orderBy(asc(schema.sessionMessages.id))
+		expect(home.map((r) => r.id)).toEqual(all)
+		expect(home.every((r) => r.ordinal === null)).toBe(true)
+	}, 60_000)
 })

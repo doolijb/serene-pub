@@ -79,6 +79,7 @@
  */
 
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import {
 	getAttributeSheet,
@@ -662,10 +663,10 @@ async function locationsOf(
 	const out: LocationLink[] = lorebookId
 		? await placesOnReading(db, lorebookId, reading ?? MAIN_HEAD, "session")
 		: []
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const phantom = await phantomOf(db, sessionId)
-	if (phantom && phantom.id !== lorebookId)
-		for (const place of await placesOnReading(db, phantom.id, MAIN_HEAD, "session"))
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const ownBook = await ownBookOf(db, sessionId)
+	if (ownBook && ownBook.id !== lorebookId)
+		for (const place of await placesOnReading(db, ownBook.id, MAIN_HEAD, "session"))
 			out.push({ ...place, sessionOnly: true })
 	return out
 }
@@ -2025,7 +2026,7 @@ async function whoFor(
 			and(
 				eq(schema.messages.sessionId, sessionId),
 				// 🚧 The live history (RF fix 5): a rewound row spoke in no history.
-				sql`not exists (select 1 from ${schema.sessionMessages} sm where sm.id = ${schema.messages.id} and sm.rewind_ordinal is not null)`
+				liveMessageWhere(schema.messages.rewindOrdinal)
 			)
 		)
 		.orderBy(desc(schema.messages.id))

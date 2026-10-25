@@ -7,23 +7,18 @@ import { and, eq, inArray, notInArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { invalidateRegistrations } from "$lib/server/pipelines/registrations/resolve"
 import {
-	scopeColumns,
+	registrationScopeWhere,
 	type RegistrationInsert,
 	type RegistrationRow,
 	type RegistrationScope
 } from "$lib/server/pipelines/registrations/rows"
-
-const scopeWhere = (scope: RegistrationScope) => {
-	const c = scopeColumns(scope)
-	return and(eq(schema.registrations.scopeKind, c.scopeKind), eq(schema.registrations.scopeRef, c.scopeRef))
-}
 
 /** The rows at one scope, oldest first. */
 export async function rowsAt(db: Db, scope: RegistrationScope): Promise<RegistrationRow[]> {
 	return (await db
 		.select()
 		.from(schema.registrations)
-		.where(scopeWhere(scope))
+		.where(registrationScopeWhere(scope))
 		.orderBy(schema.registrations.id)) as RegistrationRow[]
 }
 
@@ -39,6 +34,7 @@ const comparable = (r: Partial<RegistrationInsert>) =>
 		r.order ?? null,
 		r.mode ?? null,
 		r.allowStacking ?? null,
+		r.minAge ?? null,
 		r.caps ?? null,
 		!!r.dropped,
 		r.origin,
@@ -111,15 +107,15 @@ export async function upsertRow(db: Db, row: RegistrationInsert): Promise<void> 
 
 /** Remove the row under `key` at `scope`, if there is one. */
 export async function deleteRow(db: Db, scope: RegistrationScope, key: string): Promise<void> {
-	await db.delete(schema.registrations).where(and(scopeWhere(scope), eq(schema.registrations.key, key)))
+	await db.delete(schema.registrations).where(and(registrationScopeWhere(scope), eq(schema.registrations.key, key)))
 	invalidateRegistrations()
 }
 
 /** Remove every row at `scope` except those of `keepOrigins`. */
 export async function clearScope(db: Db, scope: RegistrationScope, keepOrigins: readonly string[] = []): Promise<void> {
 	const where = keepOrigins.length
-		? and(scopeWhere(scope), notInArray(schema.registrations.origin, [...keepOrigins]))
-		: scopeWhere(scope)
+		? and(registrationScopeWhere(scope), notInArray(schema.registrations.origin, [...keepOrigins]))
+		: registrationScopeWhere(scope)
 	await db.delete(schema.registrations).where(where)
 	invalidateRegistrations()
 }

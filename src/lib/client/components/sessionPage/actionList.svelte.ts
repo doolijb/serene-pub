@@ -193,7 +193,7 @@ export function createActionList(d: ActionListDeps) {
 		for (const [holds, reason] of busy)
 			if (holds) return { disabled: true, reason }
 		return paletteRowState(chipVerdict(t), {
-			generating: !session || !!lastMessage?.isGenerating,
+			generating: d.data.generating,
 			newest: newestItem,
 			// The reason for a failed `item.*` predicate, in the viewer's
 			// language: the app's own `statusText`, as `chipVerdict` resolves
@@ -210,7 +210,7 @@ export function createActionList(d: ActionListDeps) {
 	 * row: its `item.*` predicates are per message, and the menu says those.
 	 */
 	const legendVerdict: LegendVerdict = (t, venue) => {
-		const generating = !session || !!lastMessage?.isGenerating
+		const generating = d.data.generating
 		if (venue === "composer")
 			return paletteRowState(chipVerdict(t), {
 				generating,

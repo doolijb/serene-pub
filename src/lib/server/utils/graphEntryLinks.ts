@@ -95,9 +95,9 @@ export async function readGraphEntryLinks(
 	// 🚧 The union (PLAN-rulesets §26): the attached book on the session's
 	// reading, then the session's own notes at their head — the ways between
 	// the notes' places read as the book's do. Null only with neither.
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const phantom = await phantomOf(db, sessionId)
-	if (!session?.lorebookId && !phantom) return null
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const ownBook = await ownBookOf(db, sessionId)
+	if (!session?.lorebookId && !ownBook) return null
 	const out: GraphEntryLink[] = []
 	if (session?.lorebookId) {
 		const lorebookId = session.lorebookId
@@ -107,9 +107,9 @@ export async function readGraphEntryLinks(
 		}
 		out.push(...(await bookEntryLinks(db, lorebookId, reading)))
 	}
-	if (phantom && phantom.id !== session?.lorebookId)
+	if (ownBook && ownBook.id !== session?.lorebookId)
 		out.push(
-			...(await bookEntryLinks(db, phantom.id, { lorebookId: phantom.id, ...MAIN_HEAD }))
+			...(await bookEntryLinks(db, ownBook.id, { lorebookId: ownBook.id, ...MAIN_HEAD }))
 		)
 	return out
 }

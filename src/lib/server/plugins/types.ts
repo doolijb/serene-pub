@@ -9,11 +9,7 @@
  * it, which is what makes the security/speed dial safe to flip.
  */
 
-import type {
-	PermissionConfig,
-	PluginRowChange,
-	PluginRowSnapshotEntry
-} from "./storageHost"
+import type { PermissionConfig } from "./storageHost"
 import type { HookCtxKind } from "./hookCtx"
 
 /** Which sandbox this is. Internal — never surfaced to a hook. */
@@ -65,21 +61,6 @@ export interface InvokeOptions {
 	 */
 	jobId?: string
 	/**
-	 * This plugin's rows, as the host read them for this call.
-	 *
-	 * A sandbox is a *transport*: it carries the snapshot in and the diff back
-	 * out, and never touches a database. It has to be this way round — the
-	 * sandbox runs in a worker with no database handle, and QuickJS (the
-	 * default backend) has no asynchronous capability bridge to reach one, so a
-	 * row store the guest called across the boundary would work on SES and
-	 * throw on the backend most plugins actually run on. See `storageHost.ts`.
-	 *
-	 * Absent when the plugin has no storage grant, or when the caller keeps no
-	 * rows (the conformance probe, most tests) — the store then starts empty
-	 * and behaves exactly as it would for a plugin with none.
-	 */
-	rows?: PluginRowSnapshotEntry[]
-	/**
 	 * The secret values this call may use, for the fetch bridge alone (R63):
 	 * it fills a secret handle in at the network boundary. Never part of the
 	 * guest's input; never reaches the guest.
@@ -94,17 +75,6 @@ export interface HookRunSuccess {
 	logs: string[]
 	durationMs: number
 	backend: SandboxKind
-	/**
-	 * What the hook decided about its rows: one collapsed op per key it
-	 * touched, for the caller to commit.
-	 *
-	 * Present **only** on a call that returned *and* whose file transaction
-	 * committed — the two are decided together inside the sandbox, so a hook
-	 * that was killed, timed out or threw carries nothing here and there is
-	 * nothing for a caller to accidentally apply. `SandboxManager` consumes it
-	 * and strips it; no caller above the manager ever sees it.
-	 */
-	rowChanges?: PluginRowChange[]
 }
 
 export interface HookRunFailure {

@@ -480,6 +480,20 @@ describe("the live row and the session list", () => {
 		).toBeUndefined()
 	})
 
+	it("every run-status frame names the run's kind — the reply's, the end frame too", async () => {
+		const sessionId = await makeChatSession("kind")
+		broadcasts.length = 0
+		const res: any = await trigger(sessionId)
+		expect(res?.error, res?.error).toBeUndefined()
+		const frames = broadcasts.filter(
+			(b) =>
+				b.sessionId === sessionId && b.event === "sessions:runStatus"
+		)
+		expect(frames.length).toBeGreaterThan(0)
+		for (const f of frames) expect(f.payload.kind).toBe("reply")
+		expect(frames[frames.length - 1]!.payload.status).toBeNull()
+	}, 60_000)
+
 	it("the progress card's frames carry the status too", async () => {
 		const sessionId = await makeChatSession("card")
 		events.length = 0

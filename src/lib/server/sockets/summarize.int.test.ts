@@ -83,7 +83,11 @@ vi.mock("$lib/server/db", async () => {
 beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
-}, 60_000)
+	// The summary runs the pipeline the session's registration names, so the
+	// core genres' registrations have to be in the test database.
+	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	await bootstrapPipelines(testDb)
+}, 120_000)
 
 async function makeUser(username: string) {
 	const { createTestUser } = await import("$lib/server/utils/testDb")

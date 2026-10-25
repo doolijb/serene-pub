@@ -16,6 +16,25 @@ import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import { assertOwnedBook } from "$lib/server/utils/ownedBook"
 import { strictRulesRefusal } from "$lib/server/rulesets/bookRules"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
+import { loreSourceIdsOf } from "$lib/server/pipelines/runtime/loreSources"
+
+/**
+ * 🚧 pr-6 (B §B-7, A11): the summarize actions' identities, built once — the
+ * spec builders are not free. The host resolves the pipeline through the
+ * session's registration on the action, never by a spec id.
+ */
+let summarizeIdentities: { world: string; character: string } | undefined
+async function summarizeActionIdentities(): Promise<{ world: string; character: string }> {
+	if (!summarizeIdentities) {
+		const { summarizeWorldSpec, summarizeCharacterSpec } = await import("@serene-pub/core-catalog")
+		summarizeIdentities = {
+			world: summarizeWorldSpec().actions["summarize-world"].identity,
+			character: summarizeCharacterSpec().actions["summarize-character"].identity
+		}
+	}
+	return summarizeIdentities
+}
 
 /** The columns that say where a session reads its book, as one row has them. */
 type SessionLine = {
@@ -163,14 +182,9 @@ export const sessionsSummarizeHandler: Handler<
 		const off = await loreWritesOffRefusal(db, sessionId)
 		if (off) throw new Error(off)
 
-		// Guard: session must have a lorebook attached
-		if (!session.lorebookId) {
-			emitToUser("sessions:summarize:error", {
-				reason: "no_lorebook",
-				error: "This session reads no lorebook. Read one into this session, or create one, first."
-			})
-			return null as any
-		}
+		// The summary's book: the attached lorebook, else the session's own book.
+		const summaryBookId = await attachedOrOwnBookOf(db, sessionId)
+		if (summaryBookId == null) throw new Error("Session not found or access denied.")
 
 		// Register the activity BEFORE the lock. The lock is FIFO, so a
 		// summarize started during an in-flight generation waits that
@@ -186,7 +200,7 @@ export const sessionsSummarizeHandler: Handler<
 				sessionId,
 				sessionLabel: session.name ?? undefined,
 				loreType,
-				lorebookId: session.lorebookId!,
+				lorebookId: summaryBookId,
 				topic: topic || undefined
 			},
 			abortController
@@ -272,13 +286,26 @@ export const sessionsSummarizeHandler: Handler<
 				const { runSpec } = await import(
 					"$lib/server/pipelines/runtime/runTurn"
 				)
-				const specsModule = await import(
-					"$lib/server/pipelines/specs/summarize"
+				// The pipeline is the session's registration on the summarize
+				// action (A11) — resolved like deletion is, never by a spec id.
+				const { resolveSubjectVerdict, STANDARD_GENRE_ID } = await import(
+					"$lib/server/pipelines/entities/sessionGenres"
 				)
-				const specId =
-					loreType === "world"
-						? specsModule.SUMMARIZE_WORLD_SPEC_ID
-						: specsModule.SUMMARIZE_CHARACTER_SPEC_ID
+				const identities = await summarizeActionIdentities()
+				const routed = await resolveSubjectVerdict(
+					db,
+					session.genreId ?? STANDARD_GENRE_ID,
+					loreType === "world" ? identities.world : identities.character,
+					{ sessionId }
+				)
+				if (!routed.spec) {
+					return failRun(
+						loreType === "world"
+							? "This session's genre registers no world summary."
+							: "This session's genre registers no character summary."
+					)
+				}
+				const specId = routed.spec
 
 				// Coarse progress from step labels. The pipeline owns batching,
 				// so the total is not known up front; the count ticking upward
@@ -306,6 +333,11 @@ export const sessionsSummarizeHandler: Handler<
 					sessionId,
 					userId,
 					specId,
+					registration: {
+						family: "action",
+						key: routed.registrationKey!,
+						minAge: routed.registrationMinAge ?? 0
+					},
 					// So the status relay pushes `sessions:runStatus` beside
 					// the modal's own progress frame (R-19) — a summarize run
 					// announces like every other run does. No live row here
@@ -387,6 +419,8 @@ export const sessionsSummarizeHandler: Handler<
 				const nodeOut = (key: string) =>
 					(receipt.nodes.find((n: any) => n.nodeKey === key) as any)
 						?.output
+				const saveInput = (receipt.nodes.find((n: any) => n.nodeKey === "save") as any)?.input
+				const sourceIds = loreSourceIdsOf(saveInput?.sources)
 				const content: string | undefined = nodeOut("synth")?.content
 				const entryName: string | undefined = nodeOut("naming")?.name
 
@@ -416,7 +450,7 @@ export const sessionsSummarizeHandler: Handler<
 					content,
 					name: entryName,
 					raw: content,
-					lorebookId: session.lorebookId!,
+					lorebookId: summaryBookId,
 					batchCount: receipt.nodes.filter((n: any) =>
 						String(n.typeId ?? "").startsWith(
 							"core:oracle/summarize-batch"
@@ -439,7 +473,9 @@ export const sessionsSummarizeHandler: Handler<
 						content: response.content,
 						name: response.name,
 						raw: response.raw,
-						lorebookBindingCharacterId: bindCharacterId
+						lorebookBindingCharacterId: bindCharacterId,
+						sourceIds,
+						runId: receipt.runId
 					}
 				})
 
@@ -553,6 +589,13 @@ export const sessionsSetLorebookHandler: Handler<
 				.returning()
 			return row
 		})
+
+		// The session's own book follows its book (`overlay_of`, and the
+		// Rules), the resync `ownBookFor` keeps.
+		{
+			const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+			await ownBookFor(db as unknown as Db, sessionId)
+		}
 
 		// Attaching a book to a session is one of the two ways the two meet,
 		// and the cast arrives on its own from either (ruling 2026-09-12).

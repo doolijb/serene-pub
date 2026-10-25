@@ -13,7 +13,7 @@
  * id is unguessable, but unguessable is not an access rule.
  */
 
-import type { StatusText } from "@serene-pub/sdk"
+import type { RunKind, StatusText } from "@serene-pub/sdk"
 
 /**
  * What a run is FOR, as the message's own Stop reads it.
@@ -35,7 +35,7 @@ import type { StatusText } from "@serene-pub/sdk"
  *    never makes the session "generating" — a person's work goes ahead of
  *    it, never behind it.
  */
-export type RunKind = "reply" | "action" | "maintenance" | "routine"
+export type { RunKind } from "@serene-pub/sdk"
 
 /**
  * 🚧 The trigger family a registered run answers to (LS2): a reply is the
@@ -107,6 +107,28 @@ export interface RunHandle {
 }
 
 const runs = new Map<string, RunHandle>()
+
+/** 🚧 The kind of a registered run in flight (sprint 2, G3); undefined when none is registered under the id (a preview, a test). */
+export function runKindOf(runId: string): RunKind | undefined {
+	return runs.get(runId)?.kind
+}
+
+/**
+ * 🚧 The kind a trigger family runs as, for a run the registry does not hold (sprint 2, G3): `event` → `reply`,
+ * `action` → `action`, `routine` → `routine`, anything else → `maintenance`. The inverse of `familyOfKind`.
+ */
+export function runKindOfFamily(family: string): RunKind {
+	switch (family) {
+		case "event":
+			return "reply"
+		case "action":
+			return "action"
+		case "routine":
+			return "routine"
+		default:
+			return "maintenance"
+	}
+}
 
 /**
  * Somebody who needs to know when a run stops — and there is exactly one:

@@ -1,6 +1,6 @@
 /**
  * The Sessions sidebar's groups — **Your turn**, **Recent**, **Older** — and
- * the one test behind the first of them.
+ * Archived last (pr-6 R-k) — and the one test behind the first of them.
  *
  * Pure and structural, so the rule is testable without a component and the
  * home page can adopt it: the home's "N sessions waiting on you" line computes
@@ -8,6 +8,7 @@
  * must never disagree about which sessions owe the reader a line.
  */
 import { lastActivityAt } from "$lib/client/utils/timeAgo"
+import { SESSION_ARCHIVE_LABELS } from "$lib/shared/sessions/archive"
 
 /** The fields of a session list row the grouping reads. */
 export interface GroupableSession {
@@ -18,6 +19,8 @@ export interface GroupableSession {
 		revisedTurn?: boolean | null
 	} | null
 	updatedAt?: string | Date | null
+	/** 🚧 pr-6 (R-k): set once the session is archived. */
+	archivedAt?: string | Date | null
 }
 
 /**
@@ -33,13 +36,15 @@ export function isAwaitingUser(
 	session: GroupableSession,
 	running = false
 ): boolean {
+	// An archived session owes nobody a line (R-k).
+	if (session.archivedAt) return false
 	const last = session.lastMessage
 	// A revision branch's last line is the reader's own, but the turn after
 	// it was taken back: nobody else owes a line.
 	return !!last && (!last.isUser || !!last.revisedTurn) && !running
 }
 
-export type SessionGroupKey = "yourTurn" | "recent" | "older"
+export type SessionGroupKey = "yourTurn" | "recent" | "older" | "archived"
 
 export interface SessionGroup<T> {
 	key: SessionGroupKey
@@ -53,7 +58,8 @@ export const RECENT_WINDOW_MS = 7 * 86_400_000
 const GROUP_LABELS: Record<SessionGroupKey, string> = {
 	yourTurn: "Your turn",
 	recent: "Recent",
-	older: "Older"
+	older: "Older",
+	archived: SESSION_ARCHIVE_LABELS.group
 }
 
 /**
@@ -80,17 +86,20 @@ export function groupSessions<T extends GroupableSession>(
 	const byKey: Record<SessionGroupKey, T[]> = {
 		yourTurn: [],
 		recent: [],
-		older: []
+		older: [],
+		archived: []
 	}
 	for (const row of rows) {
-		const key: SessionGroupKey = isAwaitingUser(row, isRunning(row))
-			? "yourTurn"
-			: lastActivityAt(row) >= now - RECENT_WINDOW_MS
-				? "recent"
-				: "older"
+		const key: SessionGroupKey = row.archivedAt
+			? "archived"
+			: isAwaitingUser(row, isRunning(row))
+				? "yourTurn"
+				: lastActivityAt(row) >= now - RECENT_WINDOW_MS
+					? "recent"
+					: "older"
 		byKey[key].push(row)
 	}
-	return (["yourTurn", "recent", "older"] as const)
+	return (["yourTurn", "recent", "older", "archived"] as const)
 		.map((key) => ({ key, label: GROUP_LABELS[key], rows: byKey[key] }))
 		.filter((group) => group.rows.length > 0)
 }

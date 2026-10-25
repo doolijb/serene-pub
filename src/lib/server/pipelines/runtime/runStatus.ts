@@ -15,7 +15,9 @@
  *    frame the stream uses — where the retired `generationStage` enum went.
  *  · **the session list**: the registry remembers the run's current status
  *    so `sessions:list` can carry it, and `sessions:runStatus` announces each
- *    change to the session's users; `null` when the run ends.
+ *    change to the session's users; `null` when the run ends. Every frame
+ *    names the run's kind (`RunStatusFrame.kind`), so the page sees what the
+ *    busy door sees.
  *  · **the caller's own seam** (`SpecRunRequest.onStatus`) — the progress
  *    card frame a reply or a triggered function emits, handed the FILLED
  *    text so no caller fills a variable a second way.
@@ -49,6 +51,7 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 import { setStatus as setRegistryStatus } from "$lib/server/pipelines/runtime/runRegistry"
+import type { RunKind } from "$lib/server/pipelines/runtime/runRegistry"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { LLMQueueStatus } from "$lib/server/utils/llmQueue"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
@@ -102,6 +105,8 @@ export interface RunStatusFrame {
 	 * that is not a reply.
 	 */
 	reply?: { channel: string }
+	/** 🚧 What the run is FOR — the registry's own kind (`RunHandle.kind`), the fact the busy door reads. On every frame, the end frame too (sprint 2, G3). */
+	kind: RunKind
 }
 
 export interface StatusRelayOptions {
@@ -135,6 +140,8 @@ export interface StatusRelayOptions {
 	 * (`RunStatusFrame.reply`). The reply road's (`runTurn`); absent elsewhere.
 	 */
 	reply?: { channel: string }
+	/** 🚧 The run's kind, said on every frame (sprint 2, G3). */
+	kind: RunKind
 }
 
 export interface StatusRelay {
@@ -316,6 +323,7 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 				sessionId,
 				runId,
 				status: filled,
+				kind: opts.kind,
 				...(opts.reply ? { reply: opts.reply } : {})
 			} satisfies RunStatusFrame).catch(() => {})
 		try {
@@ -340,6 +348,7 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 					sessionId,
 					runId,
 					status: null,
+					kind: opts.kind,
 					...(opts.reply ? { reply: opts.reply } : {})
 				} satisfies RunStatusFrame).catch(() => {})
 		})

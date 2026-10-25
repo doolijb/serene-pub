@@ -292,7 +292,7 @@ describe("oneClickStart", () => {
  * lists land, a genre is chosen, and `canStart` answers. ⏳ A genre that
  * still says `lorebook: "required"` (retired RF fix 2, 2026-10-23) reads as
  * optional: a session may always start without a book — its own (the
- * phantom lorebook) is its world.
+ * own book) is its world.
  */
 describe("StartSessionFlow.canStart", () => {
 	const LAIR = "core:genre/lair" // the genre that once required a lorebook (was Adventure, retired 2026-10-19)

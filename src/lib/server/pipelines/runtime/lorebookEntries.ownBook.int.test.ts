@@ -1,6 +1,6 @@
 /**
  * `core:query/lorebook-entries@1` reads the session's books (PLAN-rulesets
- * §26): its attached lorebook, then its own notes (the phantom) — the union,
+ * §26): its attached lorebook, then its own notes (the own book) — the union,
  * the notes' rows marked `sessionOnly: true`. A session with no lorebook but
  * notes lists its notes; the rooms listing and "From here:" are built on it.
  */
@@ -13,14 +13,14 @@ import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { entryInsert } from "$lib/server/utils/lorebookEntries"
 import { createHost } from "$lib/server/pipelines/runtime/host"
-import { phantomLorebookFor } from "$lib/server/lorebooks/phantom"
+import { ownBookFor } from "$lib/server/lorebooks/ownBook"
 import { fromHereLines } from "$lib/server/pipelines/prompt/adventureContext"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	const db = await createTestDb()
-	return { db, getCryptoSecretKey: () => "phantom-entries-secret" }
+	return { db, getCryptoSecretKey: () => "ownBook-entries-secret" }
 })
 
 let db: TestDb
@@ -70,14 +70,14 @@ const place = async (lorebookId: number, name: string) => {
 
 beforeAll(async () => {
 	process.env.SERENE_PUB_DATA_DIR = await fs.mkdtemp(
-		path.join(os.tmpdir(), "serene-pub-phantom-entries-")
+		path.join(os.tmpdir(), "serene-pub-ownBook-entries-")
 	)
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
 
 	const [user] = await db
 		.insert(schema.users)
-		.values({ username: "phantom-entries", isAdmin: false })
+		.values({ username: "ownBook-entries", isAdmin: false })
 		.returning()
 	userId = user!.id
 
@@ -87,7 +87,7 @@ beforeAll(async () => {
 		.values({ userId, isGroup: false, name: "Bare" })
 		.returning()
 	bare = s1!.id
-	const notes1 = await phantomLorebookFor(db as any, bare)
+	const notes1 = await ownBookFor(db as any, bare)
 	await place(notes1.id, "The Lonely Shed")
 
 	// A lorebook, and notes over it.
@@ -101,7 +101,7 @@ beforeAll(async () => {
 		.values({ userId, isGroup: false, name: "Kept", lorebookId: book!.id })
 		.returning()
 	attached = s2!.id
-	const notes2 = await phantomLorebookFor(db as any, attached)
+	const notes2 = await ownBookFor(db as any, attached)
 	await place(notes2.id, "The Hidden Cellar")
 	await place(notes2.id, "The Root Tunnel")
 	await db.insert(schema.narrativeRelationships).values({

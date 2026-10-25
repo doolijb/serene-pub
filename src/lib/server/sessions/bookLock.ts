@@ -4,19 +4,24 @@
  * chosen, switched or removed — and a book taken before play also gives the
  * session its Rules, as choosing it at creation does.
  *
- * Why: a session's notes (the phantom) are written against the book they
- * overlay. Moving them onto another book (as `phantomLorebookFor` would on a
- * switch) lays one book's changes over a book they were never made against.
+ * ⚠ The predicate (`playHasWritten`) is the 2026-10-21 lock, kept as the
+ * interim of B-Q1 (pr-6): when the lock bites is an open owner question.
+ *
+ * Why: a session's own book is written against the book it overlays. Moving
+ * it onto another book (as `ownBookFor` would on a switch) lays one book's
+ * changes over a book they were never made against.
  *
  * **Play has written** = a message that is not a greeting, on any channel, or
- * anything in the session's notes. Greetings do not count: a session posts
+ * anything in the session's own book. Greetings do not count: a session posts
  * them when it is made, before anyone has played.
  *
- * The refusals are worded for what the person can do next (ruling 7).
+ * The refusals are worded for what the person can do next, and offer Share as
+ * a lorebook; their two sentences are the shared module's.
  */
 import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { phantomOf } from "$lib/server/lorebooks/phantom"
+import { ownBookOf } from "$lib/server/lorebooks/ownBook"
+import { NOTES_KEEP_THE_WORLD, bookFixedSentence } from "$lib/shared/lorebooks/sessionNotes"
 
 /** The session has a line of play, or its notes hold something. */
 export async function playHasWritten(db: Db, sessionId: number): Promise<boolean> {
@@ -32,7 +37,7 @@ export async function playHasWritten(db: Db, sessionId: number): Promise<boolean
 		)
 		.limit(1)
 	if (line) return true
-	const notes = await phantomOf(db, sessionId)
+	const notes = await ownBookOf(db, sessionId)
 	if (!notes) return false
 	const [entry] = await db
 		.select({ id: schema.lorebookEntries.id })
@@ -48,14 +53,7 @@ export async function playHasWritten(db: Db, sessionId: number): Promise<boolean
 	return !!member
 }
 
-/** Said when a session that reads a book is asked to read another, or none. */
-export function bookFixedSentence(bookName: string): string {
-	return `This story is underway with ${bookName}, so it keeps reading it. Start a new session to read another book.`
-}
-
-/** Said when a session with no book, already under way, is asked to read one. */
-export const NOTES_KEEP_THE_WORLD =
-	"This story is underway in its own notes. Make them a lorebook to keep them and build on them."
+export { NOTES_KEEP_THE_WORLD, bookFixedSentence } from "$lib/shared/lorebooks/sessionNotes"
 
 /**
  * Why this session may not move from its book to `nextLorebookId`, or null

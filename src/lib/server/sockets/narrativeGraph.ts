@@ -3789,6 +3789,15 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 			.update(schema.narrativeRelationships)
 			.set(fields)
 			.where(eq(schema.narrativeRelationships.id, params.relationship.id))
+		// A person's edit settles the fields' standing imprints at once (pr-6 A3).
+		{
+			const { markImprintsKept } = await import("$lib/server/lorebooks/imprints")
+			await markImprintsKept(db, {
+				subjectKind: "relationship",
+				subjectId: params.relationship.id,
+				fields: Object.keys(fields)
+			})
+		}
 
 		const [updated] = await db
 			.select()

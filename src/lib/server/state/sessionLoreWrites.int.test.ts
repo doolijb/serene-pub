@@ -308,13 +308,13 @@ describe("the mode decides what an automatic write does", () => {
 		expect(full.rows[0]!.historyEntryId).toBe(full.w.forkY3.id)
 
 		const review = await record("review")
-		expect(review.report).toMatchObject({ recorded: true, mode: "review", route: "phantom", proposed: 0 })
+		expect(review.report).toMatchObject({ recorded: true, mode: "review", route: "own-book", proposed: 0 })
 		expect(review.report.lorebookId).not.toBe(review.w.book.id)
 		expect(review.rows).toHaveLength(0)
 		expect(review.proposals).toHaveLength(0)
 
 		const off = await record("off")
-		expect(off.report).toMatchObject({ recorded: true, mode: "off", route: "phantom", proposed: 0 })
+		expect(off.report).toMatchObject({ recorded: true, mode: "off", route: "own-book", proposed: 0 })
 		expect(off.rows).toHaveLength(0)
 		expect(off.proposals).toHaveLength(0)
 	})
@@ -551,7 +551,7 @@ describe("the review round", () => {
 		const { recordToTimeline } = await import("$lib/server/state/durable")
 		const report = await recordToTimeline(testDb as unknown as Db, w.session.id, { reason: "scene" })
 		expect(report.proposed).toBe(0)
-		expect(report.route).toBe("phantom")
+		expect(report.route).toBe("own-book")
 		expect(await proposalsOf(w)).toHaveLength(0)
 		const rows = await testDb
 			.select()

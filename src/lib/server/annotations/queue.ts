@@ -59,6 +59,7 @@
  */
 
 import { and, asc, desc, eq, sql, notExists } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
 import {
@@ -80,6 +81,7 @@ import {
 	type AnnotationVocabulary
 } from "./index"
 import { nerBroker } from "$lib/server/ner/broker"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 
 // db is the global Db — see db/types.d.ts
 
@@ -172,6 +174,7 @@ const entryNeedsAnnotation = (db: Db, gazetteerHash: string) =>
 const messageNeedsAnnotation = (db: Db, gazetteerHash: string) =>
 	and(
 		eq(schema.sessionMessages.isGenerating, false),
+		liveMessageWhere(schema.messages.rewindOrdinal),
 		notExists(
 			db
 				.select({ _: sql`1` })
@@ -369,7 +372,8 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 				const message = await pickStaleMessage(
 					db,
 					group.sessionId,
-					session?.lorebookId ?? null,
+					// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+					session?.lorebookId ?? (await attachedOrOwnBookOf(db, group.sessionId)),
 					modelId
 				)
 				if (message) return message
@@ -434,7 +438,8 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 				/**
 				 * ⚠ Gated on the vocabulary only, never on `lorebookId`.
 				 *
-				 * A session with no lorebook gets `EMPTY_VOCABULARY`, and that
+				 * Every session has a lorebook (its own, when none is shared);
+				 * a book with no names yet gets `EMPTY_VOCABULARY`, and that
 				 * is a working state rather than a broken one — both sides fall
 				 * to the open tier and their keys still agree. Refusing to
 				 * annotate there would take the entity arm's whole entry half

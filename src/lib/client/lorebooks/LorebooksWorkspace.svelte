@@ -4,6 +4,7 @@
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
 	import {
 		declareInterest,
 		useInterest
@@ -31,6 +32,13 @@
 	} from "$lib/shared/entries/types"
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import type { RowMenuEntries } from "$lib/client/components/menus/RowMenu.svelte"
+	import ActionConfirm from "$lib/client/components/sessionPage/ActionConfirm.svelte"
+	import { askingOf } from "$lib/client/components/sessionPage/actionConfirmAsking"
+	import {
+		SESSION_NOTES_LABEL,
+		SHARE_LABELS,
+		SHARE_CONFIRMS
+	} from "$lib/shared/lorebooks/sessionNotes"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import BookReadBy from "./BookReadBy.svelte"
 	import BookSettings from "./BookSettings.svelte"
@@ -189,6 +197,10 @@
 	let actions: ReturnType<typeof LorebookActions> | undefined = $state()
 
 	let lorebookList: any[] = $state([])
+	let sessionNotes = $state<Sockets.Lorebooks.SessionNotes.Response["books"]>([])
+	let sessionNotesLoaded = $state(false)
+	/** 🚧 pr-6 (R-f): the lists a book can be opened from. */
+	let knownBooks = $derived<any[]>([...lorebookList, ...sessionNotes])
 	let isLoading: boolean = $state(true)
 	/** The search over the list of books, which is a different list. */
 	let bookSearch: string = $state("")
@@ -266,7 +278,8 @@
 	 */
 	let openBookId = $derived(route.lorebookId)
 	let mode = $derived(vm.mode)
-	let book = $derived(lorebookList.find((l) => l.id === route.lorebookId))
+	let book = $derived(knownBooks.find((l) => l.id === route.lorebookId))
+	let bookIsSessionNotes = $derived(book?.sessionId != null)
 	/**
 	 * A book another person shared with the reader opens **read-only**
 	 * (PLAN-private-messages §6.7, ruled Q4): every lens renders, every
@@ -1302,24 +1315,13 @@
 	 * stay in place, disabled, saying so.
 	 */
 	let readingFixed = $derived(!!openSessionCtx.lorebookFixed)
-	let readingFixedTitle = $derived(
-		openSessionCtx.lorebookId !== null
-			? `This story is underway with ${
-					lorebookList.find((l) => l.id === openSessionCtx.lorebookId)?.name ??
-					"its lorebook"
-				}, so it keeps reading it. Start a new session to read another book.`
-			: "This story is underway in its own notes. Make them a lorebook to keep them and build on them."
-	)
-
 	/** What reading this book into the open session, or stopping, does. */
 	let readingVerbTitle = $derived(
-		readingFixed
-			? readingFixedTitle
-			: readingInto
-				? `Stop reading this book into ${readingInto}`
-				: otherReadBook
-					? `This session reads ${otherReadBook}; reading this book replaces it`
-					: "Read this book into the open session"
+		readingInto
+			? `Stop reading this book into ${readingInto}`
+			: otherReadBook
+				? `This session reads ${otherReadBook}; reading this book replaces it`
+				: "Read this book into the open session"
 	)
 
 	/**
@@ -1359,6 +1361,70 @@
 	 * header's `⋯` (STYLE-GUIDE §6.3). The verb is the header's primary at
 	 * desk; compact, where the name needs the row, it heads this menu.
 	 */
+	/** 🚧 pr-6 (R-p): a session-notes book's menu is its Share verbs and its settings. */
+	let sessionNotesMenu = $derived<RowMenuEntries>([
+		...shareItemsFor(
+			sessionNotes.find((n) => n.id === book?.id) ?? {
+				sessionId: null,
+				attached: null
+			}
+		),
+		{
+			label: "Book settings",
+			icon: Icons.SlidersHorizontal,
+			title: "Name, cover, rules, calendar and clock",
+			onSelect: openSettings
+		}
+	])
+
+	let shareAsking = $state<{
+		asking: { question: string; description?: string; confirmLabel: string }
+		go: () => void
+	} | null>(null)
+	function ask(sentence: string, label: string, go: () => void) {
+		shareAsking = { asking: askingOf(sentence, label), go }
+	}
+	/** 🚧 pr-6 (R-p): a session-notes book's Share — one verb with no attached book, the drop-down's two with one. */
+	function shareItemsFor(row: {
+		sessionId: number | null
+		attached: { id: number; name: string } | null
+	}): RowMenuEntries {
+		if (row.sessionId == null) return []
+		const sessionId = row.sessionId
+		if (row.attached === null)
+			return [
+				{
+					label: SHARE_LABELS.asLorebook,
+					icon: Icons.BookPlus,
+					onSelect: () =>
+						ask(SHARE_CONFIRMS.asLorebook, SHARE_LABELS.asLorebook, () =>
+							socket.emit("sessions:shareAsLorebook", { sessionId })
+						)
+				}
+			]
+		const name = row.attached.name
+		return [
+			{
+				label: SHARE_LABELS.toAttached(name),
+				icon: Icons.BookUp,
+				onSelect: () =>
+					ask(SHARE_CONFIRMS.toAttached(name), SHARE_LABELS.toAttached(name), () =>
+						socket.emit("sessions:applyOverlay", { sessionId, entryIds: null })
+					)
+			},
+			{
+				label: SHARE_LABELS.cloneWithChanges,
+				icon: Icons.CopyPlus,
+				onSelect: () =>
+					ask(
+						SHARE_CONFIRMS.cloneWithChanges(name),
+						SHARE_LABELS.cloneWithChanges,
+						() => socket.emit("sessions:cloneWithChanges", { sessionId })
+					)
+			}
+		]
+	}
+
 	let bookMenu = $derived<RowMenuEntries>(
 		readOnly
 			? [
@@ -1372,15 +1438,17 @@
 						}
 					}
 				]
-			: bookIsKit
-				? kitMenu
-				: [
+			: bookIsSessionNotes
+				? sessionNotesMenu
+				: bookIsKit
+					? kitMenu
+					: [
 		mode === "compact" &&
-			hasOpenSession && {
+			hasOpenSession &&
+			!readingFixed && {
 				label: readingInto ? STOP_READING : READ_INTO_SESSION,
 				icon: readingInto ? Icons.BookX : Icons.BookOpen,
 				title: readingVerbTitle,
-				disabled: readingFixed,
 				onSelect: changeReading
 			},
 		{
@@ -1443,6 +1511,16 @@
 	function backToList() {
 		void loreRoute.navigate({ type: "openBook", lorebookId: null })
 	}
+
+	let filteredSessionNotes = $derived.by(() => {
+		if (!bookSearch) return sessionNotes
+		const needle = bookSearch.toLowerCase()
+		return sessionNotes.filter(
+			(l) =>
+				l.name?.toLowerCase().includes(needle) ||
+				(l.description && l.description.toLowerCase().includes(needle))
+		)
+	})
 
 	let filteredLorebooks = $derived.by(() => {
 		let list = [...lorebookList]
@@ -1861,6 +1939,11 @@
 			})
 	}
 
+	function handleSessionNotes(msg: Sockets.Lorebooks.SessionNotes.Response) {
+		sessionNotes = msg.books ?? []
+		sessionNotesLoaded = true
+	}
+
 	function handleLorebooksList(msg: Sockets.Lorebooks.List.Response) {
 		if (msg.lorebookList) {
 			lorebookList = msg.lorebookList
@@ -1900,12 +1983,10 @@
 		// (`amendments:deleteBranch`); the open session's copy follows here,
 		// found the way the server found it, rather than holding a dead id
 		// until a reload (#136).
-		if (openSessionCtx.lorebookId === msg.lorebookId)
-			openSessionCtx.lorebookBranchId = survivingLineOf(
-				openSessionCtx.lorebookBranchId,
-				before,
-				msg.branches
-			)
+		if (openSessionCtx.sessionId !== null && openSessionCtx.lorebookId === msg.lorebookId)
+			sessionStore.patchSession(openSessionCtx.sessionId, {
+				lorebookBranchId: survivingLineOf(openSessionCtx.lorebookBranchId, before, msg.branches)
+			})
 	}
 
 	/**
@@ -2103,11 +2184,13 @@
 				? `Reading ${readName ?? "the lorebook"} into this session`
 				: "Stopped reading the lorebook into this session"
 		})
-		// The ack says what the session reads, so the open-session context
-		// follows it here rather than waiting on the session's own reload: the
-		// reading line and the run's marks both hang off this one field.
-		openSessionCtx.lorebookId = msg.session.lorebookId ?? null
-		openSessionCtx.lorebookBranchId = msg.session.lorebookBranchId ?? null
+		// The ack says what the session reads, so the session store follows it
+		// here rather than waiting on the session's own reload: the reading
+		// line and the run's marks both hang off this one field.
+		sessionStore.patchSession(msg.session.id, {
+			lorebookId: msg.session.lorebookId ?? null,
+			lorebookBranchId: msg.session.lorebookBranchId ?? null
+		})
 		// Full reload of the open session, not just a field patch — lore-bound
 		// content (RAG notices, etc.) can depend on the session's lorebook.
 		socket.emit("sessions:get", {
@@ -2136,8 +2219,8 @@
 	// A book that stops existing leaves the workspace at its list of books
 	// rather than at a screen for a row that is gone.
 	$effect(() => {
-		if (isLoading || route.lorebookId === null) return
-		if (!lorebookList.some((l) => l.id === route.lorebookId))
+		if (isLoading || !sessionNotesLoaded || route.lorebookId === null) return
+		if (!knownBooks.some((l) => l.id === route.lorebookId))
 			loreRoute.set(emptyRoute())
 	})
 
@@ -2407,6 +2490,10 @@
 	 * which is the only listener path.
 	 */
 	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
+	useInterest<"lorebooks:sessionNotes">(
+		"lorebooks:sessionNotes",
+		handleSessionNotes
+	)
 	useInterest<"lorebooks:list:error">(
 		"lorebooks:list:error",
 		handleLorebooksListError
@@ -2434,6 +2521,7 @@
 
 	onMount(() => {
 		socket.emit("lorebooks:list", {})
+		socket.emit("lorebooks:sessionNotes", {})
 		const detachHash = loreRoute.attachHash()
 		// ⚠ Both read, so a lens that has JUST dropped its draft (written
 		// to the bound flag synchronously, as `discardDraft` does) is not
@@ -2464,12 +2552,11 @@
 {#snippet readingVerb()}
 	<!-- The book's one verb toward the open session, labelled (STYLE-GUIDE
 	     §6.3): offered only for a session the reader owns. -->
-	{#if hasOpenSession}
+	{#if hasOpenSession && !readingFixed && !bookIsSessionNotes}
 		<button
 			type="button"
 			class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
 			title={readingVerbTitle}
-			disabled={readingFixed}
 			data-lore-book-reading
 			onclick={changeReading}
 		>
@@ -2522,7 +2609,7 @@
 		title={book?.name ?? "Lorebook"}
 		onBack={backToList}
 		backLabel="Lorebooks"
-		primaryAction={mode === "desk" && !readOnly && !bookIsKit
+		primaryAction={mode === "desk" && !readOnly && !bookIsKit && !bookIsSessionNotes
 			? readingVerb
 			: undefined}
 		menuItems={bookMenu}
@@ -2876,7 +2963,7 @@
 			{#snippet list()}
 				{#if isLoading}
 					<LoadingState message="Loading lorebooks…" />
-				{:else if filteredLorebooks.length === 0}
+				{:else if filteredLorebooks.length === 0 && filteredSessionNotes.length === 0}
 					<EmptyState
 						icon={Icons.Book}
 						message={bookSearch
@@ -2960,6 +3047,29 @@
 									hasOpenSession={false}
 									openSessionHasLorebook={false}
 									isOpenSessionLorebook={false}
+								/>
+							{/each}
+						</div>
+					{/if}
+					{#if filteredSessionNotes.length}
+						<!-- 🚧 pr-6 (R-f): each session's own book, here and never in a picker; Share moves it to the main list. -->
+						<ListGroupLabel label={SESSION_NOTES_LABEL} id="loreSessionNotes" />
+						<div
+							class="flex flex-col gap-2"
+							role="list"
+							aria-labelledby="loreSessionNotes"
+						>
+							{#each filteredSessionNotes as l (l.id)}
+								<LorebookListItem
+									lorebook={l}
+									onclick={(lorebook) => openBook(lorebook.id)}
+									onOpenSettings={openBookSettings}
+									entryCounts={l.entryCounts}
+									hasOpenSession={false}
+									openSessionHasLorebook={false}
+									isOpenSessionLorebook={false}
+									sessionNotesOf={l}
+									shareItems={shareItemsFor(l)}
 								/>
 							{/each}
 						</div>
@@ -3049,6 +3159,16 @@
 		onclose={() => (sharing = false)}
 	/>
 {/if}
+
+<ActionConfirm
+	asking={shareAsking?.asking ?? null}
+	onConfirm={() => {
+		const g = shareAsking?.go
+		shareAsking = null
+		g?.()
+	}}
+	onCancel={() => (shareAsking = null)}
+/>
 
 <ReplaceReadingModal
 	open={replacing !== null}

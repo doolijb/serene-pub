@@ -76,6 +76,22 @@ The session's owner can also run a routine by hand (**Run now**): **Routines** i
 
 What ran, what it wrote and what it skipped is in the **While you were away** widget, which any session can add from its layout (see [Session layout](./session-layout.md#the-widgets)).
 
+## Summaries and the lorebook
+
+A summarizer registers three ways: on an **action** (a summary you ask for), on an **event** (a scene ending, say) and as a **routine** (on a cadence). Each registration has its own values, so one summarizer can run on a cadence with a minimum age of 20 messages and again on [Close out](./sessions.md#close-out) with none. The host refuses a run whose span is younger than its registration's minimum age. A routine's minimum is 20; an action's or an event's is 0. See [Summarization](./summarization.md#which-summarizer-runs).
+
+Lore outlets carry **sources**: the ids of the messages a write was generated from.
+
+- A write **with** sources is committed. It moves the session's settle line to the newest of them, and from there [Back](./sessions.md#back-and-forward) stops at that line.
+- A write **without** sources is a change, taken back with its turn.
+- Core's own generated writes (summaries, scene summaries, compile, the graph build) always pass sources.
+
+A lore write that creates an entry can **match** an entry already there, by its id, its name or one of its keys, and update that one instead; two candidates are refused, naming both. It can also **bind** a new entry to a character, so that it is that character's lore.
+
+A channel says what it carries for lore: **story**, **aside** or **never**. A genre can also declare that its history settles as it is written: every turn is kept as it is played and Back is refused. A preset cannot loosen that.
+
+Plugin authors: see the SDK guide [Writing lore from a pipeline](./sdk/guides/writing-lore-from-a-pipeline.md).
+
 ## Presets
 
 A **preset** belongs to one genre and is a set of changes on the genre's defaults. The genre's **default** preset is the one new sessions start from. Presets live in **Admin › Presets**, and a genre's page in **Admin › Genres** lists its own.
@@ -327,9 +343,9 @@ Some models ignore some sampling parameters. In **Sampling**, an image sampling 
 
 ## The story clock
 
-A session that reads a lorebook has a **story clock**: its own "now". Until it is set or moved, it follows the present of the lorebook it reads (see [Sessions → Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)). Moving it changes what the session reads: lore dated after it, and dated changes that haven't happened yet, are left out.
+Every session has a **story clock**: its own "now". A session that reads no shared lorebook keeps its clock in its Session notes, unset until a person or a pipeline sets one. Until it is set or moved, a session that reads a lorebook follows the present of that lorebook (see [Sessions → Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)). Moving it changes what the session reads: lore dated after it, and dated changes that haven't happened yet, are left out.
 
-The **Advance story clock** step moves it by a whole number (**By**, negative to go back) of minutes, hours, days, months or years (**Unit**). To move the clock once per reply, put the step in a pipeline that runs after each reply. It follows the lorebook's calendar, carrying minutes into hours and days into months; in a free-form lorebook only the part named moves. It moves only this session's clock, never the lorebook's or another session's. When it can't move the clock, for example when the session has no lorebook or the result isn't a real date in that calendar, it stops with a sentence saying why and changes nothing.
+The **Advance story clock** step moves it by a whole number (**By**, negative to go back) of minutes, hours, days, months or years (**Unit**). To move the clock once per reply, put the step in a pipeline that runs after each reply. It follows the lorebook's calendar, carrying minutes into hours and days into months; in a free-form lorebook only the part named moves. It moves only this session's clock, never the lorebook's or another session's. When it can't move the clock, for example when the result isn't a real date in that calendar, it stops with a sentence saying why and changes nothing.
 
 ## A pipeline's own session state: the annex
 

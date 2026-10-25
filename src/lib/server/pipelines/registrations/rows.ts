@@ -29,7 +29,8 @@ import {
 	type SessionRegistrationRow,
 	type Trigger
 } from "@serene-pub/sdk"
-import type * as schema from "$lib/server/db/schema"
+import { and, eq, type SQL } from "drizzle-orm"
+import * as schema from "$lib/server/db/schema"
 
 export type RegistrationRow = typeof schema.registrations.$inferSelect
 export type RegistrationInsert = typeof schema.registrations.$inferInsert
@@ -53,6 +54,15 @@ export function scopeColumns(scope: RegistrationScope): Pick<
 		case "session":
 			return { scopeKind: "session", scopeRef: String(scope.sessionId), presetId: null, sessionId: scope.sessionId }
 	}
+}
+
+/** 🚧 The rows at one scope: `scope_kind` and `scope_ref` as `scopeColumns(scope)` derives them — the one derivation (D3). */
+export function registrationScopeWhere(scope: RegistrationScope): SQL {
+	const c = scopeColumns(scope)
+	return and(
+		eq(schema.registrations.scopeKind, c.scopeKind!),
+		eq(schema.registrations.scopeRef, c.scopeRef!)
+	)!
 }
 
 const MODES: ReadonlySet<string> = new Set(["off", "review", "full"])
@@ -89,6 +99,7 @@ function changeFields(row: RegistrationRow): Omit<RegistrationChange, "key"> {
 		...(modeOf(row.mode) ? { mode: modeOf(row.mode) } : {}),
 		...(row.when ? { when: row.when as unknown as ConditionDecl } : {}),
 		...(row.allowStacking != null ? { allowStacking: row.allowStacking } : {}),
+		...(row.minAge != null ? { minAge: row.minAge } : {}),
 		...(row.caps ? { caps: row.caps as RoutineCaps } : {}),
 		...(row.order != null ? { order: row.order } : {}),
 		...(row.label != null ? { label: row.label as RegistrationChange["label"] } : {})
@@ -149,12 +160,13 @@ export function sessionRowsOf(rows: readonly RegistrationRow[]): SessionRegistra
 /** The columns a declaration's own fields fill. */
 function fieldColumns(
 	d: Partial<Omit<RegistrationChange, "key">>
-): Pick<RegistrationInsert, "values" | "mode" | "when" | "allowStacking" | "caps" | "order" | "label"> {
+): Pick<RegistrationInsert, "values" | "mode" | "when" | "allowStacking" | "minAge" | "caps" | "order" | "label"> {
 	return {
 		values: (d.values as RegistrationInsert["values"]) ?? null,
 		mode: d.mode ?? null,
 		when: (d.when as unknown as RegistrationInsert["when"]) ?? null,
 		allowStacking: d.allowStacking ?? null,
+		minAge: d.minAge ?? null,
 		caps: (d.caps as RegistrationInsert["caps"]) ?? null,
 		order: d.order ?? null,
 		label: d.label ?? null

@@ -90,7 +90,8 @@ import { publishedBackdrop, type PublishedBackdrop } from "$lib/server/sessions/
 import * as spriteChoices from "$lib/server/sprites/choices"
 import * as sharedSprites from "$lib/shared/sprites"
 import { annexOwnerSegment } from "@serene-pub/sdk"
-import { annexWithoutPoints } from "$lib/server/sessions/annexRevisionPoints"
+import { annexWithoutPoints } from "$lib/server/sessions/annexChanges"
+import { annexForPipelines, coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { publishedTurns } from "$lib/server/pipelines/routines/turnTally"
 
 export {
@@ -161,12 +162,13 @@ async function rulesOf(db: Db, sessionId: number): Promise<PublishedRules> {
 
 /**
  * 🚧 The annex as a condition reads it (lane 2): `{ <owner with dots → _>:
- * { <key>: value } }`, revision points left out. An owner's document that is
+ * { <key>: value } }`, revision points left out and the core runtime keys
+ * (`annexForPipelines`) never shown. An owner's document that is
  * not an object is not published.
  */
 export function publishedAnnex(annex: unknown): Record<string, Record<string, unknown>> {
 	const out: Record<string, Record<string, unknown>> = {}
-	for (const [owner, doc] of Object.entries(annexWithoutPoints(annex)))
+	for (const [owner, doc] of Object.entries(annexForPipelines(annexWithoutPoints(annex))))
 		if (doc && typeof doc === "object" && !Array.isArray(doc))
 			out[annexOwnerSegment(owner)] = doc as Record<string, unknown>
 	return out
@@ -175,11 +177,11 @@ export function publishedAnnex(annex: unknown): Record<string, Record<string, un
 /** 🚧 The story lane's turn tally, published (R51, R52; one indexed read). */
 async function turnsOf(db: Db, sessionId: number) {
 	const [row] = await db
-		.select({ metadata: schema.sessions.metadata })
+		.select({ annex: schema.sessions.annex })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return publishedTurns(row?.metadata ?? null)
+	return publishedTurns(coreAnnexIn(row?.annex ?? null))
 }
 
 /** The session row's annex column, published (one indexed read). */

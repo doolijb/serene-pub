@@ -1,6 +1,6 @@
 /**
  * The `your-move` producer (PLAN-notifications §5, owner ruling Q1) against a
- * real session whose order is stored on `sessions.metadata.turnOrder`.
+ * real session whose order is stored under annex owner `core`'s `turnOrder`.
  *
  * Pinned:
  *  1. A person head raises for that person; an empty order raises nothing.
@@ -73,13 +73,15 @@ async function setHead(sessionId: number, ref: string | null) {
 	await db
 		.update(schema.sessions)
 		.set({
-			metadata: {
-				turnOrder: {
-					...EMPTY_TURN_ORDER,
-					order,
-					basedOnAt: Date.now(),
-					computedAt: Date.now(),
-					strategy: "core:task/turn-round-robin@1"
+			annex: {
+				core: {
+					turnOrder: {
+						...EMPTY_TURN_ORDER,
+						order,
+						basedOnAt: Date.now(),
+						computedAt: Date.now(),
+						strategy: "core:task/turn-round-robin@1"
+					}
 				}
 			}
 		} as any)

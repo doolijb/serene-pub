@@ -399,16 +399,18 @@ declare global {
 	// same context: it renders under <main> as a sibling of the route, so this is
 	// how the session's identity reaches it.
 	interface OpenSessionCtx {
-		sessionId: number | null
+		readonly sessionId: number | null
 		/** What the session is called, for copy that names it. */
-		sessionName: string | null
+		readonly sessionName: string | null
 		/** Who is in the session, in the order the header shows them. */
 		cast: OpenSessionCastMember[]
 		/** The genre's display name, as the header prints it. */
-		genreName: string | null
+		readonly genreName: string | null
 		/** 🚧 "Branch of ‹parent›" for a branched session, else null (`branchOf`). */
-		branchOfLabel?: string | null
-		lorebookId: number | null
+		readonly branchOfLabel?: string | null
+		/** 🚧 pr-6 (R-k): the open session is archived — the header marks it. */
+		readonly archived?: boolean
+		readonly lorebookId: number | null
 		/**
 		 * The line of that book the session runs on. NULL = main.
 		 *
@@ -416,30 +418,32 @@ declare global {
 		 * marrow-stays" without a fetch of its own — the same reason
 		 * `lorebookId` is here.
 		 */
-		lorebookBranchId: number | null
+		readonly lorebookBranchId: number | null
 		/**
 		 * 🚧 The book lock (PLAN-lorebook-kinds §A): play has written, so the
 		 * session keeps the book it reads (or its own notes, with none) —
 		 * the Lorebooks view does not offer to read another into it.
 		 */
-		lorebookFixed?: boolean
+		readonly lorebookFixed?: boolean
 		/**
 		 * The session's own story clock (year/month/day), or null when it
 		 * follows its line's present. Retrieval reads the book AT this date
 		 * (owner ruling 3, 2026-09-28), so the lorebook workspace needs it to
 		 * say — and to stand at — what the session reads.
 		 */
-		storyClock: {
+		readonly storyClock: {
 			year: number
 			month: number | null
 			day: number | null
 		} | null
-		isOwner: boolean
+		readonly isOwner: boolean
 		/**
-		 * A reply is being written. Read by the shell's spine, which keeps
-		 * the session in view while a view is focused over it.
+		 * The session is busy (`generatingOf`): its newest row is being
+		 * written or a run it waits on is in flight. Read by the shell's
+		 * spine, which keeps the session in view while a view is focused
+		 * over it.
 		 */
-		isGenerating: boolean
+		readonly isGenerating: boolean
 		/**
 		 * 🚧 The session's **header notice** (PLAN-core-widgets §3.16): one
 		 * line the session header draws under its bar, dismissible. Today
@@ -472,6 +476,8 @@ declare global {
 		goBack: () => void
 		/** Forward: the newest rewound turn back into it. */
 		goForward: () => void
+		/** 🚧 pr-6 (R-c): the turn's Regenerate (`core#retake`), beside Back and Forward; null where the genre does not offer it. */
+		regenerate: { disabled: boolean; reason?: string; press: () => void } | null
 	}
 
 	/** 🚧 One line the session header shows under its bar (`OpenSessionCtx.headerNotice`). */
@@ -482,6 +488,8 @@ declare global {
 		link: { href: string; label: string } | null
 		/** Dismissed for this view only: the page keeps the flag, never storage. */
 		dismiss: () => void
+		/** 🚧 pr-6: one button after the text (the catch-up offer's); absent or null: none. */
+		action?: { label: string; press: () => void } | null
 	}
 
 	interface GraphBuildState {

@@ -7,7 +7,7 @@ import { and, eq } from "drizzle-orm"
 import type { EnabledWhen } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { effectiveRegistrations, invalidateRegistrations } from "$lib/server/pipelines/registrations/resolve"
-import { actionRegistrationKey, rowOfChange } from "$lib/server/pipelines/registrations/rows"
+import { actionRegistrationKey, registrationScopeWhere, rowOfChange } from "$lib/server/pipelines/registrations/rows"
 
 /**
  * Set (or with `null` clear) the session's enabled-when override for one
@@ -29,8 +29,7 @@ export async function setSessionActionWhen(
 			(r) => r.trigger.family === "action" && r.trigger.action === identity
 		)?.key ?? actionRegistrationKey(identity)
 	const where = and(
-		eq(schema.registrations.scopeKind, "session"),
-		eq(schema.registrations.scopeRef, String(sessionId)),
+		registrationScopeWhere({ kind: "session", sessionId }),
 		eq(schema.registrations.key, key)
 	)
 	const [row] = await db.select().from(schema.registrations).where(where).limit(1)
@@ -43,6 +42,7 @@ export async function setSessionActionWhen(
 			row.values == null &&
 			row.mode == null &&
 			row.allowStacking == null &&
+			row.minAge == null &&
 			row.caps == null &&
 			row.order == null
 		if (empty) await db.delete(schema.registrations).where(eq(schema.registrations.id, row.id))

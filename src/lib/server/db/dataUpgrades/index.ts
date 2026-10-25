@@ -144,6 +144,17 @@ export const DATA_UPGRADES: DataUpgrade[] = [
 	{
 		afterMigration: "0126_genre_slots_retire",
 		load: () => import("./0126_genre_slots_retire")
+	},
+	// 🚧 pr-6: a row Back took out before the mirror had the column carries
+	// its ordinal across once (`messages.rewind_ordinal`).
+	{
+		afterMigration: "0127_pr6_settle_line",
+		load: () => import("./0127_pr6_settle_line")
+	},
+	// 🚧 pr-6s2 (C4): core's runtime keys move onto annex owner `core`, the branch marker onto its columns.
+	{
+		afterMigration: "0128_pr6s2_core_annex",
+		load: () => import("./0128_pr6s2_core_annex")
 	}
 ]
 

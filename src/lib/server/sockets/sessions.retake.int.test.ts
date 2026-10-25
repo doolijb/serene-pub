@@ -31,7 +31,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, asc, eq, inArray, ne } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 import { JSON_INSTRUCTION } from "$lib/server/connections/structuredOutput"
@@ -499,22 +499,23 @@ describe("R2 · retake deletes the turn's yield and takes the turn again", () =>
 			)
 		expect(oldProposals).toEqual([])
 
-		// And each deleted row was announced as a change.
-		const changes = await testDb
-			.select()
-			.from(schema.sessionChanges)
+		// And the turn is gone for good: no old row is left, and nothing of
+		// the session is still rewound.
+		const left = await testDb
+			.select({ id: schema.sessionMessages.id })
+			.from(schema.sessionMessages)
+			.where(inArray(schema.sessionMessages.id, oldIds))
+		expect(left).toEqual([])
+		const rewound = await testDb
+			.select({ id: schema.sessionMessages.id })
+			.from(schema.sessionMessages)
 			.where(
 				and(
-					eq(schema.sessionChanges.sessionId, w.session.id),
-					eq(
-						schema.sessionChanges.event,
-						"core:event/message-deleted@1"
-					)
+					eq(schema.sessionMessages.sessionId, w.session.id),
+					isNotNull(schema.sessionMessages.rewindOrdinal)
 				)
 			)
-		expect(changes.map((c) => c.messageId).sort()).toEqual(
-			[...oldIds].sort()
-		)
+		expect(rewound).toEqual([])
 	})
 
 	test("applied state anchored to the turn goes with it", async () => {

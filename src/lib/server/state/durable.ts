@@ -23,7 +23,7 @@
  * ## No lorebook: the session's own notes (🚧 PLAN-rulesets §26)
  *
  * Until 2026-10-16 a session with no world recorded nothing. It now has one
- * of its own — its notes (`$lib/server/lorebooks/phantom.ts`), a hidden
+ * of its own — its notes (`$lib/server/lorebooks/ownBook.ts`), a hidden
  * lorebook it alone owns — and the world's values land there. The delete
  * safeguard is the exception: the notes go with the session it records.
  *
@@ -90,9 +90,9 @@ export interface RecordReport {
 	recorded: boolean
 	/**
 	 * 🚧 Where it landed (PLAN-rulesets §26): the attached `book`, or the
-	 * session's own notes (`phantom`, with their id in `lorebookId`).
+	 * session's own notes (`own-book`, with their id in `lorebookId`).
 	 */
-	route: "book" | "phantom" | null
+	route: "book" | "own-book" | null
 	/** The book the rows were filed against; null when nothing could be. */
 	lorebookId: number | null
 	/** The book owner's lore write mode the recording followed. */
@@ -166,13 +166,13 @@ export async function recordToTimeline(
 	 * write the book, Off and no book record nothing.
 	 */
 	let lorebookId: number
-	let route: "book" | "phantom"
+	let route: "book" | "own-book"
 	if (opts.reason === "delete") {
 		if (!links.lorebookId || mode === "off") return report
 		lorebookId = links.lorebookId
 		route = "book"
 	} else {
-		const { loreWriteTargetFor } = await import("$lib/server/lorebooks/phantom")
+		const { loreWriteTargetFor } = await import("$lib/server/lorebooks/ownBook")
 		const target = await loreWriteTargetFor(db, sessionId)
 		lorebookId = target.lorebookId
 		route = target.route
@@ -198,10 +198,10 @@ export async function recordToTimeline(
 	// The notes are never branched as a book, and the book's history is not
 	// theirs to file under: main, undated (unless the caller named one).
 	const reading =
-		route === "phantom" ? null : (links.reading ?? (await sessionReadingOf(db, sessionId)))
+		route === "own-book" ? null : (links.reading ?? (await sessionReadingOf(db, sessionId)))
 	if (opts.historyEntryId === undefined && reading)
 		report.historyEntryId = (await writeDatingAt(db, reading))?.historyEntryId ?? null
-	if (route === "phantom" && opts.historyEntryId === undefined) report.historyEntryId = null
+	if (route === "own-book" && opts.historyEntryId === undefined) report.historyEntryId = null
 	const common = {
 		branchId: reading?.branchId ?? null,
 		historyEntryId: report.historyEntryId,
@@ -296,16 +296,16 @@ export async function recordToTimeline(
 	 * the entries they are — main line, undated, anchored to the message.
 	 * Under the book route a seat bound in the book files there instead.
 	 */
-	const recordPhantomOwners = async (allCast: boolean) => {
-		const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-		const phantom = await phantomOf(db, sessionId)
-		if (!phantom) return
+	const recordOwnBookOwners = async (allCast: boolean) => {
+		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+		const ownBook = await ownBookOf(db, sessionId)
+		if (!ownBook) return
 		const into = {
-			lorebookId: phantom.id,
+			lorebookId: ownBook.id,
 			common: { ...common, branchId: null, historyEntryId: null, sceneId: report.sceneId }
 		}
 		const { castMemberCards } = await import("$lib/server/utils/castMemberCards")
-		const { memberOf } = await castMemberCards(db, phantom.id)
+		const { memberOf } = await castMemberCards(db, ownBook.id)
 		for (const member of links.cast) {
 			const bound = memberOf.get(member.characterId)
 			if (bound == null || (!allCast && member.castMemberId)) continue
@@ -317,7 +317,7 @@ export async function recordToTimeline(
 				into
 			)
 		}
-		for (const place of await placesOnReading(db, phantom.id, MAIN_HEAD, "session"))
+		for (const place of await placesOnReading(db, ownBook.id, MAIN_HEAD, "session"))
 			await record(
 				{ kind: "session_location", id: place.entryId },
 				{ kind: "location", id: place.entryId },
@@ -333,8 +333,8 @@ export async function recordToTimeline(
 		"world",
 		"The world"
 	)
-	if (opts.reason !== "delete") await recordPhantomOwners(route === "phantom")
-	if (route === "phantom") {
+	if (opts.reason !== "delete") await recordOwnBookOwners(route === "own-book")
+	if (route === "own-book") {
 		report.recorded = report.values > 0 || report.configs > 0
 		return report
 	}
@@ -355,7 +355,7 @@ export async function recordToTimeline(
 	// world's own record of what lay where. A location IS a lore entry of
 	// this world, so unlike a character there is always somewhere to file it.
 	// Which places: see `recordedLinks`.
-	// The notes' own places file into the notes (`recordPhantomOwners`).
+	// The notes' own places file into the notes (`recordOwnBookOwners`).
 	for (const place of links.locations.filter((l) => !l.sessionOnly))
 		await record(
 			{ kind: "session_location", id: place.entryId },

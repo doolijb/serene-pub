@@ -29,11 +29,15 @@ export const sessionPlacesReplyKey = (
 /**
  * Answer one `session-places` for the page's session. Rejects, in words,
  * with anything the server refused or did not say.
+ *
+ * 🚧 A session with no shared lorebook: the server lists its own book's places but names no lorebook; the
+ * answer names the own book, so the widget draws them (pr-6 B §B-3).
  */
 export async function answerSessionPlaces(
 	_params: unknown,
 	sessionId: number | null,
-	read: SessionPlacesRead
+	read: SessionPlacesRead,
+	ownBookId: number | null = null
 ): Promise<Result> {
 	if (sessionId == null)
 		throw new Error("this page has no session to read the places of")
@@ -41,5 +45,7 @@ export async function answerSessionPlaces(
 	if (res.error) throw new Error(res.error)
 	if (!res.places)
 		throw new Error("the server did not say which places there are")
-	return res.places
+	return res.places.lorebookId == null && ownBookId != null
+		? { ...res.places, lorebookId: ownBookId }
+		: res.places
 }

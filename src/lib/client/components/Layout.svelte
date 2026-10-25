@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { adoptAccountTimeZone } from "$lib/client/utils/realTime.svelte"
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
+	import { provideSessionOutcomes } from "$lib/client/contexts/sessionOutcomes.svelte"
 	import { provideConnections } from "$lib/client/contexts/connections.svelte"
 	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
 	import ConnectionsDialogs from "$lib/client/components/connections/ConnectionsDialogs.svelte"
@@ -94,6 +95,8 @@
 	// stylesheet cannot disagree about where mobile ends.
 	import { desktop } from "$lib/client/utils/breakpoint.svelte"
 	import { notifications } from "$lib/client/notifications/notifications.svelte"
+	import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
+	import { createOpenSessionView } from "$lib/client/sessions/store/openSessionView.svelte"
 	import { startAutoRead } from "$lib/client/notifications/autoRead.svelte"
 
 	interface Props {
@@ -739,17 +742,9 @@
 		history: []
 	})
 	let taskQueueCtx: TaskQueueCtx = $state({ tasks: [] })
-	let openSessionCtx: OpenSessionCtx = $state({
-		sessionId: null,
-		sessionName: null,
-		cast: [],
-		genreName: null,
-		branchOfLabel: null,
-		lorebookId: null,
-		lorebookBranchId: null,
-		storyClock: null,
-		isOwner: false,
-		isGenerating: false
+	const openSessionCtx: OpenSessionCtx = createOpenSessionView({
+		store: sessionStore,
+		userId: () => userCtx.user?.id ?? null
 	})
 	// Every graph build, one per book — never a single slot (plan B8): see
 	// `stores/graphBuilds.svelte.ts`.
@@ -2193,6 +2188,8 @@
 	// The one subscriber to the card-import events; views take the outcome
 	// from this context (contexts/characterImports.svelte.ts).
 	provideCharacterImports()
+	// Share to ‹book› with nothing waiting, and Close out started: said once, here (contexts/sessionOutcomes.svelte.ts).
+	provideSessionOutcomes()
 	// The connections list, model sync and the one way to choose a model, for
 	// every view that shows connections (contexts/connections.svelte.ts).
 	provideConnections({ systemSettings: systemSettingsCtx })

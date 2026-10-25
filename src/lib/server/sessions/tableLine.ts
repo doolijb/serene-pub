@@ -10,7 +10,8 @@
  * keeps no table channel writes nothing: the change lines under the story
  * already say what moved.
  */
-import { and, desc, eq, isNull } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 
 type Db = any
@@ -47,7 +48,7 @@ export async function sayOnTable(
 				eq(schema.sessionMessages.channel, "main"),
 				// 🚧 The live history (RF fix 5): the line's insert replaces the
 				// forward stack, so a rewound row is no anchor.
-				isNull(schema.sessionMessages.rewindOrdinal)
+				liveMessageWhere()
 			)
 		)
 		.orderBy(desc(schema.sessionMessages.id))

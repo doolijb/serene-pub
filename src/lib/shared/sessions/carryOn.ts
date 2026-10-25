@@ -10,7 +10,7 @@
  * visible line of theirs sits after main's newest visible reply (any row
  * that is not a person's; narration is a side note and does not count).
  */
-import { isSameChannel, readTurnOrder } from "@serene-pub/sdk"
+import { isSameChannel, type TurnOrderV1 } from "@serene-pub/sdk"
 
 export interface CarryOnRow {
 	role?: string | null
@@ -43,11 +43,12 @@ export function mayContinue(opts: {
 	userId: number | null | undefined
 	channel?: string
 	rows: ReadonlyArray<CarryOnRow> | null | undefined
-	sessionMetadata: unknown
+	/** 🚧 The session's turn order as the page holds it (`sessions:turnOrder` / `sessions:view`); the row's `metadata` carries none. */
+	turnOrder: Pick<TurnOrderV1, "order">
 }): boolean {
 	if (opts.isOwner) return true
 	const channel = opts.channel ?? "main"
-	if (readTurnOrder(opts.sessionMetadata).order.some((e) => isSameChannel(e.channel, channel)))
+	if (opts.turnOrder.order.some((e) => isSameChannel(e.channel, channel)))
 		return true
 	return isSameChannel(channel, "main") && sentSinceReplyIn(opts.rows, opts.userId)
 }

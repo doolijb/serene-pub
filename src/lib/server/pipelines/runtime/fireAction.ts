@@ -336,6 +336,12 @@ export async function fireAction(
 	} = await import("$lib/server/pipelines/entities/sessionGenres")
 	const modeCheck = await sessionGenreAvailable(db, req.sessionId)
 	if (!modeCheck.available) return refused(modeCheck.reason!)
+	// 🚧 pr-6 R-k: an archived session is read-only.
+	{
+		const { sessionArchivedRefusal } = await import("$lib/server/sessions/archive")
+		const archived = await sessionArchivedRefusal(db, req.sessionId)
+		if (archived) return refused(archived)
+	}
 	const [session] = await db
 		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
@@ -827,6 +833,7 @@ export async function fireAction(
 	const routed: {
 		spec: string | null
 		registrationKey?: string
+		registrationMinAge?: number
 		fallback?: Awaited<ReturnType<typeof resolveSubjectVerdict>>["fallback"]
 	} =
 		annexFieldRun
@@ -985,7 +992,14 @@ export async function fireAction(
 					: {}),
 				// 🚧 The registration that answers (D7, LS2).
 				...(routed.registrationKey
-					? { registration: { family: "action", key: routed.registrationKey } }
+					? {
+							registration: {
+								family: "action",
+								key: routed.registrationKey,
+								// The registration's summary depth (pass 9 S3), off the resolution.
+								minAge: routed.registrationMinAge ?? 0
+							}
+						}
 					: {}),
 				sink: {
 					onProgress: (event) => req.onProgress?.({ ...event, runId, specId })

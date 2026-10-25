@@ -48,7 +48,7 @@ Your draft is saved as you type, so it's still there if you reload the page or c
 
 If a message can't be sent — the session can't take it right now, or it waited too long for an answer — a short note says why and your text goes back in the composer, ahead of anything you typed since. Nothing you wrote is lost: the saved draft is only cleared once the message is in the conversation.
 
-A genre can **close the composer** on a channel while it waits for something, for everyone or only for you: Dungeon Crawler closes **Story** for each player until their character is made. A closed composer is greyed, with the genre's actions under it, and says what it's waiting on in place of *Write as…*, such as *Waiting: Make your character on the Planner tab first.* If a send gets through anyway, it's refused with the same reason and your text comes back. The turn controls (**Continue**) aren't the composer's and stay as they are. Only the genre opens it again; the owner is closed too.
+A genre can **close the composer** on a channel while it waits for something, for everyone or only for you: Dungeon Crawler closes **Story** for each player until their character is made. A closed composer is greyed, with the genre's actions under it, and says what it's waiting on in place of *Write as…*, such as *Waiting: Make your character on the Planner tab first.* (an [archived session's](#archive-and-unarchive) composer reads its sentence alone, without *Waiting:*). If a send gets through anyway, it's refused with the same reason and your text comes back. The turn controls (**Continue**) aren't the composer's and stay as they are. Only the genre opens it again; the owner is closed too.
 
 ### Attach images and files
 
@@ -150,7 +150,7 @@ If nobody is chosen for you to play as and you press **Send**, the **Choose who 
 
 In the composer's bottom row, beside who you write as, is **Actions**. Click it to open one row of buttons for this session above the text box, all alike:
 
-- first, the **turn controls**: **Continue**, **Pick who speaks** and **Regenerate** (see [Group sessions](./group-sessions.md#continue-and-pick-who-speaks));
+- first, the **turn controls**: **Continue**, **Pick who speaks** and, in Story, **Regenerate** for the last reply (see [Group sessions](./group-sessions.md#continue-and-pick-who-speaks)). In the Lair and the Dungeon Crawler, **Regenerate the last turn** is not here: it is the third press in the session header (see [Back and Forward](#back-and-forward));
 - then what the genre offers: in Story, **Narrate**, **Side character**, **Image**, **Scene**, **Look**, **Rest**, **Ask**, **Answer** and **Time passes…**; in the Lair, **Nudge**, **Whisper**, **Trigger trap**, **Reveal**, **Roll** and **Build room** (the session's owner's, by preset);
 - **Routines**, for the session's owner: the session's [routines](#routines) that aren't Off; pick one to run it now;
 - then **More**, which lists every action, including ones without a button of their own.
@@ -203,8 +203,8 @@ Each message has a **⋮** menu on the right of its name row. Hovering (or tappi
 | **Hide** / **Unhide** | The message is *hidden from the story*: it stays on screen, dimmed, and the characters no longer read it. What it changed stays. | Any message |
 | **Delete** | Removes the message for good, after you confirm. Off unless the session's genre (or an administrator) adds it: see [Deleting a message](#deleting-a-message). | Where the genre offers it |
 | **Branch from here** | Starts a copy of the session ending at this message. | Any message (owner only) |
-| **Select for summary** | Starts choosing messages to summarize into the lorebook. | When the session reads a lorebook |
-| **Start scene here** | Starts a scene at this line; an open scene ends at the line before. See [Scenes](#scenes-start-and-end-them). | Sessions you own that read a lorebook, where the genre keeps scenes |
+| **Select for summary** | Starts choosing messages to summarize into the lorebook. | When the genre keeps lore |
+| **Start scene here** | Starts a scene at this line; an open scene ends at the line before. See [Scenes](#scenes-start-and-end-them). | Sessions you own, where the genre keeps scenes |
 | **End scene here** | Ends the open scene at this line; what follows depends on [how scenes begin](#when-a-new-scene-begins). | Lines of the open scene, as above |
 | **Change sprite** | Picks the face shown with this line. | Characters with [sprites](#sprites) |
 | **Inspect run** | Shows every step of the run that wrote this reply. | Administrators |
@@ -223,11 +223,22 @@ To take back what just happened, use **Back** (the curved arrow pointing left) i
 While you're back, the composer says so: *2 turns ahead will be replaced if you write now.*, with **Forward** beside it. Writing anything new (a line, **Continue**, **Regenerate**, an action) replaces the turns ahead: they're deleted for good and the story goes on from where you are. That's the one way messages are deleted unless the genre offers **Delete**.
 
 - Only the session's owner presses Back and Forward. Everyone else sees the note in their composer while the owner is back.
-- Back and Forward wait while a reply is being written.
+- Back and Forward wait while a reply or an action is still running, not only while the reply's text arrives: they stay grey, with *Wait for the reply to finish.*, until the reply has finished filing its notes too.
 - They work on the story itself, not on side channels: private messages stay as they are.
 - The greetings and the opening stay: Back goes back to your first line, no further.
 - In a [branch](#branch-from-here), Back goes back to where the branch began. To go further, open the session it was branched from. A branch is the way to keep both versions of a story.
 - The turns ahead are kept when you leave and come back.
+- Back refuses to go below what is in the lorebook. A summary you applied, or a scene's applied summary, fixes everything up to the newest line it was written from, and Back there says *This part of the story is in the lorebook now.* In the conversation, a quiet mark after the newest such line reads *In the lorebook up to here*. See [Summarization](./summarization.md#what-an-applied-summary-fixes).
+- In a genre that keeps every turn as it is played, Back refuses outright: *This story keeps every turn as it is played, so there is no going back.*
+- While the session is [archived](#archive-and-unarchive), Back, Forward and Regenerate the last turn are all greyed with *This session is archived. Its owner can unarchive it to play on.*
+
+#### Regenerate the last turn
+
+In the Lair and the Dungeon Crawler the header has a third press after Back and Forward: **Regenerate the last turn** (the circular arrow; on a phone, the third item of the **⋯** menu). Like Back and Forward it is the session owner's only, and it is shown only where the genre offers it; Story has no such press.
+
+It takes the whole turn after your line, every reply of it, as Back does, and plays the turn again from its start. It asks first with **Regenerate the last turn?** and names what goes, for example *This deletes and rewrites: Narrator.* The box has **Don't ask again for this session**, then **Cancel** and **Regenerate**. Under [**On revision: Branch**](#on-revision) it branches first and plays the turn on the new branch, and the box adds *This will branch here; the old turns stay on the old branch.*
+
+When the press is grey, its tooltip gives the first reason that holds: a reply or an action is still running (*Wait for the reply to finish.*); the reason the session's [action list](./session-actions.md#why-a-button-is-grey) gives; or the reason the session gives, such as *Nothing has been written yet, so there is no turn to regenerate.*, *Your line is the newest. Press Continue.*, or the lorebook and every-turn-kept sentences above.
 
 ### Hide or Back?
 
@@ -277,7 +288,7 @@ Some models show their reasoning: it appears folded under **Reasoning** above th
 
 ## Find your sessions
 
-The **Sessions** view lists every session you own or were invited to, grouped under **Your turn** (the last message wasn't yours), **Recent** (the last seven days) and **Older**. The session you have open sits at the top.
+The **Sessions** view lists every session you own or were invited to, grouped under **Your turn** (the last message wasn't yours), **Recent** (the last seven days), **Older** and, last, **Archived**. An [archived session](#archive-and-unarchive) is never under **Your turn**, however it ended. The session you have open sits at the top.
 
 Each row shows up to three faces from the cast (with *+2* and so on when there are more), the session's name, and one line under it: the last line said, then the genre when your install has more than one, then when it last moved. Which sessions wait on you is said by the **Your turn** heading above them. While a reply is being written, the line starts with a small pulsing orange dot and the reply's status (*Jasmine is typing*). **Shared with you** marks a session someone invited you to.
 
@@ -299,6 +310,28 @@ Opening the sessions list from a character's details shows only sessions with th
 ### Delete a session
 
 Choose **Delete** in a session's menu and confirm. The session and all its messages are removed for good. Scenes it saved to a lorebook stay there, with their name, summary and cast.
+
+### Archive and Unarchive
+
+The session's owner can **Archive** a session from the **⋯** menu of its details in the Sessions view. It asks first. When the session's genre has a [Close out](#close-out), the box reads *Archive this session? It becomes read-only until you unarchive it. Anything played since its last scene is summarized as a closing scene for you to review.* Otherwise it reads *Archive this session? It becomes read-only until you unarchive it.*
+
+An archived session is read-only, and says so:
+
+- The composer reads *This session is archived. Its owner can unarchive it to play on.*
+- **Back**, **Forward** and **Regenerate the last turn** are greyed with *This session is archived. Its owner can unarchive it to play on.*, and so is every [action](./session-actions.md#why-a-button-is-grey).
+- Its [routines](#routines) stop.
+- The turn line (who is ready to continue) is hidden.
+- An **Archived** mark sits beside the genre in the session's header, and the session moves to the **Archived** group in the Sessions view.
+
+**Unarchive**, in the same menu, puts the session back as it was. Nothing was removed: an archived session is a session you have put down, not one you have deleted. An archived session is not an archived lorebook entry; the two have nothing to do with each other.
+
+### Close out
+
+**Close out** is in the same **⋯** menu, for the session's owner, and appears only when the session's genre offers it. It asks *Close out this session? What was played since its last scene becomes a closing scene, summarized for you to review before it goes into the lorebook.* Once it starts, it says how many closing scenes are being summarized for you to review. Nothing goes into the lorebook until you review the summary (see [Summarization](./summarization.md#close-out-and-the-catch-up-offer)). It never runs on its own, with one exception: archiving a session runs it once, when the genre offers it. If everything played is in a scene already, it says so and does nothing.
+
+### Catching up on an older session
+
+When you start a session on the same lorebook line as an older session of yours whose last lines never reached the lorebook, the new session's header says so in one line, such as *Old Keep has 12 lines the lorebook doesn't have yet.*, with a button **Catch up on Old Keep**. Pressing it closes the older session out, held for your review as above. It asks nothing first, and you can dismiss the line instead.
 
 ### Every session on the pub
 
@@ -373,10 +406,10 @@ A session's owner sees the settings the genre and its pipelines open to them; an
 
 Every session has an **On revision** setting, whatever its genre. It decides what happens when you delete or regenerate the latest turn and play resumes from an earlier point:
 
-- **Overwrite** (the default): the old turn is gone. Everything it changed (stats, the story clock, what it wrote in the session's own notes, and what it wrote in your lorebook unless someone has changed that since) is taken back, and play goes on in the same session.
+- **Overwrite** (the default): the old turn is gone. For **Regenerate the last turn** that is exactly what [Back](#back-and-forward) does to it, whole turn and every reply, before the turn is played again. Everything it changed (stats, the story clock, what it wrote in the session's own notes, and what it wrote in your lorebook unless someone has changed that since) is taken back, and play goes on in the same session.
 - **Branch**: the session is branched just before that turn. The old turn stays in the original session, untouched, and the screen moves to the branch (for **Regenerate** too: the turn is played again there, and a note says so), named after the session with its number (*Drowned King · branch 2*). The session's own notes are copied into the branch up to that point. In the session list the branch reads *Your turn*: nobody is waiting on the model. The branch's header and its session panel say *Branch of Drowned King*, and its world notes (the planner's notes, a crawl's leads) stand where they stood before the revised turn. The same is true when the turn is overwritten instead.
 
-A branch made this way can be kept or deleted like any other. The delete and regenerate confirmations say in one sentence which of the two will happen: *This will overwrite the last 3 turns. There is no undo.* or *This will branch here; the old turns stay on the old branch.*
+A branch made this way can be kept or deleted like any other. The delete confirmation says in one sentence which of the two will happen: *This will overwrite the last 3 turns. There is no undo.* or *This will branch here; the old turns stay on the old branch.* The **Regenerate the last turn?** box says *This will branch here; the old turns stay on the old branch.* under Branch, and adds nothing under Overwrite.
 
 [Back and Forward](#back-and-forward) aren't a revision: nothing is lost until you write something new, and then the turns ahead are replaced in this session, whatever On revision says. To keep them, branch first.
 
@@ -417,9 +450,11 @@ To keep a value on screen beside the story, add an **Annex** widget and set its 
 
 ## The session's lorebook
 
-A session can read one [lorebook](./lorebooks.md): its world lore, character lore and history. Choose it under **The story** in the session's settings, or, for a session you own, use **Read into this session** beside the book's name in the Lorebooks view (the first item under **⋯** on a narrow screen); **Stop reading** takes it out. A session reads one book at a time, so switching asks first. The book can be chosen, switched or removed until the story is underway (anything played beyond the greetings, or anything in the session's notes), and a book chosen before then gives the session its rules, if it has rules of its own (a book on Freeform leaves the session's as they are). After that the session keeps its book, and the setting says so; start a new session to read another. A session started from a [starter lorebook](./lorebooks.md#starter-starter lorebooks) has its world in its notes from the first line, so it keeps them from the start: **Make a lorebook from its notes** turns them into a lorebook of yours to keep and build on. See [Reading a book into a session](./lorebooks.md#reading-a-book-into-a-session). Under the lorebook, **Lorebook writes** says how much the session may write to it: the stricter of your own setting and the book's, and which of the two is holding it back when they differ (see [What a session may write](./lorebooks.md#what-a-session-may-write)).
+A session can read one [lorebook](./lorebooks.md): its world lore, character lore and history. Choose it under **The story** in the session's settings, or, for a session you own, use **Read into this session** beside the book's name in the Lorebooks view (the first item under **⋯** on a narrow screen); **Stop reading** takes it out. A session reads one book at a time, so switching asks first. The book can be chosen, switched or removed until the story is underway (anything played beyond the greetings, or anything in the session's notes), and a book chosen before then gives the session its rules, if it has rules of its own (a book on Freeform leaves the session's as they are). After that the session keeps its book, and the setting says so; start a new session to read another. A session started from a [starter lorebook](./lorebooks.md#starter-starter lorebooks) has its world in its notes from the first line, so it keeps them from the start: **Share as a lorebook** turns them into a lorebook of yours to keep and build on. See [Reading a book into a session](./lorebooks.md#reading-a-book-into-a-session). Under the lorebook, **Lorebook writes** says how much the session may write to it: the stricter of your own setting and the book's, and which of the two is holding it back when they differ (see [What a session may write](./lorebooks.md#what-a-session-may-write)).
 
-Once it reads a lorebook, the conversation shows the story's days and scenes. A date marks the first line of each new day in the story (the [story clock](./lorebook-time.md#the-story-clock) when the line was written); click it to open that day's history entry. Dates are written in the lorebook's [calendar](./lorebook-time.md#calendar-and-clock), with its month names (*5 Bloom, Year 412*); a lorebook without one writes them plainly (*Year 412, Mo. 3, Day 5*). A **scene divider** marks where a scene begins: its colour, its name, the day it began and how many lines it holds; point at the count to see who is in it (its cast; on a guest's screen, who speaks in it). The scene still going reads *since* its day and is marked **open**. Scenes summarized the older way, by picking lines, show their history entry's date above them instead. When such a history entry is finished, the line after it reads *Next: ‹date›* if a later entry exists; if none does, **Start a new entry** is in the **⋯** menu of the entry's last scene, for anyone who can open the lorebook.
+Every session also owns a lorebook of its own, its **Session notes**, from the moment it is made (also when you import a chat, and when you branch). It is born with the Gregorian calendar and no clock set. A session that reads no shared book keeps its clock, scenes and summaries there; one that does read a book keeps its changes there, on top of that book. You never pick it in a list: the Lorebooks view has a **Session notes** section for these books. See [Your session's own notes](./lorebooks.md#your-sessions-own-notes).
+
+Once the session has a clock and scenes, the conversation shows the story's days and scenes. A date marks the first line of each new day in the story (the [story clock](./lorebook-time.md#the-story-clock) when the line was written); click it to open that day's history entry. Dates are written in the lorebook's [calendar](./lorebook-time.md#calendar-and-clock), with its month names (*5 Bloom, Year 412*); a lorebook without one writes them plainly (*Year 412, Mo. 3, Day 5*). A **scene divider** marks where a scene begins: its colour, its name, the day it began and how many lines it holds; point at the count to see who is in it (its cast; on a guest's screen, who speaks in it). The scene still going reads *since* its day and is marked **open**. Scenes summarized the older way, by picking lines, show their history entry's date above them instead. When such a history entry is finished, the line after it reads *Next: ‹date›* if a later entry exists; if none does, **Start a new entry** is in the **⋯** menu of the entry's last scene, for anyone who can open the lorebook.
 
 On a session you own, click a divider's name to rename it. Its **⋯** menu has:
 
@@ -433,7 +468,7 @@ A finished summary waits for you: the divider says **Ready to review** until you
 
 ### Scenes: start and end them
 
-A scene runs from the line it starts at to the line it ends at, on one channel. Use **Start scene here** and **End scene here** in a message's menu. Starting a scene while another is open ends that one at the line before. **End scene here** follows **How scenes begin** (below): under **Automatic** the next scene starts at the line after; under **Suggested** a *New scene? — the last scene ended* suggestion waits there; under **Manual** the scene just ends. Ending at the newest line, the next line you write takes its place. They're offered on sessions you own, when the session reads a lorebook and its genre keeps scenes, and only where they'd work: not inside a finished scene, and not before the open one. A new scene is filed under the history entry the story is in (a new day makes a new entry), named *Scene 3* and so on (with the place, in a genre that keeps one: *Scene 3 · the Crypt*), and its cast is proposed from who speaks in it, and kept up to date as new people speak while it's open; nothing here asks the model. Summarize it from its divider when you like.
+A scene runs from the line it starts at to the line it ends at, on one channel. Use **Start scene here** and **End scene here** in a message's menu. Starting a scene while another is open ends that one at the line before. **End scene here** follows **How scenes begin** (below): under **Automatic** the next scene starts at the line after; under **Suggested** a *New scene? — the last scene ended* suggestion waits there; under **Manual** the scene just ends. Ending at the newest line, the next line you write takes its place. They're offered on sessions you own, when the genre keeps scenes, and only where they'd work: not inside a finished scene, and not before the open one. A new scene is filed under the history entry the story is in, in the lorebook the session reads or else its **Session notes** (a new day makes a new entry), named *Scene 3* and so on (with the place, in a genre that keeps one: *Scene 3 · the Crypt*), and its cast is proposed from who speaks in it, and kept up to date as new people speak while it's open; nothing here asks the model. Summarize it from its divider when you like.
 
 ### When a new scene begins
 
@@ -441,9 +476,10 @@ Under **The story** in the session's settings, **Scenes** decides what happens w
 
 - **How scenes begin**: **Suggested** (the default) puts a quiet *New scene? — the day changed* in the conversation, just above the line, with **Yes** (start a scene there; an open scene ends at the line before) and **Not here** (it isn't offered at that line again). **Automatic** starts the scene there itself; you can move or remove the boundary afterwards. **Manual** leaves every scene to **Start scene here** and **End scene here**.
 - **Suggest a new scene when** (or **Begin a new scene when**, under Automatic): **The story's day changes** (the [story clock](./lorebook-time.md#the-story-clock) on a line is a later day than on the line before), **Time passes** (**Time passes…**, you moved the clock, you accepted a suggestion that time passed, or Story's **Note what changed** moved the clock with **Move the clock** on and the routine on **Full** (see [What runs between turns](./genre-story.md#what-runs-between-turns)), since the line before; the reply's own clock tick doesn't count), **The place changes** (only in a genre that keeps a place, as [Story](./genre-story.md) and the [Lair](./genre-lair.md) keep the party's **Location**: where the story was when a line was written differs from the line before and from where the open scene began, however it changed: **Note what changed**, your own edit, an accepted suggestion), and, off unless you tick them, **A narrator line is posted**, **The scene reaches** a number of lines, and **A pause in play of more than** a number of real hours. The first three are on by default. A genre can add moments of its own, listed after these and on by default, such as the Lair's **The party reached a new floor**; the suggestion then says it in the same words.
+- **Notice when the scene moves on** is one of Story's **Look back over the story** switches (see [What runs between turns](./genre-story.md#what-runs-between-turns)), on by default. It adds one question to that routine's call, so no model is asked for it alone, and it follows how scenes begin. Under **Suggested** the conversation shows the *New scene?* suggestion at the line where the story moved on, with the model's reason after the dash (*the story moved on* when it gave none). Under **Automatic** the new scene begins there. Under **Manual** nothing happens. When the routine is on **Review**, it always asks, even under **Automatic**. It is asked only when all of these hold: the genre keeps scenes and the session may write to its lorebook; the scene mode isn't **Manual**; the open scene holds at least 6 lines (or, with none open, at least 6 lines have come since the last scene ended); there are lines the routine hasn't looked at yet; none of the other triggers above fired in those lines; no suggestion is already waiting; and you haven't just set aside its last suggestion with **Not here**.
 - **Summaries**: **On request** (the default) summarizes a scene when you ask, from its divider or the [Chronicle](./session-layout.md#the-widgets); **On close** writes each scene's summary in the background as the scene ends, ready for review in the activity list; **Never** offers no **Summarize** in this session.
 
-None of this asks the model: each of these is read off what the story already holds. The suggestions only appear for the session's owner, and only once the session reads a lorebook.
+None of these asks the model: each is read off what the story already holds. The one exception is **Notice when the scene moves on**, above. The suggestions only appear for the session's owner.
 
 ### Where the session reads its lorebook
 

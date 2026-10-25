@@ -3,6 +3,8 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { isSharedWith } from "$lib/server/utils/shares"
 
+export type SessionAccess = { isOwner: boolean; isGuest: boolean; hasAccess: boolean }
+
 // Shared by any socket handler file that gates access to a session-scoped
 // resource — duplicating this check per-file is how session guests previously
 // ended up locked out of features (eg. scenes) that used a local, owner-only
@@ -10,7 +12,7 @@ import { isSharedWith } from "$lib/server/utils/shares"
 export async function checkSessionAccess(
 	sessionId: number,
 	userId: number
-): Promise<{ isOwner: boolean; isGuest: boolean; hasAccess: boolean }> {
+): Promise<SessionAccess> {
 	const session = await db.query.sessions.findFirst({
 		where: eq(schema.sessions.id, sessionId),
 		columns: { userId: true }

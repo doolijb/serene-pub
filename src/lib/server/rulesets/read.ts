@@ -37,10 +37,11 @@ import { bookCalendarOf, clockOf, clockOfNow, sessionStoryNowOf } from "$lib/ser
 import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 import { storedRulesetSettings, type StoredRulesetSettings } from "./settings"
 import type { StateOwner } from "$lib/server/state/owners"
-import { lorebooksReadBy } from "$lib/server/lorebooks/phantom"
+import { lorebooksReadBy } from "$lib/server/lorebooks/ownBook"
 import { byString, compendiumRow, loreEntriesById, type EntryText } from "./common"
 import { attributeSlotsOf, sectionsOf } from "./functionRun"
 import type { HeldPiece, HeldRepertoire, OwnerCustomField, OwnerStat, OwnerView, Tie } from "./types"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 
 type Db = Parameters<typeof stateFor>[0]
 
@@ -535,7 +536,7 @@ export async function tiesBetween(db: Db, session: RulesetSession, views: readon
 				or(
 					isNull(r.branchId),
 					session.lorebookBranchId != null ? eq(r.branchId, session.lorebookBranchId) : undefined,
-					books.phantomId != null ? eq(r.lorebookId, books.phantomId) : undefined
+					books.ownBookId != null ? eq(r.lorebookId, books.ownBookId) : undefined
 				)
 			)
 		)
@@ -546,14 +547,14 @@ export async function tiesBetween(db: Db, session: RulesetSession, views: readon
 	// rule-fed row of a book the session may not write) reads in the book's
 	// row's place — one perspective, one row.
 	const overlaid = new Set(
-		books.phantomId == null
+		books.ownBookId == null
 			? []
 			: rows
-					.filter((r) => r.lorebookId === books.phantomId && r.fromNodeId != null && r.toNodeId != null)
+					.filter((r) => r.lorebookId === books.ownBookId && r.fromNodeId != null && r.toNodeId != null)
 					.map((r) => `${r.fromNodeId}>${r.toNodeId}`)
 	)
 	for (const row of rows) {
-		if (row.lorebookId !== books.phantomId && row.fromNodeId != null && row.toNodeId != null && overlaid.has(`${row.fromNodeId}>${row.toNodeId}`)) continue
+		if (row.lorebookId !== books.ownBookId && row.fromNodeId != null && row.toNodeId != null && overlaid.has(`${row.fromNodeId}>${row.toNodeId}`)) continue
 		const from = end(row.fromNodeId, row.fromEntryId)
 		const to = end(row.toNodeId, row.toEntryId)
 		if (!from || !to) continue
@@ -581,10 +582,12 @@ export async function storyClockOf(
 	db: Db,
 	session: RulesetSession
 ): Promise<{ now: StoryClock; calendar: StoryCalendar | null } | null> {
-	const now = session.lorebookId ? await sessionStoryNowOf(db, session.id) : null
+	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
+	const book = session.lorebookId ?? (await attachedOrOwnBookOf(db, session.id))
+	const now = book != null ? await sessionStoryNowOf(db, session.id) : null
 	const clock = now ? clockOfNow(now) : session.clock
 	if (!clock) return null
-	const calendar = session.lorebookId ? await bookCalendarOf(db, session.lorebookId) : null
+	const calendar = book != null ? await bookCalendarOf(db, book) : null
 	return { now: clock, calendar }
 }
 

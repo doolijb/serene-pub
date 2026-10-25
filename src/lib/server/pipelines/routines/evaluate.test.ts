@@ -48,7 +48,11 @@ vi.mock("$lib/server/pipelines/routines/state", () => ({
 }))
 vi.mock("$lib/server/pipelines/scripts/chains", () => ({ scriptsEnabledFor: async () => scripts.on }))
 
-const fakeDb = { update: () => ({ set: () => ({ where: async () => undefined }) }) } as unknown as Db
+const fakeDb = {
+	update: () => ({ set: () => ({ where: async () => undefined }) }),
+	// The archive read: no row = not archived.
+	select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) })
+} as unknown as Db
 
 let evaluateMoments: typeof import("./evaluate").evaluateMoments
 let interaction: typeof import("./interaction")

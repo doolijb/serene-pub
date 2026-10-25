@@ -12,6 +12,7 @@ import {
 	awaitsSummary,
 	firstLineOf,
 	summaryStatusOf,
+	throughLabelOf,
 	type HistoryEntriesDeps,
 	type HistoryRow,
 	type SceneRow
@@ -410,5 +411,60 @@ describe("firstLineOf", () => {
 		expect(firstLineOf("\n\n  hello  \nworld")).toBe("hello")
 		expect(firstLineOf(null)).toBe("")
 		expect(firstLineOf("x".repeat(200), 10)).toBe(`${"x".repeat(9)}…`)
+	})
+})
+
+describe("🚧 pr-6s2: the own book and what a summary was written from", () => {
+	const NO_BOOK: Reading = {
+		...OWNER_READING,
+		lorebookId: null,
+		branchId: 2,
+		present: null,
+		linePresent: null
+	}
+
+	test("no shared lorebook, an own book: its history and lines are read, on the main line", async () => {
+		const { d, asked } = deps({ reading: NO_BOOK, ownBookId: () => 9 })
+		const out = await answerHistoryEntries({}, d)
+		expect(out.lorebookId).toBe(9)
+		expect(asked).toContain("history 9")
+		expect(asked).toContain("lines 9")
+	})
+
+	test("no shared lorebook and no own book: the empty, no-book state", async () => {
+		const { d, asked } = deps({ reading: NO_BOOK })
+		const out = await answerHistoryEntries({}, d)
+		expect(out.lorebookId).toBeNull()
+		expect(asked).toEqual(["clock 7"])
+	})
+
+	test("a scene's loreSources answer with a spelled label; unknown time is empty", async () => {
+		const withSources = (throughAt: string | null): SceneRow[] =>
+			SCENES.map((s) =>
+				s.id === 11
+					? {
+							...s,
+							loreSources: { fromMessageId: 3, throughMessageId: 8, throughAt }
+						}
+					: s
+			)
+		const a = await answerHistoryEntries(
+			{},
+			deps({ sceneList: () => withSources("2026-10-03T14:20:00.000Z") }).d
+		)
+		const first = a.scenes.find((s) => s.id === 11)!
+		expect(first.loreSources?.fromMessageId).toBe(3)
+		expect(first.loreSources?.throughMessageId).toBe(8)
+		expect(first.loreSources?.throughLabel).not.toBe("")
+		expect(a.scenes.find((s) => s.id === 10)!.loreSources).toBeUndefined()
+		const b = await answerHistoryEntries(
+			{},
+			deps({ sceneList: () => withSources(null) }).d
+		)
+		expect(b.scenes.find((s) => s.id === 11)!.loreSources?.throughLabel).toBe("")
+	})
+
+	test("throughLabelOf: null is empty", () => {
+		expect(throughLabelOf(null)).toBe("")
 	})
 })

@@ -6,8 +6,8 @@
  * turn) is `sockets/sessions.genreParity.int.test.ts`.
  */
 import { describe, expect, it } from "vitest"
-import { effectiveRegistrations, genreDefaultsOf, getGenre, type SpecDocument } from "@serene-pub/sdk"
-import { CORE_SPECS, coreGenres, corePresetSeeds } from "@serene-pub/core-catalog"
+import { effectiveRegistrations, genreDefaultsOf, getGenre, parseActionIdentity, type SpecDocument } from "@serene-pub/sdk"
+import { CORE_SPECS, closeOutAction, coreGenres, corePresetSeeds } from "@serene-pub/core-catalog"
 import { derivedNumbersOf, modelCallsOf, writeTargetsOf } from "./derived"
 
 const docs = () => {
@@ -66,7 +66,8 @@ describe("core presets: what the card prints is what the registrations derive", 
 		expect(of("core-story-living").perTurnRoutines).toEqual([expect.stringContaining("story-reckoning")])
 		expect(of("core-story-minimal").perTurnRoutines).toEqual([])
 		// The sweep's lore writes go with it; what still writes lore on Minimal
-		// is a summary a person asks for (R50: the summaries are registered too).
+		// is a summary a person asks for (R50: the summaries are registered
+		// too) — a summarize action, or the scene's Close out (pr-6 B4).
 		const seed = corePresetSeeds().find((s) => s.seedKey === "core-story-minimal")!
 		const regs = effectiveRegistrations(genreDefaultsOf(getGenre(seed.genreId))?.registrations ?? [], seed.registrations)
 		const lore = regs.filter((r) => {
@@ -74,6 +75,11 @@ describe("core presets: what the card prints is what the registrations derive", 
 			return !!doc && writeTargetsOf(doc).includes("core:outlet/create-lore-entry")
 		})
 		expect(lore.length).toBeGreaterThan(0)
-		expect(lore.every((r) => r.trigger.family === "action" && /#summarize-/.test((r.trigger as { action: string }).action))).toBe(true)
+		const asksForSummary = (r: (typeof lore)[number]) => {
+			if (r.trigger.family !== "action") return false
+			const action = (r.trigger as { action: string }).action
+			return /#summarize-/.test(action) || parseActionIdentity(action)?.key === closeOutAction.key
+		}
+		expect(lore.every(asksForSummary)).toBe(true)
 	})
 })

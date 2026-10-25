@@ -43,8 +43,7 @@ import { AMBIENT_PRELUDE } from "./prelude"
 import {
 	STORAGE_HOST_SOURCE,
 	permissionKey,
-	type PermissionConfig,
-	type PluginRowChange
+	type PermissionConfig
 } from "./storageHost"
 import { FETCH_HOST_SOURCE } from "./fetchHost"
 import { CRYPTO_HOST_SOURCE } from "./cryptoHost"
@@ -65,7 +64,7 @@ interface StoredBundle {
 }
 
 type EvalOutcome =
-	| { ok: true; json: string; rows?: PluginRowChange[] | null }
+	| { ok: true; json: string }
 	| { ok: false; reason: string; kind: "error" | "load" | "missing" }
 
 const WORKER_SOURCE =
@@ -87,7 +86,7 @@ var __DENIED_STORAGE = (function () {
 	// Every method the real store has, refusing by name — a plugin without the
 	// grant must hear "permission not granted", never "is not a function".
 	var files = { list: d, stat: d, read: d, write: d, delete: d, deleteAll: d };
-	return { usage: d, get: d, keys: d, query: d, put: d, delete: d, deleteAll: d, files: files, read: d, write: d, exists: d, remove: d, list: d, size: d };
+	return { usage: d, files: files, read: d, write: d, exists: d, remove: d, list: d, size: d };
 })();
 const { parentPort } = require("worker_threads")
 const bundles = new Map()
@@ -214,13 +213,11 @@ parentPort.on("message", async (msg) => {
 			// in here and applied only if it returns — so a kill, which on this
 			// backend is the whole thread going away, cannot leave a prefix of
 			// them on disk.
-			// The host loaded this plugin's rows before it posted the job; they
-			// seed the transaction's row projection, and its diff comes back
-			// with the result for the host to commit. Nothing in here holds a
-			// database handle, and nothing in here needs one.
+			// Nothing in here holds a database handle, and nothing in here needs
+			// one.
 			// Only for a kind granted storage (R-3): a task's call opens no
-			// transaction and commits no rows.
-			const tx = job.grants.storage && bundle.config && bundle.config.storageDir ? makeStorageHost(bundle.config, job.rows, job.nowMs) : null
+			// transaction and commits nothing.
+			const tx = job.grants.storage && bundle.config && bundle.config.storageDir ? makeStorageHost(bundle.config, job.nowMs) : null
 			// A fresh Compartment per call: no ambient authority, only frozen
 			// intrinsics; every call starts from the same clean world. The two
 			// permission-gated hosts are endowed only for a kind granted them —
@@ -243,11 +240,9 @@ parentPort.on("message", async (msg) => {
 				// The hook returned: only now do its writes become real. A
 				// commit that cannot be applied throws, and the catch below
 				// reports the call as failed rather than letting it pass as a
-				// success whose data never landed. Files land here; the ROW diff
-				// only rides back on the outcome, so a file commit that threw
-				// carries no rows and the host commits none.
-				const rows = tx ? tx.commit() : null
-				parentPort.postMessage({ id: msg.id, outcome: { ok: true, json, rows } })
+				// success whose data never landed. Files land here.
+				if (tx) tx.commit()
+				parentPort.postMessage({ id: msg.id, outcome: { ok: true, json } })
 			} finally {
 				jobs.delete(msg.id)
 				if (tx) tx.discard()
@@ -396,7 +391,6 @@ export class SesWorkerSandbox implements PluginSandbox {
 			inputJson: JSON.stringify(opts.input),
 			seedLabel: opts.seedLabel,
 			nowMs: opts.nowMs,
-			rows: opts.rows,
 			secrets: opts.secrets,
 			// Derived here, on the host, from the kind the caller named — the
 			// worker never sees the kind, only what it grants (R-3). Throws on
@@ -542,11 +536,7 @@ export class SesWorkerSandbox implements PluginSandbox {
 			value: parsed.u ? undefined : parsed.v,
 			logs: parsed.logs ?? [],
 			durationMs: Date.now() - started,
-			backend: this.kind,
-			// What the hook decided about its rows, for the manager to commit.
-			// A call that ended any other way carries nothing, which is what
-			// makes "a killed hook commits neither half" true.
-			rowChanges: outcome.rows ?? undefined
+			backend: this.kind
 		}
 	}
 

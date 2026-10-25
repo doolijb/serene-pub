@@ -47,6 +47,7 @@
  */
 
 import { db } from "$lib/server/db"
+import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, isNull } from "drizzle-orm"
 import {
@@ -967,7 +968,7 @@ async function ledgerFor(
 		}),
 		// 🚧 The clock's moves (live scenes §15 G5): the world's lines, heard
 		// by everyone — the clock is the session's own, never a holder's.
-		...(await clockLedgerRows(db, sessionId, links.lorebookId ?? null)).map((move) => ({
+		...(await clockLedgerRows(db, sessionId, links.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId)))).map((move) => ({
 			id: move.id,
 			kind: "clock" as const,
 			messageId: move.messageId,
@@ -1025,10 +1026,10 @@ async function ledgerPlaces(links: SessionLinks): Promise<LocationLink[]> {
 		: []
 	// 🚧 The session's own notes' rooms too (PLAN-rulesets §26): a crawl with
 	// no lorebook names its rooms from them, at the notes' head.
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const phantom = await phantomOf(db, links.sessionId)
-	if (phantom && phantom.id !== links.lorebookId)
-		for (const place of await placesOnReading(db, phantom.id, MAIN_HEAD, "book"))
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const ownBook = await ownBookOf(db, links.sessionId)
+	if (ownBook && ownBook.id !== links.lorebookId)
+		for (const place of await placesOnReading(db, ownBook.id, MAIN_HEAD, "book"))
 			out.push({ ...place, sessionOnly: true })
 	return out
 }
@@ -1199,22 +1200,22 @@ async function storyTimeWords(sessionId: number, links: SessionLinks): Promise<{
 /**
  * 🚧 The people this session's story has met (PLAN-dc-after-walk2 Q3-5, the
  * walk's #29): the `core:entry/character-lore` entries of the session's OWN
- * notes (its phantom lorebook — where a story that writes people, a dungeon
+ * notes (its own book — where a story that writes people, a dungeon
  * crawl's, puts each one it meets), as the session sees them, entry order.
  * ⏳ A session with a lorebook of its own lists none: that book holds people
  * the story never met, and nothing yet marks the ones it did.
  */
 async function metPeopleOf(sessionId: number): Promise<{ entryId: number; name: string }[]> {
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const phantom = await phantomOf(db, sessionId)
-	if (!phantom) return []
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const ownBook = await ownBookOf(db, sessionId)
+	if (!ownBook) return []
 	const [row] = await db
 		.select({ lorebookId: schema.sessions.lorebookId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (row?.lorebookId && row.lorebookId !== phantom.id) return []
-	const people = (await entriesAsRead(db, phantom.id, MAIN_HEAD, "session", ["core:entry/character-lore"]))
+	if (row?.lorebookId && row.lorebookId !== ownBook.id) return []
+	const people = (await entriesAsRead(db, ownBook.id, MAIN_HEAD, "session", ["core:entry/character-lore"]))
 		.filter((p) => !p.unseen && p.name.trim())
 		.map(({ entryId, name }) => ({ entryId, name: name.trim() }))
 	if (!people.length) return []

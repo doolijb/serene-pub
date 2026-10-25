@@ -21,6 +21,7 @@ import {
 	type ComposerStatesV1
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { sessionArchivedRefusal } from "$lib/server/sessions/archive"
 
 /** Thrown with the sentence a run halts on. */
 export class ComposerStateRefusal extends Error {}
@@ -104,6 +105,9 @@ export async function composerRefusal(
 	channel: string,
 	userId: number
 ): Promise<string | null> {
+	// 🚧 pr-6 R-k: an archived session is read-only — every composer, everyone.
+	const archived = await sessionArchivedRefusal(db, sessionId)
+	if (archived) return composerClosedRefusal({ reason: archived })
 	const states = await readSessionComposerStates(db, sessionId)
 	if (!Object.keys(states).length) return null
 	const closure = composerClosureFor(states, channel, userId)

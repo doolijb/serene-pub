@@ -40,7 +40,10 @@ import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessio
 import type { MessageV1 } from "@serene-pub/sdk"
 import { DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
-import { REWIND_NONE_AHEAD } from "$lib/shared/sessions/rewind"
+import { rewindStateOf, withStackReplaced, type RewindState } from "$lib/shared/sessions/rewind"
+import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
+import { generatingOf, rewindOf } from "$lib/client/sessions/store/derive"
+import type { SessionPayload } from "$lib/client/sessions/store/records"
 import {
 	asksToJoin,
 	offersSeat,
@@ -83,9 +86,18 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	const newMessage = $derived(d.draft())
 	const writeDraft = (content: string) => d.writeDraft(content)
 
-	let session: Sockets.Sessions.Get.Response["session"] | undefined = $state()
-	let pagination: Sockets.Sessions.Get.Response["pagination"] | undefined =
-		$state()
+	// 🚧 The session is the store's records composed back (pr-6s2 G3): the row, its
+	// message rows and its cast (each a record of its own). The cast keeps its identity
+	// across streamed chunks — it reads no message.
+	/** The session this page last opened in the store (plain: bookkeeping, never read by a derived). */
+	let openedId: number | null = null
+	const record = $derived(sessionStore.session(sessionId))
+	const rows = $derived(record ? sessionStore.messagesOf(sessionId) : [])
+	const cast = $derived(record ? sessionStore.castOf(sessionId) : undefined)
+	const session: SessionPayload | undefined = $derived(
+		record && cast ? ({ ...record, ...cast, sessionMessages: rows } as SessionPayload) : undefined
+	)
+	const pagination = $derived(sessionStore.windowOf(sessionId)?.pagination)
 	let sessionNotFound = $state(false)
 	let loadingOlderMessages = $state(false)
 
@@ -251,23 +263,21 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	// The mode's shape (19 §1–§2): what capabilities exist for this session at
 	// all. Null — an unknown mode, or a registry that never synced — means
 	// today's behaviour exactly, the F29 posture the creation form shares.
-	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
-	let modeShape = $derived(
-		modesList.find((m) => m.genreId === ((session as any)?.genreId ?? ""))
-			?.shape ?? null
-	)
+	const genreRow = $derived(sessionStore.genreOf(sessionId) ?? null)
+	const genreReplied = $derived(sessionStore.genreOf(sessionId) !== undefined)
+	let modeShape = $derived(genreRow?.shape ?? null)
 	// `composer: 'none'` — a purely trigger-driven mode: the tabs (triggers,
 	// lore, stats) stay; the text input and send affordance go.
 	let composerHidden = $derived(modeShape?.composer === "none")
 	// Read-only (19 §6, ruled): a non-standard mode this build does not
 	// register means the session's history stays readable and nothing starts a
-	// new turn. Requires the modes list to have actually arrived — an
-	// in-flight fetch must not flash the banner over a healthy session.
+	// new turn. Requires a reply for this session's genre to have arrived and
+	// held no row — an in-flight fetch must not flash the banner over a healthy session.
 	let modeMissing = $derived(
-		modesList.length > 0 &&
+		genreReplied &&
+			genreRow === null &&
 			!!(session as any)?.genreId &&
-			(session as any).genreId !== "core:genre/story" &&
-			!modesList.some((m) => m.genreId === (session as any).genreId)
+			(session as any).genreId !== "core:genre/story"
 	)
 	// A capability the shape omits (or caps at zero) does not exist for the
 	// session: no persona requirement on send, no character-response mechanics.
@@ -355,7 +365,8 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	// been seen generating — never drawn again, whatever they do after.
 	const pending = createPendingReplies({
 		sessionId: () => sessionId,
-		rows: () => session?.sessionMessages
+		rows: () => session?.sessionMessages,
+		runs: () => sessionStore.runsOf(sessionId)
 	})
 	const pendingRows = $derived(pending.rows)
 	/**
@@ -384,6 +395,18 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		return undefined
 	})
 
+	/**
+	 * Whether the session is generating, as the page's presses read it (a
+	 * chip, the legend, the header): no session yet, its newest row writing,
+	 * or a reply run still in flight after its row finished — the run the
+	 * server's door (`sessionBusy`) waits on, read off the `sessions:runStatus`
+	 * frames the page already hears. A `reply` or `action` run counts, by its
+	 * kind (`generatingOf`); a routine run does not, though the door waits on
+	 * it (the owner's open question, F option (a)). Read from the session
+	 * store's rows and runs.
+	 */
+	const generating = $derived(!session || generatingOf(rows, sessionStore.runsOf(sessionId)))
+
 	// The author's newest line — keyed on role, never on a persona (F1): a
 	// persona-less genre's user line has no personaId (`swipeControls.ts`).
 	/**
@@ -410,10 +433,10 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	})
 
 	/** What the header calls this session's genre; null while the list loads. */
-	let genreName: string | null = $derived(
-		modesList.find((m) => m.genreId === ((session as any)?.genreId ?? ""))
-			?.name ?? null
-	)
+	let genreName: string | null = $derived(genreRow?.name ?? null)
+
+	/** 🚧 Back · Forward · Regenerate (RF fix 5, pr-6 D8): the strip's state, computed ONCE — the dossier and the header read this. */
+	const rewind: RewindState | null = $derived(rewindOf(record, rows))
 
 	// Whether the viewer is a guest (not the session owner). Read through
 	// the owner id alone: `session` is reassigned on every streamed chunk,
@@ -675,7 +698,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 					clearTimeout(timer)
 					release()
 					if (res.channels && session && session.id === id)
-						session = { ...session, channels: res.channels } as typeof session
+						sessionStore.patchSession(id, { channels: res.channels })
 					resolve({ error: res.error })
 				}
 			)
@@ -715,18 +738,17 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		const still = new Set(olderIn)
 		try {
 			for (const channel of asked) {
-				const mine = (session?.sessionMessages ?? []).filter((m) => (m.channel ?? "main") === channel)
+				const mine = sessionStore.messagesOf(sessionId).filter((m) => (m.channel ?? "main") === channel)
 				const oldest = mine.length ? Math.min(...mine.map((m) => m.id)) : undefined
 				const page = await messagesPage({ channel: exactChannel(channel), limit: 25, ...(oldest != null ? { beforeId: oldest } : {}) })
 				if (page.error || !session) break
-				const have = new Set(session.sessionMessages.map((m) => m.id))
-				const fresh = (page.rows as unknown as SelectSessionMessage[]).filter((m) => !have.has(m.id))
-				if (fresh.length) session.sessionMessages = [...fresh, ...session.sessionMessages].sort((a, b) => a.id - b.id)
+				sessionStore.prependMessages(sessionId, page.rows as unknown as SelectSessionMessage[])
 				if (!page.nextCursor) still.delete(channel)
 			}
 		} finally {
 			loadingOlderMessages = false
-			if (pagination) pagination = { ...pagination, olderIn: [...still], hasMore: still.size > 0 }
+			if (pagination)
+				sessionStore.setPagination(sessionId, { ...pagination, olderIn: [...still], hasMore: still.size > 0 })
 		}
 	}
 
@@ -825,135 +847,80 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			return
 		}
 		if (msg.session?.id === sessionId) {
-			if (session && loadingOlderMessages && msg.beforeId != null) {
-				// Load-more: prepend older messages (server already deduped via cursor)
-				const existingIds = new Set(
-					session.sessionMessages.map((m) => m.id)
-				)
-				const olderMessages = msg.session.sessionMessages.filter(
-					(m) => !existingIds.has(m.id)
-				)
-				const allMessages = [
-					...olderMessages,
-					...session.sessionMessages
-				]
-				session.sessionMessages = allMessages.sort(
-					(a, b) => a.id - b.id
-				)
+			if (record && loadingOlderMessages && msg.beforeId != null) {
+				// Load-more: prepend older messages (the store skips rows it holds)
+				sessionStore.prependMessages(sessionId, msg.session.sessionMessages)
+				sessionStore.setPagination(sessionId, msg.pagination)
 
 				// The log's `sp-scroll` holds the reader's place as the rows land.
 				loadingOlderMessages = false
 			} else {
 				// Initial load or session switch — restore draft only on first load
-				const isFirstLoad = !session
-				session = {
-					...msg.session,
-					sessionMessages: msg.session.sessionMessages.sort(
-						(a, b) => a.id - b.id
-					)
-				}
+				const isFirstLoad = !sessionStore.session(sessionId)
+				sessionStore.load(msg.session, msg.pagination)
 				if (isFirstLoad && msg.userDraft) writeDraft(msg.userDraft)
 				loadingOlderMessages = false
 				// Autopopulate panels for any channel already present in the
 				// loaded history (21 §9) — a session reopened with `tasks`
 				// messages shows its Tasks panel without waiting for a new one.
-				for (const m of session.sessionMessages)
+				for (const m of msg.session.sessionMessages)
 					surfaceManager.activateForChannel((m as any).channel)
 			}
-			pagination = msg.pagination
 			// Auto-scroll is handled by the $effect
 		}
 	}
 
-	function handleSessionMessage(msg: Sockets.SessionMessage.Response) {
-		const currentSession = session
-		if (
-			currentSession != null &&
-			msg.sessionMessage &&
-			msg.sessionMessage.sessionId === sessionId
-		) {
-			const sessionMessage = msg.sessionMessage
-			const existingIndex = currentSession.sessionMessages.findIndex(
-				(m: SelectSessionMessage) => m.id === sessionMessage.id
-			)
-			if (existingIndex !== -1) {
-				// Held before the array is rewritten: the row it REPLACES is
-				// the only thing that says whether this push is a streamed
-				// chunk, an edit or a run ending (`witnessMessage`).
-				const previous = currentSession.sessionMessages[existingIndex]
-				const updatedMessages = [...currentSession.sessionMessages]
-				updatedMessages[existingIndex] = sessionMessage
-				session = {
-					...currentSession,
-					sessionMessages: updatedMessages
-				}
-				// Announced AFTER the state is written, so a widget woken by
-				// the event reads the row the event describes.
-				surfaceManager.witnessMessage(sessionMessage, previous)
-			} else {
-				// Add new message and maintain chronological order
-				const updatedMessages = [
-					...currentSession.sessionMessages,
-					sessionMessage
-				]
-				// 🚧 A new row replaced the forward stack (RF fix 5): the
-				// server deleted the turns ahead before it wrote this one.
-				const rewind = (currentSession as { rewind?: { ahead?: number } }).rewind
-				session = {
-					...currentSession,
-					sessionMessages: updatedMessages.sort((a, b) => a.id - b.id),
-					...(rewind?.ahead
-						? { rewind: { ...rewind, ahead: 0, forward: REWIND_NONE_AHEAD } }
-						: {})
-				}
-				// Channel-driven autopopulation (21 §9): a message on a
-				// non-main channel flows in the panel that views that channel.
-				surfaceManager.activateForChannel(
-					(sessionMessage as any).channel
-				)
-				// No previous row: the arrival itself is `message:created`,
-				// which every widget's own feed announces. What this adds is
-				// `generation:start` for a reply that arrives already filling.
-				surfaceManager.witnessMessage(sessionMessage)
-			}
-			// Auto-scroll is handled by the $effect
+	/**
+	 * 🚧 pr-6 (ledger A1): the member push, folded in by row id (`mergeRefreshedRows`) — never a
+	 * replace. Pagination, an in-flight load-older and the draft are the `sessions:get` reply's alone.
+	 */
+	function handleSessionsRefresh(msg: Sockets.Sessions.Refresh.Response) {
+		if (msg.session === null) {
+			if (msg.sessionId === sessionId) sessionNotFound = true
+			return
 		}
+		if (!msg.session || msg.session.id !== sessionId) return
+		if (!session) return
+		const coversFromId =
+			(msg as { coversFromId?: number | null }).coversFromId ?? null
+		const added = sessionStore.merge(msg.session, coversFromId)
+		for (const m of added) surfaceManager.activateForChannel((m as any).channel)
+	}
+
+	function handleSessionMessage(msg: Sockets.SessionMessage.Response) {
+		if (!session || !msg.sessionMessage || msg.sessionMessage.sessionId !== sessionId) return
+		const sessionMessage = msg.sessionMessage
+		// 🚧 A new row replaced the forward stack (RF fix 5): the server deleted
+		// the turns ahead before it wrote this one. Read BEFORE the upsert.
+		const served = rewindStateOf(record)
+		const done = sessionStore.upsertMessage(sessionMessage)
+		if (!done) return
+		if (!done.added) {
+			// Announced AFTER the state is written, so a widget woken by
+			// the event reads the row the event describes. `previous` is the
+			// row it REPLACED: the only thing that says whether this push is a
+			// streamed chunk, an edit or a run ending (`witnessMessage`).
+			surfaceManager.witnessMessage(sessionMessage, done.previous)
+		} else {
+			if (served && served.ahead > 0)
+				sessionStore.patchSession(sessionId, { rewind: withStackReplaced(served) })
+			// Channel-driven autopopulation (21 §9): a message on a
+			// non-main channel flows in the panel that views that channel.
+			surfaceManager.activateForChannel((sessionMessage as any).channel)
+			// No previous row: the arrival itself is `message:created`,
+			// which every widget's own feed announces. What this adds is
+			// `generation:start` for a reply that arrives already filling.
+			surfaceManager.witnessMessage(sessionMessage)
+		}
+		// Auto-scroll is handled by the $effect
 	}
 
 	function handleCharactersUpdate(msg: Sockets.Characters.Update.Response) {
 		const charId = msg.character?.id
 		if (!charId || !session) return
-
-		// Update session characters if the character is in the session
-		const sessionCharacterIndex = session.sessionCharacters.findIndex(
-			(c: SelectSessionCharacter) => c.characterId === charId
-		)
-		if (sessionCharacterIndex !== -1) {
-			const updatedSessionCharacters = [...session.sessionCharacters]
-			updatedSessionCharacters[sessionCharacterIndex] = {
-				...updatedSessionCharacters[sessionCharacterIndex],
-				character: msg.character
-			}
-			session = {
-				...session,
-				sessionCharacters: updatedSessionCharacters
-			}
-		}
-
-		// …and the persona links, which name the same table. The SAME row can
-		// be in the cast and be somebody's persona, so this is a second check
-		// rather than an else.
-		const sessionPersonaIndex = session.sessionPersonas.findIndex(
-			(p: SelectSessionPersona) => p.personaId === charId
-		)
-		if (sessionPersonaIndex !== -1) {
-			const updatedSessionPersonas = [...session.sessionPersonas]
-			updatedSessionPersonas[sessionPersonaIndex] = {
-				...updatedSessionPersonas[sessionPersonaIndex],
-				persona: msg.character
-			}
-			session = { ...session, sessionPersonas: updatedSessionPersonas }
-		}
+		// The card is one record: every seat wearing it (cast member, persona,
+		// or both) sees the new one.
+		sessionStore.mergeCard(msg.character as NonNullable<typeof msg.character>)
 	}
 
 	/**
@@ -967,23 +934,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 */
 	function handleMediaChanged(msg: Sockets.Media.Changed.Response) {
 		if (!session) return
-		let touched = false
-		const sessionCharacters = session.sessionCharacters.map((cc) => {
-			if (!cc.character) return cc
-			const character = withRevisedAvatar(cc.character, msg)
-			if (character === cc.character) return cc
-			touched = true
-			return { ...cc, character }
-		})
-		const sessionPersonas = session.sessionPersonas.map((cp) => {
-			if (!cp.persona) return cp
-			const persona = withRevisedAvatar(cp.persona, msg)
-			if (persona === cp.persona) return cp
-			touched = true
-			return { ...cp, persona }
-		})
-		if (!touched) return
-		session = { ...session, sessionCharacters, sessionPersonas }
+		sessionStore.reviseAvatars(msg)
 	}
 
 	function handleSessionMessagesDelete(
@@ -1001,21 +952,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			// The row itself, while the page still holds it: the announcement
 			// below names the channel it was on so a widget that declared
 			// another is not told about it (`witnessMessageDeleted`).
-			const deleted = session.sessionMessages.find(
-				(m: SelectSessionMessage) => m.id === msg.id
-			)
-
-			// Remove the deleted message from the session messages array
-			const filteredMessages = session.sessionMessages.filter(
-				(m: SelectSessionMessage) => m.id !== msg.id
-			)
-
-			// Ensure messages remain sorted chronologically
-			session = {
-				...session,
-				sessionMessages: filteredMessages.sort((a, b) => a.id - b.id)
-			}
-
+			const deleted = sessionStore.removeMessage(sessionId, msg.id)
 			surfaceManager.witnessMessageDeleted(deleted ?? { id: msg.id })
 		}
 	}
@@ -1024,10 +961,10 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		msg: Sockets.Sessions.SetSpriteSet.Response
 	) {
 		if (msg.sessionId !== sessionId || !session || msg.error) return
-		const next = { ...((session as any).spriteSetOverrides ?? {}) }
+		const next = { ...((record as any)?.spriteSetOverrides ?? {}) }
 		if (msg.set) next[msg.characterId] = msg.set
 		else delete next[msg.characterId]
-		;(session as any).spriteSetOverrides = next
+		sessionStore.patchSession(sessionId, { spriteSetOverrides: next })
 	}
 
 	/**
@@ -1039,7 +976,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		msg: Sockets.Sessions.BackdropChanged.Response
 	) {
 		if (msg.sessionId !== sessionId || !session) return
-		;(session as any).backdropMediaId = msg.backdropMediaId ?? null
+		sessionStore.patchSession(sessionId, { backdropMediaId: msg.backdropMediaId ?? null })
 	}
 
 	function handleSessionsGetNarratorName(
@@ -1049,8 +986,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		narratorName = msg.narratorName
 	}
 
-	function handleSessionsModesPage(msg: Sockets.Sessions.Genres.Response) {
-		modesList = msg.genres || []
+	function handleSessionsGenreOf(msg: Sockets.Sessions.GenreOf.Response) {
+		if (msg.sessionId !== sessionId) return
+		sessionStore.mergeGenreOf(msg)
 	}
 
 	/**
@@ -1095,14 +1033,14 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			storyClockHour: own?.hour ?? null,
 			storyClockMinute: own?.hour != null ? (own?.minute ?? 0) : null
 		}
-		const row = session as unknown as Record<string, unknown>
+		const row = record as unknown as Record<string, unknown>
 		if (
 			(Object.keys(next) as (keyof typeof next)[]).every(
 				(k) => (row[k] ?? null) === next[k]
 			)
 		)
 			return
-		session = { ...session, ...next } as typeof session
+		sessionStore.patchSession(sessionId, next)
 	}
 
 	/** 🚧 The session's book's calendar, as a story clock reading carried it (§15 G9). */
@@ -1117,15 +1055,11 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	}
 
 	function setLorebook(newLorebookId: number) {
-		if (session) {
-			session = {
-				...session,
-				lorebookId: newLorebookId
-			} as typeof session
-		}
+		if (session) sessionStore.patchSession(sessionId, { lorebookId: newLorebookId })
 	}
 
 	d.inbox.on("sessions:get", handleSessionsGet)
+	d.inbox.on("sessions:refresh", handleSessionsRefresh)
 	d.inbox.on("sessionMessage", handleSessionMessage)
 	d.inbox.on("sessions:userTyping", handleSessionsUserTyping)
 	d.inbox.on("sessions:attendance", handleSessionsAttendance)
@@ -1139,7 +1073,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	d.inbox.on("sessions:backdropChanged", handleBackdropChanged)
 	d.inbox.on("sessions:annex", handleAnnex)
 	d.inbox.on("sessions:view", handleSessionsView)
-	d.inbox.on("sessions:genres", handleSessionsModesPage)
+	d.inbox.on("sessions:genreOf", handleSessionsGenreOf)
 	d.inbox.on("sessions:presetStatus", handlePresetStatus)
 	d.inbox.on("sessions:getNarratorName", handleSessionsGetNarratorName)
 	// The run-progress pushes, SCOPED to this session: every emitter puts
@@ -1147,13 +1081,19 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	// one's ticks — and an image run emits one preview frame per tick. The
 	// handlers' own id check stays as belt and braces.
 	d.inbox.on("pipelines:runStarted", handleRunStarted)
-	// Each run's status, to every user of the session — a reply's says its
-	// channel: the waiting row's source (`pendingReply.ts`).
-	d.inbox.on("sessions:runStatus", (msg) => pending.hear(msg))
+	// Each run's status, to every user of the session (every frame carries its
+	// `kind`; a reply's says its channel): the session store keeps it — the
+	// waiting rows and `generating` read it there.
+	d.inbox.on("sessions:runStatus", (msg) => sessionStore.mergeRunStatus(msg))
 	d.inbox.on("pipelines:progress", handleRunProgress)
 	// Runs belonging to a session nobody is looking at any more. The server
 	// keeps running them; the card is what goes away.
-	onDestroy(() => runProgress.clearAll())
+	onDestroy(() => {
+		runProgress.clearAll()
+		// Closed only while it is still this page's: a session page that
+		// replaces this one may already have opened its own.
+		if (sessionStore.openSessionId === openedId) sessionStore.open(null)
+	})
 
 	return {
 		/**
@@ -1208,9 +1148,6 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		set composerChannel(channel: string) {
 			composerChannel = channel
 		},
-		get modesList() {
-			return modesList
-		},
 		get composerHidden() {
 			return composerHidden
 		},
@@ -1244,6 +1181,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		get lastMessage() {
 			return lastMessage
 		},
+		get generating() {
+			return generating
+		},
 		get lastSettledMessageKey() {
 			return lastSettledMessageKey
 		},
@@ -1255,6 +1195,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		},
 		get genreName() {
 			return genreName
+		},
+		get rewind() {
+			return rewind
 		},
 		get isGuest() {
 			return isGuest
@@ -1307,9 +1250,11 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		},
 		/** Another session opened in the page: what the last one loaded goes. */
 		reset() {
-			session = undefined // Clear current session data
+			// The store drops every record of the last session (the genre row, the
+			// rows, the cast, the runs) and opens this one.
+			sessionStore.open(sessionId)
+			openedId = sessionId
 			sessionNotFound = false
-			pagination = undefined
 			loadingOlderMessages = false
 			presetStatus = undefined
 			presetBannerDismissed = false

@@ -39,7 +39,10 @@ const NOT_THE_BOOKS: Record<string, string> = {
 	attribute_carries: "a session's switches for who carries which of its rules' attributes; it goes with its session",
 	// 🚧 RF fix 4 (2026-10-23): what a session's runs wrote on a book, so a swipe or a delete takes it
 	// back — the session's record (`session_id`, cascading), never the book's content; a copy is not the run's.
-	lore_imprints: "a session's record of what its runs wrote on a book, taken back with their message; it goes with its session"
+	lore_imprints: "a session's record of what its runs wrote on a book, taken back with their message; it goes with its session",
+	// 🚧 pr-6 (2026-10-25, pass 6): which stretch of a session's story one generated lore write was written from —
+	// the session's record (`session_id`, cascading), never the book's content; a copy was not written from that story.
+	lore_sources: "a session's record of the story lines a generated lore write came from; it goes with its session"
 }
 
 const allTables = (Object.values(schema) as unknown[]).filter(

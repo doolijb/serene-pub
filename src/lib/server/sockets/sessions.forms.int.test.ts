@@ -1732,12 +1732,12 @@ describe("the review's rulings (2026-09-17)", () => {
  * the handler used to THROW it, and the socket layer's catch-all replaces a
  * thrown message with a constant on purpose. Adventure retired 2026-10-19,
  * and the Lair that required a lorebook after it no longer does: ⏳
- * `lorebook: 'required'` retired (RF fix 2, 2026-10-23) — the phantom
- * lorebook gives every session a world, so a session may always start with
+ * `lorebook: 'required'` retired (RF fix 2, 2026-10-23) — the own book
+ * gives every session a world, so a session may always start with
  * no book. A refusal still reaches the person in words (below).
  */
 describe("starting a Lair session over sessions:create", () => {
-	test("a Lair session with no lorebook starts: lorebookId null, no violation sentence, and no lorebook row made", async () => {
+	test("a Lair session with no shared lorebook starts: lorebookId null, no violation sentence, and exactly one own book made", async () => {
 		const schema = await import("$lib/server/db/schema")
 		const owner = await makeUser("start-no-book-owner")
 		const elara = await character(owner.id, "Elara")
@@ -1749,7 +1749,7 @@ describe("starting a Lair session over sessions:create", () => {
 				.where(eq(schema.sessions.userId, owner.id))
 		const booksOf = async () =>
 			testDb
-				.select({ id: schema.lorebooks.id })
+				.select({ id: schema.lorebooks.id, sessionId: schema.lorebooks.sessionId })
 				.from(schema.lorebooks)
 				.where(eq(schema.lorebooks.userId, owner.id))
 		expect(await rowsOf()).toHaveLength(0)
@@ -1779,12 +1779,14 @@ describe("starting a Lair session over sessions:create", () => {
 		expect(events).toContain("sessions:create")
 		expect(events).not.toContain("sessions:create:error")
 		expect(JSON.stringify(pushes)).not.toMatch(/requires a lorebook/)
-		// One session row, with no book; none was made for it.
+		// One session row, reading no shared book; its own book was made with it (every session owns one, pass 11).
 		const rows = await rowsOf()
 		expect(rows).toHaveLength(1)
 		expect(rows[0]!.id).toBe(res.session!.id)
 		expect(rows[0]!.lorebookId).toBeNull()
-		expect(await booksOf()).toHaveLength(0)
+		const books = await booksOf()
+		expect(books).toHaveLength(1)
+		expect(books[0]!.sessionId).toBe(res.session!.id)
 	})
 
 	test("a genre this build does not register is refused the same way", async () => {

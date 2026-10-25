@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { bookFixedSentence } from "$lib/shared/lorebooks/sessionNotes"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -153,9 +154,7 @@ describe("sessions:setLorebook", () => {
 				{ sessionId: w.session.id, lorebookId: w.second.id },
 				quiet
 			)
-		).rejects.toThrow(
-			`This story is underway with '${w.first.name}', so it keeps reading it. Start a new session to read another book.`
-		)
+		).rejects.toThrow(bookFixedSentence(`'${w.first.name}'`))
 		await expect(
 			sessionsSetLorebookHandler.handler(
 				socket(w.user.id),

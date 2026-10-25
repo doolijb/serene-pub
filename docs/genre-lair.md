@@ -224,13 +224,13 @@ With text after the name, a slash command runs at once: `/nudge the ceiling drip
 
 ## Regenerate the last turn
 
-A Lair turn writes several messages: the beats in the Sanctum, the Oracle's roll forms and outcomes, then one per delver who spoke. The composer's **Regenerate** (`/retake`) takes that whole turn again:
+A Lair turn writes several messages: the beats in the Sanctum, the Oracle's roll forms and outcomes, then one per delver who spoke. **Regenerate the last turn** takes that whole turn again. It is the third press in the session's header, after **Back** and **Forward** (on a phone, the third item of the header's **⋯** menu), and not in the composer. See [Regenerate the last turn](./sessions.md#regenerate-the-last-turn).
 
-1. A dialog, **Regenerate the last turn?**, names what goes: *This deletes and rewrites: Castellan (sanctum), Brannoc, and Vell.*
-2. **Regenerate** deletes every message that turn wrote, on both conversations, along with any stat change or proposal they made. Your own lines are never deleted, and nor is anything you did after the turn.
-3. The same turn runs again from the same point.
+1. A dialog, **Regenerate the last turn?**, names what goes: *This deletes and rewrites: Brannoc and Vell, and the turn's lines on Sanctum.*
+2. **Regenerate** takes the whole turn after your line, every reply of it, as **Back** does, on both conversations, along with any stat change or proposal they made. Your own lines are never taken, and nor is anything you did after the turn.
+3. The same turn runs again from its start. Under **On revision: Branch** the session branches first and the turn is played there.
 
-Tick **Don't ask again for this session** to skip the dialog; **Ask before regenerating a turn** in the settings brings it back. Only you can do this, and only while nothing is being written. It's refused when your own line is the newest (press **Continue** instead) or when the newest message came from **Trigger trap** or **Reveal**.
+Tick **Don't ask again for this session** to skip the dialog; **Ask before regenerating a turn** in the settings brings it back. Only you can do this, and only while nothing is being written. It's grey, with the reason, when your own line is the newest (*Your line is the newest. Press Continue.*), when nothing has been written yet, or when the newest message came from **Trigger trap** or **Reveal**. In an [archived session](./sessions.md#archive-and-unarchive) it is grey too.
 
 ## What your lines are called
 

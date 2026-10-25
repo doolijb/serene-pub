@@ -33,11 +33,11 @@
  * process open, and `process.once("exit")` drops what is left.
  */
 
-import { and, count, eq, isNull } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
-import { lastVisibleMessages } from "$lib/server/sessions/rowProjection"
+import { lastVisibleMessages, liveMessageCounts } from "$lib/server/sessions/rowProjection"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 
 /** Where a session's rows are announced. Absent, nothing is broadcast. */
@@ -60,8 +60,8 @@ const pending = new Map<number, ReturnType<typeof setTimeout>>()
  * The row as `sessions:list` would project it, for one session.
  *
  * Two reads, the same two the list pays for all of its sessions at once: the
- * message count beside the session's own `updated_at`, and the last visible
- * line. `null` back means there is no such session any more — it was deleted
+ * live message count (`liveMessageCounts`) beside the session's own
+ * `updated_at`, and the last visible line. `null` back means there is no such session any more — it was deleted
  * while the debounce waited — and a null payload is `broadcastToSessionUsers`'
  * signal to send nothing.
  */
@@ -69,31 +69,16 @@ export async function sessionRowFrame(
 	handle: Db,
 	sessionId: number
 ): Promise<Sockets.Sessions.RowChanged.Response | null> {
-	// COUNT over the left join rather than a second round trip: a session with
-	// no messages counts zero, which is what the list's grouped count reports
-	// for it by way of its own `?? 0`.
 	const [head] = await handle
-		.select({
-			updatedAt: schema.sessions.updatedAt,
-			messageCount: count(schema.sessionMessages.id)
-		})
+		.select({ updatedAt: schema.sessions.updatedAt })
 		.from(schema.sessions)
-		.leftJoin(
-			schema.sessionMessages,
-			and(
-				eq(schema.sessionMessages.sessionId, schema.sessions.id),
-				// 🚧 The live history (RF fix 5): the list's own count.
-				isNull(schema.sessionMessages.rewindOrdinal)
-			)
-		)
 		.where(eq(schema.sessions.id, sessionId))
-		.groupBy(schema.sessions.id)
 	if (!head) return null
 
 	const lastMessages = await lastVisibleMessages(handle, [sessionId])
 	return {
 		sessionId,
-		messageCount: head.messageCount,
+		messageCount: (await liveMessageCounts(handle, [sessionId])).get(sessionId) ?? 0,
 		// Null rather than absent: the push has to be able to say the quote is
 		// gone, which is what a delete of the last visible line leaves behind.
 		lastMessage: lastMessages.get(sessionId) ?? null,

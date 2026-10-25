@@ -61,6 +61,14 @@
 	import { onMount, getContext } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import ActionConfirm from "../sessionPage/ActionConfirm.svelte"
+	import { askingOf } from "../sessionPage/actionConfirmAsking"
+	import {
+		SHARE_LABELS,
+		SHARE_CONFIRMS,
+		NOTES_KEEP_THE_WORLD,
+		bookFixedSentence
+	} from "$lib/shared/lorebooks/sessionNotes"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 	import { z } from "zod"
 	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
@@ -640,6 +648,8 @@
 	 * would open the server's gate for every session's reply while the form is
 	 * mounted. The effect re-runs the moment `editSessionId` becomes known (the
 	 * form is re-pointed at a saved session) and declares the scoped key then.
+	 *
+	 * 🚧 pr-6: the member push is `sessions:refresh` (same payload); this form reads it as it reads its own reply.
 	 */
 	$effect(() => {
 		const id = editSessionId
@@ -648,11 +658,18 @@
 			interestKey("sessions:get", id),
 			handleSessionsGet
 		)
+		const releaseRefresh = declareInterest<"sessions:refresh">(
+			interestKey("sessions:refresh", id),
+			handleSessionsGet
+		)
 		// The typed `emit` puts the pending sync ahead of the request on the
 		// same socket, so the handler answering it already sees the key
 		// (plan ruling 3).
 		socket.emit("sessions:get", { id })
-		return release
+		return () => {
+			release()
+			releaseRefresh()
+		}
 	})
 
 	function handleAddCharacter(
@@ -1159,21 +1176,38 @@
 		accountVisibility = msg
 	}
 
-	/** 🚧 Make the session's own notes a lorebook it reads (2026-10-19). */
+	/** 🚧 pr-6 (R-p): Share as a lorebook — asked first, then the session's notes become a lorebook it reads. */
 	let makingBook = $state(false)
+	let askingShare = $state(false)
 	function makeBookFromNotes() {
 		if (!session?.id || makingBook) return
+		askingShare = true
+	}
+	function shareNotesAsLorebook() {
+		askingShare = false
+		if (!session?.id || makingBook) return
+		const sessionId = session.id
 		makingBook = true
-		const release = requestWithInterest(
-			"sessions:createLorebookFromPhantom",
-			{ sessionId: session.id },
+		let releaseOk = () => {}
+		let releaseErr = () => {}
+		const done = () => {
+			releaseOk()
+			releaseErr()
+			makingBook = false
+		}
+		releaseErr = declareInterest<"sessions:shareAsLorebook:error">(
+			interestKey("sessions:shareAsLorebook:error"),
 			(res) => {
-				release()
-				makingBook = false
-				if (res.error) {
-					toaster.error({ title: "Lorebook", description: res.error })
-					return
-				}
+				if (res.sessionId !== sessionId) return
+				done()
+			}
+		)
+		releaseOk = requestWithInterest(
+			"sessions:shareAsLorebook",
+			{ sessionId },
+			(res) => {
+				if (res.sessionId !== sessionId) return
+				done()
 				if (typeof res.lorebookId === "number") {
 					lorebookId = res.lorebookId
 					savedLorebookId = res.lorebookId
@@ -2392,11 +2426,13 @@
 											data-session-lorebook-fixed
 										>
 											{savedLorebookId != null
-												? `This story is underway with ${
+												? bookFixedSentence(
 														lorebookList.find((l) => l.id === savedLorebookId)
-															?.name ?? "its lorebook"
-													}, so it keeps reading it. Start a new session to read another book.`
-												: "This story is underway in its own notes. Make them a lorebook to keep them and build on them."}
+															?.name
+															? `'${lorebookList.find((l) => l.id === savedLorebookId)?.name}'`
+															: "its lorebook"
+													)
+												: NOTES_KEEP_THE_WORLD}
 										</p>
 									{/if}
 									<!-- 🚧 Lorebook writes: the stricter of the owner's
@@ -2448,9 +2484,7 @@
 									{#if session?.id && !isGuest && lorebookId == null && savedLorebookId == null}
 										<div class="mt-2 flex flex-col gap-1" data-testid="lorebook-from-notes">
 											<p class="text-surface-600-400 text-xs">
-												With no lorebook, this session keeps its own notes: the places,
-												people and history it writes down. Make them a lorebook to see and
-												edit them in Lorebooks; the session then reads it.
+												With no lorebook, this session keeps its session notes: the places, people and history it writes down. They are listed under Session notes in Lorebooks. Share them as a lorebook to build on them in other sessions.
 											</p>
 											<button
 												type="button"
@@ -2459,7 +2493,7 @@
 												onclick={makeBookFromNotes}
 											>
 												<Icons.BookPlus size={16} aria-hidden="true" />
-												Make a lorebook from its notes
+												{SHARE_LABELS.asLorebook}
 											</button>
 										</div>
 									{/if}
@@ -3137,6 +3171,14 @@
 	fall back to the "character" copy for anything else, including its own
 	default value of "character") — mapping "guest" to undefined below
 	keeps that exact same fallback behavior while satisfying its prop type. -->
+<ActionConfirm
+	asking={askingShare
+		? askingOf(SHARE_CONFIRMS.asLorebook, SHARE_LABELS.asLorebook)
+		: null}
+	onConfirm={shareNotesAsLorebook}
+	onCancel={() => (askingShare = false)}
+/>
+
 <RemoveFromSessionModal
 	open={showRemoveModal}
 	onOpenChange={(e) => (showRemoveModal = e.open)}

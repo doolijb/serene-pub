@@ -335,7 +335,7 @@ describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
 		).rejects.toThrow()
 	}, 60_000)
 
-	test("only the session's owner moves its boundaries; a session with no book is refused", async () => {
+	test("only the session's owner moves its boundaries; a session with no shared book files in its own", async () => {
 		const { sceneOpenHandler } = await import("./scenes")
 		const w = await makeWorld()
 		const m1 = await say(w.session.id, "Mine.")
@@ -354,13 +354,22 @@ describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
 			.values({ userId: w.user.id, isGroup: false })
 			.returning()
 		const b1 = await say(bare.id, "No book.")
-		await expect(
-			sceneOpenHandler.handler(
-				fakeSocket(w.user.id),
-				{ sessionId: bare.id, atMessageId: b1.id },
-				() => {}
-			)
-		).rejects.toThrow(/no lorebook/)
+		// 🚧 pr-6 (§B-3a): no shared book is no refusal — the scene is filed in
+		// the session's own book.
+		await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: bare.id, atMessageId: b1.id },
+			() => {}
+		)
+		const [own] = await testDb
+			.select({ id: schema.lorebooks.id })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.sessionId, bare.id))
+		const [filed] = await testDb
+			.select({ lorebookId: schema.scenes.lorebookId })
+			.from(schema.scenes)
+			.where(eq(schema.scenes.sessionId, bare.id))
+		expect(filed.lorebookId).toBe(own.id)
 	}, 60_000)
 
 	test("scenes:create (tick selection) still works beside ranges", async () => {

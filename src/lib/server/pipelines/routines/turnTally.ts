@@ -4,7 +4,7 @@
  * session moments (`moments.ts`) read and the published values
  * (`session.turn`, `session.round`, `session.lastSpeaker`) show.
  *
- * Stored at `sessions.metadata.turnTally` (`TurnTallyV1`), one entry per
+ * Stored at `sessions.annex -> 'core' -> 'turnTally'` (`TurnTallyV1`), one entry per
  * lane — a canonical channel string (`main`, `main:2`, `sanctum`):
  *
  *  · `turn` — the index of the last turn noted on the lane (lines that take
@@ -33,6 +33,7 @@
 import { sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
+import { coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 
 /** The speaker key of the pipeline's own voice — a narrator line names no participant. */
 export const NARRATOR_SPEAKER = "narrator"
@@ -52,7 +53,7 @@ export interface LaneTally {
 	round?: number
 }
 
-/** `sessions.metadata.turnTally`. */
+/** The `core` annex document's `turnTally`. */
 export interface TurnTallyV1 {
 	v: 1
 	lanes: Record<string, LaneTally>
@@ -60,9 +61,9 @@ export interface TurnTallyV1 {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v)
 
-/** The tally a session's metadata holds — empty when missing or unreadable. Never throws. */
-export function readTurnTally(metadata: unknown): TurnTallyV1 {
-	const t = isRecord(metadata) ? metadata.turnTally : undefined
+/** The tally the `core` annex document holds — empty when missing or unreadable. Never throws. */
+export function readTurnTally(core: unknown): TurnTallyV1 {
+	const t = isRecord(core) ? core.turnTally : undefined
 	if (!isRecord(t) || t.v !== 1 || !isRecord(t.lanes)) return { v: 1, lanes: {} }
 	const lanes: Record<string, LaneTally> = {}
 	for (const [lane, raw] of Object.entries(t.lanes)) {
@@ -141,13 +142,13 @@ export function tallyTurn(
 	}
 }
 
-/** Write one lane of the tally — `jsonb_set` on the one key, like the turn order's write. */
+/** Write one lane of the tally — the one `turnTally` key of the `core` annex document, like the turn order's write. */
 export async function writeLaneTally(db: Db, sessionId: number, lane: string, tally: LaneTally): Promise<void> {
 	await db.transaction(async (tx: Db) => {
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext('turnTally'), ${sessionId})`)
+		await lockSessionAnnex(tx, sessionId)
 		const [row] = rawRows<{ tally: unknown }>(
 			await tx.execute(sql`
-				select ${schema.sessions.metadata}::jsonb -> 'turnTally' as tally
+				select ${coreAnnexKeySql("turnTally")} as tally
 				from ${schema.sessions}
 				where ${schema.sessions.id} = ${sessionId}
 			`)
@@ -157,12 +158,7 @@ export async function writeLaneTally(db: Db, sessionId: number, lane: string, ta
 		current.lanes[lane] = tally
 		await tx.execute(sql`
 			update ${schema.sessions}
-			set ${sql.identifier("metadata")} = jsonb_set(
-				coalesce(${schema.sessions.metadata}, '{}')::jsonb,
-				'{turnTally}',
-				${JSON.stringify(current)}::jsonb,
-				true
-			)::json
+			set ${sql.identifier("annex")} = ${coreAnnexSetSql("turnTally", sql`${JSON.stringify(current)}::jsonb`)}
 			where ${schema.sessions.id} = ${sessionId}
 		`)
 	})
@@ -171,40 +167,27 @@ export async function writeLaneTally(db: Db, sessionId: number, lane: string, ta
 /**
  * 🚧 Put a session's whole tally back as it stood (RF fix 5): **Forward**
  * restores the document Back read before it rewound. `null` removes the key
- * (a session that had noted no turn yet). Under the tally's own lock.
+ * (a session that had noted no turn yet). Under the annex lock.
  */
 export async function writeTurnTally(db: Db, sessionId: number, tally: TurnTallyV1 | null): Promise<void> {
 	await db.transaction(async (tx: Db) => {
-		await tx.execute(sql`select pg_advisory_xact_lock(hashtext('turnTally'), ${sessionId})`)
-		await tx.execute(
-			tally
-				? sql`
-					update ${schema.sessions}
-					set ${sql.identifier("metadata")} = jsonb_set(
-						coalesce(${schema.sessions.metadata}, '{}')::jsonb,
-						'{turnTally}',
-						${JSON.stringify(tally)}::jsonb,
-						true
-					)::json
-					where ${schema.sessions.id} = ${sessionId}
-				`
-				: sql`
-					update ${schema.sessions}
-					set ${sql.identifier("metadata")} = (coalesce(${schema.sessions.metadata}, '{}')::jsonb - 'turnTally')::json
-					where ${schema.sessions.id} = ${sessionId}
-				`
-		)
+		await lockSessionAnnex(tx, sessionId)
+		await tx.execute(sql`
+			update ${schema.sessions}
+			set ${sql.identifier("annex")} = ${coreAnnexSetSql("turnTally", tally ? sql`${JSON.stringify(tally)}::jsonb` : null)}
+			where ${schema.sessions.id} = ${sessionId}
+		`)
 	})
 }
 
 /** What a session publishes of its story lane's tally (`session.turn` · `round` · `lastSpeaker` · `turnsBy`). */
-export function publishedTurns(metadata: unknown): {
+export function publishedTurns(core: unknown): {
 	turn: number
 	round: number
 	lastSpeaker: string | null
 	turnsBy: Record<string, number>
 } {
-	const lane = readTurnTally(metadata).lanes[STORY_LANE]
+	const lane = readTurnTally(core).lanes[STORY_LANE]
 	return {
 		turn: lane?.turn ?? 0,
 		round: lane?.round ?? 1,

@@ -396,8 +396,8 @@ describe("a session from a kit", () => {
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, res.session.id))
 		expect(session).toMatchObject({ lorebookId: null, primaryRuleset: VIS })
-		const { phantomOf } = await import("./phantom")
-		const notes = (await phantomOf(db(), session.id))!
+		const { ownBookOf } = await import("./ownBook")
+		const notes = (await ownBookOf(db(), session.id))!
 		expect(notes).toMatchObject({
 			sessionId: session.id,
 			overlayOf: null,

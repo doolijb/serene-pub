@@ -94,7 +94,7 @@ Other genres, such as **Chat** and a **Minimal** Story, don't write a place's wa
 
 ### In a session
 
-The **Places** widget puts these places beside a session: the places the session sees, with the ways it reads between them, as a list or as a map drawn like this one. The place the scene is in is marked **Here**, and each cast member's face sits on the place their **Location** points at. Click a place in the list, or **Open entry** on the map, to open it here. A Lair has it on the right from the start, as the list of the dungeon's rooms (see [The Lair](./genre-lair.md#whats-on-the-screen)); in any other session that reads a lorebook, add it from the tray. See [Session layout](./session-layout.md#the-widgets).
+The **Places** widget puts these places beside a session: the places the session sees, with the ways it reads between them, as a list or as a map drawn like this one. The place the scene is in is marked **Here**, and each cast member's face sits on the place their **Location** points at. Click a place in the list, or **Open entry** on the map, to open it here. A Lair has it on the right from the start, as the list of the dungeon's rooms (see [The Lair](./genre-lair.md#whats-on-the-screen)); in any other session, add it from the tray. See [Session layout](./session-layout.md#the-widgets).
 
 ### A place that is off
 

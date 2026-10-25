@@ -16,10 +16,10 @@
  * ## The last-read mark
  *
  * No per-person read mark existed for session lanes, and no table is added
- * for one: the mark lives in `sessions.metadata.laneReads` — core's own json
- * (`metadata` is never a pipeline's to write) — as `{ "<userId>": {
- * "<canonical lane>": <message id> } }`, moved forward only, by one atomic
- * `jsonb` update (`markLaneRead`), so two tabs never wind a mark back.
+ * for one: the mark lives under annex owner `core` as `laneReads` — a core
+ * runtime key (`sessions/coreAnnex.ts`): `{ "<userId>": { "<canonical lane>":
+ * <message id> } }`, moved forward only, by one statement under the annex
+ * lock (`markLaneRead`), so two tabs never wind a mark back.
  */
 
 import { and, eq, sql, type SQL } from "drizzle-orm"
@@ -27,14 +27,12 @@ import { formatChannel, parseChannel, readTurnOrder, type ParticipantRef, type S
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import { DEFAULT_CHANNEL } from "$lib/server/messages/channels"
+import { coreAnnexIn, coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 import { laneViewAllows, laneViewWhere, type LaneView } from "./lanes"
 
-/** The `sessions.metadata` key the read marks live under. */
-export const LANE_READS_METADATA_KEY = "laneReads"
-
 /** One person's read marks in a session: canonical lane → newest message id read. */
-export function laneReadsOf(metadata: unknown, userId: number): Record<string, number> {
-	const all = (metadata as Record<string, unknown> | null)?.[LANE_READS_METADATA_KEY]
+export function laneReadsOf(core: unknown, userId: number): Record<string, number> {
+	const all = (core as Record<string, unknown> | null)?.laneReads
 	const mine = all && typeof all === "object" ? (all as Record<string, unknown>)[String(userId)] : undefined
 	const out: Record<string, number> = {}
 	if (mine && typeof mine === "object" && !Array.isArray(mine))
@@ -56,27 +54,18 @@ export async function markLaneRead(
 ): Promise<void> {
 	const lane = formatChannel(parseChannel(channel))
 	const uid = String(userId)
-	await db.execute(sql`
-		update ${schema.sessions}
-		set ${sql.identifier("metadata")} = jsonb_set(
-			coalesce(${schema.sessions.metadata}, '{}')::jsonb,
-			${`{${LANE_READS_METADATA_KEY}}`}::text[],
-			coalesce(coalesce(${schema.sessions.metadata}, '{}')::jsonb -> ${LANE_READS_METADATA_KEY}, '{}'::jsonb)
-				|| jsonb_build_object(
-					${uid}::text,
-					coalesce(coalesce(${schema.sessions.metadata}, '{}')::jsonb -> ${LANE_READS_METADATA_KEY} -> ${uid}, '{}'::jsonb)
-						|| jsonb_build_object(
-							${lane}::text,
-							greatest(
-								coalesce((coalesce(${schema.sessions.metadata}, '{}')::jsonb -> ${LANE_READS_METADATA_KEY} -> ${uid} ->> ${lane})::int, 0),
-								${messageId}::int
-							)
-						)
-				),
-			true
-		)::json
-		where ${schema.sessions.id} = ${sessionId}
-	`)
+	const reads = coreAnnexKeySql("laneReads")
+	await db.transaction(async (tx: Db) => {
+		await lockSessionAnnex(tx, sessionId)
+		await tx.execute(sql`
+			update ${schema.sessions}
+			set ${sql.identifier("annex")} = ${coreAnnexSetSql(
+				"laneReads",
+				sql`coalesce(${reads}, '{}'::jsonb) || jsonb_build_object(${uid}::text, coalesce(${reads} -> ${uid}::text, '{}'::jsonb) || jsonb_build_object(${lane}::text, greatest(coalesce((${reads} -> ${uid}::text ->> ${lane}::text)::int, 0), ${messageId}::int)))`
+			)}
+			where ${schema.sessions.id} = ${sessionId}
+		`)
+	})
 }
 
 /**
@@ -86,12 +75,13 @@ export async function markLaneRead(
  */
 export async function sessionChannelsFor(db: Db, view: LaneView): Promise<SessionChannelV1[]> {
 	const [session] = await db
-		.select({ metadata: schema.sessions.metadata })
+		.select({ annex: schema.sessions.annex })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, view.sessionId))
 		.limit(1)
 	if (!session) return []
-	const marks = laneReadsOf(session.metadata, view.userId)
+	const core = coreAnnexIn(session.annex)
+	const marks = laneReadsOf(core, view.userId)
 
 	// Unseen: rows past the viewer's mark on each lane they may read.
 	const m = schema.sessionMessages
@@ -123,7 +113,7 @@ export async function sessionChannelsFor(db: Db, view: LaneView): Promise<Sessio
 	}
 
 	// Waiting on you: the first prepared turn on each lane the viewer reads.
-	const order = readTurnOrder(session.metadata).order
+	const order = readTurnOrder(core).order
 	const firstPerLane = new Map<string, string>()
 	for (const entry of order) {
 		const lane = formatChannel(parseChannel(entry.channel ?? DEFAULT_CHANNEL))

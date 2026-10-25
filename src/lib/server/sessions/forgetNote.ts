@@ -25,8 +25,8 @@ export async function forgetNote(db: Db, sessionId: number, name: string): Promi
 		.limit(1)
 	if (!session) return []
 	const books: number[] = []
-	const { phantomOf } = await import("$lib/server/lorebooks/phantom")
-	const notes = await phantomOf(db, sessionId)
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const notes = await ownBookOf(db, sessionId)
 	if (notes) books.push(notes.id)
 	if (session.lorebookId != null) {
 		const [book] = await db

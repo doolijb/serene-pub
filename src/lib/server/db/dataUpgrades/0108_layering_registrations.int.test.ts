@@ -203,6 +203,8 @@ describe("0108 layering registrations", () => {
 				// old include list never named them — dropped with the rest (the host
 				// still fires a summary; its values then come from the pipeline's
 				// instance values and declared defaults).
+				// 🚧 pr-6 B4: the scene summarizer's Close out (`close-out`) is a summary action too, dropped the same way.
+				"story-summarize-scene#close-out→story-summarize-scene",
 				"story-summarize-scene#summarize-scene→story-summarize-scene",
 				"summarize-character#summarize-character→summarize-character",
 				"summarize-history#summarize-history→summarize-history",
