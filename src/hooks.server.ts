@@ -119,6 +119,21 @@ if (!dev && !building && !process.env.VITEST) {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
+	// The form origin check, before anything else: in place of the
+	// framework's (off in `svelte.config.js`), which refused the recovery
+	// pages' forms on any pub with a PUBLIC_URL (`net/formOrigin.ts` says
+	// why). Skipped in dev as the framework skipped its own, so tests and the
+	// dev server post freely.
+	if (!dev) {
+		const { formOriginRefusal } = await import("$lib/server/net/formOrigin")
+		const refused = formOriginRefusal(event)
+		if (refused) {
+			for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+				refused.headers.set(name, value)
+			}
+			return refused
+		}
+	}
 	// The launcher's control routes (CONTRACT §C3), first of all: they answer
 	// before `appReady` and in the recovery state, and anything under the
 	// prefix that fails a check is a bare 404 rather than a page.

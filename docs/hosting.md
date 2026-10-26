@@ -100,6 +100,7 @@ It also names the `.env` files it read, and warns about any setting it doesn't e
 ## Security notes
 
 - **Turn accounts on** before anyone else can reach the pub (see [above](#first-turn-on-accounts)).
+- **Forms follow the same rule.** The recovery pages (the one place Serene Pub uses an HTML form) may be submitted from the address you opened them on, `http://localhost:3000` included, even when `PUBLIC_URL` names your public address. A form posted from another site is refused with *Cross-site POST form submissions are forbidden*.
 - **Allowed origins need no setting.** A browser may open a live connection from the same hostname it loaded the page from; programs that send no origin (scripts, the Android app's own view) are allowed only from your local network. `ALLOWED_ORIGINS` adds extra hostnames for the rare setup where the page and the connection use different ones.
 - **Don't set `ALLOWED_ORIGINS=*`.** It switches the check off entirely, for browsers and other programs alike. With accounts off, anything that reaches the port gets an administrator. Serene Pub warns at startup when it's set.
 - **Narrow `TRUSTED_PROXIES`.** Set to `private`, it trusts every device on your local network to report a visitor's address, so any of them could dodge the sign-in rate limit. Name your proxy's own address instead.

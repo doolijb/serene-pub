@@ -93,7 +93,16 @@ const config = {
 				// the plan; this one costs nothing today.
 				"form-action": ["self"]
 			}
-		}
+		},
+		// The framework's form-origin check compares the browser's Origin with
+		// `url.origin`, which is ORIGIN whenever that is set — and preloadEnv
+		// derives ORIGIN from PUBLIC_URL. So on a pub with a public URL, the
+		// recovery pages' forms (the only forms in the app, reachable only
+		// from local addresses) were refused as cross-site when posted from
+		// localhost. `src/lib/server/net/formOrigin.ts`, run first in
+		// hooks.server.ts, keeps the same guard with the same-hostname rule the
+		// live connections already use. Nothing else is loosened.
+		csrf: { checkOrigin: false }
 	}
 }
 
