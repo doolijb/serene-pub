@@ -32,10 +32,16 @@
  * pins registered from a plugin are remembered, and the boot sync excludes
  * them.
  *
- * ⚠ **Registration outlives an uninstall, for this process.** The SDK's
- * registry has no way to withdraw one declaration (`_clearDefinitions` empties
- * it), so a package uninstalled while the app runs leaves its descriptor here
- * until a restart. Nothing dispatches through it — the registry ROW is deleted
+ * **A reinstall of the same plugin replaces its own declarations**
+ * (2026-10-30, readiness D3 c36). The pins remember which plugin id registered
+ * them, so a reinstall under the same slug withdraws its own declaration and
+ * registers the new one in the running process. A clash with a declaration
+ * this process holds from anyone else — the build itself, or a different
+ * plugin id — is still refused, with the SDK's own sentence.
+ *
+ * ⚠ **Registration outlives an uninstall, for this process.** A package
+ * uninstalled while the app runs leaves its descriptor here until a restart
+ * (a reinstall of the same slug now replaces what was left). Nothing dispatches through it — the registry ROW is deleted
  * with the package, so no binding is built — and the cost is the sentence a
  * spec still pinning it gets: "no binding registered" rather than "unknown
  * type". Both are dead ends; only the wording differs, and a restart settles
@@ -49,6 +55,7 @@ import {
 	describeQueryDefinition,
 	describeTaskDefinition,
 	getDefinition,
+	_withdrawDefinition,
 	type Descriptor
 } from "@serene-pub/sdk"
 
@@ -61,12 +68,12 @@ const REGISTER_BY_KIND: Record<string, (d: any) => unknown> = {
 	outlet: describeOutletDefinition
 }
 
-/** Pins this process registered from a plugin's manifest — see the header. */
-const fromPlugins = new Set<string>()
+/** Pin → the plugin id that registered it, in this process — see the header. */
+const fromPlugins = new Map<string, string>()
 
 /** What {@link registerPluginDefinitions} put in the in-process registry. */
 export function pluginDefinitionPins(): ReadonlySet<string> {
-	return fromPlugins
+	return new Set(fromPlugins.keys())
 }
 
 /**
@@ -131,9 +138,14 @@ export function pluginDeclarationsOf(
  * SDK's guard, which is right (a pin means one thing per process) — and says
  * so, rather than costing the install its other declarations. The stored row is
  * updated either way, so the new declaration is live after a restart.
+ *
+ * A declaration this process holds from the SAME plugin (`pluginId`) is
+ * replaced in place (2026-10-30, readiness D3 c36). If the new one is refused
+ * on a check, the previous one is put back and stays in place.
  */
 export function registerPluginDefinitions(
-	declarations: readonly Descriptor[]
+	declarations: readonly Descriptor[],
+	pluginId: string
 ): {
 	registered: string[]
 	refused: string[]
@@ -143,13 +155,32 @@ export function registerPluginDefinitions(
 	for (const decl of declarations) {
 		const describe = REGISTER_BY_KIND[String(decl.kind)]
 		if (!describe) continue
+		const held = getDefinition(decl.id)
+		const own = held !== undefined && fromPlugins.get(decl.id) === pluginId
 		try {
+			if (own) _withdrawDefinition(decl.id)
 			// `describe*` sets the kind itself; the declaration is passed as it
 			// was stored so nothing about it is re-derived here.
 			describe(decl)
-			fromPlugins.add(decl.id)
+			fromPlugins.set(decl.id, pluginId)
 			registered.push(decl.id)
 		} catch (e) {
+			const reason = e instanceof Error ? e.message : String(e)
+			if (own && held) {
+				let restored = true
+				try {
+					REGISTER_BY_KIND[String(held.kind)]?.(held)
+				} catch {
+					restored = false
+				}
+				refused.push(
+					`node definition '${decl.id}': ${reason} ` +
+						(restored
+							? `The declaration this process held before stays in place.`
+							: `The definition is unavailable until the package is fixed and reinstalled.`)
+				)
+				continue
+			}
 			refused.push(
 				`node definition '${decl.id}': ${e instanceof Error ? e.message : String(e)}` +
 					(getDefinition(decl.id)

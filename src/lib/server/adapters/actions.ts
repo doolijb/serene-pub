@@ -329,6 +329,10 @@ export interface TranscribeResult {
 // ── synthesizeSpeech ────────────────────────────────────────────────────────
 
 export interface SpeechRequest {
+	/**
+	 * ONE rendered group — the host loops groups and calls once per group.
+	 * Never the whole message when it carries more than one speaker.
+	 */
 	text: string
 	/** A backend's own voice id. Opaque here; the connection form offers the list. */
 	voice?: string
@@ -336,6 +340,30 @@ export interface SpeechRequest {
 	format?: string
 	/** Rate multiplier, 1 being the backend's own. */
 	speed?: number
+	/**
+	 * 🚧 Prose steering ("hushed, urgent"): OpenAI `instructions`, KoboldCPP
+	 * `instruction`, audio.cpp `options.instruct`. Ignored where the model has no
+	 * `controls.instruction` in its speech facts.
+	 */
+	direction?: string
+	/**
+	 * 🚧 Inline tags ALREADY in the service's syntax (`"[whispers]"`), placed
+	 * ahead of `text` by an adapter whose model takes them; ignored elsewhere.
+	 */
+	tags?: string[]
+	/** Language to speak in (BCP 47-ish, "en", "ja"), where the service takes a hint. */
+	language?: string
+	/** Deterministic render, where the service takes one. */
+	seed?: number
+	/** The model id to speak with; absent ⇒ the connection's own model. */
+	model?: string
+	/**
+	 * ⚠ Accepted so the tts sampling schema can pass them, and NEVER SENT:
+	 * none of the surveyed services honours either (PLAN-speech-build A3,
+	 * ★2). Every adapter lists them in `ignored` when present.
+	 */
+	pitch?: number
+	volume?: number
 }
 
 /**
@@ -350,6 +378,8 @@ export interface SpeechResult {
 	applied: string[]
 	/** Keys it could not honour, or honoured at a value it had to change. */
 	ignored: string[]
+	/** 🚧 What actually spoke: the voice id, model id and connection id sent. */
+	spokenAs: { voice: string; model: string; connection: number }
 	raw?: unknown
 }
 

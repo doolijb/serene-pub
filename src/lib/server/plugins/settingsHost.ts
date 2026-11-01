@@ -74,7 +74,9 @@ const FIELD_TYPES = new Set([
 	"boolean",
 	"enum",
 	"string[]",
-	"secret"
+	"secret",
+	// 🚧 Any JSON value, stored parsed (M2a a5): its byte cap is `jsonFieldByteCap`'s, its shape the declared `jsonSchema`.
+	"json"
 ])
 
 /**
@@ -189,7 +191,8 @@ export function applySettingsWrite(
 	const provided = new Set(Object.keys(incoming))
 	const problems = checkValues(schema, reconcile(schema, next).values)
 		.filter((f) => f.severity === "error")
-		.filter((f) => f.field && provided.has(f.field))
+		// a finding inside a field (a json value's `layout.columns[2]`) is that field's
+		.filter((f) => f.field && provided.has(String(f.field).split(/[.[]/)[0]!))
 	if (problems.length)
 		return {
 			ok: false,

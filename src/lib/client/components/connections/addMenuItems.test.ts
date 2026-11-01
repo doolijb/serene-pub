@@ -6,7 +6,8 @@ describe("the Add menu's items", () => {
 		expect(addMenuItemKeys({ canRunLocalRuntimes: true })).toEqual([
 			"connection",
 			"koboldcpp",
-			"ollama"
+			"ollama",
+			"audiocpp"
 		])
 	})
 

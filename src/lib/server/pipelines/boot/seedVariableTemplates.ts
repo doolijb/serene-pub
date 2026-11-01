@@ -12,6 +12,7 @@
  */
 
 import { and, asc, eq, isNull } from "drizzle-orm"
+import { SHIPPED_SPEECH_VARIABLE_LAYOUTS } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
@@ -53,12 +54,32 @@ export async function seedVariableTemplates(
 	// variable nothing above lays out (owner ruling 2026-09-27: an object
 	// variable is never rendered without a layout). Same seed-key pattern,
 	// same refresh — the automatic source is code-derived too.
-	const rows = [
+	// 🚧 The inflection layouts are Jinja (`engine` on the row), authored in the
+	// catalogue. They take their variable's `content` seed key, so the
+	// automatic object row for the same variable (the sentence variable is an
+	// object) must yield to them, or the two would rewrite one row each boot.
+	const speechRows = SHIPPED_SPEECH_VARIABLE_LAYOUTS.map((t) => ({
+		variableId: t.variableId,
+		name: t.name,
+		source: t.source,
+		seedKey: t.seedKey,
+		engine: t.engine
+	}))
+	const speechKeys = new Set(speechRows.map((t) => t.seedKey))
+	const rows: Array<{
+		variableId: string
+		name: string
+		source: string
+		seedKey: string
+		engine?: string
+	}> = [
 		...SHIPPED_VARIABLE_TEMPLATES.map((t) => ({ ...t, seedKey: seedKeyFor(t) })),
-		...coreObjectLayouts()
+		...coreObjectLayouts().filter((t) => !speechKeys.has(t.seedKey)),
+		...speechRows
 	]
 	for (const t of rows) {
 		const seedKey = t.seedKey
+		const engine = t.engine ?? CORE_TEMPLATE_ENGINE
 		const [existing] = await db
 			.select()
 			.from(schema.pipelineVariableTemplates)
@@ -79,7 +100,7 @@ export async function seedVariableTemplates(
 			.where(
 				and(
 					eq(schema.pipelineVariableTemplates.variableId, t.variableId),
-					eq(schema.pipelineVariableTemplates.engine, CORE_TEMPLATE_ENGINE)
+					eq(schema.pipelineVariableTemplates.engine, engine)
 				)
 			)) as Array<{ id: number; name: string }>
 		const name = shippedNameFor(
@@ -118,6 +139,7 @@ export async function seedVariableTemplates(
 			if (
 				existing.source !== t.source ||
 				existing.name !== name ||
+				existing.engine !== engine ||
 				existing.templateId !== templateId
 			) {
 				await db
@@ -126,7 +148,7 @@ export async function seedVariableTemplates(
 						name,
 						templateId,
 						source: t.source,
-						engine: CORE_TEMPLATE_ENGINE,
+						engine,
 						updatedAt: new Date()
 					})
 					.where(eq(schema.pipelineVariableTemplates.id, existing.id))
@@ -146,7 +168,7 @@ export async function seedVariableTemplates(
 			// Explicit rather than NULL: a template's engine travels on the
 			// value (12 §2a), so a stored row keeps what it was authored in even
 			// if core's default moves later.
-			engine: CORE_TEMPLATE_ENGINE,
+			engine,
 			isImmutable: true
 		})
 		result.created.push(seedKey)
@@ -176,6 +198,18 @@ export async function defaultVariableTemplateFor(
 	db: Db,
 	variableId: string
 ): Promise<number | null> {
+	const speech = SHIPPED_SPEECH_VARIABLE_LAYOUTS.find(
+		(t) => t.variableId === variableId
+	)
+	if (speech) {
+		const [row] = await db
+			.select()
+			.from(schema.pipelineVariableTemplates)
+			.where(eq(schema.pipelineVariableTemplates.seedKey, speech.seedKey))
+			.limit(1)
+		if (row) return row.id
+	}
+
 	const shipped = SHIPPED_VARIABLE_TEMPLATES.find(
 		(t) => t.variableId === variableId && t.isDefault
 	)

@@ -185,11 +185,35 @@ export interface FireActionRequest {
 	/** A parent's stop reaches this run through its own handle; see `runSpec`. */
 	parentSignal?: AbortSignal
 	/**
+	 * 🚧 The kind the run registers as (default `action`). Core's automatic
+	 * read-aloud (`speech/onMessageSettled.ts`) passes `maintenance`: a run of
+	 * kind `action` makes `session.generating` true, and the speech tail must
+	 * never grey the composer or hold the next reply.
+	 */
+	kind?: runRegistry.RunKind
+	/**
+	 * 🚧 Core fires this itself rather than a person pressing it (automatic
+	 * read-aloud): the action's own on/off switch in the session's Actions
+	 * does not apply — every other door (access, audience, `enabledWhen`) does.
+	 */
+	automatic?: boolean
+	/**
+	 * 🚧 **The busy door** (2026-10-30): a person's press made while a
+	 * person's line is being answered — from its acceptance until the reply
+	 * run ends (the socket's `answering`). Every door below still judges it —
+	 * the action's own refusal (an `enabledWhen` reason) wins — and one that
+	 * passes them all is refused with this sentence instead of run. Nothing
+	 * is written: the refusal comes before the forward stack is touched.
+	 */
+	busy?: string
+	/**
 	 * `channel`: what the run is about, where the press says it — the
 	 * subject row's channel, else the one channel every venue of the
 	 * declaration names; absent otherwise (the progress card's scope).
+	 * 🚧 `lineBound`: the run is shown on its line only (`RunHandle.lineBound`)
+	 * — a caller's progress frames say so, and the card leaves it out.
 	 */
-	onStarted?: (run: { runId: string; specId: string; channel?: string }) => void
+	onStarted?: (run: { runId: string; specId: string; channel?: string; lineBound?: true }) => void
 	onProgress?: (event: RunProgress & { runId: string; specId: string }) => void
 	onStatus?: (nodeKey: string, status: StatusText, run: { runId: string; specId: string }) => void
 	/**
@@ -311,6 +335,21 @@ export async function fireAction(
 	const { checkSessionAccess } = await import("$lib/server/utils/sessionAccess")
 	const access = await checkSessionAccess(req.sessionId, req.actor.userId)
 	if (!access.hasAccess) return refused("Session not found.")
+	// 🚧 (M2b) The acting person's own rights, beside the check above: it can
+	// only narrow. A "no" where the check said yes is the convergence signal.
+	{
+		const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
+		const person = await actingPersonFor(db, { via: "press", userId: req.actor.userId })
+		const answer = person
+			? await personMay(db, person, "read", { kind: "session", id: req.sessionId })
+			: ({ ok: false, reason: "Session not found." } as const)
+		if (!answer.ok) {
+			console.warn(
+				`[acting-person] diverges: user ${req.actor.userId} may open session ${req.sessionId} by checkSessionAccess but not by personMay (${answer.reason})`
+			)
+			return refused(answer.reason)
+		}
+	}
 
 	const { parseActionIdentity, isCoreActionIdentity, actionIdentity } = await import(
 		"$lib/shared/actions/identity"
@@ -727,7 +766,8 @@ export async function fireAction(
 				`a package sets only the keys it declared, in its own annex.`
 		)
 	if (!chosen) return refused(`No action '${actionId}' is offered to this session.`)
-	if (!chosen.enabled) return turnedOff(chosen.name)
+	// 🚧 `automatic`: core's own trigger, not a person's press — the verb's switch is the person's to flip, the session's Read aloud setting is the automatic trigger's.
+	if (!chosen.enabled && !req.automatic) return turnedOff(chosen.name)
 	// A disabled plugin's action is not offered, so it is not fired either
 	// — the same answer the listing gives (R67): its code is not loaded.
 	{
@@ -869,6 +909,7 @@ export async function fireAction(
 	 * session is rewound deletes the forward stack for good before it runs.
 	 * A refused press above leaves it standing.
 	 */
+	if (req.busy) return refused(req.busy)
 	{
 		const { discardForwardStack } = await import("$lib/server/messages/store")
 		await discardForwardStack(db, req.sessionId)
@@ -876,14 +917,24 @@ export async function fireAction(
 
 	const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
 	const runId = req.runId || randomUUID()
+	/**
+	 * 🚧 Speaking a line is a **line-bound run** (owner ruling 2026-10-29):
+	 * shown on its line only, never as turn work. Decided here, once, for
+	 * the automatic read-aloud and a person's press alike; and a press of
+	 * it registers as `maintenance` as the automatic one does, so it never
+	 * makes the session generating (the composer's chips, the busy door).
+	 */
+	const { isSpeakRun } = await import("$lib/server/speech/onMessageSettled")
+	const lineBound = isSpeakRun(specId)
 	const handle = runRegistry.start({
 		runId,
 		userId: req.actor.userId,
 		sessionId: req.sessionId,
 		specId,
-		kind: "action",
+		kind: req.kind ?? (lineBound ? "maintenance" : "action"),
 		// 🚧 What a declared boundary trigger's `actionKey` reads (★9).
-		action: actionId
+		action: actionId,
+		...(lineBound ? { lineBound: true as const } : {})
 	})
 	// A parent's stop is this run's stop: the fact crosses in the shape this
 	// boundary speaks — a stop on the child's own handle.
@@ -900,7 +951,12 @@ export async function fireAction(
 	const runChannel =
 		subjectChannel ??
 		(venueChannels.size === 1 ? ([...venueChannels][0] ?? undefined) : undefined)
-	req.onStarted?.({ runId, specId, ...(runChannel ? { channel: runChannel } : {}) })
+	req.onStarted?.({
+		runId,
+		specId,
+		...(runChannel ? { channel: runChannel } : {}),
+		...(lineBound ? { lineBound: true as const } : {})
+	})
 
 	/**
 	 * The park signal (R-b): settled the moment THIS run's gate parks. A

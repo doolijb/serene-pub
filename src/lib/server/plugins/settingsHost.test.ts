@@ -99,6 +99,31 @@ describe("the write path", () => {
 	})
 })
 
+describe("a json setting (M2a a5: one field language)", () => {
+	const JSON_SCHEMA: SettingsSchema = {
+		tuning: {
+			type: "json",
+			label: "Tuning",
+			maxBytes: 64,
+			jsonSchema: { type: "object", properties: { level: { type: "integer", maximum: 5 } }, required: ["level"] }
+		}
+	}
+	it("is declared, stored parsed, and read back as the value; its shape and its cap refuse", () => {
+		expect(Object.keys(settingsSchemaOf({ settings: JSON_SCHEMA }))).toEqual(["tuning"])
+		const ok = applySettingsWrite(JSON_SCHEMA, {}, { tuning: { level: 3 } })
+		expect(ok).toEqual({ ok: true, next: { tuning: { level: 3 } } })
+		expect(clientSettingsView({ settings: JSON_SCHEMA }, (ok as any).next)!.values.tuning).toEqual({ level: 3 })
+		const misfit = applySettingsWrite(JSON_SCHEMA, {}, { tuning: { level: 9 } })
+		expect(misfit).toMatchObject({ ok: false })
+		expect((misfit as any).error).toMatch(/tuning\.level/)
+		const big = applySettingsWrite(JSON_SCHEMA, {}, { tuning: { level: 1, pad: "x".repeat(80) } })
+		expect((big as any).error).toMatch(/cap/)
+		// a manifest is stored verbatim: a hostile cap is held to the ceiling, never trusted
+		const hostile: SettingsSchema = { tuning: { type: "json", maxBytes: 10_000_000_000 } }
+		expect(applySettingsWrite(hostile, {}, { tuning: { pad: "x".repeat(300_000) } })).toMatchObject({ ok: false })
+	})
+})
+
 describe("the client view", () => {
 	it("masks secrets to set/unset and never carries ciphertext", () => {
 		const w = applySettingsWrite(SCHEMA, {}, { apiKey: "sk-live-123" })

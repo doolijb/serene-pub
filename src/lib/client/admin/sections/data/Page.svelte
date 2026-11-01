@@ -10,6 +10,8 @@
 	import { getContext } from "svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import BackupPolicyCard from "$lib/client/components/admin/pub/BackupPolicyCard.svelte"
+	import SpokenLinesRow from "$lib/client/components/media/SpokenLinesRow.svelte"
+	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import DataSettingsTab from "$lib/client/components/settingsTabs/DataSettingsTab.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -27,6 +29,15 @@
 	{#if systemSettingsCtx.settings}
 		<div class="flex flex-col gap-4">
 			<BackupPolicyCard />
+			<SettingCard
+				title="Spoken audio"
+				titleId="spoken-audio-heading"
+				headingLevel={2}
+				help="Audio made for spoken lines across every session on this pub."
+				layout="stack"
+			>
+				<SpokenLinesRow />
+			</SettingCard>
 			<DataSettingsTab />
 		</div>
 	{:else}

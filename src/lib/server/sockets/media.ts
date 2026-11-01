@@ -46,6 +46,15 @@ import {
 } from "$lib/shared/constants/MediaVisibility"
 import { frameProblem, framesEqual } from "$lib/shared/media/frame"
 import { CULL_ORIGINALS_CONFIRM } from "$lib/shared/constants/MediaCleanup"
+import {
+	deleteSpokenFiles,
+	findSpoken,
+	inSession,
+	isValidKeepSpokenAudio,
+	notSpokenSql,
+	readKeepSpokenAudio,
+	writeKeepSpokenAudio
+} from "$lib/server/media/spoken"
 
 /**
  * Resolve the display name of whatever each row is grouped under, in three
@@ -294,6 +303,8 @@ async function buildMediaList(
 
 	const filters = [eq(schema.files.userId, userId)]
 	if (params?.kind) filters.push(eq(schema.files.kind, params.kind))
+	// Spoken audio is a derived form: opt-in, never in a default listing.
+	if (params?.includeSpoken !== true) filters.push(notSpokenSql())
 
 	const rows = await db
 		.select()
@@ -759,7 +770,15 @@ export const mediaCullDerived: Handler<
 			bytes += outcome.freedBytes
 		}
 
-		const res: Sockets.Media.CullDerived.Response = { variants, bytes }
+		// Spoken audio is derived class: same button, no confirmation.
+		const spoken = await deleteSpokenFiles(db, cullable.spokenFileIds)
+		bytes += spoken.bytes
+
+		const res: Sockets.Media.CullDerived.Response = {
+			variants,
+			bytes,
+			spokenFiles: spoken.cleared
+		}
 		emitToUser("media:cullDerived", res)
 		// LAZY: see `buildMediaList`.
 		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
@@ -910,6 +929,90 @@ export const mediaSetCachePolicy: Handler<
 	}
 }
 
+/**
+ * Who may see or clear spoken audio: no session = the whole pub, admin only;
+ * a session = its owner or an admin. Returns the scope filter.
+ */
+async function spokenScope(
+	socket: { user?: { id: number; isAdmin?: boolean } | null },
+	sessionId: number | undefined
+) {
+	const user = socket.user!
+	if (sessionId == null) {
+		if (!user.isAdmin)
+			throw new Error("Only an administrator can manage spoken audio pub-wide.")
+		return { sessionId: null, filter: undefined }
+	}
+	if (!Number.isInteger(sessionId)) throw new Error("Session not found.")
+	const [session] = await db
+		.select({ userId: schema.sessions.userId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+	if (!session || (session.userId !== user.id && !user.isAdmin))
+		throw new Error("Session not found.")
+	return { sessionId, filter: inSession(sessionId) }
+}
+
+export const mediaSpokenSummary: Handler<
+	Sockets.Media.SpokenSummary.Params,
+	Sockets.Media.SpokenSummary.Response
+> = {
+	event: "media:spokenSummary",
+	handler: async (socket, params, emitToUser) => {
+		const scope = await spokenScope(socket, params?.sessionId)
+		const found = await findSpoken(db, scope.filter)
+		const res: Sockets.Media.SpokenSummary.Response = {
+			count: found.ids.length,
+			bytes: found.bytes,
+			keep: await readKeepSpokenAudio(db),
+			sessionId: scope.sessionId
+		}
+		emitToUser("media:spokenSummary", res)
+		return res
+	}
+}
+
+export const mediaClearSpoken: Handler<
+	Sockets.Media.ClearSpoken.Params,
+	Sockets.Media.ClearSpoken.Response
+> = {
+	event: "media:clearSpoken",
+	handler: async (socket, params, emitToUser) => {
+		const scope = await spokenScope(socket, params?.sessionId)
+		const found = await findSpoken(db, scope.filter)
+		const out = await deleteSpokenFiles(db, found.ids)
+		const res: Sockets.Media.ClearSpoken.Response = {
+			...out,
+			sessionId: scope.sessionId
+		}
+		emitToUser("media:clearSpoken", res)
+		// LAZY: see `buildMediaList`.
+		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
+		return res
+	}
+}
+
+export const mediaSetKeepSpokenAudio: Handler<
+	Sockets.Media.SetKeepSpokenAudio.Params,
+	Sockets.Media.SetKeepSpokenAudio.Response
+> = {
+	event: "media:setKeepSpokenAudio",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin)
+			throw new Error("Only an administrator sets how long spoken audio is kept.")
+		if (!isValidKeepSpokenAudio(params?.keep))
+			throw new Error(
+				"Keep spoken audio must be forever, archived, or a whole number of days from 1 to 3650."
+			)
+		await writeKeepSpokenAudio(db, params.keep)
+		const res: Sockets.Media.SetKeepSpokenAudio.Response = {
+			keep: params.keep
+		}
+		emitToUser("media:setKeepSpokenAudio", res)
+		return res
+	}
+}
+
 export function registerMediaHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -928,4 +1031,7 @@ export function registerMediaHandlers(
 	register(socket, mediaCullDerived, emitToUser)
 	register(socket, mediaCullOriginals, emitToUser)
 	register(socket, mediaSetCachePolicy, emitToUser)
+	register(socket, mediaSpokenSummary, emitToUser)
+	register(socket, mediaClearSpoken, emitToUser)
+	register(socket, mediaSetKeepSpokenAudio, emitToUser)
 }

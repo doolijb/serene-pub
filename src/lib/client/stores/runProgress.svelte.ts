@@ -76,6 +76,10 @@ export const runProgress = {
 	 */
 	apply(event: RunProgress): void {
 		if (!event?.runId) return
+		// 🚧 A line-bound run (speaking a line, owner ruling 2026-10-29) is
+		// shown on its line only: never a card, never a receipt — and its
+		// end must not retire the receipt of what the card is about.
+		if (event.lineBound) return
 		if (event.done || event.error) {
 			const known = runs.get(event.runId)
 			const sessionId = event.sessionId ?? known?.sessionId
@@ -112,6 +116,7 @@ export const runProgress = {
 	 * the question still being asked; a new run in the same session answers it.
 	 */
 	started(event: RunProgress): void {
+		if (event?.lineBound) return
 		if (event?.sessionId != null) finished.delete(event.sessionId)
 		this.apply(event)
 	},

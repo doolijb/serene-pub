@@ -19,11 +19,28 @@
 	 * then — and only then — the results.
 	 *
 	 * It is never a place of its own (design 2026-10-09 C.1): it opens as the
-	 * **Get a model** dialog from the index (Add › A model, the toolbar's
-	 * download button) and from the job picker, scoped to that job; it is the
-	 * Get tab of a managed or local ONNX connection; and it is the Set up chat
-	 * stepper's Model step. Getting a model closes nothing — the downloads tray
-	 * shows the progress.
+	 * **Get a model** dialog of the Models view — from its toolbar, from a
+	 * runtime's **Get more…** door (destination pre-selected, the For pills
+	 * narrowed to what that connection can hold) and from a loadout's Model
+	 * card (scoped to that job) — and it is the Set up chat stepper's Model
+	 * step. The managed and ONNX connection views carry no Get tab
+	 * (plan 2026-10-29 D1). Getting a model closes nothing — the downloads
+	 * tray shows the progress.
+	 *
+	 * ## Quants are always choosable (plan 2026-10-29 D2)
+	 *
+	 * Every row carries its files as `quants` (`finder.ts` reconciles the
+	 * sources) and `quantChoice` decides: more than one opens the quant picker
+	 * with the recommended one pre-selected, exactly one shows its name on the
+	 * row and downloads at once, none downloads the list's own tag and shows
+	 * the list's note. An ONNX or audio *precision* is chosen the same way.
+	 *
+	 * ## Presence on every row (D3)
+	 *
+	 * `models:presence` is asked once per row set (signature-guarded), and
+	 * every row — Hugging Face rows included — says whether this destination
+	 * already holds the file ("You have this on …") or another runtime does
+	 * ("Also on …", and the button reads "Get for … too").
 	 *
 	 * ## What decides the press is whether it will run
 	 *
@@ -32,7 +49,9 @@
 	 * turns all of them into one of three words, and it is the reason the row
 	 * has a gold chip, the reason exactly one Get button is gold, and the
 	 * whole second line of the quant picker. "Not sure" is a real answer and
-	 * suppresses every one of those rather than guessing.
+	 * suppresses every one of those rather than guessing. When the person has
+	 * never answered, the machine's detected graphics card proposes a tier and
+	 * a sentence says why; the moment they pick one, their answer wins.
 	 *
 	 * ## Nothing here is a new event
 	 *
@@ -44,10 +63,12 @@
 	 *
 	 * ## What is deliberately absent
 	 *
-	 * - An Ollama EMBEDDINGS destination gets no recommended group:
-	 *   `ollama:recommendedModels` answers with the chat GGUF list whatever is
-	 *   asked of it, and chat models filed under Embeddings would be a lie the
-	 *   finder told. The Hub search still works there.
+	 * - Speech and Transcription have no Hugging Face group: the rows are the
+	 *   audio packages (`audiocpp:listPackages`), one per model, never a
+	 *   free-text search that could fetch a chat model into a speech slot.
+	 * - An Ollama destination asks `ollama:recommendedModels` by kind (chat or
+	 *   embedding), so Embeddings gets its own half of the list (owner ruling
+	 *   2026-09-25) rather than chat models filed under it.
 	 * - A GGUF row's second line quotes its parameter size, not a context
 	 *   window: neither search carries one.
 	 * - An Ollama Hub row quotes no byte size, because its search does not
@@ -55,6 +76,8 @@
 	 *   one.
 	 */
 	import { getContext } from "svelte"
+	import { useMachineHardware } from "./useMachineHardware.svelte"
+	import { detectedMemoryTier } from "./hardwarePicks"
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
@@ -62,7 +85,9 @@
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import QuantPicker from "./QuantPicker.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { SvelteMap } from "svelte/reactivity"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { ONNX_DTYPES } from "$lib/shared/constants/onnxDtypes"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useConnections } from "$lib/client/contexts/connections.svelte"
 	import { downloads, type DownloadItem } from "./downloads.svelte"
@@ -71,20 +96,34 @@
 	import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
 	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
 	import {
+		ADD_BY_ID_DEFAULT_DTYPE,
 		DEFAULT_SCOPE,
 		FINDER_SCOPES,
+		audioFamilyRows,
+		audioLiveMatch,
+		audioRuntimeFor,
+		defaultQuant,
 		destinationsFor,
+		kcppDownloadKind,
 		kcppHubRows,
 		kcppKindForScope,
 		kcppRecommendedRows,
+		kcppSpeechDownloads,
 		landingNote,
 		ollamaHubRows,
 		ollamaRecommendedRows,
 		onnxRecommendedRows,
 		pickDestination,
+		presenceBatches,
+		presenceFor,
+		presenceNote,
+		presenceSignature,
 		primaryRowIndex,
+		quantChoice,
+		quantLine,
 		quantsFromKcpp,
 		quantsFromOllama,
+		quantsForAddById,
 		scopeForCapability,
 		scopePhrase,
 		repoTitle,
@@ -95,11 +134,13 @@
 		type HubRow,
 		type OllamaHubResult,
 		type OllamaRecommended,
+		type PresenceHolder,
+		type PresenceQuery,
 		type QuantFile
 	} from "./finder"
 	import {
 		MEMORY_TIERS,
-		readMemoryTier,
+		readStoredMemoryTier,
 		tierLabel,
 		writeMemoryTier,
 		type MemoryTier
@@ -125,13 +166,6 @@
 		 */
 		embedded?: boolean
 		/**
-		 * Inside a managed connection's Get tab (plan 2026-09-24 C3): the
-		 * connection's view owns the header, and the destination IS that
-		 * connection, so the "Download to" pills are hidden. What it is for
-		 * stays — KoboldCPP holds chat and image models.
-		 */
-		inTab?: boolean
-		/**
 		 * Open a connection — the ONNX destination's "N already on this
 		 * machine" line goes to the list that holds them.
 		 */
@@ -142,7 +176,6 @@
 		connectionId,
 		onBack,
 		embedded = false,
-		inTab = false,
 		onOpenConnection
 	}: Props = $props()
 
@@ -179,16 +212,23 @@
 		scopeOverride ?? scopeForCapability(capability) ?? DEFAULT_SCOPE
 	)
 
-	let tier = $state<MemoryTier>("unsure")
-	// Read on mount rather than at module scope: `localStorage` does not exist
-	// during SSR, and the default is what a browser that will not store it
-	// keeps getting.
+	// The person's own answer, once they have given one; read on mount rather
+	// than at module scope because `localStorage` does not exist during SSR.
+	// Until then the machine's detected tier (if any) is proposed, with its
+	// reason, and "Not sure" is what a browser that detects nothing keeps.
+	let pickedTier = $state<MemoryTier | null>(null)
 	$effect(() => {
-		tier = readMemoryTier()
+		pickedTier = readStoredMemoryTier()
 	})
+	const hardware = useMachineHardware()
+	const detected = $derived(detectedMemoryTier(hardware.current))
+	const tier = $derived<MemoryTier>(pickedTier ?? detected?.tier ?? "unsure")
+	const tierReason = $derived(
+		pickedTier == null ? (detected?.reason ?? null) : null
+	)
 	let tierOpen = $state(false)
 	function pickTier(next: MemoryTier) {
-		tier = next
+		pickedTier = next
 		writeMemoryTier(next)
 		tierOpen = false
 	}
@@ -203,19 +243,21 @@
 		destinationsFor(scope, connectionsList, { localOnnx })
 	)
 	/**
-	 * The "For" pills. In a connection's Get tab only what THAT connection can
-	 * hold: the destination pills are hidden there, so picking Embeddings in
-	 * KoboldCPP's tab would quietly have sent the download somewhere else.
+	 * The "For" pills. Asked for a connection (a runtime's **Get more…**
+	 * door), only what THAT connection can hold — a KoboldCPP door offers
+	 * Chat, Images and Speech, never Embeddings — while the "Download to"
+	 * pills stay, with that connection pre-selected. A connection that no
+	 * scope lists leaves all of them, so the pills are never empty.
 	 */
-	const scopeOptions = $derived(
-		inTab && connectionId != null
-			? FINDER_SCOPES.filter((option) =>
-					destinationsFor(option.value, connectionsList, {
-						localOnnx
-					}).some((d) => d.connectionId === connectionId)
-				)
-			: FINDER_SCOPES
-	)
+	const scopeOptions = $derived.by(() => {
+		if (connectionId == null) return FINDER_SCOPES
+		const narrowed = FINDER_SCOPES.filter((option) =>
+			destinationsFor(option.value, connectionsList, {
+				localOnnx
+			}).some((d) => d.connectionId === connectionId)
+		)
+		return narrowed.length ? narrowed : FINDER_SCOPES
+	})
 	let destinationOverride = $state<string | null>(null)
 	const destination = $derived.by(() => {
 		const chosen = destinations.find((d) => d.id === destinationOverride)
@@ -270,6 +312,9 @@
 	let kcppSearch = $state<Sockets.KoboldCPP.SearchModels.ModelResult[]>([])
 	let ollamaRecommended = $state<OllamaRecommended[]>([])
 	let ollamaSearch = $state<OllamaHubResult[]>([])
+	/** audio.cpp's packages grouped by family; null until the list answers. */
+	let audioFamilies = $state<Sockets.AudioCpp.PackageFamily[] | null>(null)
+	let audioFailed = $state(false)
 	let loadingRecommended = $state(false)
 	let searching = $state(false)
 	let searchError = $state<string | null>(null)
@@ -316,6 +361,14 @@
 		searching = false
 		searchError = msg.error ?? null
 	}
+	function handleAudioList(msg: Sockets.AudioCpp.ListPackages.Response) {
+		audioFamilies = msg.families ?? []
+		audioFailed = false
+	}
+	function handleAudioListError() {
+		audioFailed = true
+		if (audioFamilies === null) audioFamilies = []
+	}
 	function handleSearchError(msg: Sockets.ErrorResponse) {
 		if (searchAsks.settle()) return
 		searching = false
@@ -334,6 +387,9 @@
 	let hubId = $state("")
 	let hubError = $state<string | null>(null)
 	let hubPending = $state(false)
+	/** The precision the added model is fetched in; always sent. */
+	let hubDtype = $state<string>(ADD_BY_ID_DEFAULT_DTYPE)
+	const hubDtypes = quantsForAddById(ONNX_DTYPES, ADD_BY_ID_DEFAULT_DTYPE)
 	function submitHub() {
 		const id = hubId.trim()
 		if (!id || !destination) return
@@ -341,7 +397,8 @@
 		hubPending = true
 		socket.emit("connections:addHubModel", {
 			id: destination.connectionId,
-			hubId: id
+			hubId: id,
+			dtype: hubDtype
 		})
 	}
 	function handleHubAdded() {
@@ -423,6 +480,24 @@
 			declareInterest<"ollama:pullModel:error">(
 				"ollama:pullModel:error",
 				handleDownloadError
+			),
+			declareInterest<"audiocpp:listPackages">(
+				"audiocpp:listPackages",
+				handleAudioList
+			),
+			declareInterest<"audiocpp:listPackages:error">(
+				"audiocpp:listPackages:error",
+				handleAudioListError
+			),
+			// `audiocpp:downloadPackage:error` is Layout's to toast (it is not
+			// in its handled set); declaring it here too would toast twice.
+			declareInterest<"models:presence">(
+				"models:presence",
+				handlePresence
+			),
+			declareInterest<"models:presence:error">(
+				"models:presence:error",
+				handlePresenceError
 			)
 		]
 		return () => releases.forEach((release) => release())
@@ -454,8 +529,9 @@
 		const current = scope
 		if (!kind || !isAdmin) return
 		// Local ONNX has no second list to fetch: its catalogue is already
-		// projected into the connection's own models by the sync.
-		if (kind === "onnx") return
+		// projected into the connection's own models by the sync. The audio
+		// scopes read `audiocpp:listPackages` instead (below).
+		if (kind === "onnx" || audioRuntime) return
 		// The Ollama list now has two halves in one file — chat, and
 		// embedding models tagged `embedding` (owner ruling 2026-09-25) — so
 		// both scopes an Ollama connection can take get a group.
@@ -489,7 +565,8 @@
 		const term = debouncedQuery.trim()
 		const kind = destination?.kind
 		const current = scope
-		if (!term || !kind || kind === "onnx" || !isAdmin) return
+		if (!term || !kind || kind === "onnx" || audioRuntime || !isAdmin)
+			return
 		const signature = `${kind}:${current}:${term}`
 		if (signature === lastSearchAsk) return
 		lastSearchAsk = signature
@@ -512,6 +589,30 @@
 				})
 		})
 	})
+	// audio.cpp's packages, for an audio.cpp destination and for KoboldCPP under
+	// Speech. One list serves both: each row names its runtime. It is asked
+	// again when an audio download settles, because a package's state is the
+	// list's to report.
+	let lastAudioAsk = ""
+	$effect(() => {
+		if (!audioRuntime || !isAdmin) return
+		const signature = `${audioRuntime}:${audioSettled}`
+		if (signature === lastAudioAsk) return
+		lastAudioAsk = signature
+		socket.emit("audiocpp:listPackages", {})
+	})
+	let audioSettled = $state(0)
+	let audioBusyCount = 0
+	$effect(() => {
+		const busy = downloads.items.filter(
+			(i) =>
+				(i.source === "audiocpp" || i.source === "koboldcpp") &&
+				i.state === "in_flight"
+		).length
+		if (busy < audioBusyCount) audioSettled += 1
+		audioBusyCount = busy
+	})
+
 	// A reply owed to an unmounted view must not be waited on by the next one.
 	$effect(() => () => {
 		recommendedAsks.reset()
@@ -520,15 +621,24 @@
 
 	// ── The rows ────────────────────────────────────────────────────────────
 
+	/** Which audio runtime's families this destination + scope lists, or null. */
+	const audioRuntime = $derived(audioRuntimeFor(destination, scope))
+
 	const rowContext = $derived({
 		tier,
 		query: debouncedQuery,
-		present: presentModels
-	})
+		present: presentModels,
+		kcppKind: kcppKindForScope(scope) === "image" ? "image" : "text"
+	} as const)
 
 	const recommendedRows = $derived.by((): FinderRow[] => {
 		const dest = destination
 		if (!dest) return []
+		if (audioRuntime)
+			return audioFamilyRows(audioFamilies ?? [], rowContext, {
+				scope,
+				runtime: audioRuntime
+			})
 		if (dest.kind === "koboldcpp")
 			return kcppRecommendedRows(kcppRecommended, rowContext)
 		if (dest.kind === "ollama")
@@ -563,9 +673,18 @@
 
 	const hubRows = $derived.by((): HubRow[] => {
 		const dest = destination
-		if (!dest || dest.kind === "onnx" || !debouncedQuery.trim()) return []
+		if (
+			!dest ||
+			dest.kind === "onnx" ||
+			audioRuntime ||
+			!debouncedQuery.trim()
+		)
+			return []
 		return dest.kind === "koboldcpp"
-			? kcppHubRows(kcppSearch)
+			? kcppHubRows(
+					kcppSearch,
+					kcppKindForScope(scope) === "image" ? "image" : "text"
+				)
 			: ollamaHubRows(ollamaSearch)
 	})
 
@@ -588,6 +707,7 @@
 		const kind = dest?.kind
 		if (!dest || !kind || kind === "onnx") return null
 		const items = downloads.items
+		if (audioRuntime) return audioLiveMatch(row, audioRuntime, items)
 		if (kind === "ollama") {
 			const id =
 				dest.connectionId != null
@@ -605,14 +725,73 @@
 		)
 	}
 
+	// ── Presence: who already holds this ────────────────────────────────────
+
+	/** Holders by row key. A row nobody holds maps to []. */
+	const holdersByKey = new SvelteMap<string, PresenceHolder[]>()
+	function handlePresence(msg: Sockets.Models.Presence.Response) {
+		for (const result of msg?.results ?? [])
+			holdersByKey.set(result.key, result.holders ?? [])
+	}
+	// A failed check is a missing note, never a toast: presence is a courtesy.
+	function handlePresenceError() {}
+
+	/** The note for a row under the current destination. */
+	function summaryFor(key: string) {
+		return destination
+			? presenceNote(holdersByKey.get(key), destination)
+			: null
+	}
+	/** The row's own state, or "held here" per the presence check. */
+	function effectivePresence(row: {
+		key: string
+		presence?: FinderRow["presence"]
+	}) {
+		if (row.presence) return row.presence
+		const summary = summaryFor(row.key)
+		return summary?.here && destination
+			? presenceFor(destination.kind)
+			: null
+	}
+
+	const presenceQueries = $derived.by((): PresenceQuery[] => {
+		const out: PresenceQuery[] = []
+		for (const row of recommendedRows)
+			if (row.presenceQuery) out.push(row.presenceQuery)
+		for (const row of hubRows.slice(0, hubShown))
+			if (row.presenceQuery) out.push(row.presenceQuery)
+		return out
+	})
+	// Re-asked only when the row set (or a download settling) changes — never
+	// on a list push that left the rows alone.
+	let lastPresenceAsk = ""
+	$effect(() => {
+		if (!isAdmin || !destination) return
+		const queries = presenceQueries
+		if (!queries.length) return
+		const signature = `${presenceSignature(queries)}#${audioSettled}`
+		if (signature === lastPresenceAsk) return
+		lastPresenceAsk = signature
+		for (const batch of presenceBatches(queries))
+			socket.emit("models:presence", { queries: batch })
+	})
+
 	// ── Starting a download ─────────────────────────────────────────────────
 
+	/** What the open picker will do with the chosen file. */
+	type PickerSource =
+		| {
+				kind: "koboldcpp"
+				model: Sockets.KoboldCPP.SearchModels.ModelResult
+		  }
+		| { kind: "ollama" }
+		| { kind: "onnx"; modelId: number }
+		| { kind: "audio"; runtime: "audiocpp" | "koboldcpp"; name: string }
 	let picker = $state<{
 		repo: string
 		quants: QuantFile[]
-		kind: "koboldcpp" | "ollama"
-		/** The KoboldCPP result the params are rebuilt from. */
-		model: Sockets.KoboldCPP.SearchModels.ModelResult | null
+		source: PickerSource
+		noun: "size" | "precision"
 	} | null>(null)
 
 	function started(name: string) {
@@ -643,75 +822,141 @@
 		started(model.name)
 	}
 
+	function startOllama(tag: string, name: string) {
+		socket.emit("ollama:pullModel", {
+			modelName: tag,
+			connectionId: destination?.connectionId
+		})
+		started(name)
+	}
+
+	/** ALWAYS carries the precision when the list named one. */
+	function startOnnx(modelId: number, quant: QuantFile | null, name: string) {
+		const dest = destination
+		if (!dest) return
+		socket.emit("connections:downloadModel", {
+			id: dest.connectionId,
+			modelId,
+			...(quant?.dtype ? { dtype: quant.dtype } : {})
+		})
+		started(name)
+	}
+
+	function startAudio(
+		runtime: "audiocpp" | "koboldcpp",
+		name: string,
+		quant: QuantFile
+	) {
+		if (runtime === "audiocpp") {
+			if (!quant.packageId) return
+			socket.emit("audiocpp:downloadPackage", { id: quant.packageId })
+		} else {
+			// One call per file, the model first and its codec after.
+			for (const params of kcppSpeechDownloads(name, quant))
+				socket.emit("koboldcpp:downloadModel", params)
+		}
+		started(name)
+	}
+
+	/** Open the picker, or go straight ahead when there is nothing to choose. */
+	function offer(
+		repo: string,
+		quants: QuantFile[],
+		source: PickerSource,
+		noun: "size" | "precision",
+		go: (quant: QuantFile | null) => void
+	) {
+		const choice = quantChoice(quants)
+		if (choice === "picker") picker = { repo, quants, source, noun }
+		else go(defaultQuant(quants))
+	}
+
 	/** The Get button on a recommended row. */
 	function getRecommended(row: FinderRow) {
 		const dest = destination
 		if (!dest) return
+		const quants = row.quants ?? []
+		if (audioRuntime) {
+			const runtime = audioRuntime
+			offer(
+				row.name,
+				quants,
+				{ kind: "audio", runtime, name: row.name },
+				"precision",
+				(quant) => quant && startAudio(runtime, row.name, quant)
+			)
+			return
+		}
 		if (dest.kind === "onnx") {
 			const modelId = Number(row.key.slice("onnx:".length))
-			socket.emit("connections:downloadModel", {
-				id: dest.connectionId,
-				modelId
-			})
-			started(row.name)
+			offer(
+				row.name,
+				quants,
+				{ kind: "onnx", modelId },
+				"precision",
+				(quant) => startOnnx(modelId, quant, row.name)
+			)
 			return
 		}
 		if (dest.kind === "ollama") {
-			// A recommended Ollama row names one exact tag; there is nothing
-			// to pick between.
-			const modelName = row.key.slice("ollama:".length)
-			socket.emit("ollama:pullModel", {
-				modelName,
-				connectionId: dest.connectionId
-			})
-			started(row.name)
+			// Quants when the server could list them; else the yaml's own tag
+			// (a library name has no quants, and the row says why).
+			offer(row.name, quants, { kind: "ollama" }, "size", (quant) =>
+				startOllama(
+					quant?.tag ?? row.key.slice("ollama:".length),
+					row.name
+				)
+			)
 			return
 		}
 		const model = kcppRecommended.find((m) => m.name === row.name)
 		if (!model) return
-		const kind = kcppKindForScope(scope) ?? "text"
-		const quants = quantsFromKcpp(model, kind)
-		// A picker with one row asks a question with one answer.
-		if (quants.length === 1) startKcpp(model, quants[0])
-		else picker = { repo: model.name, quants, kind: "koboldcpp", model }
+		offer(
+			model.name,
+			quants,
+			{ kind: "koboldcpp", model },
+			"size",
+			(quant) => quant && startKcpp(model, quant)
+		)
 	}
 
 	/** The Get button on a Hugging Face row. */
 	function getHub(row: HubRow) {
 		const dest = destination
 		if (!dest || dest.kind === "onnx") return
+		const quants = row.quants ?? []
+		if (!quants.length) {
+			toaster.error({ title: "That repo lists no files to get" })
+			return
+		}
 		if (dest.kind === "koboldcpp") {
 			const model = kcppSearch.find((m) => m.name === row.name)
 			if (!model) return
-			const kind = kcppKindForScope(scope) ?? "text"
-			const quants = quantsFromKcpp(model, kind)
-			if (quants.length === 1) startKcpp(model, quants[0])
-			else picker = { repo: model.name, quants, kind: "koboldcpp", model }
+			offer(
+				model.name,
+				quants,
+				{ kind: "koboldcpp", model },
+				"size",
+				(quant) => quant && startKcpp(model, quant)
+			)
 			return
 		}
-		const model = ollamaSearch.find((m) => m.name === row.name)
-		if (!model) return
-		picker = {
-			repo: model.name,
-			quants: quantsFromOllama(model),
-			kind: "ollama",
-			model: null
-		}
+		offer(row.name, quants, { kind: "ollama" }, "size", (quant) => {
+			if (quant?.tag) startOllama(quant.tag, row.name)
+		})
 	}
 
 	function downloadPicked(quant: QuantFile) {
 		const open = picker
 		picker = null
 		if (!open) return
-		if (open.kind === "koboldcpp" && open.model)
-			startKcpp(open.model, quant)
-		else if (open.kind === "ollama" && quant.tag) {
-			socket.emit("ollama:pullModel", {
-				modelName: quant.tag,
-				connectionId: destination?.connectionId
-			})
-			started(open.repo)
-		}
+		const source = open.source
+		if (source.kind === "koboldcpp") startKcpp(source.model, quant)
+		else if (source.kind === "ollama") {
+			if (quant.tag) startOllama(quant.tag, open.repo)
+		} else if (source.kind === "onnx")
+			startOnnx(source.modelId, quant, open.repo)
+		else startAudio(source.runtime, source.name, quant)
 	}
 
 	function cancelRow(row: FinderRow) {
@@ -724,8 +969,28 @@
 			})
 			return
 		}
+		if (audioRuntime === "koboldcpp") {
+			// A speech conversion is several files; stop every one of them.
+			for (const item of downloads.items)
+				if (
+					item.source === "koboldcpp" &&
+					item.state === "in_flight" &&
+					item.name === row.name
+				)
+					downloads.cancel(item)
+			return
+		}
 		const item = liveDownload(row)
 		if (item) downloads.cancel(item)
+		else if (audioRuntime === "audiocpp")
+			// Downloading per the list but not (yet) per the feed.
+			for (const family of audioFamilies ?? [])
+				if (`audio:${family.key}` === row.key)
+					for (const p of family.precisions)
+						if (p.state === "downloading")
+							socket.emit("audiocpp:cancelPackageDownload", {
+								id: p.id
+							})
 	}
 
 	// ── When there is nowhere to put it ─────────────────────────────────────
@@ -734,6 +999,11 @@
 		// Through the context, so the create it may ask for is this tab's own
 		// and the Connections view opens the new row.
 		const { plan } = conns.enableManagerHere("koboldcpp")
+		toaster.success({ title: `${plan.label} is on` })
+	}
+
+	function addAudioCpp() {
+		const { plan } = conns.enableManagerHere("audiocpp")
 		toaster.success({ title: `${plan.label} is on` })
 	}
 
@@ -762,12 +1032,14 @@
 				: landingNote(destination, kcppModelsDir)
 	)
 
-	const hubGroupVisible = $derived(!!destination && !!debouncedQuery.trim())
+	const hubGroupVisible = $derived(
+		!!destination && !audioRuntime && !!debouncedQuery.trim()
+	)
 	const onnxHubVisible = $derived(destination?.kind === "onnx")
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-3">
-	{#if onBack && !embedded && !inTab}
+	{#if onBack && !embedded}
 		<PanelNavHeader
 			title="Get a model"
 			{onBack}
@@ -813,7 +1085,7 @@
 
 	<!-- WHERE IT GOES. Derived from the list, so a pill is never offered for
 	     a runtime this pub has no connection to. -->
-	<div class="flex shrink-0 flex-col gap-1.5" class:hidden={inTab}>
+	<div class="flex shrink-0 flex-col gap-1.5">
 		<span class="text-surface-600-400 text-xs">Download to</span>
 		{#if destinations.length}
 			<div
@@ -851,7 +1123,7 @@
 				<p class="text-sm">
 					Nothing here can hold {scopePhrase(scope)} yet.
 				</p>
-				{#if scope === "chat" || scope === "images"}
+				{#if scope === "chat" || scope === "images" || scope === "speech"}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-primary self-start"
@@ -860,7 +1132,17 @@
 						<Icons.Cpu size={14} aria-hidden="true" />
 						Add KoboldCPP, run by Serene Pub
 					</button>
-				{:else}
+				{/if}
+				{#if scope === "speech" || scope === "transcription"}
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-primary self-start"
+						onclick={addAudioCpp}
+					>
+						<Icons.AudioLines size={14} aria-hidden="true" />
+						Add audio.cpp, run by Serene Pub
+					</button>
+				{:else if scope === "embeddings" || scope === "entities"}
 					<p class="text-surface-600-400 text-xs">
 						Add → A connection makes the local connection this pub
 						downloads them into.
@@ -917,6 +1199,13 @@
 								>
 									How much memory does this machine have?
 								</p>
+								{#if tierReason}
+									<p
+										class="text-surface-600-400 px-1.5 pb-1 text-xs"
+									>
+										{tierReason}
+									</p>
+								{/if}
 								<div
 									class="flex flex-col gap-0.5"
 									role="radiogroup"
@@ -944,6 +1233,9 @@
 				</Popover>
 			{/if}
 		</p>
+		{#if tierReason && destination?.kind !== "onnx"}
+			<p class="text-surface-600-400 text-xs">{tierReason}</p>
+		{/if}
 	</div>
 
 	<!-- RESULTS. Two groups, each with its own count, and neither rendered
@@ -982,7 +1274,7 @@
 				{#if onnxOnDisk && destination}
 					<button
 						type="button"
-						class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-base px-1.5 text-left text-xs"
+						class="hover:preset-tonal-primary text-surface-600-400 rounded-base flex min-h-9 items-center gap-2 px-1.5 text-left text-xs"
 						onclick={() =>
 							destination &&
 							onOpenConnection?.(destination.connectionId)}
@@ -1027,8 +1319,37 @@
 								autocomplete="off"
 								spellcheck="false"
 							/>
+							<span class="text-surface-600-400 text-xs">
+								Precision
+							</span>
+							<div
+								class="flex flex-wrap gap-1.5"
+								role="radiogroup"
+								aria-label="Precision"
+							>
+								{#each hubDtypes as option (option.name)}
+									{@const on = hubDtype === option.dtype}
+									<button
+										type="button"
+										role="radio"
+										aria-checked={on}
+										class="flex min-h-9 items-center rounded-full px-2.5 text-xs pointer-coarse:min-h-11 {on
+											? 'preset-pressed'
+											: 'bg-surface-200-800 text-surface-700-300 hover:bg-surface-300-700'}"
+										onclick={() =>
+											(hubDtype =
+												option.dtype ??
+												ADD_BY_ID_DEFAULT_DTYPE)}
+									>
+										{option.name}
+									</button>
+								{/each}
+							</div>
 							{#if hubError}
-								<p class="text-error-600-400 text-xs" role="alert">
+								<p
+									class="text-error-600-400 text-xs"
+									role="alert"
+								>
 									{hubError}
 								</p>
 							{/if}
@@ -1055,7 +1376,7 @@
 					{:else}
 						<button
 							type="button"
-							class="hover:preset-tonal-primary flex min-h-11 w-full items-center gap-2.5 rounded-base px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-70"
+							class="hover:preset-tonal-primary rounded-base flex min-h-11 w-full items-center gap-2.5 px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-70"
 							disabled={!!destination?.disabledReason}
 							title={destination?.disabledReason}
 							onclick={() => (hubOpen = true)}
@@ -1067,7 +1388,7 @@
 								<Icons.Plus size={16} />
 							</span>
 							<span class="min-w-0 flex-1">
-								<span class="block text-lead font-medium">
+								<span class="text-lead block font-medium">
 									Add from Hugging Face by id
 								</span>
 								<span
@@ -1121,6 +1442,7 @@
 		repo={picker.repo}
 		quants={picker.quants}
 		{tier}
+		noun={picker.noun}
 		onCancel={() => (picker = null)}
 		onDownload={downloadPicked}
 	/>
@@ -1138,6 +1460,9 @@
 {#snippet resultRow(row: FinderRow, gold: boolean)}
 	{@const live = row.downloading ? null : liveDownload(row)}
 	{@const busy = row.downloading || !!live}
+	{@const held = effectivePresence(row)}
+	{@const summary = summaryFor(row.key)}
+	{@const fileLine = quantLine(row)}
 	<!-- The ONNX feed reports a percent; the KoboldCPP one reports only
 	     bytes, so a bare `live.percent` would pin every managed download at
 	     0% forever. -->
@@ -1153,7 +1478,7 @@
 	<div class="panel-card flex flex-col gap-2">
 		<div class="flex items-start gap-2.5">
 			<span
-				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-base"
+				class="preset-tonal-surface rounded-base grid size-9 shrink-0 place-items-center"
 				aria-hidden="true"
 			>
 				<Icons.Package size={18} />
@@ -1161,14 +1486,14 @@
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 				<div class="flex min-w-0 flex-wrap items-center gap-1.5">
 					<span
-						class="min-w-0 truncate text-lead font-medium"
+						class="text-lead min-w-0 truncate font-medium"
 						title={row.name}
 					>
 						{repoTitle(row.name)}
 					</span>
 					{#if row.tier}
 						<span
-							class="shrink-0 rounded-full px-2 py-0.5 text-meta {row
+							class="text-meta shrink-0 rounded-full px-2 py-0.5 {row
 								.tier.matches
 								? 'preset-tonal-primary'
 								: 'preset-tonal-surface'}"
@@ -1180,6 +1505,16 @@
 				<span class="text-surface-600-400 truncate text-xs">
 					{secondLine(row)}
 				</span>
+				{#if fileLine}
+					<!-- A single-file repo names its file before Get; an Ollama
+					     row with no listable quants says why. -->
+					<span
+						class="text-surface-600-400 truncate text-xs"
+						title={fileLine}
+					>
+						{fileLine}
+					</span>
+				{/if}
 			</div>
 			{#if busy}
 				<button
@@ -1190,9 +1525,9 @@
 				>
 					Cancel
 				</button>
-			{:else if row.presence}
+			{:else if held}
 				<Badge tone="success" size="sm" class="shrink-0">
-					{row.presence === "on_disk" ? "On disk" : "Pulled"}
+					{held === "on_disk" ? "On disk" : "Pulled"}
 				</Badge>
 			{:else}
 				<button
@@ -1205,10 +1540,14 @@
 					onclick={() => getRecommended(row)}
 					aria-label={`Get ${row.name}`}
 				>
-					Get
+					{summary?.getLabel ?? "Get"}
 				</button>
 			{/if}
 		</div>
+
+		{#if summary?.text}
+			<p class="text-surface-600-400 text-xs">{summary.text}</p>
+		{/if}
 
 		{#if row.description}
 			<!-- Clamped, not truncated: two lines of a sentence is a sentence,
@@ -1237,7 +1576,7 @@
 						style={`width: ${Math.round(percent ?? 0)}%`}
 					></span>
 				</span>
-				<span class="text-surface-600-400 shrink-0 text-meta">
+				<span class="text-surface-600-400 text-meta shrink-0">
 					{formatProgress(
 						live?.downloadedBytes,
 						live?.totalBytes,
@@ -1250,31 +1589,52 @@
 {/snippet}
 
 {#snippet hubResultRow(row: HubRow)}
+	{@const held = effectivePresence({ key: row.key })}
+	{@const summary = summaryFor(row.key)}
+	{@const fileLine = quantLine(row)}
 	<div class="panel-card flex flex-col gap-2">
 		<div class="flex items-start gap-2.5">
 			<span
-				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-base"
+				class="preset-tonal-surface rounded-base grid size-9 shrink-0 place-items-center"
 				aria-hidden="true"
 			>
 				<Icons.Globe size={18} />
 			</span>
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span class="truncate text-lead font-medium" title={row.name}>
+				<span class="text-lead truncate font-medium" title={row.name}>
 					{repoTitle(row.name)}
 				</span>
 				<span class="text-surface-600-400 truncate text-xs">
 					{row.detail}
 				</span>
+				{#if fileLine}
+					<span
+						class="text-surface-600-400 truncate text-xs"
+						title={fileLine}
+					>
+						{fileLine}
+					</span>
+				{/if}
 			</div>
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
-				onclick={() => getHub(row)}
-				aria-label={`Get ${row.name}`}
-			>
-				Get
-			</button>
+			{#if held}
+				<Badge tone="success" size="sm" class="shrink-0">
+					{held === "on_disk" ? "On disk" : "Pulled"}
+				</Badge>
+			{:else}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+					onclick={() => getHub(row)}
+					aria-label={`Get ${row.name}`}
+				>
+					{summary?.getLabel ?? "Get"}
+				</button>
+			{/if}
 		</div>
+
+		{#if summary?.text}
+			<p class="text-surface-600-400 text-xs">{summary.text}</p>
+		{/if}
 
 		{#if row.description}
 			<p

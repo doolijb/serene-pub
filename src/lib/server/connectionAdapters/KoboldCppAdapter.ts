@@ -812,6 +812,9 @@ export async function testConnection(
 // "could not ask" collapse into "nothing loaded", which would mark the real row
 // missing every time the worker is busy. `determined` is the flag that keeps
 // those two apart — see `fetchCurrentModelStatus`.
+/** The one `tts` row an external instance lists (see `listModels`). */
+export const KCPP_SPEECH_MODEL_ID = "koboldcpp-speech"
+
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
@@ -877,6 +880,18 @@ async function listModels(
 				model: embedding.name,
 				name: embedding.name,
 				modality: "embeddings"
+			})
+		// 🚧 Speech build (S10/B2): koboldcpp reports THAT a speech model is
+		// loaded (`tts` on /api/extra/version) but no endpoint names it
+		// (/v1/models is the text model; verified in koboldcpp.py, 2026-10-28).
+		// So one honest row stands for "the speech model this instance has":
+		// the id is ours, and the speech module sends it as `model`, which
+		// koboldcpp ignores. Never listed on an unanswered flag.
+		if (flags?.tts)
+			models.push({
+				model: KCPP_SPEECH_MODEL_ID,
+				name: "Speech model (loaded in KoboldCPP)",
+				modality: "tts"
 			})
 		return { models }
 	} catch (e: any) {

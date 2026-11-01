@@ -317,7 +317,7 @@
 	bind:this={rootEl}
 	class="session-layout"
 	class:editing
-	data-stage-only={model.stageOnly ? "" : undefined}
+	data-fullscreen={model.fullscreen ? "" : undefined}
 	style:padding-block-start="{model.editorTop}px"
 >
 	{#if editing}
@@ -374,7 +374,7 @@
 		inline-size: 100%;
 		min-block-size: 0;
 	}
-	/* Stage only (the model's `stageOnly`): marked, never unmounted — the mount
+	/* Full screen (the model's `fullscreen`): marked, never unmounted — the mount
 	   stays and an iframe under it keeps running. `!important` because a side's
 	   slot and a flyout set their own `display` by class. */
 	.session-layout :global([data-stage-hidden]) {

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, test } from "vitest"
 import {
 	MESSAGE_STYLE_PRESETS,
@@ -304,6 +305,61 @@ describe("folded sections in every pack (B4)", () => {
 			expect(css).not.toMatch(
 				/messages\.(message-disclosure|part-disclosure|fold-list)/
 			)
+		}
+	)
+})
+
+describe("the spoken line is quiet in the default sheet (owner 2026-10-29)", () => {
+	const HIDDEN = ["spoken-state", "spoken-audio", "spoken-time", "spoken-menu", "spoken-stop"]
+	const KEPT = ["spoken-voice", "spoken-mood", "spoken-caption", "spoken-missing", "message-speech-player"]
+	const blocksOf = (css: string) =>
+		[...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1], body: m[2] }))
+	const sheet = readFileSync("src/lib/client/styles/widgets.css", "utf8")
+	// Straight inside `@layer sp-widgets`, outside any @container / @media:
+	// the hide holds at every width and pointer.
+	const topLevel: { sel: string; body: string }[] = []
+	{
+		let depth = 0
+		let at = 0
+		for (const m of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+			for (const ch of sheet.slice(at, m.index!)) depth += ch === "{" ? 1 : ch === "}" ? -1 : 0
+			at = m.index! + m[0].length
+			if (depth === 1) topLevel.push({ sel: m[1], body: m[2] })
+		}
+	}
+
+	test("the base sheet hides the player row: glyph, player, clock, ⋯ and Stop", () => {
+		for (const part of HIDDEN) {
+			const hit = topLevel.some(
+				(b) => /display:\s*none/.test(b.body) && b.sel.includes(`messages.${part}"`)
+			)
+			expect(hit, part).toBe(true)
+		}
+	})
+
+	test("Speaking… is clipped for a screen reader, never display:none", () => {
+		const pending = topLevel.filter((b) => b.sel.includes(`messages.spoken-pending"`))
+		expect(pending.some((b) => b.body.includes("clip-path"))).toBe(true)
+		expect(pending.some((b) => /display:\s*none/.test(b.body))).toBe(false)
+	})
+
+	test("the chips, caption, missing note and the menu player are never hidden", () => {
+		for (const f of ["src/lib/client/sessionLayout/messageLayouts.css", "src/lib/client/styles/widgets.css"]) {
+			for (const { sel, body } of blocksOf(readFileSync(f, "utf8"))) {
+				if (!/display:\s*none|clip-path/.test(body)) continue
+				for (const part of KEPT) expect(sel.includes(`messages.${part}"`), `${f}: ${part}`).toBe(false)
+			}
+		}
+	})
+
+	test.each(MESSAGE_STYLE_PRESETS.map((p) => [p.slug, p.css] as const))(
+		"%s carries no tuck of its own and hides none of the kept parts",
+		(_slug, css) => {
+			expect(css.includes("the player row is tucked")).toBe(false)
+			for (const { sel, body } of blocksOf(css)) {
+				if (!/display:\s*none|clip-path/.test(body)) continue
+				for (const part of KEPT) expect(sel.includes(`messages.${part}"`)).toBe(false)
+			}
 		}
 	)
 })

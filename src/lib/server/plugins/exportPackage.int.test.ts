@@ -4,7 +4,7 @@
  *
  * Round trip: the unified fixture is installed from its folder, its genre is
  * exported through `plugins:exportPackage`, the zip is read back, the plugin
- * is uninstalled, and the zip is installed through `plugins:installPackage` —
+ * is uninstalled, and the zip is installed through `installUploadedPackage` —
  * which must announce the same genre, pipelines, presets and configs.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -15,6 +15,18 @@ import { eq } from "drizzle-orm"
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+
+// Writes `bytes` to a temp zip and installs it as the upload route does.
+async function installZip(bytes: Uint8Array, filename: string) {
+	const { installUploadedPackage } = await import("./packageUpload")
+	const zipPath = path.join(dataDir, `${Math.random().toString(36).slice(2)}.zip`)
+	await fs.writeFile(zipPath, bytes)
+	try {
+		return await installUploadedPackage({ zipPath, filename })
+	} finally {
+		await fs.rm(zipPath, { force: true })
+	}
+}
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 120_000 })
 
@@ -39,7 +51,7 @@ const SLUG = "demo.unified"
 const GENRE = "demo.unified:genre/tally"
 const CREATE = "demo.unified:spec/create-session"
 const RESPOND = "demo.unified:spec/respond"
-const OFF_WORDS = /The plugin subsystem is off/
+const OFF_WORDS = /Plugins are turned off on this server/
 
 beforeAll(async () => {
 	priorFlag = process.env.SP_PLUGINS_ENABLED
@@ -219,16 +231,7 @@ describe("install from an upload", () => {
 			.where(eq(schema.pipelineSpecs.slug, CREATE))
 		expect(gone).toBeUndefined()
 
-		const { pluginsInstallPackage } = await import(
-			"$lib/server/sockets/pluginPackages"
-		)
-		const c = collector()
-		const res: any = await pluginsInstallPackage.handler(
-			asAdmin(),
-			{ filename: `${SLUG}.zip`, bytes: Buffer.from(zip).toString("base64") },
-			c.emit
-		)
-		expect(c.last("plugins:installPackage")).toBe(res)
+		const res: any = await installZip(zip, `${SLUG}.zip`)
 		expect(res.pluginId).toBe(SLUG)
 		expect(res.specs.sort()).toEqual([CREATE, RESPOND].sort())
 		expect(res.configs.sort()).toEqual(
@@ -384,24 +387,19 @@ describe("presets as rows", () => {
 })
 
 describe("refusals", () => {
-	it("refuses a non-admin, on both events", async () => {
-		const m = await import("$lib/server/sockets/pluginPackages")
-		for (const [h, params] of [
-			[m.pluginsExportPackage, { genreId: GENRE }],
-			[m.pluginsInstallPackage, { filename: "x.zip", bytes: "" }]
-		] as const) {
-			const c = collector()
-			await expect(
-				(h.handler as any)(socketFor(strangerId, false), params, c.emit)
-			).rejects.toThrow(/admin/i)
-			expect(c.last(`${h.event}:error`)?.error).toMatch(/admin/i)
-		}
+	it("refuses a non-admin export", async () => {
+		const { pluginsExportPackage: h } = await import("$lib/server/sockets/pluginPackages")
+		const c = collector()
+		await expect(
+			(h.handler as any)(socketFor(strangerId, false), { genreId: GENRE }, c.emit)
+		).rejects.toThrow(/admin/i)
+		expect(c.last(`${h.event}:error`)?.error).toMatch(/admin/i)
 	})
 
 	it("refuses with the flag unset, in installLocal's own words", async () => {
 		const m = await import("$lib/server/sockets/pluginPackages")
 		const { pluginsInstallLocal } = await import("$lib/server/sockets/plugins")
-		delete process.env.SP_PLUGINS_ENABLED
+		process.env.SP_PLUGINS_ENABLED = "0"
 		try {
 			const local = collector()
 			let localWords = ""
@@ -409,16 +407,12 @@ describe("refusals", () => {
 				.handler(asAdmin(), { dir: FIXTURE }, local.emit)
 				.catch((e: Error) => (localWords = e.message))
 			expect(localWords).toMatch(OFF_WORDS)
-			for (const [h, params] of [
-				[m.pluginsExportPackage, { genreId: GENRE }],
-				[m.pluginsInstallPackage, { filename: "x.zip", bytes: "" }]
-			] as const) {
-				const c = collector()
-				await expect(
-					(h.handler as any)(asAdmin(), params, c.emit)
-				).rejects.toThrow(localWords)
-				expect(c.last(`${h.event}:error`)?.error).toBe(localWords)
-			}
+			const h = m.pluginsExportPackage
+			const c = collector()
+			await expect(
+				(h.handler as any)(asAdmin(), { genreId: GENRE }, c.emit)
+			).rejects.toThrow(localWords)
+			expect(c.last(`${h.event}:error`)?.error).toBe(localWords)
 		} finally {
 			process.env.SP_PLUGINS_ENABLED = "1"
 		}
@@ -431,16 +425,12 @@ describe("refusals", () => {
 		const inApp = `${SLUG}:spec/made-here`
 		await db.insert(schema.pipelineSpecs).values({ slug: inApp, name: "Made here" })
 		try {
-			const { pluginsInstallPackage } = await import("$lib/server/sockets/pluginPackages")
-			const c = collector()
-			await expect(
-				pluginsInstallPackage.handler(
-					asAdmin(),
-					{ filename: `${SLUG}.zip`, bytes: Buffer.from(zip).toString("base64") },
-					c.emit
-				)
-			).rejects.toThrow(/is the owner name of a pipeline made on this pub \('demo\.unified:spec\/made-here'\)/)
-			expect(c.last("plugins:installPackage:error")?.error).toMatch(/A package cannot install over in-app work/)
+			await expect(installZip(zip, `${SLUG}.zip`)).rejects.toThrow(
+				/is the owner name of a pipeline made on this pub \('demo\.unified:spec\/made-here'\)/
+			)
+			await expect(installZip(zip, `${SLUG}.zip`)).rejects.toThrow(
+				/A package cannot install over in-app work/
+			)
 			const [still] = await db
 				.select({ slug: schema.pipelineSpecs.slug })
 				.from(schema.pipelineSpecs)
@@ -456,40 +446,20 @@ describe("refusals", () => {
 		const m = JSON.parse(strFromU8(files["dist/plugin/manifest.json"]))
 		m.requires = [...m.requires, "core:event/time-travel@1"]
 		files["dist/plugin/manifest.json"] = strToU8(JSON.stringify(m))
-		const { pluginsInstallPackage } = await import("$lib/server/sockets/pluginPackages")
-		const c = collector()
-		await expect(
-			pluginsInstallPackage.handler(
-				asAdmin(),
-				{ filename: `${SLUG}.zip`, bytes: Buffer.from(zipSync(files)).toString("base64") },
-				c.emit
-			)
-		).rejects.toThrow(
+		const bad = zipSync(files)
+		await expect(installZip(bad, `${SLUG}.zip`)).rejects.toThrow(
 			"'core:event/time-travel@1' is an event this version of Serene Pub does not have; the package needs a newer Serene Pub."
 		)
 		// The events this build does have are not named.
-		expect(c.last("plugins:installPackage:error")?.error).not.toMatch(/message-respond/)
+		await expect(installZip(bad, `${SLUG}.zip`)).rejects.not.toThrow(/message-respond/)
 	})
 
 	it("refuses a zip naming a file outside its folder", async () => {
-		const { pluginsInstallPackage } = await import(
-			"$lib/server/sockets/pluginPackages"
-		)
 		const evil = zipSync({
 			"dist/plugin/manifest.json": strToU8("{}"),
 			"../escape.txt": strToU8("out")
 		})
-		const c = collector()
-		await expect(
-			pluginsInstallPackage.handler(
-				asAdmin(),
-				{ filename: "evil.zip", bytes: Buffer.from(evil).toString("base64") },
-				c.emit
-			)
-		).rejects.toThrow(/outside its own folder/)
-		expect(c.last("plugins:installPackage:error")?.error).toMatch(
-			/outside its own folder/
-		)
+		await expect(installZip(evil, "evil.zip")).rejects.toThrow(/outside its own folder/)
 		await expect(fs.stat(path.join(dataDir, "escape.txt"))).rejects.toThrow()
 	})
 

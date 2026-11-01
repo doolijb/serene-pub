@@ -62,8 +62,38 @@ describe("serviceRoadChecklist", () => {
 			connectionId: 7,
 			label: "Open OpenRouter"
 		})
-		expect(c.lines[1].detail).toBe("Paste your API key, then press Save.")
+		expect(c.lines[1].detail).toBe(
+			"Paste your API key, then press Save; a key with no credit still gets free models, about 50 replies a day."
+		)
 		expect(c.lines[2].action).toBeNull()
+	})
+
+	test("a keyless row that is not OpenRouter keeps the plain key line", () => {
+		const c = serviceRoadChecklist({
+			connections: [
+				openRouter({
+					preset: "openai",
+					baseUrl: "https://api.openai.com/v1"
+				})
+			],
+			chatConnectionId: null
+		})
+		expect(c.lines[1].detail).toBe("Paste your API key, then press Save.")
+	})
+
+	test("a saved key with no credit says free models only", () => {
+		const c = serviceRoadChecklist({
+			connections: [
+				openRouter({
+					hasCredential: true,
+					modelsSync: { at: "2026-10-06T10:00:00Z", error: null, freeTier: true }
+				})
+			],
+			chatConnectionId: null
+		})
+		expect(c.lines[1].detail).toBe(
+			"No credit yet: free models only, about 50 replies a day"
+		)
 	})
 
 	test("key saved and models listed: Choose which model replies is the action", () => {

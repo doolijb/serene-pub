@@ -3,7 +3,7 @@
  * S4): the page refuses before it uploads, and the server refuses before it
  * parses — a hand-rolled emit meets the same ceiling the dialog does.
  *
- * All three sit under Socket.IO's `maxHttpBufferSize` (1e8, which a base64
+ * Both sit under Socket.IO's `maxHttpBufferSize` (1e8, which a base64
  * card file can use only three quarters of). That transport ceiling was the
  * only one before; it bounds a message, not what parsing the message costs.
  */

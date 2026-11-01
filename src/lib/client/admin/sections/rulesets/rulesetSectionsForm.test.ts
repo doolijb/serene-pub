@@ -87,7 +87,7 @@ describe("reading and writing the sections", () => {
 	it("an attribute added with its sentence is the whole of a playable ruleset", () => {
 		const form = sectionsFormOf(SCRATCH, "Hollow Hearts")
 		const a = newAttribute(form, "Affection")
-		Object.assign(a, { min: "0", max: "10", start: "5", prose: "How much someone likes you.", carriedBy: ["cast"], visibility: "holder", tags: "relationship, warmth", shownAs: "bar", changedBy: ["rules", "gm"] })
+		Object.assign(a, { min: "0", max: "10", start: "5", prose: "How much someone likes you.", owner: "cast", visibility: "holder", tags: "relationship, warmth", shownAs: "bar", changedBy: ["rules", "gm"] })
 		form.attributes.push(a)
 		const mood = newAttribute(form, "Mood")
 		Object.assign(mood, { kind: "label", of: "shy, warm, guarded", prose: "The mood they are in." })
@@ -101,7 +101,7 @@ describe("reading and writing the sections", () => {
 				kind: "number",
 				bounds: { min: 0, max: 10 },
 				start: 5,
-				carriedBy: ["cast"],
+				owner: "cast",
 				visibility: "holder",
 				changedBy: ["rules", "gm"],
 				tags: ["relationship", "warmth"],
@@ -568,5 +568,38 @@ describe("🚧 RF fix 6: removing a function, and what a role takes (2026-10-23)
 			"The word takes a word or free text. None of yours is yet: add one under Attributes."
 		)
 		expect(pickNote({ role: "Restore", takes: "a number, a pool or a tally", fieldTypes: [], leftOut: [], offered: 3 })).toBeUndefined()
+	})
+
+	it("🚧 T3: an attribute's owner round-trips through the editor's pick", () => {
+		const attr = (owner: string) => ({ id: "asleep", name: { en: "Asleep" }, kind: "flag", prose: "Asleep: whether they are asleep.", scope: "session", owner })
+		const player = sectionsFormOf({ ...SCRATCH, attributes: [attr("player")] } as never, "Hearts")
+		expect(player.attributes[0]!.owner).toBe("player")
+		expect(player.attributes[0]!.carriedBy).toEqual([])
+		expect(sectionsDocument({ ...SCRATCH, attributes: [attr("player")] } as never, player).attributes).toEqual([attr("player")])
+		const cast = sectionsFormOf({ ...SCRATCH, attributes: [attr("cast")] } as never, "Hearts")
+		cast.attributes[0]!.owner = "world"
+		const written = sectionsDocument({ ...SCRATCH, attributes: [attr("cast")] } as never, cast).attributes as Record<string, unknown>[]
+		expect(written[0]!.owner).toBe("world")
+		expect(written[0]!.carriedBy).toBeUndefined()
+	})
+
+	it("🚧 U5b: a legacy carriedBy list is kept, a picked holder replaces it, and scope round-trips", () => {
+		const legacy = { id: "asleep", name: { en: "Asleep" }, kind: "flag", prose: "Asleep: whether they are asleep.", carriedBy: ["cast", "world"] }
+		const doc = { ...SCRATCH, attributes: [legacy] } as never
+		const form = sectionsFormOf(doc, "Hearts")
+		expect(form.attributes[0]!.carriedBy).toEqual(["cast", "world"])
+		expect(form.attributes[0]!.owner).toBe("")
+		const kept = sectionsDocument(doc, form).attributes as Record<string, unknown>[]
+		expect(kept[0]!.carriedBy).toEqual(["cast", "world"])
+		expect(kept[0]!.owner).toBeUndefined()
+		form.attributes[0]!.owner = "location"
+		form.attributes[0]!.carriedBy = []
+		const picked = sectionsDocument(doc, form).attributes as Record<string, unknown>[]
+		expect(picked[0]!.owner).toBe("location")
+		expect(picked[0]!.carriedBy).toBeUndefined()
+		const scoped = { ...legacy, carriedBy: undefined, owner: "cast", scope: "world" }
+		const again = sectionsFormOf({ ...SCRATCH, attributes: [scoped] } as never, "Hearts")
+		expect(again.attributes[0]!.scope).toBe("world")
+		expect((sectionsDocument({ ...SCRATCH, attributes: [scoped] } as never, again).attributes as Record<string, unknown>[])[0]!.scope).toBe("world")
 	})
 })

@@ -21,6 +21,8 @@ import {
 	extensionAllowedForKind
 } from "$lib/server/koboldcpp/modelKind"
 import { rereadDetectedTextModels } from "$lib/server/koboldcpp/rereadDetectedKinds"
+import { catalogueFor } from "$lib/shared/speech/catalogues"
+import { isWavTokenizerFile } from "$lib/server/koboldcpp/ttsTokenizer"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -289,6 +291,8 @@ async function listTextModels(
 		const candidates = entries.filter(
 			(name) =>
 				extensionAllowedForKind(name, "text") &&
+				// A codec file (Qwen3-TTS / OuteTTS wav tokenizer) is no model.
+				!isWavTokenizerFile(name) &&
 				!imageLane.has(name) &&
 				!incomplete.has(name)
 		)
@@ -336,9 +340,14 @@ async function listTextModels(
 					// The registry's own name where it has one — a filename is
 					// an identifier, not a title.
 					name: row?.modelName || filename,
+					// A file the speech catalogues recognise (Kokoro, Qwen3-TTS,
+					// KittenTTS) is stated as speech, so a sync never overwrites
+					// the admin's "tts" choice with "text-gen".
 					modality: embeddingsLane.has(filename)
 						? "embeddings"
-						: "text-gen",
+						: catalogueFor(filename)
+							? "tts"
+							: "text-gen",
 					...(Object.keys(facts).length > 1 ? { facts } : {})
 				}
 			})

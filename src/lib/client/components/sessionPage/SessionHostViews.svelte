@@ -203,6 +203,7 @@
 	<SessionBanners
 		typing={[...data.typingPersonas.values()]}
 		showTyping={!data.modeMissing && !data.composerHidden}
+		speaking={data.speakingNames}
 	/>
 {/snippet}
 

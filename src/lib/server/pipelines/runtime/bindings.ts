@@ -51,7 +51,8 @@ import {
 	type FormBlock,
 	type MessageBlock,
 	type ParticipantRef,
-	type StatusText
+	type StatusText,
+	readLibraryDraft
 } from "@serene-pub/sdk"
 
 /**
@@ -142,6 +143,7 @@ import {
 // The relationship mechanism (ruling 2026-09-10, Q1), in its own module — see
 // the header there for why it is not written inline.
 import { relationshipSearchBindings } from "./bindings.relationships"
+import { pluginStorageBindings } from "./bindings.pluginStorage"
 // Stats and states, in their own module for the same reason — see its header
 // for why the write does not go through a host seam.
 import { stateBindings } from "./bindings.state"
@@ -149,6 +151,7 @@ import { cutOutBindings } from "./cutOut"
 import { spriteFillBindings } from "./spriteFill"
 import { portraitBindings } from "./portrait"
 import { illustrateSceneBindings } from "./illustrateScene"
+import { messageLineBindings } from "$lib/server/pipelines/speech/messageLine"
 import { clockStepBindings } from "./clockStep"
 import { describeImageBindings } from "./describeImage"
 // Is a room name already described (lair pass R7) — its own module, same reason.
@@ -253,6 +256,8 @@ import { resolveBatchBudget } from "$lib/server/utils/summarizer/batchBudget"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import { explicitStopsFrom } from "$lib/server/connections/stops"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
+import { cueLines as cueLinesOf } from "$lib/server/pipelines/speech/cueLines"
+import { ComposedError } from "$lib/server/connections/visibility"
 import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
 import {
 	docsExcerptContent,
@@ -2069,6 +2074,17 @@ export function selectJsonPaths(
 	// single value to publish, and a reader of `value` on a multi-path node is
 	// asking the same question `items` answers.
 	return { value: items, items }
+}
+
+/**
+ * 🚧 A commit that refused in words (`{ halt: '…' }` from the host — a library write under the person's Off mode,
+ * a conversion nobody may make) halts the run with that sentence; anything else is the commit's ids, as before.
+ * The convention the seat and composer outlets spell out by hand (M2c path B: the library outlets' Off sentence
+ * reached no one because the binding wrapped it as ids).
+ */
+const committedOrHalt = (r: unknown) => {
+	const { halt: halted, ...ids } = (r ?? {}) as Record<string, unknown> & { halt?: unknown }
+	return typeof halted === "string" ? halt(halted) : ok(ids)
 }
 
 /**
@@ -3967,6 +3983,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// The same graph, ranked and budgeted rather than dumped.
 		...relationshipSearchBindings(),
 
+		// 🚧 One file of the running plugin's own storage (M2a).
+		...pluginStorageBindings(),
+
 		// The session's stats and states: one node reads them,
 		// one changes them.
 		...stateBindings(run),
@@ -3984,6 +4003,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		...clockStepBindings(),
 		// 🚧 Describe image — a picture read by the job that reads pictures (D1).
 		...describeImageBindings(),
+		// 🚧 One message as a line to speak — Read aloud / Say it as… (speech ★1).
+		...messageLineBindings(),
 
 		// Is a room name already described, by an entry or by recent prose.
 		...undescribedNameBindings(),
@@ -4188,8 +4209,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					return halt(
 						`view is 'ai', 'template' or left out — '${String(view)}' is none of them`
 					)
+				// The owner the params name (`owner` + `sharedAnnex`), which the
+				// host resolves — passed through, as the lorebook annex's are.
+				const params = (input as { params?: unknown })?.params
 				const doc = await ctx.read("session_annex", {
 					sessionId: input?.scope?.sessionId,
+					params,
 					...(view === "ai"
 						? { view: "ai", speaker: (input as { speaker?: unknown })?.speaker ?? null }
 						: view === "template"
@@ -4201,9 +4226,45 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						"there is no session to read an annex for — the run is scoped to a " +
 							"session that no longer exists"
 					)
-				return ok({ main: doc })
+				// 🚧 The owner's annex document version (M2a a8), for a
+				// `set-session-annex`'s `base`; the template view is many
+				// owners' and has none.
+				if (view === "template") return ok({ main: doc })
+				const version = await ctx.read("session_annex_version", {
+					sessionId: input?.scope?.sessionId,
+					params
+				})
+				return ok({ main: doc, ...(typeof version === "number" ? { version } : {}) })
 			},
 			{ ports: ["scope", "view", "speaker"], params: ["owner", "sharedAnnex"] }
+		),
+		/**
+		 * 🚧 One owner's document in the **lorebook annex** (M0, SHAPES
+		 * L9): the lorebook the session reads (its attached book overlaid by its
+		 * own), or the book a book-level run is scoped to. The owner resolves as
+		 * the session annex's does. No `view` — the query has none.
+		 */
+		"core:query/lorebook-annex@1": reads<typeof C.lorebookAnnex>(
+			async (input: NodeInput<typeof C.lorebookAnnex>, ctx: CoreQueryCtx) => {
+				const params = (input?.params ?? {}) as { owner?: unknown; sharedAnnex?: unknown }
+				const doc = await ctx.read("lorebook_annex", {
+					sessionId: input?.scope?.sessionId,
+					owner: params.owner,
+					sharedAnnex: params.sharedAnnex
+				})
+				if (doc === null)
+					return halt(
+						"there is no lorebook annex to read — the run is scoped to neither a session nor a lorebook"
+					)
+				// 🚧 (M2b) The owner's annex document version, for a `set-lorebook-annex`'s `base`.
+				const version = await ctx.read("lorebook_annex_version", {
+					sessionId: input?.scope?.sessionId,
+					owner: params.owner,
+					sharedAnnex: params.sharedAnnex
+				})
+				return ok({ main: doc, ...(typeof version === "number" ? { version } : {}) })
+			},
+			{ ports: ["scope"], params: ["owner", "sharedAnnex"] }
 		),
 		"core:query/session-settings@1": reads<typeof C.sessionSettings>(
 			async (
@@ -4559,16 +4620,18 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ctx: CoreQueryCtx
 			) => {
 				const read = (await ctx.read("cast_presences", {
-					sessionId: input?.scope?.sessionId
-				})) as { rows?: unknown[]; at?: unknown } | null
+					sessionId: input?.scope?.sessionId,
+					atHour: (input as { atHour?: unknown })?.atHour
+				})) as { rows?: unknown[]; at?: unknown; placements?: unknown[] } | null
 				const rows = Array.isArray(read?.rows) ? read!.rows : []
 				return ok({
 					main: rows,
 					at: read?.at ?? null,
+					placements: Array.isArray(read?.placements) ? read!.placements : [],
 					diagnostics: { presences: rows.length }
 				})
 			},
-			{ ports: ["scope"] }
+			{ ports: ["scope", "atHour"] }
 		),
 
 		/**
@@ -5130,6 +5193,43 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({ main: cast, cast })
 			},
 			{ ports: ["cast", "messages"], params: ["scanDepth"] }
+		),
+
+		/**
+		 * 🚧 **Cue a line** (speech build, seam S3) — the line's text as the
+		 * speech cues it is spoken from. Pure and deterministic: `cueLines`
+		 * (`pipelines/speech/cueLines.ts`) is regex and locale tables, so the same
+		 * text, label and cast give the same cues. `inflection` takes a sprite
+		 * pick as it is; `cast` takes names, a cast document, or a settings
+		 * document carrying `.cast`.
+		 *
+		 * `speaker` is declared by the contract and used by `speak`, which names
+		 * whose voice a `speaker` cue takes; this task never needs it (a `Name:`
+		 * run is switched by `cast` alone), so it is listed in the read
+		 * declaration but not consulted.
+		 */
+		"core:task/cue-lines@1": reads<typeof C.cueLines>(
+			async (input: NodeInput<typeof C.cueLines>) => {
+				const cues = cueLinesOf({
+					text: typeof input?.text === "string" ? input.text : "",
+					inflection: input?.inflection,
+					cast: input?.cast,
+					quoteStyles: Array.isArray(input?.params?.quoteStyles)
+						? (input.params.quoteStyles as string[])
+						: null,
+					asterisks: input?.params?.asterisks,
+					voices: input?.params?.voices as never,
+					language:
+						typeof input?.params?.language === "string" && input.params.language.trim()
+							? input.params.language.trim()
+							: null
+				})
+				return ok({ main: cues, cues })
+			},
+			{
+				ports: ["text", "speaker", "inflection", "cast"],
+				params: ["quoteStyles", "asterisks", "voices", "language"]
+			}
 		),
 
 		/**
@@ -6337,6 +6437,95 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			}
 		),
 
+		/**
+		 * 🚧 **Speak** (speech build, seam S3) — the line's cues in, one audio file
+		 * out. The host does the work (`dispatchSpeech`): it groups the cues by
+		 * voice and inflection, renders each group through the line template,
+		 * resolves the voice, calls the Narration loadout's model once per group,
+		 * joins the audio and stores it (spoken, owned by the session's owner).
+		 *
+		 * ⚠ **Any failure is "nothing spoken", never an error.** The step runs after
+		 * the reply is saved, and a voice that could not be made must not turn a
+		 * delivered reply into a failed turn (the sprite picker's posture): the
+		 * ports publish null, `attach-audio` writes nothing, and the reason — a
+		 * sentence that names no connection — goes to the run's log. A line with
+		 * nothing to speak makes no call at all.
+		 *
+		 * `streaming` is read and treated as off (A5); no connection is published
+		 * (R53) — the host records the one it used on the receipt's request.
+		 */
+		"core:oracle/speak@1": reads<typeof C.speak>(
+			async (input: NodeInput<typeof C.speak>, ctx: OracleCtx) => {
+				const none = (cueMap: unknown = { source: "none", spans: [] }) =>
+					ok({ main: null, audio: null, cueMap, spokenAs: null, meta: null })
+				const cues = Array.isArray(input?.cues) ? input.cues : []
+				const text = typeof input?.text === "string" ? input.text : ""
+				if (!cues.length && !text.trim()) return none()
+
+				let result: any
+				try {
+					result = await ctx.call({
+						cues,
+						text,
+						speaker: input?.speaker ?? null,
+						language: input?.language ?? null,
+						template: input?.template,
+						prompts: input?.prompts,
+						variables: input?.variables,
+						connection: input?.connection,
+						sampling: input?.sampling,
+						params: {
+							gapMs: input?.params?.gapMs,
+							streaming: input?.params?.streaming
+						}
+					})
+				} catch (e) {
+					// A composed sentence names no connection and is safe to log;
+					// anything else (an adapter's own words) stays on the server.
+					ctx.log(
+						"warn",
+						e instanceof ComposedError
+							? `not spoken: ${e.message}`
+							: "not spoken: the speech step failed (see the server log)"
+					)
+					if (!(e instanceof ComposedError))
+						console.warn("[speak] failed:", e instanceof Error ? e.message : e)
+					return none()
+				}
+				for (const note of Array.isArray(result?.notes) ? result.notes : [])
+					ctx.log("info", String(note))
+				if (result?.isAborted || !result?.audio) return none()
+
+				// What the service honoured and what it could not — the only way
+				// "why did the speed do nothing" is answerable.
+				ctx.reportSampling?.(
+					Object.fromEntries((result.applied ?? []).map((k: string) => [k, true])),
+					result.ignored ?? []
+				)
+				return ok({
+					main: result.audio,
+					audio: result.audio,
+					cueMap: result.cueMap ?? { source: "none", spans: [] },
+					spokenAs: result.spokenAs ?? null,
+					meta: result.meta ?? null
+				})
+			},
+			{
+				ports: [
+					"cues",
+					"speaker",
+					"language",
+					"text",
+					"connection",
+					"sampling",
+					"prompts",
+					"template",
+					"variables"
+				],
+				params: ["streaming", "gapMs"]
+			}
+		),
+
 		// ── Summarization ───────────────────────────────────────────────────
 		//
 		// The two-phase shape of `utils/summarizer`, as nodes. Every prompt below
@@ -6875,6 +7064,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * contract's rules: anything that is not a list is a list of one,
 		 * `first` absent on an empty list, `rest` always a list.
 		 */
+		// 🚧 A drafted card or book read out of a reply (M2c path B): pure, the SDK's `readLibraryDraft`.
+		"core:task/read-library-draft@1": reads<typeof C.readLibraryDraft>(
+			async (input: NodeInput<typeof C.readLibraryDraft>) => {
+				const read = readLibraryDraft(input?.text)
+				return ok({
+					main: { make: read.make, ...(read.draft ? { draft: read.draft } : {}) },
+					text: read.text,
+					make: read.make,
+					...(read.draft ? { draft: read.draft } : {})
+				})
+			},
+			{ ports: ["text"] }
+		),
 		"core:task/split-first@1": reads<typeof C.splitFirst>(
 			async (input: NodeInput<typeof C.splitFirst>) => {
 				const raw = input?.items
@@ -7958,7 +8160,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:outlet/set-session-annex@1": reads<typeof C.setSessionAnnex>(
 			async (input: NodeInput<typeof C.setSessionAnnex>, ctx: OutletCtx) =>
 				ok(await ctx.commit(input)),
-			{ ports: ["value"], params: ["owner", "merge", "sharedAnnex"] }
+			{ ports: ["value", "base"], params: ["owner", "merge", "sharedAnnex"] }
 		),
 		/**
 		 * An annex field's write (2026-09-26): the host reads the field's
@@ -7967,6 +8169,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 */
 		"core:outlet/set-annex-field@1": reads<typeof C.setAnnexField>(
 			async (input: NodeInput<typeof C.setAnnexField>, ctx: OutletCtx) =>
+				ok(await ctx.commit(input)),
+			{ ports: ["payload"] }
+		),
+		/** 🚧 The lorebook annex's two writes (M0, SHAPES L9): the host's commit routes them. */
+		"core:outlet/set-lorebook-annex@1": reads<typeof C.setLorebookAnnex>(
+			async (input: NodeInput<typeof C.setLorebookAnnex>, ctx: OutletCtx) =>
+				ok(await ctx.commit(input)),
+			{ ports: ["value", "base"] }
+		),
+		"core:outlet/set-lorebook-annex-field@1": reads<typeof C.setLorebookAnnexField>(
+			async (input: NodeInput<typeof C.setLorebookAnnexField>, ctx: OutletCtx) =>
 				ok(await ctx.commit(input)),
 			{ ports: ["payload"] }
 		),
@@ -8107,12 +8320,27 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			) => ok(await ctx.commit(input)),
 			{ ports: ["target", "image"] }
 		),
+		/**
+		 * The audio twin of attach-image. 🚧 Speech (S3/S6): `meta` is the
+		 * `SpokenMeta` the speak step published — the host records it per swipe
+		 * beside the part — and `replace` swaps the line's earlier spoken audio for
+		 * this one. No `audio` (nothing was spoken, or speaking failed and said so
+		 * with null) writes nothing and never throws: the host answers
+		 * `written: false`, so no `message-updated` is caused.
+		 */
 		"core:outlet/attach-audio@1": reads<typeof C.attachAudio>(
 			async (
 				input: NodeInput<typeof C.attachAudio>,
 				ctx: OutletCtx
-			) => ok(await ctx.commit(input)),
-			{ ports: ["target", "audio"] }
+			) => {
+				// `written` is the executor's (no write, no event), not a row id.
+				const { written: _, ...ids } = (await ctx.commit(input)) as Record<
+					string,
+					unknown
+				>
+				return ok(ids)
+			},
+			{ ports: ["target", "audio", "meta"], params: ["replace"] }
 		),
 		/**
 		 * The form's answer, committed as a click (U5d). The commit fires the
@@ -8237,22 +8465,24 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			async (input: NodeInput<typeof C.advanceStoryClock>, ctx: OutletCtx) => {
 				// 🚧 `skipped` (live scenes §15 G7): the sentence a skipped
 				// move left in the ledger — on the receipt with the result.
-				const { clock, label, skipped, ...ids } = (await ctx.commit(input)) as {
+				const { clock, label, skipped, moved, ...ids } = (await ctx.commit(input)) as {
 					id: unknown
 					sessionId?: unknown
 					clock?: unknown
 					label?: unknown
 					skipped?: unknown
+					moved?: unknown
 				}
 				return ok({
 					status: "committed",
 					ids,
 					clock: clock ?? null,
 					label: label ?? "",
-					skipped: typeof skipped === "string" ? skipped : ""
+					skipped: typeof skipped === "string" ? skipped : "",
+					...(typeof moved === "number" ? { moved } : {})
 				})
 			},
-			{ ports: ["by", "unit", "cause", "onRefusal"], params: ["by", "unit"] }
+			{ ports: ["by", "unit", "to", "cause", "onRefusal"], params: ["by", "unit"] }
 		),
 		"core:outlet/show-sprite@1": reads<typeof C.showSprite>(
 			async (input: NodeInput<typeof C.showSprite>, ctx: OutletCtx) => {
@@ -8414,6 +8644,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			) => ok(await ctx.commit(input)),
 			{ ports: ["fromMessage", "title"] }
 		),
+		"core:outlet/convert-ruleset@1": reads<typeof C.convertRuleset>(
+			async (
+				input: NodeInput<typeof C.convertRuleset>,
+				ctx: OutletCtx
+			) => committedOrHalt(await ctx.commit(input)),
+			{ ports: ["to"] }
+		),
 		/**
 		 * The finished entry, and — since L2/L3 (2026-09-17) — its kind and
 		 * its links.
@@ -8481,6 +8718,29 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ports: ["from", "to", "name", "description", "sources"],
 				params: ["linkType", "reverseLinkType"]
 			}
+		),
+		/**
+		 * 🚧 The library outlets (M2c path B, plan §8): a card or a book in,
+		 * a row out — or a proposal, or a refusal — as the acting person under
+		 * their library write mode. Everything is the commit's to judge
+		 * (host.ts `libraryOutlet`): the genre's `writes.library`, the person's
+		 * rights (`personMay`), the mode.
+		 */
+		"core:outlet/create-character@1": reads<typeof C.createCharacter>(
+			async (input: NodeInput<typeof C.createCharacter>, ctx: OutletCtx) => committedOrHalt(await ctx.commit(input)),
+			{ ports: ["card"] }
+		),
+		"core:outlet/update-character@1": reads<typeof C.updateCharacter>(
+			async (input: NodeInput<typeof C.updateCharacter>, ctx: OutletCtx) => committedOrHalt(await ctx.commit(input)),
+			{ ports: ["characterId", "changes"] }
+		),
+		"core:outlet/create-lorebook@1": reads<typeof C.createLorebook>(
+			async (input: NodeInput<typeof C.createLorebook>, ctx: OutletCtx) => committedOrHalt(await ctx.commit(input)),
+			{ ports: ["lorebook"] }
+		),
+		"core:outlet/attach-lorebook@1": reads<typeof C.attachLorebook>(
+			async (input: NodeInput<typeof C.attachLorebook>, ctx: OutletCtx) => committedOrHalt(await ctx.commit(input)),
+			{ ports: ["lorebookId", "sessionId"] }
 		),
 		// Gate-eligible, and that is the mechanism behind "a graph build stops at
 		// the review screen": what comes back is a proposal, not rows.

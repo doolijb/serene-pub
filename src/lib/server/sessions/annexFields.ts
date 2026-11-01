@@ -116,12 +116,25 @@ export async function declaredAnnexFields(
 	return out
 }
 
-/** The declared fields a person may set — the ones offered as actions (`act` present). */
+/**
+ * Which annex a declared field is held in: the **session annex** (the
+ * default) or the **lorebook annex**. 🚧 M0 (SHAPES L9).
+ */
+export const annexScopeOf = (d: AnnexFieldDecl): "session" | "lorebook" =>
+	d.scope === "lorebook" ? "lorebook" : "session" // a `user` field is in no session (M2b)
+
+/**
+ * The declared fields a person may set — the ones offered as actions (`act`
+ * present). Session-scope only: a press of a lorebook-scope field is routed
+ * by the host's `set-annex-field` (it finds the field with `annexFieldFor`).
+ */
 export async function settableAnnexFields(
 	db: Db,
 	genreId: string
 ): Promise<DeclaredAnnexField[]> {
-	return (await declaredAnnexFields(db, genreId)).filter((f) => isSettableAnnexField(f.decl))
+	return (await declaredAnnexFields(db, genreId)).filter(
+		(f) => isSettableAnnexField(f.decl) && annexScopeOf(f.decl) === "session"
+	)
 }
 
 /** The one declared field an identity names for this session's genre, settable or not — or null. */
@@ -142,11 +155,12 @@ export async function annexFieldFor(
 export async function annexFieldsOfOwner(
 	db: Db,
 	genreId: string,
-	owner: string
+	owner: string,
+	scope: "session" | "lorebook" = "session"
 ): Promise<AnnexFieldDecl[]> {
 	const all = await everyDeclaration(db)
 	const mine = all.find((d) => d.owner === owner)
-	return mine ? annexFieldsInGenre(mine.fields, genreId) : []
+	return mine ? annexFieldsInGenre(mine.fields, genreId).filter((d) => annexScopeOf(d) === scope) : []
 }
 
 /**
@@ -157,9 +171,14 @@ export async function annexFieldsOfOwner(
  * pipelines only (R59) — still in the annex, still read by every pipeline.
  * A key declared for pipelines only is absent too.
  */
-export async function declaredAudiences(db: Db, genreId: string): Promise<DataAudiences> {
+export async function declaredAudiences(
+	db: Db,
+	genreId: string,
+	scope: "session" | "lorebook" = "session"
+): Promise<DataAudiences> {
 	const out: DataAudiences = {}
 	for (const f of await declaredAnnexFields(db, genreId)) {
+		if (annexScopeOf(f.decl) !== scope) continue
 		if (!f.decl.see.length) continue
 		;(out[f.owner] ??= {})[f.decl.key] = [...f.decl.see] as ParticipantRef[]
 	}
@@ -210,7 +229,7 @@ export function templateAnnexFrom(
 		if (!doc || typeof doc !== "object" || Array.isArray(doc)) continue
 		const stored = doc as Record<string, unknown>
 		const kept: Record<string, unknown> = {}
-		for (const decl of annexFieldsInGenre(fields, genreId))
+		for (const decl of annexFieldsInGenre(fields, genreId).filter((d) => annexScopeOf(d) === "session"))
 			if (Object.prototype.hasOwnProperty.call(stored, decl.key) && stored[decl.key] !== undefined)
 				kept[decl.key] = stored[decl.key]
 		if (Object.keys(kept).length) out[owner] = kept

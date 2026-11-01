@@ -137,7 +137,12 @@ describe("ADAPTER_REGISTRY", () => {
 					modules.text ||
 					modules.image ||
 					modules.embedding ||
-					modules.ner
+					modules.ner ||
+					// 🚧 speech and transcription families (speech build
+					// 2026-10-28, audio.cpp 2026-10-29): ElevenLabs and both
+					// audio.cpp types hold only these.
+					modules.speech ||
+					modules.transcription
 				)
 			}).toEqual({
 				type,

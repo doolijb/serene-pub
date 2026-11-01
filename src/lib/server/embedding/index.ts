@@ -198,10 +198,13 @@ export async function loadEmbeddingModel(
 	// when the row records none: guessing a precision is how a working file
 	// stops loading. The entity loader resolves it the same way.
 	const modelDef = findModel(modelId)
-	const registered = modelDef ? null : await registeredEmbeddingModel(modelId)
+	// Read for a catalogued model too: a person may have downloaded it at a
+	// precision other than the list's default (`connections:downloadModel`
+	// `dtype`), and the load must ask for the files the download fetched.
+	const registered = await registeredEmbeddingModel(modelId)
 	if (!modelDef && !registered)
 		throw new Error(`Unknown embedding model: ${modelId}`)
-	const dtype = modelDef?.dtype ?? registered?.dtype ?? null
+	const dtype = registered?.dtype ?? modelDef?.dtype ?? null
 
 	isLoading = true
 	pipeline = null

@@ -106,7 +106,8 @@ import {
 	type SheetSlotEntry,
 	type SlotAppliesTo,
 	type SlotConfig,
-	type SlotValue
+	type SlotValue,
+	type StoryCalendar
 } from "@serene-pub/sdk"
 import {
 	ownerFacet,
@@ -118,7 +119,8 @@ import { deriveValue } from "$lib/server/state/derive"
 import { notCarriedFor } from "$lib/server/state/carries"
 // THE comparator for the book's calendar (one comparator per calendar): the
 // shared one, which delegates to the SDK's `compareStoryTimes`.
-import { storyNowOf } from "$lib/server/state/storyTime"
+import { bookCalendarOf, clockOfNow, sessionStoryNowOf, storyNowOf } from "$lib/server/state/storyTime"
+import { ownBookOf } from "$lib/server/lorebooks/ownBook"
 import { readingOf, rowsOnReading, sessionReadingOf, type LineReading } from "$lib/server/state/reading"
 import {
 	MAIN_HEAD,
@@ -135,6 +137,7 @@ import { castMemberCards } from "$lib/server/utils/castMemberCards"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { castKey, castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
 import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
+import { keptRulesetDocument } from "$lib/server/rulesets/versions"
 import { offerableSlot, rulesetSettingAllows, sessionRulesets, withoutForeignRepertoire } from "$lib/server/rulesets/settings"
 import {
 	createExpressionBudget,
@@ -210,6 +213,19 @@ export interface SessionLinks {
 	locations: LocationLink[]
 	/** The story date, when the world has one — what `age` is measured against. */
 	storyDate: { year: number; month?: number; day?: number } | null
+	/**
+	 * The session's story clock, whole (hour and minute too), for the derived
+	 * day-period and season. Absent or null reads as no clock.
+	 */
+	clock?: {
+		year: number
+		month?: number | null
+		day?: number | null
+		hour?: number | null
+		minute?: number | null
+	} | null
+	/** The calendar of the book the session reads; absent or null is free-form. */
+	calendar?: StoryCalendar | null
 	/**
 	 * 🚧 Where the session reads its book (`state/reading.ts`): its line, its
 	 * moment and the fork cut — which durable rows it inherits. Absent or null
@@ -628,9 +644,13 @@ export async function sessionLinks(
 	// The session's line and story clock (ruling 15, story-time P3): which
 	// durable rows it inherits, and where its story's now stands.
 	const reading = lorebookId ? await sessionReadingOf(db, sessionId) : null
+	const now = await sessionStoryNowOf(db, sessionId)
+	const readBookId = lorebookId ?? (await ownBookOf(db, sessionId))?.id ?? null
 	return {
 		sessionId,
 		lorebookId,
+		clock: now ? clockOfNow(now) : null,
+		calendar: readBookId != null ? await bookCalendarOf(db, readBookId) : null,
 		storyDate: await storyDateOf(db, lorebookId, reading?.branchId ?? null, {
 			sessionStoryClock: reading?.moment ?? null,
 			line: reading?.line ?? null
@@ -809,11 +829,24 @@ export async function valueOf(
 	if (decl?.type === "derived")
 		return deriveValue(decl, {
 			storyDate: links?.storyDate ?? null,
+			clock: links?.clock ?? null,
+			calendar: links?.calendar ?? null,
 			read: async (slotId) => valueOf(db, { ...query, slotId, reading }, { ...known, links })
 		})
 
 	const found = fromLayers(rows, chain, query.slotId, reading?.dates)
 	if (found !== undefined) return found
+	// The derived default (`SlotConfig.derivation` on a stored slot): after the
+	// layers, before the declaration's default.
+	if (decl?.config?.derivation) {
+		const derived = await deriveValue(decl, {
+			storyDate: links?.storyDate ?? null,
+			clock: links?.clock ?? null,
+			calendar: links?.calendar ?? null,
+			read: async (slotId) => valueOf(db, { ...query, slotId, reading }, { ...known, links })
+		})
+		if (derived !== undefined) return derived
+	}
 	const vocabulary =
 		known.vocabulary ??
 		(query.sessionId && links
@@ -1319,9 +1352,12 @@ export async function vocabularyFor(
 		.select({
 			genreId: schema.sessions.genreId,
 			primaryRuleset: schema.sessions.primaryRuleset,
-			rulesetSettings: schema.sessions.rulesetSettings
+			rulesetSettings: schema.sessions.rulesetSettings,
+			rulesetVersion: schema.sessions.rulesetVersion,
+			currentVersion: schema.rulesets.publishedVersion
 		})
 		.from(schema.sessions)
+		.leftJoin(schema.rulesets, eq(schema.rulesets.rulesetId, schema.sessions.primaryRuleset))
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	const genreId = row?.genreId ?? ""
@@ -1381,7 +1417,14 @@ export async function vocabularyFor(
 	for (const rulesetId of plays) {
 		const ruleset = getRuleset(rulesetId)
 		if (!ruleset) continue
-		const attributes = rulesetSections(ruleset).attributes ?? []
+		// 🚧 A session pinned to an OLDER version (M2b a7) is offered that version's attributes, from the kept
+		// document. No pin, the pin is the current version, or nobody kept it (pinned before `ruleset_versions`
+		// existed): the current version, as before.
+		let attributes = rulesetSections(ruleset).attributes ?? []
+		if (rulesetId === row?.primaryRuleset && row.rulesetVersion && row.rulesetVersion !== row.currentVersion) {
+			const kept = await keptRulesetDocument(db, rulesetId, row.rulesetVersion)
+			if (kept) attributes = rulesetSections({ id: rulesetId, ...kept }).attributes ?? []
+		}
 		if (!attributes.length) continue
 		const slotOf = rulesetAttributeSlots({ id: ruleset.id, attributes: attributes as never })
 		for (const a of attributes) {

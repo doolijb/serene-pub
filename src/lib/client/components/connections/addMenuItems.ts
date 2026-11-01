@@ -10,7 +10,7 @@
  * 2026-10-11).
  */
 
-export type AddMenuItemKey = "connection" | "koboldcpp" | "ollama"
+export type AddMenuItemKey = "connection" | "koboldcpp" | "ollama" | "audiocpp"
 
 /**
  * Whether this instance can run a local runtime (KoboldCPP, Ollama) for
@@ -31,6 +31,6 @@ export function addMenuItemKeys(opts: {
 }): AddMenuItemKey[] {
 	return [
 		"connection",
-		...(opts.canRunLocalRuntimes ? (["koboldcpp", "ollama"] as const) : [])
+		...(opts.canRunLocalRuntimes ? (["koboldcpp", "ollama", "audiocpp"] as const) : [])
 	]
 }

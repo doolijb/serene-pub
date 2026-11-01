@@ -101,6 +101,10 @@ A pub starts as just you. Turn on accounts in **Admin › General** and everyone
 
 **What you'll notice:** the Connections, Models, Loadouts, Sampling and Admin icons are only on an administrator's rail; pipelines are in **Admin › Pipelines**. Sampler presets are edited in **Sampling**; each loadout's sheet in **Loadouts** picks which one that loadout uses.
 
+### Voices
+
+SillyTavern keeps a per-character voice map in its text-to-speech extension. Serene Pub's counterpart is split in two. A character's card has a **Speech** tab with **How they sound**, a plain description that travels with the card, and a voice picked from the pub's **voicebank**, the named voices an administrator sets up in **Loadouts → Voices**. Turn on **Read replies aloud** in a session's settings to hear it. Exporting a card keeps the description and language; the voice pick is local to the pub and is left out. See [Read aloud](./sessions.md#read-aloud).
+
 ### Settings live in fewer places
 
 Instead of a stack of drawers, settings sit in a few places:
@@ -142,10 +146,10 @@ Things you'd otherwise patch together with extensions, or do by hand:
 ## Not here yet
 
 - **Impersonate.** The model never writes your persona's lines for you.
-- **Voice.** There's no text-to-speech or speech input in sessions.
+- **Speech input.** There's no dictation in the composer. (Lines can be [read aloud](./sessions.md#read-aloud).)
 - **More than one lorebook per session.** A session reads one book at a time, so there's no stacking of global, character and chat books.
 - **Lorebook export.** It's paused while the format settles. A [character card](./characters.md#exporting-a-character) can still carry a book.
-- **SillyTavern's extension catalogue.** SillyTavern extensions don't run here. Serene Pub's own plugins (including showcase genres such as Whodunit, Writing Room, Battleship and Twenty Questions) are a preview in 0.6 and switched off in releases; an administrator turns them on with `SP_PLUGINS_ENABLED` (see [Feature toggles](./environment-variables.md#feature-toggles)).
+- **SillyTavern's extension catalogue.** SillyTavern extensions don't run here. If you wrote one, the SDK guide [Coming from SillyTavern extensions](./sdk/guides/coming-from-sillytavern-extensions.md) maps its API onto a plugin. Serene Pub's own plugins (including showcase genres such as Whodunit, Writing Room, Battleship and Twenty Questions) are a preview in 0.6. Plugins are on by default; the person who runs the pub can turn them off with `SP_PLUGINS_ENABLED` (see [Feature toggles](./environment-variables.md#feature-toggles)).
 
 ## Your first session, the SillyTavern way
 

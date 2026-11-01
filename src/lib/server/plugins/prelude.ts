@@ -22,6 +22,7 @@
  *                      the SDK's `ExtensionStorage`, here for the same reason
  *                      `__fmtLog` is: one implementation is what makes the two
  *                      backends indistinguishable
+ *  - `__wrapPackage` → the same, for `ctx.package` (the package's own files)
  * Deferred to the capability bridge (which can provide real entropy / IO under
  * a permission check): `crypto`, `fetch`, storage, `Buffer`. In particular
  * `crypto` is withheld rather than seeded — a `getRandomValues` that is secretly
@@ -367,13 +368,13 @@ function __bytesToB64(bytes) {
 	if (typeof bytes === "string") return Buffer.from(bytes, "utf8").toString("base64");
 	return Buffer.from(bytes == null ? [] : bytes).toString("base64");
 }
-function __wrapStorage(host) {
+function __wrapStorage(host, scoped) {
 	if (!host || typeof host !== "object") return host;
 	// Absent only for a stub that predates files; the denied stub carries it
 	// like the real store does, so a plugin without the grant is refused by
 	// name rather than by "is not a function".
 	var files = host.files || {};
-	return {
+	var out = {
 		usage: function () { return __spCall(host, host.usage, []); },
 		files: {
 			list: function (p) { return __spCall(files, files.list, [p]); },
@@ -395,12 +396,198 @@ function __wrapStorage(host) {
 			delete: function (p) { return __spCall(files, files.delete, [p]); },
 			deleteAll: function (p) { return __spCall(files, files.deleteAll, [p]); }
 		},
-		read: function (p) { return host.read(p); },
-		write: function (p, d) { return host.write(p, d); },
-		exists: function (p) { return host.exists(p); },
-		remove: function (p) { return host.remove(p); },
-		list: function (p) { return host.list(p); },
-		size: function () { return host.size(); }
 	};
+	// ctx.storage.user (M2b) is scoped: exactly what the SDK declares (usage and
+	// files), never the older six, which the pub-wide store keeps for the plugins
+	// written against them. buildProgram endows it on its own line
+	// (ctx.storage.user = __wrapStorage(<the person's host>, true)), where the
+	// wiring scan (section 5) reads it.
+	if (!scoped) {
+		out.read = function (p) { return host.read(p); };
+		out.write = function (p, d) { return host.write(p, d); };
+		out.exists = function (p) { return host.exists(p); };
+		out.remove = function (p) { return host.remove(p); };
+		out.list = function (p) { return host.list(p); };
+		out.size = function () { return host.size(); };
+	}
+	return out;
+}
+
+// ── ctx.package: the SDK's PackageFiles over the mediated package host ─────
+//
+// Same split as storage (see packageHost.ts): the host's read is synchronous and
+// answers bytes as base64; the SDK declares a promise of a Uint8Array.
+function __wrapPackage(host) {
+	if (!host || typeof host !== "object") return host;
+	return {
+		read: function (p) {
+			return __spCall(host, host.read, [p]).then(function (r) {
+				return r && r.kind === "ok"
+					? { kind: "ok", value: __b64ToBytes(r.value) }
+					: r;
+			});
+		}
+	};
+}
+
+// ── ctx.annex('user'): the acting person's saved documents (M2b) ───────────
+//
+// No mid-call round trip to the database exists in either sandbox, so this is
+// the storage TRANSACTION model: the host loaded the person's documents for
+// this plugin into init.snapshot before the call, this answers every read from
+// a PROJECTION of them (read-your-writes), and the writes it accepted ride back
+// with the call's result (__annexWrites) for the host to commit all-or-nothing
+// AFTER the hook returned. A thrown hook never returns them, so commits nothing.
+// One implementation here, spliced identically into both backends. It mirrors
+// the SDK's userAnnexProjection (sdk/src/userAnnex.ts) rule for rule; the
+// host's store re-checks everything at commit (declared field, shape).
+var __annexState = null;
+function __annexUtf8(s) {
+	var n = 0;
+	for (var i = 0; i < s.length; i++) {
+		var c = s.charCodeAt(i);
+		if (c < 0x80) n += 1;
+		else if (c < 0x800) n += 2;
+		else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n += 4; i++; }
+		else n += 3;
+	}
+	return n;
+}
+function __annexPlain(v, seen) {
+	if (v === null) return true;
+	var t = typeof v;
+	if (t === "string" || t === "boolean") return true;
+	if (t === "number") return isFinite(v);
+	if (t !== "object") return false;
+	if (seen.indexOf(v) >= 0) return false;
+	seen.push(v);
+	var ok = true;
+	if (Array.isArray(v)) {
+		for (var i = 0; i < v.length && ok; i++) ok = __annexPlain(v[i], seen);
+	} else {
+		var proto = Object.getPrototypeOf(v);
+		if (proto !== Object.prototype && proto !== null) ok = false;
+		else {
+			var ks = Object.keys(v);
+			for (var j = 0; j < ks.length && ok; j++) ok = __annexPlain(v[ks[j]], seen);
+		}
+	}
+	seen.pop();
+	return ok;
+}
+function __annexBytes(doc) {
+	if (doc === undefined || !__annexPlain(doc, [])) return null;
+	return __annexUtf8(JSON.stringify(doc));
+}
+function __annexKeyWhy(key, lim) {
+	if (typeof key !== "string" || !key) return "A user annex key is a non-empty piece of text.";
+	if (key.length > lim.keyMaxLength) return "A user annex key is at most " + lim.keyMaxLength + " characters; this one has " + key.length + ".";
+	if (key.charAt(0) === "/" || key.charAt(key.length - 1) === "/") return "A user annex key never begins or ends with '/': '" + key + "'.";
+	if (key.indexOf("..") >= 0 || key.indexOf("//") >= 0) return "A user annex key has no '..' and no empty part between slashes: '" + key + "'.";
+	if (!/^[a-z0-9][a-z0-9._\/-]*$/.test(key)) return "A user annex key uses lowercase letters, digits and . _ / - only, starting with a letter or digit: '" + key + "'.";
+	return null;
+}
+function __annexDocWhy(doc, lim) {
+	var b = __annexBytes(doc);
+	if (b === null) return "A user annex document is plain data (text, numbers, true/false, null, lists and objects of them).";
+	if (b > lim.bytesPerDoc) return "A user annex document is at most " + lim.bytesPerDoc + " bytes; this one is " + b + ".";
+	return null;
+}
+function __makeHookAnnex(init) {
+	var denied = init && init.denied;
+	if (denied) {
+		var rej = function () { return Promise.reject(new Error(denied)); };
+		__annexState = null;
+		return function (host) {
+			if (host !== "user") throw new Error("annex: unknown host '" + String(host) + "'; a hook may name: 'user'.");
+			return { get: rej, set: rej, list: rej, remove: rej };
+		};
+	}
+	var lim = init.limits;
+	var proj = Object.create(null);
+	var baseOf = Object.create(null);
+	var touched = [];
+	var snap = init.snapshot || {};
+	var sk = Object.keys(snap);
+	for (var i = 0; i < sk.length; i++) {
+		proj[sk[i]] = { doc: snap[sk[i]].doc, version: snap[sk[i]].version, updatedAt: snap[sk[i]].updatedAt };
+		baseOf[sk[i]] = snap[sk[i]].version;
+	}
+	var clone = function (v) { return v === undefined ? v : JSON.parse(JSON.stringify(v)); };
+	var touch = function (k) { if (touched.indexOf(k) < 0) touched.push(k); };
+	var entry = function (k) {
+		var e = proj[k];
+		return e ? { key: k, doc: clone(e.doc), version: e.version, updatedAt: e.updatedAt } : null;
+	};
+	var stale = function (k, opts) {
+		var base = opts && opts.base;
+		if (base === undefined) return null;
+		var cur = proj[k] ? proj[k].version : 0;
+		return base !== cur ? { ok: false, stale: true, fresh: entry(k) } : null;
+	};
+	var capWhy = function () {
+		var ks = Object.keys(proj);
+		if (ks.length > lim.docsPerOwner) return "This extension may keep at most " + lim.docsPerOwner + " documents for one person.";
+		var bytes = 0;
+		for (var q = 0; q < ks.length; q++) bytes += __annexBytes(proj[ks[q]].doc) || 0;
+		if (bytes > lim.bytesPerOwner) return "This extension may keep at most " + lim.bytesPerOwner + " bytes of documents for one person; this would make " + bytes + ".";
+		return null;
+	};
+	var api = {
+		get: function (key) { return __spCall(null, function () { return entry(key); }, []); },
+		list: function (prefix) {
+			return __spCall(null, function () {
+				return Object.keys(proj).filter(function (k) { return !prefix || k.indexOf(prefix) === 0; }).sort().map(function (k) {
+					return { key: k, version: proj[k].version, updatedAt: proj[k].updatedAt };
+				});
+			}, []);
+		},
+		set: function (key, doc, opts) {
+			return __spCall(null, function () {
+				var why = __annexKeyWhy(key, lim) || __annexDocWhy(doc, lim);
+				if (why) return { ok: false, refused: why };
+				if (doc === null) return { ok: false, refused: "A hook cannot save a bare null document; use remove(key) to delete one." };
+				var s = stale(key, opts);
+				if (s) return s;
+				var before = proj[key];
+				var next = { doc: clone(doc), version: (before ? before.version : 0) + 1, updatedAt: new Date(init.nowMs).toISOString() };
+				proj[key] = next;
+				var cap = capWhy();
+				if (cap) {
+					if (before) proj[key] = before; else delete proj[key];
+					return { ok: false, refused: cap };
+				}
+				touch(key);
+				return { ok: true, version: next.version };
+			}, []);
+		},
+		remove: function (key, opts) {
+			return __spCall(null, function () {
+				var why = __annexKeyWhy(key, lim);
+				if (why) return { ok: false, refused: why };
+				var s = stale(key, opts);
+				if (s) return s;
+				var before = proj[key];
+				if (!before) return { ok: true, version: 0 };
+				delete proj[key];
+				touch(key);
+				return { ok: true, version: before.version };
+			}, []);
+		}
+	};
+	__annexState = { writes: function () {
+		return touched.map(function (k) {
+			return { key: k, doc: proj[k] ? clone(proj[k].doc) : null, base: baseOf[k] || 0 };
+		});
+	} };
+	return function (host) {
+		if (host !== "user") throw new Error("annex: unknown host '" + String(host) + "'; a hook may name: 'user'.");
+		return api;
+	};
+}
+// The writes this call buffered, or null when it has no annex (the result's
+// "aw"). Read by the program's epilogue, after the hook returned.
+function __annexWrites() {
+	return __annexState ? __annexState.writes() : null;
 }
 `

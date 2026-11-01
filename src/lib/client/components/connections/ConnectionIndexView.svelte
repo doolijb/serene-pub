@@ -120,7 +120,7 @@
 		/** Open Add; a door may narrow the service picker to one category. */
 		onAddNew: (opts?: { category?: "cloud" | "local" | "custom" }) => void
 		/** Switch a manager on and open its connection. */
-		onEnableManager: (kind: "koboldcpp" | "ollama") => void
+		onEnableManager: (kind: "koboldcpp" | "ollama" | "audiocpp") => void
 		onOpenConnection: (connection: Row) => void
 		onRefresh: (connection: Row) => void
 		/**
@@ -197,13 +197,14 @@
 	const summary = $derived(defaultsSummary(rows, capabilityDefaults))
 
 	/**
-	 * The two kinds whose chip is TEAL: a runtime this pub manages, rather
+	 * The kinds whose chip is TEAL: a runtime this pub manages, rather
 	 * than a host it merely talks to (ruling R5). Keyed on the kind and not on
 	 * the type so the Ollama embeddings type is the same "Ollama" the text one
 	 * is — one service, one chip.
 	 */
 	const MANAGED_KINDS: ReadonlySet<string> = new Set([
 		"koboldcpp-managed",
+		"audiocpp-managed",
 		"ollama"
 	])
 
@@ -315,17 +316,24 @@
 	const statusOf = live.statusOf
 
 	function handleRowAction(connection: Row, verb: string) {
+		// audio.cpp's process has its own events; KoboldCPP's are the default.
+		const acpp = connection.type === CONNECTION_TYPE.AUDIOCPP_MANAGED
 		switch (verb) {
 			case "start":
-				socket.emit("koboldcpp:startSubprocess", {})
+				if (acpp) socket.emit("audiocpp:start", {})
+				else socket.emit("koboldcpp:startSubprocess", {})
 				return
 			case "start-offline":
 				// Switched off with the install kept: one call turns it back
 				// on and starts it (ruled 2026-09-24).
-				socket.emit("koboldcpp:startSubprocess", { enable: true })
+				if (acpp) {
+					socket.emit("audiocpp:updateSettings", { enabled: true })
+					socket.emit("audiocpp:start", {})
+				} else socket.emit("koboldcpp:startSubprocess", { enable: true })
 				return
 			case "stop":
-				socket.emit("koboldcpp:stopSubprocess", {})
+				if (acpp) socket.emit("audiocpp:stop", {})
+				else socket.emit("koboldcpp:stopSubprocess", {})
 				return
 			case "refresh":
 				onRefresh(connection)
@@ -549,6 +557,7 @@
 				onAddConnection={onAddNew}
 				onAddKoboldCpp={() => onEnableManager("koboldcpp")}
 				onAddOllama={() => onEnableManager("ollama")}
+				onAddAudioCpp={() => onEnableManager("audiocpp")}
 				canRunLocalRuntimes={localRuntimes}
 			/>
 		{/snippet}

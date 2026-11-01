@@ -102,6 +102,12 @@
 	grid-column: content;
 	grid-row: content-end / span 1;
 }
+/* 🚧 The spoken line (speech build, 2026-10-28): a sixth cell, in content's
+   columns, auto-placed on the row after the strip's — under the card, never
+   inside it, the same rule as the strip. */
+[data-widget-part~="messages.message"] > [data-widget-part~="messages.spoken-line"] {
+	grid-column: content;
+}
 
 /* Avatar: rendered directly, sized entirely by --sp-av (+ optional radius). */
 [data-widget-part~="messages.message-avatar-button"] {
@@ -348,6 +354,74 @@ button[data-widget-part~="messages.message-name"]:hover {
 [data-widget-part~="messages.message-icon-button"]:disabled {
 	opacity: 0.35;
 	cursor: not-allowed;
+}
+/* A speak verb this pub cannot do yet stays drawn and explains itself in its
+   tooltip (aria-disabled, never `disabled`: a disabled button shows no title). */
+[data-widget-part~="messages.message-icon-button"][aria-disabled="true"] {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+/* Stopping work in flight is the error role (STYLE-GUIDE 6.1): the speak
+   Stop is static (the pulse belongs to the strip's Speaking indicator) and
+   stays visible while the line is being spoken, even where icons reveal on
+   hover. */
+[data-widget-part~="messages.message-speak-stop"] {
+	color: var(--color-error-700);
+}
+[data-mode="dark"] [data-widget-part~="messages.message-speak-stop"] {
+	color: var(--color-error-400);
+}
+[data-widget-part~="messages.message-speak-stop"]:hover:not(:disabled) {
+	color: var(--color-error-700);
+}
+[data-mode="dark"] [data-widget-part~="messages.message-speak-stop"]:hover:not(:disabled) {
+	color: var(--color-error-400);
+}
+@media (pointer: fine) {
+	[data-widget-part~="messages.message-actions"]:is([data-speaking], [data-playing]) {
+		opacity: 1;
+	}
+}
+/* The heading's one speech icon (heading audio control, 2026-10-29): playing
+   is a soft pulse in the accent; speaking is the ember working motion
+   (STYLE-GUIDE §8) and turns to the error tone only on hover or focus, so
+   "press to stop" still reads. Static colours stand where motion is reduced. */
+[data-widget-part~="messages.message-speech"][data-state="playing"] {
+	color: light-dark(var(--color-primary-700), var(--color-primary-300));
+}
+[data-widget-part~="messages.message-speech"][data-state="speaking"] {
+	color: var(--color-warning-500);
+}
+[data-widget-part~="messages.message-speech"][data-state="speaking"]:is(:hover, :focus-visible) {
+	color: light-dark(var(--color-error-700), var(--color-error-400));
+}
+@media (prefers-reduced-motion: no-preference) {
+	[data-widget-part~="messages.message-speech"][data-state="playing"] > sp-icon {
+		animation: sp-speech-play 1.4s ease-in-out infinite;
+	}
+	[data-widget-part~="messages.message-speech"][data-state="speaking"] > sp-icon {
+		animation: sp-dot-pulse-icon 1.6s ease-out infinite;
+	}
+}
+@keyframes sp-speech-play {
+	0%,
+	100% {
+		opacity: 0.65;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1.12);
+	}
+}
+@keyframes sp-dot-pulse-icon {
+	0% {
+		opacity: 1;
+	}
+	60%,
+	100% {
+		opacity: 0.4;
+	}
 }
 /* A 28px control gets a 44px target where a finger can land. */
 @media (pointer: coarse) {
@@ -804,6 +878,7 @@ button[data-widget-part~="messages.scene-title"]:hover {
 
 @media (prefers-reduced-motion: reduce) {
 	[data-widget-part~="messages.message-ember"]::after,
+	[data-widget-part~="messages.message-speech"] > sp-icon,
 	[data-widget-part~="messages.message-actions"],
 	[data-widget-part~="messages.message-disclosure-track"],
 	[data-widget-part~="messages.message-disclosure-toggle"] > :where(svg, sp-icon):last-child {

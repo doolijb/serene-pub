@@ -1302,3 +1302,39 @@ describe("the builder's structural payload", () => {
 		expect(fromBlock.every((e: any) => e.from === null)).toBe(true)
 	})
 })
+
+// 2026-10-30: after a long walk, Admin › Pipelines' page of 100 runs selected
+// every column, receipts included, and PGlite's WASM died "memory access out
+// of bounds" on it — and failed every query after. The list reads only what it
+// shows; a receipt is read one run at a time.
+describe("the runs list over many large receipts", () => {
+	test("returns its page without reading the receipts, and the next query still works", async () => {
+		const { pipelinesRuns } = await import("./pipelines")
+		const trace = "x".repeat(512 * 1024)
+		const rows = Array.from({ length: 100 }, (_, i) => ({
+			runId: `run-big-${i}`,
+			specSlug: STORY_RESPOND_SPEC_ID,
+			specVersion: "1.0.0",
+			sessionId: ownersSessionId,
+			userId: admin.id,
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "s",
+			startedAt: new Date(),
+			endedAt: new Date(),
+			elapsedMs: 1,
+			receipt: { trace, i }
+		}))
+		for (let i = 0; i < rows.length; i += 10)
+			await testDb.insert(schema.pipelineRuns).values(rows.slice(i, i + 10))
+
+		const res: any = await pipelinesRuns.handler(socketFor(admin.id, true), { limit: 100 }, noopEmit)
+		expect(res.runs).toHaveLength(100)
+		expect(res.runs[0]).not.toHaveProperty("receipt")
+		const [spec] = await testDb
+			.select({ slug: schema.pipelineSpecs.slug })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
+		expect(spec?.slug).toBe(STORY_RESPOND_SPEC_ID)
+	}, 120_000)
+})

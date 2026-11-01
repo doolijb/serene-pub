@@ -13,6 +13,15 @@
  * collected and `redact.ts` has already cleaned. It never redacts.
  */
 import type { LogRingLine } from "$lib/server/utils/logRing"
+import { megabytes } from "$lib/shared/imports/fileCaps"
+
+/** "none" for no folder, KB under 1 MiB, else whole megabytes. */
+function diskSize(bytes: number | null): string {
+	if (bytes === null) return "none"
+	if (bytes === 0) return "0 KB"
+	if (bytes < 1024 * 1024) return `${Math.max(1, Math.ceil(bytes / 1024))} KB`
+	return megabytes(bytes)
+}
 
 /** The report's own format version; bump when a heading or JSON key changes. */
 export const SUPPORT_REPORT_FORMAT = 1
@@ -97,6 +106,14 @@ export interface SupportReportFacts {
 			disabledSwaps: number
 			installedAt: string | null
 			updatedAt: string | null
+		}>
+		/** Per installed plugin: package bytes, split by where stored, and its storage folder. */
+		diskUse: Array<{
+			slug: string
+			packageBytes: number
+			dbBytes: number
+			diskBytes: number
+			storageBytes: number | null
 		}>
 		/** Failed hook calls in the window, grouped by plugin, hook and outcome. */
 		failures: Array<{
@@ -294,6 +311,20 @@ function renderOnce(f: SupportReportFacts): string {
 					x.bundleDigest,
 					x.deniedPermissions.join(", "),
 					x.updatedAt
+				])
+			)
+	)
+
+	out.push(
+		"## Plugin disk use\n\nWhat each plugin's package and its own storage take on this pub's disk and database.\n\n" +
+			table(
+				["Plugin", "Package", "Kept in the database", "On disk", "Plugin storage"],
+				p.diskUse.map((x) => [
+					x.slug,
+					diskSize(x.packageBytes),
+					diskSize(x.dbBytes),
+					diskSize(x.diskBytes),
+					diskSize(x.storageBytes)
 				])
 			)
 	)

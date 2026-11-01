@@ -1,0 +1,1 @@
+ALTER TABLE "voicebank_voices" ADD COLUMN "is_narration_default" boolean DEFAULT false NOT NULL;

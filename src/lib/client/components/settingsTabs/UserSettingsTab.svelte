@@ -2,6 +2,11 @@
 	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	import InlineError from "$lib/client/components/InlineError.svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import {
+		SPOKEN_PLAYBACK_CHOICES,
+		SPOKEN_PLAYBACK_MODES,
+		type SpokenPlayback
+	} from "$lib/shared/speech/spokenPlayback"
 	import TotpSettings from "./TotpSettings.svelte"
 	import PluginUserSettingsCard from "./PluginUserSettingsCard.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -36,6 +41,12 @@
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import { languageDefinition } from "$lib/shared/i18n/languages"
 	import LoreWriteModePicker from "$lib/client/components/inputs/LoreWriteModePicker.svelte"
+	import {
+		LIBRARY_WRITE_MODE_CHOICES,
+		LIBRARY_WRITE_MODE_HELP,
+		LIBRARY_WRITE_MODE_TITLE,
+		effectiveLibraryWriteMode
+	} from "$lib/shared/library/libraryWriteMode"
 	import RoutineCapsCard from "./RoutineCapsCard.svelte"
 	import SettingCard from "./SettingCard.svelte"
 	import AvatarPicker from "$lib/client/components/media/AvatarPicker.svelte"
@@ -355,6 +366,12 @@
 		socket.emit("userSettings:updateLoreWriteMode", { mode })
 	}
 
+	// ── Library write mode (M2c) ─────────────────────────────────────────────
+	// Stored as NULL until chosen; NULL reads Review, which the picker shows.
+	function onLibraryWriteModeChange(mode: LoreWriteMode | null) {
+		socket.emit("userSettings:updateLoreWriteMode", { libraryWriteMode: mode })
+	}
+
 	// Profile modal state
 	let showChangePasswordModal = $state(false)
 	let isUpdatingDisplayName = $state(false)
@@ -411,6 +428,10 @@
 		socket?.emit("userSettings:updateShowAllCharacterFields", {
 			enabled: event.checked
 		})
+	}
+
+	function onSpokenPlaybackChange(mode: SpokenPlayback) {
+		socket?.emit("userSettings:updateSpokenPlayback", { mode })
 	}
 
 	async function onEasyCharacterCreationClick(event: { checked: boolean }) {
@@ -608,6 +629,54 @@
 			describedBy="user-lore-write-mode-note"
 			onValueChange={onLoreWriteModeChange}
 		/>
+	</SettingCard>
+
+	<!-- 🚧 Library write mode (M2c): what Serene or a session adds to the library. -->
+	<SettingCard
+		title={LIBRARY_WRITE_MODE_TITLE}
+		titleId="user-library-write-mode-heading"
+		helpId="user-library-write-mode-note"
+		help={LIBRARY_WRITE_MODE_HELP}
+		layout="stack"
+	>
+		<LoreWriteModePicker
+			legend={LIBRARY_WRITE_MODE_TITLE}
+			name="user-library-write-mode"
+			value={effectiveLibraryWriteMode(userSettingsCtx.settings?.libraryWriteMode)}
+			wording={LIBRARY_WRITE_MODE_CHOICES}
+			describedBy="user-library-write-mode-note"
+			onValueChange={onLibraryWriteModeChange}
+		/>
+	</SettingCard>
+
+	<!-- 🚧 Spoken lines (speech; owner ruling 2026-10-28): how audio a session
+	     makes plays for THIS person. Never whether it is made. -->
+	<SettingCard
+		title="Spoken lines"
+		titleId="user-spoken-playback-heading"
+		help="When a session reads aloud, how its spoken lines play for you."
+		layout="stack"
+	>
+		<fieldset class="flex flex-col gap-1" aria-labelledby="user-spoken-playback-heading">
+			{#each SPOKEN_PLAYBACK_MODES as mode (mode)}
+				<label
+					class="hover:preset-tonal-surface flex min-h-11 cursor-pointer items-start gap-3 rounded-md px-2 py-2"
+				>
+					<input
+						type="radio"
+						class="radio mt-0.5 shrink-0"
+						name="user-spoken-playback"
+						value={mode}
+						checked={(userSettingsCtx.settings?.spokenPlayback ?? "auto") === mode}
+						onchange={() => onSpokenPlaybackChange(mode)}
+					/>
+					<span class="flex flex-col">
+						<span class="text-sm">{SPOKEN_PLAYBACK_CHOICES[mode].label}</span>
+						<span class="text-xs text-muted">{SPOKEN_PLAYBACK_CHOICES[mode].description}</span>
+					</span>
+				</label>
+			{/each}
+		</fieldset>
 	</SettingCard>
 
 	<!-- 🚧 Background routines (R11; lane 7): this person's own caps on

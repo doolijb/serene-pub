@@ -87,28 +87,62 @@ export async function systemTick(db: Db, at: number): Promise<number[]> {
 let timer: ReturnType<typeof setTimeout> | null = null
 let tickDb: Db | null = null
 
+/**
+ * 🚧 The live timer, process-wide (2026-10-30, dev). A Vite dev-server
+ * restart re-executes this module and boots a second tick, while the first
+ * module's timer is still set; when it fired, its dynamic imports ran on the
+ * closed module runner and the uncaught rejection took the process down. So
+ * the timer lives on the process: a start clears whatever an earlier copy of
+ * this module left there. (`import.meta.hot.dispose` is no hook here —
+ * SvelteKit's dev SSR runner has `hmr: false`, see `db/devBootPass.ts`.)
+ */
+const LIVE = Symbol.for("serene-pub.routines.systemTick")
+type Live = { timer: ReturnType<typeof setTimeout> | null }
+const live = (): Live => ((globalThis as Record<symbol, unknown>)[LIVE] ??= { timer: null }) as Live
+
+/** A dynamic import on a closed dev module runner — this copy of the module is gone. */
+export const onClosedRunner = (err: unknown): boolean =>
+	/module runner has been closed/i.test(String((err as { message?: unknown } | null)?.message ?? err))
+
+let saidClosed = false
+
 function schedule(): void {
 	if (!tickDb) return
 	timer = setTimeout(() => {
 		timer = null
+		live().timer = null
 		const db = tickDb
 		if (!db) return
-		void systemTick(db, gridPoint(Date.now())).finally(schedule)
+		systemTick(db, gridPoint(Date.now())).then(schedule, (err) => {
+			if (onClosedRunner(err)) {
+				// Said once, then this copy's tick stops: the restarted server runs its own.
+				if (!saidClosed) console.warn("[routines] the system tick's module runner closed (a dev-server restart); this tick stops.")
+				saidClosed = true
+				stopSystemTick()
+				return
+			}
+			console.warn("[routines] the system tick failed:", err)
+			schedule()
+		})
 	}, msToNextTick(Date.now()))
+	live().timer = timer
 	// Never the reason a process stays alive.
 	;(timer as { unref?: () => void }).unref?.()
 }
 
-/** Start the tick on the grid (idempotent). */
+/** Start the tick on the grid (idempotent). Clears a timer an earlier copy of this module left set. */
 export function startSystemTick(db: Db): void {
 	tickDb = db
 	if (timer) return
+	const stale = live().timer
+	if (stale) clearTimeout(stale)
 	schedule()
 }
 
 /** Stop the tick (shutdown, a test). */
 export function stopSystemTick(): void {
 	if (timer) clearTimeout(timer)
+	if (live().timer === timer) live().timer = null
 	timer = null
 	tickDb = null
 }

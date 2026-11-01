@@ -125,6 +125,18 @@ describe("what is on disk", () => {
 		expect(await dirSizeBytes(MODEL, "embeddings")).toBeGreaterThan(2000)
 	})
 
+	it("means the RIGHT file: another precision's weights are not this one's", async () => {
+		await writeWeights() // onnx/model_quantized.onnx = q8
+		expect(await isCached(MODEL, "embeddings", "q8")).toBe(true)
+		expect(await isCached(MODEL, "embeddings", "fp32")).toBe(false)
+		expect(await isCached(MODEL, "embeddings", "q4")).toBe(false)
+		expect(await isCached(MODEL, "embeddings", "fp16")).toBe(false)
+		const dir = modelDirFor(MODEL, "embeddings")!
+		await fs.writeFile(path.join(dir, "onnx", "model.onnx"), "x")
+		clearCachedScans()
+		expect(await isCached(MODEL, "embeddings", "fp32")).toBe(true)
+	})
+
 	it("does not call a config-only directory cached", async () => {
 		// What an interrupted download leaves: a directory that is not empty
 		// and cannot be loaded.

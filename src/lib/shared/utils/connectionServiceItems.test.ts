@@ -4,6 +4,8 @@ import {
 	groupConnectionServiceItems,
 	filterConnectionServiceItems,
 	isKoboldCppManagedType,
+	isAudioCppManagedType,
+	AUDIOCPP_MANAGED_TYPES,
 	connectionTypeDisabledReason,
 	localOnnxDisabledReason,
 	presetKeyUrl,
@@ -41,6 +43,7 @@ describe("buildConnectionServiceItems", () => {
 			CONNECTION_TYPES.length -
 			1 -
 			KOBOLDCPP_MANAGED_TYPES.length -
+			AUDIOCPP_MANAGED_TYPES.length -
 			2 +
 			OPENAI_COMPATIBLE_PRESETS.length +
 			1 +
@@ -210,6 +213,7 @@ describe("buildConnectionServiceItems", () => {
 			if (
 				t.value === CONNECTION_TYPE.OPENAI ||
 				isKoboldCppManagedType(t.value) ||
+				isAudioCppManagedType(t.value) ||
 				// Merged into `ollama` (2026-09-25) and `openai` (2026-10-05):
 				// never created by hand, for the same reason the managed types
 				// above are not.

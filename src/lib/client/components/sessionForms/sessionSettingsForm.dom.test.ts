@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
+import { EditorView } from "@codemirror/view"
 
 vi.mock("$app/environment", () => ({ dev: true, building: false, browser: true }))
 
@@ -326,5 +327,61 @@ describe("the form's words", () => {
 		expect(routineStatusLine({ waiting: 0, running: false, needs: "Needs a story clock" } as never)).toBe(
 			"Needs a story clock"
 		)
+	})
+})
+
+describe("a json field (the json field type)", () => {
+	const jsonField = {
+		id: JSON.stringify(["genre", "cfg"]),
+		address: { kind: "genre", key: "cfg" },
+		label: "Config",
+		control: "json",
+		maxBytes: 64,
+		value: { n: 1 },
+		inherited: { n: 1 },
+		source: "genre",
+		reach: "owner",
+		editable: true
+	}
+
+	function showJson() {
+		app = mount(SessionSettingsForm, { target, props: { sessionId: 7, cardClass: "card" } })
+		flushSync()
+		const f = formFor("owner")
+		;(f.groups[0] as any).fields.push(jsonField)
+		client.dispatch("sessions:settingsForm", f)
+		client.dispatch("sessions:routines", { sessionId: 7, routines: [] })
+		flushSync()
+	}
+	const typeInto = (doc: string) => {
+		const view = EditorView.findFromDOM(target.querySelector<HTMLElement>('[data-setting] .cm-editor')!)!
+		view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc } })
+		flushSync()
+		view.contentDOM.dispatchEvent(new FocusEvent("focusout", { bubbles: true }))
+		flushSync()
+	}
+	const jsonWrites = () => writes().filter((w) => w.address.key === "cfg")
+
+	test("is drawn as a code field over the formatted JSON", () => {
+		showJson()
+		expect(target.querySelector('[data-setting] .cm-editor')).not.toBeNull()
+		expect(target.querySelector('[data-setting] .cm-content')?.textContent).toContain('"n": 1')
+	})
+
+	test("text that is not JSON writes nothing and says why; text over the cap says so too", () => {
+		showJson()
+		typeInto('{"n": ')
+		expect(jsonWrites()).toEqual([])
+		expect(target.querySelector('[data-testid="session-setting-json-issue"]')?.textContent).toContain("not valid JSON")
+		typeInto(JSON.stringify({ n: 1, pad: "x".repeat(100) }))
+		expect(jsonWrites()).toEqual([])
+		expect(target.querySelector('[data-testid="session-setting-json-issue"]')?.textContent).toContain("at most 64")
+	})
+
+	test("text that parses is written as the parsed value", () => {
+		showJson()
+		typeInto('{ "n": 2 }')
+		expect(jsonWrites()).toEqual([expect.objectContaining({ sessionId: 7, value: { n: 2 } })])
+		expect(target.querySelector('[data-testid="session-setting-json-issue"]')).toBeNull()
 	})
 })

@@ -919,6 +919,19 @@ export const usersDelete: Handler<
 			.delete(schema.userTokens)
 			.where(eq(schema.userTokens.userId, params.id))
 
+		// The person's own plugin files go with the account (M2b).
+		const { removeUserPluginFiles } = await import(
+			"$lib/server/plugins/userFiles"
+		)
+		const { getAppDataDir } = await import("$lib/server/utils/appDataDir")
+		await removeUserPluginFiles(getAppDataDir(), params.id)
+		// ...and so do their saved data (the user annex); soft-deleted accounts
+		// never fire the FK cascade.
+		const { removeUserAnnexesOfUser } = await import(
+			"$lib/server/plugins/userAnnex"
+		)
+		await removeUserAnnexesOfUser(db, params.id)
+
 		const res: Sockets.Users.Delete.Response = { success: true }
 		emitToUser("users:delete", res)
 

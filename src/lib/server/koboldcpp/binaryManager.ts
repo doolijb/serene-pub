@@ -5,6 +5,10 @@ import * as fsPromises from "fs/promises"
 import * as path from "path"
 import * as crypto from "crypto"
 import { finished } from "stream/promises"
+import {
+	createProgressThrottle,
+	createUserEmitters
+} from "$lib/server/managed/emitters"
 
 export interface BinaryVariant {
 	name: string
@@ -28,60 +32,26 @@ export interface BinaryDownloadState {
 
 let currentDownload: (BinaryDownloadState & { abort?: () => void }) | null =
 	null
-type ProgressEmitter = (d: { download: BinaryDownloadState | null }) => void
-// Map<userId, {emit, connections}>, not a single nullable slot or a
-// Set<ProgressEmitter> — the old single-slot design meant whichever admin
-// socket most recently called setEmitter() became the sole recipient of
-// binary-download progress, silently cutting off any other connected
-// admin's UI. A Set<ProgressEmitter> fixes that but overcorrects:
-// registration happens once per *connection*, and emitToUser already
-// broadcasts to every open tab/connection for a user — so N tabs for the
-// same admin would mean N entries in the Set, each independently
-// re-broadcasting to all N sockets (N² transmissions per tick instead of
-// N). Keying by userId with a connection refcount collapses that back to
-// one broadcast per user regardless of tab count, and only unregisters
-// once every one of their connections has disconnected.
-const progressEmitters = new Map<
-	number,
-	{ emit: ProgressEmitter; connections: number }
->()
+type ProgressPayload = { download: BinaryDownloadState | null }
+type ProgressEmitter = (d: ProgressPayload) => void
+// Per-user refcounted emitters and the 250 ms progress throttle: see
+// ../managed/emitters.ts. Single-flight download, so the throttle needs one key.
+const progressEmitters = createUserEmitters<ProgressPayload>()
+const progressThrottle = createProgressThrottle()
 
 export function registerEmitter(userId: number, fn: ProgressEmitter) {
-	const existing = progressEmitters.get(userId)
-	if (existing) {
-		existing.connections++
-		return
-	}
-	progressEmitters.set(userId, { emit: fn, connections: 1 })
+	progressEmitters.register(userId, fn)
 }
 
 export function unregisterEmitter(userId: number) {
-	const existing = progressEmitters.get(userId)
-	if (!existing) return
-	existing.connections--
-	if (existing.connections <= 0) progressEmitters.delete(userId)
+	progressEmitters.unregister(userId)
 }
-
-// Progress ticks arrive on every TCP chunk of a streaming download (up to
-// hundreds of thousands of times for a multi-GB binary) — each broadcast
-// is a synchronous JSON-serialize + Socket.IO emit, competing with the
-// download's own network I/O on Node's single event loop. Throttling the
-// broadcast (not the byte-counter update) is the single biggest win for
-// actual download throughput. Single-flight download (one `currentDownload`
-// slot at a time), so a single global timer is enough — no per-key map
-// needed the way koboldcpp.ts's multi-download model download needs.
-const PROGRESS_EMIT_THROTTLE_MS = 250
-let lastProgressEmitAt = 0
 
 function emitProgress() {
 	const payload = currentDownload
 		? { download: (({ abort: _, ...rest }) => rest)(currentDownload) }
 		: { download: null }
-	for (const { emit } of progressEmitters.values()) {
-		try {
-			emit(payload)
-		} catch {}
-	}
+	progressEmitters.emit(payload)
 }
 
 export function getDownloadState(): BinaryDownloadState | null {
@@ -100,20 +70,39 @@ function detectPlatform(name: string): BinaryVariant["platform"] {
 	return "other"
 }
 
-function makeDescription(name: string): string {
+/**
+ * Which computer a build suits, in the words the picker shows under its name.
+ *
+ * Read against the release's real asset names (v1.123.1, 2026-10-30):
+ * `koboldcpp.exe` / `koboldcpp-linux-x64` are the FULL build (CUDA 12, Vulkan
+ * and CPU), `-nocuda` drops CUDA (Vulkan and CPU, a fifth of the size),
+ * `-oldpc` is CUDA 11 for older processors and cards, `-mac-arm64` is Metal.
+ * Until 2026-10-30 only a bare `koboldcpp.exe` was recognised as the full
+ * build, so the Linux one and both `-nocuda` builds read "CPU" — beside the
+ * build the picker now proposes for an NVIDIA card (`hardwarePicks.ts`).
+ */
+export function makeDescription(name: string): string {
 	const lower = name.toLowerCase().replace(/\.exe$/i, "")
 	if (/cu121|cuda121|cuda12_1/i.test(lower)) return "NVIDIA CUDA 12.1"
 	if (/cu118|cuda118|cuda11_8/i.test(lower)) return "NVIDIA CUDA 11.8"
 	if (/cu12/i.test(lower)) return "NVIDIA CUDA 12.x"
 	if (/cu11/i.test(lower)) return "NVIDIA CUDA 11.x"
 	if (/rocm/i.test(lower)) return "AMD ROCm (GPU)"
+	if (/nocuda/i.test(lower))
+		return "Other graphics cards (Vulkan) or no graphics card; smaller download"
+	if (/oldpc/i.test(lower))
+		return "Older computers and older NVIDIA cards (CUDA 11)"
 	if (/vulkan/i.test(lower)) return "Vulkan (cross-GPU)"
 	if (/opencl/i.test(lower)) return "OpenCL (GPU)"
 	if (/metal/i.test(lower)) return "Metal (Apple GPU)"
 	if (/mac|osx/i.test(lower)) return "Metal (Apple GPU)"
-	// Base build: no suffix after koboldcpp
-	if (/^koboldcpp(\.exe)?$/i.test(name))
-		return "CPU + Vulkan + OpenCL — works on any hardware (recommended)"
+	// The full build: `koboldcpp`, or `koboldcpp-<os>-<arch>` with no other suffix.
+	if (
+		/^koboldcpp(?:[-_](?:linux|windows|win))?(?:[-_](?:x64|x86_64|amd64|arm64|aarch64))?$/i.test(
+			lower
+		)
+	)
+		return "NVIDIA graphics cards (CUDA 12); also works with other cards or none"
 	return "CPU"
 }
 
@@ -326,14 +315,7 @@ export async function downloadVariant(opts: {
 
 					res.on("data", (chunk: Buffer) => {
 						currentDownload!.downloaded += chunk.length
-						const now = Date.now()
-						if (
-							now - lastProgressEmitAt >=
-							PROGRESS_EMIT_THROTTLE_MS
-						) {
-							lastProgressEmitAt = now
-							emitProgress()
-						}
+						if (progressThrottle.ready()) emitProgress()
 					})
 					// `pipe` never hands a response error to its destination;
 					// destroying it does, which also releases the fd.

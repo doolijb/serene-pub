@@ -858,15 +858,31 @@ describe("tags from the recommended list reach the card", () => {
 					tags: ["roleplay", "vision", "long-context"]
 				}
 			],
-			{ query: "", tier: "mid", present: new Set(), pulled: new Set() } as any
+			{
+				query: "",
+				tier: "mid",
+				present: new Set(),
+				pulled: new Set()
+			} as any
 		)
 		expect(row.tags).toEqual(["roleplay", "vision", "long-context"])
 	})
 
 	test("the `embedding` tag is dropped from the chips — the scope already says it", () => {
 		const [row] = ollamaRecommendedRows(
-			[{ name: "nomic-embed-text", pull: "nomic-embed-text", tags: ["embedding", "english"] }],
-			{ query: "", tier: "mid", present: new Set(), pulled: new Set() } as any
+			[
+				{
+					name: "nomic-embed-text",
+					pull: "nomic-embed-text",
+					tags: ["embedding", "english"]
+				}
+			],
+			{
+				query: "",
+				tier: "mid",
+				present: new Set(),
+				pulled: new Set()
+			} as any
 		)
 		expect(row.tags).toEqual(["english"])
 	})
@@ -881,8 +897,528 @@ describe("tags from the recommended list reach the card", () => {
 					tags: ["roleplay", "uncensored"]
 				} as any
 			],
-			{ query: "", tier: "mid", present: new Set(), pulled: new Set() } as any
+			{
+				query: "",
+				tier: "mid",
+				present: new Set(),
+				pulled: new Set()
+			} as any
 		)
 		expect(row.tags).toEqual(["roleplay", "uncensored"])
+	})
+})
+
+// ── Plan 2026-10-29: audio scopes, the picker rule, presence ────────────────
+
+import {
+	audioFamilyRows,
+	audioLiveMatch,
+	audioRuntimeFor,
+	defaultQuant,
+	kcppDownloadKind,
+	kcppSpeechDownloads,
+	presenceBatches,
+	presenceFor,
+	presenceNote,
+	presenceQueryFor,
+	presenceSignature,
+	preselectedQuantIndex,
+	quantChoice,
+	quantLine,
+	quantsForAddById,
+	quantsFromFamily,
+	quantsFromOllamaRecommended,
+	quantsFromOnnx,
+	type QuantFile
+} from "./finder"
+
+const q = (name: string, extra: Partial<QuantFile> = {}): QuantFile => ({
+	name,
+	recommended: false,
+	...extra
+})
+
+describe("the Speech and Transcription scopes", () => {
+	test("labels, capabilities and phrases are exact", () => {
+		const speech = FINDER_SCOPES.find((s) => s.value === "speech")!
+		const asr = FINDER_SCOPES.find((s) => s.value === "transcription")!
+		expect([speech.label, speech.capability, speech.phrase]).toEqual([
+			"Speech",
+			"text->audio",
+			"a speech model"
+		])
+		expect([asr.label, asr.capability, asr.phrase]).toEqual([
+			"Transcription",
+			"audio->text",
+			"a transcription model"
+		])
+		expect(scopeForCapability("audio->text")).toBe("transcription")
+	})
+
+	test("Speech lists audio.cpp then KoboldCPP; Transcription only audio.cpp", () => {
+		const rows = [
+			{
+				id: 1,
+				name: "KoboldCPP",
+				type: CONNECTION_TYPE.KOBOLDCPP_MANAGED
+			},
+			{ id: 2, name: "audio.cpp", type: CONNECTION_TYPE.AUDIOCPP_MANAGED }
+		]
+		expect(
+			destinationsFor("speech", rows).map((d) => [d.kind, d.connectionId])
+		).toEqual([
+			["audiocpp", 2],
+			["koboldcpp", 1]
+		])
+		expect(
+			destinationsFor("transcription", rows).map((d) => d.kind)
+		).toEqual(["audiocpp"])
+		// No audio.cpp row, no audiocpp pill.
+		expect(destinationsFor("transcription", rows.slice(0, 1))).toEqual([])
+	})
+
+	test("a KoboldCPP speech download declares kind speech", () => {
+		expect(kcppDownloadKind("speech")).toBe("speech")
+		expect(kcppDownloadKind("images")).toBe("image")
+		expect(kcppDownloadKind("chat")).toBe("text")
+		expect(kcppKindForScope("speech")).toBeNull()
+	})
+
+	test("the old transform id still has no scope", () => {
+		expect(scopeForCapability("text->speech")).toBeNull()
+	})
+
+	test("audio runtimes follow destination and scope", () => {
+		expect(audioRuntimeFor({ kind: "audiocpp" }, "speech")).toBe("audiocpp")
+		expect(audioRuntimeFor({ kind: "koboldcpp" }, "speech")).toBe(
+			"koboldcpp"
+		)
+		expect(
+			audioRuntimeFor({ kind: "koboldcpp" }, "transcription")
+		).toBeNull()
+		expect(audioRuntimeFor({ kind: "koboldcpp" }, "chat")).toBeNull()
+	})
+})
+
+describe("the picker rule", () => {
+	test("quantChoice", () => {
+		expect(quantChoice([])).toBe("none")
+		expect(quantChoice([q("a")])).toBe("single")
+		expect(quantChoice([q("a"), q("b")])).toBe("picker")
+	})
+
+	test("preselectedQuantIndex: recommended, else largest that fits, else first", () => {
+		expect(preselectedQuantIndex([], "8gb")).toBe(-1)
+		expect(
+			preselectedQuantIndex(
+				[q("a"), q("b", { recommended: true })],
+				"8gb"
+			)
+		).toBe(1)
+		const sized = [
+			q("Q2", { bytes: 1 * GB }),
+			q("Q4", { bytes: 4 * GB }),
+			q("Q8", { bytes: 40 * GB })
+		]
+		expect(preselectedQuantIndex(sized, "8gb")).toBe(1)
+		expect(preselectedQuantIndex([q("a"), q("b")], "unsure")).toBe(0)
+	})
+
+	test("quantLine: a single file names itself, none shows the note", () => {
+		expect(
+			quantLine({ quants: [q("Q4_K_M", { filename: "m-Q4_K_M.gguf" })] })
+		).toBe("m-Q4_K_M.gguf")
+		expect(quantLine({ quants: [q("q8")] })).toBe("q8")
+		expect(quantLine({ quants: [], quantsNote: "Library name" })).toBe(
+			"Library name"
+		)
+		expect(quantLine({ quants: [q("a"), q("b")] })).toBeNull()
+	})
+
+	test("defaultQuant is what the picker opens on", () => {
+		expect(defaultQuant([])).toBeNull()
+		expect(
+			defaultQuant([q("a"), q("b", { recommended: true })])?.name
+		).toBe("b")
+	})
+
+	test("KoboldCPP rows carry their files for the rule", () => {
+		const rec = {
+			name: "org/m",
+			description: "",
+			parameterSize: "7B",
+			recommendedVram: 8,
+			tags: [],
+			pullOptions: [
+				{
+					label: "Q4_K_M",
+					filename: "a.gguf",
+					downloadUrl: "u",
+					sizeBytes: GB
+				},
+				{
+					label: "Q8_0",
+					filename: "b.gguf",
+					downloadUrl: "u2",
+					sizeBytes: 2 * GB
+				}
+			]
+		} as any
+		const [row] = kcppRecommendedRows([rec], ctx())
+		expect(quantChoice(row.quants!)).toBe("picker")
+		expect(preselectedQuantIndex(row.quants!, "8gb")).toBe(0)
+		const [one] = kcppRecommendedRows(
+			[{ ...rec, pullOptions: [rec.pullOptions[0]] }],
+			ctx()
+		)
+		expect(quantLine(one)).toBe("a.gguf")
+		expect(row.presenceQuery).toMatchObject({
+			key: "kcpp:org/m",
+			repo: "org/m",
+			file: "a.gguf"
+		})
+	})
+})
+
+describe("Ollama recommended quants", () => {
+	const model = {
+		name: "Gemma",
+		pull: "hf.co/org/gemma-GGUF:Q4_K_M",
+		quants: [
+			{
+				label: "Q4_K_M",
+				tag: "hf.co/org/gemma-GGUF:Q4_K_M",
+				sizeBytes: 3 * GB,
+				recommended: true
+			},
+			{
+				label: "Q8_0",
+				tag: "hf.co/org/gemma-GGUF:Q8_0",
+				sizeBytes: 6 * GB,
+				recommended: false
+			}
+		]
+	}
+	test("maps tags and the recommended flag", () => {
+		const out = quantsFromOllamaRecommended(model)
+		expect(out.map((x) => [x.name, x.tag, x.recommended])).toEqual([
+			["Q4_K_M", "hf.co/org/gemma-GGUF:Q4_K_M", true],
+			["Q8_0", "hf.co/org/gemma-GGUF:Q8_0", false]
+		])
+		expect(out[0].bytes).toBe(3 * GB)
+	})
+	test("a library name has none and the row carries the note", () => {
+		const [row] = ollamaRecommendedRows(
+			[
+				{
+					name: "Llama",
+					pull: "llama3.2",
+					quants: [],
+					quantsNote: "No quants listed"
+				}
+			],
+			ctx()
+		)
+		expect(quantChoice(row.quants!)).toBe("none")
+		expect(quantLine(row)).toBe("No quants listed")
+		expect(row.presenceQuery).toEqual({
+			key: "ollama:llama3.2",
+			tag: "llama3.2"
+		})
+	})
+	test("a listed row asks presence by the pre-selected tag", () => {
+		const [row] = ollamaRecommendedRows([model as any], ctx())
+		expect(row.presenceQuery).toEqual({
+			key: `ollama:${model.pull}`,
+			tag: "hf.co/org/gemma-GGUF:Q4_K_M"
+		})
+	})
+})
+
+describe("ONNX precisions", () => {
+	test("a list that publishes dtypes offers them all, default pre-selected", () => {
+		const out = quantsFromOnnx({ dtype: "q8", dtypes: ["q4", "fp32"] })
+		expect(out.map((x) => x.dtype)).toEqual(["fp32", "q8", "q4"])
+		expect(out.find((x) => x.recommended)?.dtype).toBe("q8")
+	})
+	test("one dtype is a single; none is none", () => {
+		expect(quantChoice(quantsFromOnnx({ dtype: "q8" }))).toBe("single")
+		expect(quantChoice(quantsFromOnnx({}))).toBe("none")
+		expect(quantsFromOnnx(undefined)).toEqual([])
+	})
+	test("rows carry them and ask presence by model + dtype", () => {
+		const [row] = onnxRecommendedRows(
+			[
+				{
+					id: 4,
+					name: "org/bge",
+					local: {
+						state: "not_downloaded",
+						catalog: { dtype: "q8", dtypes: ["fp32"] }
+					} as any
+				}
+			],
+			ctx(),
+			"embeddings"
+		)
+		expect(row.quants?.map((x) => x.dtype)).toEqual(["fp32", "q8"])
+		expect(row.presenceQuery).toEqual({
+			key: "onnx:4",
+			repo: "org/bge",
+			dtype: "q8"
+		})
+	})
+	test("add-by-id offers every dtype with the default pre-selected", () => {
+		const out = quantsForAddById(["fp32", "fp16", "q8", "q4"], "fp32")
+		expect(out.map((x) => x.recommended)).toEqual([
+			true,
+			false,
+			false,
+			false
+		])
+	})
+})
+
+describe("audio family rows", () => {
+	const pkg = (
+		id: string,
+		precision: string,
+		state = "available",
+		extra = {}
+	) => ({
+		id,
+		name: `Qwen ${precision}`,
+		task: "tts",
+		family: "qwen3_tts",
+		files: [],
+		tags: [],
+		confidence: "listed",
+		state,
+		recommended: false,
+		precision,
+		sizeBytes: 2 * GB,
+		...extra
+	})
+	const family = (over: any = {}) => ({
+		key: "audiocpp:qwen3_tts:",
+		family: "qwen3_tts",
+		variant: null,
+		task: "tts",
+		runtime: "audiocpp",
+		displayName: "Qwen3-TTS",
+		recommendedId: "p-q8",
+		precisions: [pkg("p-q8", "q8_0"), pkg("p-bf16", "bf16")],
+		...over
+	})
+	test("one row per family, picker over precisions, recommendedId pre-selected", () => {
+		const [row] = audioFamilyRows([family()] as any, ctx(), {
+			scope: "speech",
+			runtime: "audiocpp"
+		})
+		expect(row.name).toBe("Qwen3-TTS")
+		expect(quantChoice(row.quants!)).toBe("picker")
+		expect(preselectedQuantIndex(row.quants!, "8gb")).toBe(0)
+		expect(row.quants!.map((x) => x.packageId)).toEqual(["p-q8", "p-bf16"])
+		expect(row.presenceQuery).toMatchObject({
+			key: row.key,
+			packageId: "p-q8"
+		})
+	})
+	test("the recommendedId need not be first", () => {
+		const [row] = audioFamilyRows(
+			[family({ recommendedId: "p-bf16" })] as any,
+			ctx(),
+			{ scope: "speech", runtime: "audiocpp" }
+		)
+		expect(preselectedQuantIndex(row.quants!, "8gb")).toBe(1)
+	})
+	test("task and runtime filter; vdes is Speech, asr is Transcription", () => {
+		const fams = [
+			family(),
+			family({
+				key: "audiocpp:parakeet:",
+				task: "asr",
+				displayName: "Parakeet"
+			}),
+			family({
+				key: "audiocpp:vd:",
+				task: "vdes",
+				displayName: "Voice design"
+			}),
+			family({
+				key: "koboldcpp:kokoro:",
+				runtime: "koboldcpp",
+				displayName: "Kokoro"
+			})
+		] as any
+		const names = (scope: any, runtime: any) =>
+			audioFamilyRows(fams, ctx(), { scope, runtime }).map((r) => r.name)
+		expect(names("speech", "audiocpp")).toEqual([
+			"Qwen3-TTS",
+			"Voice design"
+		])
+		expect(names("transcription", "audiocpp")).toEqual(["Parakeet"])
+		expect(names("speech", "koboldcpp")).toEqual(["Kokoro"])
+	})
+	test("a single precision is a single; presence needs every precision held", () => {
+		const [one] = audioFamilyRows(
+			[family({ precisions: [pkg("p-q8", "q8_0")] })] as any,
+			ctx(),
+			{ scope: "speech", runtime: "audiocpp" }
+		)
+		expect(quantLine(one)).toBe("q8_0")
+		const [half] = audioFamilyRows(
+			[
+				family({
+					precisions: [
+						pkg("p-q8", "q8_0", "downloaded"),
+						pkg("p-bf16", "bf16")
+					]
+				})
+			] as any,
+			ctx(),
+			{ scope: "speech", runtime: "audiocpp" }
+		)
+		expect(half.presence).toBeNull()
+		expect(half.facts).toContain("q8_0 on disk")
+		const [all] = audioFamilyRows(
+			[family({ precisions: [pkg("p-q8", "q8_0", "enabled")] })] as any,
+			ctx(),
+			{ scope: "speech", runtime: "audiocpp" }
+		)
+		expect(all.presence).toBe("on_disk")
+	})
+	test("KoboldCPP files go one call each, model first", () => {
+		const fam = family({
+			runtime: "koboldcpp",
+			precisions: [
+				pkg("k", "q8_0", "available", {
+					koboldCppFiles: [
+						{
+							filename: "model.gguf",
+							downloadUrl: "u1",
+							sizeBytes: 5
+						},
+						{ filename: "codec.gguf", downloadUrl: "u2" }
+					]
+				})
+			],
+			recommendedId: "k"
+		}) as any
+		const [quant] = quantsFromFamily(fam)
+		const calls = kcppSpeechDownloads("Kokoro", quant)
+		expect(calls.map((c) => [c.filename, c.kind, c.modelName])).toEqual([
+			["model.gguf", "speech", "Kokoro"],
+			["codec.gguf", "speech", "Kokoro"]
+		])
+	})
+	test("live downloads match by package id or family name", () => {
+		const row = {
+			name: "Qwen3-TTS",
+			quants: [q("q8_0", { packageId: "p-q8" })]
+		}
+		const items = [
+			{
+				id: "audiocpp:p-q8",
+				source: "audiocpp",
+				name: "x",
+				state: "in_flight"
+			},
+			{
+				id: "koboldcpp:m.gguf",
+				source: "koboldcpp",
+				name: "Qwen3-TTS",
+				state: "in_flight"
+			}
+		]
+		expect(audioLiveMatch(row, "audiocpp", items)?.id).toBe("audiocpp:p-q8")
+		expect(audioLiveMatch(row, "koboldcpp", items)?.id).toBe(
+			"koboldcpp:m.gguf"
+		)
+		expect(audioLiveMatch(row, "audiocpp", [])).toBeNull()
+	})
+})
+
+describe("presence", () => {
+	const ollama = {
+		kind: "ollama",
+		connectionId: 5,
+		serviceLabel: "Ollama"
+	} as const
+	const kcpp = {
+		kind: "koboldcpp",
+		connectionId: 1,
+		serviceLabel: "KoboldCPP"
+	} as const
+	const holder = (
+		runtime: any,
+		connectionId: number | null = null,
+		where: string | null = null
+	) => ({
+		runtime,
+		connectionId,
+		where,
+		match: "m"
+	})
+	test("nobody holds it", () => {
+		const s = presenceNote([], kcpp)
+		expect(s).toMatchObject({ here: false, text: null, getLabel: "Get" })
+	})
+	test("the destination's own runtime holds it", () => {
+		const s = presenceNote([holder("koboldcpp", 1, "text")], kcpp)
+		expect(s.here).toBe(true)
+		expect(s.text).toBe("You have this on KoboldCPP")
+		expect(s.getLabel).toBe("Get")
+		expect(presenceFor("koboldcpp")).toBe("on_disk")
+		expect(presenceFor("ollama")).toBe("pulled")
+	})
+	test("another runtime holds it: Also on, and Get for … too", () => {
+		const s = presenceNote(
+			[holder("koboldcpp", 1), holder("onnx", 9)],
+			ollama
+		)
+		expect(s.here).toBe(false)
+		expect(s.text).toBe("Also on KoboldCPP, ONNX")
+		expect(s.getLabel).toBe("Get for Ollama too")
+	})
+	test("an Ollama copy on another host is not this host", () => {
+		const s = presenceNote([holder("ollama", 6, "Den")], ollama)
+		expect(s.here).toBe(false)
+		expect(s.text).toBe("Also on Ollama (Den)")
+		expect(presenceNote([holder("ollama", 5, "Home")], ollama).here).toBe(
+			true
+		)
+	})
+	test("here and elsewhere together", () => {
+		const s = presenceNote(
+			[holder("koboldcpp", 1), holder("ollama", 5)],
+			kcpp
+		)
+		expect(s.text).toBe("You have this on KoboldCPP · Also on Ollama")
+		expect(s.getLabel).toBe("Get")
+	})
+	test("queries are signature-stable and batched at 200", () => {
+		const a = { key: "a", repo: "r" }
+		const b = { key: "b", tag: "t" }
+		expect(presenceSignature([a, b])).toBe(presenceSignature([b, a]))
+		expect(presenceSignature([a])).not.toBe(presenceSignature([a, b]))
+		const many = Array.from({ length: 450 }, (_, i) => ({ key: String(i) }))
+		expect(presenceBatches(many).map((x) => x.length)).toEqual([
+			200, 200, 50
+		])
+	})
+	test("presenceQueryFor speaks each runtime's words", () => {
+		expect(
+			presenceQueryFor("k", "org/r", [
+				q("Q4", { filename: "f.gguf", bytes: 9, recommended: true })
+			])
+		).toEqual({ key: "k", repo: "org/r", file: "f.gguf", bytes: 9 })
+		expect(
+			presenceQueryFor("o", "org/r", [q("Q4", { tag: "hf.co/org/r:Q4" })])
+		).toEqual({
+			key: "o",
+			tag: "hf.co/org/r:Q4"
+		})
+		expect(presenceQueryFor("e", undefined, [])).toEqual({ key: "e" })
 	})
 })

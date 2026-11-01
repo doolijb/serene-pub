@@ -129,6 +129,17 @@ export class CONNECTION_TYPE {
 	static NOVELAI = "novelai"
 	/** 🚧 Black Forest Labs' FLUX API (the **BFL dialect**). Needs a key. */
 	static BFL = "bfl"
+	/** 🚧 ElevenLabs' speech API (native, not the OpenAI speech dialect). Needs a key. */
+	static ELEVENLABS = "elevenlabs"
+	/** 🚧 audio.cpp: a local speech server (OpenAI-shaped `/v1/audio/speech`, many engines). Speaks and does nothing else. */
+	static AUDIOCPP = "audiocpp"
+	/**
+	 * 🚧 audio.cpp, run by Serene Pub: the second managed service beside
+	 * `KOBOLDCPP_MANAGED`. Serene Pub downloads the audio.cpp binary and the
+	 * speech and transcription model packages, writes its `server.json`, and
+	 * supervises the process. Its base URL comes from its settings, not the row.
+	 */
+	static AUDIOCPP_MANAGED = "audiocpp_managed"
 
 	/**
 	 * Embeddings from an in-process ONNX model (`@huggingface/transformers`).
@@ -319,6 +330,38 @@ export class CONNECTION_TYPE {
 			modality: "image-gen"
 		},
 		{
+			value: CONNECTION_TYPE.ELEVENLABS,
+			label: "ElevenLabs",
+			description:
+				"<p>An online speech service: <b>ElevenLabs</b> reads lines aloud " +
+				"in a library of voices.</p>" +
+				"<p>Needs an API key from elevenlabs.io.</p>",
+			category: "cloud",
+			modality: "tts"
+		},
+		{
+			value: CONNECTION_TYPE.AUDIOCPP,
+			label: "audio.cpp",
+			description:
+				"<p>A local speech server: <b>audio.cpp</b> reads lines aloud with " +
+				"Kokoro, Qwen3-TTS, KittenTTS 2 and many more, on your own machine.</p>" +
+				"<p>Start it with <code>audiocpp_server --config server.json</code> " +
+				"and point this at its address. Serene Pub does not run it yet.</p>",
+			category: "local",
+			modality: "tts"
+		},
+		{
+			// 🚧 provisional: never offered in the New Connection picker
+			// (`connectionServiceItems.ts` skips `isAudioCppManagedType`).
+			value: CONNECTION_TYPE.AUDIOCPP_MANAGED,
+			label: "audio.cpp, run by Serene Pub",
+			description:
+				"<p>Serene Pub downloads <b>audio.cpp</b> and its speech and " +
+				"transcription models, and runs it for you.</p>",
+			category: "local",
+			modality: "tts"
+		},
+		{
 			value: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
 			label: "Local embeddings (ONNX)",
 			description:
@@ -407,6 +450,11 @@ export class CONNECTION_TYPE {
 			type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
 		)
 	}
+
+	/** True for the audio.cpp this pub runs: its base URL comes from its settings, not the row. */
+	static isManagedAudioCpp(type: string | null | undefined): boolean {
+		return type === CONNECTION_TYPE.AUDIOCPP_MANAGED
+	}
 }
 
 /**
@@ -460,6 +508,8 @@ export function modalityLabel(modality: string): string {
 	if (modality === "image-gen") return "image generation"
 	if (modality === "embeddings") return "embeddings"
 	if (modality === "ner") return "entity extraction"
+	if (modality === "tts") return "speech"
+	if (modality === "asr") return "transcription"
 	return modality || "this modality"
 }
 

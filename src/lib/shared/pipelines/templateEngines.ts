@@ -26,14 +26,22 @@ export const CORE_TEMPLATE_ENGINE = "core:template/handlebars@1"
 export const CORE_LIQUID_ENGINE = "core:template/liquid@1"
 
 /**
- * Both, in the order a picker should offer them.
+ * Jinja2, the engine speak's line templates and inflection layouts are
+ * written in. Twin of the SDK's `jinja2.id`, kept literal because this
+ * module is a leaf; `prompt/renderers.ts` registers the renderer under it.
+ */
+export const CORE_JINJA2_ENGINE = "core:template/jinja2@1"
+
+/**
+ * All three, in the order a picker should offer them.
  *
  * Core's engines are the ones no plugin may claim or release, so this list is
  * also the answer to "may this be taken over" — see `registerRenderer`.
  */
 export const CORE_TEMPLATE_ENGINES = [
 	CORE_TEMPLATE_ENGINE,
-	CORE_LIQUID_ENGINE
+	CORE_LIQUID_ENGINE,
+	CORE_JINJA2_ENGINE
 ] as const
 
 export const isCoreTemplateEngine = (engineId: string): boolean =>

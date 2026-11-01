@@ -119,7 +119,7 @@ describe("a remote widget", () => {
 		expect(scoped).toEqual(
 			expect.arrayContaining([
 				{ t: "scoped", section: "persona", value: [persona] },
-				{ t: "scoped", section: "lore", value: { granted: true } }
+				{ t: "scoped", section: "lore", value: { granted: true, annex: {} } }
 			])
 		)
 		// The cast itself was not granted: only the viewer's own persona went.

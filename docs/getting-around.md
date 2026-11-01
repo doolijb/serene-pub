@@ -157,13 +157,20 @@ view. The app remembers whether you last used Dock or Half.
 When a view is focused over a session, a narrow strip on the right, the **spine**, shows who is in
 the session and whether a reply is being written. Click it to go back.
 
-## Stage only
+## Full screen
 
-Press **Ctrl .** in a session to set everything else aside: the rail and the sidebar step away
-and the story has the window. Move the pointer to the left edge to bring the rail back, or press
-**Esc** or **Leave stage only** to return. Pressed while a view is in Focus, the view steps back
-to its dock first. Opening the layout editor leaves Stage only, and so does a reload: it lasts
-for the visit, not across it.
+Press **Ctrl Shift F** (**⌘ Shift F** on a Mac), or the **Full screen** button in the session's header (the **⋯** on a
+phone), to set everything else aside: the bars, the rail and the sidebar step away and the story has the window. Press
+**Esc** or **Exit full screen** in the corner to return. The corner control fades to a thin edge after
+two seconds and comes back when you point at it, touch it or tab to it; its **⋯** holds Back, Forward, Regenerate and
+Customize layout, and **Use the whole screen** also hides the browser's own bars. Full screen is remembered for each
+session, so a reload keeps it. Opening a sidebar view or the layout editor leaves it. On a phone, the corner control reads
+"Tap the corner to leave full screen." when it first appears. A session type with its own session view may open the session in full screen
+for you, with a one-line notice; your own choice wins after that.
+
+A plugin's game screen opened from **Apps** in the Sessions view is always full screen. **Leave** in its corner, or
+**Esc** (until you click into the game, which then has the keyboard), takes you back to Sessions (see
+[Apps](./sessions.md#apps)).
 
 ## Help
 
@@ -228,8 +235,8 @@ story. Jump opens as a sheet from the top.
 
 - **Ctrl K** or **⌘K**: open Jump. **Esc** closes it.
 - **Ctrl \\**: step the open view through Dock, Half and Focus. **Ctrl Shift \\** closes it.
-- **Ctrl .**: Stage only.
-- **Esc** (outside a text box): step down one layer: leave Stage only, then Focus goes back to
+- **Ctrl Shift F** (**⌘ Shift F**): full screen on or off, in a session.
+- **Esc**: step down one layer: leave full screen (even from a text box), then, outside a text box, Focus goes back to
   the width it came from, then the sidebar folds away. It never leaves a session or stops a reply.
 - **Alt [**: focus the rail. Arrow keys move between icons, Enter opens.
 - **Alt ]**: focus the open sidebar view.

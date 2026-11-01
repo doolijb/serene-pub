@@ -40,12 +40,14 @@ export type LedgerValue = SlotValue
 /** One anchored row. The wire shape (`Sockets.State.LedgerRow`), structurally. */
 export interface LedgerRow {
 	id: number
-	/** 🚧 `clock`: a move of the session's story clock (live scenes §15 G5). */
-	kind: "value" | "clock"
+	/** 🚧 `clock`: a move of the session's story clock (live scenes §15 G5). 🚧 `library`: a character or lorebook made or changed for the person (M2c). */
+	kind: "value" | "clock" | "library"
 	messageId: number | null
 	ownerKey: string
 	ownerLabel: string
 	updatedBy: string
+	/** 🚧 A library row's change: what was done, and to what. */
+	library?: LedgerLibraryChange
 	slotId?: string
 	slotLabel?: string
 	value?: LedgerValue
@@ -53,6 +55,61 @@ export interface LedgerRow {
 	/** 🚧 A bounded number's maximum in force for this owner, when it has one: "Health 10 (full)". */
 	max?: number
 }
+
+/** 🚧 What a library row did: the op, and the card's or book's name. */
+export interface LedgerLibraryChange {
+	op: LibraryOp
+	label: string
+	/** 🚧 Nothing was made, and why. */
+	skipped?: string
+}
+
+/** 🚧 The four library ops (`LibraryChangePayload.op`). */
+export type LibraryOp = "create-character" | "update-character" | "create-lorebook" | "attach-lorebook"
+
+/** A library change in the ledger's words, once it has landed (applied or accepted). */
+export function libraryChangeText(op: LibraryOp, label: string): string {
+	switch (op) {
+		case "create-character":
+			return `Made a character: ${label}`
+		case "update-character":
+			return `Changed ${label}`
+		case "create-lorebook":
+			return `Made a lorebook: ${label}`
+		case "attach-lorebook":
+			return `Read ${label} into this session`
+	}
+}
+
+/** 🚧 A library change drafted and NOT made, with why (the person's library write mode is Off). */
+export function librarySkippedText(op: LibraryOp, label: string, why: string): string {
+	switch (op) {
+		case "create-character":
+			return `Drafted a character, not added: ${label}. ${why}`
+		case "update-character":
+			return `Drafted a change to ${label}, not made. ${why}`
+		case "create-lorebook":
+			return `Drafted a lorebook, not added: ${label}. ${why}`
+		case "attach-lorebook":
+			return `Did not read ${label} into this session. ${why}`
+	}
+}
+
+/** A library change before it has: the proposal's line, with Accept / Reject beside it. */
+export function libraryProposalText(op: LibraryOp, label: string): string {
+	switch (op) {
+		case "create-character":
+			return `Proposes a character: ${label}`
+		case "update-character":
+			return `Proposes changing ${label}`
+		case "create-lorebook":
+			return `Proposes a lorebook: ${label}`
+		case "attach-lorebook":
+			return `Proposes reading ${label} into this session`
+	}
+}
+
+const LIBRARY_OPS: readonly string[] = ["create-character", "update-character", "create-lorebook", "attach-lorebook"]
 
 /** 🚧 A clock row's move: the step, and where the clock went — or why it did not. */
 export interface LedgerClockMove {
@@ -84,7 +141,7 @@ export interface LedgerLine {
 	messageId: number | null
 	ownerKey: string
 	ownerLabel: string
-	kind: "value" | "clock"
+	kind: "value" | "clock" | "library"
 	/**
 	 * The change without the owner's name: `hp 20 → 14`, `Inventory → Rusty key ×2`,
 	 * 🚧 `Time passes: 3 hours (Day 4, 14:00 → Day 4, 17:00)`.
@@ -111,6 +168,7 @@ const inOrder = (rows: LedgerRow[]): LedgerRow[] =>
 		(a, b) =>
 			(a.messageId ?? -1) - (b.messageId ?? -1) ||
 			Number(a.kind === "clock") - Number(b.kind === "clock") ||
+			Number(a.kind === "library") - Number(b.kind === "library") ||
 			a.id - b.id
 	)
 
@@ -335,6 +393,21 @@ export function ledgerLines(
 	for (let i = 0; i < ordered.length; i++) {
 		if (merged.has(i)) continue
 		let row = ordered[i]!
+		if (row.kind === "library") {
+			if (!row.library || !LIBRARY_OPS.includes(row.library.op)) continue
+			out.push({
+				key: `l${row.id}`,
+				messageId: row.messageId,
+				ownerKey: row.ownerKey,
+				ownerLabel: row.ownerLabel,
+				kind: "library",
+				text: row.library.skipped
+					? librarySkippedText(row.library.op, row.library.label, row.library.skipped)
+					: libraryChangeText(row.library.op, row.library.label),
+				updatedBy: row.updatedBy
+			})
+			continue
+		}
 		if (row.kind === "clock") {
 			if (!row.clock) continue
 			out.push({
@@ -447,6 +520,8 @@ function clockStoryTime(move: LedgerClockMove): { storyTime?: LedgerStoryTime } 
  * story had no clock for (G7) — the step and why it did not happen.
  */
 export function clockMoveText(move: LedgerClockMove): string {
+	// 🚧 A skipped move that moves nothing (`by` 0: a note, not a step) is its sentence alone.
+	if (move.skipped && move.by === 0) return move.skipped
 	const span = clockSpanWords(move.by, move.unit)
 	const head = move.by < 0 ? `Time goes back: ${span}` : `Time passes: ${span}`
 	if (move.skipped) return `${head}, not on the clock. ${move.skipped}`
@@ -510,7 +585,7 @@ export function groupLinesByOwner(lines: LedgerLine[]): LedgerOwnerGroup[] {
 
 /** A held change, as `state:proposals` publishes it. 🚧 `clock`: a clock proposal (live scenes ★3). */
 export interface ProposalLike {
-	kind: "value" | "clock"
+	kind: "value" | "clock" | "library"
 	payload: Record<string, unknown>
 }
 
@@ -551,6 +626,15 @@ export function describeProposal(
 	const clock = describeClockProposal(proposal)
 	if (clock !== null) return clock
 	const payload = proposal.payload ?? {}
+	// 🚧 A library proposal (M2c): a character or lorebook Serene drafted,
+	// waiting for Accept. Same Accept / Reject as any held change.
+	if (proposal.kind === "library" || payload.kind === "library") {
+		const op = typeof payload.op === "string" ? payload.op : ""
+		const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim() : "something"
+		return LIBRARY_OPS.includes(op)
+			? libraryProposalText(op as LibraryOp, label)
+			: "a change to your library this session cannot describe"
+	}
 	// 🚧 An offer (Give to…, owner ruling ★4): who offers what to whom, in
 	// the words it was made with — nothing has moved yet.
 	const offer = payload.offer as

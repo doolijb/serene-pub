@@ -115,6 +115,8 @@
 	const TILE: Record<DownloadSource, string> = {
 		koboldcpp: "Cpu",
 		"koboldcpp-binary": "Box",
+		audiocpp: "Cpu",
+		"audiocpp-binary": "Box",
 		ollama: "Server",
 		onnx: "HardDrive",
 		matting: "HardDrive"

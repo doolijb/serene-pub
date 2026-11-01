@@ -21,13 +21,14 @@
 import type { DownloadSource } from "./downloads.svelte"
 import { sameHost } from "$lib/shared/connections/hostKey"
 
-export type ManagedKind = "koboldcpp" | "ollama"
+export type ManagedKind = "koboldcpp" | "ollama" | "audiocpp"
 
 /** Same five tones the index row uses, so one dot means one thing app-wide. */
 export type StatusDot = "ok" | "pending" | "warning" | "error" | "quiet"
 
 /** What a person calls this runtime. */
 export function managedLabel(kind: ManagedKind): string {
+	if (kind === "audiocpp") return "audio.cpp"
 	return kind === "koboldcpp" ? "KoboldCPP" : "Ollama"
 }
 
@@ -44,6 +45,8 @@ export type ManagedStage =
 	| "kcpp-mode"
 	| "kcpp-binary"
 	| "kcpp-external-setup"
+	/** 🚧 audio.cpp, run by Serene Pub: no binary on disk yet, or Change binary pressed. */
+	| "acpp-binary"
 	| "tabs"
 
 /**
@@ -106,6 +109,10 @@ export function managedStage(
 	facts: KcppStageFacts
 ): ManagedStage {
 	if (kind === "ollama") return "tabs"
+	// audio.cpp has no mode to choose — Serene Pub always runs it; the
+	// external `audiocpp` type is a different connection altogether.
+	if (kind === "audiocpp")
+		return !facts.hasBinary || facts.pickerRequested ? "acpp-binary" : "tabs"
 	if (facts.managedMode === null) return "kcpp-mode"
 	if (facts.managedMode === "managed")
 		return !facts.hasBinary || facts.pickerRequested
@@ -116,27 +123,34 @@ export function managedStage(
 
 /** One tab. `icon` is a `@lucide/svelte` export name, resolved by the view. */
 export interface ManagedTab {
-	value: "models" | "get" | "downloads" | "settings"
+	value: "models" | "downloads" | "settings" | "process"
 	label: string
 	icon: string
 }
 
 /**
- * The four tabs, the same four for both runtimes.
- *
- * "Get models" is NOT the managers' old Available tabs: those are retired in
- * favour of the one model finder (ruling R3), so this tab IS that finder,
- * mounted in place and scoped to this connection — it was a single button
- * leading to the same finder until plan 2026-09-24 C3.
+ * The tabs: Models · Arriving · Settings for KoboldCPP and Ollama (audio.cpp
+ * adds Process). There is no Get tab: getting a model is the Models view's one
+ * **Get a model** dialog (ruling R3), opened by the Models tab's **Get more…**
+ * door (plan 2026-10-29 D1).
  */
-export function managedTabs(stage: ManagedStage): ManagedTab[] {
+export function managedTabs(
+	stage: ManagedStage,
+	kind: ManagedKind = "koboldcpp"
+): ManagedTab[] {
 	if (stage !== "tabs") return []
+	// audio.cpp's second tab is the process.
+	if (kind === "audiocpp")
+		return [
+			{ value: "models", label: "Models", icon: "Package" },
+			{ value: "process", label: "Process", icon: "Activity" },
+			{ value: "downloads", label: "Arriving", icon: "Download" },
+			{ value: "settings", label: "Settings", icon: "Settings" }
+		]
 	return [
-		// ⚠ One word each. Four labelled tabs share 400px in the dock, and
-		// "Get models" / "Downloads" rendered as "Get mo…" / "Downlo…" — a tab
-		// strip nobody can read the end of. The icon carries the rest.
+		// ⚠ One word each: labelled tabs share 400px in the dock, and long
+		// labels rendered truncated. The icon carries the rest.
 		{ value: "models", label: "Models", icon: "Package" },
-		{ value: "get", label: "Get", icon: "Search" },
 		{ value: "downloads", label: "Arriving", icon: "Download" },
 		{ value: "settings", label: "Settings", icon: "Settings" }
 	]
@@ -146,6 +160,7 @@ export function managedTabs(stage: ManagedStage): ManagedTab[] {
 export function downloadSourcesFor(
 	kind: ManagedKind
 ): readonly DownloadSource[] {
+	if (kind === "audiocpp") return ["audiocpp", "audiocpp-binary"] as const
 	return kind === "koboldcpp"
 		? (["koboldcpp", "koboldcpp-binary"] as const)
 		: (["ollama"] as const)
@@ -384,7 +399,9 @@ export function managedConnectionIds(
 	const types =
 		kind === "koboldcpp"
 			? ["koboldcpp_managed", "koboldcpp_managed_image"]
-			: ["ollama"]
+			: kind === "audiocpp"
+				? ["audiocpp_managed"]
+				: ["ollama"]
 	return rows
 		.filter((r) => r.id != null && types.includes(r.type ?? ""))
 		.map((r) => r.id as number)
@@ -445,7 +462,7 @@ export function removeConfirmation(
 		}
 	return {
 		title: `Remove ${label} from this pub?`,
-		body: "The connection goes, and Serene Pub stops running KoboldCPP. Downloaded models stay on disk.",
+		body: `The connection goes, and Serene Pub stops running ${label}. Downloaded models stay on disk.`,
 		cost: listed
 			? `${label} currently answers for ${listed}. Those stop until you pick another model.`
 			: null,
@@ -480,4 +497,138 @@ export function duplicateOllamaHosts<
 			c.type === self.type &&
 			sameHost(c.baseUrl, self.baseUrl)
 	)
+}
+
+// ── audio.cpp, run by Serene Pub 🚧 ─────────────────────────────────────────
+//
+// The third kind (plan 2026-10-28 D10). One process, packages instead of
+// GGUF repos, and the supervisor's five status words (★L1) — so its lines
+// reuse KoboldCPP's dot and word tables rather than inventing a second scale.
+
+type AcppSettings = Pick<
+	Sockets.AudioCpp.SettingsView,
+	"enabled" | "binaryVariant"
+>
+
+/**
+ * Where the managed audio.cpp install stands, from its settings alone — the
+ * one reading the index row and this view share, as `kcppInstallState` is
+ * for KoboldCPP.
+ *
+ * - `loading` — settings have not arrived.
+ * - `not-installed` — switched off and no binary recorded.
+ * - `offline` — switched off with a binary still on disk (files kept).
+ * - `no-binary` — switched on, no binary yet: the setup screen's job.
+ * - `ready` — switched on with a binary; the process status says the rest.
+ */
+export type AcppInstallState =
+	| "loading"
+	| "not-installed"
+	| "offline"
+	| "no-binary"
+	| "ready"
+
+export function acppInstallState(
+	settings: AcppSettings | null | undefined
+): AcppInstallState {
+	if (!settings) return "loading"
+	const hasBinary = !!settings.binaryVariant
+	if (!settings.enabled) return hasBinary ? "offline" : "not-installed"
+	return hasBinary ? "ready" : "no-binary"
+}
+
+const BACKEND_LABEL: Record<Sockets.AudioCpp.Backend, string> = {
+	cpu: "CPU",
+	vulkan: "Vulkan",
+	cuda: "CUDA",
+	metal: "Metal",
+	rocm: "ROCm"
+}
+
+/** A compute backend as a person reads it: `cuda` is "CUDA". */
+export function acppBackendLabel(
+	backend: Sockets.AudioCpp.Backend | null | undefined
+): string | null {
+	return backend ? (BACKEND_LABEL[backend] ?? backend) : null
+}
+
+/**
+ * The process line: the supervisor's word and dot, PID and uptime.
+ *
+ * Null while nothing has answered. An audio.cpp on the port that Serene Pub
+ * did not start says so — Stop cannot act on it. A crash carries its reason.
+ */
+export function acppProcessLine(
+	status: Sockets.AudioCpp.StatusView | null | undefined,
+	now: number = Date.now()
+): StatusLine | null {
+	if (!status) return null
+	const base = kcppProcessLine(
+		{ status: status.status, pid: status.pid, startedAt: status.startedAt },
+		now
+	)
+	if (!base) return null
+	if (status.isExternal)
+		return { ...base, meta: "Not started by Serene Pub" }
+	if (status.status === "crashed" && status.lastError)
+		return { ...base, meta: status.lastError }
+	return base
+}
+
+/**
+ * What the process is holding, from `/v1/models` (ids with their device).
+ * audio.cpp loads lazily, so nothing loaded is the ordinary idle state.
+ */
+export function acppLoadedLine(
+	status: Pick<Sockets.AudioCpp.StatusView, "loaded" | "status"> | null | undefined
+): LoadedLine {
+	const loaded = status?.status === "running" ? (status.loaded ?? []) : []
+	if (!loaded.length)
+		return { text: "Nothing loaded · loads on first use", loaded: false }
+	return {
+		text: `Loaded · ${loaded
+			.map((m) => (m.device ? `${m.id} (${m.device})` : m.id))
+			.join(", ")}`,
+		loaded: true
+	}
+}
+
+/**
+ * The build line: version and backend from `/health`, falling back to what
+ * was installed; "unverified" when no published checksum was checked (★A1).
+ */
+export function acppBuildLine(facts: {
+	version?: string | null
+	backend?: Sockets.AudioCpp.Backend | null
+	releaseTag?: string | null
+	verified?: boolean | null
+}): string | null {
+	const version = facts.version ?? facts.releaseTag ?? null
+	const parts = [
+		version,
+		acppBackendLabel(facts.backend),
+		facts.verified === false ? "unverified" : null
+	].filter(Boolean)
+	return parts.length ? parts.join(" · ") : null
+}
+
+/**
+ * The apply line: a change to the enabled packages or settings rewrote
+ * server.json, and the supervisor restarts the process onto it (D5). Said
+ * while that is under way, never when the process is stopped — the next
+ * start reads the new file anyway.
+ */
+export function acppApplyLine(
+	status: Pick<Sockets.AudioCpp.StatusView, "status" | "configApplied"> | null | undefined
+): string | null {
+	if (!status || status.configApplied) return null
+	// Lane B: the restart onto the new file passes through stopping and
+	// starting; `setPackageEnabled` / `updateSettings` answer before it ends.
+	if (
+		status.status !== "running" &&
+		status.status !== "starting" &&
+		status.status !== "stopping"
+	)
+		return null
+	return "Restarting to apply"
 }

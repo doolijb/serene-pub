@@ -144,7 +144,8 @@ describe("pageOf", () => {
 	it("carries the harness's numbers — the twin's, not new ones", () => {
 		expect(FRAME_PAGE_DEFAULT).toBe(50)
 		expect(FRAME_PAGE_MAX).toBe(200)
-		expect(FRAME_STATE_MAX_BYTES).toBe(16 * 1024)
+		// 🚧 M0 (SHAPES L8): the SDK's SAVE_STATE_MAX_BYTES, raised from 16 KB.
+		expect(FRAME_STATE_MAX_BYTES).toBe(256 * 1024)
 	})
 
 	it("answers the default page and offers a cursor when there is more", () => {

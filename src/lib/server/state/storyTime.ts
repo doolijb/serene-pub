@@ -42,6 +42,7 @@
  * 2026-09-24, §7): "now" still applies every dated amendment. The clock is what
  * `age` is measured against and what the prompt's current date says.
  */
+import type { ClockTargetV1 } from "@serene-pub/contracts"
 import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm"
 import { getAttributeSlot, i18nText, parseStoryTime, slotField } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
@@ -384,6 +385,63 @@ export async function advanceSessionStoryClock(
 	by: number,
 	unit: StoryTimeUnit
 ): Promise<{ clock: StoryClock; label: string; from: StoryClock }> {
+	const done = await moveSessionStoryClock(db, sessionId, () => ({ by, unit }))
+	return { clock: done.clock, label: done.label, from: done.from }
+}
+
+/**
+ * **Move a session's story clock to a moment of the day** (M0, lane T1;
+ * `advance-story-clock@1`'s `to`): `to` is read against the clock's start
+ * INSIDE the transaction — never a pre-read — and the move is by the
+ * minutes between them, so it is one ledger move that Back takes back.
+ * `next` (the default) is the coming `hour:minute`, tomorrow's when today's
+ * has passed; `tomorrow` is always tomorrow's; `today` is a no-op (`by: 0`, nothing
+ * written) when the clock stands at the moment and refused with a sentence when it is past it. A clock with
+ * no time of day reads as 00:00. Same refusals and locks as
+ * `advanceSessionStoryClock` — except that a story with no clock and no
+ * present is not refused: a moment of the day names where the clock stands,
+ * so it starts on the story's first day (`FIRST_STORY_DAY`) at that moment
+ * and the clock is stored, as any later move from a present stores it (M1
+ * E-fix T-4: a genre's create move set no clock, and every later move began
+ * from a dated entry's 00:00 instead). A move by an amount still refuses.
+ */
+export async function advanceSessionStoryClockTo(
+	db: Db,
+	sessionId: number,
+	to: ClockTargetV1
+): Promise<{ clock: StoryClock; label: string; from: StoryClock; by: number; unit: "minutes" }> {
+	const done = await moveSessionStoryClock(db, sessionId, (start) => {
+		const now = (start.hour ?? 0) * 60 + (start.minute ?? 0)
+		const target = to.hour * 60 + (to.minute ?? 0)
+		const d = target - now
+		const day = to.day ?? "next"
+		let by: number
+		if (day === "tomorrow") by = d + 1440
+		else if (day === "today") {
+			if (d === 0) return { by: 0, unit: "minutes", noop: true }
+			if (d < 0) {
+				const two = (n: number) => String(n).padStart(2, "0")
+				throw new StoryClockRefusal(
+					`The clock already stands at or past ${two(to.hour)}:${two(to.minute ?? 0)} today, and a clock target never moves it back.`
+				)
+			}
+			by = d
+		} else by = d > 0 ? d : d + 1440
+		return { by, unit: "minutes" }
+	}, FIRST_STORY_DAY)
+	return { ...done, unit: "minutes" }
+}
+
+/** 🚧 Where a clock starts when its story has neither a clock nor a present: Year 1, month 1, day 1, 00:00. */
+const FIRST_STORY_DAY: StoryClock = { year: 1, month: 1, day: 1, hour: 0, minute: 0 }
+
+async function moveSessionStoryClock(
+	db: Db,
+	sessionId: number,
+	step: (start: StoryClock) => { by: number; unit: StoryTimeUnit; noop?: boolean },
+	/** The start when the story has no clock and no present (a move TO a moment); unset, that refuses. */
+	clockless?: StoryClock
+): Promise<{ clock: StoryClock; label: string; from: StoryClock; by: number; unit: StoryTimeUnit }> {
 	const found = await sessionStoryClockRow(db, sessionId)
 	if (!found) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
 	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
@@ -405,13 +463,22 @@ export async function advanceSessionStoryClock(
 			throw new StoryClockRefusal(
 				"This session's lorebook changed while its clock was being advanced. Try again."
 			)
-		const start =
+		const present =
 			clockOf(row) ?? (await sessionStoryNowOf(tx, sessionId).then((n) => (n ? clockOfNow(n) : null)))
+		const start = present ?? clockless ?? null
 		if (!start)
 			throw new StoryClockRefusal(
 				"This session's lorebook has no present to start from: nothing on its line is dated and no clock is set. Set the session's story clock first."
 			)
 		const calendar = await bookCalendarOf(tx, lorebookId)
+		const planned = step(compactClock(start))
+		// 🚧 A `to` move that does not move (`today` at this very minute): nothing written.
+		if (planned.noop) {
+			// … but a clock that starts here is stored: the story has one from now on.
+			if (!present) await tx.update(schema.sessions).set(clockColumns(start)).where(eq(schema.sessions.id, sessionId))
+			return { clock: compactClock(start), label: formatDate(start, calendar), from: compactClock(start), by: 0, unit: planned.unit }
+		}
+		const { by, unit } = planned
 		const moved = advanceStoryTime(start, by, unit, calendar)
 		if (moved.problem !== undefined) throw new StoryClockRefusal(moved.problem)
 		const clock: StoryClock = {
@@ -422,7 +489,7 @@ export async function advanceSessionStoryClock(
 			minute: moved.time.minute ?? null
 		}
 		await tx.update(schema.sessions).set(clockColumns(clock)).where(eq(schema.sessions.id, sessionId))
-		return { clock: compactClock(clock), label: formatDate(clock, calendar), from: compactClock(start) }
+		return { clock: compactClock(clock), label: formatDate(clock, calendar), from: compactClock(start), by, unit }
 	})
 }
 

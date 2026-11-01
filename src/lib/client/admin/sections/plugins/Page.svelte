@@ -6,15 +6,25 @@
 	 * history stays). A row opens its change form at `/admin/plugins/<id>`:
 	 * backend, concurrency, settings, permissions and storage.
 	 *
+	 * **Install a package** holds the chosen zip (nothing is sent), reads its
+	 * manifest in the browser and shows a review under the hold: its name, the
+	 * permissions it asks for and what the sandbox keeps it from doing. Install
+	 * then uploads the file in pieces over HTTP (`uploadPackage`); the pub's
+	 * `SP_PLUGIN_PACKAGE_MAX_MB` decides how large a package may be.
+	 *
 	 * Below the list, two instance-wide panels (Django's "Recent actions"):
 	 * **Running now** — the live sandbox monitor with Ask to stop and Kill —
 	 * and **Recent hook calls**. An inert sandbox is surfaced, not hidden: with
 	 * the flag off (the 0.6.0 release default) plugins are managed here but
-	 * do not run. Admin only, checked here and again in every handler.
+	 * do not run. The sandbox line says which, and whether the environment set it. Admin only, checked here and again in every handler.
 	 */
 	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
+	import { megabytes } from "$lib/shared/imports/fileCaps"
+	import { readPackageManifest } from "$lib/shared/plugins/packageManifest"
+	import { declaredPermissions, type PluginManifest } from "$lib/shared/plugins/declaredPermissions"
+	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import { adminGoto as goto } from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
@@ -27,7 +37,8 @@
 	} from "$lib/client/components/admin/changelist"
 	import { hookOutcome, HOOK_OUTCOME_CLASS } from "./hookOutcome"
 	import { PLUGIN_NOUN, backendWord, pluginStatus, pluginUninstall } from "./pluginsAdmin"
-	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import PluginPalisade from "./PluginPalisade.svelte"
+	import { uploadPackage } from "./packageUploadClient"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -40,6 +51,7 @@
 	let logs = $state<Sockets.Plugins.LogRow[]>([])
 	let active = $state<Sockets.Plugins.ActiveRow[]>([])
 	let sandboxEnabled = $state(false)
+	let sandboxFromEnv = $state(false)
 	let loading = $state(true)
 	let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -47,36 +59,62 @@
 	let fileInput = $state<HTMLInputElement | null>(null)
 	let installing = $state(false)
 	let installNote = $state<{ tone: "ok" | "error"; text: string } | null>(null)
-	const MAX_PACKAGE_BYTES = 8 * 1024 * 1024
+	/** 0..100 while pieces go; null before the first piece. `allSent` once the last one is accepted. */
+	let uploadPercent = $state<number | null>(null)
+	let allSent = $state(false)
 
-	const toBase64 = (file: File) =>
-		new Promise<string>((resolve, reject) => {
-			const reader = new FileReader()
-			reader.onerror = () => reject(new Error("The file could not be read."))
-			reader.onload = () => {
-				const url = String(reader.result ?? "")
-				resolve(url.slice(url.indexOf(",") + 1))
-			}
-			reader.readAsDataURL(file)
-		})
+	/** A chosen package is HELD here until the person confirms; nothing is sent on choosing. */
+	let pendingPackage = $state<File | null>(null)
+	/** What the held package's manifest says, read in the browser; the server checks again on install. */
+	let review = $state<
+		| { state: "reading" }
+		| { state: "ready"; name: string; slug: string; version: string; manifest: PluginManifest }
+		| { state: "problem"; problem: string }
+		| null
+	>(null)
+
+	async function holdPackage(file: File | undefined) {
+		installNote = null
+		pendingPackage = file ?? null
+		review = file ? { state: "reading" } : null
+		if (!file) return
+		const read = await readPackageManifest(file)
+		// A newer choice (or a cancel) has moved on; this read is stale.
+		if (pendingPackage !== file) return
+		if (!read.ok) {
+			review = { state: "problem", problem: read.problem }
+			return
+		}
+		const manifest = read.manifest as PluginManifest & Record<string, unknown>
+		const slug = String(manifest.slug ?? "")
+		review = {
+			state: "ready",
+			name: i18nTextIn(manifest.name) || slug,
+			slug,
+			version: String(manifest.version ?? ""),
+			manifest
+		}
+	}
+
+	function cancelPackage() {
+		pendingPackage = null
+		review = null
+		installNote = null
+		if (fileInput) fileInput.value = ""
+	}
 
 	async function installFromFile(file: File) {
 		installNote = null
-		if (file.size > MAX_PACKAGE_BYTES) {
-			installNote = { tone: "error", text: `${file.name} is over the 8 MiB a package may be.` }
-			return
-		}
 		installing = true
+		uploadPercent = null
+		allSent = false
 		try {
-			const bytes = await toBase64(file)
-			const res = (await awaitReply({
-				socket,
-				event: "plugins:installPackage",
-				errorEvent: "plugins:installPackage:error",
-				params: { filename: file.name, bytes },
-				match: (r) => typeof r?.pluginId === "string",
-				timeoutMs: 120_000
-			})) as Sockets.Plugins.InstallPackage.Response
+			const res = await uploadPackage(file, {
+				onProgress: (sent, total) => {
+					uploadPercent = total ? Math.floor((sent / total) * 100) : 100
+					if (sent >= total) allSent = true
+				}
+			})
 			const counts = `${res.specs.length} ${res.specs.length === 1 ? "pipeline" : "pipelines"}, ${res.genres.length} ${res.genres.length === 1 ? "genre" : "genres"}, ${res.configs.length} ${res.configs.length === 1 ? "configuration" : "configurations"}, ${res.files} ${res.files === 1 ? "file" : "files"}`
 			installNote = res.warnings.length
 				? { tone: "error", text: `${res.pluginId} installed (${counts}) with ${res.warnings.length} ${res.warnings.length === 1 ? "warning" : "warnings"}: ${res.warnings.join(" · ")}` }
@@ -87,9 +125,18 @@
 			installNote = { tone: "error", text: e instanceof Error ? e.message : "The package was refused." }
 		} finally {
 			installing = false
+			uploadPercent = null
+			allSent = false
+			pendingPackage = null
+			review = null
 			if (fileInput) fileInput.value = ""
 		}
 	}
+
+	/** Pieces going: the percent; every byte sent (or none yet): the install's own wait. */
+	const installLabel = $derived(
+		!installing ? "Install" : allSent ? "Installing…" : uploadPercent === null ? "Uploading… 0%" : `Uploading… ${uploadPercent}%`
+	)
 
 	/**
 	 * The three page-wide reads, each asked for and listened for in one. All
@@ -102,6 +149,7 @@
 			interest.requestWithInterest("plugins:list", {}, (res) => {
 				plugins = res.plugins
 				sandboxEnabled = res.sandboxEnabled
+				sandboxFromEnv = res.sandboxFromEnv
 				loading = false
 			}),
 			interest.requestWithInterest("plugins:logs", { limit: 100 }, (res) => {
@@ -233,18 +281,36 @@
 					aria-label="Choose a package file"
 					onchange={(e) => {
 						const f = (e.currentTarget as HTMLInputElement).files?.[0]
-						if (f) void installFromFile(f)
+						holdPackage(f)
 					}}
 				/>
 				<button
 					type="button"
 					class="btn btn-sm preset-tonal-surface"
-					disabled={installing}
-					title="A content-only package: a zip in the dist/plugin layout, as Export as plugin writes"
+					disabled={installing || (!loading && !sandboxEnabled)}
+					title={!loading && !sandboxEnabled
+						? "Plugins are off on this server, so a package can't be installed"
+						: "A content-only package: a zip in the dist/plugin layout, as Export as plugin writes"}
 					onclick={() => fileInput?.click()}
 				>
-					<Icons.PackagePlus size={14} /> {installing ? "Installing…" : "Install a package…"}
+					<Icons.PackagePlus size={14} /> {installing ? installLabel : "Install a package…"}
 				</button>
+				{#if pendingPackage}
+					<div class="flex flex-wrap items-center gap-2 text-sm" data-field="plugin-package-hold">
+						<span>{pendingPackage.name} · {megabytes(pendingPackage.size)}</span>
+						<button
+							type="button"
+							class="btn btn-sm preset-filled-primary-500"
+							disabled={installing}
+							onclick={() => pendingPackage && void installFromFile(pendingPackage)}
+						>
+							{installLabel}
+						</button>
+						<button type="button" class="btn btn-sm preset-tonal-surface" disabled={installing} onclick={cancelPackage}>
+							Cancel
+						</button>
+					</div>
+				{/if}
 				{#if installNote}
 					<p class="flex items-start gap-2 text-sm {installNote.tone === 'error' ? 'text-error-600-400' : 'text-surface-700-300'}" role="status">
 						<span class="mt-1.5 size-2 shrink-0 rounded-full {installNote.tone === 'error' ? 'bg-error-500' : 'bg-success-500'}" aria-hidden="true"></span>
@@ -252,17 +318,35 @@
 					</p>
 				{/if}
 			</div>
-			{#if !loading && !sandboxEnabled}
-				<!-- The one status line (§6.11): a dot plus words and the fix. -->
-				<p
-					data-field="plugin-sandbox"
-					class="text-surface-700-300 flex items-start gap-2 text-sm"
-					role="status"
-				>
-					<span class="bg-surface-500 mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
+			{#if pendingPackage && review}
+				<div class="flex w-full flex-col gap-3" data-field="plugin-package-review">
+					{#if review.state === "reading"}
+						<p class="text-surface-600-400 text-sm">Reading the package…</p>
+					{:else if review.state === "problem"}
+						<p class="text-surface-600-400 text-sm">{review.problem}</p>
+					{:else}
+						<p class="text-sm">
+							<span class="font-medium">{review.name}</span>
+							<span class="text-surface-600-400"> {review.slug} · v{review.version}</span>
+						</p>
+						<PluginPalisade permissions={declaredPermissions(review.manifest)} showAsks />
+						<p class="text-surface-600-400 text-xs">
+							A permission you haven't approved before stays refused until you approve it on the plugin's page.
+						</p>
+					{/if}
+				</div>
+			{/if}
+			{#if !loading}
+				<!-- The one status line (§6.11): a dot plus words and, when off, the fix. -->
+				<p id="plugin-sandbox" data-field="plugin-sandbox" class="text-surface-700-300 flex items-start gap-2 text-sm" role="status">
+					<span class="mt-1.5 size-2 shrink-0 rounded-full {sandboxEnabled ? 'bg-success-500' : 'bg-surface-500'}" aria-hidden="true"></span>
 					<span>
-						The plugin sandbox is off, so hooks do not run. You can still install and configure plugins.
-						<a class="anchor" href="/docs/environment-variables#feature-toggles">How to turn it on</a>
+						{#if sandboxEnabled}
+							Plugins run on this pub.{sandboxFromEnv ? " Set by SP_PLUGINS_ENABLED on this server." : ""}
+						{:else}
+							Plugins are off on this server (SP_PLUGINS_ENABLED), so they don't run and packages can't be installed.
+							<a class="anchor" href="/docs/environment-variables#feature-toggles">How to turn them on</a>
+						{/if}
 					</span>
 				</p>
 			{/if}

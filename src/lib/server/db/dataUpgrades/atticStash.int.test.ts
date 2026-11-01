@@ -80,7 +80,12 @@ describe("0.5.3 database", () => {
 			"0123_story_reply_tail",
 			"0126_genre_slots_retire",
 			"0127_pr6_settle_line",
-			"0128_pr6s2_core_annex"
+			"0128_pr6s2_core_annex",
+			// E M0 2026-10-28: 0130 (plugin files over 64 KB move to disk, M0 P2) finds nothing to move on a database just stashed.
+			"0130_m0_sdk_gaps",
+			"0135_voicebank_loadout",
+			// Narration fallback 2026-10-30: the voicebank stars move onto their loadout's voice.
+			"0137_loadout_voices"
 		])
 		expect(await atticExists(client)).toBe(true)
 		expect(await count(client, `${ATTIC_SCHEMA}.chats`)).toBe(1)

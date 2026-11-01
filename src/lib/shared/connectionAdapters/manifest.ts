@@ -246,6 +246,8 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * compatible servers that answer the route. PROBED.
 				 */
 				"audio->text": { unproven: true, until: "none" },
+				/** 🚧 Speech: `POST {base}/audio/speech` (speech dialect). PROBED per model. */
+				"text->audio": { unproven: true, until: "none" },
 				json_object: "native",
 				json_schema: { unproven: true, until: "none" },
 				strict_schema: { unproven: true, until: "none" },
@@ -615,7 +617,10 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				// `POST /api/embed` on the same host (owner ruling 2026-09-25):
 				// one Ollama connection serves every modality the host has, so
 				// there is no separate `ollama-embeddings` type to file it under.
-				"text->embedding": "native"
+				"text->embedding": "native",
+				// 🚧 Phonon (>= 0.40.11): `/v1/audio/speech`. PROBED per model
+				// (`speech` in /api/show capabilities).
+				"text->audio": { unproven: true, until: "none" }
 			},
 			defaults: [
 				"text->text",
@@ -696,6 +701,10 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				// Which one is per MODEL — the listing names it, and the adapter
 				// refuses a response from any other (owner ruling 2026-09-26).
 				"text->embedding": { unproven: true, until: "none" },
+				// Probed (`tts` on /api/extra/version): whether a speech model is
+				// loaded is per-instance; `/v1/audio/speech` is spoken by
+				// `speech/profiles/koboldcpp.ts`.
+				"text->audio": { unproven: true, until: "none" },
 				grammar: "native",
 				tools: "emulated",
 				streaming: "native",
@@ -784,7 +793,10 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				// embedding model never evicts the chat model. Per MODEL, like
 				// the other two: `capabilityRefusal` refuses it to a `text-gen`
 				// row, as it refuses chat to an `embeddings` one.
-				"text->embedding": "native"
+				"text->embedding": "native",
+				// The managed process loads a speech GGUF into koboldcpp's
+				// `--ttsmodel` slot; probed like the external type.
+				"text->audio": { unproven: true, until: "none" }
 			},
 			defaults: [
 				"text->text",
@@ -1093,6 +1105,39 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			defaults: ["text->image", "text+image->image"]
 		}
 	},
+	/** 🚧 ElevenLabs: speaks, natively, and does nothing else. */
+	[CONNECTION_TYPE.ELEVENLABS]: {
+		id: CONNECTION_TYPE.ELEVENLABS,
+		capabilities: {
+			supports: {
+				"text->audio": "native"
+			},
+			defaults: ["text->audio"]
+		}
+	},
+	/** 🚧 audio.cpp you run yourself: speaks and transcribes, natively (transcription: lane C's adapter). */
+	[CONNECTION_TYPE.AUDIOCPP]: {
+		id: CONNECTION_TYPE.AUDIOCPP,
+		capabilities: {
+			supports: {
+				"text->audio": "native",
+				"audio->text": "native"
+			},
+			defaults: ["text->audio"]
+		}
+	},
+	/** 🚧 audio.cpp, run by Serene Pub: speaks and transcribes, natively. */
+	[CONNECTION_TYPE.AUDIOCPP_MANAGED]: {
+		id: CONNECTION_TYPE.AUDIOCPP_MANAGED,
+		capabilities: {
+			supports: {
+				"text->audio": "native",
+				"audio->text": "native",
+				audio_streaming: "native"
+			},
+			defaults: ["text->audio", "audio->text"]
+		}
+	},
 
 
 	/**
@@ -1203,6 +1248,7 @@ export const PRESET_CAPABILITIES: Record<
 		"text+audio->text": true,
 		"text->text+audio": true,
 		"audio->text": true,
+		"text->audio": true,
 		/**
 		 * Chat only — a KNOWN TRUTH about the service, recorded at the layer that
 		 * can hold one.

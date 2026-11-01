@@ -151,7 +151,6 @@ describe("the index's rows render", () => {
 		// got in the Models view.
 		expect(html).toContain('title="Add a connection"')
 	})
-	// The job picker has its own render test (`jobPickerDialog.ssr.test.ts`).
 	test("placeholders", () => {
 		expect(
 			render(ModelFinderView, {

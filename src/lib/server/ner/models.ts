@@ -41,6 +41,8 @@ export interface NerModelDef {
 	 * that is a label per token rather than a vector anything is compared on.
 	 */
 	dtype?: DataType
+	/** Other precisions the list publishes for this entry (variants). */
+	dtypes?: DataType[]
 
 	/* ── What the PUBLISHED list adds ────────────────────────────────────
 	 * Optional so one shape serves both the compiled fallback above and an

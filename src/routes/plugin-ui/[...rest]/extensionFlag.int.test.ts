@@ -44,7 +44,8 @@ afterEach(() => {
 
 async function frame(rest: string): Promise<Response> {
 	const { GET } = await import("./+server")
-	return GET({ params: { rest }, request: new Request(`http://localhost/plugin-ui/${rest}`) } as never) as Promise<Response>
+	const url = new URL(`http://localhost:5174/plugin-ui/${rest}`)
+	return GET({ params: { rest }, url, request: new Request(url) } as never) as Promise<Response>
 }
 
 async function page(rest: string): Promise<Record<string, unknown>> {
@@ -54,7 +55,7 @@ async function page(rest: string): Promise<Record<string, unknown>> {
 
 describe("the extension flag gates plugin UI routes", () => {
 	test("off: /plugin-ui/ answers 404 and /x/ resolves no page", async () => {
-		vi.stubEnv("SP_PLUGINS_ENABLED", "")
+		vi.stubEnv("SP_PLUGINS_ENABLED", "0")
 		expect((await frame(`${PLUGIN}/ui/page.html`)).status).toBe(404)
 		expect(await page(PLUGIN)).toEqual({})
 	})
@@ -64,6 +65,10 @@ describe("the extension flag gates plugin UI routes", () => {
 		const res = await frame(`${PLUGIN}/ui/page.html`)
 		expect(res.status).toBe(200)
 		expect(await res.text()).toBe("<h1>page</h1>")
-		expect(await page(PLUGIN)).toMatchObject({ src: `/plugin-ui/${PLUGIN}/ui/page.html`, title: "Page" })
+		// The frame's own two GET doors, on the host it was asked at, in its id.
+		expect(res.headers.get("content-security-policy")).toContain(
+			`connect-src localhost:5174/plugin-assets/${PLUGIN}/ localhost:5174/plugin-data/${PLUGIN}/;`
+		)
+		expect(await page(PLUGIN)).toMatchObject({ src: `/plugin-ui/${PLUGIN}/ui/page.html?v=0.0.0`, title: "Page" })
 	})
 })

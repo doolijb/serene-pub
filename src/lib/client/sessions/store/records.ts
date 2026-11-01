@@ -32,6 +32,8 @@ export interface SessionRunRecord {
 	status: import("@serene-pub/sdk").StatusText
 	/** A reply run, on this channel. */
 	reply?: { channel: string }
+	/** 🚧 A line-bound run (speaking one line): kept for the line's *Speaking…*, never turn work. */
+	lineBound?: true
 }
 /** 🚧 The session's genre row as `sessions:genreOf` answered; null = answered, not offered here. */
 export type SessionGenreRecord = Sockets.Sessions.GenreOf.Response["genre"]

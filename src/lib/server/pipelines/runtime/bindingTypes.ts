@@ -224,6 +224,11 @@ export type HostTable =
 	| "session_cast"
 	| "session_settings"
 	| "session_annex"
+	/** 🚧 One owner's annex document version (M2a a8) — `session-annex`'s `version`. */
+	| "session_annex_version"
+	| "lorebook_annex"
+	/** 🚧 (M2b) One owner's annex document version on the book a write would land on — `lorebook-annex`'s `version`. */
+	| "lorebook_annex_version"
 	| "graph_scenes"
 	| "session_state"
 	| "lorebook_state"
@@ -233,6 +238,8 @@ export type HostTable =
 	| "graph_entry_links"
 	| "cast_presences"
 	| "likeness_images"
+	/** 🚧 One row as a line to speak (`core:query/message-line@1`, speech ★1). */
+	| "message_line"
 	| "embedding_status"
 	| "vector_search"
 	| "entity_annotations"
@@ -240,6 +247,8 @@ export type HostTable =
 	| "mention_spans"
 	| "entity_link"
 	| "available_tools"
+	/** 🚧 One file of the running plugin's own storage (`core:query/plugin-storage@1`, M2a). */
+	| "plugin_storage"
 
 /**
  * A Query's context: the SDK's `QueryCtx` with one member narrowed.

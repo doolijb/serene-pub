@@ -39,6 +39,7 @@ import {
 	type MemoryTier
 } from "./memoryTier"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { ONNX_DTYPES } from "$lib/shared/constants/onnxDtypes"
 import {
 	localOnnxDisabledReason,
 	type LocalOnnxAvailability
@@ -46,8 +47,18 @@ import {
 
 // ── Scopes ──────────────────────────────────────────────────────────────────
 
-/** Which of the four sections the finder is shopping for. */
-export type FinderScope = "chat" | "images" | "embeddings" | "entities"
+/**
+ * Which section the finder is shopping for. **Speech** and **Transcription**
+ * are the audio scopes (plan 2026-10-29 D1): audio.cpp's packages and
+ * KoboldCPP's speech conversions are got here, not in a tab of their own.
+ */
+export type FinderScope =
+	| "chat"
+	| "images"
+	| "embeddings"
+	| "entities"
+	| "speech"
+	| "transcription"
 
 export const FINDER_SCOPES: readonly {
 	value: FinderScope
@@ -86,6 +97,18 @@ export const FINDER_SCOPES: readonly {
 		label: "Entities",
 		capability: "text->entities",
 		phrase: "an entity model"
+	},
+	{
+		value: "speech",
+		label: "Speech",
+		capability: "text->audio",
+		phrase: "a speech model"
+	},
+	{
+		value: "transcription",
+		label: "Transcription",
+		capability: "audio->text",
+		phrase: "a transcription model"
 	}
 ]
 
@@ -111,12 +134,25 @@ export function scopePhrase(scope: FinderScope): string {
 export function kcppKindForScope(scope: FinderScope): "text" | "image" | null {
 	if (scope === "chat") return "text"
 	if (scope === "images") return "image"
+	// Speech is NOT null-by-accident: a KoboldCPP speech download sends
+	// `kind: "speech"` (see `kcppDownloadKind`), which is not a directory kind.
 	return null
+}
+
+/**
+ * The `kind` a KoboldCPP download sends for a scope. Speech files land in
+ * the text directory but are declared "speech" so the server can tell a
+ * speech conversion from a chat model.
+ */
+export function kcppDownloadKind(
+	scope: FinderScope
+): "text" | "image" | "speech" {
+	return scope === "speech" ? "speech" : (kcppKindForScope(scope) ?? "text")
 }
 
 // ── Destinations ────────────────────────────────────────────────────────────
 
-export type DestinationKind = "koboldcpp" | "ollama" | "onnx"
+export type DestinationKind = "koboldcpp" | "ollama" | "onnx" | "audiocpp"
 
 export interface Destination {
 	/** Unique in the row: `<kind>:<connectionId>`. */
@@ -163,13 +199,18 @@ const SCOPE_KINDS: Record<FinderScope, readonly DestinationKind[]> = {
 	chat: ["koboldcpp", "ollama"],
 	images: ["koboldcpp"],
 	embeddings: ["onnx", "ollama"],
-	entities: ["onnx"]
+	entities: ["onnx"],
+	// KoboldCPP holds speech conversions (`koboldcpp/tts`); audio.cpp holds
+	// both audio jobs. The two are separate conversions by design.
+	speech: ["audiocpp", "koboldcpp"],
+	transcription: ["audiocpp"]
 }
 
 const SERVICE_LABEL: Record<DestinationKind, string> = {
 	koboldcpp: "KoboldCPP",
 	ollama: "Ollama",
-	onnx: "ONNX"
+	onnx: "ONNX",
+	audiocpp: "audio.cpp"
 }
 
 /** The connection types each kind accepts, per scope. */
@@ -183,6 +224,7 @@ function typesFor(kind: DestinationKind, scope: FinderScope): string[] {
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
 		]
+	if (kind === "audiocpp") return [CONNECTION_TYPE.AUDIOCPP_MANAGED]
 	if (kind === "ollama")
 		// One Ollama connection per host serves every modality it has (owner
 		// ruling 2026-09-25), so the chat row IS the embeddings destination.
@@ -300,6 +342,8 @@ export function landingNote(
 				: "Files land in the KoboldCPP models folder"
 		case "ollama":
 			return "Pulled into Ollama"
+		case "audiocpp":
+			return "Downloaded into the audio.cpp models folder"
 		default:
 			return "Downloaded into Serene Pub"
 	}
@@ -389,6 +433,16 @@ export interface FinderRow {
 	/** 0–100 while this row's own download runs, or null. */
 	percent: number | null
 	downloading: boolean
+	/**
+	 * The files / variants / precisions this row offers — one source, one
+	 * shape, so `quantChoice` and the picker read every catalogue alike.
+	 * Absent on a row built before a list answered.
+	 */
+	quants?: QuantFile[]
+	/** Why `quants` is empty, when the list said (Ollama's `quantsNote`). */
+	quantsNote?: string | null
+	/** What `models:presence` is asked about this row. Keyed by `key`. */
+	presenceQuery?: PresenceQuery
 }
 
 /**
@@ -460,6 +514,18 @@ export interface OllamaRecommended {
 		quantization_level?: string
 		description?: string
 	}
+	/** The repo's choosable quants, resolved by the server (`hf.co/<repo>:<quant>` tags). */
+	quants?: OllamaRecommendedQuant[]
+	/** Why `quants` is empty — a library name, or the Hub did not answer. */
+	quantsNote?: string
+}
+
+export interface OllamaRecommendedQuant {
+	label: string
+	tag: string
+	filename?: string
+	sizeBytes?: number
+	recommended: boolean
 }
 
 export interface OllamaHubResult {
@@ -512,6 +578,8 @@ export interface RowContext {
 	query: string
 	/** Model identifiers the destination already holds. */
 	present: ReadonlySet<string>
+	/** KoboldCPP rows: which directory kind the quants are judged for. Default text. */
+	kcppKind?: "text" | "image"
 }
 
 /** The recommended GGUF rows a KoboldCPP destination offers. */
@@ -530,8 +598,12 @@ export function kcppRecommendedRows(
 			const onDisk =
 				ctx.present.has(m.name) ||
 				(m.pullOptions ?? []).some((o) => ctx.present.has(o.filename))
+			const quants = quantsFromKcpp(m, ctx.kcppKind ?? "text")
+			const key = `kcpp:${m.name}`
 			return {
-				key: `kcpp:${m.name}`,
+				key,
+				quants,
+				presenceQuery: presenceQueryFor(key, m.name, quants),
 				name: m.name,
 				sizeLabel: formatBytes(bytes),
 				facts: m.parameterSize || null,
@@ -570,8 +642,15 @@ export function ollamaRecommendedRows(
 					: null
 			const label = ggufTierLabel(m.recommended_vram)
 			const pull = m.pull || m.name
+			const quants = quantsFromOllamaRecommended(m)
+			const key = `ollama:${pull}`
 			return {
-				key: `ollama:${pull}`,
+				key,
+				quants,
+				quantsNote: m.quantsNote ?? null,
+				presenceQuery: quants.length
+					? presenceQueryFor(key, undefined, quants)
+					: { key, tag: pull },
 				name: m.name,
 				sizeLabel: formatBytes(bytes),
 				facts: m.details?.parameter_size || null,
@@ -632,8 +711,12 @@ export function onnxRecommendedRows(
 						? `${catalog.labels.length} labels`
 						: null
 			const state = m.local?.state
+			const quants = quantsFromOnnx(catalog)
+			const key = `onnx:${m.id}`
 			return {
-				key: `onnx:${m.id}`,
+				key,
+				quants,
+				presenceQuery: presenceQueryFor(key, m.name, quants),
 				name: m.name,
 				sizeLabel:
 					formatBytes(m.local?.sizeBytes) ??
@@ -668,6 +751,9 @@ export interface HubRow {
 	description: string | null
 	/** Human tags only — see `displayTags`. Empty when there are none. */
 	tags: string[]
+	/** The repo's files, so a single-file repo can name its file before Get. */
+	quants?: QuantFile[]
+	presenceQuery?: PresenceQuery
 }
 
 /**
@@ -760,8 +846,22 @@ export function rankHub<T extends { downloads?: number | null }>(
 		.map((entry) => entry.model)
 }
 
-export function kcppHubRows(models: readonly KcppResult[]): HubRow[] {
-	return rankHub(models).map((m) => ({
+export function kcppHubRows(
+	models: readonly KcppResult[],
+	kind: "text" | "image" = "text"
+): HubRow[] {
+	return rankHub(models).map((m) => {
+		const quants = quantsFromKcpp(m, kind)
+		return {
+			...kcppHubRow(m),
+			quants,
+			presenceQuery: presenceQueryFor(`hub:${m.name}`, m.name, quants)
+		}
+	})
+}
+
+function kcppHubRow(m: KcppResult): HubRow {
+	return {
 		key: `hub:${m.name}`,
 		name: m.name,
 		fileCount: m.pullOptions?.length ?? 0,
@@ -776,22 +876,27 @@ export function kcppHubRows(models: readonly KcppResult[]): HubRow[] {
 			// the module header's rule about absent clauses.
 			license: null
 		})
-	}))
+	}
 }
 
 export function ollamaHubRows(models: readonly OllamaHubResult[]): HubRow[] {
-	return rankHub(models).map((m) => ({
-		key: `hub:${m.name}`,
-		name: m.name,
-		fileCount: m.pullOptions?.length ?? 0,
-		description: m.description || null,
-		tags: displayTags(m.tags),
-		detail: hubDetail({
+	return rankHub(models).map((m) => {
+		const quants = quantsFromOllama(m)
+		return {
+			key: `hub:${m.name}`,
+			name: m.name,
 			fileCount: m.pullOptions?.length ?? 0,
-			downloads: m.downloads,
-			license: licenseFromTags(m.tags)
-		})
-	}))
+			description: m.description || null,
+			tags: displayTags(m.tags),
+			detail: hubDetail({
+				fileCount: m.pullOptions?.length ?? 0,
+				downloads: m.downloads,
+				license: licenseFromTags(m.tags)
+			}),
+			quants,
+			presenceQuery: presenceQueryFor(`hub:${m.name}`, m.name, quants)
+		}
+	})
 }
 
 // ── Quants ──────────────────────────────────────────────────────────────────
@@ -815,6 +920,12 @@ export interface QuantFile {
 	/** Ollama: the tag to pull. */
 	tag?: string
 	recommended: boolean
+	/** ONNX / audio: the precision this entry is (fp32 | fp16 | q8 | q4, q8_0, bf16, …). */
+	dtype?: string
+	/** audio.cpp / KoboldCPP speech: the package this precision is. */
+	packageId?: string
+	/** KoboldCPP speech: the files to fetch one by one, model first, then codec. */
+	files?: { filename: string; downloadUrl: string; sizeBytes?: number }[]
 }
 
 export function quantsFromKcpp(
@@ -827,8 +938,7 @@ export function quantsFromKcpp(
 		url: option.downloadUrl,
 		filename: option.filename,
 		// An image row's labels are whole checkpoint names, not precisions, so
-		// the Q4_K_M claim is not one that can be made about them (the same
-		// rule `availableTab.isRecommendedQuant` states).
+		// the Q4_K_M claim is not one that can be made about them.
 		recommended: kind === "text" && isRecommendedQuantLabel(option.label)
 	}))
 }
@@ -841,6 +951,76 @@ export function quantsFromOllama(model: OllamaHubResult): QuantFile[] {
 			tag: option.pull as string,
 			recommended: isRecommendedQuantLabel(option.label)
 		}))
+}
+
+/**
+ * An Ollama recommended row's choosable quants (the server resolved
+ * `hf.co/<repo>:<quant>` tags). Empty for a library name — the row then pulls
+ * the yaml tag and shows `quantsNote`.
+ */
+export function quantsFromOllamaRecommended(model: {
+	quants?: readonly OllamaRecommendedQuant[]
+}): QuantFile[] {
+	return (model.quants ?? [])
+		.filter((q) => !!q.tag)
+		.map((q) => ({
+			name: q.label || q.tag,
+			bytes: q.sizeBytes,
+			tag: q.tag,
+			filename: q.filename,
+			recommended: !!q.recommended
+		}))
+}
+
+/**
+ * An ONNX list entry's precisions: `catalog.dtypes` when it publishes more
+ * than one, else its single `dtype`. The entry's default (`catalog.dtype`) is
+ * the one pre-selected. Empty when the list said nothing at all — then no
+ * `dtype` is sent and the server uses its own default.
+ */
+export function quantsFromOnnx(
+	catalog: { dtype?: string; dtypes?: readonly string[] } | null | undefined
+): QuantFile[] {
+	if (!catalog) return []
+	// The server offers the entry's default AND its `dtypes`, so both are here
+	// (a list that publishes only the extra variants still has its default),
+	// in the vocabulary's own order.
+	const have = new Set(
+		[...(catalog.dtypes ?? []), catalog.dtype].filter(
+			(d): d is string => !!d
+		)
+	)
+	const all = [
+		...ONNX_DTYPES.filter((d) => have.has(d)),
+		...[...have].filter(
+			(d) => !(ONNX_DTYPES as readonly string[]).includes(d)
+		)
+	]
+	const def = catalog.dtype ?? all[0]
+	return all.map((dtype) => ({
+		name: dtype,
+		dtype,
+		recommended: dtype === def
+	}))
+}
+
+/**
+ * What "add by id" pre-selects. A Hub export always publishes full-precision
+ * weights (`onnx/model.onnx`); a quantised file is optional, so fp32 is the
+ * one choice that cannot fail to exist. ★ owner may prefer q8 (the lists' own).
+ */
+export const ADD_BY_ID_DEFAULT_DTYPE = "fp32"
+
+/** The precisions "add by id" offers, the default pre-selected. */
+export function quantsForAddById(
+	dtypes: readonly string[],
+	defaultDtype: string
+): QuantFile[] {
+	return dtypes.map((dtype) => ({
+		name: dtype,
+		dtype,
+		recommended: dtype === defaultDtype
+	}))
 }
 
 export type QuantFitTone = "good" | "warn" | "bad" | "muted"
@@ -871,6 +1051,335 @@ export function quantFit(
 	const tone: QuantFitTone =
 		fit === "fits" ? "good" : fit === "tight" ? "warn" : "bad"
 	return { tone, sentence }
+}
+
+// ── The picker rule (plan 2026-10-29 D2) ────────────────────────────────────
+
+/**
+ * How a row offers its files: `picker` whenever a repo or package has more
+ * than one file or variant (nothing downloads one of those without the quant
+ * picker), `single` for exactly one (its name is shown on the row before
+ * Get), `none` when the list quoted no file at all.
+ */
+export type QuantChoice = "picker" | "single" | "none"
+
+export function quantChoice(quants: readonly unknown[]): QuantChoice {
+	if (quants.length > 1) return "picker"
+	return quants.length === 1 ? "single" : "none"
+}
+
+/**
+ * Which file the picker opens on: the list's own recommendation, else the
+ * largest file that still fits the memory tier (lists are smallest-first),
+ * else the first. -1 for an empty list. The quant picker and the plain
+ * document-view radio list both read it, so the two never disagree.
+ */
+export function preselectedQuantIndex(
+	quants: readonly QuantFile[],
+	tier: MemoryTier
+): number {
+	if (!quants.length) return -1
+	const recommended = quants.findIndex((q) => q.recommended)
+	if (recommended >= 0) return recommended
+	let best = -1
+	for (let i = 0; i < quants.length; i++)
+		if (quantFit(quants[i], tier)?.tone === "good") best = i
+	return best >= 0 ? best : 0
+}
+
+// ── What a row says about its files ─────────────────────────────────────────
+
+/**
+ * The line a row prints under its facts: a single-file repo's file name before
+ * Get, or — for a recommended Ollama row whose quants could not be listed —
+ * the server's note. Null when there is nothing to add (a picker opens on
+ * Get, and the row already quotes how many files there are).
+ */
+export function quantLine(row: {
+	quants?: readonly QuantFile[]
+	quantsNote?: string | null
+}): string | null {
+	const quants = row.quants ?? []
+	const choice = quantChoice(quants)
+	if (choice === "single") return quants[0].filename || quants[0].name
+	if (choice === "none") return row.quantsNote?.trim() || null
+	return null
+}
+
+/** The quant a row would download with no picker: the one the picker opens on. */
+export function defaultQuant(quants: readonly QuantFile[]): QuantFile | null {
+	if (!quants.length) return null
+	const i = quants.findIndex((q) => q.recommended)
+	return quants[i >= 0 ? i : 0]
+}
+
+// ── Audio packages (audio.cpp and KoboldCPP's speech conversions) ───────────
+
+type AudioFamily = Sockets.AudioCpp.PackageFamily
+type AudioPackage = Sockets.AudioCpp.PackageRow
+
+/** Speech covers text-to-speech and voice design; Transcription is `asr`. */
+export function audioTasksFor(
+	scope: FinderScope
+): readonly Sockets.AudioCpp.PackageTask[] {
+	if (scope === "speech") return ["tts", "vdes"]
+	if (scope === "transcription") return ["asr"]
+	return []
+}
+
+/** The runtime whose families a destination lists, or null for a non-audio one. */
+export function audioRuntimeFor(
+	destination: Pick<Destination, "kind"> | null | undefined,
+	scope: FinderScope
+): "audiocpp" | "koboldcpp" | null {
+	if (!destination || !audioTasksFor(scope).length) return null
+	if (destination.kind === "audiocpp") return "audiocpp"
+	if (destination.kind === "koboldcpp" && scope === "speech")
+		return "koboldcpp"
+	return null
+}
+
+/** One precision of a family as a picker row. */
+export function quantsFromFamily(family: AudioFamily): QuantFile[] {
+	return family.precisions.map((p: AudioPackage) => ({
+		name: p.precision || p.name,
+		bytes: p.sizeBytes,
+		dtype: p.precision,
+		packageId: p.id,
+		...(p.koboldCppFiles?.length ? { files: p.koboldCppFiles } : {}),
+		recommended: p.id === family.recommendedId
+	}))
+}
+
+const isHeld = (p: AudioPackage) =>
+	p.state === "downloaded" || p.state === "enabled"
+
+/**
+ * One row per family. More than one precision opens the picker; the
+ * recommended one is pre-selected. A family counts as present only when every
+ * precision is held — one held, one not, is a row still worth a Get.
+ */
+export function audioFamilyRows(
+	families: readonly AudioFamily[],
+	ctx: RowContext,
+	opts: { scope: FinderScope; runtime: "audiocpp" | "koboldcpp" }
+): FinderRow[] {
+	const tasks = audioTasksFor(opts.scope)
+	return families
+		.filter((f) => f.runtime === opts.runtime && tasks.includes(f.task))
+		.filter((f) => f.precisions.length > 0)
+		.filter((f) => {
+			const head = f.precisions.find((p) => p.id === f.recommendedId)
+			return matchesQuery(
+				ctx.query,
+				f.displayName,
+				f.family,
+				head?.description
+			)
+		})
+		.map((f) => {
+			const quants = quantsFromFamily(f)
+			const head =
+				f.precisions.find((p) => p.id === f.recommendedId) ??
+				f.precisions[0]
+			const bytes = head.sizeBytes ?? null
+			const key = `audio:${f.key}`
+			const heldNames = f.precisions
+				.filter(isHeld)
+				.map((p) => p.precision || p.name)
+			const all = heldNames.length === f.precisions.length
+			const label =
+				head.recommendedVram && head.recommendedVram > 0
+					? ggufTierLabel(head.recommendedVram)
+					: null
+			return {
+				key,
+				name: f.displayName,
+				sizeLabel: formatBytes(bytes),
+				facts:
+					!all && heldNames.length
+						? `${heldNames.join(", ")} on disk`
+						: head.license || null,
+				description: head.description || null,
+				tags: displayTags(head.tags),
+				tier: label
+					? {
+							label,
+							matches: matchesTier(head.recommendedVram, ctx.tier)
+						}
+					: null,
+				bytes,
+				fit: fitFor(bytes, ctx.tier),
+				presence: all ? ("on_disk" as const) : null,
+				percent: null,
+				downloading: f.precisions.some(
+					(p) => p.state === "downloading"
+				),
+				quants,
+				presenceQuery: presenceQueryFor(key, undefined, quants)
+			}
+		})
+}
+
+/**
+ * The `koboldcpp:downloadModel` calls for a KoboldCPP speech precision: one
+ * per file, the model first and its codec after, each declared `speech`.
+ */
+export function kcppSpeechDownloads(
+	familyName: string,
+	quant: QuantFile
+): Sockets.KoboldCPP.DownloadModel.Params[] {
+	return (quant.files ?? []).map((file) => ({
+		modelName: familyName,
+		filename: file.filename,
+		downloadUrl: file.downloadUrl,
+		quantization: quant.name,
+		sizeBytes: file.sizeBytes,
+		kind: "speech" as const
+	}))
+}
+
+/**
+ * The live download of an audio row, matched the way `liveDownload` matches
+ * the others: audio.cpp by package id (`audiocpp:<id>`), KoboldCPP by the
+ * family name the files were sent under.
+ */
+export function audioLiveMatch<
+	T extends { id: string; source: string; name: string; state: string }
+>(
+	row: { name: string; quants?: readonly QuantFile[] },
+	runtime: "audiocpp" | "koboldcpp",
+	items: readonly T[]
+): T | null {
+	if (runtime === "audiocpp") {
+		const ids = new Set(
+			(row.quants ?? []).map((q) => `audiocpp:${q.packageId}`)
+		)
+		return (
+			items.find(
+				(i) =>
+					i.source === "audiocpp" &&
+					i.state === "in_flight" &&
+					ids.has(i.id)
+			) ?? null
+		)
+	}
+	return (
+		items.find(
+			(i) =>
+				i.source === "koboldcpp" &&
+				i.state === "in_flight" &&
+				i.name === row.name
+		) ?? null
+	)
+}
+
+// ── Presence (plan 2026-10-29 D3) ───────────────────────────────────────────
+
+export type PresenceQuery = Sockets.Models.Presence.Query
+export type PresenceHolder = Sockets.Models.Presence.Holder
+
+/** The server takes at most this many queries per ask. */
+export const PRESENCE_BATCH = 200
+
+/**
+ * What to ask the server about a row: the file the row would download with no
+ * picker (the recommended quant, else the first), in the words each runtime
+ * checks by. An Ollama tag stands alone; a KoboldCPP file travels with its
+ * repo and size; an ONNX precision with its model; an audio package by id.
+ */
+export function presenceQueryFor(
+	key: string,
+	repo: string | undefined,
+	quants: readonly QuantFile[]
+): PresenceQuery {
+	const q = defaultQuant(quants)
+	const out: PresenceQuery = { key }
+	if (q?.tag) {
+		out.tag = q.tag
+		return out
+	}
+	if (repo) out.repo = repo
+	if (q?.packageId) out.packageId = q.packageId
+	if (q?.dtype && !q.packageId) out.dtype = q.dtype
+	if (q?.filename) out.file = q.filename
+	if (q?.bytes) out.bytes = q.bytes
+	return out
+}
+
+/** Order-stable fingerprint of a query set: re-ask only when it changes. */
+export function presenceSignature(queries: readonly PresenceQuery[]): string {
+	return queries
+		.map((q) => JSON.stringify(q))
+		.sort()
+		.join("|")
+}
+
+/** The set, split into asks the server will accept. */
+export function presenceBatches(
+	queries: readonly PresenceQuery[]
+): PresenceQuery[][] {
+	const out: PresenceQuery[][] = []
+	for (let i = 0; i < queries.length; i += PRESENCE_BATCH)
+		out.push(queries.slice(i, i + PRESENCE_BATCH))
+	return out
+}
+
+export interface PresenceSummary {
+	/** The destination's own runtime already holds this. */
+	here: boolean
+	/** Service labels of the OTHER runtimes that hold it (deduped, in order). */
+	elsewhere: string[]
+	/** The sentence under the row, or null when nobody holds it. */
+	text: string | null
+	/** The Get button's label. */
+	getLabel: string
+}
+
+/**
+ * What the holders mean for THIS destination.
+ *
+ * "Here" is the destination's own runtime — and, where the runtime is per
+ * connection (Ollama's host, an ONNX lane), that connection. A copy on
+ * another Ollama host is "elsewhere": it is not on this one.
+ */
+export function presenceNote(
+	holders: readonly PresenceHolder[] | undefined,
+	destination: Pick<Destination, "kind" | "connectionId" | "serviceLabel">
+): PresenceSummary {
+	const list = holders ?? []
+	const perConnection =
+		destination.kind === "ollama" || destination.kind === "onnx"
+	const isHere = (h: PresenceHolder) =>
+		h.runtime === destination.kind &&
+		(!perConnection || h.connectionId === destination.connectionId)
+	const here = list.some(isHere)
+	const elsewhere: string[] = []
+	for (const h of list) {
+		if (isHere(h)) continue
+		const label =
+			h.runtime === destination.kind && h.where
+				? `${SERVICE_LABEL[h.runtime]} (${h.where})`
+				: SERVICE_LABEL[h.runtime]
+		if (!elsewhere.includes(label)) elsewhere.push(label)
+	}
+	const parts: string[] = []
+	if (here) parts.push(`You have this on ${destination.serviceLabel}`)
+	if (elsewhere.length) parts.push(`Also on ${elsewhere.join(", ")}`)
+	return {
+		here,
+		elsewhere,
+		text: parts.length ? parts.join(" · ") : null,
+		getLabel:
+			!here && elsewhere.length
+				? `Get for ${destination.serviceLabel} too`
+				: "Get"
+	}
+}
+
+/** The row-state a "here" holder stands in for. */
+export function presenceFor(kind: DestinationKind): "on_disk" | "pulled" {
+	return kind === "ollama" ? "pulled" : "on_disk"
 }
 
 // ── One ask at a time ───────────────────────────────────────────────────────

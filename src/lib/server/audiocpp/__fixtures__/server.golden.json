@@ -1,0 +1,41 @@
+{
+  "host": "127.0.0.1",
+  "port": 5002,
+  "backend": "vulkan",
+  "device": 0,
+  "threads": 4,
+  "lazy_load": true,
+  "max_loaded_models": 2,
+  "idle_unload_ms": 600000,
+  "ui": false,
+  "ui_management": false,
+  "models": [
+    {
+      "id": "kokoro_82m_q8_0",
+      "family": "kokoro_tts",
+      "path": "/m/tts/kokoro_tts/K/kokoro.gguf",
+      "task": "tts",
+      "mode": "offline",
+      "default_voice_preset": {
+        "voice_id": "af_heart"
+      }
+    },
+    {
+      "id": "parakeet_tdt_0_6b_v3_q8_0",
+      "family": "parakeet_tdt",
+      "path": "/m/asr/parakeet_tdt/P/parakeet.gguf",
+      "task": "asr",
+      "mode": "offline"
+    },
+    {
+      "id": "qwen3_tts_1_7b_customvoice_q8_0",
+      "family": "qwen3_tts",
+      "path": "/m/tts/qwen3_tts/Q/qwen3-cv.gguf",
+      "task": "tts",
+      "mode": "offline",
+      "default_voice_preset": {
+        "voice_id": "Vivian"
+      }
+    }
+  ]
+}

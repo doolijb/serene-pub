@@ -207,4 +207,20 @@ describe("users:delete — privilege revocation (PGlite integration)", () => {
 			`disconnect:user_${target.id}`
 		])
 	})
+
+	test("removes the person's saved data (user annex) with the account", async () => {
+		const { usersDelete } = await import("./users")
+		const admin = await makeUser("annexdel-admin", true)
+		const target = await makeUser("annexdel-target")
+		const bystander = await makeUser("annexdel-bystander")
+		await testDb.insert(schema.userAnnexes).values([
+			{ userId: target.id, owner: "acme.saves", key: "profile", doc: "x", version: 1 },
+			{ userId: bystander.id, owner: "acme.saves", key: "profile", doc: "y", version: 1 }
+		])
+		const { emitToUser, io } = makeOrderedSpies()
+		await usersDelete.handler({ user: { id: admin.id }, io }, { id: target.id } as any, emitToUser)
+		const rows = await testDb.select().from(schema.userAnnexes)
+		const mine = rows.filter((r) => [target.id, bystander.id].includes(r.userId))
+		expect(mine.map((r) => r.userId)).toEqual([bystander.id])
+	}, 60_000)
 })

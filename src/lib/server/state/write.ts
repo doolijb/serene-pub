@@ -441,6 +441,49 @@ const turnOwnerOf = (owner: StateOwner, sessionId: number): TurnOwner =>
 		: { kind: "session", id: sessionId }
 
 /**
+ * A cast member's open anchor, moved up to the newest live row that already
+ * holds one of their values when that row is later.
+ *
+ * A run's own row can hold a cast member's change (`set-state`'s `worldRow`,
+ * 2026-10-29), and it can be newer than the member's latest reply — a press,
+ * an interview's row before they have spoken. Filed at the older anchor, the
+ * next change would never be in force: `inForce` takes the latest anchor, so
+ * a spend written after the interview set the sheet sat behind it, unseen.
+ * Positions, not ids, decide "later" (`turnMessages` is in story order); a
+ * rewound row is out of the history, and holds nothing open.
+ */
+async function notBehindOwnRows(
+	db: Db,
+	sessionId: number,
+	owner: StateOwner,
+	tail: TurnMessage[],
+	open: number | null
+): Promise<number | null> {
+	const held = await db
+		.selectDistinct({ id: schema.attributeValues.validFromMessageId })
+		.from(schema.attributeValues)
+		.where(
+			and(
+				eq(schema.attributeValues.sessionId, sessionId),
+				eq(schema.attributeValues.ownerKind, owner.kind),
+				eq(schema.attributeValues.ownerId, owner.id)
+			)
+		)
+	if (!held.length) return open
+	const at = new Map(tail.map((m, i) => [m.id, i]))
+	let best = open
+	let bestAt = open === null ? -1 : (at.get(open) ?? -1)
+	for (const { id } of held) {
+		const i = id === null ? undefined : at.get(id)
+		if (i !== undefined && i > bestAt) {
+			best = id
+			bestAt = i
+		}
+	}
+	return best
+}
+
+/**
  * The anchor this write gets, or the refusal saying the reply is sealed.
  *
  * The **one** place an anchor is decided. Three cases, and the middle one is
@@ -468,9 +511,11 @@ export async function anchorFor(
 	if (!isSessionScoped(owner.kind)) return null
 	const tail = messages ?? (await turnMessages(db, ctx.sessionId))
 	const turnOwner = turnOwnerOf(owner, ctx.sessionId)
-	if (ctx.messageId === undefined) return openAnchorFor(tail, turnOwner)
-	if (ctx.ownAnchor && turnOwner.kind === "session" && ctx.messageId !== null)
-		return ctx.messageId
+	if (ctx.messageId === undefined)
+		return turnOwner.kind === "session_cast"
+			? notBehindOwnRows(db, ctx.sessionId, owner, tail, openAnchorFor(tail, turnOwner))
+			: openAnchorFor(tail, turnOwner)
+	if (ctx.ownAnchor && ctx.messageId !== null) return ctx.messageId
 	if (isAnchorOpen(tail, turnOwner, ctx.messageId ?? null))
 		return ctx.messageId ?? null
 	throw new StateRefusal(
@@ -576,6 +621,10 @@ export async function retractStateAnchoredTo(
 	const { retractAnnexDeltasAnchoredTo } = await import("$lib/server/sessions/annexChanges")
 	const { takeSceneBoundariesAt } = await import("$lib/server/scenes/liveScenes")
 	const takeTicks = opts.ticks === "take"
+	// 🚧 (M2c) A made lorebook's export, for Forward — read through the module
+	// handle, so before the transaction.
+	const library = await import("$lib/server/library/writes")
+	await library.exportLibraryBooksAnchoredTo(db, [messageId])
 	return await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
 		const { sessionIds } = await revertClockMovesAnchoredTo(
@@ -583,6 +632,9 @@ export async function retractStateAnchoredTo(
 			[messageId],
 			takeTicks ? {} : { keepTicks: true }
 		)
+		// 🚧 (M2c) The library changes anchored to it come back first, so the
+		// rows deleted below carry what the undo learned.
+		const libraryBack = await library.revertLibraryChangesAnchoredTo(t, [messageId])
 		const values = await t
 			.delete(schema.attributeValues)
 			.where(eq(schema.attributeValues.validFromMessageId, messageId))
@@ -615,11 +667,33 @@ export async function retractStateAnchoredTo(
 		const lore = message
 			? await retractLoreAnchoredTo(t, message.sessionId, [messageId])
 			: { imprints: [], ownBookEntries: [], changed: false }
+		// 🚧 A conversion of the session's rules anchored to it (M0, lane T4): Back puts
+		// the version it moved from back, and the record leaves the list.
+		let conversions: RulesetConversionRecord[] = []
+		if (message) {
+			const { readCoreAnnex, coreAnnexSetSql, lockSessionAnnex } = await import("$lib/server/sessions/coreAnnex")
+			const doc = await readCoreAnnex(t, message.sessionId)
+			const list = (Array.isArray(doc?.rulesetConversions) ? doc!.rulesetConversions : []) as RulesetConversionRecord[]
+			conversions = list.filter((r) => r?.messageId === messageId)
+			if (conversions.length) {
+				await lockSessionAnnex(t, message.sessionId)
+				const kept = list.filter((r) => r?.messageId !== messageId)
+				await t
+					.update(schema.sessions)
+					.set({
+						rulesetVersion: conversions[0]!.from,
+						annex: coreAnnexSetSql("rulesetConversions", kept.length ? sql`${JSON.stringify(kept)}::jsonb` : null)
+					})
+					.where(eq(schema.sessions.id, message.sessionId))
+			}
+		}
 		const clockMoved = sessionIds.length > 0
 		return {
 			clockMoved,
 			changed:
 				clockMoved ||
+				libraryBack.changed ||
+				conversions.length > 0 ||
 				values.length > 0 ||
 				configs.length > 0 ||
 				proposals.length > 0 ||
@@ -637,7 +711,8 @@ export async function retractStateAnchoredTo(
 				ownBookEntries: lore.ownBookEntries,
 				clockSessions: sessionIds,
 				annexDeltas,
-				scenes
+				scenes,
+				conversions
 			}
 		}
 	})
@@ -691,6 +766,16 @@ export interface RetractedState {
 	annexDeltas: import("$lib/server/sessions/annexChanges").AnnexDeltaTaken[]
 	/** 🚧 What Back did to the scene boundaries anchored to it, in the order taken (pr-6 C9). */
 	scenes: import("$lib/server/scenes/liveScenes").SceneBoundaryTaken[]
+	/** 🚧 The conversions of the session's rules anchored to it (M0, lane T4), as recorded. */
+	conversions?: RulesetConversionRecord[]
+}
+
+/** 🚧 One conversion of a session's rules, kept in the `core` annex key `rulesetConversions`. */
+export interface RulesetConversionRecord {
+	messageId: number
+	rulesetId: string
+	from: string
+	to: string
 }
 
 /**
@@ -791,6 +876,7 @@ export async function restoreRetractedState(db: Db, taken: RetractedState): Prom
 	const ownBookEntries = taken.ownBookEntries ?? []
 	const annexDeltas = taken.annexDeltas ?? []
 	const scenes = taken.scenes ?? []
+	const conversions = taken.conversions ?? []
 	if (
 		!taken.values.length &&
 		!taken.configs.length &&
@@ -799,7 +885,8 @@ export async function restoreRetractedState(db: Db, taken: RetractedState): Prom
 		!imprints.length &&
 		!ownBookEntries.length &&
 		!annexDeltas.length &&
-		!scenes.length
+		!scenes.length &&
+		!conversions.length
 	)
 		return undone.changed
 	await db.transaction(async (tx) => {
@@ -822,7 +909,34 @@ export async function restoreRetractedState(db: Db, taken: RetractedState): Prom
 			const { restoreSceneBoundaries } = await import("$lib/server/scenes/liveScenes")
 			await restoreSceneBoundaries(t, scenes)
 		}
+		// 🚧 The conversion again: its `to`, and its record back in the list.
+		if (conversions.length) {
+			const { readCoreAnnex, coreAnnexSetSql, lockSessionAnnex } = await import("$lib/server/sessions/coreAnnex")
+			const [m] = await t.select({ sessionId: schema.messages.sessionId }).from(schema.messages).where(eq(schema.messages.id, taken.messageId)).limit(1)
+			if (m) {
+				await lockSessionAnnex(t, m.sessionId)
+				const doc = await readCoreAnnex(t, m.sessionId)
+				const list = (Array.isArray(doc?.rulesetConversions) ? doc!.rulesetConversions : []) as RulesetConversionRecord[]
+				await t
+					.update(schema.sessions)
+					.set({
+						rulesetVersion: conversions[conversions.length - 1]!.to,
+						annex: coreAnnexSetSql("rulesetConversions", sql`${JSON.stringify([...list, ...conversions])}::jsonb`)
+					})
+					.where(eq(schema.sessions.id, m.sessionId))
+			}
+		}
 	})
+	// 🚧 (M2c) The library changes put back, outside the transaction (a book's
+	// importer reads through the module handle).
+	if (taken.proposals.some((r) => r.kind === "library")) {
+		const { redoLibraryChanges } = await import("$lib/server/library/writes")
+		const back = await db
+			.select()
+			.from(schema.stateProposals)
+			.where(inArray(schema.stateProposals.id, taken.proposals.filter((r) => r.kind === "library").map((r) => r.id)))
+		await redoLibraryChanges(db, back)
+	}
 	if (!taken.clockSessions.length) return true
 	// The clock, forward again by each move it was stepped back by.
 	const { advanceSessionStoryClock } = await import("$lib/server/state/storyTime")
@@ -1573,8 +1687,8 @@ export interface WriteContext {
 	 * run (lair pass R8, 2026-09-28: `set-state`'s declared `worldRow`, whose
 	 * port takes only this run's own write results). Open to that run for the
 	 * rest of its turn, whatever it wrote after it — the rows after it are
-	 * the same turn's. Honoured for world owners only; a cast member's anchor
-	 * is theirs.
+	 * the same turn's. Honoured for cast owners too (2026-10-29): a change a
+	 * run files at its own row goes back with that row.
 	 */
 	ownAnchor?: boolean
 	/**
@@ -2283,6 +2397,7 @@ export async function decideProposal(
 	if (proposal.status !== "pending")
 		throw new StateRefusal(`that proposal was already ${proposal.status}.`)
 	if (proposal.kind === "clock") return await decideClockProposal(db, proposal, accept)
+	if (proposal.kind === "library") return await decideLibraryProposal(db, proposal, accept, userId)
 
 	const change = proposal.payload as unknown as StateChange
 	return await db.transaction(async (tx) => {
@@ -2356,6 +2471,73 @@ export async function decideProposal(
 		await mark("accepted")
 		return { status: "accepted", appliedId }
 	})
+}
+
+/**
+ * 🚧 (M2c) Decide a **library proposal**: Accept makes the character, the
+ * lorebook, the change or the attach as the DECIDING person (their own rights,
+ * `personMay` — a guest's Accept never makes a card in the host's library),
+ * writes `result`/`before` onto the payload and marks it accepted; Reject
+ * makes nothing. The writers take their own transactions (the book importer
+ * reads through the module handle), so the row is claimed first — pending to
+ * its answer in one statement — and put back to pending if the write refuses.
+ */
+async function decideLibraryProposal(
+	db: Db,
+	proposal: typeof schema.stateProposals.$inferSelect,
+	accept: boolean,
+	userId?: number | null
+): Promise<ProposalDecision> {
+	const lib = await import("$lib/server/library/writes")
+	const payload = proposal.payload as unknown as import("$lib/server/library/writes").LibraryChangePayload
+	const status = accept ? "accepted" : "rejected"
+	const claim = async (to: "accepted" | "rejected" | "pending") =>
+		await db
+			.update(schema.stateProposals)
+			.set({ status: to, decidedAt: to === "pending" ? null : new Date() })
+			.where(
+				and(
+					eq(schema.stateProposals.id, proposal.id),
+					eq(schema.stateProposals.status, to === "pending" ? status : "pending")
+				)
+			)
+			.returning({ id: schema.stateProposals.id })
+	let decider = userId ?? null
+	if (decider === null) {
+		const [s] = await db
+			.select({ userId: schema.sessions.userId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, proposal.sessionId))
+			.limit(1)
+		decider = s?.userId ?? null
+	}
+	const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
+	const person = decider === null ? null : await actingPersonFor(db, { via: "press", userId: decider })
+	if (!person) throw new StateRefusal(lib.NOBODY_ACTING_SENTENCE)
+	const seat = await personMay(db, person, "read", { kind: "session", id: proposal.sessionId })
+	if (!seat.ok) throw new StateRefusal(seat.reason)
+	if (!(await claim(status)).length) throw new StateRefusal("that proposal was already decided.")
+	if (!accept) return { status: "rejected" }
+	try {
+		const applied = await lib.applyLibraryChange(db, person, payload.op, payload.input)
+		await db
+			.update(schema.stateProposals)
+			.set({
+				payload: {
+					...payload,
+					by: person.userId,
+					label: applied.label,
+					result: applied.result,
+					...(applied.before ? { before: applied.before } : {})
+				} as unknown as Record<string, unknown>
+			})
+			.where(eq(schema.stateProposals.id, proposal.id))
+		return { status: "accepted" }
+	} catch (e) {
+		await claim("pending")
+		if (e instanceof lib.LibraryWriteRefusal) throw new StateRefusal(e.message)
+		throw e
+	}
 }
 
 /**

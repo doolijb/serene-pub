@@ -1,0 +1,1 @@
+ALTER TABLE "user_settings" ADD COLUMN "spoken_playback" text DEFAULT 'auto' NOT NULL;

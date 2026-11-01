@@ -552,6 +552,14 @@ function makeStorageHost(config, nowMs) {
 		}
 	};
 }
+// 🚧 (M2b) The refusing stand-in for ctx.storage.user: the same shape as the
+// real store, every method refusing with one sentence that says WHY — the
+// grant is absent, or no person is acting for this call.
+function makeDeniedUserStorage(message) {
+	function d() { throw new Error("storage.user: " + message); }
+	var files = { list: d, stat: d, read: d, write: d, delete: d, deleteAll: d };
+	return { usage: d, files: files, read: d, write: d, exists: d, remove: d, list: d, size: d };
+}
 `
 
 /** The per-plugin permission grants the sandbox passes at load. Each field is
@@ -568,7 +576,8 @@ export function permissionKey(config?: PermissionConfig): string {
 	return JSON.stringify([
 		config.storageDir ?? null,
 		config.quotaBytes ?? 0,
-		[...(config.networkHosts ?? [])].sort()
+		[...(config.networkHosts ?? [])].sort(),
+		config.userQuotaBytes ?? 0
 	])
 }
 
@@ -579,4 +588,10 @@ export interface PermissionConfig {
 	quotaBytes?: number
 	/** Allowed fetch hosts — the mediated network grant, honoured on both backends. */
 	networkHosts?: string[]
+	/**
+	 * 🚧 (M2b) Each person's own storage quota in bytes (`storage-per-user`).
+	 * Absent = per-user storage denied. The folder is per call
+	 * (`InvokeOptions.userStorageDir`), never part of the load.
+	 */
+	userQuotaBytes?: number
 }

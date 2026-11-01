@@ -941,7 +941,9 @@
 						<p class="text-surface-600-400 text-xs">
 							Thumbnails and other copies made from what is kept;
 							removing them frees space now and costs one
-							re-encode the next time each image is shown.
+							re-encode the next time each image is shown. This
+							includes spoken audio, which is spoken again when
+							asked.
 						</p>
 						<p class="text-sm">
 							{cleanup.derived.variants}

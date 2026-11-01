@@ -40,9 +40,10 @@
  */
 
 import { bridgesFor, getRuleset, i18nText, RIGOURS, type Rigour, type RulesetDecl, type RulesetTime, type SlotListItem } from "@serene-pub/sdk"
-import { eq, sql } from "drizzle-orm"
+import { and, eq, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { stateFor } from "$lib/server/state/resolve"
+import { stateFor, valueOf } from "$lib/server/state/resolve"
+import { hoursCrossed, noteHourlyWaitsForClock, usesHourlyRecurring } from "./clockHours"
 import { coreAnnexIn, coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 import { minutesPer } from "./common"
 import { conventionsOf, earlyPhases, runApply, runApplyAsync, runResolve } from "./engine"
@@ -386,9 +387,12 @@ async function buildEngineInput(
 			? (session.rigour as Rigour)
 			: "prose"
 	const ruleset: RulesetDecl | undefined = getRuleset(session.primaryRuleset)
-	if (!ruleset)
+	if (!ruleset) {
 		// A ruleset that is not installed parks: nothing renders, nothing is
-		// refused, and the step says why.
+		// refused, and the step says why. 🚧 One that came with an uninstalled
+		// plugin says so (M0, lane T4): read-only.
+		const { rulesetOrigin } = await import("$lib/server/rulesets/pubRulesets")
+		const retired = (await rulesetOrigin(db, session.primaryRuleset)) === "plugin"
 		return {
 			parked: {
 				blocks: {},
@@ -396,13 +400,16 @@ async function buildEngineInput(
 					ruleset: session.primaryRuleset,
 					rigour,
 					mode,
-					parked: `${session.primaryRuleset} is not installed, so nothing of it is read this turn`
+					parked: retired
+						? "These rules came with a plugin that is no longer installed."
+						: `${session.primaryRuleset} is not installed, so nothing of it is read this turn`
 				},
 				outcomes: [],
 				explain: [],
 				rejected: []
 			}
 		}
+	}
 
 	const refs: OwnerRef[] = []
 	const unknownOwners: unknown[] = []
@@ -471,7 +478,9 @@ async function buildEngineInput(
 	// 🚧 D5: what the owners' zones hold, for a ruleset that keeps zones in the store.
 	if (keepsStoredZones(ruleset)) input.zones = await zonesFor(db, sessionId, ruleset.id, owners)
 	const keyOf = (raw: unknown): string | null => (raw == null ? null : (ownerRefOf(raw, sessionId)?.key ?? (typeof raw === "string" ? raw : null)))
-	const event = eventOf(req.event)
+	// 🚧 Hourly steps wait for a clock: a clockless session's ledger says so, once.
+	if (writes && usesHourlyRecurring(ruleset) && !(await storyClockOf(db, session))) await noteHourlyWaitsForClock(db, sessionId)
+	const event = await withClockHours(db, session, eventOf(req.event))
 	return {
 		built: {
 			sessionId,
@@ -491,7 +500,32 @@ async function buildEngineInput(
 	}
 }
 
-/** 🚧 The session's story-lane turn tally, as a ruleset script reads it (`session.turn` · `round` · `lastSpeaker` · `turnsBy`). */
+/**
+ * 🚧 M0 (lane T1): the engine's COPY of a `core:event/story-clock-moved@1`
+ * event carries `payload.clock.hours` — the whole hour marks the move crossed
+ * (`hoursCrossed`), read through the session's calendar. `eventOf` stays pure;
+ * the request's own event is never mutated. Left as it is when the move cannot
+ * be placed (no `from`/`to`, or `hoursCrossed` answers `undefined`).
+ */
+async function withClockHours(
+	db: Db,
+	session: Parameters<typeof storyClockOf>[1],
+	event: { id: string; payload?: unknown } | null
+): Promise<{ id: string; payload?: unknown } | null> {
+	if (!event || event.id !== "core:event/story-clock-moved@1" || !isRecord(event.payload)) return event
+	const clock = event.payload.clock
+	if (!isRecord(clock) || !isRecord(clock.from) || !isRecord(clock.to)) return event
+	const calendar = (await storyClockOf(db, session))?.calendar ?? null
+	const hours = hoursCrossed(clock.from as never, clock.to as never, calendar)
+	if (hours === undefined) return event
+	return { ...event, payload: { ...event.payload, clock: { ...clock, hours } } }
+}
+
+/**
+ * 🚧 The session's story-lane turn tally, as a ruleset script reads it (`session.turn` · `round` · `lastSpeaker` · `turnsBy`),
+ * and `asleep` (M0, lane T1): true when the session has at least one player seat (`session_personas`, `removedAt` null)
+ * and EVERY such seat reads `core:slot/asleep@1` true; false otherwise, also when the slot is not declared.
+ */
 async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<string, unknown> | undefined> {
 	try {
 		const [row] = await db
@@ -501,9 +535,26 @@ async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<strin
 			.limit(1)
 		if (!row) return undefined
 		const { publishedTurns } = await import("$lib/server/pipelines/routines/turnTally")
-		return publishedTurns(coreAnnexIn(row.annex))
+		return { ...(publishedTurns(coreAnnexIn(row.annex)) ?? {}), asleep: await sessionAsleep(db, sessionId) }
 	} catch {
 		return undefined
+	}
+}
+
+async function sessionAsleep(db: Db, sessionId: number): Promise<boolean> {
+	try {
+		const seats = await db
+			.select({ id: schema.sessionPersonas.id })
+			.from(schema.sessionPersonas)
+			.where(and(eq(schema.sessionPersonas.sessionId, sessionId), isNull(schema.sessionPersonas.removedAt)))
+		if (!seats.length) return false
+		for (const seat of seats) {
+			const v = await valueOf(db, { sessionId, owner: { kind: "player_seat", id: seat.id }, slotId: "core:slot/asleep@1" })
+			if (v !== true) return false
+		}
+		return true
+	} catch {
+		return false
 	}
 }
 

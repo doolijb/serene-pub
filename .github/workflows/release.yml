@@ -216,6 +216,7 @@ jobs:
             (needs.test.result == 'success' || needs.test.result == 'skipped')
         permissions:
             contents: write # uploads assets to the tag's release
+            actions: read # SignPath's connector reads this run and downloads the unsigned artifact
         strategy:
             fail-fast: false
             matrix:
@@ -446,6 +447,81 @@ jobs:
                   xattr -cr "$APP"
                   codesign --force --deep --sign - "$APP"
                   codesign --verify --deep --verbose=2 "$APP"
+
+            # ── Windows code signing (SignPath Foundation) ──────────────
+            #
+            # Signs the two binaries built from this repository, the launcher
+            # (`Serene Pub.exe`) and the window helper (`app/serene-pub-window.exe`),
+            # and nothing else: node.exe is the OpenJS Foundation's own signed
+            # build, and the DLLs and .node addons under app/node_modules are
+            # upstream open-source binaries, which SignPath's terms leave to their
+            # own projects (docs/code-signing-policy.md). Skipped, with a notice,
+            # until the repository has the SIGNPATH_API_TOKEN secret and the
+            # SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG /
+            # SIGNPATH_SIGNING_POLICY_SLUG variables; the zip is then unsigned, as
+            # every release before signing began was. Each request waits for the
+            # maintainer to approve it in SignPath (up to 45 minutes) before it is
+            # signed. After signing, nothing may rebuild these two files.
+            - name: Check for Windows signing (SignPath)
+              id: signpath
+              if: runner.os == 'Windows'
+              env:
+                  SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+                  SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+                  SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+                  SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+              run: |
+                  if [ -n "$SIGNPATH_API_TOKEN" ] && [ -n "$SIGNPATH_ORGANIZATION_ID" ] && [ -n "$SIGNPATH_PROJECT_SLUG" ] && [ -n "$SIGNPATH_SIGNING_POLICY_SLUG" ]; then
+                    echo "enabled=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "enabled=false" >> "$GITHUB_OUTPUT"
+                    echo "::notice::SignPath is not set up (secret SIGNPATH_API_TOKEN; variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG), so the Windows zip is unsigned"
+                  fi
+
+            - name: Keep the Windows binaries for signing
+              id: unsigned-windows
+              if: steps.signpath.outputs.enabled == 'true'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: unsigned-windows-${{ matrix.target }}
+                  path: |
+                      dist/serene-pub-*-${{ matrix.target }}/serene-pub/Serene Pub.exe
+                      dist/serene-pub-*-${{ matrix.target }}/serene-pub/app/serene-pub-window.exe
+                  retention-days: 1
+                  if-no-files-found: error
+
+            - name: Sign the Windows binaries (SignPath)
+              if: steps.signpath.outputs.enabled == 'true'
+              uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+              with:
+                  api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+                  organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+                  project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+                  signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+                  artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+                  github-artifact-id: ${{ steps.unsigned-windows.outputs.artifact-id }}
+                  wait-for-completion: true
+                  wait-for-completion-timeout-in-seconds: 2700
+                  output-artifact-directory: signed-windows
+
+            - name: Put the signed binaries in the bundle
+              if: steps.signpath.outputs.enabled == 'true'
+              shell: pwsh
+              run: |
+                  $stage = Get-ChildItem -Directory -Path dist -Filter "serene-pub-*-$env:TARGET" | Select-Object -First 1
+                  if (-not $stage) { Write-Error "No dist/serene-pub-*-$env:TARGET directory"; exit 1 }
+                  $root = Join-Path $stage.FullName "serene-pub"
+                  $pairs = @(
+                    @("signed-windows/Serene Pub.exe", (Join-Path $root "Serene Pub.exe")),
+                    @("signed-windows/app/serene-pub-window.exe", (Join-Path $root "app/serene-pub-window.exe"))
+                  )
+                  foreach ($pair in $pairs) {
+                    if (-not (Test-Path -LiteralPath $pair[0])) { Write-Error "SignPath returned no $($pair[0])"; exit 1 }
+                    Copy-Item -LiteralPath $pair[0] -Destination $pair[1] -Force
+                    $sig = Get-AuthenticodeSignature -LiteralPath $pair[1]
+                    if ($sig.Status -ne 'Valid') { Write-Error "$($pair[1]) is not validly signed: $($sig.Status) $($sig.StatusMessage)"; exit 1 }
+                    Write-Host "$($pair[1]) signed by $($sig.SignerCertificate.Subject)"
+                  }
 
             # The archive keeps the version in its FILENAME, but its single
             # top-level entry is the unversioned "serene-pub" directory inside

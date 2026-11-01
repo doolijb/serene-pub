@@ -262,7 +262,7 @@ describe("sessions:view — a genre's panels (21)", () => {
 		const tray = mine.find((p) => p.id === `${s.pluginId}:map`)!
 		expect(tray.title).toBe("Dice tray")
 		expect(tray.role).toBe("secondary")
-		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.js`)
+		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.js?v=0.0.0`)
 		expect(tray.surface).toEqual({
 			kind: "remote",
 			owner: s.pluginId,
@@ -467,7 +467,7 @@ describe("sessions:view — package widgets (R71) carry what they read (R75)", (
 	test("with SP_PLUGINS_ENABLED off no package widget is offered", async () => {
 		const s = await packageScenario()
 		const { sessionsViewHandler } = await import("./sessions")
-		vi.stubEnv("SP_PLUGINS_ENABLED", "")
+		vi.stubEnv("SP_PLUGINS_ENABLED", "0")
 		try {
 			const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
 			expect(res.modePanels.some((p) => p.id.startsWith(`${s.pluginId}:`))).toBe(false)
@@ -484,7 +484,7 @@ describe("sessions:view — package widgets (R71) carry what they read (R75)", (
  */
 describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered", () => {
 	beforeAll(() => {
-		vi.stubEnv("SP_PLUGINS_ENABLED", "")
+		vi.stubEnv("SP_PLUGINS_ENABLED", "0")
 	})
 	afterAll(() => {
 		vi.unstubAllEnvs()
@@ -545,10 +545,10 @@ describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered"
 		vi.stubEnv("SP_PLUGINS_ENABLED", "1")
 		try {
 			const res = await view(s.owner.id, s.session.id)
-			expect(res.sessionView?.src).toBe(`/plugin-ui/${s.pluginId}/ui/view.html`)
-			expect(res.modePanels.find((p) => p.id === `${s.pluginId}:tray`)?.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.js`)
+			expect(res.sessionView?.src).toBe(`/plugin-ui/${s.pluginId}/ui/view.html?v=0.0.0`)
+			expect(res.modePanels.find((p) => p.id === `${s.pluginId}:tray`)?.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.js?v=0.0.0`)
 		} finally {
-			vi.stubEnv("SP_PLUGINS_ENABLED", "")
+			vi.stubEnv("SP_PLUGINS_ENABLED", "0")
 		}
 	})
 })

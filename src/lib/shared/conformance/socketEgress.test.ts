@@ -607,6 +607,21 @@ describe("§1 socket egress — every in-place projection is written down", () =
 // ── §2 The emits that do not project ────────────────────────────────────────
 
 /**
+ * 🚧 The per-user push registries (audio.cpp build, 2026-10-28): five
+ * subjects, one reason.
+ */
+const PER_USER_EMITTERS =
+	"Not a socket emit: `.emit` on a `createUserEmitters` registry " +
+		"(`server/managed/emitters.ts`, 2026-10-28), which calls the one " +
+		"function each user registered. Every registration is a closure " +
+		"over the handler's own `emitToUser` (`sockets/koboldcpp.ts` " +
+		"`registerKoboldCppHandlers`, `sockets/audiocpp.ts` " +
+		"`registerAudioCppHandlers`), bound only when `socket.user?.isAdmin`, " +
+		"so the push reaches the wire through the sanctioned emitter. Named " +
+		"here because the scan matches the NAME `emit`; before the helper the " +
+		"same loops called a destructured `emit(…)` the scan never saw."
+
+/**
  * Raw emits that run no projection, and the reason each is safe without one.
  *
  * ⚠ It was five. `users.ts :: user` — the fifth hole this file was written to
@@ -651,6 +666,36 @@ const UNREDACTED_EMITS: Deliberate[] = [
 			"spelled three times is a rule two of them can drift from. Same " +
 			"shape as hole 3, where a store-registered emitter was how the " +
 			"activity stream escaped the walk entirely."
+	},
+	{
+		subject:
+			"src/lib/server/audiocpp/binary.ts :: emitState → binaryDownloadEmitters.emit(<computed>)",
+		reason:
+			PER_USER_EMITTERS
+	},
+	{
+		subject:
+			"src/lib/server/audiocpp/packages.ts :: push → packageDownloadEmitters.emit(<computed>)",
+		reason:
+			PER_USER_EMITTERS
+	},
+	{
+		subject:
+			"src/lib/server/koboldcpp/binaryManager.ts :: emitProgress → progressEmitters.emit(<computed>)",
+		reason:
+			PER_USER_EMITTERS
+	},
+	{
+		subject:
+			"src/lib/server/managed/supervisor.ts :: createSupervisor.emitStatus → emitters.emit(<computed>)",
+		reason:
+			PER_USER_EMITTERS
+	},
+	{
+		subject:
+			"src/lib/server/sockets/koboldcpp.ts :: emitDownloadProgress → downloadProgressEmitters.emit(<computed>)",
+		reason:
+			PER_USER_EMITTERS
 	}
 ]
 

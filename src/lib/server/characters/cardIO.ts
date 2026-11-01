@@ -37,6 +37,11 @@ import {
 	readLikeness,
 	withLikeness
 } from "$lib/server/characters/likeness"
+import {
+	applyTimbreToExtensions,
+	timbreForExport,
+	timbreFromImport
+} from "$lib/server/characters/timbre"
 
 /** The ceiling on a card's foreign extension JSON kept on the row. */
 export const CARD_EXTENSIONS_MAX_BYTES = 256 * 1024
@@ -165,6 +170,11 @@ export function exportedExtensions(
 	const likeness = readLikeness(stored)
 	if (likeness && out.serenepub.likeness === undefined)
 		out.serenepub = { ...out.serenepub, likeness }
+	// 🚧 The timbre (speech build S5): description, language and settings
+	// travel; `voice` is pub-local and is dropped.
+	const timbre = timbreForExport(stored)
+	if (timbre && out.serenepub.timbre === undefined)
+		out.serenepub = { ...out.serenepub, timbre }
 	return out
 }
 
@@ -409,6 +419,10 @@ export function planCardImport(data: any, book?: unknown): CardImportPlan {
 	// the row; ST's key, when the card had one, stays a foreign key as written.
 	const likeness = likenessFromCardExtensions(ext)
 	if (likeness) extensions = withLikeness(extensions, likeness)
+	// 🚧 The timbre — sanitized, never its `voice` (pub-local).
+	const timbre = timbreFromImport(serenepub?.timbre)
+	if (timbre)
+		extensions = applyTimbreToExtensions(extensions, timbre)
 
 	return {
 		fields: { strokes, ...compiled, extensions },

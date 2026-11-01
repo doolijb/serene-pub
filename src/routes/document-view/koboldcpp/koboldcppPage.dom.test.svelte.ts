@@ -234,6 +234,138 @@ describe("Document View › KoboldCPP › embedding models", () => {
 })
 
 /**
+ * The search and download sections run on `finder.ts` rows: the quant choice
+ * is a radio list (the recommended one checked), a single-file repo names its
+ * file, and every download carries the Text / Image kind the person chose.
+ */
+describe("Document View › KoboldCPP › getting a model", () => {
+	const MULTI = {
+		name: "org/Llama-GGUF",
+		url: "https://huggingface.co/org/Llama-GGUF",
+		description: "A llama",
+		downloads: 10,
+		pullOptions: [
+			{
+				label: "Q2_K",
+				filename: "llama-q2.gguf",
+				downloadUrl: "https://x/llama-q2.gguf",
+				sizeBytes: 1_000_000_000
+			},
+			{
+				label: "Q4_K_M",
+				filename: "llama-q4.gguf",
+				downloadUrl: "https://x/llama-q4.gguf",
+				sizeBytes: 2_000_000_000
+			},
+			{
+				label: "Q8_0",
+				filename: "llama-q8.gguf",
+				downloadUrl: "https://x/llama-q8.gguf",
+				sizeBytes: 3_000_000_000
+			}
+		]
+	}
+	const SINGLE = {
+		name: "org/One-GGUF",
+		url: "https://huggingface.co/org/One-GGUF",
+		description: "",
+		downloads: 5,
+		pullOptions: [
+			{
+				label: "Q4_K_M",
+				filename: "only-one.gguf",
+				downloadUrl: "https://x/only-one.gguf",
+				sizeBytes: 500_000_000
+			}
+		]
+	}
+	const recommend = (models: unknown[]) => {
+		listeners.get("koboldcpp:recommendedModels")!({ models })
+		flushSync()
+	}
+	const radios = (scope: ParentNode) =>
+		[...scope.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+
+	test("a multi-quant repo is a radio list with the recommended one checked", () => {
+		render()
+		recommend([{ ...MULTI, ollamaName: "Llama" }])
+		const list = listUnder("Recommended text models")
+		const quants = radios(list)
+		expect(quants.length).toBe(3)
+		expect(quants.map((r) => r.checked)).toEqual([false, true, false])
+		expect(list.querySelector("legend")?.textContent).toContain(
+			"org/Llama-GGUF"
+		)
+	})
+
+	test("a single-file repo shows its file name before Download", () => {
+		render()
+		recommend([{ ...SINGLE, ollamaName: "One" }])
+		const list = listUnder("Recommended text models")
+		expect(radios(list).length).toBe(0)
+		expect(list.textContent).toContain("only-one.gguf")
+		expect(button(list, "Download")).toBeDefined()
+	})
+
+	test("the download carries the chosen kind, and the file that is checked", () => {
+		render()
+		recommend([{ ...MULTI, ollamaName: "Llama" }])
+		const list = listUnder("Recommended text models")
+		radios(list)[2].click()
+		flushSync()
+		button(list, "Download Q8_0")!.click()
+		const sent = emitted.filter(([e]) => e === "koboldcpp:downloadModel")
+		expect(sent.length).toBe(1)
+		expect(sent[0][1].kind).toBe("text")
+		expect(sent[0][1].filename).toBe("llama-q8.gguf")
+	})
+
+	test("choosing Image asks for the image list and downloads as an image", async () => {
+		render()
+		emitted.length = 0
+		const image = document.getElementById(
+			"a11y-kcpp-kind-image"
+		) as HTMLInputElement
+		image.click()
+		flushSync()
+		// The text ask is still owed a reply; the image ask waits behind it.
+		recommend([])
+		await settle()
+		expect(
+			emitted.filter(([e]) => e === "koboldcpp:recommendedModels")
+		).toContainEqual(["koboldcpp:recommendedModels", { kind: "image" }])
+		recommend([{ ...SINGLE, ollamaName: "Pic" }])
+		const list = listUnder("Recommended image models")
+		button(list, "Download")!.click()
+		expect(
+			emitted.find(([e]) => e === "koboldcpp:downloadModel")![1].kind
+		).toBe("image")
+	})
+
+	test("a search sends the kind and lists the repo's files as radios", () => {
+		render()
+		const input = document.getElementById(
+			"a11y-kcpp-search"
+		) as HTMLInputElement
+		input.value = "llama"
+		input.dispatchEvent(new Event("input", { bubbles: true }))
+		flushSync()
+		const form = input.closest("form") as HTMLFormElement
+		form.dispatchEvent(new Event("submit", { cancelable: true }))
+		flushSync()
+		expect(
+			emitted.find(([e]) => e === "koboldcpp:searchModels")![1]
+		).toEqual({ searchTerm: "llama", kind: "text" })
+		listeners.get("koboldcpp:searchModels")!({ models: [MULTI] })
+		flushSync()
+		const quants = radios(document.body).filter((r) =>
+			r.id.startsWith("a11y-kcpp-hub")
+		)
+		expect(quants.map((r) => r.checked)).toEqual([false, true, false])
+	})
+})
+
+/**
  * Off is not a dead end (less-confusing J1): the page turns its own manager
  * on with the Add menu's press (`enableManager`), the flag and, when there is
  * none, the connection, instead of sending the person to Pub settings first.

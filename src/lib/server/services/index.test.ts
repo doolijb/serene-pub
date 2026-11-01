@@ -178,6 +178,36 @@ describe("shutdownServices", () => {
 	})
 })
 
+describe("an exit another listener asks for mid-teardown", () => {
+	// 2026-10-30: Vite's own SIGTERM listener (close the dev server, then
+	// process.exit) runs beside ours; its exit landed before the database —
+	// which stops last and writes the clean marker — had stopped.
+	test("waits until the teardown has settled, so the last service still stops", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		const exits: unknown[] = []
+		const exit = vi.spyOn(process, "exit").mockImplementation(((code?: unknown) => {
+			exits.push(code)
+		}) as never)
+		let databaseStopped = false
+		registerService({
+			id: "database",
+			label: "Database",
+			shutdown: () => new Promise<void>((r) => setTimeout(() => ((databaseStopped = true), r()), 30))
+		})
+		registerService({ id: "fast", label: "Fast", shutdown: async () => {} })
+		const teardown = shutdownServices("SIGTERM")
+		process.exit(143) // the other listener's exit, a moment in
+		expect(exits).toEqual([])
+		await teardown
+		await new Promise((r) => setImmediate(r))
+		expect(databaseStopped).toBe(true)
+		expect(exits).toEqual([143])
+		expect(log).toHaveBeenCalledWith("Stopped 2 managed service(s).")
+		exit.mockRestore()
+		log.mockRestore()
+	})
+})
+
 describe("requestShutdown", () => {
 	test("stops every service, then exits with the code asked for", async () => {
 		const log = vi.spyOn(console, "log").mockImplementation(() => {})

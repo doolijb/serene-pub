@@ -4,7 +4,9 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { getContext, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
+	import { useMachineHardware } from "$lib/client/components/connections/useMachineHardware.svelte"
+	import { detectedBuild } from "$lib/client/components/connections/hardwarePicks"
 
 	interface Props {
 		onDownloadStarted: () => void
@@ -38,6 +40,20 @@
 	let confirming = $state(false)
 	let downloadStarted = $state(false)
 	let isDownloading = $derived(!!download && !download.isDone)
+
+	// The build this computer suggests, and why. The person's click always
+	// wins: the reason shows only while the selection is still the suggestion.
+	const hardware = useMachineHardware()
+	let autoPicked = $state<{ name: string; reason: string } | null>(null)
+	$effect(() => {
+		const list = variants
+		const hw = hardware.current
+		if (untrack(() => selected) !== null || isDownloading) return
+		const pick = detectedBuild(list, hw)
+		if (!pick) return
+		selected = pick.variant
+		autoPicked = { name: pick.variant.name, reason: pick.reason }
+	})
 
 	$effect(() => {
 		if (
@@ -85,6 +101,7 @@
 		loading = true
 		error = null
 		selected = null
+		autoPicked = null
 		variants = []
 		socket.emit("koboldcpp:listBinaryVariants", {
 			tag: tag === "latest" ? undefined : tag
@@ -364,6 +381,11 @@
 				<p class="text-surface-700-300 text-xs">
 					{selected.description}
 				</p>
+				{#if autoPicked && selected.name === autoPicked.name}
+					<p class="text-surface-600-400 text-xs">
+						{autoPicked.reason}
+					</p>
+				{/if}
 			</div>
 		{/if}
 

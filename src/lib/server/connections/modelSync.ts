@@ -77,6 +77,8 @@ import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { getImageAdapter } from "../utils/getImageAdapter"
 import { getEmbeddingAdapter } from "../utils/getEmbeddingAdapter"
 import { getNerAdapter } from "../utils/getNerAdapter"
+import { getSpeechAdapter } from "../connectionAdapters/speech/getSpeechAdapter"
+import { SPEECH_FACTS_KEY } from "$lib/shared/connectionAdapters/speechFacts"
 import { ADAPTER_REGISTRY } from "../adapters/registry"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { capabilityDefault } from "./capabilityDefaults"
@@ -86,6 +88,7 @@ import {
 	mergeEndpointModel
 } from "./models"
 import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
+import { recordOpenRouterKey } from "./openRouterKey"
 
 /** What an adapter's `listModels` answers, in the shape every family shares. */
 export interface ModelListing {
@@ -189,6 +192,19 @@ export async function adapterIO(type: string, db?: Db) {
 		}
 		case "ner":
 			return await getNerAdapter(type)
+		// 🚧 Speech-only types (`audiocpp`, `elevenlabs`): the speech module is
+		// that type's only one, so it lists and tests (PLAN-speech-build S9).
+		case "tts": {
+			const speech = await getSpeechAdapter(type)
+			if (!speech?.listModels || !speech.testConnection)
+				throw new Error(
+					`The speech adapter for "${type}" cannot list or test an endpoint on its own.`
+				)
+			return {
+				listModels: speech.listModels,
+				testConnection: speech.testConnection
+			}
+		}
 		default: {
 			const text = await getConnectionAdapter(type)
 			if (!ADAPTER_REGISTRY[type]?.embedding) return text
@@ -401,7 +417,17 @@ export async function syncConnectionModels(
 		if (!offered) continue
 		const renaming =
 			offered.name && offered.name !== r.model && r.name === r.model
-		const nextFacts = offered.facts ?? {}
+		// 🚧 Speech facts (`facts.speech`, PLAN-speech-build S1) are a sibling
+		// record with a DIFFERENT writer (voice discovery / catalogue / Refresh),
+		// never part of the host's listing claim — carried across the
+		// wholesale replace, or every ten-minute sync would erase the voices.
+		const keptSpeech = (r.facts as Record<string, unknown> | null)?.[
+			SPEECH_FACTS_KEY
+		]
+		const nextFacts =
+			keptSpeech !== undefined
+				? { ...(offered.facts ?? {}), [SPEECH_FACTS_KEY]: keptSpeech }
+				: (offered.facts ?? {})
 		// An empty bag from a host that never had facts is not a change; only a
 		// bag that differs is worth a write on every ten-minute sync.
 		const factsChanged =
@@ -534,6 +560,8 @@ export async function syncConnectionModelsById(
 		return null
 	const listing = await fetchListing(connection)
 	const result = await syncConnectionModels(db, connectionId, listing, now)
+	// An OpenRouter key's tier rides every sync (never throws).
+	if (!listing.error) await recordOpenRouterKey(db, connection)
 	return { result, listing }
 }
 

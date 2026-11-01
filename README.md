@@ -363,7 +363,7 @@ Pre-built images are published to the GitHub Container Registry on every release
 
 ```
 ghcr.io/doolijb/serene-pub:latest       ← always the latest stable release
-ghcr.io/doolijb/serene-pub:0.6.0-pr-1   ← exact version pin (pre-releases are published only this way)
+ghcr.io/doolijb/serene-pub:0.6.0-pr-7   ← exact version pin (pre-releases are published only this way)
 ```
 
 **Quickstart** — download [`docker-compose.dist.yml`](docker-compose.dist.yml) from the release assets, then:
@@ -406,6 +406,7 @@ The same documentation ships inside the app on a built-in **Docs** page.
 - **[Pipelines](docs/pipelines.md)** and **[Context Templates](docs/context-templates.md)** - How replies are made, and what the model sees
 - **[Document View](docs/document-view.md)** - The accessible alternative interface
 - **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+- **[Code signing policy](docs/code-signing-policy.md)** - How the Windows download is signed, and by whom
 
 ---
 
@@ -413,7 +414,7 @@ The same documentation ships inside the app on a built-in **Docs** page.
 
 Upcoming releases are tracked as **[GitHub Milestones](https://github.com/doolijb/serene-pub/milestones)**, each holding the issues that make it up. Nothing is promised on a timeline.
 
-- **0.6.0** — in preview now as **0.6.0-pr-1**: genres, inspectable pipelines, session layouts and widgets, a rebuilt Lorebooks+ with story time, cast and places, attachments, a rebuilt Connections view and a desktop launcher that updates itself. See the [release notes](docs/release-notes/0.6.0-pr-1.md)
+- **0.6.0** — in preview now as **0.6.0-pr-7**: genres, inspectable pipelines, session layouts and widgets, a rebuilt Lorebooks+ with story time, cast and places, attachments, a rebuilt Connections view and a desktop launcher that updates itself. See the [release notes](docs/release-notes/0.6.0-pr-1.md)
 - **0.7.0** — the plugin SDK settles into its first stable release (1.0): custom pipelines, server-side logic, free-form data storage and UI components for modders. A preview of the SDK is published to npm (`@serene-pub/*`, on the `next` tag) with each 0.6 pre-release
 
 **Text-to-Speech** was targeted for 0.5.0 and held back. No integration found yet that's small, fast, expressive and tunable without voice cloning or a large sample library.

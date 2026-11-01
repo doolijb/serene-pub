@@ -94,7 +94,7 @@ describe("sideSlot — one mount, three places", () => {
 })
 
 describe("sideSlot — the stage (QE, brief 7a)", () => {
-	it("a side holding the stage's conversation becomes the stage, on the phone and in Stage only", () => {
+	it("a side holding the stage's conversation becomes the stage, on the phone and in full screen", () => {
 		expect(sideSlot({ ...base, narrow: true, stage: true })).toBe("stage")
 		expect(sideSlot({ ...base, stage: true })).toBe("stage")
 	})

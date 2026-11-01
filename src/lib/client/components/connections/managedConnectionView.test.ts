@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest"
 import {
+	acppApplyLine,
+	acppBackendLabel,
+	acppBuildLine,
+	acppInstallState,
+	acppLoadedLine,
+	acppProcessLine,
 	capabilitiesServedBy,
 	contextLabel,
 	downloadSourcesFor,
@@ -76,18 +82,18 @@ describe("managedStage", () => {
 })
 
 describe("managedTabs", () => {
-	test("four tabs, only once there are tabs", () => {
+	test("three tabs, only once there are tabs", () => {
 		expect(managedTabs("kcpp-mode")).toEqual([])
 		expect(managedTabs("kcpp-binary")).toEqual([])
 		expect(managedTabs("tabs").map((t) => t.value)).toEqual([
 			"models",
-			"get",
 			"downloads",
 			"settings"
 		])
 	})
-	test("Get is its own tab, not the retired Available one", () => {
-		expect(managedTabs("tabs").map((t) => t.label)).toContain("Get")
+	test("there is no Get tab (the Get more… door replaced it), nor the retired Available one", () => {
+		expect(managedTabs("tabs").map((t) => t.label)).not.toContain("Get")
+		expect(managedTabs("tabs", "ollama").map((t) => t.value)).not.toContain("get")
 		expect(managedTabs("tabs").map((t) => t.label)).not.toContain(
 			"Available"
 		)
@@ -482,5 +488,183 @@ describe("other Ollama connections on this host", () => {
 	test("says nothing for a row with no id yet", () => {
 		expect(duplicateOllamaHosts({ ...rows[0], id: null }, rows)).toEqual([])
 		expect(duplicateOllamaHosts(undefined, rows)).toEqual([])
+	})
+})
+
+// ── audio.cpp, run by Serene Pub 🚧 (lane D, 2026-10-29) ────────────────────
+
+describe("audio.cpp — the third kind", () => {
+	const facts = {
+		managedMode: null as "managed" | "external" | null,
+		hasBinary: false,
+		pickerRequested: false,
+		connected: false
+	}
+	const status = (
+		over: Partial<Sockets.AudioCpp.StatusView> = {}
+	): Sockets.AudioCpp.StatusView => ({
+		status: "running",
+		pid: 4242,
+		startedAt: new Date(Date.now() - 65_000).toISOString(),
+		restartCount: 0,
+		isExternal: false,
+		port: 5002,
+		baseUrl: "http://127.0.0.1:5002",
+		loaded: [],
+		configApplied: true,
+		lastError: null,
+		...over
+	})
+
+	test("one stage before the tabs: the binary, never a mode", () => {
+		expect(managedStage("audiocpp", facts)).toBe("acpp-binary")
+		expect(managedStage("audiocpp", { ...facts, hasBinary: true })).toBe(
+			"tabs"
+		)
+		expect(
+			managedStage("audiocpp", {
+				...facts,
+				hasBinary: true,
+				pickerRequested: true
+			})
+		).toBe("acpp-binary")
+		// A KoboldCPP mode in the facts means nothing to audio.cpp.
+		expect(
+			managedStage("audiocpp", {
+				...facts,
+				managedMode: "external",
+				hasBinary: true
+			})
+		).toBe("tabs")
+	})
+
+	test("tabs: Models · Process · Arriving · Settings — no Get", () => {
+		expect(managedTabs("acpp-binary", "audiocpp")).toEqual([])
+		expect(managedTabs("tabs", "audiocpp").map((t) => t.label)).toEqual([
+			"Models",
+			"Process",
+			"Arriving",
+			"Settings"
+		])
+		// The other two have three.
+		expect(managedTabs("tabs").map((t) => t.value)).toEqual([
+			"models",
+			"downloads",
+			"settings"
+		])
+	})
+
+	test("label, feeds, rows and the Remove words", () => {
+		expect(managedLabel("audiocpp")).toBe("audio.cpp")
+		expect(downloadSourcesFor("audiocpp")).toEqual([
+			"audiocpp",
+			"audiocpp-binary"
+		])
+		expect(
+			managedConnectionIds("audiocpp", [
+				{ id: 1, type: "audiocpp_managed" },
+				{ id: 2, type: "audiocpp" },
+				{ id: 3, type: "koboldcpp_managed" }
+			])
+		).toEqual([1])
+		const copy = removeConfirmation("audiocpp", [])
+		expect(copy.title).toBe("Remove audio.cpp from this pub?")
+		expect(copy.body).toContain("stops running audio.cpp")
+		// KoboldCPP's words did not move when the body took the label.
+		expect(removeConfirmation("koboldcpp", []).body).toContain(
+			"stops running KoboldCPP"
+		)
+	})
+
+	test("install state from the settings alone", () => {
+		expect(acppInstallState(undefined)).toBe("loading")
+		expect(
+			acppInstallState({ enabled: false, binaryVariant: null })
+		).toBe("not-installed")
+		expect(
+			acppInstallState({ enabled: false, binaryVariant: "cpu-portable" })
+		).toBe("offline")
+		expect(acppInstallState({ enabled: true, binaryVariant: null })).toBe(
+			"no-binary"
+		)
+		expect(
+			acppInstallState({ enabled: true, binaryVariant: "cpu-portable" })
+		).toBe("ready")
+	})
+
+	test("process line: KoboldCPP's five words, external and crash said", () => {
+		expect(acppProcessLine(null)).toBe(null)
+		const running = acppProcessLine(status())!
+		expect(running.dot).toBe("ok")
+		expect(running.label).toBe("Running")
+		expect(running.meta).toContain("PID 4242")
+		expect(acppProcessLine(status({ isExternal: true }))!.meta).toBe(
+			"Not started by Serene Pub"
+		)
+		const crashed = acppProcessLine(
+			status({ status: "crashed", pid: null, lastError: "exit 1" })
+		)!
+		expect(crashed.dot).toBe("error")
+		expect(crashed.meta).toBe("exit 1")
+		expect(acppProcessLine(status({ status: "stopped" }))!.dot).toBe(
+			"quiet"
+		)
+	})
+
+	test("loaded line: lazy load makes nothing loaded the idle state", () => {
+		expect(acppLoadedLine(status()).loaded).toBe(false)
+		expect(acppLoadedLine(status()).text).toBe(
+			"Nothing loaded · loads on first use"
+		)
+		const line = acppLoadedLine(
+			status({
+				loaded: [
+					{ id: "kokoro_82m_q8_0", device: "cpu" },
+					{ id: "parakeet_tdt_0_6b_v3_q8_0" }
+				]
+			})
+		)
+		expect(line.loaded).toBe(true)
+		expect(line.text).toBe(
+			"Loaded · kokoro_82m_q8_0 (cpu), parakeet_tdt_0_6b_v3_q8_0"
+		)
+		// A stopped process holds nothing, whatever the last list said.
+		expect(
+			acppLoadedLine(
+				status({ status: "stopped", loaded: [{ id: "x" }] })
+			).loaded
+		).toBe(false)
+	})
+
+	test("build line and backend words; unverified is said", () => {
+		expect(acppBackendLabel("cuda")).toBe("CUDA")
+		expect(acppBackendLabel(null)).toBe(null)
+		expect(
+			acppBuildLine({ version: "v0.9.3", backend: "cpu", verified: true })
+		).toBe("v0.9.3 · CPU")
+		expect(
+			acppBuildLine({
+				releaseTag: "v0.9.3",
+				backend: "vulkan",
+				verified: false
+			})
+		).toBe("v0.9.3 · Vulkan · unverified")
+		expect(acppBuildLine({})).toBe(null)
+	})
+
+	test("apply line only while the process is moving onto the new file", () => {
+		expect(acppApplyLine(status())).toBe(null)
+		expect(acppApplyLine(status({ configApplied: false }))).toBe(
+			"Restarting to apply"
+		)
+		expect(
+			acppApplyLine(status({ status: "stopping", configApplied: false }))
+		).toBe("Restarting to apply")
+		// A Stop someone pressed is not a restart.
+		expect(acppApplyLine(status({ status: "stopping" }))).toBe(null)
+		expect(
+			acppApplyLine(status({ status: "stopped", configApplied: false }))
+		).toBe(null)
+		expect(acppApplyLine(null)).toBe(null)
 	})
 })

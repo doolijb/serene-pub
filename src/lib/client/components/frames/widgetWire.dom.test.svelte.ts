@@ -57,6 +57,25 @@ describe("a document nested in a component (sp-frame)", () => {
 		w.close()
 	})
 
+	test("asks the page for a file — file-pick and file-save only — as its own plugin (M2a)", async () => {
+		const asked: Array<[string, unknown, { owner: string }]> = []
+		const requests = (what: string, params: unknown, from: { owner: string }) => {
+			asked.push([what, params, from])
+			return Promise.resolve(undefined)
+		}
+		const w = await open(() => ({ ...base(), owner: "acme.worlds", props: {}, onInvoke: () => {} }), { requests })
+		const save = { name: "a.json", mime: "application/json", source: "handler:world.export", target: "summer" }
+		await w.send({ t: "request", requestId: "f1", what: "file-save", params: save })
+		await w.send({ t: "request", requestId: "f2", what: "file-pick", params: { accept: [".png"], action: "world.picture", target: "summer/portrait" } })
+		await w.send({ t: "request", requestId: "f3", what: "pick-turn", params: {} })
+		expect(asked.map(([what]) => what)).toEqual(["file-save", "file-pick"])
+		expect(asked[0]![1]).toMatchObject({ target: "summer" })
+		expect(asked.every(([, , from]) => from.owner === "acme.worlds")).toBe(true)
+		expect(w.got.find((m) => m.requestId === "f1")).toMatchObject({ t: "response", ok: true })
+		expect(w.got.find((m) => m.requestId === "f3")).toMatchObject({ t: "response", ok: false })
+		w.close()
+	})
+
 	test("raises its invoke unresolved, with the document's own live check", async () => {
 		const seen: unknown[] = []
 		let pressing = false

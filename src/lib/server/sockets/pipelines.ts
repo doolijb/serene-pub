@@ -3104,8 +3104,28 @@ export const pipelinesRuns: Handler<
 				eq(schema.pipelineRuns.specSlug, params.specSlug)
 			)
 
+		// Only the columns the list shows (2026-10-30): never `receipt`, which
+		// holds a run's whole trace. A page of 100 runs selected whole put
+		// every receipt through PGlite's WASM memory at once, and after a long
+		// walk that read died "memory access out of bounds" and took the
+		// database down with it. A receipt is read one run at a time.
 		const rows = await db
-			.select()
+			.select({
+				id: schema.pipelineRuns.id,
+				runId: schema.pipelineRuns.runId,
+				specSlug: schema.pipelineRuns.specSlug,
+				specVersion: schema.pipelineRuns.specVersion,
+				specHash: schema.pipelineRuns.specHash,
+				userId: schema.pipelineRuns.userId,
+				outcome: schema.pipelineRuns.outcome,
+				haltNodeKey: schema.pipelineRuns.haltNodeKey,
+				haltReason: schema.pipelineRuns.haltReason,
+				elapsedMs: schema.pipelineRuns.elapsedMs,
+				tokensSpent: schema.pipelineRuns.tokensSpent,
+				isPreview: schema.pipelineRuns.isPreview,
+				sessionId: schema.pipelineRuns.sessionId,
+				startedAt: schema.pipelineRuns.startedAt
+			})
 			.from(schema.pipelineRuns)
 			.where(where)
 			.orderBy(desc(schema.pipelineRuns.id))

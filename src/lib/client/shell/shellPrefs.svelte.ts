@@ -15,7 +15,7 @@
  *   note 29, 2026-10-02): the bar across a session's top — its name, faces
  *   and genre, the Layout button — and the layout's top strips with it. Per
  *   device, since how much room a screen has is the screen's question.
- *   ⚠ Not **Stage only** (the shell's Ctrl+., which hides the rail, the views
+ *   ⚠ Not **full screen** (the shell's Ctrl/⌘+Shift+F, which hides the rail, the views
  *   and every side) and not **tucked** sides (the session's narrow-box rule).
  *
  * Every read and write is guarded: storage can throw (private windows,

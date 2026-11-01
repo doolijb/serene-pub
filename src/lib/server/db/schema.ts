@@ -174,6 +174,14 @@ export const userSettings = pgTable(
 			.notNull()
 			.default(false),
 		/**
+		 * 🚧 How spoken lines play for THIS person (owner ruling 2026-10-28:
+		 * the session decides whether audio is made, the listener how it
+		 * plays): `auto` (the newest line plays as it arrives, under the
+		 * session's *Make and play*), `click` (a player, never by itself),
+		 * `never` (no player at all). Playback only — never synthesis.
+		 */
+		spokenPlayback: text("spoken_playback").notNull().default("auto"),
+		/**
 		 * This user's language (R5). ISO 639-1, from `LANGUAGES`.
 		 *
 		 * **Nullable, and that is the whole design.** NULL is not "English" —
@@ -212,6 +220,14 @@ export const userSettings = pgTable(
 		 */
 		loreWriteMode: text("lore_write_mode"),
 		/**
+		 * 🚧 This person's **library write mode** (M2c path B): what a core
+		 * genre's library outlets (`create-character`, `create-lorebook`, …) do
+		 * when they act for them — `full` lands it (Back takes it back), `review`
+		 * proposes it in the session, `off` refuses. Nullable: NULL reads
+		 * `review` (the default). Read through `libraryWriteModeFor`, never alone.
+		 */
+		libraryWriteMode: text("library_write_mode"),
+		/**
 		 * 🚧 This person's default **On revision** for sessions they start
 		 * (PLAN-rulesets §28): `overwrite` or `branch`. Nullable as
 		 * `lore_write_mode` is: NULL follows
@@ -231,6 +247,10 @@ export const userSettings = pgTable(
 		check(
 			"user_settings_lore_write_mode_check",
 			sql`${table.loreWriteMode} IS NULL OR ${table.loreWriteMode} IN ('full', 'review', 'off')`
+		),
+		check(
+			"user_settings_library_write_mode_check",
+			sql`${table.libraryWriteMode} IS NULL OR ${table.libraryWriteMode} IN ('full', 'review', 'off')`
 		),
 		check(
 			"user_settings_on_revision_default_check",
@@ -1127,6 +1147,23 @@ export const loadouts = pgTable(
 			(): AnyPgColumn => loadouts.id,
 			{ onDelete: "set null" }
 		),
+		/**
+		 * Meaningful only on a `text->audio` loadout: its **loadout voice**, the
+		 * voicebank entry that narrates. Null = the loadout's first enabled entry
+		 * (filled in by `ensureLoadoutVoice`).
+		 */
+		defaultVoiceId: integer("default_voice_id").references(
+			(): AnyPgColumn => voicebankVoices.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * Meaningful only on a `text->audio` loadout: the entry every speaker
+		 * without a voice of its own gets. Null = **Auto**.
+		 */
+		otherSpeakersVoiceId: integer("other_speakers_voice_id").references(
+			(): AnyPgColumn => voicebankVoices.id,
+			{ onDelete: "set null" }
+		),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
@@ -1401,6 +1438,29 @@ export const lorebooks = pgTable(
 			(): AnyPgColumn => lorebooks.id,
 			{ onDelete: "cascade" }
 		),
+		/**
+		 * 🚧 The book's **lorebook annex** (M0, SHAPES L9): owner →
+		 * document, the session annex's model (`sessions.annex`) at book scope —
+		 * world-level engine state that is neither an attribute nor prose.
+		 * Written through `core:outlet/set-lorebook-annex@1` and the fields an
+		 * owner declares `annexField({ scope: 'lorebook' })`; a write from a
+		 * session is a `lore_imprints` row (subject `annex`). ⚠ Not an entry,
+		 * not a save.
+		 */
+		annex: jsonb("annex")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		/** 🚧 Who, besides pipelines, may see each lorebook annex value: owner → key → participant references (as `sessions.annex_audiences`). */
+		annexAudiences: jsonb("annex_audiences")
+			.notNull()
+			.default({})
+			.$type<Record<string, Record<string, string[]>>>(),
+		/** 🚧 (M2b) Each owner's **annex document version** on this book, `{ owner: count }` (`sessions/annexVersions.ts`); `set-lorebook-annex`'s `base` compares against it. */
+		annexVersions: jsonb("annex_versions")
+			.notNull()
+			.default({})
+			.$type<Record<string, number>>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -2471,6 +2531,17 @@ export const sessions = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, Record<string, string[]>>>(),
+		/**
+		 * 🚧 (M2a a8; a column since M2b) Each owner's **annex document version**,
+		 * `{ owner: count }`: moved by every write of that owner's document
+		 * (`sessions/annexVersions.ts`); `set-session-annex`'s `base` compares
+		 * against it. Was the core runtime key `annexVersions` (converted once at
+		 * boot by this migration's data upgrade).
+		 */
+		annexVersions: jsonb("annex_versions")
+			.notNull()
+			.default({})
+			.$type<Record<string, number>>(),
 		/**
 		 * 🚧 The session's **composer states** (owner ruling 2026-10-15):
 		 * which channel lanes' composers the genre closed, for whom, and what
@@ -4010,7 +4081,26 @@ export const systemSettings = pgTable("system_settings", {
 	 * hides the Messages rail item everywhere and makes every `conversations:*`
 	 * handler refuse. Data stays.
 	 */
-	messagingEnabled: boolean("messaging_enabled").notNull().default(true)
+	messagingEnabled: boolean("messaging_enabled").notNull().default(true),
+	/**
+	 * 🚧 **Keep spoken audio** (speech build S8, design §12): how long a
+	 * spoken line's audio file (`files.meta.spoken`) is kept before the
+	 * schedule-tick sweep reclaims it — `forever`, `archived` (until its
+	 * session is archived), or a whole number of days as digits (`"30"`).
+	 * Spoken audio is a derived form: it can always be spoken again.
+	 */
+	keepSpokenAudio: text("keep_spoken_audio").notNull().default("forever"),
+	/**
+	 * 🚧 The last good copy of each `serene-pub-gguf-list` file the server
+	 * reads (audio.cpp build, S3b): file name (`audio.yaml`,
+	 * `audio-families.yaml`) → `{ text, fetchedAt }`. Read when the fetch at
+	 * boot fails; the copy shipped under `server/audio/snapshot/` covers a
+	 * first boot offline. A cache, never authored: losing it costs one fetch.
+	 */
+	ggufListCache: jsonb("gguf_list_cache")
+		.notNull()
+		.default({})
+		.$type<Record<string, { text: string; fetchedAt: string }>>()
 }, (t) => [
 	check(
 		"system_settings_lore_write_mode_default_check",
@@ -4130,6 +4220,66 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 		.notNull()
 		.default(1800),
 	koboldCppManagedReleaseTag: text("koboldcpp_managed_release_tag")
+})
+
+/**
+ * audio.cpp, run by Serene Pub — its settings row.
+ *
+ * One row, found by "oldest first" (`ensureAudioCppSettings`), never by a fixed
+ * id: nothing seeds it at a hardcoded id.
+ */
+export const audiocppSettings = pgTable("audiocpp_settings", {
+	/** Identity, no fixed value. The oldest row is THE row. */
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Whether Serene Pub runs audio.cpp at all. */
+	enabled: boolean("enabled").notNull().default(false),
+	/** Directory the unpacked release lives in. */
+	binaryDir: text("binary_dir"),
+	/** Release asset name installed. */
+	binaryVariant: text("binary_variant"),
+	/** Release tag installed. */
+	releaseTag: text("release_tag"),
+	/** audio.cpp's own 8080 collides with llama.cpp in local discovery. */
+	port: integer("port").notNull().default(5002),
+	/** NULL = `<models>/audio`. */
+	modelsDir: text("models_dir"),
+	/** Derived from the installed variant. */
+	backend: text("backend").$type<
+		"cpu" | "vulkan" | "cuda" | "metal" | "rocm"
+	>(),
+	/** NULL = audio.cpp's default device. */
+	deviceIndex: integer("device_index"),
+	/** CPU threads; NULL = audio.cpp's default. */
+	threads: integer("threads"),
+	/** NULL = Serene Pub's rule: 2 on GPU builds, 1 on CPU. */
+	maxLoadedModels: integer("max_loaded_models"),
+	/** Unload a model after this many ms idle; NULL = no idle unload. */
+	idleUnloadMs: integer("idle_unload_ms"),
+	/** 0 = never stop for idleness (KoboldCPP's equivalent is 1800 secs). */
+	subprocessTimeoutMinutes: integer("subprocess_timeout_minutes")
+		.notNull()
+		.default(30),
+	/** Hash of the server.json the process was last spawned with. */
+	configHash: text("config_hash"),
+	/**
+	 * Package ids (`PackageRow.id`) written into server.json. A package is
+	 * *downloaded* when its files are on disk and *enabled* when listed here;
+	 * there is no per-package row.
+	 */
+	enabledPackageIds: jsonb("enabled_package_ids")
+		.notNull()
+		.default([])
+		.$type<string[]>(),
+	/**
+	 * The installed binary was checked against a published checksum. False =
+	 * none was published (shown as "unverified"); null = nothing installed.
+	 */
+	binaryVerified: boolean("binary_verified"),
+	createdAt: timestamp("created_at").notNull().defaultNow(),
+	updatedAt: timestamp("updated_at")
+		.notNull()
+		.defaultNow()
+		.$onUpdate(() => new Date())
 })
 
 /**
@@ -6656,7 +6806,7 @@ export const pipelineRunArtifacts = pgTable(
 /**
  * Installed plugins / extensions. Built and persisted on this branch behind the
  * `SP_PLUGINS_ENABLED` gate so a proper SDK preview can ship in 0.6.0 with an
- * almost-frozen shape; the whole surface is inert until that flag is set.
+ * almost-frozen shape; the whole surface is on unless that flag turns it off.
  *
  * A plugin's executable code is *only* its reviewed, `bundleHash`-pinned bundle
  * — never a file it writes at runtime. `backends` is the set the conformance
@@ -6687,6 +6837,12 @@ export const plugins = pgTable(
 		/** Sequential-only: manifest-declared, or admin-forced. Concurrent otherwise. */
 		sequential: boolean("sequential").notNull().default(false),
 		enabled: boolean("enabled").notNull().default(false),
+		/**
+		 * 🚧 (M2b) The admin who last switched the plugin on — install-time work
+		 * runs as them (`auth/actingPerson.ts`). Null: never switched on, or they
+		 * are gone.
+		 */
+		enabledBy: integer("enabled_by").references(() => users.id, { onDelete: "set null" }),
 		/** The compiled manifest — hooks, components, pipelines, declared permissions. */
 		manifest: json("manifest")
 			.notNull()
@@ -6746,6 +6902,17 @@ export const plugins = pgTable(
 		 * version, so the callback is told what it is actually upgrading from.
 		 */
 		updateFromVersion: text("update_from_version"),
+		/**
+		 * 🚧 (M2c) What core keeps about the things the plugin PROVIDES
+		 * (`provides`): `dismissed` — the provided lorebooks an administrator
+		 * deleted by hand, by slug (`{ at, by, version }`), which the sync never
+		 * brings back (`plugins/providedMarks.ts` `PluginProvidedState`). Goes
+		 * with the row at uninstall, so reinstalling provides them anew.
+		 */
+		provided: jsonb("provided")
+			.notNull()
+			.default({})
+			.$type<{ dismissed?: Record<string, { at: string; by: number | null; version: string }> }>(),
 		installedAt: timestamp("installed_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
@@ -6781,10 +6948,17 @@ export const pluginFiles = pgTable(
 		/** Relative, slash-separated, no traversal — validated at install. */
 		path: text("path").notNull(),
 		mime: text("mime").notNull(),
-		/** Base64 of the file bytes. */
-		content: text("content").notNull(),
+		/** Base64 of the file bytes; 🚧 NULL when the file is stored on disk (`stored_at = 'disk'`, M0 SHAPES L2). */
+		content: text("content"),
+		/** The sha256 of the file bytes, hex — the immutable-cache key. */
 		hash: text("hash").notNull(),
-		bytes: integer("bytes").notNull()
+		bytes: integer("bytes").notNull(),
+		/** 🚧 Where the bytes live (M0, SHAPES L2): `db` (in `content`) or `disk` (at `disk_path`). */
+		storedAt: text("stored_at").notNull().default("db"),
+		/** 🚧 `<dataDir>/plugins/<id>/<version>/<path>` when `stored_at = 'disk'`; NULL when `db`. */
+		diskPath: text("disk_path"),
+		/** 🚧 `ui` (a frame surface's document or asset under `ui/`) or `asset` (the package's `assets` dir). */
+		kind: text("kind").notNull().default("ui")
 	},
 	(t) => [uniqueIndex("plugin_files_plugin_path_idx").on(t.pluginId, t.path)]
 )
@@ -6828,6 +7002,36 @@ export const pluginUserSettings = pgTable(
 			t.pluginId,
 			t.userId
 		)
+	]
+)
+
+/**
+ * 🚧 (M2b) The **user annex**: one person's own JSON documents, namespaced by
+ * owner (a plugin id, or `core`) — rows, not a jsonb column, because per-key
+ * compare-and-set on `version` is the point (a stale write is refused with the
+ * fresh document). The person is always resolved by core, never named by a
+ * plugin. The FK cascades a hard delete, but accounts are soft-deleted
+ * (`users.is_deleted`): the user-deletion handler removes them explicitly
+ * (`removeUserAnnexesOfUser`). Part of the whole-database backup.
+ */
+export const userAnnexes = pgTable(
+	"user_annexes",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		/** A plugin id, or `core`. */
+		owner: text("owner").notNull(),
+		key: text("key").notNull(),
+		doc: jsonb("doc").notNull().$type<unknown>(),
+		/** Bumped on every write; 1 on insert. The compare-and-set token. */
+		version: integer("version").notNull().default(1),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		unique("user_annexes_user_owner_key_unique").on(t.userId, t.owner, t.key),
+		index("user_annexes_user_owner_idx").on(t.userId, t.owner)
 	]
 )
 
@@ -9661,6 +9865,8 @@ export const stateProposals = pgTable(
 		 * clock (`advanceSessionStoryClock`); it names no owner and no slot,
 		 * never supersedes (a step holds from wherever the clock stands), and
 		 * is a time action for the boundary watcher once accepted.
+		 * 🚧 `library` — a library change a core genre's outlet made or proposes
+		 * (M2c path B): `LibraryChangePayload`, src/lib/server/library/writes.ts.
 		 */
 		kind: text("kind").notNull(),
 		/**
@@ -9738,7 +9944,7 @@ export const stateProposals = pgTable(
 		index("state_proposals_message_idx").on(t.messageId),
 		check(
 			"state_proposals_kind_check",
-			sql`${t.kind} IN ('value', 'clock')`
+			sql`${t.kind} IN ('value', 'clock', 'library')`
 		),
 		check(
 			"state_proposals_status_check",
@@ -9849,7 +10055,7 @@ export const loreImprints = pgTable(
 		lorebookId: integer("lorebook_id")
 			.notNull()
 			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		/** `entry` · `relationship` · `member` · `overlay` (the notes' rule-fed overlay, by the notes' id). */
+		/** `entry` · `relationship` · `member` · `overlay` (the notes' rule-fed overlay, by the notes' id) · 🚧 `annex` (a lorebook annex write, M0 SHAPES L9; `field` = owner/key). */
 		subjectKind: text("subject_kind").notNull(),
 		subjectId: integer("subject_id").notNull(),
 		/** The column (`title`), a typed field (`fields.standing`), an overlay path; NULL = the row was made. */
@@ -9871,7 +10077,7 @@ export const loreImprints = pgTable(
 			.where(sql`${t.status} = 'kept'`),
 		check(
 			"lore_imprints_subject_kind_check",
-			sql`${t.subjectKind} IN ('entry', 'relationship', 'member', 'overlay')`
+			sql`${t.subjectKind} IN ('entry', 'relationship', 'member', 'overlay', 'annex')`
 		),
 		check("lore_imprints_status_check", sql`${t.status} IN ('standing', 'kept', 'settled')`)
 	]
@@ -10033,6 +10239,38 @@ export const rulesets = pgTable(
 			.$onUpdate(() => new Date())
 	},
 	(t) => [index("rulesets_owner_idx").on(t.ownerSlug)]
+)
+
+/**
+ * 🚧 **Every published version of a ruleset** (M2b, owner ruling a7, 2026-10-31):
+ * one row per (`ruleset_id`, `version`), its whole `RulesetDocument`, written
+ * by every publish — a package's install or upgrade (`publishPluginRulesets`)
+ * and an Admin › Rulesets publish (`publishPubRuleset`) — and backfilled at
+ * boot from each `rulesets.published`. The `rulesets` row keeps meaning
+ * "current"; this is what a session pinned to an older version
+ * (`sessions.ruleset_version`) plays until it converts: `vocabularyFor`
+ * reads the pinned document, and the slots only an older version declares
+ * stay registered (`registerKeptRulesetSlots`). Never deleted while a session
+ * pins the ruleset: the only delete is the cascade of `deletePubRuleset`,
+ * which refuses a ruleset anything plays. `published_by` is NULL for a
+ * package's publish. ⚠ Not `rulesets.published` (the current document only).
+ */
+export const rulesetVersions = pgTable(
+	"ruleset_versions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		rulesetId: text("ruleset_id")
+			.notNull()
+			.references(() => rulesets.rulesetId, { onDelete: "cascade" }),
+		/** The document's semver (`1.1.0`). */
+		version: text("version").notNull(),
+		document: jsonb("document").notNull().$type<Record<string, unknown>>(),
+		publishedAt: timestamp("published_at").notNull().defaultNow(),
+		publishedBy: integer("published_by").references(() => users.id, {
+			onDelete: "set null"
+		})
+	},
+	(t) => [uniqueIndex("ruleset_versions_ruleset_version_unique").on(t.rulesetId, t.version)]
 )
 
 export const attributeSheets = pgTable(
@@ -10674,4 +10912,72 @@ export const lorebookSharesRelations = relations(lorebookShares, ({ one }) => ({
 		references: [lorebooks.id]
 	}),
 	user: one(users, { fields: [lorebookShares.userId], references: [users.id] })
+}))
+
+// ── Voicebank (speech build lane C, seam S4, 2026-10-28) ────────────────────
+
+/**
+ * 🚧 The **voicebank** — the pub's named voices (PLAN-speech-build S4; the
+ * shapes are `shared/speech/voicebank.ts`, the rules `server/speech/`). One
+ * row picks one voice id on one connection model and names it, with the
+ * settings it is spoken with. A character's timbre
+ * (`characters.extensions.serenepub.timbre.voice`) and a session's narrator
+ * voice (`speech.narratorVoice`) name a row by slug; at most one row is the
+ * pub's default.
+ *
+ * ⚠ Not the cast roster or the member roster. Not the service's voice list
+ * (`connection_models.facts.speech.voices`): a row picks one of those.
+ * Each row speaks through its own `text->audio` loadout (`loadout_id`); the
+ * model is derived from that loadout's merge root, never stored.
+ */
+export const voicebankVoices = pgTable(
+	"voicebank_voices",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Unique per owner; what a timbre and a session setting store. */
+		slug: text("slug").notNull(),
+		name: text("name").notNull(),
+		/** Free prose: what this voice is like and what it suits. */
+		description: text("description"),
+		/** `pub` (a person's) or the plugin id that declared it. */
+		owner: text("owner").notNull().default("pub"),
+		/** A declared entry's id; NULL on one a person made. */
+		seedKey: text("seed_key").unique(),
+		/**
+		 * The `text->audio` loadout this voice speaks through (voice loadouts,
+		 * 2026-10-29); the model is derived from its merge root. A deleted
+		 * loadout leaves the row unassigned, not gone.
+		 */
+		loadoutId: integer("loadout_id").references(() => loadouts.id, {
+			onDelete: "set null"
+		}),
+		/** The service's voice id on that model (`af_heart`, an ElevenLabs id). */
+		voiceId: text("voice_id").notNull(),
+		/** ISO 639-1; NULL = the voice's own. */
+		language: text("language"),
+		/** `VoicebankSettings`: speed and the ElevenLabs-style dials. */
+		settings: json("settings")
+			.$type<Record<string, unknown>>()
+			.notNull()
+			.default({}),
+		/** `VoicebankLabels`: gender, accent, age, use case. */
+		labels: json("labels")
+			.$type<Record<string, string>>()
+			.notNull()
+			.default({}),
+		enabled: boolean("enabled").notNull().default(true),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("voicebank_voices_owner_slug_unique").on(t.owner, t.slug),
+		index("voicebank_voices_loadout_idx").on(t.loadoutId)
+	]
+)
+
+export const voicebankVoicesRelations = relations(voicebankVoices, ({ one }) => ({
+	loadout: one(loadouts, {
+		fields: [voicebankVoices.loadoutId],
+		references: [loadouts.id]
+	})
 }))

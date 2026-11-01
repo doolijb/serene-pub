@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest"
 import { afterEachRound, everyNTurns, systemCron, type EffectiveRegistration } from "@serene-pub/sdk"
 import { capsOf, capsPause, spanWords } from "./interaction"
-import { gridPoint, msToNextTick, TICK_MS } from "./tick"
+import { gridPoint, msToNextTick, onClosedRunner, startSystemTick, stopSystemTick, TICK_MS } from "./tick"
 import { takesTurn, lineSpeaker, laneOf } from "./moments"
 import { causeOf, wakesOf } from "./evaluate"
 
@@ -53,6 +53,25 @@ describe("the 5-minute grid (R15)", () => {
 		const onGrid = Date.parse("2026-10-21T09:05:00Z")
 		expect(msToNextTick(onGrid)).toBe(TICK_MS)
 		expect(gridPoint(Date.parse("2026-10-21T09:07:59Z"))).toBe(onGrid)
+	})
+	it("a dev-server restart never leaves two ticks: a start clears the timer an earlier copy left; a closed module runner is recognised", async () => {
+		expect(onClosedRunner(new Error("Vite module runner has been closed."))).toBe(true)
+		expect(onClosedRunner(new Error("the database is busy"))).toBe(false)
+		const slot = Symbol.for("serene-pub.routines.systemTick")
+		let staleFired = false
+		const stale = setTimeout(() => {
+			staleFired = true
+		}, 5)
+		;(globalThis as Record<symbol, unknown>)[slot] = { timer: stale }
+		startSystemTick({} as unknown as Db)
+		try {
+			expect(((globalThis as Record<symbol, unknown>)[slot] as { timer: unknown }).timer).not.toBe(stale)
+			await new Promise((r) => setTimeout(r, 25))
+			expect(staleFired).toBe(false)
+		} finally {
+			stopSystemTick()
+		}
+		expect(((globalThis as Record<symbol, unknown>)[slot] as { timer: unknown }).timer).toBeNull()
 	})
 })
 

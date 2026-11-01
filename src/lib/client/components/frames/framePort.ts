@@ -37,7 +37,7 @@
  * spelling is this host's, opaque by contract. A frame reads `nextCursor` and
  * hands it back; it never parses one.
  */
-import { FRAME_PROTOCOL, type HostFrameMessage } from "@serene-pub/sdk"
+import { FRAME_PROTOCOL, SAVE_STATE_MAX_BYTES, type HostFrameMessage } from "@serene-pub/sdk"
 import { channelMatcher, type SurfaceMessage } from "$lib/shared/widgets/context"
 
 /** The rows this host pages over — the messages as the mount site holds them. */
@@ -55,11 +55,12 @@ export const FRAME_PAGE_DEFAULT = 50
 /** The most rows one page may carry, whatever a frame asks for. */
 export const FRAME_PAGE_MAX = 200
 /**
- * The most view state this host will hold for a surface. `save-state` is not
- * storage — the declaration says the host may cap or drop it — so it does,
- * loudly, rather than quietly becoming a database a surface comes to rely on.
+ * The most view state this host will hold for a surface: 256 KB of JSON, a
+ * `SavedStateV1` `{ v, data }` kept as written. `save-state` is not storage —
+ * the declaration says the host may cap or drop it — so it does, loudly,
+ * rather than quietly becoming a database a surface comes to rely on.
  */
-export const FRAME_STATE_MAX_BYTES = 16 * 1024
+export const FRAME_STATE_MAX_BYTES = SAVE_STATE_MAX_BYTES
 
 /** The host's messages, named off the protocol's union rather than restated. */
 export type FrameInitMessage = Extract<HostFrameMessage, { t: "init" }>
@@ -226,8 +227,16 @@ export const frameStateKey = (
  * package the frame's author compiled against.
  */
 export const initMessage = (
-	surface: FrameInitMessage["surface"]
-): FrameInitMessage => ({ t: "init", protocol: FRAME_PROTOCOL, surface })
+	surface: FrameInitMessage["surface"],
+	assetsBase?: string,
+	fullscreen?: boolean
+): FrameInitMessage => ({
+	t: "init",
+	protocol: FRAME_PROTOCOL,
+	surface,
+	...(assetsBase ? { assetsBase } : {}),
+	...(fullscreen !== undefined ? { fullscreen } : {})
+})
 
 /** The `page` reply to a `request`, echoing the frame's own `requestId`. */
 export const buildPageMessage = (

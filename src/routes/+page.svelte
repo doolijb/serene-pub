@@ -15,6 +15,7 @@
 	import { wizardStart } from "$lib/client/wizard/wizardStart"
 	import {
 		characterPickOptions,
+		characterStepOffers,
 		personaPickExcludes,
 		pickedRow
 	} from "$lib/client/wizard/wizardPicks"
@@ -22,6 +23,11 @@
 		quickPersonaCharacter,
 		quickPersonaName
 	} from "$lib/client/wizard/quickPersona"
+	import {
+		STARTER_CHARACTER,
+		isStarterCharacterRow,
+		starterCharacterCreate
+	} from "$lib/shared/characters/starterCharacter"
 	import { wizardCharacterStep } from "$lib/client/wizard/wizardCharacterStep.svelte"
 	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import Avatar from "$lib/client/components/Avatar.svelte"
@@ -54,6 +60,7 @@
 	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { modalityOfTransform } from "$lib/shared/constants/connectionSections"
+	import { modelKindsAllow } from "$lib/shared/connections/modelKinds"
 	import { enableManager } from "$lib/client/components/connections/managers"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
 	import { avatarSrc } from "$lib/client/utils/media"
@@ -183,6 +190,10 @@
 	let startingSession = $state(false)
 	/** "Just call me …" was pressed; its create reply selects the row. */
 	let awaitingQuickPersona = false
+	/** The starter character was pressed; its create reply selects the row. */
+	let starterCharacterPending = $state(false)
+	/** Why the starter's create was refused, shown under its card (no toast: Layout leaves `characters:create:error` to whoever sent it). */
+	let starterCharacterRefusal: string | null = $state(null)
 
 	// Card import state
 	let wizardImportingCharacterCard = $state(false)
@@ -311,14 +322,16 @@
 		capability: string
 	): boolean {
 		if (!modelServes(connectionId, modelId, capability)) return false
-		const need = modalityOfTransform(capability)
-		if (need == null) return true
+		if (modalityOfTransform(capability) == null) return true
 		const model = connections
 			.find((c) => c.id === connectionId)
 			?.models?.find((m: { id: number }) => m.id === modelId) as
-			| { modality?: string | null }
+			| { modality?: string | null; reads?: string[] | null; writes?: string[] | null }
 			| undefined
-		return model?.modality === need
+		// Set-based, not "modality equals the transform's": an `asr` row reads
+		// audio and writes text, which `modalityOfTransform("audio->text")`
+		// (keyed by output side) would never equal (lane V V-7, 2026-10-29).
+		return model?.modality != null && modelKindsAllow(model, capability, modalityOfTransform)
 	}
 
 	/**
@@ -415,6 +428,16 @@
 	// standing key only answers the "Just call me …" persona, which is
 	// created straight from this page with no modal in between.
 	function handleCharacterCreated(res: Sockets.Characters.Create.Response) {
+		// The starter character's create selects it on the Character step.
+		if (
+			starterCharacterPending &&
+			res.character?.id != null &&
+			isStarterCharacterRow(res.character)
+		) {
+			starterCharacterPending = false
+			selectedCharacterId = res.character.id
+			return
+		}
 		if (!awaitingQuickPersona || !res.character?.id) return
 		awaitingQuickPersona = false
 		selectedPersonaId = res.character.id
@@ -1046,6 +1069,10 @@
 	let wizardCharacters = $derived(
 		characterPickOptions(sortedCharacters, selectedPersonaId)
 	)
+	/** What the Character step offers, starter first (`characterStepOffers`). */
+	let characterOffers = $derived(
+		characterStepOffers(sortedCharacters, selectedPersonaId)
+	)
 	/** The Character step's row once chosen; null shows Choose a character. */
 	let chosenCharacter = $derived(
 		pickedRow(wizardCharacters, selectedCharacterId)
@@ -1218,6 +1245,28 @@
 		})
 	}
 
+	/**
+	 * The starter character, created only now, for this person, by the
+	 * ordinary `characters:create`; the reply selects it
+	 * (`handleCharacterCreated`).
+	 */
+	function pickStarterCharacter() {
+		if (starterCharacterPending) return
+		starterCharacterRefusal = null
+		starterCharacterPending = true
+		socket.emit("characters:create", {
+			character: starterCharacterCreate()
+		})
+	}
+
+	/** The starter's create was refused: say so under its card. */
+	function handleStarterCharacterRefused(res: Sockets.ErrorResponse) {
+		if (!starterCharacterPending) return
+		starterCharacterPending = false
+		starterCharacterRefusal =
+			res?.error || t("Couldn't add this character. Try again.")
+	}
+
 	function createSamplePersona() {
 		// A persona is a character: one create, with the two flags on the row.
 		// The server applies the default in its own transaction; the reply
@@ -1354,7 +1403,10 @@
 	function handleDiscoverLocal(
 		res: SocketEventMap["connections:discoverLocal"]["response"]
 	) {
-		localProviders = res.providers ?? []
+		// Set up chat offers chat servers only: audio.cpp answers speech.
+		localProviders = (res.providers ?? []).filter(
+			(p) => p.type !== CONNECTION_TYPE.AUDIOCPP
+		)
 		// A found server's road re-reads its card, so "Check again" there
 		// shows the model just loaded.
 		if (detectedProvider) {
@@ -1533,7 +1585,9 @@
 	 *
 	 * `characters:create` is a standing key: the creator modals send their
 	 * own creates, and this page's only one is the "Just call me …"
-	 * persona, whose reply selects it on the wizard's persona step.
+	 * persona, whose reply selects it on the wizard's persona step. The
+	 * `:error` half answers the starter card's create, shown inline under
+	 * the card.
 	 * `characters:importCard` IS a reply, to the dropzone emits in
 	 * `handleCharacterCardImport` / `handlePersonaCardImport` (one family: a
 	 * persona is a character), and its `:error` half is never gated (plan
@@ -1553,6 +1607,10 @@
 	interest.useInterest<"characters:create">(
 		"characters:create",
 		handleCharacterCreated
+	)
+	interest.useInterest<"characters:create:error">(
+		"characters:create:error",
+		handleStarterCharacterRefused
 	)
 	// The import events are the characters-import context's; this page takes
 	// the outcome for the wizard's selection.
@@ -3066,6 +3124,69 @@
 									)}
 								</p>
 							</div>
+							{#if characterOffers.includes("starter")}
+								<!-- The starter character (B4): offered first,
+								     created only when pressed. -->
+								<button
+									type="button"
+									class="{CHOICE_CARD} items-center gap-3 p-3"
+									disabled={starterCharacterPending}
+									aria-busy={starterCharacterPending}
+									onclick={pickStarterCharacter}
+								>
+									<Avatar
+										char={{ name: STARTER_CHARACTER.name }}
+										size="md"
+										decorative
+									/>
+									<span
+										class="flex min-w-0 flex-1 flex-col gap-1"
+									>
+										<span class="font-semibold">
+											{STARTER_CHARACTER.name}
+										</span>
+										<span
+											class="text-surface-600-400 text-sm"
+										>
+											{STARTER_CHARACTER.summary}
+										</span>
+										<span class="flex flex-wrap gap-1.5">
+											<span
+												class="chip preset-tonal-surface rounded-full text-xs"
+											>
+												{t("Comes with Serene Pub")}
+											</span>
+										</span>
+									</span>
+									{#if starterCharacterPending}
+										<span
+											class="flex shrink-0 items-center gap-2 text-sm"
+											role="status"
+										>
+											<Icons.LoaderCircle
+												size={14}
+												class="animate-spin"
+												aria-hidden="true"
+											/>
+											{t("Adding…")}
+										</span>
+									{:else}
+										<span
+											class="preset-tonal-surface shrink-0 rounded-md px-3 py-1.5 text-sm font-medium"
+										>
+											{t("Pick")}
+										</span>
+									{/if}
+								</button>
+								{#if starterCharacterRefusal}
+									<p
+										class="text-error-600-400 text-sm"
+										role="alert"
+									>
+										{starterCharacterRefusal}
+									</p>
+								{/if}
+							{/if}
 							{#if wizardCharacters.length > 0}
 								<!-- One button, chosen or not, so the picker hands
 								     focus back to it after a pick. -->
@@ -3109,7 +3230,7 @@
 								</button>
 							{/if}
 							<div class="flex flex-col gap-2">
-								{#if wizardCharacters.length > 0}
+								{#if characterOffers.includes("starter") || characterOffers.includes("choose")}
 									<h3 class="text-surface-600-400 text-sm">
 										{t("Or add one")}
 									</h3>

@@ -191,7 +191,10 @@ export const ACTION_FEATURES = {
 	embedText: [],
 	extractEntities: [],
 	transcribeAudio: [],
-	synthesizeSpeech: []
+	// 🚧 Speech arriving while it is still being made qualifies a SPEECH call
+	// and nothing else (the SDK's own words for `audio_streaming`): the first
+	// type to declare it is audio.cpp, run by Serene Pub (PLAN-audiocpp-managed).
+	synthesizeSpeech: ["audio_streaming"]
 } as const satisfies Record<ActionName, readonly FeatureId[]>
 
 /** Every action name, in declaration order. */

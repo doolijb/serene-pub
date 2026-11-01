@@ -63,6 +63,7 @@ import {
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { NER_CAPABILITY } from "$lib/shared/constants/ner"
+import { ONNX_DTYPES, isOnnxDtype } from "$lib/shared/constants/onnxDtypes"
 import { findModel } from "$lib/server/embedding/models"
 import { findNerModel } from "$lib/server/ner/models"
 import {
@@ -295,8 +296,11 @@ async function dropRegistryRow(modelId: string, modality: OnnxModality) {
 function dtypeFor(
 	modality: OnnxModality,
 	modelId: string,
-	row: SelectConnectionModel
+	row: SelectConnectionModel,
+	/** The precision the person picked for THIS download, already validated. */
+	chosen?: string
 ): string | undefined {
+	if (chosen) return chosen
 	const listed =
 		modality === "embeddings"
 			? findModel(modelId)?.dtype
@@ -305,6 +309,33 @@ function dtypeFor(
 	return (listed ?? (typeof declared === "string" ? declared : undefined)) as
 		| string
 		| undefined
+}
+
+/**
+ * Why a requested precision cannot be downloaded for this row, or null.
+ *
+ * Offered: the list's default, every `dtypes` variant it publishes, and — for
+ * a row a person added by Hub id, which publishes no variants — all four
+ * transformers.js precisions (they chose among them when adding).
+ */
+export function dtypeRefusal(
+	modality: OnnxModality,
+	row: SelectConnectionModel,
+	dtype: string
+): string | null {
+	if (!isOnnxDtype(dtype))
+		return `${dtype} is not a precision this app can ask for. Choose one of ${ONNX_DTYPES.join(", ")}.`
+	const def =
+		modality === "embeddings" ? findModel(row.model) : findNerModel(row.model)
+	if ((row.extraJson as any)?.onnx?.addedByUser === true) return null
+	const offered = new Set<string>([
+		...(def?.dtype ? [def.dtype] : []),
+		...((def?.dtypes as string[] | undefined) ?? [])
+	])
+	// A listed entry that names no default runs at fp32.
+	if (!def?.dtype) offered.add("fp32")
+	if (offered.has(dtype)) return null
+	return `${row.model} does not list ${dtype}. It offers: ${[...offered].join(", ")}.`
 }
 
 /** Bytes across every file of one download, as one bar. */
@@ -466,12 +497,14 @@ async function runWarm(
 	endpoint: SelectConnection,
 	row: SelectConnectionModel,
 	/** The admin who pressed Download — the one told how it settled. */
-	initiatorId: number
+	initiatorId: number,
+	/** A validated precision picked for this download; absent = the default. */
+	chosenDtype?: string
 ) {
 	const { modality, modelId } = download
 	let failure: string | null = null
 	try {
-		const dtype = dtypeFor(modality, modelId, row)
+		const dtype = dtypeFor(modality, modelId, row, chosenDtype)
 		await beginRegistryRow(modality, modelId, dtype)
 		const warmed = await fetchModelFiles(
 			modality,
@@ -617,6 +650,20 @@ export const connectionsDownloadModel: Handler<
 			}
 		}
 
+		// A precision other than the default must be one this entry offers.
+		// Refused before anything is claimed or written.
+		const requested =
+			typeof params.dtype === "string" && params.dtype.trim()
+				? params.dtype.trim()
+				: undefined
+		if (requested) {
+			const refusal = dtypeRefusal(modality, row, requested)
+			if (refusal) {
+				emitToUser("connections:downloadModel:error", { error: refusal })
+				return await stateResponse(endpoint, row, refusal)
+			}
+		}
+
 		// Before the claim, and so before `runWarm`'s import of transformers:
 		// nothing is claimed, no registry row is written, and the answer is the
 		// machine's own reason rather than a failed download naming a missing
@@ -640,7 +687,13 @@ export const connectionsDownloadModel: Handler<
 		watch(download, socket.user!.id, emitToUser)
 		if (claimed) {
 			lastPushAt.set(download.key, 0)
-			download.settled = runWarm(download, endpoint, row, socket.user!.id)
+			download.settled = runWarm(
+				download,
+				endpoint,
+				row,
+				socket.user!.id,
+				requested
+			)
 		} else if (!activeDownload(modality, row.model)) {
 			// It settled between `claimDownload` handing back the running entry
 			// and this line, so the watcher just registered is on a key nothing
@@ -953,6 +1006,10 @@ export const connectionsAddHubModel: Handler<
 			typeof params.dtype === "string" && params.dtype.trim()
 				? params.dtype.trim()
 				: undefined
+		if (dtype && !isOnnxDtype(dtype))
+			return fail(
+				`${dtype} is not a precision this app can ask for. Choose one of ${ONNX_DTYPES.join(", ")}.`
+			)
 		const [created] = await db
 			.insert(schema.connectionModels)
 			.values({

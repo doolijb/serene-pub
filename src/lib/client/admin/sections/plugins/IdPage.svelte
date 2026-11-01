@@ -46,6 +46,8 @@
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
 	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
 	import { backendWord, pluginStatus, pluginUninstall } from "./pluginsAdmin"
+	import PluginPalisade from "./PluginPalisade.svelte"
+	import { groupPermissionRows, setGroupTicks } from "$lib/shared/plugins/permissionGroups"
 
 	type Row = Sockets.Plugins.PluginRow
 	type Draft = { enabled: boolean; backend: "quickjs" | "ses"; sequential: boolean }
@@ -363,9 +365,20 @@
 
 	// ── acts that are not edits ─────────────────────────────────────────
 	let uninstalling = false
+	// 🚧 (M2b) What the plugin kept for each person (their own files, `ctx.storage.user`,
+	// and their saved data, `ctx.annex('user')`) stays on uninstall unless this is
+	// ticked; one choice, offered only for a plugin that asked for either.
+	let deleteUserFiles = $state(false)
+	// 🚧 (M2c) The lorebooks the plugin provided stay on uninstall unless this is ticked.
+	let deleteProvidedBooks = $state(false)
 	function uninstall() {
 		uninstalling = true
-		socket.emit("plugins:uninstall", { pluginId })
+		socket.emit("plugins:uninstall", {
+			pluginId,
+			userFiles: deleteUserFiles ? "delete" : "keep",
+			userAnnex: deleteUserFiles ? "delete" : "keep",
+			providedBooks: deleteProvidedBooks ? "delete" : "keep"
+		})
 	}
 	function fmtBytes(n: number | null | undefined): string {
 		if (n == null) return "—"
@@ -460,6 +473,42 @@
 					Sequential (one hook call at a time)
 				</label>
 			</div>
+			{#if perms.some((x) => x.key === "storage-per-user" || x.key === "applet:annex:user")}
+				<label
+					class="flex min-h-10 items-center gap-2 text-sm"
+					title="Applies when you uninstall this plugin. Left unticked, what it kept for each person stays in case it is installed again."
+				>
+					<input type="checkbox" class="checkbox" bind:checked={deleteUserFiles} />
+					When uninstalling, also delete what it kept for each person (files and saved data)
+				</label>
+			{/if}
+			{#if row.providedBooks?.length}
+				<div class="flex flex-col gap-1">
+					<h3 class="text-sm font-semibold">Lorebooks it provides</h3>
+					<ul class="flex flex-col gap-1 text-sm">
+						{#each row.providedBooks as b (b.slug)}
+							<li>
+								{#if b.lorebookId !== null}
+									<a class="anchor" href="/lorebooks#{b.lorebookId}">{b.name}</a>
+								{:else}
+									{b.name}
+								{/if}
+								<span class="text-surface-600-400 text-xs">· version {b.version}</span>
+								{#if b.why}
+									<span class="text-surface-600-400 text-xs">· {b.why}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+				<label
+					class="flex min-h-10 items-center gap-2 text-sm"
+					title="Applies when you uninstall this plugin. Left unticked, the books stay in your library as ordinary lorebooks."
+				>
+					<input type="checkbox" class="checkbox" bind:checked={deleteProvidedBooks} />
+					When uninstalling, also delete the lorebooks it provided
+				</label>
+			{/if}
 			{#each row.componentRefusals ?? [] as r (r.slug)}
 				<p class="text-error-600-400 text-xs">
 					Component “{r.slug}” isn't offered — it was {r.reason}. Install a newer build of this extension.
@@ -514,7 +563,7 @@
 		<AdminFieldset
 			id="plugin-permissions"
 			title="Permissions"
-			description="Saved with the save row. A requested permission is refused until approved."
+			description="Saved with the save row. Each group is granted on its own, and a requested permission is refused until approved."
 		>
 			{#if perms.length === 0}
 				<FieldHelp>This extension declares no permissions.</FieldHelp>
@@ -527,31 +576,56 @@
 						then approve and save.
 					</p>
 				{/if}
-				<ul class="flex flex-col gap-1">
-					{#each perms as perm (perm.key)}
-						<li>
-							<label class="flex min-h-9 flex-wrap items-center gap-2 text-sm">
-								<input
-									type="checkbox"
-									class="checkbox"
-									bind:checked={consent.perms[perm.key]}
-								/>
-								<span>{perm.label}</span>
-								{#if perm.pending}
-									<span
-										class="text-warning-700-300 text-xs"
-										title="Requested but not in force — it starts working when you approve"
-									>
-										(requested — not in force)
-									</span>
-								{/if}
-								{#if perm.accountAffecting}
-									<span class="text-warning-700-300 text-xs">(affects user accounts)</span>
-								{/if}
-							</label>
-						</li>
-					{/each}
-				</ul>
+				{#each groupPermissionRows(perms) as g (g.group)}
+					<section class="flex flex-col gap-1" data-field="permission-group-{g.group}">
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<h4 class="text-surface-600-400 text-xs font-medium">{g.heading}</h4>
+							<span class="flex gap-1">
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal-surface"
+									data-action="allow-group"
+									onclick={() => (consent.perms = setGroupTicks(consent.perms, g.rows.map((r) => r.key), true))}
+								>
+									Allow all
+								</button>
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal-surface"
+									data-action="deny-group"
+									onclick={() => (consent.perms = setGroupTicks(consent.perms, g.rows.map((r) => r.key), false))}
+								>
+									Deny all
+								</button>
+							</span>
+						</div>
+						<ul class="flex flex-col gap-1">
+							{#each g.rows as perm (perm.key)}
+								<li>
+									<label class="flex min-h-9 flex-wrap items-center gap-2 text-sm">
+										<input
+											type="checkbox"
+											class="checkbox"
+											bind:checked={consent.perms[perm.key]}
+										/>
+										<span>{perm.label}</span>
+										{#if perm.pending}
+											<span
+												class="text-warning-700-300 text-xs"
+												title="Requested but not in force — it starts working when you approve"
+											>
+												(requested — not in force)
+											</span>
+										{/if}
+										{#if perm.accountAffecting}
+											<span class="text-warning-700-300 text-xs">(affects user accounts)</span>
+										{/if}
+									</label>
+								</li>
+							{/each}
+						</ul>
+					</section>
+				{/each}
 				{#if pending.length}
 					<!-- The consent act, held like every other edit until Save
 					     (tonal: the save row owns the one filled primary). -->
@@ -572,6 +646,8 @@
 					</div>
 				{/if}
 			{/if}
+			<!-- The ticks above are the asks; this is what the ticked set leaves out, live. -->
+			<PluginPalisade permissions={perms.filter((p) => consent.perms[p.key])} />
 		</AdminFieldset>
 
 		{#if storage}

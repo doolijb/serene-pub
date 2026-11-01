@@ -634,12 +634,20 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 								// sheet's abilities or gear written whole. Lines only —
 								// a lore entry rides the item arm above.
 								textLines(written)
+					// 🚧 A slot that lives on the world (`scope: 'world'`, M0)
+					// is written to the book, not the session: re-owned here.
+					const target =
+						getAttributeSlot(slotId)?.scope === "world"
+							? await (
+									await import("$lib/server/state/worldScope")
+								).worldOwnerOf(db, sessionId, owner)
+							: owner
 					// Throws a sentence naming the slot and what it accepts,
 					// which is the whole of why nothing invalid is proposed.
-					await validateValue(db, { sessionId, owner, slotId, value })
+					await validateValue(db, { sessionId, owner: target, slotId, value })
 					claimed.add(claim(owner, slotId))
 					changes.push({
-						owner,
+						owner: target,
 						slotId,
 						value,
 						...(base !== null ? { base } : {})
@@ -921,10 +929,12 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					updatedBy: `run:${run.runId ?? "unknown"}`
 				}
 				/**
-				 * **The row the world's changes are filed at** (lair pass R8,
-				 * 2026-09-28) — declared on `worldRow`, never inferred, and
-				 * only for world-owned changes: a cast member's change still
-				 * resolves to that member's open anchor above. A write result
+				 * **The row this run's changes are filed at** (lair pass R8,
+				 * 2026-09-28) — declared on `worldRow`, never inferred. A cast
+				 * member's change files there too (2026-10-29): the run's row
+				 * is what Back takes, so a bond a press moved goes back with
+				 * the press. Undeclared, a cast member's change resolves to
+				 * that member's open anchor above. A write result
 				 * from THIS run only (the port's shape: a row id is not
 				 * assignable to it), so the row is the run's own, and a run's
 				 * own row is open to it for the rest of its turn
@@ -935,8 +945,8 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					return halt(
 						"worldRow takes a message this run wrote, as that write's result — wire an earlier create-message's messageId"
 					)
-				const ctxFor = (change: StateChange) =>
-					worldRow !== undefined && change.owner.kind !== "session_cast"
+				const ctxFor = (_change: StateChange) =>
+					worldRow !== undefined
 						? { ...ctxWrite, messageId: worldRow, ownAnchor: true }
 						: ctxWrite
 

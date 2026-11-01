@@ -23,6 +23,10 @@
 	import { v4 as uuid } from "uuid"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
+	import { goto } from "$app/navigation"
+	import { appletLauncher } from "$lib/client/sessions/appletRows"
+	import type { SessionCreationMode } from "@serene-pub/sdk"
+	import CreationModePicker from "./CreationModePicker.svelte"
 	import {
 		declareInterest,
 		requestWithInterest
@@ -60,6 +64,8 @@
 		StartSessionFlow
 	} from "./createSession.svelte"
 
+	type FollowRow = Sockets.Sessions.List.Response["sessionList"][number]
+
 	interface Props {
 		/** What the caller already knows: a character to start with, a persona
 		 *  to speak as, a genre or preset to open on. */
@@ -68,7 +74,16 @@
 			personaId?: number
 			genreId?: string
 			presetId?: number
+			mode?: SessionCreationMode
+			from?: number
+			/** 🚧 M2c: an applet's `create-session` — its genre's declared field values and a proposed lorebook. */
+			fields?: Record<string, unknown>
+			lorebookId?: number
+			/** 🚧 M2c: the asking applet's plugin id; the form then collapses to a one-press confirm. */
+			fromApplet?: string
 		}
+		/** The person's sessions: what a branch or next chapter may follow. */
+		sessions?: readonly FollowRow[]
 		/** The new session's id, once the server has made it. */
 		onCreated: (sessionId: number) => void
 		onCancel: () => void
@@ -83,6 +98,7 @@
 
 	let {
 		prefill,
+		sessions = [],
 		onCreated,
 		onCancel,
 		hasChanges = $bindable(false),
@@ -147,6 +163,10 @@
 		[]
 	)
 	let creating = $state(false)
+	/** 🚧 M2c: the person chose the generic start form for an applet genre ("Use the start form"). */
+	let genericForm = $state(false)
+	/** 🚧 M2c: an applet's request collapses to a one-press confirm until "Change…". */
+	let changeOpen = $state(false)
 	/**
 	 * Which step the person has asked to open, over the first unsettled one.
 	 * Every collapsed step carries a Change action, so a person who wants the
@@ -194,6 +214,14 @@
 	 * own picker, or a lorebook created elsewhere, re-sends the list this
 	 * screen renders.
 	 */
+	/** The prefilled creation mode (and the session it follows), applied once. */
+	let modePrefilled = false
+	$effect(() => {
+		if (modePrefilled || !prefill?.mode) return
+		modePrefilled = true
+		flow.chooseMode(prefill.mode)
+		flow.from = prefill.from ?? null
+	})
 	$effect(() =>
 		requestWithInterest("characters:list", {}, handleCharactersList)
 	)
@@ -252,6 +280,65 @@
 		}
 		flow.syncPresetChoice()
 	})
+
+	/**
+	 * 🚧 M2c: an applet's declared field values and proposed lorebook, applied once the genre and its preset have
+	 * filled their own defaults (so the applet's answers win).
+	 */
+	let appletFieldsApplied = $state(false)
+	$effect(() => {
+		if (appletFieldsApplied || !prefill) return
+		if (!prefill.fields && prefill.lorebookId == null) return
+		if (flow.genreId === null || flow.genreId !== prefill.genreId) return
+		if (flow.presetId === null && !flow.noPresetsForGenre) return
+		appletFieldsApplied = true
+		untrack(() => {
+			if (prefill.fields)
+				flow.fields.genreFields = { ...flow.fields.genreFields, ...prefill.fields }
+			if (prefill.lorebookId != null && flow.shape?.lorebook)
+				flow.fields.lorebookId = prefill.lorebookId
+		})
+	})
+
+	/** 🚧 M2c: nothing left to ask an applet's request: one press, with what will be used. */
+	const confirmOnly = $derived(
+		!!prefill?.fromApplet &&
+			!changeOpen &&
+			flow.genreId !== null &&
+			flow.genreId === prefill.genreId &&
+			(!(prefill.fields || prefill.lorebookId != null) || appletFieldsApplied) &&
+			flow.canStart
+	)
+	const confirmFacts = $derived.by(() => {
+		const out: string[] = []
+		if (flow.preset?.name) out.push(`Preset: ${flow.preset.name}`)
+		const personas = personaOptions.filter((p) => flow.personaIds.includes(p.id))
+		if (personas.length) out.push(`Playing as ${personas.map((p) => p.name).join(", ")}`)
+		const book = lorebookList.find((b) => b.id === flow.fields.lorebookId)
+		if (book) out.push(`Lorebook: ${book.name}`)
+		return out
+	})
+	/**
+	 * 🚧 M2c (ruled 2026-10-31): the applet's field values the session will start with, one row each under the
+	 * genre's declared label; a key the genre does not declare is not shown (nothing would use it).
+	 */
+	const confirmFields = $derived.by(() => {
+		const declared = (flow.shape?.fields ?? {}) as Record<string, { label?: unknown } | undefined>
+		const applied = (flow.fields.genreFields ?? {}) as Record<string, unknown>
+		const out: Array<{ key: string; label: string; value: string }> = []
+		for (const key of Object.keys(prefill?.fields ?? {})) {
+			const decl = declared[key]
+			if (!decl) continue
+			out.push({ key, label: i18nTextIn(decl.label) ?? key, value: fieldValueText(applied[key]) })
+		}
+		return out
+	})
+	function fieldValueText(v: unknown): string {
+		if (v === null || v === undefined || v === "") return "—"
+		if (typeof v === "boolean") return v ? "Yes" : "No"
+		if (typeof v === "object") return JSON.stringify(v)
+		return String(v)
+	}
 
 	/** The prefilled character, once the list carrying it lands. */
 	let prefilledCharacter = $state(false)
@@ -315,6 +402,8 @@
 	const edits = new UnsavedEdits(
 		() => ({
 			genreId: flow.genreId,
+			mode: flow.mode,
+			from: flow.from,
 			presetId: flow.presetId,
 			characterIds: flow.characterIds,
 			personaIds: flow.personaIds,
@@ -685,7 +774,23 @@
 		openStep = step
 	}
 
+	/** 🚧 M2c: an applet genre starts in its launcher, unless the applet itself asked or the person chose this form. */
+	function launcherOf(id: string): string | null {
+		if (prefill?.fromApplet || genericForm) return null
+		return appletLauncher(flow.genres.find((g) => g.genreId === id))
+	}
+
+	function useStartForm(id: string) {
+		genericForm = true
+		chooseGenre(id)
+	}
+
 	function chooseGenre(id: string) {
+		const launcher = launcherOf(id)
+		if (launcher) {
+			void goto(`/apps/${launcher}`)
+			return
+		}
 		touch()
 		genreConfirmed = true
 		// A preset belongs to one genre: the new genre's default takes the
@@ -866,9 +971,15 @@
 			"sessions:create:error",
 			handleCreateError
 		)
+		// 🚧 M2c: started from an applet's request (and still its genre): the server judges the applet's grant too.
+		const payload = flow.payload(finalName)
+		const fromApplet =
+			prefill?.fromApplet && flow.genreId === prefill.genreId
+				? { fromApplet: { pluginId: prefill.fromApplet } }
+				: {}
 		const releaseOk = requestWithInterest(
 			"sessions:create",
-			flow.payload(finalName),
+			{ ...payload, ...fromApplet },
 			handleCreated
 		)
 		releaseCreateInterest = () => {
@@ -905,6 +1016,7 @@
 		backLabel="Back"
 	>
 		{#snippet primaryAction()}
+			{#if !confirmOnly}
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-primary-500 shrink-0"
@@ -923,6 +1035,7 @@
 				{/if}
 				Start
 			</button>
+			{/if}
 		{/snippet}
 		{#snippet subtitle()}
 			{#if startReason}
@@ -937,10 +1050,57 @@
 		{/snippet}
 	</PanelNavHeader>
 
+	{#if confirmOnly}
+		<section class="{CARD_CLASS} flex flex-col gap-2" data-applet-confirm>
+			<p class="text-lead font-medium">
+				Start {flow.genre?.name ?? "a session"}
+			</p>
+			{#if confirmFields.length}
+				<ul class="text-sm" aria-label="What {flow.genre?.name ?? 'it'} starts with">
+					{#each confirmFields as field (field.key)}
+						<li data-applet-field={field.key}>
+							<span class="text-surface-600-400">{field.label}:</span>
+							{field.value}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			{#if confirmFacts.length}
+				<ul class="text-surface-600-400 text-sm">
+					{#each confirmFacts as fact (fact)}
+						<li>{fact}</li>
+					{/each}
+				</ul>
+			{/if}
+			<div class="flex flex-wrap items-center gap-2">
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500"
+					disabled={!canStart}
+					onclick={start}
+				>
+					{#if creating}
+						<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+					{:else}
+						<Icons.Play size={16} aria-hidden="true" />
+					{/if}
+					Start {flow.genre?.name ?? ""}
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => (changeOpen = true)}
+				>
+					Change…
+				</button>
+			</div>
+		</section>
+	{:else}
 	<div class="flex flex-col gap-3">
 		<!-- ── 1. Name ───────────────────────────────────────────────────
 		     First: the one thing most people type (polish parity L11). What
 		     an empty name becomes is the placeholder, and the title says it. -->
+		{#if flow.mode !== "branch"}
 		<section class="{CARD_CLASS} flex flex-col gap-1.5">
 			<label class="text-sm font-medium" for="start-session-name">
 				Name
@@ -955,6 +1115,7 @@
 				onbeforeinput={touch}
 			/>
 		</section>
+		{/if}
 
 		<!-- ── 2. Genre ──────────────────────────────────────────────────
 		     A radio list (polish parity L11): one row per genre, its name and
@@ -1034,6 +1195,19 @@
 									/>
 								</button>
 							</div>
+							{#if appletLauncher(g) && !prefill?.fromApplet && !genericForm}
+								<p class="text-surface-600-400 mt-1 pl-[26px] text-xs">
+									Opens its own app.
+									<button
+										type="button"
+										class="anchor"
+										data-use-start-form={g.genreId}
+										onclick={() => useStartForm(g.genreId)}
+									>
+										Use the start form
+									</button>
+								</p>
+							{/if}
 							{#if selected && (facts || g.about)}
 								<p
 									class="text-surface-600-400 mt-1 pl-[26px] text-xs"
@@ -1071,10 +1245,31 @@
 			{/if}
 		</section>
 
+		<!-- ── 1b. How it starts ──────────────────────────────────────────
+		     The four creation modes, one line each; the genre may suggest
+		     one, never lock it. -->
+		<CreationModePicker
+			cardClass={CARD_CLASS}
+			mode={flow.mode}
+			proposed={flow.proposedMode}
+			genreName={flow.genre?.name ?? "this genre"}
+			genreId={flow.genreId}
+			from={flow.from}
+			{sessions}
+			onmode={(m) => {
+				touch()
+				flow.chooseMode(m)
+			}}
+			onfrom={(id) => {
+				touch()
+				flow.from = id
+			}}
+		/>
+
 		<!-- ── 3. Preset ─────────────────────────────────────────────────
 		     A row with its value and Change (polish parity L11); the chooser
 		     opens on Change, or by itself while nothing is chosen. -->
-		{#if showPreset}
+		{#if flow.mode !== "branch" && showPreset}
 			<section class={CARD_CLASS} aria-labelledby="start-preset-heading">
 				{#if flow.noPresetsForGenre}
 					<h3 id="start-preset-heading" class="text-sm font-medium">
@@ -1207,7 +1402,7 @@
 		     Under the chosen preset: the genre's settings it marks
 		     `askAtStart`, and those fixed at start. A fixed one says it
 		     cannot change later. The rules have their own card below. -->
-		{#if genreAnswered && presetAnswered && flow.genreAsks.length}
+		{#if flow.mode !== "branch" && genreAnswered && presetAnswered && flow.genreAsks.length}
 			<section class={CARD_CLASS} aria-labelledby="start-asks-heading" data-testid="start-asks">
 				<h3 id="start-asks-heading" class="text-sm font-medium">Before you start</h3>
 				<p class="text-surface-600-400 mt-1 text-xs">
@@ -1227,7 +1422,7 @@
 		{/if}
 
 		<!-- ── 3. Who is in it ──────────────────────────────────────────── -->
-		{#if showCast}
+		{#if flow.mode !== "branch" && showCast}
 			<section class={CARD_CLASS} aria-labelledby="start-cast-heading">
 				<div class="flex min-w-0 items-baseline gap-2">
 					<h3
@@ -1449,7 +1644,7 @@
 		{/if}
 
 		<!-- ── 4. Lorebook ──────────────────────────────────────────────── -->
-		{#if showLorebook}
+		{#if flow.mode !== "branch" && flow.mode !== "next-chapter" && showLorebook}
 			<section
 				class={CARD_CLASS}
 				aria-labelledby="start-lorebook-heading"
@@ -1461,6 +1656,11 @@
 					The session will use world lore, character lore and history
 					entries from this lorebook.
 				</p>
+				{#if flow.mode === "new-world"}
+					<p class="text-surface-600-400 mt-1 text-xs">
+						This story starts on a copy of the lorebook you choose; the original stays as it is.
+					</p>
+				{/if}
 				{#if lorebookOptions.length === 0}
 					<!-- Never required (RF fix 2, 2026-10-23): the session's own
 					     book is its world until one is chosen. -->
@@ -1482,6 +1682,7 @@
 						role="radiogroup"
 						aria-labelledby="start-lorebook-heading"
 					>
+						{#if flow.mode !== "new-world"}
 						<li>
 							<button
 								type="button"
@@ -1509,6 +1710,7 @@
 								{/if}
 							</button>
 						</li>
+						{/if}
 						{#each lorebookOptions as l (l.id)}
 							{@const selected = flow.fields.lorebookId === l.id}
 							<li>
@@ -1574,7 +1776,7 @@
 
 		<!-- ── 4b. Rules and How strict (PLAN-rulesets §4, §21; NOMENCLATURE
 		     §28). Only for a genre that offers a choice: Chat shows none. -->
-		{#if showRules && rulesOffer}
+		{#if flow.mode !== "branch" && showRules && rulesOffer}
 			<section class={CARD_CLASS} aria-labelledby="start-rules-heading">
 				<h3 id="start-rules-heading" class="text-sm font-medium">Rules</h3>
 				{#if flow.rulesFixed && !rulesAdoptedLine}
@@ -1695,7 +1897,7 @@
 		{/if}
 
 		<!-- ── 5. Scenario ─────────────────────────────────────────────── -->
-		{#if showScenarioCard}
+		{#if flow.mode !== "branch" && showScenarioCard}
 			{#if showScenario}
 				<section class="{CARD_CLASS} flex flex-col">
 					<label
@@ -1727,6 +1929,7 @@
 			{/if}
 		{/if}
 	</div>
+	{/if}
 </div>
 
 <CharacterSelectModal

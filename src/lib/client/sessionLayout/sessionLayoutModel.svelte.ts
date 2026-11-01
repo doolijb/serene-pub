@@ -52,7 +52,7 @@ import {
 } from "./sideSlot"
 import { createSideRailModel } from "./sideRailModel.svelte"
 import { tuckedSidesOf } from "./tuckedSides"
-import { stageOnlyActive, stagePanelOf } from "./stageOnly"
+import { fullscreenActive, stagePanelOf } from "./stagePanel"
 import {
 	channelClaims,
 	channelsForCopy,
@@ -84,7 +84,7 @@ export const BODY_GAP_PX = 8
 export type PanelsCtx = {
 	leftPanel?: string | null
 	rightPanel?: string | null
-	stageOnly?: boolean
+	fullscreen?: boolean
 }
 
 /** The desktop editor's two tabs (PLAN-session-panels-2026-10-14, Q4). */
@@ -582,13 +582,13 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	}
 
 	/* ── the stage (QE, ./placementRules; brief 7a) ─────────────────────────
-	 * Stage only and the phone draw ONE widget as the stage — the layout's
+	 * Full screen and the phone draw ONE widget as the stage — the layout's
 	 * primary log, in whichever zone holds it. In a side that side's mount
 	 * becomes the stage (./sideSlot's `stage` slot); the middle is hidden with
 	 * the rest, and on the phone its panels join the panels menu as "Middle".
 	 * Marks and containers only — nothing unmounts, and nothing is written. */
-	let stageOnly = $derived(
-		!input.editing && stageOnlyActive(input.panelsCtx, desktop.matches)
+	let fullscreen = $derived(
+		!input.editing && fullscreenActive(input.panelsCtx)
 	)
 	/**
 	 * With no conversation placed (R-B) the stage is the primary panel, else
@@ -626,11 +626,11 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	}
 	/**
 	 * The side drawn as the stage right now, or null: on the phone, and in
-	 * Stage only, while the stage sits in a side. Never while editing.
+	 * Full screen, while the stage sits in a side. Never while editing.
 	 */
 	let stageSide = $derived<"left" | "right" | null>(
 		!input.editing &&
-			(isNarrow || stageOnly) &&
+			(isNarrow || fullscreen) &&
 			stagePick &&
 			stagePick.zone !== "middle"
 			? stagePick.zone
@@ -656,11 +656,11 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 			stagePick?.zone === side ? stagePick.id : null
 		)
 	}
-	/** The middle's stage while Stage only draws it there, else null. */
+	/** The middle's stage while full screen draws it there, else null. */
 	let stageMiddleId = $derived(
-		stageOnly && stagePick?.zone === "middle" ? stagePick.id : null
+		fullscreen && stagePick?.zone === "middle" ? stagePick.id : null
 	)
-	/** The middle panel holding the stage while Stage only draws it there. */
+	/** The middle panel holding the stage while full screen draws it there. */
 	let stageMiddleKey = $derived(
 		stagePanelOf(
 			[...middle.above, middle.primary, ...middle.below],
@@ -668,7 +668,7 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 		)
 	)
 	/**
-	 * Is this middle panel hidden while Stage only draws the middle's stage?
+	 * Is this middle panel hidden while full screen draws the middle's stage?
 	 * Never when no panel holds it: hiding every panel would leave it blank.
 	 */
 	function middleStageHidden(p: DrawnPanel): boolean {
@@ -869,8 +869,8 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 			return pageIdsHeld
 		},
 		dossierFor,
-		get stageOnly() {
-			return stageOnly
+		get fullscreen() {
+			return fullscreen
 		},
 		get stagePick() {
 			return stagePick

@@ -109,6 +109,20 @@ It also names the `.env` files it read, and warns about any setting it doesn't e
 - **Sign-ins last** `USER_TOKEN_EXPIRATION_HOURS` (7 days by default). The cookie can't be read by page scripts, is `Secure` over HTTPS, and **Logout** ends the session on the server at once.
 - **Content Security Policy** is on and strict. If your proxy or CDN injects its own scripts, the browser console shows a CSP error naming the blocked address. Most often it's Cloudflare's Browser Insights beacon (`static.cloudflareinsights.com`): turn that off in Cloudflare (Speed → Optimization → Browser Insights), or allow it with `CSP_EXTRA_SCRIPT_SRC`.
 
+## Plugin packages on a pub
+
+A plugin package is a zip that **Admin › Plugins** unpacks onto the pub's disk, under your [data folder](./environment-variables.md#data-and-storage) at `plugins/<id>/<version>/`. When you install a newer version, the previous one stays until the next start, then it is removed. Two settings bound a package (see [Environment variables](./environment-variables.md)): `SP_PLUGIN_PACKAGE_MAX_MB` (512 by default, counted as the files it unpacks to) and `SP_PLUGIN_FILES_MAX` (10000 files). A package over either is refused, and the message names the variable to raise. Admin › Plugins shows a package's name, size, the permissions it asks for and what it can't do before you press **Install**, and **Cancel** drops it. Each plugin also gets a place of its own to keep files, 64 MB unless its package asks for another size. It is on for every pub; before this preview it stayed off unless `SERENE_PUB_DATA_DIR` was set. [Plugins](./plugins.md) covers what the plugin can do with it.
+
+### Install a package from disk
+
+A browser uploads a package of any size up to `SP_PLUGIN_PACKAGE_MAX_MB`. Where there's no browser to hand, such as a machine you reach only by a terminal, install it from a folder on the machine that runs the pub. Stop Serene Pub first (the command needs the database to itself), then run this from the app's folder:
+
+```bash
+npm run plugin:install -- <folder>
+```
+
+`<folder>` is the built package's root, the folder that holds `dist/plugin/manifest.json`. It is installed switched off, as an upload is; add `--enable` after the folder to switch it on too. Start Serene Pub again afterwards.
+
 ## Troubleshooting
 
 | What you see | Likely cause |

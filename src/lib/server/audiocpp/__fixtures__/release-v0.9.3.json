@@ -1,0 +1,176 @@
+{
+ "tag_name": "v0.9.3",
+ "published_at": "2026-10-26T20:46:25Z",
+ "assets": [
+  {
+   "name": "audio-v0.9.3-bin-macos-arm64-metal.tar.gz",
+   "size": 34847832,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-macos-arm64-metal.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-macos-x64-metal.tar.gz",
+   "size": 36812821,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-macos-x64-metal.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-ubuntu-x64-cpu-portable.tar.gz",
+   "size": 63289061,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-cpu-portable.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-ubuntu-x64-cpu.tar.gz",
+   "size": 57691455,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-cpu.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-ubuntu-x64-cuda12.8-colab.tar.gz",
+   "size": 228182886,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-cuda12.8-colab.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-ubuntu-x64-rocm10.0.0-test.tar.gz",
+   "size": 698655206,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-rocm10.0.0-test.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-ubuntu-x64-vulkan-portable.tar.gz",
+   "size": 77051422,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-vulkan-portable.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-ubuntu-x64-vulkan.tar.gz",
+   "size": 99054053,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-vulkan.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-cpu-portable.zip",
+   "size": 30409504,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-cpu-portable.zip"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-cpu.zip",
+   "size": 30547092,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-cpu.zip"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-cuda12.4.zip",
+   "size": 465913709,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-cuda12.4.zip"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-cuda13.3.zip",
+   "size": 277336614,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-cuda13.3.zip"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-rocm10.0.0-test.zip",
+   "size": 281830660,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-rocm10.0.0-test.zip"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-vulkan-portable.zip",
+   "size": 82088153,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-vulkan-portable.zip"
+  },
+  {
+   "name": "audio-v0.9.3-bin-windows-x64-vulkan.zip",
+   "size": 82301824,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-vulkan.zip"
+  },
+  {
+   "name": "audio-v0.9.3-cudart-ubuntu-x64-cuda12.8.tar.gz",
+   "size": 787020239,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-cudart-ubuntu-x64-cuda12.8.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-cudart-ubuntu-x64-cuda13.3.tar.gz",
+   "size": 591797780,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-cudart-ubuntu-x64-cuda13.3.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-cudart-windows-x64-cuda12.4.zip",
+   "size": 607273675,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-cudart-windows-x64-cuda12.4.zip"
+  },
+  {
+   "name": "audio-v0.9.3-cudart-windows-x64-cuda13.3.zip",
+   "size": 575457454,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-cudart-windows-x64-cuda13.3.zip"
+  },
+  {
+   "name": "audio-v0.9.3-lib-macos-arm64-metal.tar.gz",
+   "size": 13469329,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-macos-arm64-metal.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-macos-x64-metal.tar.gz",
+   "size": 14349788,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-macos-x64-metal.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-ubuntu-x64-cpu-portable.tar.gz",
+   "size": 26336991,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-ubuntu-x64-cpu-portable.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-ubuntu-x64-cpu.tar.gz",
+   "size": 19928884,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-ubuntu-x64-cpu.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-ubuntu-x64-cuda12.8.tar.gz",
+   "size": 222769949,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-ubuntu-x64-cuda12.8.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-ubuntu-x64-cuda13.3.tar.gz",
+   "size": 261796341,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-ubuntu-x64-cuda13.3.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-ubuntu-x64-vulkan-portable.tar.gz",
+   "size": 40098851,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-ubuntu-x64-vulkan-portable.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-ubuntu-x64-vulkan.tar.gz",
+   "size": 33717376,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-ubuntu-x64-vulkan.tar.gz"
+  },
+  {
+   "name": "audio-v0.9.3-lib-windows-x64-cpu-portable.zip",
+   "size": 12666242,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-windows-x64-cpu-portable.zip"
+  },
+  {
+   "name": "audio-v0.9.3-lib-windows-x64-cpu.zip",
+   "size": 12712481,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-windows-x64-cpu.zip"
+  },
+  {
+   "name": "audio-v0.9.3-lib-windows-x64-cuda12.4.zip",
+   "size": 455516494,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-windows-x64-cuda12.4.zip"
+  },
+  {
+   "name": "audio-v0.9.3-lib-windows-x64-cuda13.3.zip",
+   "size": 260710984,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-windows-x64-cuda13.3.zip"
+  },
+  {
+   "name": "audio-v0.9.3-lib-windows-x64-vulkan-portable.zip",
+   "size": 29850039,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-windows-x64-vulkan-portable.zip"
+  },
+  {
+   "name": "audio-v0.9.3-lib-windows-x64-vulkan.zip",
+   "size": 29922578,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-lib-windows-x64-vulkan.zip"
+  },
+  {
+   "name": "audio-v0.9.3-server-config-examples.zip",
+   "size": 13491,
+   "browser_download_url": "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-server-config-examples.zip"
+  }
+ ]
+}

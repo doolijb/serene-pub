@@ -322,8 +322,8 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		// The hook ctx per kind (R-3), probed rather than documented: the SDK's
 		// `assertHookSurface` reads the keys the sandboxes hand an event
 		// listener and a lifecycle callback and refuses an executor handle on
-		// either; the two pure kinds are held to carrying neither storage nor
-		// fetch. One table feeds both sandboxes (`plugins/hookCtx.ts`), so a
+		// either; the two pure kinds are held to carrying none of storage,
+		// package (M2a) or fetch. One table feeds both sandboxes (`plugins/hookCtx.ts`), so a
 		// regression here is a regression in what every plugin receives.
 		const { hookCtxKeysFor } = await import("$lib/server/plugins/hookCtx")
 		const { assertHookSurface } = await import("@serene-pub/sdk")
@@ -339,11 +339,11 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		}
 		for (const kind of ["task", "chain-link"] as const) {
 			const keys = hookCtxKeysFor(kind)
-			const leaked = keys.filter((k) => k === "storage" || k === "fetch")
+			const leaked = keys.filter((k) => k === "storage" || k === "package" || k === "fetch")
 			if (leaked.length)
 				throw new Error(
 					`the ${kind} hook ctx hands out ${leaked.join(", ")} — a ${kind} is pure ` +
-						`(F11) and gets neither (plans/29 R-3)`
+						`(F11) and gets none of storage, package or fetch (plans/29 R-3)`
 				)
 		}
 	}

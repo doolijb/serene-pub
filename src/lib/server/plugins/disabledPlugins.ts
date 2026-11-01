@@ -5,7 +5,7 @@
  * turning it back on restores everything, and sessions already running on
  * what it provided keep running: resolution and dispatch never read this.
  *
- * With the whole subsystem off (SP_PLUGINS_ENABLED unset) every non-core
+ * With the whole subsystem off (SP_PLUGINS_ENABLED turns it off) every non-core
  * plugin counts as switched off here, so listings offer nothing a plugin
  * provides — the same as every other plugin surface under the flag.
  *

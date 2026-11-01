@@ -22,6 +22,7 @@ import { interestKey } from "$lib/shared/sockets/interest"
 import { hearLoreRanked } from "$lib/client/components/sessionPage/loreRanked"
 import { hearLoreMarked } from "$lib/client/components/sessionPage/loreMarked"
 import { hearGenreFieldsChanged } from "$lib/client/components/sessionPage/genreFieldsChanged"
+import { hearRunEnded } from "$lib/client/components/sessionPage/runEnded"
 import { hearStoryMoved } from "$lib/client/components/sessionPage/storyMoved"
 import { authoredReloadKeys } from "$lib/client/components/sessionPage/authoredReload"
 import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
@@ -139,6 +140,8 @@ const SESSION_SCOPED_EVENTS = [
 	"sessions:actions",
 	"sessions:genreOf",
 	"sessions:annex",
+	// 🚧 M0 (L9): the viewer's lorebook-annex view, handed to widgets as `lore.v1.annex`.
+	"sessions:lorebookAnnex",
 	// 🚧 The session's backdrop moved — folded into the page's session.
 	"sessions:backdropChanged",
 	"sessions:panelLayout:startedFromUpdated",
@@ -189,7 +192,7 @@ export interface SessionPageInboxScope {
 	ownLorebookId(): number | null
 	/** The authored owners the page offers, space-joined (`authoredOwnersOf`). */
 	authoredOwners(): string
-	/** The page's widgets, told when the session's lore is ranked or marked, its genre fields move, or its story moves. */
+	/** The page's widgets, told when the session's lore is ranked or marked, its genre fields move, its story moves, or a press's run ends. */
 	widgets: SurfaceManager
 }
 
@@ -239,7 +242,9 @@ export function createSessionPageInbox(
 			hearLoreRanked(sessionId, scope.widgets),
 			// Its stored genre fields moved (Edit Session, the Author's note in
 			// another tab): to the widgets that show one (2026-10-03).
-			hearGenreFieldsChanged(sessionId, scope.widgets)
+			hearGenreFieldsChanged(sessionId, scope.widgets),
+			// 🚧 M2a a6: a press's run ended, whoever pressed: every widget and frame hears `run:ended`.
+			hearRunEnded(sessionId, scope.widgets)
 		]
 		return () => {
 			for (const release of releases) release()

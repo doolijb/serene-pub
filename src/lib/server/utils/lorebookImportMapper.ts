@@ -8,7 +8,8 @@
 import {
 	coerceDeclaredField,
 	declaredFields,
-	entryDeclaration
+	entryDeclaration,
+	isDeclaredEntryType
 } from "$lib/server/entries/declarations"
 import {
 	SELECTIVE_LOGIC_BY_ST_CODE,
@@ -19,6 +20,7 @@ import { ENTRY_PROVENANCES } from "$lib/server/utils/lorebookEntries"
 import {
 	entryTypeIdOfExportKey,
 	HISTORY_TYPE_ID,
+	isDerivedEntryTypeId,
 	LOCATION_TYPE_ID,
 	type EntryTypeId
 } from "$lib/shared/entries/types"
@@ -877,14 +879,26 @@ function sharedEntryFields(entry: LorebookEntryLike) {
  * the most agnostic shape, which is what this importer has always done for a
  * foreign source.
  *
- * ⚠ **The marker is a wire name, never a type id** (`world`, `character`,
- * `history`, and from format 2 `location` and `item`), and a file is read by
- * installs whose type registry is not this one.
+ * ⚠ **The marker is a wire name for core's five** (`world`, `character`,
+ * `history`, and from format 2 `location` and `item`) **or, for a ruleset's
+ * type, its full id** — honoured only when this install's registry declares
+ * it, since a file is read by installs whose registry is not this one.
  * `entryTypeIdOfExportKey` is the one translation table, shared with the
  * exporter.
  */
 export function entryTypeIdOf(entry: LorebookEntryLike): EntryTypeId {
-	return entryTypeIdOfExportKey(entry.extensions?.serenepub?.entryType)
+	const marker = entry.extensions?.serenepub?.entryType
+	// 🚧 (M2c) A ruleset's entry type travels under its full id
+	// (`<owner>:entry/<ruleset>.<repertoire>@1`, SDK `rulesetEntryTypeId`) and
+	// restores when the registry declares it at import time — core's rulesets,
+	// a pub ruleset, a package's own. An id nothing declares falls back to
+	// world lore like any other unknown marker. The shared wire-name table
+	// stays pure; this is the registry's question, so it is asked here.
+	if (typeof marker === "string") {
+		const bare = marker.replace(/@\d+$/, "")
+		if (isDerivedEntryTypeId(bare) && isDeclaredEntryType(bare)) return bare
+	}
+	return entryTypeIdOfExportKey(marker)
 }
 
 /**

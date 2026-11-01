@@ -1,0 +1,100 @@
+# The audio family detector's rules - which audio.cpp family a model belongs to, read by Serene Pub
+# without an app release. One entry per family. A family appears upstream -> add an entry here.
+#
+# family: string               audio.cpp's family id (the same ids audio.yaml uses)
+# tasks: (tts | asr | vdes)[]  what the family can do; the first is the default
+# runner: audiocpp             who runs it (koboldcpp may be added later for families its loader takes)
+# voices: catalogue | listed | none
+#                              where the voices come from: catalogue = a list shipped inside Serene Pub,
+#                              listed = asked of the running service, none = the family has no voices to pick
+# match
+#    repos: regex[]            matched against a Hugging Face repo id (owner/name)
+#    files: regex[]            matched against a file name or path
+#    gguf_architectures: string[]
+#                              general.architecture read from a GGUF header. Every audio.cpp GGUF reads
+#                              'audiocpp' (verified on the real files), which names the runner, not the
+#                              family, so this stays empty; see gguf_families.
+#    gguf_families: string[]   audiocpp.model_spec.family read from a GGUF header. Verified on a real file of each
+#                              family. This is the one signal that decides a family from the file alone.
+#    hf_pipeline_tags: string[]  Hugging Face pipeline_tag values; corroborates, never decides alone
+#    hf_tags: string[]         Hugging Face tags; corroborates, never decides alone
+# variants (optional): [{variant, task?, match: {repos[], files[]}}] - the first variant that matches wins;
+#    a variant's task overrides the family's default (VoiceDesign is task vdes).
+#
+# Regexes are JavaScript-compatible, matched case-insensitively (no inline flags). Write them loosely
+# enough that '-', '_', '.' and spaces are interchangeable.
+
+families:
+  - family: kokoro_tts
+    tasks: [tts]
+    runner: audiocpp
+    voices: catalogue
+    match:
+      repos: ["kokoro"]
+      files: ["kokoro"]
+      gguf_architectures: []
+      gguf_families: [kokoro_tts]
+      hf_pipeline_tags: [text-to-speech]
+      hf_tags: [kokoro]
+
+  - family: qwen3_tts
+    tasks: [tts, vdes]
+    runner: audiocpp
+    voices: catalogue
+    match:
+      repos: ["qwen3[-_. ]?tts"]
+      files: ["qwen3[-_. ]?tts"]
+      gguf_architectures: []
+      gguf_families: [qwen3_tts]
+      hf_pipeline_tags: [text-to-speech]
+      hf_tags: [qwen3-tts, qwen3_tts]
+    variants:
+      - variant: voicedesign
+        task: vdes
+        match:
+          repos: ["voice[-_. ]?design"]
+          files: ["voice[-_. ]?design"]
+      - variant: customvoice
+        match:
+          repos: ["custom[-_. ]?voice"]
+          files: ["custom[-_. ]?voice"]
+      - variant: base
+        match:
+          repos: ["[-_. ]base([-_. ]|$)"]
+          files: ["[-_. ]base([-_. ]|$)"]
+
+  - family: kitten_tts2
+    tasks: [tts]
+    runner: audiocpp
+    voices: catalogue
+    match:
+      repos: ["kitten[-_. ]?tts[-_. ]?2"]
+      files: ["kitten[-_. ]?tts[-_. ]?2"]
+      gguf_architectures: []
+      gguf_families: [kitten_tts2]
+      hf_pipeline_tags: [text-to-speech]
+      hf_tags: [kitten-tts, kittentts]
+
+  - family: parakeet_tdt
+    tasks: [asr]
+    runner: audiocpp
+    voices: none
+    match:
+      repos: ["parakeet[-_. ]?tdt"]
+      files: ["parakeet[-_. ]?tdt"]
+      gguf_architectures: []
+      gguf_families: [parakeet_tdt]
+      hf_pipeline_tags: [automatic-speech-recognition]
+      hf_tags: [parakeet]
+
+  - family: qwen3_asr
+    tasks: [asr]
+    runner: audiocpp
+    voices: none
+    match:
+      repos: ["qwen3[-_. ]?asr"]
+      files: ["qwen3[-_. ]?asr"]
+      gguf_architectures: []
+      gguf_families: [qwen3_asr]
+      hf_pipeline_tags: [automatic-speech-recognition]
+      hf_tags: [qwen3-asr, qwen3_asr]

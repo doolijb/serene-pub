@@ -170,6 +170,25 @@ describe("nextStep — the one thing to do next, by the word on its control", ()
 		])
 	})
 
+	test("4 · a key with no credit is told to pick a free model, listed first", () => {
+		const s = step({
+			modelsSync: { at: "2026-10-06", error: null, freeTier: true },
+			modelCount: 503,
+			servesChat: true
+		})
+		expect(s).toMatchObject({ state: "unfinished", action: "models" })
+		expect(s!.parts).toEqual([
+			"This key has no credit yet, so paid models would be refused: pick a free one under ",
+			{ strong: "Models" },
+			", listed first, and press ",
+			{ strong: "Use in Reply" },
+			"."
+		])
+		expect(
+			step({ ...LISTED, servesChat: true, modelsSync: { at: "2026-10-06", error: null, freeTier: false } })!.text
+		).toBe("Pick a model under Models and press Use in Reply.")
+	})
+
 	test("5 · the chat default: which model replies, and Start a session", () => {
 		expect(
 			step({

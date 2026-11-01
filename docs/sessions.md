@@ -34,6 +34,21 @@ The session opens. In a Story session, each character's greeting from their card
 - **"No preset is available for this genre"**: an administrator hasn't enabled a preset for it. Pick another genre, or ask them. Administrators get a link straight to **Admin › Play › Presets**.
 :::
 
+### How it starts
+
+Under the genre, **How it starts** offers four ways to begin, each with its line:
+
+- **New session**: a fresh story on the lorebook you choose. The world carries over; this session's own state starts empty.
+- **New world**: copies the lorebook (or a starter lorebook) first, so this story changes its own copy of the world.
+- **Branch**: picks up another session's history in a new session. The original stays exactly as it was.
+- **Next chapter**: follows a session you're done with: it's closed out, and what its rules carry forward starts this one. Its messages stay behind.
+
+A genre may suggest one; the row says **Suggested**, and you can pick another. **Branch** and **Next chapter** ask which session, from your own sessions of that genre.
+
+A genre's suggestion is already picked when the form opens, and you can change it. A genre never refuses a mode it didn't suggest.
+
+**Next chapter** starts the new session with **Chapter begins.** as its first line (you can hide it like any line). What the old session's rules mark as carrying over comes with it: your seat's name and portrait, the stats those rules say follow the player, and any saved genre notes marked the same way. Nothing else is copied: no messages, scenes or history. The old session is left as it was. If the old session had no lorebook, its session notes become a lorebook first (what **Share as a lorebook** does), and both sessions read it.
+
 A **persona** is a character you play: see [Personas](./personas.md). You can play any of your characters, and one you pick becomes one of your personas.
 
 ### Send a message
@@ -220,6 +235,8 @@ To take back what just happened, use **Back** (the curved arrow pointing left) i
 
 **Forward** (the arrow beside it) brings the last turn you took back into the story again, with everything it changed. Point at it to see how many turns are ahead (*2 turns ahead*).
 
+**When Serene drafts a character or a lorebook.** In a Guide session, ask Serene to make a character or a lorebook and she drafts one. By default it waits in the session as a proposal with **Accept** and **Reject**; nothing is added to your library until you accept. Your **Library write mode** (Settings › User) can change that: **Full** adds it at once, **Off** adds nothing, and the session says so beside the reply (*Drafted a character, not added: …*). Either way, **Back** takes it back: a character or lorebook made by that turn is removed from your library, and **Forward** puts it back.
+
 While you're back, the composer says so: *2 turns ahead will be replaced if you write now.*, with **Forward** beside it. Writing anything new (a line, **Continue**, **Regenerate**, an action) replaces the turns ahead: they're deleted for good and the story goes on from where you are. That's the one way messages are deleted unless the genre offers **Delete**.
 
 - Only the session's owner presses Back and Forward. Everyone else sees the note in their composer while the owner is back.
@@ -307,6 +324,23 @@ Each row's menu offers **View**, **Edit**, **Star** / **Unstar** and **Delete**.
 
 Opening the sessions list from a character's details shows only sessions with that character, with a chip you can dismiss to see all.
 
+### Apps
+
+Some plugins come with a whole game of their own: a screen with New game, Continue and Load. When one is installed,
+the top of the Sessions view shows an **Apps** group with one row for it. Pressing the row opens the game full screen,
+outside any session; **Leave** in the top-left corner, or **Esc**, brings you back to Sessions. Like Exit full screen,
+Leave slides out of the way after two seconds; point at the top-left edge to bring it back. Once you click into the game it
+has the keyboard, so Esc is the game's own; **Leave** always works.
+
+From there the game uses Serene Pub's own screens. New game opens the ordinary start form with the game's choices
+already filled in, and when nothing is left to ask it is a single **Start** press. Load opens this list showing only
+the game's sessions, with a chip you can dismiss to see all. Deleting a save shows the usual delete confirm. Each save
+is an ordinary session: it is listed here with the rest, keeps Back and Forward, history and panels, and opens
+straight into the session, never through the game's screen.
+
+Choosing one of these games under **New** also opens its own screen. The card's **Use the start form** keeps the
+ordinary form instead.
+
 ### Delete a session
 
 Choose **Delete** in a session's menu and confirm. The session and all its messages are removed for good. Scenes it saved to a lorebook stay there, with their name, summary and cast.
@@ -368,6 +402,7 @@ From the top:
 - **Actions**: which actions the session offers, each with a line on what it does. Untick one to switch it off in this session. Actions the genre offers but the preset leaves out are listed under **Not in this preset**; an administrator can add one to this session.
 - **Preset**, when the genre has more than one (Story, Chat, the Lair): which preset the session runs, with what a turn costs. Pick another and it applies at once. In Chat, change the **Tools** the preset picked and it reads **Custom**, with **Back to** the preset beside it.
 - **The genre's settings**, headed by the genre's name (*Story settings*): whatever the genre offers, such as Story's **Auto-advance** and **Author's note**, Chat's **Tools**, and **How strict** where the genre plays by rules. Rarely-touched ones sit under **Advanced**. A setting the preset locked shows its value, read-only, with the reason. See [Settings you can change, and why some are locked](#settings-you-can-change-and-why-some-are-locked).
+  A setting that holds JSON (a genre or plugin can declare one) is a code field over the formatted JSON. Leave the field and text that is valid JSON is saved as that JSON, not as text; text that isn't valid JSON is not saved, and the field says what is wrong with it. A JSON setting has a size limit (16 KB unless its author sets another, never more than 256 KB), and may have a shape its value must fit; if the text is over the limit or doesn't fit, nothing is saved and you are told why. A JSON setting you can't change is shown as formatted JSON, read-only.
 - **A card for each pipeline the session runs** that offers something to set: the reply (Story's **What the reply reads**, the sprite choice), the turn order (who may take a turn), each routine's own switches (**Note what changed**). Only what your role can change is there.
 - **Routines**: what runs on its own between turns, each **Off**, **Review** or **Full** (see [Routines](#routines)).
 - **On revision**: what deleting or regenerating the latest turn does (see [On revision](#on-revision)).
@@ -419,6 +454,9 @@ When a session's rules offer choices (Vis Itineris does; Story offers none), **R
 
 A change applies at once, from the next turn, without **Save**. Only the session's owner can change them; everyone else in the session sees them. Each session keeps its own choices, and a session that changes its rules and changes back finds its earlier choices again.
 
+When a session's rules have a newer version, its owner sees **Update rules to v…** under **Rules version** in the session's settings; the confirm lists what changes (the rules' own notes) before anything moves. Back undoes it. Until then the session keeps playing the version it started on: the pub keeps every published version of a ruleset, so an upgrade (or a newer publish) never changes the attributes or values of a game in progress, and a value you change meanwhile is kept when you do update.
+A genre may update its sessions' rules by itself when they open; the session then says *The rules were updated from v… to v… when this session opened.* in one line at the top, which you can dismiss. The confirm ends *Back undoes this.*: Back puts the old rules version and the stats' values back together.
+
 ### Author's note
 
 A Story session has an **Author's note**: your own note to the model for this session, such as what is true right now or where you want the story to go. Edit it under **Genre settings**, or in the **Author's note** widget beside the conversation: Chat's default layout puts it in the right column as an icon (on a phone, under **Session panels**). A session whose layout you changed, or one opened before the widget was in the default, can add it from the tray (see [Session layout](./session-layout.md#the-widgets)).
@@ -444,7 +482,7 @@ What this session shows of your own characters and data, and to whom. It's read-
 
 At the foot of the Settings tab, for the session's owner and administrators. It lists what pipelines keep for this session: for Serene Pub and each plugin, every value it stores, what it is, who can see and change it, and its current value. Press **Refresh** to read it again after a turn.
 
-A text value you're allowed to change has an **Edit** button. That's how you correct something no widget shows, such as the Lair Castellan's scratchpad. A value marked secret is never shown.
+A value declared as JSON is shown as formatted JSON and its shape reads *JSON*. A text value you're allowed to change has an **Edit** button. That's how you correct something no widget shows, such as the Lair Castellan's scratchpad. A value marked secret is never shown.
 
 To keep a value on screen beside the story, add an **Annex** widget and set its **Key** to the value's owner and key with a dot between, such as `core.retake-quietly` (see [the widgets](./session-layout.md#the-widgets)). It shows only what the person looking may see.
 
@@ -574,6 +612,62 @@ When a character has [sprites](./characters.md#sprites) (faces for different moo
 Faces show in the **Scene Portraits** widget (with **Picture** set to **Current sprite**, its default), beside each line in the **Messages** widget when **Face beside each line** is set to the line's sprite, and in the session's header.
 
 **Another outfit for this session.** On a Scene Portraits face, the sprite-set menu shows the character in another of their card's sets, for this session only. It's there when the card has more than one set, for the session's owner and the character's owner.
+
+## Read aloud
+
+A session can speak its lines. It uses the pub's [speech setup](./connections.md#speech): a speaking model in the **Narration** loadout, and the named voices in **Loadouts → Voices**.
+
+[audio.cpp, run by Serene Pub](./connections.md#audiocpp-run-by-serene-pub) is the route that needs no graphics card: it speaks on the processor alone.
+
+The session's settings have a **Read aloud** card. **Read replies aloud** is a three-way switch, and a line under it says what the choice does:
+
+- **Off** (the default): replies stay text.
+- **Make audio**: each reply gets audio once it has landed, with a play button under it. Speech is its own job after the reply: the next reply never waits for it, and the composer stays free. Making audio is another call to a speech service per reply.
+- **Make and play**: the same, and the newest reply plays by itself. Browsers sometimes refuse a sound nobody asked for; then you press **Tap to play** once.
+
+The session's owner changes these. They decide whether audio is **made**. Two other switches decide whether it is **heard**:
+
+- Each character's card has **Spoken aloud** on its Speech tab. Off, that character's lines stay text in every session, whatever Read aloud says.
+- Your own **Settings → Spoken lines** decides how spoken lines play for you: **Play as they arrive**, **Play when I press**, or **No player**. It changes nothing for anyone else and never stops audio being made. The rest of the card:
+
+- **What is read** (a select): **As the pipeline says** (the default: the reply's own choice, which reads the whole line), **Whole line** (dialogue and narration, as written), **Dialogue only** (only what the characters say), or **Narration only**. Words between asterisks inside a quote are the speaker's own emphasis and stay with the line; asterisks outside a quote mark an action, which is read by the narrator or kept silent. A fragment of one or two words joins the words before or after it in the same voice rather than being spoken alone, and a stretch of audio that runs far past its words is cut short, since a voice model given almost nothing to say tends to fill the time with noise.
+- **Narrator voice**: the voice that reads narration, and any line whose speaker has no voice of their own and no pick below. Blank follows the pub: it reads _Narration's voice (Bruno)_ (members see _Pub narrator (Bruno)_), the **Voice** of the Narration loadout (see [Voices](./connections.md#loadouts)); pick one from the voicebank to override it for this session.
+- **Envoy voices** (the session's owner): a compact list, one row per envoy of the genre seated in this session, with the envoy's face, name and a voice picker. Blank gets the pub's automatic choice, and the row says which: _Auto: Mira — avoids the narrator_, _Auto: same as the narrator — add a second voice to Narration_ (administrators only; members see the first part), or _Other speakers: Mira_ when an administrator pinned one. Pick a voice in the row to override it. A **Details** fold on each row holds **Voice** (blank is **Auto**) and **Narration voice** (blank is **Session narrator**). There is nothing to write: voices are picked, never described. A character's card has no narration prose either; see [A character's Speech tab](#a-characters-speech-tab).
+
+The card ends with **Language** and then **Spoken lines** with **Clear** (see [Where the audio goes](#where-the-audio-goes)).
+
+**While a line is being spoken** it shows **Speaking…** and a **Stop**; stopping ends only that line's audio. Speaking shows only on that line: the composer's **Stop**, the line above the composer and the progress card stay about replies, and you can keep writing while a line is read. Changing a line yourself does not read it again; use **Say it again** in its ⋮ › Speech popout.
+
+**Which voice reads a piece.** The first of these that is set and usable (a voice that is off or gone is skipped), then the model's own voice. Dialogue with a speaker: the character's **Voice**, the envoy's, **Other speakers** when an administrator pinned one, **Auto**, then the narrator's voice. Narration inside a character's or envoy's line: their **Narrator** override, the envoy's narration voice, then the narrator's voice. The narrator's voice is the session's **Narrator voice**, else the Narration loadout's **Voice**, else its first voice, else the loadout's own voice setting, else the service's default. A description is only ever the character's own (for their dialogue) and the chosen voicebank voice's own.
+- **Language**: the language the session is spoken in, as a two-letter code such as _en_ or _fr_. Empty uses the pub's default.
+
+**Which language a line is spoken in.** The first of these that says: the line itself, the writing in it (Japanese, Korean, Chinese, Greek, Hebrew, Thai, Georgian, Armenian and Hindi are recognised; Latin letters never are, since English, French and Spanish share them), the character's own language, the session's **Language**, then the pub's default language.
+
+Any line can also be read on demand: its heading has one speech icon (**Read aloud** until the line has audio, then press it to play and again to stop), and its ⋮ menu lists **Read aloud** (**Say it again**), **Say it as…** and, while it is spoken, **Stop speaking this line**, with a **Speech** popout holding the full player (see [Spoken lines](./session-layout.md#spoken-lines)). While a line is being spoken, the line above the message box says so: *Mira is speaking…*. Only one sound plays at a time: starting a line stops the one that was playing, wherever it was started, and a voice's **Try this voice** clip and a line pause each other.
+
+### A character's Speech tab
+
+A character's card has a **Speech** tab (the **Voice** tab is how they write). It reads top to bottom:
+
+- **Spoken aloud** is first. It is on by default; off, the character is never spoken, and that travels with the card.
+- **Voice** is how this character speaks. An administrator picks a voice from the pub's voices as the base (blank is **Auto**: the pub gives them one, see [Read aloud](#read-aloud)); then anyone who can edit the card can change how they sound over it: **Description** (a few words, _low, tired, a little amused_), **Language** (a two-letter code), **Speed**, a **Seed** and any dials the model offers. **Try** speaks a line with it before you save. These settings apply to what the character says.
+- **Narrator** is who reads the prose around their lines. **Override narrator** is a pick from the pub's voices only (there is nothing to write). Blank is **Session narrator**: the session's narrator, then the Narration loadout's **Voice**. A narrator voice is read with its own settings. Administrators pick; **Try** is theirs too.
+- Members see which voices were picked, never the loadouts behind them. If a voice a card names is later turned off, or its loadout loses its model, the lines are spoken in the next voice that fits. Exporting a card keeps the description, language, speed and seed; the voice picks belong to this pub and are left out. An older card's narration description is dropped when it is imported.
+
+**Try the voice** hears a line before you save. Anyone who can edit the card sees it. There is one try-out, and each block's **Try this voice** points it at that voice (it reads _Try the voice_ or _Try the narrator_). With a wide window it has two columns; with a narrow one they stack.
+
+- Type a **Line** (a sample is filled in) and press **Try**. A small player appears: **Play the clip** or **Pause the clip**, a position bar, the time, and a chip with the voice.
+- It uses the block's **Description**, **Language**, **Speed** and dials. For an administrator it also uses the picked voice; a member's try uses the pub's default voice. Members see the picked voice as a plain label.
+- If the speaking model takes direction in words, the moods show as chips to pick from, with **None** to clear the choice.
+- Nothing a try speaks is kept. One try runs at a time, and it gives up after a minute; a refusal shows right under **Try**.
+
+Administrators also see the voice's **person**: a chip such as _person #355260212_ with **Copy** (it reads **Copied** for a moment) and **Change**, which opens the number to type one in, and **Re-roll** (a dice). On a model that designs its voice from the description, that number picks which person the description becomes: press **Re-roll** until you like one, and the voice then stays the same in every line. A blank seed still gives one steady voice for the same description. The seed is saved with the card's normal **Save** and travels with the card; a card's seed wins over the voicebank voice's.
+
+### Where the audio goes
+
+Spoken audio is stored with the session, one file per line, and you can play it again any time. It is not part of anyone's media list: the session's **Read aloud** card ends with one **Spoken lines** row (how many files, how much space) and a **Clear** button, and **Admin › Data** has the same row for the whole pub. **Clear** deletes the audio files only; the lines stay, read *Not spoken yet*, and can be spoken again.
+
+Only the session's owner and administrators see or clear a session's spoken audio. An administrator also sets **Keep spoken audio** in **Admin › General**: *Forever*, *Until the session is archived*, or a number of days, after which older audio is swept away.
 
 ## Search by meaning notice
 

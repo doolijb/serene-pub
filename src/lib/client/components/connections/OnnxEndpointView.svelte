@@ -20,16 +20,15 @@
 	 *
 	 * ## Tabs, like every managed runtime (2026-09-25)
 	 *
-	 * **Models · Get · Arriving.** What could be downloaded never sits INLINE
-	 * under what is already here: every endpoint answers "where do I get a
-	 * model?" the same way KoboldCPP and Ollama do, with a **Get** tab
-	 * (plan 2026-09-24 C3). The tab holds the same `ModelFinderView`
-	 * they open, scoped to this connection, and **Arriving** the same
-	 * `DownloadsView`: one idiom, three destinations.
+	 * **Models · Arriving.** What could be downloaded never sits INLINE under
+	 * what is already here: every endpoint answers "where do I get a model?"
+	 * the same way, with a **Get more…** door that opens the Models view's Get a
+	 * model dialog on this connection (plan 2026-10-29 D1); **Arriving** is the
+	 * same `DownloadsView`.
 	 *
 	 * ⚠ The table therefore lists only what is **on this machine**
 	 * (`splitByPresence().here`). Comparing a model you have against one you
-	 * could fetch now means opening Get — which is the trade the tabs make, and
+	 * could fetch now means opening Get more… — which is the trade the tabs make, and
 	 * the same one the managed runtimes already made.
 	 *
 	 * ⚠ **The connection's own form is the Settings tab** (2026-09-25), handed
@@ -68,7 +67,7 @@
 	} from "./onnxModelFacts"
 	import { useLaneStatus } from "./useLaneStatus.svelte"
 	import ModelRowItem from "./ModelRow.svelte"
-	import ModelFinderView from "./ModelFinderView.svelte"
+	import { openInModels } from "$lib/client/admin/railDoors"
 	import DownloadsView from "./DownloadsView.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
@@ -156,13 +155,25 @@
 	/**
 	 * Which half of the endpoint is on show.
 	 *
-	 * ⚠ **A tab, not a fold** (2026-09-25). A disclosure under what is already
-	 * here would answer "where do I get a model?" differently from every
-	 * managed runtime, which has a **Get** tab (plan 2026-09-24 C3). One idiom, three
-	 * destinations: the tab holds the same `ModelFinderView` KoboldCPP and
-	 * Ollama open, scoped to this connection.
+	 * ⚠ **A tab, not a fold** (2026-09-25).
 	 */
 	let tab = $state("models")
+
+	/**
+	 * **Get more…**: the Models view's Get a model dialog on this connection.
+	 * ⚠ `capability` is NOT optional: ONNX is a finder destination only under
+	 * the `embeddings` and `entities` scopes (`SCOPE_KINDS`), and the lane's
+	 * star capability (`text->embedding` / `text->entities`) picks the scope.
+	 */
+	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
+	function getMore() {
+		openInModels(panelsCtx, {
+			finder: {
+				connectionId: connection.id,
+				capability: section?.starCapability
+			}
+		})
+	}
 
 	/** This endpoint's files still arriving, for the Arriving tab's dot. */
 	const arriving = $derived(
@@ -171,7 +182,6 @@
 
 	const onnxTabs = $derived([
 		{ value: "models", label: "Models", icon: Icons.Package },
-		{ value: "get", label: "Get", icon: Icons.Search },
 		{
 			value: "downloads",
 			label: "Arriving",
@@ -434,7 +444,7 @@
 	>
 		{#if tab === "models"}
 			<!-- What is on this machine, and nothing else. What could be
-			     downloaded is the Get tab, the same door every managed
+			     downloaded is the Get more… door, the same one every managed
 			     runtime has. -->
 			{#if mode === "compact"}
 				<section
@@ -484,35 +494,19 @@
 					</table>
 				</div>
 			{/if}
-		{/if}
-	</div>
-
-	<div
-		id="onnx-endpoint-get"
-		role="tabpanel"
-		aria-labelledby="onnx-endpoint-get-tab"
-		hidden={tab !== "get"}
-	>
-		{#if tab === "get"}
-			<!-- The ONE finder (R3), scoped to this connection — the same
-			     component, cards and all, that KoboldCPP and Ollama open. -->
-			<div class="flex flex-col py-3">
-				<!-- ⚠ `capability` is NOT optional here. ONNX is a finder
-				     destination only under the `embeddings` and `entities`
-				     scopes (`SCOPE_KINDS`) — never `chat` — so a Get tab that
-				     opened on the default scope would list no ONNX
-				     destination at all and offer this endpoint nothing. The
-				     lane's own star capability picks the scope, and the two
-				     vocabularies already line up: `text->embedding` and
-				     `text->entities` are exactly what `FINDER_SCOPES` keys
-				     on. -->
-				<ModelFinderView
-					connectionId={connection.id}
-					capability={section?.starCapability}
-					inTab
-					onBack={() => (tab = "models")}
-				/>
-			</div>
+			{#if !unavailable && split.here.length}
+				<div class="pt-3">
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface min-h-11"
+						data-get-more
+						onclick={getMore}
+					>
+						<Icons.Download size={14} aria-hidden="true" />
+						Get more…
+					</button>
+				</div>
+			{/if}
 		{/if}
 	</div>
 
@@ -546,7 +540,7 @@
 
 	{#snippet nothingHere()}
 		<!-- The managed runtimes' empty state, word for word in shape: one
-		     card, one button, and the button is the Get tab. Adding a model
+		     card, one button, and the button is Get more…. Adding a model
 		     by Hugging Face id lives there too, in the finder — never a
 		     second copy of that form here: one way in per endpoint. -->
 		<div class="panel-card flex flex-col items-start gap-2">
@@ -566,10 +560,10 @@
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-primary-500"
-					onclick={() => (tab = "get")}
+					onclick={getMore}
 				>
 					<Icons.Download size={15} aria-hidden="true" />
-					Get a model
+					Get more…
 				</button>
 			{/if}
 		</div>

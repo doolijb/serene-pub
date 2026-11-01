@@ -17,6 +17,7 @@
 	import ScriptsCard from "$lib/client/components/admin/pub/ScriptsCard.svelte"
 	import MessagingCard from "$lib/client/components/admin/pub/MessagingCard.svelte"
 	import LoreWriteModeCard from "$lib/client/components/admin/pub/LoreWriteModeCard.svelte"
+	import KeepSpokenAudioCard from "$lib/client/components/admin/pub/KeepSpokenAudioCard.svelte"
 	import RoutineCapsCard from "$lib/client/components/settingsTabs/RoutineCapsCard.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -57,6 +58,7 @@
 			<CharaVaultCard bind:hasUnsavedChanges={charaVaultDirty} />
 			<ScriptsCard />
 			<LoreWriteModeCard />
+			<KeepSpokenAudioCard />
 			<!-- 🚧 The pub's two limits on real-time routines (R11; lane 7). -->
 			<RoutineCapsCard scope="system" />
 

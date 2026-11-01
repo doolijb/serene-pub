@@ -12,7 +12,8 @@
  * proposal: it names both, and the preset wins. See `sessionsCreateHandler`.
  */
 import type { StoredSwapContribution } from "$lib/shared/swaps"
-import { settingValueOf } from "@serene-pub/sdk"
+import { settingValueOf, type SessionCreationMode } from "@serene-pub/sdk"
+import { creationModeBlocker } from "./creationModes"
 import { adoptedBookRules, howStrictChoices, rigourFor, rulesField } from "$lib/shared/rulesets/rulesOffer"
 import {
 	INITIAL_PRESET_FILLABLE_FIELDS,
@@ -556,6 +557,13 @@ export class StartSessionFlow {
 	/** The chosen preset, or null while none is selected. */
 	presetId = $state<number | null>(null)
 
+	/** How the session starts (`new` unless the person or the prefill picked another). */
+	mode = $state<SessionCreationMode>("new")
+	/** The session a `branch` or `next-chapter` start follows; null for the other modes. */
+	from = $state<number | null>(null)
+	/** True once the person or the prefill picked a mode, so a genre's proposal never overrides it. */
+	modeChosen = $state(false)
+
 	/** The fields a preset's creation defaults can fill. */
 	fields = $state<PresetFillableFields>({
 		...INITIAL_PRESET_FILLABLE_FIELDS
@@ -592,6 +600,8 @@ export class StartSessionFlow {
 		this.genres.find((g) => g.genreId === this.genreId) ?? null
 	)
 	shape = $derived(this.genre?.shape ?? null)
+	/** The mode the chosen genre suggests, or null. */
+	proposedMode = $derived<SessionCreationMode | null>(this.shape?.creationMode?.propose ?? null)
 	/** 🚧 The genre's Rules / How strict offer; null when it offers no choice (Chat). */
 	rulesOffer = $derived(this.genre?.rules ?? null)
 	/**
@@ -700,21 +710,46 @@ export class StartSessionFlow {
 	 * (`firstUnmetStartRule`). Never a lorebook: a session may always start
 	 * without one (RF fix 2, 2026-10-23).
 	 */
-	startBlocker = $derived(
-		firstUnmetStartRule({
-			genreId: this.genreId,
-			noPresetsForGenre: this.noPresetsForGenre,
-			characterCount: this.characterIds.length,
-			personaCount: this.personaIds.length,
-			floors: this.floors
+	startBlocker = $derived.by(() => {
+		const modeBlocker = creationModeBlocker({
+			mode: this.mode,
+			from: this.from,
+			lorebookId: this.fields.lorebookId,
+			starterKit: this.starterKit
 		})
-	)
+		// A branch ignores every other draft field server-side, so the cast floors do not apply.
+		if (this.mode === "branch") return modeBlocker
+		return (
+			modeBlocker ??
+			firstUnmetStartRule({
+				genreId: this.genreId,
+				noPresetsForGenre: this.noPresetsForGenre,
+				characterCount: this.characterIds.length,
+				personaCount: this.personaIds.length,
+				floors: this.floors
+			})
+		)
+	})
 	/** True once nothing stands in Start's way (`startBlocker` is null). */
 	canStart = $derived(this.startBlocker === null)
+
+	/** The person (or the prefill) picks how the session starts. */
+	chooseMode(m: SessionCreationMode) {
+		this.mode = m
+		this.modeChosen = true
+		if (m !== "branch" && m !== "next-chapter") this.from = null
+	}
 
 	chooseGenre(id: string) {
 		if (this.genreId === id) return
 		this.genreId = id
+		// Sessions are per genre, so a followed session is dropped; a proposal
+		// preselects only while nothing was chosen.
+		this.from = null
+		if (!this.modeChosen) {
+			const proposal = this.genres.find((g) => g.genreId === id)?.shape?.creationMode?.propose
+			this.mode = proposal ?? "new"
+		}
 		// Rules and How strict are the genre's to offer: a new genre starts
 		// from its own defaults.
 		this.rulesPick = null
@@ -851,7 +886,7 @@ export class StartSessionFlow {
 
 	/** The `sessions:create` body for what the flow currently holds. */
 	payload(name: string): Sockets.Sessions.Create.Params {
-		return buildCreatePayload({
+		const built = buildCreatePayload({
 			name,
 			genreId: this.genreId ?? STANDARD_GENRE_ID,
 			presetId: this.presetId,
@@ -869,5 +904,10 @@ export class StartSessionFlow {
 			primaryRuleset: this.rulesOffer && !this.adoptedRules ? this.rulesNowId : null,
 			rigour: this.rigour
 		})
+		return {
+			...built,
+			...(this.mode !== "new" ? { mode: this.mode } : {}),
+			...(this.from != null ? { from: this.from } : {})
+		}
 	}
 }

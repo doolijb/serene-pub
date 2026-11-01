@@ -32,6 +32,7 @@
 	import LoadoutsGrid from "$lib/client/components/loadouts/LoadoutsGrid.svelte"
 	import LoadoutsLedger from "$lib/client/components/loadouts/LoadoutsLedger.svelte"
 	import LoadoutSheet from "$lib/client/components/loadouts/LoadoutSheet.svelte"
+	import VoicebankPanel from "$lib/client/components/speech/VoicebankPanel.svelte"
 	import NewLoadoutDialog from "$lib/client/components/loadouts/NewLoadoutDialog.svelte"
 	import {
 		groupLoadouts,
@@ -73,6 +74,12 @@
 			? (list.loadouts.find((l) => l.id === sheetId) ?? null)
 			: null
 	)
+	let voicesPanel = $state<ReturnType<typeof VoicebankPanel> | null>(null)
+	/** The sheet's "Add a voice" door: close the sheet, open the New voice form on that loadout. */
+	function addVoiceTo(loadoutId: number) {
+		sheetId = null
+		voicesPanel?.addVoice(loadoutId)
+	}
 	function openSheet(id: number | null) {
 		newOpen = false
 		sheetId = id
@@ -175,6 +182,12 @@
 			/>
 			<LoadoutsGrid {groups} onOpen={openSheet} />
 			<LoadoutsLedger rows={ledger} onOpen={openSheet} />
+			<!-- 🚧 Speech: the voicebank (this view is admin-only). -->
+			<VoicebankPanel
+				bind:this={voicesPanel}
+				onOpenNarration={() => openJob("text->audio")}
+				onOpenLoadout={openSheet}
+			/>
 		{/if}
 	</div>
 {/snippet}
@@ -188,6 +201,7 @@
 		connections={conns.listed}
 		onClose={() => (sheetId = null)}
 		onOpenLoadout={openSheet}
+		onAddVoice={addVoiceTo}
 	/>
 {/if}
 {#if list}

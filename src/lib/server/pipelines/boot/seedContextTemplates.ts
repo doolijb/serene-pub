@@ -17,7 +17,8 @@
 import { and, asc, eq, isNull } from "drizzle-orm"
 import {
 	DEFAULT_TRANSCRIPT_TEMPLATE,
-	LAIR_TRANSCRIPT_TEMPLATE
+	LAIR_TRANSCRIPT_TEMPLATE,
+	SHIPPED_SPOKEN_LINE_TEMPLATES
 } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
@@ -52,6 +53,10 @@ interface ShippedContextTemplate {
 	nodeDefinitionId: string
 	name: string
 	source: string
+	/** The language it is written in; absent = core's Handlebars. */
+	engine?: string
+	/** Pool default by seed key (read by `defaultContextTemplateFor`). */
+	isDefault?: boolean
 }
 
 /**
@@ -81,7 +86,18 @@ export const SHIPPED_CONTEXT_TEMPLATES: readonly ShippedContextTemplate[] = [
 		nodeDefinitionId: TRANSCRIPT_TEMPLATE_NODE_TYPE,
 		name: "Lair transcript",
 		source: LAIR_TRANSCRIPT_TEMPLATE
-	}
+	},
+	// 🚧 speak's line templates (Jinja), from the catalogue: the pool is
+	// `core:oracle/speak`, the default is Whole line. Rows are matched by
+	// seed key and never written at a chosen id.
+	...SHIPPED_SPOKEN_LINE_TEMPLATES.map((t) => ({
+		seedKey: t.seedKey,
+		nodeDefinitionId: t.nodeDefinitionId,
+		name: t.name,
+		source: t.source,
+		engine: t.engine,
+		isDefault: t.isDefault
+	}))
 ]
 
 /**
@@ -91,8 +107,21 @@ export const SHIPPED_CONTEXT_TEMPLATES: readonly ShippedContextTemplate[] = [
  */
 const POOL_DEFAULT_SEED_KEYS: ReadonlyMap<string, string> = new Map([
 	[poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE), CONTEXT_TEMPLATE_SEED_KEY],
-	[poolKeyFor(TRANSCRIPT_TEMPLATE_NODE_TYPE), DEFAULT_TRANSCRIPT_SEED_KEY]
+	[poolKeyFor(TRANSCRIPT_TEMPLATE_NODE_TYPE), DEFAULT_TRANSCRIPT_SEED_KEY],
+	...SHIPPED_SPOKEN_LINE_TEMPLATES.filter((t) => t.isDefault).map(
+		(t) => [poolKeyFor(t.nodeDefinitionId), t.seedKey] as const
+	)
 ])
+
+/** The engine a shipped row is written in (absent = core's Handlebars). */
+const engineOf = (t: ShippedContextTemplate): string => t.engine ?? CORE_TEMPLATE_ENGINE
+
+/** The engine the pool's default row is written in. */
+function shippedEngineOfPool(pool: string): string {
+	const seedKey = POOL_DEFAULT_SEED_KEYS.get(pool)
+	const row = SHIPPED_CONTEXT_TEMPLATES.find((t) => t.seedKey === seedKey)
+	return row ? engineOf(row) : CORE_TEMPLATE_ENGINE
+}
 
 export interface ContextTemplateSeedResult {
 	created: string[]
@@ -149,7 +178,7 @@ async function seedOne(
 					schema.pipelineContextTemplates.nodeDefinitionId,
 					poolKeyFor(t.nodeDefinitionId)
 				),
-				eq(schema.pipelineContextTemplates.engine, CORE_TEMPLATE_ENGINE)
+				eq(schema.pipelineContextTemplates.engine, engineOf(t))
 			)
 		)) as Array<{ id: number; name: string }>
 	const name = shippedNameFor(
@@ -170,6 +199,7 @@ async function seedOne(
 		if (
 			existing.source !== t.source ||
 			existing.templateId !== templateId ||
+			existing.engine !== engineOf(t) ||
 			existing.name !== name
 		) {
 			await db
@@ -178,7 +208,7 @@ async function seedOne(
 					name,
 					source: t.source,
 					templateId,
-					engine: CORE_TEMPLATE_ENGINE,
+					engine: engineOf(t),
 					updatedAt: new Date()
 				})
 				.where(eq(schema.pipelineContextTemplates.id, existing.id))
@@ -196,7 +226,7 @@ async function seedOne(
 		// Explicit rather than NULL: a template carries its engine on the value
 		// (12 §2a), so a stored row keeps what it was authored in even if
 		// core's default moves later.
-		engine: CORE_TEMPLATE_ENGINE,
+		engine: engineOf(t),
 		isImmutable: true,
 		// Core's belongs to no pipeline, which is what puts it in the picker's
 		// "shipped" group rather than under whichever panel happened to boot.
@@ -237,7 +267,7 @@ export async function defaultContextTemplateFor(
 	const pool = poolKeyFor(nodeDefinitionId)
 
 	const seedKey = POOL_DEFAULT_SEED_KEYS.get(pool)
-	if (seedKey && engine === CORE_TEMPLATE_ENGINE) {
+	if (seedKey && engine === shippedEngineOfPool(pool)) {
 		const [row] = await db
 			.select()
 			.from(schema.pipelineContextTemplates)

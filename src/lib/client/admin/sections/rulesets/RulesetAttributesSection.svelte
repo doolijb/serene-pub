@@ -23,6 +23,8 @@
 		changedByWords,
 		kindWords,
 		OWNER_OPTIONS,
+		SCOPE_OPTIONS,
+		scopeWords,
 		SHOWN_AS_OPTIONS,
 		shownAsWords,
 		visibilityWords,
@@ -133,17 +135,35 @@
 						{/if}
 					</div>
 					<div class="flex min-w-0 flex-col gap-1">
-						<span class="text-surface-600-400 text-xs">Carried by</span>
+						<span class="text-surface-600-400 text-xs">Held by</span>
 						<RulesetInlinePick
-							id="attr-carried-{a.uid}"
+							id="attr-holder-{a.uid}"
 							look="field"
-							many
-							label="Who carries {attributeName(a, slotChoices)}"
+							label="Who holds {attributeName(a, slotChoices)}"
 							choices={OWNER_OPTIONS}
-							value={a.carriedBy}
-							text={carriedWords(a.carriedBy)}
+							value={a.owner}
+							text={a.carriedBy.length > 1 ? carriedWords(a.carriedBy) : carriedWords(a.owner ? [a.owner] : [])}
 							{readonly}
-							onchange={(v) => (a.carriedBy = v as string[])}
+							onchange={(v) => {
+								a.owner = String(v)
+								a.carriedBy = []
+							}}
+						/>
+						{#if a.carriedBy.length > 1}
+							<FieldHelp>Several hold it (an older spelling). Pick one to replace it.</FieldHelp>
+						{/if}
+					</div>
+					<div class="flex min-w-0 flex-col gap-1">
+						<span class="text-surface-600-400 text-xs">Kept</span>
+						<RulesetInlinePick
+							id="attr-kept-{a.uid}"
+							look="field"
+							label="How long {attributeName(a, slotChoices)} is kept"
+							choices={SCOPE_OPTIONS}
+							value={a.scope}
+							text={scopeWords(a.scope)}
+							{readonly}
+							onchange={(v) => (a.scope = String(v))}
 						/>
 					</div>
 					<div class="flex min-w-0 flex-col gap-1">

@@ -40,11 +40,12 @@
 
 import { Worker } from "node:worker_threads"
 import { AMBIENT_PRELUDE } from "./prelude"
+import { STORAGE_HOST_SOURCE } from "./storageHost"
 import {
-	STORAGE_HOST_SOURCE,
-	permissionKey,
-	type PermissionConfig
-} from "./storageHost"
+	PACKAGE_HOST_SOURCE,
+	sandboxConfigKey,
+	type SandboxConfig
+} from "./packageHost"
 import { FETCH_HOST_SOURCE } from "./fetchHost"
 import { CRYPTO_HOST_SOURCE } from "./cryptoHost"
 import { hookCtxGrants } from "./hookCtx"
@@ -52,15 +53,19 @@ import type {
 	HookRef,
 	HookRunResult,
 	InvokeOptions,
-	PluginSandbox
+	PluginSandbox,
+	UserAnnexCallWrite
 } from "./types"
+
+/** Room in a call's result JSON for the annex writes it buffered (M2b): a person's annex under one owner is capped at 1 MiB. */
+const ANNEX_WRITES_SLACK_BYTES = 2 * 1024 * 1024
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
 interface StoredBundle {
 	source: string
 	hash: string
-	config?: PermissionConfig
+	config?: SandboxConfig
 }
 
 type EvalOutcome =
@@ -80,6 +85,7 @@ lockdown()
 	STORAGE_HOST_SOURCE +
 	FETCH_HOST_SOURCE +
 	CRYPTO_HOST_SOURCE +
+	PACKAGE_HOST_SOURCE +
 	String.raw`
 var __DENIED_STORAGE = (function () {
 	function d() { throw new Error("storage: permission not granted"); }
@@ -101,7 +107,14 @@ const jobs = new Map()
 // grants: what the host derived from the hook's kind (hookCtx.ts, R-3). A
 // ctx member the kind is not granted is absent, not a stub that refuses, so
 // Object.keys(ctx) says exactly what the hook may reach.
-function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants) {
+function annexJsonOf(job) {
+	// ctx.annex('user')'s start (M2b): the host's snapshot, or the sentence its
+	// methods reject with. The clock is the call's pinned one.
+	var base = job.userAnnexJob || { denied: "annex('user'): no person is acting for this call" };
+	return JSON.stringify(Object.assign({}, base, { nowMs: job.nowMs }));
+}
+
+function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants, annexJson) {
 	return (
 		'(async function () {\n' +
 		'"use strict";\n' +
@@ -133,6 +146,10 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants) {
 		// backends so a hook cannot tell them apart by what its logs look like.
 		'  log: function () { __logs.push(__fmtLog(arguments)); }' +
 		(grants.storage ? ',\n  storage: __storage' : '') +
+		(grants.package ? ',\n  package: __package' : '') +
+		// annex is put on after the prelude (its one implementation lives there);
+		// the key is placed here so Object.keys(ctx) follows hookCtxKeysFor.
+		(grants.annex ? ',\n  annex: null' : '') +
 		(grants.fetch ? ',\n  fetch: function (url, opts) { return __fetch(url, opts ? JSON.stringify(opts) : undefined); }' : '') +
 		'\n};\n' +
 		__PRELUDE + '\n' +
@@ -140,7 +157,9 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants) {
 		// that is where the one adapter lives (see prelude.ts): promises for
 		// the members the SDK declares as promises, Uint8Array for file bytes,
 		// and the older six passed through synchronously.
-		(grants.storage ? 'ctx.storage = __wrapStorage(ctx.storage);\n' : '') +
+		(grants.storage ? 'ctx.storage = __wrapStorage(ctx.storage);\nctx.storage.user = __wrapStorage(__userStorage, true);\n' : '') +
+		(grants.package ? 'ctx.package = __wrapPackage(ctx.package);\n' : '') +
+		(grants.annex ? 'ctx.annex = __makeHookAnnex(JSON.parse(' + JSON.stringify(annexJson) + '));\n' : '') +
 		// The abort capability, wired *before* the bundle is evaluated: the
 		// first registration wins, so a hook cannot displace its own abort. The
 		// controller is the prelude's — an AbortSignal cannot cross a worker
@@ -159,8 +178,8 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants) {
 		// SES runs on real V8: async hooks and awaited capabilities (fetch) work.
 		'if (__r && typeof __r.then === "function") __r = await __r;\n' +
 		'return JSON.stringify(__r === undefined\n' +
-		'  ? { u: true, logs: __logs }\n' +
-		'  : { u: false, v: __r, logs: __logs });\n' +
+		'  ? { u: true, logs: __logs, aw: __annexWrites() }\n' +
+		'  : { u: false, v: __r, logs: __logs, aw: __annexWrites() });\n' +
 		'})()'
 	)
 }
@@ -225,6 +244,23 @@ parentPort.on("message", async (msg) => {
 			// past the ctx to a name the program never mentions (R-3).
 			const endowments = { __crypto: harden(makeCryptoHost()), __registerAbort: harden(function (fn) { if (typeof fn === "function" && !state.fire) state.fire = fn }) }
 			if (job.grants.storage) endowments.__storage = harden(tx ? tx.api : __DENIED_STORAGE)
+			// ctx.storage.user (M2b): the acting person's own folder, the same host
+			// scoped to it. Refuses by sentence when no grant or no person.
+			const utx =
+				job.grants.storage && job.userStorageDir && bundle.config && bundle.config.userQuotaBytes
+					? makeStorageHost({ storageDir: job.userStorageDir, quotaBytes: bundle.config.userQuotaBytes }, job.nowMs)
+					: null
+			if (job.grants.storage)
+				endowments.__userStorage = harden(
+					utx
+						? utx.api
+						: makeDeniedUserStorage(
+								bundle.config && bundle.config.userQuotaBytes
+									? "no person is acting for this call"
+									: "per-user storage is not granted"
+							)
+				)
+			if (job.grants.package) endowments.__package = harden(makePackageHost(bundle.config))
 			if (job.grants.fetch) endowments.__fetch = harden(fetchHostFor(bundle.config, function () { return state.aborted }, job.secrets))
 			const compartment = new Compartment(endowments)
 			const program = buildProgram(
@@ -233,7 +269,8 @@ parentPort.on("message", async (msg) => {
 				job.inputJson,
 				job.seedLabel,
 				job.nowMs,
-				job.grants
+				job.grants,
+				annexJsonOf(job)
 			)
 			try {
 				const json = await compartment.evaluate(program)
@@ -242,10 +279,12 @@ parentPort.on("message", async (msg) => {
 				// reports the call as failed rather than letting it pass as a
 				// success whose data never landed. Files land here.
 				if (tx) tx.commit()
+				if (utx) utx.commit()
 				parentPort.postMessage({ id: msg.id, outcome: { ok: true, json } })
 			} finally {
 				jobs.delete(msg.id)
 				if (tx) tx.discard()
+				if (utx) utx.discard()
 			}
 		}
 	} catch (e) {
@@ -308,7 +347,7 @@ export class SesWorkerSandbox implements PluginSandbox {
 		pluginId: string,
 		bundleSource: string,
 		bundleHash: string,
-		config?: PermissionConfig
+		config?: SandboxConfig
 	): Promise<void> {
 		const prev = this.loaded.get(pluginId)
 		// Identical bytes *and* identical grants. Anything else has to re-store:
@@ -317,7 +356,7 @@ export class SesWorkerSandbox implements PluginSandbox {
 		if (
 			prev &&
 			prev.hash === bundleHash &&
-			permissionKey(prev.config) === permissionKey(config)
+			sandboxConfigKey(prev.config) === sandboxConfigKey(config)
 		)
 			return
 		this.loaded.set(pluginId, {
@@ -392,6 +431,8 @@ export class SesWorkerSandbox implements PluginSandbox {
 			seedLabel: opts.seedLabel,
 			nowMs: opts.nowMs,
 			secrets: opts.secrets,
+			userStorageDir: opts.userStorageDir,
+			userAnnexJob: opts.userAnnexJob,
 			// Derived here, on the host, from the kind the caller named — the
 			// worker never sees the kind, only what it grants (R-3). Throws on
 			// a call that names none: a host bug, surfaced loudly, never a
@@ -508,7 +549,12 @@ export class SesWorkerSandbox implements PluginSandbox {
 						: "error",
 				started
 			)
-		if (Buffer.byteLength(outcome.json, "utf8") > maxOutputBytes)
+		// The buffered annex writes (M2b) ride in the same JSON but are not the
+		// hook's output: the first check allows for them, the second is exact.
+		if (
+			Buffer.byteLength(outcome.json, "utf8") >
+			maxOutputBytes + ANNEX_WRITES_SLACK_BYTES
+		)
 			return this.mkFail(
 				`output exceeds ${maxOutputBytes} bytes`,
 				"error",
@@ -518,6 +564,7 @@ export class SesWorkerSandbox implements PluginSandbox {
 			u?: boolean
 			v?: unknown
 			logs?: string[]
+			aw?: UserAnnexCallWrite[] | null
 			__miss?: boolean
 		}
 		try {
@@ -531,12 +578,24 @@ export class SesWorkerSandbox implements PluginSandbox {
 		}
 		if (parsed.__miss)
 			return this.mkFail("no such hook", "missing", started)
+		const writes = parsed.aw && parsed.aw.length ? parsed.aw : undefined
+		if (
+			Buffer.byteLength(outcome.json, "utf8") -
+				(writes ? Buffer.byteLength(JSON.stringify(writes), "utf8") : 0) >
+			maxOutputBytes
+		)
+			return this.mkFail(
+				`output exceeds ${maxOutputBytes} bytes`,
+				"error",
+				started
+			)
 		return {
 			ok: true,
 			value: parsed.u ? undefined : parsed.v,
 			logs: parsed.logs ?? [],
 			durationMs: Date.now() - started,
-			backend: this.kind
+			backend: this.kind,
+			...(writes ? { userAnnexWrites: writes } : {})
 		}
 	}
 

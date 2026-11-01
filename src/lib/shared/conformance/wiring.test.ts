@@ -241,11 +241,23 @@ const shapeSubject = (shape: string, ports: readonly Port[]) =>
 /**
  * Shapes some port declares it accepts, that nothing in the registry emits.
  *
- * Clean today, and kept for the direction rather than for the findings: a new
- * in-port typed to a shape no node produces is a feature wired to nothing, and
- * it is the cheapest possible thing to notice at the moment it is written.
+ * Kept for the direction rather than for the findings: a new in-port typed to
+ * a shape no node produces is a feature wired to nothing, and it is the
+ * cheapest possible thing to notice at the moment it is written.
  */
-const UNPRODUCED_IN_SHAPES: Deliberate[] = []
+const UNPRODUCED_IN_SHAPES: Deliberate[] = [
+	{
+		subject: shapeSubject(
+			"core:shape/clock-target@1",
+			IN_PORTS.filter((p) => p.shape === "core:shape/clock-target@1")
+		),
+		reason:
+			"🚧 A moment within the story day (`ClockTargetV1`, M0): " +
+			"`advance-story-clock@1.to` and `cast-presences@1.atHour` take it as a " +
+			"literal in the node's config (\"sleep until 07:00\"), the way `cause` " +
+			"is one; no node computes a clock target, so nothing emits the shape."
+	}
+]
 
 /**
  * Shapes some port emits, that no port anywhere declares it accepts.
@@ -420,6 +432,29 @@ const unfilledInPorts = (): string[] => {
  * shipped run can reach.
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
+	{
+		subject: "core:outlet/set-session-annex@1.base",
+		reason:
+			"🚧 M2a a8 (2026-10-31): the annex version a write was based on " +
+			"(compare-and-set; a stale write is not written and answers the fresh " +
+			"annex). Optional: unwired, the write is unconditional as before. No core " +
+			"spec races another run on one owner's document; a plugin's pipeline wires " +
+			"it from `session-annex`'s `version`. Closes when a core spec does."
+	},
+	{
+		subject: "core:outlet/advance-story-clock@1.to",
+		reason:
+			"🚧 M0 (2026-10-28, lane T1): the moment of the day to move the clock " +
+			"to (\"sleep until 07:00\"), the second input beside `by`. No core spec moves " +
+			"the clock to a moment; a genre's sleep or wait action does. Closes when one does."
+	},
+	{
+		subject: "core:query/cast-presences@1.atHour",
+		reason:
+			"🚧 M0 (2026-10-28, lane T3/T4): the hour whose `placements` (where each " +
+			"cast member is, by their schedule) the query answers; unwired, the present hour. " +
+			"No core spec asks for another hour; a genre's map or plans do. Closes when one does."
+	},
 	{
 		subject: "core:outlet/create-lore-entry@1.match",
 		reason:
@@ -1233,7 +1268,10 @@ function socketReferences(): {
 			// A handler's event: `event:` in a `register()` entry, or the first
 			// argument of the verb factories (`refusable`, `summaryVerb`) that
 			// build one — each registers it, so its `:error` is synthesised too.
-			if (/(?:\bevent\s*:|\b(?:refusable|summaryVerb)(?:<[^>]*>)?\()\s*$/.test(before))
+			// `adminHandler` (sockets/audiocpp.ts, 2026-10-29) is the same kind
+			// of factory: it builds the handler and emits its own
+			// `${event}:error` from a template literal.
+			if (/(?:\bevent\s*:|\b(?:refusable|summaryVerb|adminHandler)(?:<[^>]*>)?\()\s*$/.test(before))
 				handled.add(name)
 		}
 	}
@@ -1713,6 +1751,36 @@ function endowedCtx(relPath: string): string[] {
 			n.left.expression.text === "ctx"
 		)
 			members.push(n.left.name.text)
+		// A nested endowment on a line of its own (M2b: `ctx.storage.user`),
+		// read as `<member>.<nested>`. Only the one shape this reader can
+		// follow — the storage adapter, scoped, over a named host — is taken;
+		// any other nested assignment throws rather than reads as endowed.
+		if (
+			ts.isBinaryExpression(n) &&
+			n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+			ts.isPropertyAccessExpression(n.left) &&
+			ts.isPropertyAccessExpression(n.left.expression) &&
+			ts.isIdentifier(n.left.expression.expression) &&
+			n.left.expression.expression.text === "ctx"
+		) {
+			const path = `${n.left.expression.name.text}.${n.left.name.text}`
+			const rhs = n.right
+			if (
+				path !== "storage.user" ||
+				!ts.isCallExpression(rhs) ||
+				!ts.isIdentifier(rhs.expression) ||
+				rhs.expression.text !== "__wrapStorage" ||
+				rhs.arguments.length !== 2 ||
+				!ts.isIdentifier(rhs.arguments[0]!) ||
+				rhs.arguments[1]!.kind !== ts.SyntaxKind.TrueKeyword
+			)
+				throw new Error(
+					`§5: ${relPath}'s program assigns ${path} as \`${rhs.getText(sf)}\`, a ` +
+						`nested endowment this reader cannot follow. Teach endowedCtx ` +
+						`and endowedNested about it rather than letting it read as endowed.`
+				)
+			members.push(path)
+		}
 		ts.forEachChild(n, visit)
 	}
 	visit(sf)
@@ -1799,8 +1867,31 @@ const endowedNested = (): Record<string, string[]> => ({
 	storage: [
 		...storageHostMembers().top,
 		...storageHostMembers().files.map((k) => `files.${k}`)
+	],
+	// 🚧 (M2b) `ctx.storage.user`: the storage adapter SCOPED (prelude
+	// `__wrapStorage(host, true)`) over a second storageHost — `usage` and
+	// `files.*` only, never the older six. endowedCtx admits this path only
+	// in that exact shape.
+	"storage.user": [
+		...storageHostMembers().top.filter((k) => k === "usage" || k === "files"),
+		...storageHostMembers().files.map((k) => `files.${k}`)
 	]
 })
+
+/** 🚧 (M2b) The refusing stand-in for `ctx.storage.user` — it must mirror the real store's api too. */
+function deniedUserStorageApi(): string[] {
+	const block = rawTemplates(join(SRC, "lib/server/plugins/storageHost.ts")).find((t) =>
+		t.includes("function makeDeniedUserStorage")
+	)
+	if (!block) throw new Error("§5 found no makeDeniedUserStorage in storageHost.ts")
+	const m = /function makeDeniedUserStorage[\s\S]*?return \{([^}]*)\}/.exec(block)
+	if (!m) throw new Error("§5 could not read makeDeniedUserStorage's return")
+	return m[1]!
+		.split(",")
+		.map((s) => s.split(":")[0]!.trim())
+		.filter(Boolean)
+		.sort()
+}
 
 /**
  * Members a hook surface declares that no backend puts on `ctx`.
@@ -1926,6 +2017,12 @@ describe("§5 hook context — every declared member is one the runtime endows",
 				deniedStorageApi(f),
 				`${f}'s __DENIED_STORAGE does not mirror storageHost's api`
 			).toEqual(storageHostApi())
+		// The same for the person's store (M2b), refused by sentence.
+		expect(
+			deniedUserStorageApi(),
+			"storageHost's makeDeniedUserStorage does not mirror storageHost's api"
+		).toEqual(storageHostApi())
+		expect(endowed).toContain("storage.user.files.read")
 	})
 
 	test("every member a hook surface declares is one the runtime endows", () => {

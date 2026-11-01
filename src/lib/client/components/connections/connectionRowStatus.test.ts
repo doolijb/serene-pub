@@ -284,6 +284,49 @@ describe("a cloud connection with no key yet", () => {
 	})
 })
 
+describe("a managed audio.cpp", () => {
+	const managed = { ...base, type: "audiocpp_managed", baseUrl: null }
+
+	test("reads its own install and process, on KoboldCPP's scale", () => {
+		expect(
+			connectionRowStatus(managed, {
+				kind: "audiocpp-managed",
+				acppInstall: "not-installed"
+			}).label
+		).toBe("Not installed")
+		const running = connectionRowStatus(managed, {
+			kind: "audiocpp-managed",
+			acppInstall: "ready",
+			acpp: { run: "running", loadedFiles: ["kokoro"], downloads: [] }
+		})
+		expect(running.state).toBe("ready")
+		expect(running.detail).toBe("kokoro")
+		// KoboldCPP's facts do not leak into audio.cpp's row.
+		expect(
+			connectionRowStatus(managed, {
+				kind: "audiocpp-managed",
+				kcppInstall: "ready",
+				kcpp: { run: "running", loadedFiles: [], downloads: [] }
+			}).label
+		).toBe("Installed")
+	})
+
+	test("a process not started yet is the normal cold state, not a fault", () => {
+		// The adapter's test says ok with `running: false` (it starts on first
+		// use), so the row reads the same idle "Stopped" as KoboldCPP's.
+		const status = connectionRowStatus(managed, {
+			kind: "audiocpp-managed",
+			acppInstall: "ready",
+			acpp: { run: "stopped", loadedFiles: [], downloads: [] },
+			lastTest: { ok: true, error: null, at: 0 }
+		} as any)
+		expect(status.state).toBe("idle")
+		expect(status.label).toBe("Stopped")
+		expect(status.detail).toBe("Starts on first use")
+		expect(needsAttention(status.state)).toBe(false)
+	})
+})
+
 describe("a managed KoboldCPP", () => {
 	const managed = { ...base, type: "koboldcpp_managed", baseUrl: null }
 

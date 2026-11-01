@@ -623,6 +623,47 @@ describe("M3 · the emitters the modder pass adds (R30/R45 annex, R31 members)",
 		expect((await ofEvent(s.sessionId, sessionEvents.annexChanged)).length).toBe(2)
 	})
 
+	it("🚧 M2a a8: a write with a stale base writes nothing and answers the fresh document and version; a matching base writes and moves the version", async () => {
+		const s = await makeSession("annex-base")
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const hostOf = (runId: string) =>
+			createHost(db as any, { sessionId: s.sessionId, userId, specId: "acme.rp:spec/clock", runId } as any)
+		const node = { key: "save", definitionId: "core:outlet/set-session-annex", definitionVersion: 1 } as any
+		const readNode = { key: "annex", definitionId: "core:query/session-annex", definitionVersion: 1 } as any
+		const versionNow = () => (hostOf("run-read") as any).read("session_annex_version", { sessionId: s.sessionId }, readNode)
+
+		// Never written: version 0. A base of 0 writes, and moves it to 1.
+		expect(await versionNow()).toBe(0)
+		const first = (await hostOf("run-a").commit!({ value: { clock: 3 }, base: 0 }, node)) as any
+		expect(first).toMatchObject({ written: true, version: 1, annex: { clock: 3 } })
+
+		// Two runs read version 1; the first to write wins, the second is refused.
+		const won = (await hostOf("run-b").commit!({ value: { clock: 4 }, base: 1 }, node)) as any
+		expect(won).toMatchObject({ written: true, version: 2 })
+		const lost = (await hostOf("run-c").commit!({ value: { clock: 9 }, base: 1 }, node)) as any
+		expect(lost).toMatchObject({ written: false, stale: true, version: 2, annex: { clock: 4 } })
+		expect(lost.notes?.[0]).toMatch(/moved since this run read it \(version 1, now 2\)/)
+		expect(await (hostOf("run-read") as any).read("session_annex", { sessionId: s.sessionId }, readNode)).toEqual({ clock: 4 })
+		// The refused write caused nothing (two writes, two events).
+		expect((await ofEvent(s.sessionId, sessionEvents.annexChanged)).length).toBe(2)
+
+		// No base: the write lands as before, and still moves the version.
+		const plain = (await hostOf("run-d").commit!({ value: { clock: 5 } }, node)) as any
+		expect(plain).toMatchObject({ written: true, version: 3 })
+		// An unchanged write writes nothing and leaves the version where it is.
+		expect(await hostOf("run-e").commit!({ value: { clock: 5 }, base: 3 }, node)).toMatchObject({ written: false, version: 3 })
+		expect(await versionNow()).toBe(3)
+		// The version is the session's own column (M2b), never in the annex.
+		const [row] = await db
+			.select({ annex: schema.sessions.annex, versions: schema.sessions.annexVersions })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, s.sessionId))
+		expect(row!.versions).toEqual({ "acme.rp": 3 })
+		expect((row!.annex as any).core?.annexVersions).toBeUndefined()
+		// A base that is no count is refused out loud.
+		await expect(hostOf("run-f").commit!({ value: { clock: 6 }, base: "1" }, node)).rejects.toThrow(/base is the annex document version/)
+	})
+
 	it("adding and removing a character through sessions:update lands member-added / member-removed in the ledger with a cast-change payload", async () => {
 		const s = await makeSession("members")
 		const [bob] = await db

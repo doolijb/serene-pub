@@ -145,6 +145,17 @@ export function isKoboldCppManagedType(
 	return !!type && KOBOLDCPP_MANAGED_TYPES.includes(type)
 }
 
+/** 🚧 The connection types of audio.cpp, run by Serene Pub. Never created from the New Connection picker. */
+export const AUDIOCPP_MANAGED_TYPES: readonly string[] = [
+	CONNECTION_TYPE.AUDIOCPP_MANAGED
+]
+
+export function isAudioCppManagedType(
+	type: string | null | undefined
+): boolean {
+	return !!type && AUDIOCPP_MANAGED_TYPES.includes(type)
+}
+
 export const CATEGORY_ORDER: ConnectionServiceCategory[] = [
 	"cloud",
 	"local",
@@ -259,6 +270,8 @@ export function buildConnectionServiceItems(
 		// (src/lib/server/sockets/koboldcpp.ts), same reasoning
 		// /document-view/connections/new already excludes them for.
 		if (isKoboldCppManagedType(t.value)) continue
+		// audio.cpp, run by Serene Pub: same reasoning (🚧 provisional).
+		if (isAudioCppManagedType(t.value)) continue
 		// Merged into `ollama` (owner ruling 2026-09-25): one Ollama connection
 		// per host serves every modality it has, and the boot sync renames any
 		// old row. Its option entry stays so a straggler still has a label.

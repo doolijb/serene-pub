@@ -1,9 +1,12 @@
 import { describe, expect, test } from "vitest"
 import {
 	characterPickOptions,
+	characterStepOffers,
+	ownStarterCharacter,
 	personaPickExcludes,
 	pickedRow
 } from "./wizardPicks"
+import { starterCharacterCreate } from "$lib/shared/characters/starterCharacter"
 
 const character = (id: number, isPersona = false) => ({
 	id,
@@ -76,5 +79,65 @@ describe("pickedRow", () => {
 		// Deleted, or a new row whose list push has not landed yet: the step
 		// shows Choose again rather than a row it cannot draw.
 		expect(pickedRow(rows, 9)).toBeNull()
+	})
+})
+
+describe("characterStepOffers", () => {
+	const starterRow = (id: number, extra: Record<string, unknown> = {}) => ({
+		id,
+		...starterCharacterCreate(),
+		...extra
+	})
+
+	test("offers the starter first on an empty library", () => {
+		expect(characterStepOffers([], null)).toEqual([
+			"starter",
+			"create",
+			"library",
+			"import"
+		])
+	})
+
+	test("puts the starter before Choose a character", () => {
+		expect(characterStepOffers([character(1)], null)).toEqual([
+			"starter",
+			"choose",
+			"create",
+			"library",
+			"import"
+		])
+	})
+
+	test("drops the starter once the person has an unchanged copy", () => {
+		expect(characterStepOffers([starterRow(7)], null)).toEqual([
+			"choose",
+			"create",
+			"library",
+			"import"
+		])
+	})
+
+	test("offers the starter again when the copy was edited", () => {
+		const edited = starterRow(7, { description: "Someone else now." })
+		expect(characterStepOffers([edited], null)).toContain("starter")
+	})
+
+	test("a persona or shared row does not count as having it", () => {
+		const persona = starterRow(7, { isPersona: true })
+		const shared = starterRow(8, { isSharedWithMe: true })
+		expect(characterStepOffers([persona, shared], null)).toContain(
+			"starter"
+		)
+	})
+})
+
+describe("ownStarterCharacter", () => {
+	test("is the unchanged row", () => {
+		const row = { id: 3, ...starterCharacterCreate() }
+		expect(ownStarterCharacter([character(1), row])).toBe(row)
+	})
+
+	test("is null without one", () => {
+		expect(ownStarterCharacter([character(1)])).toBeNull()
 	})
 })

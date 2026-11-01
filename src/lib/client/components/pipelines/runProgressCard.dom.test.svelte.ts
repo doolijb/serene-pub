@@ -149,3 +149,30 @@ describe("🚧 a halted action run offers Retry (2026-10-16)", () => {
 		expect(retryButton()).toBeUndefined()
 	})
 })
+
+/**
+ * 🚧 Speech polish (owner ruling 2026-10-29): a speak-message run shows on its
+ * own line only — the card drew it as *Read Aloud · Speaking* with a fourth
+ * Stop. Its frames say `lineBound`, and the card draws neither it nor a
+ * receipt for it, while a reply's card beside it still shows.
+ */
+describe("a line-bound run (speaking a line)", () => {
+	test("draws no card in flight and no receipt after; a reply's card still shows", () => {
+		place()
+		runProgress.started({ runId: "speak", sessionId: SESSION_ID, label: "read-aloud", channel: "main", lineBound: true } as never)
+		runProgress.apply({ runId: "speak", sessionId: SESSION_ID, status: { i18n: { en: "Speaking" } }, lineBound: true } as never)
+		flushSync()
+		expect(text()).not.toMatch(/read aloud|speaking/i)
+		expect(document.querySelector("sp-progress, [role=progressbar]")).toBeNull()
+
+		runProgress.started({ runId: "reply", sessionId: SESSION_ID, label: "respond", channel: "main" } as never)
+		flushSync()
+		expect(text()).toMatch(/respond/i)
+		expect(text()).not.toMatch(/read aloud/i)
+
+		runProgress.apply({ runId: "speak", sessionId: SESSION_ID, done: true, outcome: "ok", lineBound: true } as never)
+		flushSync()
+		expect(text()).not.toMatch(/read aloud/i)
+		expect(text()).toMatch(/respond/i)
+	})
+})

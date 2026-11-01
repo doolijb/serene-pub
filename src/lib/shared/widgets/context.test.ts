@@ -386,9 +386,11 @@ describe("actions.v1 and invoke", () => {
 })
 
 describe("scoped sections come off the SDK's one table", () => {
-	test("every scope in the table but lore has a page context to supply it; persona reads the cast's", () => {
+	test("every scope in the table has a page context to supply it; persona reads the cast's", () => {
+		// 🚧 M0 (L9): lore's handle is the viewer's lorebook-annex view.
 		expect(Object.keys(SCOPED_SECTION_CONTEXT_KEYS).sort()).toEqual([
 			"characters",
+			"lore",
 			"persona",
 			"session:full",
 			"session:state"
@@ -446,18 +448,22 @@ describe("scoped sections come off the SDK's one table", () => {
 		expect(projectScopedSections(["persona"], handles({ [SESSION_CHARACTERS_KEY]: undefined }))).toBeUndefined()
 	})
 
-	test("lore is the grant marker: { granted: true } when granted, absent otherwise, whatever the page holds", () => {
+	test("lore is the grant marker plus the annex view: { granted: true, annex } when granted, absent otherwise", () => {
 		const read: WidgetSectionScope[] = []
 		const handleOf = (scope: WidgetSectionScope) => {
 			read.push(scope)
 			return undefined
 		}
-		expect(projectScopedSections(["lore"], handleOf)).toEqual({ lore: { granted: true } })
+		// No view yet: the frozen marker, with an empty annex.
+		expect(projectScopedSections(["lore"], handleOf)).toEqual({ lore: { granted: true, annex: {} } })
 		expect(projectScopedSections(["lore"], handleOf)?.lore).toBe(LORE_GRANTED)
 		expect(projectScopedSections(["session:state"], handleOf)).toBeUndefined()
 		expect(Object.isFrozen(LORE_GRANTED)).toBe(true)
 		// Only granted scopes are read; a scope no table names is skipped.
 		expect(read).toEqual(["lore", "lore", "session:state"])
 		expect(projectScopedSections(["channel:x" as WidgetSectionScope], handleOf)).toBeUndefined()
+		// 🚧 M0 (L9): with a view, the section carries it.
+		const view = { "plugin:demo": { day: 2 } }
+		expect(projectScopedSections(["lore"], () => view)).toEqual({ lore: { granted: true, annex: view } })
 	})
 })

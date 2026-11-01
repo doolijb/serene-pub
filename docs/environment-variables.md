@@ -75,7 +75,9 @@ Small, self-contained switches. Each is safe to try on its own.
 | `USER_TOKEN_EXPIRATION_HOURS` | `168` (7 days) | How long a sign-in lasts before you have to sign in again. |
 | `ENABLE_UNSAFE_CHARACTER_BROWSING` | unset | Set to `true` to let the character Library show an **include NSFW** option when browsing outside sources such as CharaVault. It only makes the option appear; it stays off until someone turns it on. |
 | `PUBLIC_DOCUMENT_VIEW_DEFAULT` | `false` | Set to `true` to open [Document View](./document-view.md) (the simplified, high-contrast, screen-reader-friendly version) by default in any browser that hasn't chosen yet. Someone who switches views keeps their choice. |
-| `SP_PLUGINS_ENABLED` | unset (off) | Set to `1` or `true` to run plugins: their hooks, sandbox and components. Off, you can still install and configure plugins under **Admin › Plugins**, which says the sandbox is off, but they do nothing. Releases ship with it off. |
+| `SP_PLUGINS_ENABLED` | unset (on) | Plugins run unless this turns them off. `0`, `false`, `no` or `off` stops their hooks, sandbox and components, and packages can't be installed; `1`, `true`, `yes` or `on` keeps them on, and so does anything else. Restart Serene Pub after changing it. While it is set, **Admin › Plugins** says _Set by SP_PLUGINS_ENABLED on this server._ There's no switch in the app yet. |
+| `SP_PLUGIN_PACKAGE_MAX_MB` | `512` | The largest plugin package this pub installs, in MB, counted as the files it unpacks to. A larger one is refused with this variable's name. Admin › Plugins shows a package's size before you install it. The browser uploads a package of any size up to this, so `BODY_SIZE_LIMIT` needs no raising. |
+| `SP_PLUGIN_FILES_MAX` | `10000` | The most files one plugin package may hold. |
 
 ## Desktop launcher
 
@@ -99,6 +101,14 @@ Only for [KoboldCPP, run by Serene Pub](./connections.md#koboldcpp-run-by-serene
 | --- | --- | --- |
 | `KOBOLDCPP_BINARY_DIR` | unset | The folder holding the KoboldCPP program, or where a download from the app should put it. Read on the very first start only, so it never overrides a setup that already works. Useful for a Docker image with KoboldCPP mounted in. |
 | `KOBOLDCPP_BINARY_NAME` | unset | The file name of a KoboldCPP program you provided inside `KOBOLDCPP_BINARY_DIR`, instead of letting Serene Pub download one. |
+
+## audio.cpp run by Serene Pub
+
+Only for [audio.cpp, run by Serene Pub](./connections.md#audiocpp-run-by-serene-pub), where Serene Pub downloads and runs audio.cpp for you.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `AUDIOCPP_BINARY_DIR` | unset | The folder holding the audio.cpp program, or where a download from the app should put it. Unset, it is the `audiocpp` folder in Serene Pub's data folder. A folder already recorded by a download wins over this. Useful for a Docker image with audio.cpp mounted in. |
 
 ## Tunnels
 

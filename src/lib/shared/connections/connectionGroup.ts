@@ -15,7 +15,10 @@
  * Client-safe: no Node imports, no Svelte.
  */
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
+import {
+	isAudioCppManagedType,
+	isKoboldCppManagedType
+} from "$lib/shared/utils/connectionServiceItems"
 
 /**
  * What KIND of endpoint a row belongs to, for the one branch the index really
@@ -23,14 +26,16 @@ import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems
  * is the type's `category` (`connectionGroupOf`, below); `api` is every type
  * with no row shape of its own, local or not.
  *
- * Five values and no sixth: they are the four cases with their own status
- * line, header badge and row action, plus everything else. ⚠ Not a modality —
+ * Six values and no seventh: they are the five cases with their own status
+ * line, header badge and row action (the two services run by Serene Pub,
+ * KoboldCPP and audio.cpp, among them), plus everything else. ⚠ Not a modality —
  * a modality says what a model is FOR (§10), and two of these share one
  * (`local-onnx` and `ollama-embeddings` are both `embeddings`) while one
  * endpoint of kind `koboldcpp-managed` serves three.
  */
 export type EndpointKind =
 	| "koboldcpp-managed"
+	| "audiocpp-managed"
 	| "ollama"
 	| "onnx-embeddings"
 	| "onnx-entities"
@@ -38,6 +43,7 @@ export type EndpointKind =
 
 export function endpointKind(type: string | null | undefined): EndpointKind {
 	if (isKoboldCppManagedType(type ?? "")) return "koboldcpp-managed"
+	if (isAudioCppManagedType(type ?? "")) return "audiocpp-managed"
 	if (
 		type === CONNECTION_TYPE.OLLAMA ||
 		type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS

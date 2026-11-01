@@ -128,4 +128,40 @@ describe("createPendingReplies", () => {
 		expect(h.pending.rows).toEqual([])
 		h.stop()
 	})
+	/**
+	 * 🚧 Speech polish (owner ruling 2026-10-29): a speak-message run shows on
+	 * its own line only. A waiting row is what drew it as *Narrator ·
+	 * Speaking · Stop*, the turn line's *Speaking* pill and the composer's
+	 * Stop (both read the newest row's `isGenerating`), so none is drawn —
+	 * even were a stray `reply` on the frame — while the run stays in the
+	 * store, where `liveRunIds` (the line's *Speaking…*) reads it.
+	 */
+	it("a line-bound run (speaking a line) draws no waiting row, but stays in the store for its line", () => {
+		const h = harness()
+		h.store.mergeRunStatus({
+			sessionId: 7,
+			runId: "speak-1",
+			kind: "maintenance",
+			status: say("Speaking"),
+			lineBound: true
+		} as any)
+		h.store.mergeRunStatus({
+			sessionId: 7,
+			runId: "speak-2",
+			kind: "maintenance",
+			status: say("Speaking"),
+			lineBound: true,
+			reply: { channel: "main" }
+		} as any)
+		flushSync()
+		expect(h.pending.rows).toEqual([])
+		expect(h.store.runsOf(7).map((r) => r.runId).sort()).toEqual(["speak-1", "speak-2"])
+		expect(h.store.runsOf(7).every((r) => r.lineBound === true)).toBe(true)
+
+		// A reply alongside it still gets its waiting row, and only it.
+		h.hear({ sessionId: 7, runId: "r1", status: say("The Planner is thinking"), reply: { channel: "main" } })
+		flushSync()
+		expect(h.pending.rows.map((r) => (r.metadata as any).pendingReplyRun)).toEqual(["r1"])
+		h.stop()
+	})
 })

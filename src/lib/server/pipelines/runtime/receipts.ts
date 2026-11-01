@@ -59,6 +59,10 @@ export interface RunArtifact {
 		| "session"
 		/** 🚧 A `sprites` row `core:outlet/attach-sprite@1` wrote (I5). */
 		| "sprite"
+		/** 🚧 A `characters` row a library outlet made or changed (`create-character@1`, `update-character@1`; M2c path B). */
+		| "character"
+		/** 🚧 A `lorebooks` row a library outlet made or read into a session (`create-lorebook@1`, `attach-lorebook@1`; M2c path B). */
+		| "lorebook"
 	/**
 	 * The row's id in that table.
 	 *

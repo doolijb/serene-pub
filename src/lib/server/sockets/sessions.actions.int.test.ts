@@ -114,6 +114,19 @@ vi.mock("$lib/server/pipelines/runtime/runStatus", async (importOriginal) => {
 	}
 })
 
+/** 🚧 M2a a6: every `sessions:runEnded` told, recorded — real behaviour, delegated. */
+const runEndedHooks = vi.hoisted(() => ({ told: [] as { sessionId: number; frame: any }[] }))
+vi.mock("$lib/server/sockets/utils/broadcastHelpers", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("$lib/server/sockets/utils/broadcastHelpers")>()
+	return {
+		...actual,
+		broadcastToSessionUsers: (async (io: any, sessionId: number, event: string, data: any) => {
+			if (event === "sessions:runEnded") runEndedHooks.told.push({ sessionId, frame: data })
+			return actual.broadcastToSessionUsers(io, sessionId, event, data)
+		}) as typeof actual.broadcastToSessionUsers
+	}
+})
+
 const CHAT = "core:genre/story"
 
 beforeAll(async () => {
@@ -189,6 +202,8 @@ async function publishActionSpec(
 		 * brings whatever the test gave it.
 		 */
 		genre?: "chat" | "adventure" | import("@serene-pub/sdk").GenreDecl
+		/** 🚧 M2a a6: a spec whose run halts, every time, at its one read (an annex read with no such view). */
+		halts?: boolean
 	} = {}
 ) {
 	const { spec, compile } = await import("@serene-pub/sdk")
@@ -201,8 +216,7 @@ async function publishActionSpec(
 				? opts.genre
 				: storyGenre
 	const declared = Array.isArray(action) ? action : [action]
-	const doc: SpecDocument = compile(
-		spec(id, {
+	const head: any = spec(id, {
 			version: opts.version ?? "1.0.0",
 			taxonomy: { role: "action"},
 			contributes: {
@@ -223,8 +237,13 @@ async function publishActionSpec(
 				genre,
 				event: "core:event/session-action@1"
 			})
-			.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
-			.build()
+	const doc: SpecDocument = compile(
+		opts.halts
+			? head
+					.query("stop", ($: any) => C.sessionAnnex.v1({ scope: $.input.sessionScope, view: "stop" as any }))
+					.outlet("keep", ($: any) => C.setSessionAnnex.v1({ value: $.stop.main }))
+					.build()
+			: head.outlet("save", ($: any) => C.createMessage.v1({ text: $.input.text })).build()
 	)
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 	const saved = await saveDocument(testDb as any, doc, {
@@ -1525,6 +1544,143 @@ describe("sessions:fireAction announces its run (R-19)", () => {
 		// `undefined`, which is what silently dropped every status this
 		// route ever set.
 		expect(statusRelayHooks.ioSeen).toEqual([socket.io, socket.io])
+	}, 60_000)
+
+	test("🚧 M2a a6: a press's answer names its run, and its end is told to the session as sessions:runEnded", async () => {
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const { owner, session } = await sessionWithGuest("run-ended-ok")
+		await publishActionSpec("core:spec/test-run-ended-ok", { key: "beckon" })
+		runEndedHooks.told.length = 0
+		const res = await sessionsFireActionHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, action: "core:spec/test-run-ended-ok#beckon", text: "hello" },
+			noopEmit
+		)
+		expect(res.error).toBeUndefined()
+		expect(res).toMatchObject({ success: true })
+		expect(typeof res.runId).toBe("string")
+		expect(res.halted).toBeUndefined()
+		const told = runEndedHooks.told.filter((t) => t.frame.runId === res.runId)
+		expect(told).toEqual([{ sessionId: session.id, frame: { sessionId: session.id, runId: res.runId, outcome: "ok" } }])
+	}, 60_000)
+
+	test("🚧 M2a a6: a press whose run halts answers { halted: true, reason, runId }, and sessions:runEnded carries the halt and its sentence", async () => {
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const { owner, session } = await sessionWithGuest("run-ended-halt")
+		await publishActionSpec("core:spec/test-run-ended-halt", { key: "stumble" }, { halts: true })
+		runEndedHooks.told.length = 0
+		const res = await sessionsFireActionHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, action: "core:spec/test-run-ended-halt#stumble" },
+			noopEmit
+		)
+		expect(res.halted).toBe(true)
+		expect(typeof res.runId).toBe("string")
+		expect(res.reason).toBe(res.error)
+		expect(res.reason).toMatch(/stop/)
+		const told = runEndedHooks.told.filter((t) => t.frame.runId === res.runId)
+		expect(told).toEqual([
+			{ sessionId: session.id, frame: { sessionId: session.id, runId: res.runId, outcome: "halt", reason: res.reason } }
+		])
+	}, 60_000)
+
+	test("🚧 M2a a6: every answer echoes the run id the press named as askedRunId — a refusal before any run (no runId) and a halted run alike", async () => {
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+		const { owner, session } = await sessionWithGuest("asked-run-id")
+		await publishActionSpec("core:spec/test-asked-run-id", { key: "shrug" }, { halts: true })
+		const press = (runId: string) =>
+			sessionsFireActionHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id, action: "core:spec/test-asked-run-id#shrug", runId },
+				noopEmit
+			)
+		// Refused at the busy door: no run stood behind it, so no runId — but the press is named.
+		const handle = runRegistry.start({ runId: `asked-busy-${session.id}`, userId: owner.id, sessionId: session.id, specId: "core:spec/test", kind: "reply" })
+		try {
+			const refused = await press(`press-a-${session.id}`)
+			expect(refused).toMatchObject({ error: "Wait for the reply to finish.", askedRunId: `press-a-${session.id}` })
+			expect(refused.runId).toBeUndefined()
+		} finally {
+			runRegistry.finish(handle.runId)
+		}
+		// A run that halted: the same name on both.
+		const halted = await press(`press-b-${session.id}`)
+		expect(halted).toMatchObject({ halted: true, runId: `press-b-${session.id}`, askedRunId: `press-b-${session.id}` })
+	}, 60_000)
+
+	test("the busy door: a press while another run is generating is refused out loud, never queued, and makes no run", async () => {
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+		const { owner, session } = await sessionWithGuest("busy-door")
+		await publishActionSpec("core:spec/test-busy-door", { key: "travel" })
+		const handle = runRegistry.start({
+			runId: `busy-door-${session.id}`,
+			userId: owner.id,
+			sessionId: session.id,
+			specId: "core:spec/test",
+			kind: "reply"
+		})
+		const emitted: unknown[] = []
+		try {
+			const res = await sessionsFireActionHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id, action: "core:spec/test-busy-door#travel" },
+				(event: string, data: unknown) => {
+					if (event === "sessions:fireAction") emitted.push(data)
+				}
+			)
+			expect(res.error).toBe("Wait for the reply to finish.")
+			expect(emitted).toEqual([res])
+			expect(await runsOf(session.id)).not.toContain("core:spec/test-busy-door")
+		} finally {
+			runRegistry.finish(handle.runId)
+		}
+		// Once the reply has finished, the same press runs.
+		const after = await sessionsFireActionHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, action: "core:spec/test-busy-door#travel" },
+			noopEmit
+		)
+		expect(after.error ?? null).toBeNull()
+		expect(await runsOf(session.id)).toContain("core:spec/test-busy-door")
+	}, 60_000)
+
+	test("the busy door covers the whole answer window: a press after a person's line, before its reply run starts, is refused", async () => {
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const { owner, session } = await sessionWithGuest("busy-window")
+		await publishActionSpec("core:spec/test-busy-window", { key: "snack" })
+		// The person's line is accepted: its `message-completed` sits on the session's event chain (the recompute, then the fire), no reply run yet.
+		const schema = await import("$lib/server/db/schema")
+		await testDb.insert(schema.sessionMessages).values({ sessionId: session.id, userId: owner.id, role: "user", content: "Hello?" })
+		const queues = (globalThis as Record<symbol, unknown>)[Symbol.for("serene-pub.sessionEventQueues")] as Map<number, Promise<void>>
+		let release!: () => void
+		queues.set(session.id, new Promise<void>((r) => (release = r)))
+		const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+		try {
+			// The door waits for the decision; the auto-advance starts the reply 300 ms in.
+			const pressed = sessionsFireActionHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id, action: "core:spec/test-busy-window#snack" },
+				noopEmit
+			)
+			setTimeout(() => runRegistry.start({ runId: `busy-window-${session.id}`, userId: owner.id, sessionId: session.id, specId: "core:spec/test", kind: "reply" }), 300)
+			const res = await pressed
+			expect(res.error).toBe("Wait for the reply to finish.")
+		} finally {
+			runRegistry.finish(`busy-window-${session.id}`)
+			release()
+			queues.delete(session.id)
+		}
+		expect(await runsOf(session.id)).not.toContain("core:spec/test-busy-window")
+		// The chain settled (the answer came, or nothing was due): the press runs.
+		const after = await sessionsFireActionHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, action: "core:spec/test-busy-window#snack" },
+			noopEmit
+		)
+		expect(after.error ?? null).toBeNull()
+		expect(await runsOf(session.id)).toContain("core:spec/test-busy-window")
 	}, 60_000)
 })
 

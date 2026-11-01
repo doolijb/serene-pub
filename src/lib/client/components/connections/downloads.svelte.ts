@@ -40,6 +40,9 @@ export type DownloadSource =
 	| "ollama"
 	| "onnx"
 	| "matting"
+	/** 🚧 audio.cpp, run by Serene Pub: its packages, and the binary itself. */
+	| "audiocpp"
+	| "audiocpp-binary"
 
 export interface DownloadItem {
 	/** Unique across sources: `<source>:<whatever that source keys by>`. */
@@ -139,6 +142,66 @@ export function kcppBinaryItem(
 		name: download.assetName,
 		downloadedBytes: download.downloaded,
 		totalBytes: download.total,
+		state: endedState(download.isDone, download.status),
+		error: download.error
+	}
+}
+
+/**
+ * audio.cpp's packages, keyed by package id. Its own state words match the
+ * managers' (`isDone` true for every ending), so the same `endedState` reads
+ * them.
+ */
+export function audiocppPackageItems(
+	downloads:
+		| Record<
+				string,
+				{
+					packageId?: string
+					name: string
+					status?: string
+					downloaded: number
+					total: number
+					isDone: boolean
+					error?: string
+				}
+		  >
+		| undefined
+): DownloadItem[] {
+	return Object.entries(downloads ?? {}).map(([key, d]) => ({
+		id: `audiocpp:${d.packageId ?? key}`,
+		source: "audiocpp" as const,
+		destinationLabel: "audio.cpp",
+		name: d.name || key,
+		downloadedBytes: d.downloaded,
+		totalBytes: d.total || undefined,
+		state: endedState(d.isDone, d.status),
+		...(d.error ? { error: d.error } : {})
+	}))
+}
+
+/** audio.cpp itself (phase "binary") or its CUDA runtime (phase "runtime"). */
+export function audiocppBinaryItem(
+	download:
+		| {
+				assetName: string
+				status: string
+				downloaded: number
+				total: number
+				isDone: boolean
+				error?: string
+		  }
+		| null
+		| undefined
+): DownloadItem | null {
+	if (!download) return null
+	return {
+		id: "audiocpp-binary",
+		source: "audiocpp-binary",
+		destinationLabel: "audio.cpp",
+		name: download.assetName,
+		downloadedBytes: download.downloaded,
+		totalBytes: download.total || undefined,
 		state: endedState(download.isDone, download.status),
 		error: download.error
 	}
@@ -419,6 +482,23 @@ class DownloadsStore {
 				"koboldcpp:binaryDownloadProgress",
 				(msg) => this.#setBinary(msg.download)
 			),
+			// audio.cpp has no "get current progress" request: these two ride
+			// on the pushes alone.
+			declareInterest<"audiocpp:packageDownloadProgress">(
+				"audiocpp:packageDownloadProgress",
+				(msg) =>
+					this.#setFeed(
+						"audiocpp",
+						audiocppPackageItems(msg.downloads)
+					)
+			),
+			declareInterest<"audiocpp:binaryDownloadProgress">(
+				"audiocpp:binaryDownloadProgress",
+				(msg) => {
+					const item = audiocppBinaryItem(msg.download)
+					this.#setFeed("audiocpp-binary", item ? [item] : [])
+				}
+			),
 			declareInterest<"ollama:getDownloadProgress">(
 				"ollama:getDownloadProgress",
 				(msg) =>
@@ -446,6 +526,8 @@ class DownloadsStore {
 			if (this.#subscribers === 0) {
 				this.#feeds.delete("koboldcpp")
 				this.#feeds.delete("koboldcpp-binary")
+				this.#feeds.delete("audiocpp")
+				this.#feeds.delete("audiocpp-binary")
 				this.#feeds.delete("ollama")
 				this.#feeds.delete("matting")
 				this.#cleared.clear()
@@ -486,6 +568,14 @@ class DownloadsStore {
 				break
 			case "koboldcpp-binary":
 				socket.emit("koboldcpp:cancelBinaryDownload", {})
+				break
+			case "audiocpp":
+				socket.emit("audiocpp:cancelPackageDownload", {
+					id: item.id.slice("audiocpp:".length)
+				})
+				break
+			case "audiocpp-binary":
+				socket.emit("audiocpp:cancelBinaryDownload", {})
 				break
 			case "ollama":
 				socket.emit("ollama:cancelPull", {

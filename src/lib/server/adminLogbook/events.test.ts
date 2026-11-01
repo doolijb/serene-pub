@@ -13,6 +13,13 @@ import { logbookWants } from "./record"
 
 const SOCKETS = path.resolve(__dirname, "../sockets")
 
+/**
+ * Since 2026-10-30 one event is recorded by an HTTP route, not a socket: the
+ * plugin package upload (`plugins:installPackage`). Those recorders declare
+ * the event as `logbookBegin(user, "…", …)`; this list names every such file.
+ */
+const HTTP_RECORDERS = [path.resolve(__dirname, "../plugins/packageUpload.ts")]
+
 function declaredEvents(): Set<string> {
 	const out = new Set<string>()
 	for (const f of fs.readdirSync(SOCKETS)) {
@@ -21,6 +28,10 @@ function declaredEvents(): Set<string> {
 		// `{ event: "…", handler }`, or `refusable("…", …)` — the wrapper
 		// declares its handler's event as its first argument.
 		for (const m of src.matchAll(/(?:event:\s*|refusable(?:<[^>]*>)?\(\s*)"([^"]+)"/g)) out.add(m[1])
+	}
+	for (const file of HTTP_RECORDERS) {
+		const src = fs.readFileSync(file, "utf8")
+		for (const m of src.matchAll(/logbookBegin\(\s*[^,]+,\s*"([^"]+)"/g)) out.add(m[1])
 	}
 	return out
 }

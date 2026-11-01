@@ -73,6 +73,7 @@ import {
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import { sessionGenreOf } from "$lib/server/sessions/annexFields"
 import { SESSION_UPDATE_REFUSALS } from "$lib/server/sessions/updateRefusals"
+import { appletCallerOf } from "./appletCause"
 
 /** At most this many swaps are seeded at create — one per node, and nodes are few (M2 review). */
 const MAX_SEEDED_SWAPS = 32
@@ -88,7 +89,7 @@ const MAX_SEEDED_SWAPS = 32
 const voicedCharacter = alias(schema.characters, "voiced_character")
 // Replacing a message is not deleting one, so the anchor cascade cannot fire —
 // see the call sites in the regenerate and swipe-right handlers.
-import { retractStateAnchoredTo } from "$lib/server/state/write"
+import { retractStateAnchoredTo, StateRefusal } from "$lib/server/state/write"
 import { SettledRefusal } from "$lib/server/sessions/settle"
 import { runReply } from "../utils/runReply"
 import { clearReplyFailed } from "../utils/generationStatus"
@@ -656,6 +657,83 @@ export const sessionsCreateHandler: Handler<
 	event: "sessions:create",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
+		// 🚧 (M2c) Opened by an extension's launcher: its grant, its genre and its
+		// prefilled fields are judged first, in words. Absent: exactly today.
+		if (params.fromApplet) {
+			const { appletCreateRefusal } = await import("./appletSessions")
+			const refusal = await appletCreateRefusal(db as unknown as Db, userId, params)
+			if (refusal) {
+				emitToUser("sessions:create:error", { error: refusal })
+				return { error: refusal }
+			}
+		}
+		// 🚧 Creation mode (M0, F5): how it starts; absent is `new`. The
+		// genre may propose one in the form; the server never refuses a mode
+		// because another was proposed.
+		const creationMode = params.mode ?? "new"
+		const creationModes = await import("$lib/server/sessions/creationModes")
+		{
+			const refusal = await creationModes.creationModeRefusal(db as unknown as Db, {
+				mode: creationMode,
+				from: params.from,
+				userId
+			})
+			if (refusal) {
+				emitToUser("sessions:create:error", { error: refusal })
+				return { error: refusal }
+			}
+		}
+		if (creationMode === "branch") {
+			// Forked at the newest live message through what `sessions:branch`
+			// runs; the draft's other fields are ignored.
+			const forked = await creationModes.branchForCreate(db as unknown as Db, {
+				from: params.from!,
+				userId,
+				io: socket.io
+			})
+			if ("error" in forked) {
+				emitToUser("sessions:create:error", { error: forked.error })
+				return { error: forked.error }
+			}
+			const branchedSession = await getSessionFromDB(forked.sessionId, userId)
+			if (!branchedSession) throw new Error("Failed to fetch branched session")
+			await relistWithRow(socket, emitToUser, forked.sessionId)
+			const branchRes: Sockets.Sessions.Create.Response = { session: branchedSession as any }
+			emitToUser("sessions:create", branchRes)
+			return branchRes
+		}
+		if (creationMode === "next-chapter") {
+			// The successor reads the same book and line as the session it follows.
+			const [followed] = await db
+				.select({
+					lorebookId: schema.sessions.lorebookId,
+					lorebookBranchId: schema.sessions.lorebookBranchId,
+					archivedAt: schema.sessions.archivedAt
+				})
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.from!))
+				.limit(1)
+			// 🚧 A session with no book attached keeps its world in its own
+			// book (RF fix 2: every session has a world). Its next chapter
+			// follows that world: the notes are shared as a lorebook first —
+			// what "Share as a lorebook" does by hand — so the old session
+			// reads it and the new one attaches it like any other.
+			let lorebookId = followed?.lorebookId ?? null
+			if (followed && lorebookId == null) {
+				const { shareAsLorebook } = await import("$lib/server/lorebooks/ownBook")
+				lorebookId = (
+					await shareAsLorebook(db as unknown as Db, { sessionId: params.from!, userId })
+				).lorebookId
+			}
+			params = {
+				...params,
+				session: {
+					...params.session,
+					lorebookId,
+					lorebookBranchId: followed?.lorebookBranchId ?? null
+				}
+			}
+		}
 		const tags = params.tags || []
 		const personaIds = params.personaIds || []
 		const characterIds = params.characterIds || []
@@ -693,7 +771,13 @@ export const sessionsCreateHandler: Handler<
 			params.session.lorebookId != null
 				? await kitReadRefusal(db as unknown as Db, params.session.lorebookId)
 				: null
-		if (params.session.lorebookId != null && !kitAsBook) {
+		if (params.session.lorebookId != null && !kitAsBook && creationMode === "new-world") {
+			// A world to copy need only be readable: owner or share recipient.
+			const { assertReadableBook } = await import("$lib/server/utils/ownedBook")
+			await assertReadableBook(db as unknown as Db, userId, params.session.lorebookId, {
+				isAdmin: false
+			})
+		} else if (params.session.lorebookId != null && !kitAsBook) {
 			const ownsLorebook = await checkLorebookOwnership(
 				params.session.lorebookId,
 				userId
@@ -726,6 +810,8 @@ export const sessionsCreateHandler: Handler<
 		if (kitAsBook) return refuse(kitAsBook)
 		if (params.starterKit != null && params.session.lorebookId != null)
 			return refuse(STARTER_KIT_SENTENCES.kitAndBook)
+		if (creationMode === "new-world" && params.starterKit == null && params.session.lorebookId == null)
+			return refuse("Choose the world to copy.")
 		let startKit: import("$lib/server/lorebooks/starterKits").ResolvedKit | null = null
 		if (params.starterKit != null) {
 			try {
@@ -939,6 +1025,19 @@ export const sessionsCreateHandler: Handler<
 				>
 			).filter(([k]) => declaredFieldKeys.includes(k))
 		)
+		// 🚧 Speech: the narrator voice is checked at every write, not only
+		// through the settings form (lane V finding V-3, 2026-10-28).
+		{
+			const { SPEECH_FIELD_KEYS } = await import("$lib/shared/sessions/speechSettings")
+			const voice = ((sessionDataWithoutTags as any).genreFields as Record<string, unknown>)[
+				SPEECH_FIELD_KEYS.narratorVoice
+			]
+			if (voice !== undefined) {
+				const { narratorVoiceRefusal } = await import("$lib/server/speech/narratorVoiceCheck")
+				const refusal = await narratorVoiceRefusal(db, voice)
+				if (refusal) throw new Error(refusal)
+			}
+		}
 
 		// 🚧 Rulesets (PLAN-rulesets §4, §13, §21, §28): a session attached to
 		// a lorebook at creation ADOPTS its ruleset and version, whatever the client sent — refused, with the reason, when the
@@ -1029,6 +1128,13 @@ export const sessionsCreateHandler: Handler<
 						: null
 				data.primaryRuleset = picked ?? genreDefault ?? "core:ruleset/freeform@1"
 			}
+			// 🚧 Pinned to the version it starts on when nothing adopted pins one (a genre's or preset's pick, or a book
+			// that carries none): a pub or package ruleset's published version, so "Update rules" and a conversion work
+			// (M0 E-fix). A ruleset declared in code has no version and stays unpinned.
+			if (data.rulesetVersion == null && typeof data.primaryRuleset === "string") {
+				const { publishedRulesetVersion } = await import("$lib/server/rulesets/pubRulesets")
+				data.rulesetVersion = await publishedRulesetVersion(db, data.primaryRuleset)
+			}
 			const rigourOptions: readonly string[] = genre?.rigour?.options ?? ["prose"]
 			// 🚧 R32: rigour is fixed at start, through the cascade — the
 			// person's pick where it is open to them, a layer's where one
@@ -1059,13 +1165,46 @@ export const sessionsCreateHandler: Handler<
 		// the book's calendar lock (`sessionLinePatch`).
 		let kitCopy: import("$lib/server/lorebooks/starterKits").KitCopy | null = null
 		const { insertOwnBook } = await import("$lib/server/lorebooks/ownBook")
+		// 🚧 `next-chapter`: the session it follows is closed out first, unless
+		// archived. Nothing to close out is not a refusal; any other is.
+		if (creationMode === "next-chapter") {
+			const [followed] = await db
+				.select({ archivedAt: schema.sessions.archivedAt })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.from!))
+				.limit(1)
+			if (!followed?.archivedAt) {
+				const { closeOutSession } = await import("./sessionArchive")
+				const { CLOSE_OUT_REFUSALS } = await import("$lib/shared/sessions/archive")
+				const closed = await closeOutSession({ sessionId: params.from!, userId, emitToUser })
+				if ("refused" in closed && closed.refused !== CLOSE_OUT_REFUSALS.nothing)
+					return refuse(closed.refused)
+			}
+		}
 		const newSession = await db.transaction(async (tx) => {
+			// 🚧 `new-world`: the session starts on a COPY of the world it chose
+			// (named "<source name> (copy)"), never on the source itself. The
+			// copy has lines of its own, so the draft's line is not carried.
+			let worldId = sessionDataWithoutTags.lorebookId ?? null
+			let worldBranchId = requestedBranchId
+			if (creationMode === "new-world" && worldId != null) {
+				const { duplicateLorebookRows } = await import("$lib/server/utils/lorebookDuplicate")
+				const [source] = await tx
+					.select({ name: schema.lorebooks.name })
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, worldId))
+					.limit(1)
+				const copy = await duplicateLorebookRows(tx, worldId, userId, `${source?.name ?? "World"} (copy)`)
+				worldId = copy.id
+				worldBranchId = undefined
+			}
 			const sessionData: InsertSession = {
 				...sessionDataWithoutTags,
+				...(worldId !== (sessionDataWithoutTags.lorebookId ?? null) ? { lorebookId: worldId } : {}),
 				...(await sessionLinePatch(tx, {
 					before: null,
-					lorebookId: sessionDataWithoutTags.lorebookId ?? null,
-					lorebookBranchId: requestedBranchId,
+					lorebookId: worldId,
+					lorebookBranchId: worldBranchId,
 					clock:
 						requestedClockYear == null
 							? undefined
@@ -1134,6 +1273,26 @@ export const sessionsCreateHandler: Handler<
 			"$lib/server/sessions/creating"
 		)
 		markCreating(newSession.id)
+
+		// 🚧 `next-chapter`: the chapter's first message, ahead of whatever the
+		// genre's create pipeline writes, is the anchor the carried state is
+		// filed against. An ordinary system line: the viewer may Hide it.
+		let chapterAnchorId: number | null = null
+		if (creationMode === "next-chapter") {
+			const { insertLegacy } = await import("$lib/server/messages/store")
+			chapterAnchorId = (
+				await insertLegacy(db as unknown as Db, {
+					userId,
+					sessionId: newSession.id,
+					personaId: null,
+					characterId: null,
+					role: "system",
+					channel: "main",
+					content: "Chapter begins.",
+					isGenerating: false
+				})
+			).id
+		}
 
 		// Process tags after session creation
 		if (tags.length > 0) {
@@ -1247,6 +1406,17 @@ export const sessionsCreateHandler: Handler<
 			).catch(console.error)
 		}
 
+		// 🚧 `next-chapter`: what the old session declared `nextChapter: true`
+		// follows the player, in one write anchored to the chapter's first message — before the create
+		// pipeline, while that row is still the newest and so still open to a write.
+		if (creationMode === "next-chapter")
+			await creationModes.seedNextChapter(db as unknown as Db, {
+				fromSessionId: params.from!,
+				sessionId: newSession.id,
+				userId,
+				anchorMessageId: chapterAnchorId!
+			})
+
 		// Creation as a run (24 §12, T8): the genre's create pipeline answers
 		// `session-created` — greeting seeding is its nodes now, receipted
 		// like any other run. Dispatch keys on (genre, event); nothing serving
@@ -1267,7 +1437,7 @@ export const sessionsCreateHandler: Handler<
 				presetId: newSession.presetId ?? null,
 				characterIds,
 				personaIds,
-				lorebookId: params.session.lorebookId ?? null
+				lorebookId: newSession.lorebookId ?? null
 			}
 			const dispatched = await dispatchSessionEvent(db, {
 				sessionId: newSession.id,
@@ -1483,6 +1653,9 @@ async function getSessionFromDB(
 			// 🚧 The Back · Forward strip's state (RF fix 5,
 			// `SessionDossierV1.rewind`): the same for every viewer.
 			rewind: await (await import("$lib/server/sessions/rewind")).rewindStateOf(db, sessionId),
+			// 🚧 Speech polish: whether a speaking pair exists (a boolean + one
+			// sentence; `SessionDossierV1.speech`) — the speak icons' reason.
+			speech: await (await import("$lib/server/speech/voicebank")).speechAvailability(db),
 			// 🚧 pr-6 (D R-B5): the settle line.
 			settledLine: await (await import("$lib/server/sessions/settle")).settledLineOf(db, sessionId),
 			// 🚧 pr-6 (B §B-3): the session's own book, or null.
@@ -1634,6 +1807,17 @@ export const sessionsDeleteHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
+			// 🚧 (M2c) Confirmed from an extension's launcher: its grant and its
+			// genre are judged first, in words. Absent: exactly today.
+			if (params.fromApplet) {
+				const { appletDeleteRefusal } = await import("./appletSessions")
+				const refusal = await appletDeleteRefusal(db as unknown as Db, userId, params)
+				if (refusal) {
+					emitToUser("sessions:delete:error", { error: refusal })
+					return { error: refusal }
+				}
+			}
+
 			console.log("[sessions:delete] Received params:", params)
 			console.log("[sessions:delete] Params type:", typeof params)
 			console.log(
@@ -1733,6 +1917,37 @@ export const sessionsDeleteHandler: Handler<
 }
 
 /**
+ * 🚧 M2c: an applet genre's launcher title — what `/apps/<pluginId>` shows (its
+ * plugin's `session-view` frame title, else the plugin's name) — read through
+ * the launcher's own test (`appletMount`), so the Apps row is listed exactly
+ * when the launcher mounts. Null for any other genre.
+ */
+async function appletTitleOf(g: {
+	genreId: string
+	name: string
+	shape?: unknown
+}): Promise<string | null> {
+	const shape = g.shape as { applet?: boolean; view?: string } | undefined
+	if (shape?.applet !== true || typeof shape.view !== "string") return null
+	const { pluginsEnabled } = await import("$lib/server/plugins/flag")
+	if (!pluginsEnabled()) return null
+	const { notCoreRow } = await import("$lib/server/plugins/frameHost")
+	const { appletMount } = await import("$lib/server/plugins/appletMount")
+	const [row] = await db
+		.select({
+			enabled: schema.plugins.enabled,
+			name: schema.plugins.name,
+			version: schema.plugins.version,
+			manifest: schema.plugins.manifest,
+			adminDenied: schema.plugins.adminDenied
+		})
+		.from(schema.plugins)
+		.where(and(eq(schema.plugins.pluginId, shape.view), notCoreRow()))
+		.limit(1)
+	return appletMount(shape.view, row, [{ genreId: g.genreId, name: g.name, shape }])?.title ?? null
+}
+
+/**
  * One offered genre as the session form reads it (`sessions:genres`,
  * `sessions:genreOf`): the genre row plus its Rules / How strict offer and its
  * declared scene boundary triggers.
@@ -1753,11 +1968,14 @@ async function genreRowFor(
 	const { rulesetDecides } = await import("$lib/server/rulesets/methods")
 	const decides = (id: string) => rulesetDecides(getRuleset(id))
 	const declared = await genreBoundaryTriggers(db, g.genreId).catch(() => [])
+	// 🚧 M2c: an applet genre carries its launcher's title for the Sessions view's Apps row.
+	const appletTitle = await appletTitleOf(g)
 	const offer = genreRulesOffer(getGenre(g.genreId) as any, pickableRulesets())
 	const rules = offer ? withRigoursPlayed(offer, decides) : null
 	return {
 		...g,
 		...(rules ? { rules } : {}),
+		...(appletTitle ? { appletTitle } : {}),
 		...(declared.length
 			? {
 					sceneBoundaryTriggers: declared.map((t) => ({
@@ -1862,6 +2080,56 @@ export const sessionsUpgradeModeHandler: Handler<
 		emitToUser("sessions:upgradeGenre", res)
 		if (!error) await relistSessions(socket, emitToUser)
 		return res
+	}
+}
+
+/**
+ * 🚧 Move a session's rules to the published version of their ruleset (M0,
+ * lane T4): owner-only, one transaction, the event after the commit.
+ * A refusal is `{ id, error }`.
+ */
+export const sessionsConvertRulesetHandler: Handler<
+	Sockets.Sessions.ConvertRuleset.Params,
+	Sockets.Sessions.ConvertRuleset.Response
+> = {
+	event: "sessions:convertRuleset",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const base = { id: params.id }
+		const access = await checkSessionAccess(params.id, userId)
+		if (!access.hasAccess || !access.isOwner) {
+			const res = { ...base, error: "Only the session's owner can change its rules." }
+			emitToUser("sessions:convertRuleset", res)
+			return res
+		}
+		try {
+			const { convertSessionRuleset } = await import("$lib/server/sessions/convertRuleset")
+			const converted = await convertSessionRuleset(db, { sessionId: params.id, to: params.to, userId })
+			const { emitSessionEvent } = await import("$lib/server/pipelines/runtime/sessionEvents")
+			await emitSessionEvent(db, {
+				sessionId: params.id,
+				userId,
+				event: "core:event/ruleset-converted@1",
+				payload: {
+					sessionId: params.id,
+					rulesetId: converted.rulesetId,
+					from: converted.from,
+					to: converted.to,
+					slots: converted.slots,
+					cause: { kind: "edit", userId }
+				},
+				io: socket.io
+			})
+			await pushSessionToParticipants(socket.io, params.id, userId)
+			const res: Sockets.Sessions.ConvertRuleset.Response = { ...base, rulesetVersion: converted.to }
+			emitToUser("sessions:convertRuleset", res)
+			return res
+		} catch (e) {
+			if (!(e instanceof StateRefusal)) throw e
+			const res = { ...base, error: e.message }
+			emitToUser("sessions:convertRuleset", res)
+			return res
+		}
 	}
 }
 
@@ -2260,8 +2528,88 @@ export const sessionsFireActionHandler: Handler<
 	Sockets.Sessions.FireAction.Response
 > = {
 	event: "sessions:fireAction",
-	handler: async (socket, params, emitToUser) =>
-		withSessionGenerationLock(params.sessionId, async () => {
+	handler: async (socket, params, emitToUser) => {
+		/**
+		 * 🚧 M2a a6: the run id the press named (`params.runId`), echoed on
+		 * EVERY answer — a refusal before any run and a Stop included — so the
+		 * asker matches its own press exactly (`Response.askedRunId`).
+		 */
+		const asked = typeof params.runId === "string" && params.runId ? { askedRunId: params.runId } : {}
+		/**
+		 * 🚧 **The busy door** (2026-10-30): a session-level press (no form
+		 * block, no message) made while a person's line is being ANSWERED is
+		 * refused out loud, never queued behind it: waiting in the generation
+		 * lock it made no run row and said nothing. The answer window is the
+		 * whole of it (ruled 2026-10-30): from the line's acceptance — its
+		 * `message-completed` on the session's event chain, where the
+		 * turn-order recompute and the auto-advance fire run — until the reply
+		 * run ends. Read from what already exists: a registered reply run; or,
+		 * while the session's event chain is still deciding
+		 * (`sessionEventsPending`) after a person's line (the newest live
+		 * row), the door waits for that decision — bounded, as
+		 * `settleBackgroundRuns` waits for a Regenerate — and refuses once a
+		 * reply run starts, lets the press through once the chain empties
+		 * with none (auto-advance off, nobody due). A press's own settling
+		 * children and a run parked at review keep the session pressable (no
+		 * person's line is waiting). The press
+		 * still walks every door of `fireAction` (its own `enabledWhen` reason
+		 * wins), then is refused with core's busy sentence; nothing is
+		 * retried. A form's answer and a press on a message keep their place
+		 * in the queue, as before.
+		 */
+		const answering = async (sessionId: number, ms = 8000): Promise<boolean> => {
+			const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+			const { sessionEventsPending } = await import("$lib/server/pipelines/runtime/sessionEvents")
+			const { liveMessageWhere } = await import("$lib/server/messages/store")
+			const replying = () => runRegistry.active().some((h) => h.sessionId === sessionId && h.kind === "reply")
+			if (replying()) return true
+			if (!sessionEventsPending(sessionId)) return false
+			const [newest] = await db
+				.select({ role: schema.sessionMessages.role })
+				.from(schema.sessionMessages)
+				.where(and(eq(schema.sessionMessages.sessionId, sessionId), liveMessageWhere()))
+				.orderBy(desc(schema.sessionMessages.id))
+				.limit(1)
+			if (newest?.role !== "user") return false
+			// A person's line, its turn order still being decided: wait for the decision.
+			const end = Date.now() + ms
+			for (;;) {
+				if (replying()) return true
+				if (!sessionEventsPending(sessionId)) return false
+				if (Date.now() > end) return true
+				await new Promise((r) => setTimeout(r, 150))
+			}
+		}
+		if (!params.blockId && params.messageId == null) {
+			if (await answering(params.sessionId)) {
+				const userId = socket.user!.id
+				const access = await checkSessionAccess(params.sessionId, userId)
+				if (access.hasAccess) {
+					const { REWIND_STRIP_REASONS } = await import("@serene-pub/core-catalog/conversation")
+					const { fireAction } = await import("$lib/server/pipelines/runtime/fireAction")
+					const outcome = await fireAction(db, {
+						sessionId: params.sessionId,
+						action: params.action ?? undefined,
+						key: params.key ?? undefined,
+						payload: params.payload && typeof params.payload === "object" ? params.payload : undefined,
+						...(typeof params.text === "string" ? { text: params.text } : {}),
+						...(Array.isArray(params.recipients) ? { recipients: params.recipients } : {}),
+						...(params.clockStep !== undefined ? { clockStep: params.clockStep } : {}),
+						actor: { userId },
+						busy: REWIND_STRIP_REASONS.generating
+					})
+					const res: Sockets.Sessions.FireAction.Response = {
+						sessionId: params.sessionId,
+						action: params.action ?? params.key ?? "",
+						error: outcome.kind === "refused" ? outcome.error : REWIND_STRIP_REASONS.generating,
+						...asked
+					}
+					emitToUser("sessions:fireAction", res)
+					return res
+				}
+			}
+		}
+		return withSessionGenerationLock(params.sessionId, async () => {
 			// 🚧 A person pressed something: an interaction (R11, R21; lane 6).
 			const access = await checkSessionAccess(params.sessionId, socket.user!.id)
 			await noteSocketInteraction(access, params.sessionId, params.blockId ? "form" : "action")
@@ -2269,16 +2617,26 @@ export const sessionsFireActionHandler: Handler<
 			const named = params.action ?? params.key ?? ""
 			/** The card's title — the action's key, the short word a person pressed. */
 			const label = named.includes("#") ? named.slice(named.lastIndexOf("#") + 1) : named
+			/**
+			 * 🚧 The run is line-bound (speaking a line, `RunHandle.lineBound`):
+			 * every progress frame says so and the card leaves it out — the
+			 * line's own Speaking… and Stop show it. Learned at `onStarted`.
+			 */
+			let lineBound = false
 			const fail = (
 				error: string,
 				/** The run whose terminal frame already said `error` (see `Response.runId`). */
-				runId?: string
+				runId?: string,
+				/** 🚧 M2a a6: the run halted on purpose (not an error): the answer says so, with the sentence as `reason`. */
+				halted?: boolean
 			): Sockets.Sessions.FireAction.Response => {
 				const res = {
 					sessionId: params.sessionId,
 					action: named,
 					error,
-					...(runId ? { runId } : {})
+					...(runId ? { runId } : {}),
+					...(halted ? { halted: true as const, reason: error } : {}),
+					...asked
 				}
 				emitToUser("sessions:fireAction", res)
 				return res
@@ -2302,7 +2660,8 @@ export const sessionsFireActionHandler: Handler<
 					sessionId: params.sessionId,
 					action: named,
 					cancelled: true,
-					cancelledBy: by
+					cancelledBy: by,
+					...asked
 				}
 				emitToUser("sessions:fireAction", res)
 				return res
@@ -2343,6 +2702,7 @@ export const sessionsFireActionHandler: Handler<
 					// reply road's `finally` says the same) titled the receipt
 					// "Working" (2026-09-17).
 					label,
+					...(lineBound ? { lineBound: true as const } : {}),
 					done: true,
 					outcome,
 					...(outcome === "cancelled" ? { cancelled: true } : {}),
@@ -2352,6 +2712,22 @@ export const sessionsFireActionHandler: Handler<
 						: {}),
 					...(haltStep ? { haltStep } : {})
 				})
+				/**
+				 * 🚧 M2a a6: the run a press started has ended — told to every
+				 * member's page, so the session's widget bus can say
+				 * `run:ended` to the frames (the client half, widgetWire). The
+				 * outcome in the receipt's words; `reason` the sentence the
+				 * terminal frame just carried (a halt's or an error's).
+				 */
+				{
+					const { broadcastToSessionUsers } = await import("$lib/server/sockets/utils/broadcastHelpers")
+					await broadcastToSessionUsers(socket.io, params.sessionId, "sessions:runEnded", {
+						sessionId: params.sessionId,
+						runId,
+						outcome,
+						...(explanation !== undefined ? { reason: explanation } : {})
+					} satisfies Sockets.Sessions.RunEnded.Frame).catch(() => {})
+				}
 				// The run moved the session's published values — at the
 				// least, `session.generating` is false again — so every
 				// member's action list is re-sent from here (U5e, review
@@ -2416,7 +2792,8 @@ export const sessionsFireActionHandler: Handler<
 					// does not say it a second time (PLAN-less-confusing D4).
 					return fail(
 						haltExplanation(receipt) ?? "The run produced nothing.",
-						outcome.runId
+						outcome.runId,
+						receipt.outcome === "halt"
 					)
 				}
 
@@ -2426,9 +2803,12 @@ export const sessionsFireActionHandler: Handler<
 					sessionId: params.sessionId,
 					action: named,
 					success: true,
+					// 🚧 M2a a6: the run the press started, matched by its `sessions:runEnded`.
+					runId: outcome.runId,
 					// A run under this one is waiting at a review gate: its
 					// own row lands when the owner decides.
-					...(outcome.parked?.length ? { parked: true } : {})
+					...(outcome.parked?.length ? { parked: true } : {}),
+					...asked
 				}
 				emitToUser("sessions:fireAction", res)
 				return res
@@ -2438,6 +2818,16 @@ export const sessionsFireActionHandler: Handler<
 			// when somebody realises the prompt was wrong.
 			const runId = params.runId || randomUUID()
 			let started = false
+			// A manual Read aloud / Say it as… marks its line pending (as the
+			// automatic path does) so it reads Speaking… with a Stop; cleared
+			// when the run ends, whatever the outcome.
+			let speechMark: Promise<boolean> | null = null
+			const endSpeech = async () => {
+				if (!speechMark || params.messageId == null) return
+				const { endManualSpeech } = await import("$lib/server/speech/onMessageSettled")
+				await speechMark.catch(() => false)
+				await endManualSpeech(db, socket.io as never, params.sessionId, params.messageId, runId)
+			}
 			try {
 				const userId = socket.user!.id
 				const { fireAction } = await import(
@@ -2468,12 +2858,20 @@ export const sessionsFireActionHandler: Handler<
 					io: socket.io,
 					onStarted: (run) => {
 						started = true
+						if (run.lineBound) lineBound = true
+						if (params.messageId != null)
+							speechMark = import("$lib/server/speech/onMessageSettled").then((m) =>
+								m.isSpeakRun(run.specId)
+									? m.markManualSpeech(db, socket.io as never, params.sessionId, params.messageId!, run.runId)
+									: false
+							)
 						emitToUser("pipelines:runStarted", {
 							runId: run.runId,
 							sessionId: params.sessionId,
 							specId: run.specId,
 							label,
-							...(run.channel ? { channel: run.channel } : {})
+							...(run.channel ? { channel: run.channel } : {}),
+							...(lineBound ? { lineBound: true as const } : {})
 						})
 						// `session.generating` just rose (U5e, review W-A1):
 						// every member's list follows, once per root — the
@@ -2501,7 +2899,8 @@ export const sessionsFireActionHandler: Handler<
 						emitToUser("pipelines:progress", {
 							...event,
 							sessionId: params.sessionId,
-							label
+							label,
+							...(lineBound ? { lineBound: true as const } : {})
 						})
 					},
 					// The run's status (R-19), onto the progress card's frame
@@ -2514,7 +2913,8 @@ export const sessionsFireActionHandler: Handler<
 							specId: run.specId,
 							label,
 							nodeKey,
-							status
+							status,
+							...(lineBound ? { lineBound: true as const } : {})
 						}),
 					// The run parked and was released to us (R-b); this is
 					// how it ends, delivered as pushes — the ack is long gone.
@@ -2540,6 +2940,7 @@ export const sessionsFireActionHandler: Handler<
 					}
 				})
 
+				if (outcome.kind !== "parked") await endSpeech()
 				if (outcome.kind === "refused") return fail(outcome.error)
 				/**
 				 * Parked at a review gate (R-b): the owner has the card, the
@@ -2551,7 +2952,8 @@ export const sessionsFireActionHandler: Handler<
 					const res: Sockets.Sessions.FireAction.Response = {
 						sessionId: params.sessionId,
 						action: named,
-						parked: true
+						parked: true,
+						...asked
 					}
 					emitToUser("sessions:fireAction", res)
 					return res
@@ -2560,11 +2962,13 @@ export const sessionsFireActionHandler: Handler<
 			} catch (error: any) {
 				// A stopped run never arrives here: `fireAction` reads the
 				// handle before it rethrows, and answers `stopped` for one.
+				await endSpeech()
 				if (started) await finished(runId, "err")
 				console.error("Error in sessionsFireActionHandler:", error)
 				return fail("Failed to run the function.")
 			}
 		})
+	}
 }
 
 /**
@@ -2782,6 +3186,7 @@ export const sessionsViewHandler: Handler<
 				? await db
 						.select({
 							pluginId: schema.plugins.pluginId,
+							version: schema.plugins.version,
 							name: schema.plugins.name,
 							manifest: schema.plugins.manifest,
 							adminDenied: schema.plugins.adminDenied
@@ -2804,8 +3209,16 @@ export const sessionsViewHandler: Handler<
 			// 🚧 A channel for the owner alone (`audience: 'owner'`, Lair
 			// rewrite D6) is no part of a guest's session: not listed, not
 			// labelled, never offered to their composer's switch.
-			const { ownerOnlySlugsOf } = await import("$lib/server/channels/lanes")
-			const hiddenChannels = new Set(access.isOwner ? [] : ownerOnlySlugsOf(mode?.shape))
+			// 🚧 So is a channel for the people named (`audience: { participants }`,
+			// M0 L6) to anyone not among them: one predicate decides.
+			const { audienceHiddenSlugsFor } = await import("$lib/server/channels/lanes")
+			const hiddenChannels = await audienceHiddenSlugsFor(
+				db,
+				params.sessionId,
+				mode?.shape,
+				userId,
+				access.isOwner
+			)
 			res.channels = channelsOf(mode?.shape).filter((c) => !hiddenChannels.has(c))
 			// What each is CALLED (S1): the declared label, in the viewer's
 			// language — the Lair's `sanctum` is _Sanctum_. Only the channels
@@ -2884,7 +3297,7 @@ export const sessionsViewHandler: Handler<
 				if (owner && decl)
 					res.sessionView = {
 						pluginId: owner.pluginId,
-						src: frameSrc(owner.pluginId, decl.entry),
+						src: frameSrc(owner.pluginId, decl.entry, owner.version),
 						title: decl.title ?? owner.name
 					}
 			}
@@ -2979,7 +3392,9 @@ export const sessionsViewHandler: Handler<
 						// Built for a host contract this host does not speak (F1): not offered, the reason in the admin list.
 						const { pluginComponentRefusal } = await import("$lib/server/components/compat")
 						if (pluginComponentRefusal(owner.manifest, surface.component)) continue
-						remoteSrc = frameSrc(owner.pluginId, declared.entry)
+						// Versioned like the session view's document, so a document the
+						// component nests (`sp-frame`) is too, and gets its `assetsBase` (M2a).
+						remoteSrc = frameSrc(owner.pluginId, declared.entry, owner.version)
 						if (Array.isArray(p.scopes) && p.scopes.length) {
 							const { panelGrants } = await import("$lib/server/plugins/permissions")
 							grants = panelGrants(p.scopes, owner.manifest as never, owner.adminDenied)
@@ -3034,6 +3449,7 @@ export const sessionsViewHandler: Handler<
 			const enabledNow = await db
 				.select({
 					pluginId: schema.plugins.pluginId,
+					version: schema.plugins.version,
 					manifest: schema.plugins.manifest,
 					adminDenied: schema.plugins.adminDenied
 				})
@@ -3076,7 +3492,7 @@ export const sessionsViewHandler: Handler<
 						continue
 					// Built for a host contract this host does not speak (F1): not offered, the reason in the admin list.
 					if (pluginComponentRefusal(e.manifest, surface.component)) continue
-					const src = frameSrc(e.pluginId, built.entry)
+					const src = frameSrc(e.pluginId, built.entry, e.version)
 					const id = pluginWidgetId(e.pluginId, w.id)
 					if (seen.has(id)) continue // one declaration per id
 					seen.add(id)
@@ -4726,6 +5142,29 @@ export const sessionsAnnexHandler: Handler<
 }
 
 /**
+ * 🚧 The asker's view of the lorebook annex their session reads (M0):
+ * the lorebook twin of `sessionsAnnexHandler` — the catch-up for a page that
+ * opens or reconnects; every change is pushed under the same event, to each
+ * member their own (`pushLorebookAnnexViews`).
+ */
+export const sessionsLorebookAnnexHandler: Handler<
+	Sockets.Sessions.LorebookAnnex.Params,
+	Sockets.Sessions.LorebookAnnex.Response
+> = {
+	event: "sessions:lorebookAnnex",
+	handler: async (socket, params, emitToUser) => {
+		const { lorebookAnnexViewFor } = await import("$lib/server/lorebooks/annex")
+		const annex = await lorebookAnnexViewFor(db, params.sessionId, socket.user!.id)
+		const res: Sockets.Sessions.LorebookAnnex.Response =
+			annex === null
+				? { sessionId: params.sessionId, annex: {}, error: "No such session." }
+				: { sessionId: params.sessionId, annex }
+		emitToUser("sessions:lorebookAnnex", res)
+		return res
+	}
+}
+
+/**
  * The session data panel (owner-approved 2026-09-26): the whole annex laid
  * out against its owners' declarations, plus legacy keys. The session's
  * owner and administrators only — anyone else is refused by sentence, the
@@ -4753,6 +5192,58 @@ export const sessionsAnnexInspectHandler: Handler<
 	}
 }
 
+/**
+ * 🚧 `autoConvert` at open (M0, lane T4, the server half): the asker owns
+ * the session, its genre says `rulesets.autoConvert: true`, and its pinned
+ * version is not the published one → convert, then tell the session. A refusal
+ * is logged, never shown: the session opens as it is. The notice is the client's.
+ */
+async function autoConvertRulesetAtOpen(socket: any, sessionId: number): Promise<{ from: string; to: string } | null> {
+	try {
+		const userId = socket.user!.id
+		const [row] = await db
+			.select({
+				userId: schema.sessions.userId,
+				genreId: schema.sessions.genreId,
+				rulesetId: schema.sessions.primaryRuleset,
+				pinned: schema.sessions.rulesetVersion
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!row || row.userId !== userId || !row.pinned) return null
+		const genre = getGenre(row.genreId)
+		if ((genre?.rulesets as { autoConvert?: boolean } | undefined)?.autoConvert !== true) return null
+		const [published] = await db
+			.select({ version: schema.rulesets.publishedVersion })
+			.from(schema.rulesets)
+			.where(eq(schema.rulesets.rulesetId, row.rulesetId))
+			.limit(1)
+		if (!published?.version || published.version === row.pinned) return null
+		const { convertSessionRuleset } = await import("$lib/server/sessions/convertRuleset")
+		const converted = await convertSessionRuleset(db, { sessionId, to: published.version, userId })
+		const { emitSessionEvent } = await import("$lib/server/pipelines/runtime/sessionEvents")
+		await emitSessionEvent(db, {
+			sessionId,
+			userId,
+			event: "core:event/ruleset-converted@1",
+			payload: {
+				sessionId,
+				rulesetId: converted.rulesetId,
+				from: converted.from,
+				to: converted.to,
+				slots: converted.slots,
+				cause: { kind: "edit", userId }
+			},
+			io: socket.io
+		})
+		return { from: converted.from, to: converted.to }
+	} catch (e) {
+		console.warn("[sessions:get] autoConvert did not convert:", e instanceof Error ? e.message : e)
+		return null
+	}
+}
+
 export const sessionsGetHandler: Handler<
 	Sockets.Sessions.Get.Params,
 	Sockets.Sessions.Get.Response
@@ -4760,11 +5251,13 @@ export const sessionsGetHandler: Handler<
 	event: "sessions:get",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const res = await buildSessionGetResponse(
+			const converted = await autoConvertRulesetAtOpen(socket, params.id)
+			const built = await buildSessionGetResponse(
 				params.id,
 				socket.user!.id,
 				{ limit: params.limit, beforeId: params.beforeId }
 			)
+			const res = converted ? { ...built, rulesetConverted: converted } : built
 			emitToUser("sessions:get", res)
 			return res
 		} catch (error: any) {
@@ -5373,6 +5866,13 @@ export const sessionsUpdateHandler: Handler<
 							(genreFields ?? {}) as Record<string, unknown>
 						).filter(([k]) => declared.includes(k))
 					)
+					// 🚧 Speech: narrator voice checked here too (lane V V-3).
+					const { SPEECH_FIELD_KEYS } = await import("$lib/shared/sessions/speechSettings")
+					if (SPEECH_FIELD_KEYS.narratorVoice in genreFieldsPatch) {
+						const { narratorVoiceRefusal } = await import("$lib/server/speech/narratorVoiceCheck")
+						const refusal = await narratorVoiceRefusal(db, genreFieldsPatch[SPEECH_FIELD_KEYS.narratorVoice])
+						if (refusal) throw new Error(refusal)
+					}
 				}
 
 				/**
@@ -5646,7 +6146,7 @@ export const sessionsUpdateHandler: Handler<
 							payload: {
 								sessionId: params.session.id!,
 								changed,
-								cause: { kind: "settings", userId }
+								cause: { kind: "settings", userId, ...appletCallerOf(params) }
 							},
 							io: socket.io
 						})
@@ -5664,7 +6164,7 @@ export const sessionsUpdateHandler: Handler<
 								await noteStoryClockMoved(db, {
 									sessionId: params.session.id!,
 									userId,
-									cause: { kind: "settings", userId },
+									cause: { kind: "settings", userId, ...appletCallerOf(params) },
 									from,
 									to,
 									io: socket.io
@@ -9112,12 +9612,15 @@ export const sessionsFireTurnHandler: Handler<
 				if (!access.isOwner && params.channel) {
 					const { laneViewFor, laneViewAllows } = await import("$lib/server/channels/lanes")
 					const view = await laneViewFor(db, params.sessionId, userId)
-					if (view && !laneViewAllows(view, params.channel))
+					if (view && !laneViewAllows(view, params.channel)) {
+						const { sessionLaneFacts, hiddenChannelRefusal } = await import("$lib/server/channels/lanes")
+						const facts = await sessionLaneFacts(db, params.sessionId)
 						return reply({
 							sessionId: params.sessionId,
 							ok: false,
-							error: "That channel is the session owner's alone."
+							error: hiddenChannelRefusal(facts?.shape, params.channel)
 						})
+					}
 				}
 				// No entry is Continue — the `advance` turn control (B7),
 				// which the genre may switch off; a pick is not this.
@@ -10272,6 +10775,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsDeleteHandler, emitToUser)
 	register(socket, sessionsGetHandler, emitToUser)
 	register(socket, sessionsAnnexHandler, emitToUser)
+	register(socket, sessionsLorebookAnnexHandler, emitToUser)
 	register(socket, sessionsAnnexInspectHandler, emitToUser)
 	register(socket, sessionsModesHandler, emitToUser)
 	register(socket, sessionsGenreOfHandler, emitToUser)
@@ -10300,6 +10804,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsFunctionsHandler, emitToUser)
 	register(socket, sessionsSetFunctionHandler, emitToUser)
 	register(socket, sessionsUpgradeModeHandler, emitToUser)
+	register(socket, sessionsConvertRulesetHandler, emitToUser)
 	register(socket, sessionsFunctionCandidatesHandler, emitToUser)
 	register(socket, sessionsBindFunctionHandler, emitToUser)
 	// The generic session-scope rebind (PLAN-turn-order §4.7): what a node

@@ -49,7 +49,19 @@ export interface LocalCandidate {
 	probeUrl: string
 	/** Whether the fingerprint's JSON is this service's. */
 	matches: (body: any) => boolean
+	/**
+	 * False for a service that answers speech, not chat (audio.cpp): it is
+	 * fingerprinted and named, but its models are never listed as chat choices.
+	 */
+	listsChat?: false
 }
+
+/** audio.cpp's `/health` shape: `status` plus `backend` or `models`. llama.cpp's is bare `{status:"ok"}`. */
+const isAudioCppHealth = (b: any): boolean =>
+	!!b &&
+	typeof b === "object" &&
+	typeof b.status === "string" &&
+	("backend" in b || "models" in b)
 
 /**
  * The services Serene Pub has a native connection type for, at the address
@@ -88,6 +100,25 @@ export const LOCAL_CANDIDATES: readonly LocalCandidate[] = [
 		baseUrl: "http://localhost:5001",
 		probeUrl: "http://localhost:5001/api/extra/version",
 		matches: (b) => b?.result === "KoboldCpp"
+	},
+	// audio.cpp (speech). Its own default port is 8080, shared with llama.cpp;
+	// llama.cpp is told apart above by `/props`, this one by `/health`
+	// carrying `backend` or `models`. Serene Pub's own copy runs on 5002.
+	{
+		type: CONNECTION_TYPE.AUDIOCPP,
+		label: "audio.cpp",
+		baseUrl: "http://localhost:8080",
+		probeUrl: "http://localhost:8080/health",
+		matches: isAudioCppHealth,
+		listsChat: false
+	},
+	{
+		type: CONNECTION_TYPE.AUDIOCPP,
+		label: "audio.cpp",
+		baseUrl: "http://localhost:5002",
+		probeUrl: "http://localhost:5002/health",
+		matches: isAudioCppHealth,
+		listsChat: false
 	}
 ]
 
@@ -225,6 +256,14 @@ export async function discoverLocalProviders(
 	const found = await Promise.all(
 		candidates.map(async (candidate) => {
 			if (!(await fingerprint(candidate, fetchImpl))) return null
+			if (candidate.listsChat === false)
+				return {
+					type: candidate.type,
+					label: candidate.label,
+					baseUrl: candidate.baseUrl,
+					models: [],
+					error: null
+				} satisfies DiscoveredProvider
 			const listing = await listWithin(candidate, listModels)
 			const provider: DiscoveredProvider = {
 				type: candidate.type,

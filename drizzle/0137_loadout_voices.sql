@@ -1,0 +1,4 @@
+ALTER TABLE "loadouts" ADD COLUMN "default_voice_id" integer;--> statement-breakpoint
+ALTER TABLE "loadouts" ADD COLUMN "other_speakers_voice_id" integer;--> statement-breakpoint
+ALTER TABLE "loadouts" ADD CONSTRAINT "loadouts_default_voice_id_voicebank_voices_id_fk" FOREIGN KEY ("default_voice_id") REFERENCES "public"."voicebank_voices"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "loadouts" ADD CONSTRAINT "loadouts_other_speakers_voice_id_voicebank_voices_id_fk" FOREIGN KEY ("other_speakers_voice_id") REFERENCES "public"."voicebank_voices"("id") ON DELETE set null ON UPDATE no action;

@@ -113,7 +113,34 @@ export function shutdownServices(signal: string): Promise<void> {
 	if (shuttingDown) return Promise.resolve()
 	shuttingDown = true
 	shutdownInFlight = runShutdown(signal)
+	holdExitUntil(shutdownInFlight)
 	return shutdownInFlight
+}
+
+/**
+ * Hold any `process.exit` asked for while the teardown runs until the teardown
+ * settles — itself bounded by {@link SHUTDOWN_TIMEOUT_MS}, so the hold is too.
+ *
+ * Another SIGTERM listener runs beside ours: the dev server's own (Vite's
+ * `closeServerAndExit`: close its HTTP server, then `process.exit()`). Its exit
+ * landed 0.2 s in — before the database, which stops last and writes the clean
+ * marker, had stopped — so every dev stop read `lastShutdown: "unclean"` on the
+ * next boot and the log ended at "stopping N managed service(s)…" (2026-10-30).
+ * Held, that exit happens once the teardown has settled, as ours does.
+ */
+function holdExitUntil(teardown: Promise<void>): void {
+	const exit = process.exit
+	let settled = false
+	const held = ((code?: Parameters<typeof process.exit>[0]) => {
+		if (settled) return exit.call(process, code)
+		void teardown.finally(() => exit.call(process, code))
+		return undefined as never
+	}) as typeof process.exit
+	process.exit = held
+	void teardown.finally(() => {
+		settled = true
+		if (process.exit === held) process.exit = exit
+	})
 }
 
 async function runShutdown(signal: string): Promise<void> {
@@ -129,25 +156,35 @@ async function runShutdown(signal: string): Promise<void> {
 	// other services write to it on their way out (the tunnel marks its row
 	// stopped) and a closed database turns that into a failed write. The shared
 	// deadline below still bounds the whole sequence.
+	// The service stopping now, so a deadline that fires can name it.
+	let stopping: ManagedService | null = null
+	let deadline: ReturnType<typeof setTimeout> | undefined
 	await Promise.race([
 		(async () => {
 			for (const service of [...withShutdown].reverse()) {
+				stopping = service
 				try {
 					await service.shutdown!()
 				} catch (err) {
 					console.error(`[${service.id}] error while stopping:`, err)
 				}
 			}
+			stopping = null
+			console.log(`Stopped ${withShutdown.length} managed service(s).`)
 		})(),
-		new Promise<void>((resolve) =>
-			setTimeout(() => {
+		new Promise<void>((resolve) => {
+			deadline = setTimeout(() => {
+				const hung = stopping as ManagedService | null
 				console.warn(
-					`Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS / 1000}s — exiting anyway.`
+					`Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS / 1000}s` +
+						(hung ? ` while stopping "${hung.label}" (${hung.id})` : "") +
+						` — exiting anyway.`
 				)
 				resolve()
 			}, SHUTDOWN_TIMEOUT_MS)
-		)
+		})
 	])
+	clearTimeout(deadline)
 }
 
 let handlersInstalled = false

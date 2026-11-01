@@ -18,7 +18,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import { getManager, pluginsEnabled } from "$lib/server/plugins"
-import type { PluginDescriptor } from "$lib/server/plugins/SandboxManager"
+import { pluginsEnabledByEnv } from "$lib/server/plugins/flag"
 import type { SandboxKind } from "$lib/server/plugins/types"
 import { checkConformance } from "$lib/server/plugins/conformance"
 import {
@@ -28,7 +28,8 @@ import {
 	setSequentialPref,
 	setAdminDenied,
 	setStorageQuotaOverride,
-	removePlugin
+	removePlugin,
+	rowToDescriptor
 } from "$lib/server/plugins/store"
 import {
 	permissionStates,
@@ -40,7 +41,6 @@ import {
 	reviewMark,
 	reviewMarks,
 	storageGrant,
-	networkGrant,
 	normalizeAdminStorageQuota,
 	MIN_STORAGE_QUOTA,
 	MAX_ADMIN_STORAGE_QUOTA,
@@ -52,7 +52,6 @@ import {
 	clientSettingsView,
 	loadPluginUserSettingsRows,
 	readUserPluginSettings,
-	settingsDelivery,
 	settingsSchemaOf,
 	pluginUserSettingsView,
 	writePluginSettings,
@@ -60,6 +59,11 @@ import {
 	type PluginUserSettingsRow
 } from "$lib/server/plugins/settingsHost"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
+import { registerPluginActionHandlers } from "./pluginActions"
+import { registerPluginCatalogHandlers } from "./pluginCatalogs"
+import { registerUserAnnexHandlers } from "./userAnnex"
+import { registerAppletSessionHandlers } from "./appletSessions"
+import { registerAppletLibraryHandlers } from "./appletLibrary"
 import {
 	afterEnable,
 	fireLifecycle,
@@ -120,31 +124,6 @@ export function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
 	}
 }
 
-function toDescriptor(
-	r: Row,
-	userRows: readonly PluginUserSettingsRow[] = []
-): PluginDescriptor {
-	const p = toPluginRow(r)
-	const eff = effectivePermissions(
-		declaredPermissions(r.manifest),
-		r.adminDenied
-	)
-	return {
-		id: r.pluginId,
-		name: r.name,
-		bundleSource: r.bundleSource,
-		bundleHash: r.bundleHash,
-		backends: p.backends,
-		backend: p.backend,
-		sequential: r.sequential,
-		storageQuotaBytes: storageGrant(eff, r.storageQuotaOverride),
-		networkHosts: networkGrant(eff),
-		// Handles for the hook, plaintext host-side (R63) — as `store.ts`
-		// does — and each user's own resolution for user-scoped fields.
-		...settingsDelivery(r.manifest, r.settings, userRows)
-	}
-}
-
 async function allRows(): Promise<Row[]> {
 	return db.select().from(schema.plugins).orderBy(asc(schema.plugins.name))
 }
@@ -201,13 +180,26 @@ async function listPayload(): Promise<Sockets.Plugins.List.Response> {
 	// rather than stored: with the gate off nothing is ever loaded.
 	const mgr = sandboxEnabled ? getManager() : null
 	const swapsOf = await swapSummaries(rows)
+	// 🚧 (M2c) The books each provides, with where each stands.
+	const { providedBooksOf } = await import("$lib/server/plugins/providedBooks")
+	const booksOf = new Map<string, Sockets.Plugins.ProvidedBook[]>()
+	for (const r of rows) {
+		try {
+			const books = await providedBooksOf(db, r as any)
+			if (books.length) booksOf.set(r.pluginId, books)
+		} catch (e) {
+			console.warn(`[plugins] provided books of '${r.pluginId}' not listed:`, e)
+		}
+	}
 	return {
 		plugins: rows.map((r) => ({
 			...toPluginRow(r),
 			warm: mgr ? mgr.isWarm(r.pluginId) : false,
-			...(swapsOf.has(r.pluginId) ? { swaps: swapsOf.get(r.pluginId)! } : {})
+			...(swapsOf.has(r.pluginId) ? { swaps: swapsOf.get(r.pluginId)! } : {}),
+			...(booksOf.has(r.pluginId) ? { providedBooks: booksOf.get(r.pluginId)! } : {})
 		})),
-		sandboxEnabled
+		sandboxEnabled,
+		sandboxFromEnv: pluginsEnabledByEnv()
 	}
 }
 
@@ -259,6 +251,9 @@ async function pushScripts(socket: any): Promise<void> {
 
 /** Best-effort: keep the live manager in step with the DB (only when on). */
 async function syncManager(pluginId: string): Promise<void> {
+	// 🚧 (M2c) Its provided books come in whenever the plugin is synced while on
+	// and approved — sandbox or no sandbox, since nothing of it runs in one.
+	await syncProvidedBooksQuietly(pluginId)
 	if (!pluginsEnabled()) return
 	// A row stored as `core` is never registered, even switched on: it
 	// reads as absent, so the manager holds nothing under the app's name.
@@ -274,11 +269,23 @@ async function syncManager(pluginId: string): Promise<void> {
 	}
 	try {
 		const userRows = await loadPluginUserSettingsRows(db, [pluginId])
-		mgr.register(toDescriptor(row as Row, userRows.get(pluginId)))
+		// The one builder the boot read uses too (store.ts), so what an admin just
+		// granted is in force now, not after a restart (M2b fix).
+		mgr.register(rowToDescriptor(row as Row, userRows.get(pluginId)))
 	} catch (e) {
 		console.warn(`[plugins] manager register '${pluginId}' failed:`, e)
 	}
 	await syncDeclarations()
+}
+
+/** Import or upgrade the plugin's provided books; best-effort, and a no-op unless on and granted. */
+async function syncProvidedBooksQuietly(pluginId: string): Promise<void> {
+	try {
+		const { syncProvidedBooks } = await import("$lib/server/plugins/providedBooks")
+		await syncProvidedBooks(db, pluginId)
+	} catch (e) {
+		console.warn(`[plugins] provided books for '${pluginId}' failed:`, e)
+	}
 }
 
 /** Whether a plugin's row says it is switched on (false when there is none). */
@@ -609,6 +616,20 @@ export const pluginsInstall: Handler<
 				console.warn(
 					`[plugins] '${params.pluginId}' UI files refused (unsafe path): ${r.refused.join(", ")}`
 				)
+			if (params.manifest && typeof params.manifest === "object") {
+				const { publishPluginRulesets } = await import(
+					"$lib/server/plugins/pluginRulesets"
+				)
+				const rr = await publishPluginRulesets(db, params.pluginId, params.manifest)
+				if (rr.refused.length)
+					console.warn(
+						`[plugins] '${params.pluginId}' rulesets refused: ${rr.refused.join("; ")}`
+					)
+				// 🚧 …and into the registry now, slots and all, not at the next boot (M0 E-fix).
+				const { registerPluginRulesets } = await import("$lib/server/rulesets/pubRulesets")
+				for (const line of await registerPluginRulesets(db, params.pluginId))
+					console.warn(`[plugins] '${params.pluginId}' ruleset not registered: ${line}`)
+			}
 		}
 		// Its widgets' shipped styles, seeded whether or not the sandbox is on.
 		await syncWidgetStylesQuietly()
@@ -634,6 +655,12 @@ export const pluginsSetEnabled: Handler<
 		if (pluginsEnabled() && wasOn && !params.enabled)
 			await fireLifecycle(getManager(), params.pluginId, "disable")
 		await setEnabled(db, params.pluginId, params.enabled)
+		// 🚧 (M2b) Install-time work runs as the admin who switched it on.
+		if (params.enabled)
+			await db
+				.update(schema.plugins)
+				.set({ enabledBy: socket.user!.id })
+				.where(eq(schema.plugins.pluginId, params.pluginId))
 		await syncManager(params.pluginId)
 		// Its loadouts, sandbox on or off (`syncManager` reconciles only when on).
 		if (params.enabled) await seedPluginLoadoutsQuietly()
@@ -713,6 +740,35 @@ export const pluginsUninstall: Handler<
 		await db
 			.delete(schema.pluginFiles)
 			.where(eq(schema.pluginFiles.pluginId, params.pluginId))
+		const { removePluginPackageDir } = await import("$lib/server/plugins/install")
+		await removePluginPackageDir(params.pluginId)
+		// 🚧 (M2b) Each person's own files (`ctx.storage.user`) stay unless the
+		// admin chose to delete them; absent = keep.
+		if (params.userFiles === "delete") {
+			const { removePluginUserFiles } = await import(
+				"$lib/server/plugins/userFiles"
+			)
+			const { getAppDataDir } = await import("$lib/server/utils/appDataDir")
+			await removePluginUserFiles(getAppDataDir(), params.pluginId)
+		}
+		// 🚧 (M2c) The books (and their cards) the plugin provided stay unless the
+		// admin chose to delete them; absent = keep. Only rows carrying its mark.
+		if (params.providedBooks === "delete") {
+			const { deleteProvidedBooks } = await import("$lib/server/plugins/providedBooks")
+			await deleteProvidedBooks(db, params.pluginId)
+		}
+		// 🚧 (M2b) Each person's saved data (`ctx.annex('user')`), the same choice.
+		if (params.userAnnex === "delete") {
+			const { removeOwnerUserAnnexes } = await import(
+				"$lib/server/plugins/userAnnex"
+			)
+			await removeOwnerUserAnnexes(db, params.pluginId)
+		}
+		const { retirePluginRulesets } = await import("$lib/server/plugins/pluginRulesets")
+		await retirePluginRulesets(db, params.pluginId)
+		// 🚧 Retired, so out of the registry with their slots (values stay, parked).
+		const { registerPluginRulesets } = await import("$lib/server/rulesets/pubRulesets")
+		await registerPluginRulesets(db, params.pluginId)
 		if (pluginsEnabled()) await syncDeclarations()
 		// Its shipped widget styles go with it, sandbox on or off.
 		else await syncWidgetStylesQuietly()
@@ -764,50 +820,75 @@ export const pluginsInstallLocal: Handler<
 			throw new Error(msg)
 		}
 
-		return installPackageFromDir(socket, dir, emitToUser, "installLocal")
+		return installPackageFromDir(dir, {
+			via: "installLocal",
+			pushIo: (socket as { io?: unknown })?.io,
+			emitToUser
+		})
 	}
 }
 
 /**
- * The two refusals every package install shares — `plugins:installLocal` and
- * `plugins:installPackage` (the upload half) both ask for an admin and for
- * `SP_PLUGINS_ENABLED`, with this wording.
+ * The sentence for a pub with the plugin subsystem off — said by
+ * `plugins:installLocal` and by the package upload route.
+ */
+export const PACKAGE_INSTALL_OFF_SENTENCE =
+	"Plugins are turned off on this server (SP_PLUGINS_ENABLED), so a package " +
+	"can't be installed. Unset the variable, or set it to 1, then restart Serene Pub."
+
+/**
+ * The two refusals `plugins:installLocal` asks for: an admin and
+ * `SP_PLUGINS_ENABLED`, with this wording. The upload route
+ * (`POST /api/admin/plugins/package`) says the same sentence over HTTP.
  */
 export function requirePackageInstall(socket: any, emitToUser: Emit): void {
 	requireAdmin(socket, emitToUser)
 	if (!pluginsEnabled()) {
-		const msg =
-			"The plugin subsystem is off. A dev install projects a genre and its " +
-			"pipelines into rows the session surface reads, so it asks for " +
-			"SP_PLUGINS_ENABLED rather than landing them on a pub that has " +
-			"the subsystem switched off."
-		emitToUser("error", { error: msg })
-		throw new Error(msg)
+		emitToUser("error", { error: PACKAGE_INSTALL_OFF_SENTENCE })
+		throw new Error(PACKAGE_INSTALL_OFF_SENTENCE)
 	}
+}
+
+const PUSH_IO_KEY = Symbol.for("serene-pub.pluginPushIo")
+
+/**
+ * The Socket.IO server the plugin handlers were registered on, for an install
+ * that arrives over HTTP and has no socket to re-push presets and scripts
+ * through. On `globalThis` because a Vite SSR reload splits module singletons.
+ */
+export function pluginPushIo(): unknown {
+	return (globalThis as Record<symbol, unknown>)[PUSH_IO_KEY]
 }
 
 /**
  * Install the package folder at `dir` and bring the pub in step — the shared
- * tail of `plugins:installLocal` and `plugins:installPackage`. The caller has
- * already passed {@link requirePackageInstall}.
+ * tail of `plugins:installLocal` and the package upload. The caller has
+ * already checked who may install. `pushIo` is the Socket.IO server (or
+ * undefined: nothing is re-pushed); without `emitToUser` the plugin list is
+ * read straight from its payload instead of being pushed to one user.
  */
 export async function installPackageFromDir(
-	socket: any,
 	dir: string,
-	emitToUser: Emit,
-	via: string
+	opts: { via: string; pushIo?: unknown; emitToUser?: Emit }
 ): Promise<Sockets.Plugins.InstallLocal.Response> {
+	const { via, pushIo, emitToUser } = opts
+	const pushTo = { io: pushIo }
 	const { installPluginPackage } = await import("$lib/server/plugins/install")
 	const report = await installPluginPackage(db, dir)
 	for (const line of [...report.warnings, ...report.refused])
 		console.warn(`[plugins] ${via} '${report.pluginId}': ${line}`)
+	// 🚧 The rulesets the package just published, into the registry now — slots and all — not at the next boot
+	// (M0 E-fix: a session started before a restart had no slots to write).
+	const { registerPluginRulesets } = await import("$lib/server/rulesets/pubRulesets")
+	for (const line of await registerPluginRulesets(db, report.pluginId))
+		console.warn(`[plugins] ${via} '${report.pluginId}' ruleset not registered: ${line}`)
 	await afterReinstall(report.pluginId, report.wasEnabled)
 	// The manifest's own declarations — presets, prompts, engines, event
 	// subscriptions, layouts — are reconciled from the plugin rows, so they
 	// land the moment the row exists (and again on enable).
 	await syncDeclarations()
-	await pushPresets(socket)
-	await pushScripts(socket)
+	await pushPresets(pushTo)
+	await pushScripts(pushTo)
 	return {
 		pluginId: report.pluginId,
 		specs: report.specs,
@@ -815,7 +896,7 @@ export async function installPackageFromDir(
 		genres: report.genresDeclared,
 		files: report.files.stored,
 		warnings: [...report.warnings, ...report.refused],
-		plugins: await emitList(emitToUser)
+		plugins: emitToUser ? await emitList(emitToUser) : (await listPayload()).plugins
 	}
 }
 
@@ -1314,6 +1395,7 @@ export function registerPluginHandlers(
 		emitToUser: Emit
 	) => void
 ) {
+	if (socket?.io) (globalThis as Record<symbol, unknown>)[PUSH_IO_KEY] = socket.io
 	register(socket, pluginsList, emitToUser)
 	register(socket, pluginsPermissions, emitToUser)
 	register(socket, pluginsSetPermission, emitToUser)
@@ -1334,4 +1416,13 @@ export function registerPluginHandlers(
 	register(socket, pluginsSetSettings, emitToUser)
 	register(socket, pluginUserSettingsList, emitToUser)
 	register(socket, pluginUserSettingsSet, emitToUser)
+	// 🚧 M0: plugin actions (lane P4) and catalogs (lane P3), any signed-in person.
+	registerPluginActionHandlers(socket, emitToUser, register)
+	registerPluginCatalogHandlers(socket, emitToUser, register)
+	// 🚧 M2b: the user annex's frame door (`appletApi:userAnnex`).
+	registerUserAnnexHandlers(socket, emitToUser, register)
+	// 🚧 M2c: the applet session doors (`appletApi:librarySessions`, `appletApi:updateSession`).
+	registerAppletSessionHandlers(socket, emitToUser, register)
+	// 🚧 M2c: the applet library doors (characters, lorebooks).
+	registerAppletLibraryHandlers(socket, emitToUser, register)
 }

@@ -20,7 +20,9 @@
 		SESSION_DOSSIER_KEY,
 		SESSION_STATE_KEY,
 		SESSION_CHARACTERS_KEY,
-		WIDGET_REQUESTS_KEY
+		SESSION_LORE_ANNEX_KEY,
+		WIDGET_REQUESTS_KEY,
+		projectScopedSections
 	} from "$lib/shared/widgets/context"
 	import { guardWidgetRequests } from "$lib/client/components/sessionPage/requests/askers"
 	import {
@@ -43,6 +45,7 @@
 	import { headerCastKeyOf } from "$lib/client/components/sessionPage/sessionPageProjections"
 	import { presetHeaderNotice } from "$lib/client/components/sessionPage/presetNotice"
 	import { catchUpHeaderNotice } from "$lib/client/components/sessionPage/catchUpNotice"
+	import { rulesetConvertedHeaderNotice } from "$lib/client/components/sessionPage/rulesetConvertedNotice"
 	import type { CatchUpOffer } from "$lib/shared/sessions/archive"
 	import { rewindStripState } from "@serene-pub/core-catalog/conversation"
 	import { regeneratePress } from "$lib/shared/sessions/rewind"
@@ -67,8 +70,10 @@
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { useSessionFullscreen } from "$lib/client/sessions/fullscreen.svelte"
 	import * as Icons from "@lucide/svelte"
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
+	import { sessionViewHanded } from "$lib/client/components/frames/sessionViewHanded"
 	import TurnPicker from "$lib/client/components/sessionPage/TurnPicker.svelte"
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
 	import ConfirmDialog from "$lib/client/components/loadouts/sheet/ConfirmDialog.svelte"
@@ -139,6 +144,8 @@
 	// beside it. Availability = the mode's declared panels (from sessions:view)
 	// merged with core's defaults; placement is this user's, persisted.
 	const surfaceManager = new SurfaceManager()
+	// Full screen (SHAPES L1): this viewer's choice for this session.
+	const fullscreen = $derived(useSessionFullscreen(sessionId))
 
 	// The ONE subscriber to every reply and push the page reads, declared
 	// ahead of every store that registers on it and of the session-load
@@ -190,6 +197,7 @@
 			: ""
 	)
 	let catchUpDismissedFor = $state<number | null>(null)
+	let rulesetNoticeDismissedFor = $state<number | null>(null)
 	const sessionLorebookId = $derived(session?.lorebookId ?? null)
 	// 🚧 pr-6 (B §B-3): the session's own book — its Session notes.
 	const sessionOwnBookId: number | null = $derived((session as { ownBookId?: number | null } | undefined)?.ownBookId ?? null)
@@ -230,7 +238,12 @@
 				dismiss: () => (catchUpDismissedFor = loadedSessionId),
 				press: (id) => socket.emit("sessions:closeOut", { sessionId: id })
 			}
-		) ?? presetHeaderNotice(data, !!userCtx.user?.isAdmin)
+		) ??
+			rulesetConvertedHeaderNotice(data.rulesetConverted, {
+				dismissed: rulesetNoticeDismissedFor === loadedSessionId,
+				dismiss: () => (rulesetNoticeDismissedFor = loadedSessionId)
+			}) ??
+			presetHeaderNotice(data, !!userCtx.user?.isAdmin)
 	)
 	$effect(() => {
 		openSessionCtx.headerNotice = headerNotice
@@ -412,6 +425,8 @@
 		// 🚧 Kept by its run id, so a halted run's card can offer Retry.
 		rememberFiredAction(params)
 		socket.emit("sessions:fireAction", params)
+		// 🚧 M2a a6: the run's name, so the press's answer finds whoever is waiting on it.
+		return params.runId
 	}
 
 	const press = createPressRouting({
@@ -460,6 +475,19 @@
 	setContext(SESSION_ATTENDANCE_KEY, envelope.attendance)
 	setContext("sessionLocale", envelope.locale)
 	setContext("sessionAnnex", envelope.annex)
+	setContext(SESSION_LORE_ANNEX_KEY, envelope.loreAnnex)
+	// 🚧 M0 (L8): the session-view frame of a genre that declares a lorebook is
+	// posted `lore.v1` without an admin grant — through the ONE supplier.
+	const sessionViewScoped = $derived(
+		data.declaresLorebook
+			? { lore: projectScopedSections(["lore"], () => data.lorebookAnnex)?.lore }
+			: undefined
+	)
+	// 🚧 M1 fix: the session-view frame also writes its own lines (`send`) on the
+	// session's channels, as the viewer — core's composer is absent there.
+	const sessionViewGrants = $derived(
+		sessionViewHanded({ declaresLorebook: data.declaresLorebook, channels: data.sessionChannels })
+	)
 	setContext(SESSION_DOSSIER_KEY, envelope.dossier)
 	setContext(SESSION_STATE_KEY, envelope.state)
 	setContext(SESSION_CHARACTERS_KEY, envelope.characters)
@@ -483,6 +511,8 @@
 		characters: () => envelope.characters.current,
 		characterForRef: (ref) => data.characterForRef(ref),
 		isAdmin: () => !!userCtx.user?.isAdmin,
+		panelsCtx: () => panelsCtx,
+		viewerId: () => userCtx.user?.id ?? null,
 		contextDebugging: () => !!systemSettingsCtx.settings?.contextDebuggingEnabled,
 		canControlMessage: (msg) => data.canControlMessage(msg),
 		// A name opens the person as this story knows them: the cast member
@@ -583,9 +613,40 @@
 		// 🚧 A tie side shown or hidden (ties on the graph, screen 2).
 		writeTieShown: asks.writeTieShown,
 		// A carry switch flipped from the Stats widget (RF fix 8).
-		writeCarry: asks.writeCarry
+		writeCarry: asks.writeCarry,
+		// 🚧 The open session's full screen (SHAPES L1), for `session-fullscreen`.
+		fullscreen: () => (sessionId ? fullscreen : null)
 	}
 	setContext(WIDGET_REQUESTS_KEY, guardWidgetRequests(buildWidgetRequestAnswerer(widgetRequestDeps)))
+
+	// A genre that proposes full screen (`shape.fullscreen: 'propose'`) opens
+	// it on this viewer's FIRST open of the session (no stored choice); the
+	// viewer's choice wins afterwards. Once per session id: a plain `let`.
+	let proposedFor: number | null = null
+	$effect(() => {
+		if (!data.proposesFullscreen) return
+		const id = sessionId
+		untrack(() => {
+			if (proposedFor === id) return
+			proposedFor = id
+			fullscreen.propose()
+		})
+	})
+
+	// Every widget and frame hears `fullscreen` when it CHANGES (never at
+	// mount): the first run for a session id only records the state.
+	let announcedFor: number | null = null
+	$effect(() => {
+		const on = fullscreen.on
+		const id = sessionId
+		untrack(() => {
+			if (announcedFor !== id) {
+				announcedFor = id
+				return
+			}
+			surfaceManager.announceFullscreen(on)
+		})
+	})
 
 	/**
 	 * Another session opened in this page (the route keeps the component):
@@ -723,6 +784,9 @@
 					actionDispatch={press.actionDispatch}
 					onAction={press.handleFrameAction}
 					source={surfaceManager}
+					scoped={sessionViewScoped}
+					grants={sessionViewGrants.grants}
+					writeChannels={sessionViewGrants.writeChannels}
 				/>
 			</div>
 		{:else}
@@ -911,6 +975,8 @@
 		cast={press.collectCast}
 		ownVoice={data.ownVoice}
 		initialText={press.collecting?.initialText ?? ""}
+		subject={press.collectSubject}
+		rememberKey={press.collectRememberKey}
 		onSubmit={press.submitCollected}
 		onCancel={() => (press.collecting = null)}
 	/>

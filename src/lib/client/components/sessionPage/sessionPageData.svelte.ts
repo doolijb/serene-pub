@@ -40,6 +40,8 @@ import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessio
 import type { MessageV1 } from "@serene-pub/sdk"
 import { DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
+import { speakingNamesOf } from "$lib/client/components/sessionPage/speakingLines"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { rewindStateOf, withStackReplaced, type RewindState } from "$lib/shared/sessions/rewind"
 import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
 import { generatingOf, rewindOf } from "$lib/client/sessions/store/derive"
@@ -356,6 +358,25 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		socket.emit("sessions:annex", { sessionId })
 	})
 
+	/**
+	 * 🚧 M0 (L9): this viewer's audience view of the LOREBOOK annex their
+	 * session reads (`sessions:lorebookAnnex`), handed to a widget granted
+	 * `lore` as `lore.v1.annex`.
+	 */
+	let lorebookAnnexView = $state<Record<string, Record<string, unknown>>>({})
+	const handleLorebookAnnex = (res: Sockets.Sessions.LorebookAnnex.Response) => {
+		if (res.sessionId !== sessionId) return
+		if (res.error) return
+		const next = res.annex ?? {}
+		if (JSON.stringify(next) === JSON.stringify(lorebookAnnexView)) return
+		lorebookAnnexView = next
+	}
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		lorebookAnnexView = {}
+		socket.emit("sessions:lorebookAnnex", { sessionId })
+	})
+
 	// ── The waiting row (`pendingReply.ts`) ───────────────────────────────────
 	// A reply run on its way whose own row is not open yet — a Dungeon
 	// Crawler story turn through the Planner's call and the dice — is drawn
@@ -406,6 +427,17 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 * store's rows and runs.
 	 */
 	const generating = $derived(!session || generatingOf(rows, sessionStore.runsOf(sessionId)))
+	/**
+	 * The run ids in flight, as one string so what reads it re-runs only when the
+	 * set changes, not on every status frame (a spoken line's *Speaking…*, A4).
+	 */
+	const liveRunKey = $derived(
+		sessionStore
+			.runsOf(sessionId)
+			.map((r) => r.runId)
+			.sort()
+			.join(",")
+	)
 
 	// The author's newest line — keyed on role, never on a persona (F1): a
 	// persona-less genre's user line has no personaId (`swipeControls.ts`).
@@ -582,6 +614,41 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		msg: SelectSessionMessage
 	): SelectCharacter | undefined =>
 		messageCharacterOf(session, sessionFrames, msg, personLine)
+
+	// ── Who is speaking ───────────────────────────────────────────────────────
+	/**
+	 * 🚧 The live line-bound runs (each speaking one line), as one string so
+	 * what reads it re-runs only when the set changes, not per status frame.
+	 */
+	const lineBoundRunKey = $derived(
+		sessionStore
+			.runsOf(sessionId)
+			.filter((r) => r.lineBound)
+			.map((r) => r.runId)
+			.sort()
+			.join(",")
+	)
+	/**
+	 * 🚧 Whose lines are being read aloud now — the turn line's *Mira is
+	 * speaking…* (owner 2026-10-29): each line whose speak marker names a live
+	 * line-bound run (`speakingNamesOf`), by the name its heading shows (the
+	 * narrator's, else the card's). Joined, so a streamed chunk re-runs
+	 * nothing downstream; nothing is read while no line is spoken.
+	 */
+	const speakingNamesKey: string = $derived.by(() => {
+		if (!lineBoundRunKey) return ""
+		return speakingNamesOf(
+			session?.sessionMessages ?? [],
+			lineBoundRunKey.split(","),
+			(m) =>
+				m.isNarratorResponse
+					? m.metadata?.narratorName || "Narrator"
+					: resolveCharacterName(getMessageCharacter(m), ownVoice)
+		).join("\n")
+	})
+	const speakingNames: string[] = $derived(
+		speakingNamesKey ? speakingNamesKey.split("\n") : []
+	)
 
 	/** A face for a turn ref, from the loaded cast (`character:<id>`). */
 	const characterForRef = (
@@ -841,12 +908,17 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		attendance = msg
 	}
 
+	/** 🚧 M0 L4: the genre's autoConvert moved this session's rules as it opened; told on the one `sessions:get` reply. */
+	let rulesetConverted = $state<{ sessionId: number; from: string; to: string } | null>(null)
+
 	function handleSessionsGet(msg: Sockets.Sessions.Get.Response) {
 		if (msg.session === null && !loadingOlderMessages) {
 			sessionNotFound = true
 			return
 		}
 		if (msg.session?.id === sessionId) {
+			if (msg.rulesetConverted)
+				rulesetConverted = { sessionId, from: msg.rulesetConverted.from, to: msg.rulesetConverted.to }
 			if (record && loadingOlderMessages && msg.beforeId != null) {
 				// Load-more: prepend older messages (the store skips rows it holds)
 				sessionStore.prependMessages(sessionId, msg.session.sessionMessages)
@@ -1072,6 +1144,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	d.inbox.on("sessions:spriteSetChanged", handleSpriteSetChanged)
 	d.inbox.on("sessions:backdropChanged", handleBackdropChanged)
 	d.inbox.on("sessions:annex", handleAnnex)
+	d.inbox.on("sessions:lorebookAnnex", handleLorebookAnnex)
 	d.inbox.on("sessions:view", handleSessionsView)
 	d.inbox.on("sessions:genreOf", handleSessionsGenreOf)
 	d.inbox.on("sessions:presetStatus", handlePresetStatus)
@@ -1116,6 +1189,10 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		get typingPersonas() {
 			return typingPersonas
 		},
+		/** 🚧 Whose lines are being read aloud now, one name each (the turn line's *… is speaking…*). */
+		get speakingNames() {
+			return speakingNames
+		},
 		/** The server's last word on who of the session's people has it open (W10). */
 		get attendance() {
 			return attendance
@@ -1128,6 +1205,19 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		},
 		get sessionViewFrame() {
 			return sessionViewFrame
+		},
+		/** 🚧 The genre proposes full screen (SHAPES L1) and its session view is drawn. */
+		get proposesFullscreen() {
+			return (
+				sessionFrames?.sessionId === sessionId &&
+				!!sessionFrames.sessionView &&
+				modeShape?.fullscreen === "propose"
+			)
+		},
+		get rulesetConverted() {
+			return rulesetConverted && rulesetConverted.sessionId === sessionId
+				? { from: rulesetConverted.from, to: rulesetConverted.to }
+				: null
 		},
 		get ownVoice() {
 			return ownVoice
@@ -1178,11 +1268,22 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		get annex() {
 			return annexView
 		},
+		/** 🚧 M0 (L9): the viewer's lorebook-annex view (`lore.v1.annex`). */
+		get lorebookAnnex() {
+			return lorebookAnnexView
+		},
+		/** 🚧 M0 (L9): the genre declares a lorebook (its session view's `lore` section). */
+		get declaresLorebook() {
+			return !!modeShape?.lorebook
+		},
 		get lastMessage() {
 			return lastMessage
 		},
 		get generating() {
 			return generating
+		},
+		get liveRunIds(): string[] {
+			return liveRunKey ? liveRunKey.split(",") : []
 		},
 		get lastSettledMessageKey() {
 			return lastSettledMessageKey

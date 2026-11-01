@@ -28,6 +28,13 @@ import {
 	widgetEventHeard,
 	widgetReads,
 	widgetRequestRefusal,
+	frontEndApiRefusal,
+	appletGrantRefusal,
+	WIDGET_FRONT_END_APIS,
+	WIDGET_SECTION_APIS,
+	type FrontEndApi,
+	type FrontEndMount,
+	type AppletGrant,
 	type AttendanceV1,
 	type HostFrameMessage,
 	type MessageV1,
@@ -38,7 +45,8 @@ import {
 	type WidgetRequestKind,
 	type WidgetScopedSectionName,
 	type WidgetScopedSectionValues,
-	type WidgetSectionScope
+	type WidgetSectionScope,
+	type WidgetWriteGrant
 } from "@serene-pub/sdk"
 import { t } from "$lib/client/i18n/state.svelte"
 import {
@@ -59,7 +67,8 @@ import {
 	type WidgetEvent,
 	type WidgetEventSource
 } from "$lib/shared/widgets/context"
-import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
+import type { ActionDispatch, ActionRef, InvokeArgs, PressHearing } from "$lib/shared/widgets/invokeAction"
+import { pluginCatalogFor } from "./pluginCatalogs.svelte"
 import { buildEventMessage, buildLayoutMessage } from "./framePlacement"
 import type { FrameInvokeVerdict } from "./frameActivation"
 import {
@@ -69,9 +78,22 @@ import {
 	savedFrameState,
 	type FrameRow
 } from "./framePort"
+import { invokePluginAction } from "./pluginActions"
 
 /** The sections a widget is fed — read live, so a change re-pushes. */
+/** 🚧 M2b: the front-end APIs a mount holds (a widget placed in a session's layout when it says nothing). */
+const apisOf = (i: { apis?: readonly FrontEndApi[] }): readonly FrontEndApi[] => i.apis ?? WIDGET_FRONT_END_APIS
+
 export interface WireInputs {
+	/**
+	 * 🚧 M2b: the front-end APIs this mount holds (`ui` · `session` · `applet`, SDK `FrontEndApi`). Absent: a widget
+	 * placed in a session's layout — `ui` + `session` (`WIDGET_FRONT_END_APIS`). An applet frame holds `ui` + `applet`,
+	 * and `session` while mounted in one (`appletFrontEndApis`). A request outside them is declined in words; without
+	 * `session` the session's sections are not posted and its verbs are refused.
+	 */
+	apis?: readonly FrontEndApi[]
+	/** 🚧 M2c: what this mount is, for the refusal sentences (`widget` when absent; a plugin page says `page`). */
+	mount?: FrontEndMount
 	/**
 	 * Scoped sections this widget was granted, by the name each is posted
 	 * under (C0b; the SDK's one table, `WIDGET_SCOPED_SECTIONS`) — posted as
@@ -92,10 +114,18 @@ export interface WireInputs {
 	 * rather than wait for a section that will never come. Absent, nothing is
 	 * told: a frame, whose page passes none, is left as it was.
 	 */
-	grants?: readonly WidgetSectionScope[]
+	grants?: readonly (WidgetSectionScope | WidgetWriteGrant | AppletGrant)[]
 	session?: SessionV1
 	messages?: unknown[]
 	channels?: string[]
+	/**
+	 * 🚧 M1 fix: the channels a genre's session-view frame writes to as the
+	 * viewer (`send`, with a `channel:<slug>:write` grant each) — told to the
+	 * request door as `from.channels` WITHOUT narrowing what the frame is
+	 * posted (`channels` would scope its messages to exact lanes; a
+	 * session view sees the whole session). See `sessionViewHanded`.
+	 */
+	writeChannels?: readonly string[]
 	props?: Record<string, unknown>
 	settings?: Record<string, unknown>
 	placement?: PlacementInput
@@ -264,7 +294,11 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	})
 
 	/** The base sections this widget reads (R75) — the SDK's one clamp; absent reads all. */
-	const readsOf = (i: WireInputs) => new Set<WidgetBaseSection>(widgetReads({ reads: i.reads as WidgetBaseSection[] | undefined }))
+	// 🚧 M2b: held to the mount's front-end APIs — without `session`, none of the session's sections.
+	const readsOf = (i: WireInputs) =>
+		new Set<WidgetBaseSection>(
+			widgetReads({ reads: i.reads as WidgetBaseSection[] | undefined }).filter((s) => apisOf(i).includes(WIDGET_SECTION_APIS[s]))
+		)
 
 	function push() {
 		if (!port || !ready) return
@@ -314,7 +348,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		// Scoped sections: posted when they change, and withdrawn (`null`)
 		// when a grant goes away — a worker keeps nothing it may not see.
 		// Only a name the SDK's table carries is a section at all.
-		const scoped = (i.scoped ?? {}) as Record<string, unknown>
+		// 🚧 M2b: a scoped section is the session's (its lore, its full state): none without the `session` API.
+		const scoped = (apisOf(i).includes("session") ? (i.scoped ?? {}) : {}) as Record<string, unknown>
 		const postedScoped = [...sent.keys()].filter((k) => k.startsWith("scoped:")).map((k) => k.slice("scoped:".length))
 		for (const section of new Set([...Object.keys(scoped), ...postedScoped]) as Set<WidgetScopedSectionName>) {
 			const value = scoped[section]
@@ -335,7 +370,16 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			if (what !== "messages") post({ t: "response", requestId: m.requestId, ok: false, error: why })
 		}
 		if (!WIDGET_REQUEST_KINDS.includes(what)) return decline(`'${String(m.what)}' is not something this host answers`)
-		if (i.onInvoke) return decline("a document inside a component asks its component, not the page")
+		// 🚧 M2b: the front-end API decides whether a kind is this mount's at all — a widget placed in a
+		// session holds ui + session and never asks an applet's library requests.
+		const notMine = frontEndApiRefusal(what, apisOf(i), i.mount)
+		if (notMine) return decline(notMine)
+		// A document inside a component asks its component, not the page — save
+		// for a file (M2a): `file-pick` and `file-save` reach only its own
+		// plugin's actions and served storage, which is the component's own
+		// authority, and the person's click is in the document, not the component.
+		if (i.onInvoke && what !== "file-pick" && what !== "file-save")
+			return decline("a document inside a component asks its component, not the page")
 		// Who asks, with what it was granted (F9): the page's handler judges
 		// by the same, and a kind this widget may not ask is declined here
 		// before any page code runs — core's writes to core's widgets, a
@@ -346,10 +390,14 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			widgetId: i.widgetId ?? opts.label(),
 			owner: i.owner ?? "unknown",
 			grants: [...(i.grants ?? [])] as string[],
-			channels: [...(i.channels ?? [])]
+			channels: [...(i.channels ?? []), ...(i.writeChannels ?? [])]
 		}
 		const refused = widgetRequestRefusal(what, from, what === "messages" ? undefined : m.params)
 		if (refused) return decline(refused)
+		// 🚧 M2b: an applet request also needs the applet grant it reads or writes (`applet:<…>` keys, as the
+		// manifest's `permissions.applet` group compiles them; the host sends them with the mount's grants).
+		const ungranted = appletGrantRefusal(what, from, m.params)
+		if (ungranted) return decline(ungranted)
 		// 🚧 A write a plugin's widget may ask (D4: `send`, `draft`,
 		// `set-attribute-value`) goes in as the viewer, so a person's press
 		// stands behind it — the gate an invoke of a message-changing verb
@@ -403,7 +451,12 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	$effect(() => {
 		if (!ready || !wanted.size) return
 		const strings: Record<string, string> = {}
-		for (const src of wanted) strings[src] = t(src)
+		const owner = input().owner
+		const catalog =
+			owner && owner !== "core"
+				? pluginCatalogFor(owner, localeCtx?.current ?? "en")
+				: undefined
+		for (const src of wanted) strings[src] = catalog?.get(src) ?? t(src)
 		post({ t: "strings", strings })
 	})
 
@@ -440,6 +493,9 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			// Not storage: held for this (session, surface), capped.
 			const outcome = savedFrameState.set(i.stateKey, m.state)
 			if (!outcome.kept) console.warn(`${opts.label()}: dropped save-state — ${outcome.reason}`)
+		} else if (m.t === "action" && typeof m.fn === "string" && !apisOf(i).includes("session")) {
+			// 🚧 M2b: as `invoke` above — a session verb, and this frame is not mounted in a session.
+			console.warn(`${opts.label()}: '${m.fn}' is a session press, and this frame is not mounted in a session`)
 		} else if (m.t === "action" && typeof m.fn === "string") {
 			i.onAction?.(
 				m.fn,
@@ -460,21 +516,64 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 				},
 				opts.personBehind?.() ?? false
 			)
+		} else if (
+			m.t === "invoke" &&
+			typeof m.key === "string" &&
+			!apisOf(i).includes("session") &&
+			(m.key.startsWith("core#") || !!findAction(projectActions(i.actions), m.key))
+		) {
+			// 🚧 M2b: a session's verbs are the session API's; a mount not in one presses none of them. One of the
+			// package's own plugin actions (a key no session lists, e.g. `world.load`) is not a session press: it goes on (M2c).
+			if (typeof m.requestId === "string" && m.requestId.length <= 128)
+				post({ t: "response", requestId: m.requestId, ok: false, error: `'${m.key}' is a session press, and this frame is not mounted in a session` })
 		} else if (m.t === "invoke" && typeof m.key === "string") {
 			// The same walk the native verb makes, over the same projection this
 			// widget was posted. A state-changing core verb needs a person
 			// behind it — the boundary's gate says whether one is — and a verb
 			// that spends tokens is put to the person on the host's own dialog.
+			// A frame that sent a `requestId` hears the answer (M0).
+			const reqId = typeof m.requestId === "string" && m.requestId.length <= 128 ? m.requestId : undefined
+			const answerInvoke = (ok: boolean, rest: { result?: unknown; error?: string }) => {
+				if (reqId) post({ t: "response", requestId: reqId, ok, ...rest })
+			}
+			let pluginRan = false
+			/**
+			 * 🚧 M2a a6: a contributed action's press is answered with its
+			 * run's outcome when the run ENDS (the fire's own answer):
+			 * `{ runId }`, `{ runId, halted: true, reason }`, or `ok: false`
+			 * with the sentence (`cancelled` for a Stop). A core verb runs no
+			 * run, and a press that asks first (a confirm, the collect or the
+			 * narrator's modal) is not fired now: both are answered `{}` at
+			 * once, as before.
+			 */
+			let fired = false
+			const hearing: PressHearing = {
+				fired: () => {
+					fired = true
+				},
+				answered: (a) =>
+					a.ok
+						? answerInvoke(true, {
+								result: {
+									runId: a.runId,
+									...(a.halted ? { halted: true, reason: a.reason ?? "" } : {}),
+									...(a.parked ? { parked: true } : {})
+								}
+							})
+						: answerInvoke(false, { error: a.error })
+			}
 			try {
 				const resolved = findAction(projectActions(i.actions), m.key)
 				if (resolved) {
 					const verdict = opts.gate(resolved)
 					if (!verdict.allowed) {
 						console.warn(`${opts.label()}: ${verdict.reason}`)
+						answerInvoke(false, { error: verdict.reason })
 						return
 					}
 					if (verdict.confirm && !window.confirm(verdict.confirm)) {
 						console.warn(`${opts.label()}: '${m.key}' declined by the person`)
+						answerInvoke(false, { error: `'${m.key}' declined by the person` })
 						return
 					}
 					// `edit` commits text (C0b): a widget that is not core's does not
@@ -489,6 +588,7 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 						!window.confirm(`Replace this message's text with:\n\n${content.slice(0, 2000)}`)
 					) {
 						console.warn(`${opts.label()}: 'edit' declined by the person`)
+						answerInvoke(false, { error: "'edit' declined by the person" })
 						return
 					}
 				}
@@ -497,15 +597,36 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 					(fn, messageId, payload, action, blockId) =>
 						input().onAction?.(fn, messageId, payload, action, blockId),
 					opts.label(),
-					i.actionDispatch
+					{
+						...i.actionDispatch,
+						...(i.actionDispatch?.fire
+							? { fire: (a: ActionRef, args?: InvokeArgs) => i.actionDispatch!.fire(a, args, hearing) }
+							: {}),
+						...(i.owner && i.owner !== "core"
+							? {
+									pluginAction: (key: string, args?: { payload?: Record<string, unknown> }) => {
+										pluginRan = true
+										invokePluginAction(i.owner!, key, args?.payload).then(
+											(result) => answerInvoke(true, { result }),
+											(e) => {
+												if (!reqId) console.warn(`${opts.label()}: ${(e as Error).message}`)
+												answerInvoke(false, { error: (e as Error).message })
+											}
+										)
+									}
+								}
+							: {})
+					},
 				)(m.key, {
 					messageId: typeof m.messageId === "number" ? m.messageId : undefined,
 					payload: m.payload && typeof m.payload === "object" ? m.payload : undefined,
 					blockId: typeof m.blockId === "string" ? m.blockId : undefined,
 					...(typeof m.text === "string" ? { text: m.text } : {})
 				})
+				if (!pluginRan && !fired) answerInvoke(true, {})
 			} catch (err) {
 				console.warn(`${opts.label()}: ${(err as Error).message}`)
+				answerInvoke(false, { error: (err as Error).message })
 			}
 		}
 	}
@@ -572,6 +693,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		const declared = [...(i.channels ?? [])]
 		return src.subscribe((e) => {
 			if (!eventInScope(e, declared)) return
+			// 🚧 M2b: the session's events are the session API's; a mount without it hears only the chrome's (`fullscreen`).
+			if (e.kind !== "fullscreen" && !apisOf(input()).includes("session")) return
 			const now = input()
 			if (!widgetEventHeard(e.kind, { owner: now.owner ?? "unknown", grants: [...(now.grants ?? [])] })) return
 			emit(e)

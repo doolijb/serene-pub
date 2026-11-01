@@ -11,6 +11,7 @@
 	// The way into the session layout editor: this bar's Layout button asks,
 	// SessionLayout answers. See layoutEditor.svelte.ts.
 	import { requestLayoutEditor } from "$lib/client/sessionLayout/layoutEditor.svelte"
+	import { useSessionFullscreen } from "$lib/client/sessions/fullscreen.svelte"
 	// Mobile side panels (P6, ruled 2026-08-30; revised 2026-09-10). Below
 	// 1024px a session's side zones take no layout space; if either side holds
 	// widgets they are reached from ONE panels button in this bar, which opens
@@ -37,6 +38,8 @@
 	 *    editor at every width. It only asks (`requestLayoutEditor`); the
 	 *    session answers, and while its desktop editor is open this header is
 	 *    not rendered at all — the toolbar has taken the band.
+	 *  - the Full screen button (Ctrl+Shift+F), beside Layout; the corner
+	 *    control (FullscreenExit) is the way out.
 	 *  - the mobile session-panels button, which is the ONLY way into a narrow
 	 *    session's side widgets.
 	 *
@@ -167,8 +170,20 @@
 			label: "Customize layout",
 			icon: Icons.LayoutDashboard,
 			onSelect: () => requestLayoutEditor()
+		},
+		openSessionCtx?.sessionId != null && {
+			label: "Full screen",
+			icon: Icons.Maximize,
+			onSelect: () => enterFullscreen()
 		}
 	])
+
+	/** Into full screen for the open session (SHAPES L1). */
+	function enterFullscreen() {
+		const id = openSessionCtx?.sessionId
+		if (id == null) return
+		useSessionFullscreen(id).enter()
+	}
 
 	/** The face's accessible name, carrying the turn when it holds one. */
 	function faceLabel(member: OpenSessionCastMember): string {
@@ -362,13 +377,13 @@
 				{#if openSessionCtx?.sessionId != null && panelsCtx}
 					<button
 						type="button"
-						class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
+						class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
 						aria-label="Session settings"
 						title="Session settings"
 						onclick={openSessionSettings}
 					>
 						<Icons.Settings aria-hidden="true" />
-						<span class="hidden text-sm font-medium lg:inline">
+						<span class="sp-head-label text-sm font-medium">
 							Settings
 						</span>
 					</button>
@@ -382,16 +397,31 @@
 			     opening or closing. -->
 				<button
 					type="button"
-					class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 lg:px-2.5 [&>svg]:size-5"
+					class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
 					aria-label="Customize layout"
 					title="Customize layout"
 					onclick={() => requestLayoutEditor()}
 				>
 					<Icons.LayoutDashboard aria-hidden="true" />
-					<span class="hidden text-sm font-medium lg:inline">
+					<span class="sp-head-label text-sm font-medium">
 						Layout
 					</span>
 				</button>
+
+				{#if openSessionCtx?.sessionId != null}
+					<button
+						type="button"
+						class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
+						aria-label="Full screen (Ctrl+Shift+F)"
+						title="Full screen (Ctrl+Shift+F)"
+						onclick={enterFullscreen}
+					>
+						<Icons.Maximize aria-hidden="true" />
+						<span class="sp-head-label text-sm font-medium">
+							Full screen
+						</span>
+					</button>
+				{/if}
 
 				<!-- The phone's ⋯ (L8): Back, Forward, Settings and Layout as
 				     items, drawn only below 640px of bar (`sp-head-narrow`). -->
@@ -528,6 +558,14 @@
 		max-inline-size: calc(76 * 0.58 * 17px * var(--sp-prose-scale, 1) + 3.5rem);
 		margin-inline: auto;
 		min-inline-size: 0;
+		/* The identity never paints over the cluster: when the name's floor
+		   and the stack's first face are wider than the room left beside the
+		   buttons, the row clips at its own edge instead of overflowing onto
+		   Back (2026-10-30: a ten-face cast covered Back at 1280 with the dock
+		   open). The block padding keeps the faces' 2px ring and the next dot
+		   inside the clip. */
+		overflow: hidden;
+		padding-block: 4px;
 	}
 
 	.sp-head-name {
@@ -647,6 +685,22 @@
 	@container sp-head (width >= 640px) {
 		.sp-head-narrow {
 			display: none;
+		}
+	}
+	/* The cluster's words (Settings, Layout, Full screen) by the BAR's width,
+	   like every rule here, never the window's: with the dock open a 1280px
+	   window leaves an 816px bar, where three words took the identity's room.
+	   Below 1040px of bar the buttons are their icons, named by their
+	   `aria-label` and `title` as before. */
+	.sp-head-label {
+		display: none;
+	}
+	@container sp-head (width >= 1040px) {
+		.sp-head-label {
+			display: inline;
+		}
+		.sp-head-labelled {
+			padding-inline: 0.625rem;
 		}
 	}
 

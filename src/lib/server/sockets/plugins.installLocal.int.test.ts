@@ -162,7 +162,7 @@ describe("plugins:installLocal — the refusals", () => {
 	it("refuses when the plugin subsystem is off", async () => {
 		const h = await import("./plugins")
 		const c = collector()
-		delete process.env.SP_PLUGINS_ENABLED
+		process.env.SP_PLUGINS_ENABLED = "0"
 		try {
 			await expect(
 				h.pluginsInstallLocal.handler(

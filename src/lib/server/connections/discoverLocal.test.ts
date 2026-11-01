@@ -124,8 +124,54 @@ describe("discoverLocalProviders", () => {
 			"ollama",
 			"lmstudio",
 			"llamacpp",
-			"koboldcpp"
+			"koboldcpp",
+			"audiocpp",
+			"audiocpp"
 		])
+	})
+
+	it("finds audio.cpp on each port, never listing chat models", async () => {
+		const health = { status: "ok", backend: "cpu", models: [] }
+		const listModels = vi.fn(async () => ({ models: [{ model: "x" }] }))
+		for (const port of [8080, 5002]) {
+			const providers = await discoverLocalProviders({
+				fetchImpl: fakeFetch({
+					[`http://localhost:${port}/health`]: health
+				}),
+				listModels
+			})
+			expect(providers).toEqual([
+				{
+					type: "audiocpp",
+					label: "audio.cpp",
+					baseUrl: `http://localhost:${port}`,
+					models: [],
+					error: null
+				}
+			])
+		}
+		expect(listModels).not.toHaveBeenCalled()
+	})
+
+	it("tells llama.cpp from audio.cpp on 8080", async () => {
+		const listModels = async () => ({ models: [{ model: "m" }] })
+		// llama-server: /props answers, /health is a bare status.
+		const llama = await discoverLocalProviders({
+			fetchImpl: fakeFetch({
+				"http://localhost:8080/props": { total_slots: 1 },
+				"http://localhost:8080/health": { status: "ok" }
+			}),
+			listModels
+		})
+		expect(llama.map((p) => p.type)).toEqual(["llamacpp"])
+		// audio.cpp: /health carries backend; /props is not served.
+		const audio = await discoverLocalProviders({
+			fetchImpl: fakeFetch({
+				"http://localhost:8080/health": { status: "ok", backend: "cpu" }
+			}),
+			listModels
+		})
+		expect(audio.map((p) => p.type)).toEqual(["audiocpp"])
 	})
 })
 

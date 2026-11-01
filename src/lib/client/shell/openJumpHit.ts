@@ -43,6 +43,32 @@ export interface OpenJumpHitOptions {
 }
 
 /**
+ * Open a session's page: the ONE way a session opens (the Sessions view's
+ * Start and Open session, and a jump), so a genre that proposes full screen
+ * (`shape.fullscreen: 'propose'`) gets the same first open from each.
+ *
+ * It never steps Focus down before navigating. Stepping Focus down pops the
+ * shallow entry Focus pushed (`history.go(-depth)`, Layout's "Focus → the
+ * address"), and that pop raced the `goto`: a session started from a focused
+ * Sessions view landed on the page under Focus — Home — and its first open,
+ * where the full-screen proposal runs, never happened (2026-10-30). The
+ * navigation ends Focus by itself ("a real navigation somewhere else ends
+ * Focus", Layout's "The address → focus") without popping anything. Only on
+ * the session's own address already, where nothing navigates, does Focus
+ * step down here.
+ */
+export async function openSessionPage(panelsCtx: PanelsCtx, sessionId: number): Promise<void> {
+	if (panelsCtx.isMobileMenuOpen) panelsCtx.isMobileMenuOpen = false
+	if (panelsCtx.mobilePanel) panelsCtx.mobilePanel = null
+	const path = `/sessions/${sessionId}`
+	if (globalThis.location?.pathname === path) {
+		panelsCtx.fullPageView = null
+		return
+	}
+	await goto(path)
+}
+
+/**
  * Open the thing a jump hit names.
  *
  * Async because two kinds are pages rather than panels and `goto` is what
@@ -104,11 +130,12 @@ export async function openJumpHit(
 			openView("characters")
 			return
 
-		// A session is a page, not a panel — the same navigation
-		// SessionsSidebar's own row does (`handleOpenSession`, :140). NOT
-		// `digest.sessionId`, which opens that sidebar's *edit form* (:294).
+		// A session is a page, not a panel — the one way a session opens
+		// (`openSessionPage`, below; SessionsSidebar's Start and Open session
+		// use it too). NOT `digest.sessionId`, which opens that sidebar's *edit
+		// form*.
 		case "session":
-			await goto(`/sessions/${id}`)
+			await openSessionPage(panelsCtx, id)
 			return
 
 		// One address for the book, the section and the entry. Reader:

@@ -307,6 +307,20 @@ describe("register refreshes what the sandbox holds", () => {
 		expect(await gen(mgr)).toBe(2)
 	})
 
+	it("a new package version reloads the copy, so ctx.package reads the new folder (M2a)", async () => {
+		mgr = new SandboxManager({ dataDir })
+		mgr.register(
+			desc({ bundleSource: genA, bundleHash: "h1", packageAssets: { version: "1.0.0", dir: "assets" } })
+		)
+		mgr.markReady()
+		expect(await gen(mgr)).toBe(1)
+		// identical bundle hash: only the installed version moved, yet the copy must go
+		mgr.register(
+			desc({ bundleSource: genB, bundleHash: "h1", packageAssets: { version: "1.1.0", dir: "assets" } })
+		)
+		expect(await gen(mgr)).toBe(2)
+	})
+
 	it("revoking network drops the copy holding the old allowlist", async () => {
 		mgr = new SandboxManager()
 		mgr.register(

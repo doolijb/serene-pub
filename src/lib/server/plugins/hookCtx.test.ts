@@ -12,21 +12,23 @@ import {
  */
 describe("hookCtx — the table", () => {
 	it("grants by kind: task and chain-link neither, oracle both, the rest storage", () => {
-		expect(hookCtxGrants("task")).toEqual({ storage: false, fetch: false })
-		expect(hookCtxGrants("chain-link")).toEqual({ storage: false, fetch: false })
+		expect(hookCtxGrants("task")).toEqual({ storage: false, package: false, annex: false, fetch: false })
+		expect(hookCtxGrants("chain-link")).toEqual({ storage: false, package: false, annex: false, fetch: false })
 		for (const kind of ["query", "outlet", "event", "lifecycle"] as const)
-			expect(hookCtxGrants(kind), kind).toEqual({ storage: true, fetch: false })
-		expect(hookCtxGrants("oracle")).toEqual({ storage: true, fetch: true })
+			expect(hookCtxGrants(kind), kind).toEqual({ storage: true, package: true, annex: true, fetch: false })
+		expect(hookCtxGrants("oracle")).toEqual({ storage: true, package: true, annex: true, fetch: true })
 	})
 
-	it("keys follow the sandboxes' order: random, now, log, [storage], [fetch], signal", () => {
+	it("keys follow the sandboxes' order: random, now, log, [storage], [package], [annex], [fetch], signal", () => {
 		expect(hookCtxKeysFor("task")).toEqual(["random", "now", "log", "signal"])
-		expect(hookCtxKeysFor("query")).toEqual(["random", "now", "log", "storage", "signal"])
+		expect(hookCtxKeysFor("query")).toEqual(["random", "now", "log", "storage", "package", "annex", "signal"])
 		expect(hookCtxKeysFor("oracle")).toEqual([
 			"random",
 			"now",
 			"log",
 			"storage",
+			"package",
+			"annex",
 			"fetch",
 			"signal"
 		])

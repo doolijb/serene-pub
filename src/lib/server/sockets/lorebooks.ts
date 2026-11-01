@@ -111,6 +111,7 @@ import {
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { pickableRulesets } from "$lib/server/rulesets/pubRulesets"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
+import { lorebookFileFindings } from "@serene-pub/sdk"
 import { serverFailureAs } from "$lib/server/imports/importFailure"
 import {
 	getAttributeSlot,
@@ -991,16 +992,24 @@ export const lorebooksDeleteHandler: Handler<
 					eq(schema.lorebooks.userId, userId)
 				)
 				const [book] = await tx
-					.select({ id: schema.lorebooks.id })
+					.select({ id: schema.lorebooks.id, uuid: schema.lorebooks.uuid, extraJson: schema.lorebooks.extraJson })
 					.from(schema.lorebooks)
 					.where(mine)
 					.limit(1)
 				if (!book) return []
 				await purgeLorebook(tx, book.id)
-				return await tx
+				const gone = await tx
 					.delete(schema.lorebooks)
 					.where(mine)
 					.returning({ id: schema.lorebooks.id })
+				// 🚧 (M2c) A provided book deleted by hand stays deleted: its plugin's row keeps a tombstone.
+				const { markedBook } = await import("$lib/server/plugins/providedMarks")
+				const mark = gone.length ? markedBook(book.extraJson, book.uuid) : null
+				if (mark) {
+					const { recordDismissedProvidedBook } = await import("$lib/server/plugins/providedBooks")
+					await recordDismissedProvidedBook(tx as unknown as Db, mark, userId)
+				}
+				return gone
 			})
 			if (deleted.length === 0) throw new Error("Lorebook not found.")
 
@@ -2327,7 +2336,7 @@ export function assertEntryWithinImportLimits(entry: any, i: number): void {
  * every legacy shape, named as the person named it in the import dialog, and
  * held to `LOREBOOK_IMPORT_LIMITS` — all before any DB work.
  */
-function readLorebookImport(
+export function readLorebookImport(
 	lorebookJson: unknown,
 	name?: unknown
 ): {
@@ -2345,6 +2354,10 @@ function readLorebookImport(
 	}
 	const tooLarge = lorebookFileTooLarge(Buffer.byteLength(lorebookJson))
 	if (tooLarge) throw new Error(tooLarge)
+	// 🚧 (M2c) The SDK's one file validator, first: `serene-pub check` runs the
+	// same function over a package's provided books, so the two cannot disagree.
+	const fileFindings = lorebookFileFindings(lorebookJson)
+	if (fileFindings.length) throw new Error(fileFindings[0])
 	// What the parse may build, measured first: the byte ceiling alone let
 	// 32 MiB of `{}`s parse to +753 MB of heap (S4 review).
 	assertImportJsonShape(lorebookJson, "This lorebook file")
@@ -2847,7 +2860,9 @@ async function insertLorebookEntries(
 
 	for (const entry of entries) {
 		const typeId = entryTypeIdOf(entry)
-		const position = positions.get(typeId)!
+		// A ruleset's own entry type (M2c b4) is not among core's, so its count
+		// starts at zero the first time the import meets it.
+		const position = positions.get(typeId) ?? 0
 		positions.set(typeId, position + 1)
 
 		const meta = entry.extensions?.serenepub ?? {}
@@ -4205,6 +4220,33 @@ export const lorebookImportHandler = refusable<
 	IMPORT_FAILED,
 	importFailureOf
 )
+
+/**
+ * 🚧 (M2c) A lorebook file imported as `userId` WITHOUT a socket: the same
+ * reader and the same writer `lorebooks:import` runs for a new book, minus the
+ * conflict dialog and the per-person import limit. A plugin's provided books
+ * come in through it (`plugins/providedBooks.ts`), as the admin who enabled the
+ * plugin. A file carrying a uuid this person already owns is imported under a
+ * fresh one (`claimIncomingLorebookUuid`), never over their book.
+ */
+export async function importLorebookDocument(
+	userId: number,
+	lorebookJson: string
+): Promise<{
+	book: typeof schema.lorebooks.$inferSelect
+	warnings: string[]
+	card: ParsedImportedLorebook
+}> {
+	const { lorebookData, card } = readLorebookImport(lorebookJson)
+	const rawUuid = (lorebookData as any)?.extensions?.serenepub?.uuid
+	const { book, warnings } = await createLorebookFromParsedCard(
+		card,
+		lorebookData,
+		userId,
+		isValidUuid(rawUuid) ? rawUuid : undefined
+	)
+	return { book, warnings, card }
+}
 
 /**
  * The book list after an import, lazily and exactly once. The book is already

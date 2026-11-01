@@ -84,23 +84,25 @@ describe("core publishes nothing it cannot run", () => {
 		expect(assertCoreDefinitionsBound("dev")).toEqual([])
 	})
 
-	it("asked something — the three provisional ones are published and unbound", () => {
+	it("asked something — the two provisional ones are published and unbound", () => {
 		// The guard this test would be worthless without: a walk over an empty
 		// registry, or one whose `provisional` flags were dropped, must not be
-		// green by having asked nothing. The three plans 14/28 own are the
-		// control — declared, unbound, and excused by the flag alone.
+		// green by having asked nothing. The two plan 28 owns are the control —
+		// declared, unbound, and excused by the flag alone. (Three until
+		// 2026-10-28: the speech build bound `speak`, plans/14's, and dropped
+		// its flag — lane V.)
 		const bound = new Set(boundTypeIds())
-		for (const id of [
-			"core:oracle/speak@1",
-			"core:oracle/mcp-tool@1",
-			"core:oracle/mcp-resource@1"
-		]) {
+		for (const id of ["core:oracle/mcp-tool@1", "core:oracle/mcp-resource@1"]) {
 			expect(getDefinition(id)?.provisional, id).toBe(true)
 			expect(bound.has(id), id).toBe(false)
 		}
-		// And the two bound that day are bound.
+		// And the ones bound since are bound — `speak` with no flag left.
 		expect(bound.has("core:outlet/attach-image@1")).toBe(true)
 		expect(bound.has("core:outlet/attach-audio@1")).toBe(true)
+		expect(bound.has("core:oracle/speak@1")).toBe(true)
+		expect(getDefinition("core:oracle/speak@1")?.provisional).toBeUndefined()
+		expect(bound.has("core:task/cue-lines@1")).toBe(true)
+		expect(bound.has("core:query/message-line@1")).toBe(true)
 	})
 
 	it("an unbound core definition without the flag refuses a dev boot and is said once in production", () => {

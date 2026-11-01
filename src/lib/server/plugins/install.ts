@@ -54,14 +54,16 @@
  */
 
 import { createHash } from "node:crypto"
-import { readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { createReadStream } from "node:fs"
+import { copyFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { and, eq, inArray, isNotNull, isNull, like, ne, or } from "drizzle-orm"
 import { i18nText } from "@serene-pub/sdk"
 import type { I18n, SpecDocument } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import {
 	assertInstallSlashNamesFree,
+	retireUnshippedPluginSpecs,
 	saveDocument
 } from "$lib/server/pipelines/boot/store"
 import {
@@ -78,11 +80,15 @@ import { registerPluginEvents } from "./pluginEvents"
 import { registerPluginHookPoints } from "./pluginHookPoints"
 import { registerPluginAnnex } from "./pluginAnnex"
 import { registerPluginVariables } from "./pluginVariables"
-import { storePluginFiles } from "./frameHost"
+import { getAppDataDir } from "$lib/server/utils/appDataDir"
+import { isSafeUiPath } from "./frameHost"
+import { PLUGIN_FILE_DB_MAX_BYTES, pluginPackageDirOf } from "./packageDir"
+import { publishPluginRulesets } from "./pluginRulesets"
 import {
 	readPluginPackage,
 	PLUGIN_BUILD_DIR,
 	type PluginPackage,
+	type PluginPackageFile,
 	type PluginPackageManifest
 } from "./pluginPackage"
 import {
@@ -118,6 +124,8 @@ export interface PluginProjectionReport {
 	definitions: string[]
 	/** Declarations refused, one sentence each. Never fatal: the rest still lands. */
 	refused: string[]
+	/** 🚧 Spec slugs a previous build shipped and this one does not, retired in place (`retireUnshippedPluginSpecs`). */
+	retired?: string[]
 }
 
 export interface InstallPluginPackageReport extends PluginProjectionReport {
@@ -351,7 +359,7 @@ async function projectDefinitions(
 	// — see `pluginDefinitions.ts`. Without it the rows are right and the run
 	// still halts on `unknown type` before the binding is reached.
 	report.refused.push(
-		...registerPluginDefinitions(mine.map((p) => p.d)).refused
+		...registerPluginDefinitions(mine.map((p) => p.d), pluginId).refused
 	)
 }
 
@@ -424,6 +432,21 @@ export async function projectPluginPackage(
 	// The whole set publishes together, so a package that renames a slash name
 	// between two of its own specs is not refused one spec at a time.
 	const batch = new Set(pkg.documents.map((d) => d.id))
+
+	// 🚧 What a previous build shipped and this one does not (2026-10-31):
+	// retired in place BEFORE anything publishes, so a dropped spec's actions
+	// claim no slash name — neither against each document's own publish check
+	// nor against the install's check below.
+	{
+		const retired = await retireUnshippedPluginSpecs(db, ownerId, batch)
+		if (retired.length) {
+			report.retired = retired
+			console.warn(
+				`[plugins] ${retired.length} pipeline(s) '${pluginId}' no longer ships, marked retired ` +
+					`(rows kept for what pins them): ${retired.join(", ")}`
+			)
+		}
+	}
 
 	for (const shipped of pkg.documents) {
 		// A lock on a core genre core has since renamed locks on the one it
@@ -774,18 +797,144 @@ export async function installPluginPackage(
 		manifest: pkg.manifest as Record<string, unknown>
 	})
 
-	const files = await storePluginFiles(db, pluginId, pkg.files)
+	const files = await storePackageFiles(db, pluginId, pkg.manifest.version, pkg.files)
 	if (files.refused.length)
 		warnings.push(
 			`client files refused as unservable paths: ${files.refused.join(", ")}`
 		)
 
 	const projection = await projectPluginPackage(db, pkg)
+	const rulesetsReport = await publishPluginRulesets(db, pluginId, pkg.manifest)
+	for (const line of rulesetsReport.refused) warnings.push(`ruleset ${line}`)
 	return {
 		pluginId,
-		files,
+		files: { stored: files.stored, refused: files.refused },
 		warnings,
 		wasEnabled: !!prior?.enabled,
 		...projection
 	}
+}
+
+/* ── package files on disk (M0, SHAPES L2) ─────────────────────────── */
+
+const isDbText = (mime: string): boolean =>
+	mime.startsWith("text/") ||
+	mime.startsWith("application/json") ||
+	mime.startsWith("image/svg+xml")
+
+const sha256OfFile = (file: string): Promise<string> =>
+	new Promise((resolve, reject) => {
+		const h = createHash("sha256")
+		const s = createReadStream(file)
+		s.on("error", reject)
+		s.on("data", (c) => h.update(c))
+		s.on("end", () => resolve(h.digest("hex")))
+	})
+
+/**
+ * Store a package's files: small `ui` text stays in `plugin_files.content`
+ * (`db`); everything else is copied to `<dataDir>/plugins/<id>/<version>/<path>`
+ * (`disk`). A same-version reinstall replaces its own folder; other versions'
+ * folders stay for {@link cullPluginPackageDirs}.
+ */
+export async function storePackageFiles(
+	db: Db,
+	pluginId: string,
+	version: string,
+	files: PluginPackageFile[]
+): Promise<{ stored: number; onDisk: number; refused: string[] }> {
+	const refused: string[] = []
+	const rel = pluginPackageDirOf(pluginId, version)
+	const root = join(getAppDataDir(), rel)
+	await rm(root, { recursive: true, force: true })
+	await mkdir(root, { recursive: true })
+	const rows: Array<typeof schema.pluginFiles.$inferInsert> = []
+	let onDisk = 0
+	for (const f of files) {
+		if (!isSafeUiPath(f.path)) {
+			refused.push(f.path)
+			continue
+		}
+		const hash = await sha256OfFile(f.source)
+		const size = (await stat(f.source)).size
+		if (f.kind === "ui" && isDbText(f.mime) && size <= PLUGIN_FILE_DB_MAX_BYTES) {
+			rows.push({
+				pluginId,
+				path: f.path,
+				mime: f.mime,
+				content: (await readFile(f.source)).toString("base64"),
+				hash,
+				bytes: size,
+				storedAt: "db",
+				diskPath: null,
+				kind: f.kind
+			})
+			continue
+		}
+		const dest = join(root, f.path)
+		await mkdir(dirname(dest), { recursive: true })
+		await copyFile(f.source, dest)
+		onDisk++
+		rows.push({
+			pluginId,
+			path: f.path,
+			mime: f.mime,
+			content: null,
+			hash,
+			bytes: size,
+			storedAt: "disk",
+			diskPath: `${rel}/${f.path}`,
+			kind: f.kind
+		})
+	}
+	await db.transaction(async (tx) => {
+		await tx.delete(schema.pluginFiles).where(eq(schema.pluginFiles.pluginId, pluginId))
+		if (rows.length) await tx.insert(schema.pluginFiles).values(rows)
+	})
+	return { stored: rows.length, onDisk, refused }
+}
+
+/** Remove every version folder of a plugin (uninstall). */
+export async function removePluginPackageDir(pluginId: string): Promise<void> {
+	if (!/^[a-z0-9]+([.-][a-z0-9]+)*$/.test(pluginId)) return
+	await rm(join(getAppDataDir(), "plugins", pluginId), { recursive: true, force: true })
+}
+
+/**
+ * Boot cleanup: remove the folders of plugins that are not installed, and every
+ * version folder but the installed one (an upgrade keeps N-1 until here).
+ * One line per folder removed; a failure on one folder is a line, not a throw.
+ */
+export async function cullPluginPackageDirs(db: Db): Promise<string[]> {
+	const lines: string[] = []
+	const base = join(getAppDataDir(), "plugins")
+	let ids: string[]
+	try {
+		ids = await readdir(base)
+	} catch {
+		return []
+	}
+	const rows = await db
+		.select({ pluginId: schema.plugins.pluginId, version: schema.plugins.version })
+		.from(schema.plugins)
+	const versionOf = new Map(rows.map((r) => [r.pluginId, r.version]))
+	for (const id of ids) {
+		try {
+			const dir = join(base, id)
+			if (!versionOf.has(id)) {
+				await rm(dir, { recursive: true, force: true })
+				lines.push(`removed the package folder of '${id}' (not installed)`)
+				continue
+			}
+			const keep = basename(pluginPackageDirOf(id, versionOf.get(id) as string))
+			for (const v of await readdir(dir)) {
+				if (v === keep) continue
+				await rm(join(dir, v), { recursive: true, force: true })
+				lines.push(`removed the old package folder '${id}/${v}'`)
+			}
+		} catch (e) {
+			lines.push(`could not clean the package folder of '${id}': ${e instanceof Error ? e.message : String(e)}`)
+		}
+	}
+	return lines
 }

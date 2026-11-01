@@ -41,7 +41,7 @@ import {
  * so the door it opens is that connection's view.
  */
 export interface ModelManager {
-	panel: "ollama" | "koboldcpp"
+	panel: "ollama" | "koboldcpp" | "audiocpp"
 	label: string
 }
 
@@ -52,6 +52,8 @@ export function managerFor(
 	if (!type) return null
 	if (isKoboldCppManagedType(type))
 		return { panel: "koboldcpp", label: "KoboldCPP" }
+	if (type === CONNECTION_TYPE.AUDIOCPP_MANAGED)
+		return { panel: "audiocpp", label: "audio.cpp" }
 	if (
 		type === CONNECTION_TYPE.OLLAMA ||
 		type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS
@@ -232,6 +234,9 @@ export function rowAction(
 		if (ctx.kcppLoaded) return null
 		return { verb: "load", label: "Load" }
 	}
+	// audio.cpp's packages are got, enabled and removed in its own Models tab,
+	// and a connection model of it is never "loaded" from a list row.
+	if (kind === "audiocpp-managed") return null
 	// Ollama's models are the manager's, and an API's are the host's: there is
 	// nothing this list can do to either that is not already a door elsewhere.
 	return null

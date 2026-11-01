@@ -173,7 +173,7 @@ export function channelClaims(
  *
  * Free placement (brief 7a) is why this is a question: the conversation may
  * sit in a side, and a layout whose every copy claims a channel has no
- * unclaimed log. The phone's stage and Stage only draw this one (./placementRules
+ * unclaimed log. The phone's stage and full screen draw this one (./placementRules
  * `stageOf`), and when it is a claiming copy it also shows what no copy claims
  * (`channelsForCopy`), so `main` never vanishes from the session.
  */

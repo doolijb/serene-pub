@@ -367,7 +367,7 @@ describe("the offer", () => {
 		const row = await offerable()
 		const { offeredAuthoredWidgets, offeredAuthoredWidgetIds } = await import("./offer")
 		expect((await offeredAuthoredWidgets(testDb as never)).some((p) => p.id.startsWith(`authored.${row.id}:`))).toBe(true)
-		delete process.env.SP_PLUGINS_ENABLED
+		process.env.SP_PLUGINS_ENABLED = "0"
 		try {
 			expect(await offeredAuthoredWidgets(testDb as never)).toEqual([])
 			expect((await offeredAuthoredWidgetIds(testDb as never)).size).toBe(0)

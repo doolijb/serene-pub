@@ -961,6 +961,33 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		id: (p) => p?.pluginId,
 		snapshot: pluginSnap
 	},
+	// 🚧 (M2c) An applet frame changed a character the plugin provided. The
+	// logbook records an admin actor only, which is right here: a provided
+	// row belongs to the admin who switched the plugin on.
+	"appletApi:updateCharacter": {
+		objectType: "plugin",
+		action: "change",
+		id: (p) => p?.pluginId,
+		snapshot: async (db, _id, p) => {
+			const n = Number(p?.characterId)
+			if (!Number.isSafeInteger(n)) return null
+			const [row] = await (db as any)
+				.select({ name: schema.characters.name })
+				.from(schema.characters)
+				.where(eq(schema.characters.id, n))
+				.limit(1)
+			return row ? { label: row.name, fields: {} } : null
+		},
+		fields: [
+			"name",
+			"nickname",
+			"description",
+			"personality",
+			"scenario",
+			"firstMessage"
+		],
+		verb: (p, label) => `${p?.pluginId} changed its character '${label}'`
+	},
 	"plugins:setSettings": {
 		objectType: "plugin",
 		action: "change",

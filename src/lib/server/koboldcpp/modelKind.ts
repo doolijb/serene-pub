@@ -282,7 +282,7 @@ function readGgufString(
 }
 
 /** A decoded metadata value. Arrays are stepped over, never kept. */
-type GgufValue = string | number | boolean
+export type GgufValue = string | number | boolean
 
 /**
  * One metadata value of type `type` at `offset`, and where the next byte after
@@ -550,6 +550,33 @@ export async function classifyModelFile(
 			kind: "unknown",
 			reason: `The file could not be read (${err?.code ?? err?.message ?? "unknown error"}).`
 		}
+	} finally {
+		await handle?.close().catch(() => {})
+	}
+}
+
+/**
+ * The GGUF metadata strings, numbers and booleans in a file's first window,
+ * by key — or null when the file is not a readable GGUF. Arrays are stepped
+ * over. Added for audio.cpp packages (S3c): their `general.architecture` is
+ * the runner (`audiocpp`), and the family is `audiocpp.model_spec.family`,
+ * written at byte ~315 — well inside the window. Never throws.
+ */
+export async function readGgufMetadataWindow(
+	filePath: string
+): Promise<ReadonlyMap<string, GgufValue> | null> {
+	let handle: FileHandle | undefined
+	try {
+		handle = await fsPromises.open(filePath, "r")
+		const window = Buffer.alloc(HEADER_WINDOW_BYTES)
+		const { bytesRead } = await handle.read(window, 0, HEADER_WINDOW_BYTES, 0)
+		const buf = window.subarray(0, bytesRead)
+		if (buf.length < GGUF_HEADER_BYTES) return null
+		if (buf.toString("latin1", 0, 4) !== GGUF_MAGIC) return null
+		if (!GGUF_READABLE_VERSIONS.has(buf.readUInt32LE(4))) return null
+		return readGgufMetadata(buf, buf.readBigUInt64LE(16))
+	} catch {
+		return null
 	} finally {
 		await handle?.close().catch(() => {})
 	}

@@ -29,7 +29,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { formatBytes } from "./modelManagement"
-	import { quantFit, type QuantFile } from "./finder"
+	import { preselectedQuantIndex, quantFit, type QuantFile } from "./finder"
 	import { tierLabel, type MemoryTier } from "./memoryTier"
 
 	interface Props {
@@ -38,6 +38,11 @@
 		repo: string
 		quants: readonly QuantFile[]
 		tier: MemoryTier
+		/**
+		 * What is being chosen: GGUF files are **sizes**; an ONNX dtype or an
+		 * audio package variant is a **precision** (the user-facing word).
+		 */
+		noun?: "size" | "precision"
 		onCancel: () => void
 		onDownload: (quant: QuantFile) => void
 	}
@@ -46,6 +51,7 @@
 		repo,
 		quants,
 		tier,
+		noun = "size",
 		onCancel,
 		onDownload
 	}: Props = $props()
@@ -62,20 +68,16 @@
 	let seededFor = $state<string | null>(null)
 	$effect(() => {
 		if (!open || seededFor === repo) return
-		const recommended = quants.findIndex((q) => q.recommended)
-		if (recommended >= 0) selected = recommended
-		else {
-			let best = -1
-			for (let i = 0; i < quants.length; i++)
-				if (quantFit(quants[i], tier)?.tone === "good") best = i
-			selected = best >= 0 ? best : 0
-		}
+		selected = Math.max(0, preselectedQuantIndex(quants, tier))
 		seededFor = repo
 	})
 	$effect(() => {
 		if (!open) seededFor = null
 	})
 
+	const title = $derived(
+		noun === "precision" ? "Choose a precision" : "Pick a size"
+	)
 	const chosen = $derived(quants[selected] ?? null)
 	/** "Download 4.0 GB" when a size is known; the file's name when it is not. */
 	const downloadLabel = $derived(
@@ -108,7 +110,7 @@
 						<Dialog.Title
 							class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
 						>
-							Pick a size
+							{title}
 						</Dialog.Title>
 						<Dialog.Description
 							class="text-surface-600-400 mt-0.5 block truncate text-xs"
@@ -126,13 +128,15 @@
 
 				{#if !quants.length}
 					<p class="text-surface-600-400 text-sm">
-						This repo publishes no GGUF files to choose between.
+						{noun === "precision"
+							? "This model lists no precisions to choose between."
+							: "This repo publishes no GGUF files to choose between."}
 					</p>
 				{:else}
 					<div
 						class="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1"
 						role="radiogroup"
-						aria-label="Pick a size"
+						aria-label={title}
 					>
 						{#each quants as quant, index (quant.name + index)}
 							{@const fit = quantFit(quant, tier)}
@@ -140,7 +144,7 @@
 								type="button"
 								role="radio"
 								aria-checked={selected === index}
-								class="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-base px-2.5 py-1.5 text-left {selected ===
+								class="rounded-base flex min-h-11 w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left {selected ===
 								index
 									? 'sidebar-row-active'
 									: 'hover:preset-tonal-primary'}"
@@ -151,12 +155,16 @@
 										class="flex min-w-0 items-center gap-1.5"
 									>
 										<span
-											class="min-w-0 truncate text-lead font-medium"
+											class="text-lead min-w-0 truncate font-medium"
 										>
 											{quant.name}
 										</span>
 										{#if quant.recommended}
-											<Badge tone="primary" size="sm" class="shrink-0">
+											<Badge
+												tone="primary"
+												size="sm"
+												class="shrink-0"
+											>
 												Recommended
 											</Badge>
 										{/if}

@@ -277,11 +277,11 @@
      can't follow that through two ternaries and reads a bare div with a
      dynamic tabindex. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<!-- Stage only hides every side but the one that IS the stage (QE). -->
+<!-- Full screen hides every side but the one that IS the stage (QE). -->
 <div
 	bind:this={el}
 	class="side-slot slot-{slot}"
-	data-stage-hidden={model.stageOnly && slot !== "stage" ? "" : undefined}
+	data-stage-hidden={model.fullscreen && slot !== "stage" ? "" : undefined}
 	class:zone-flyout={overlay}
 	class:mobile={overlay}
 	class:from-left={overlay && side === "left"}
@@ -353,7 +353,7 @@
 		min-block-size: 0;
 	}
 	/* The stage (QE, brief 7a): this side holds the conversation the phone or
-	   Stage only draws full width. The wrapper becomes the body's one flex
+	   full screen draws full width. The wrapper becomes the body's one flex
 	   item and its column or rail fills it; everything in the side but the
 	   conversation is `data-stage-hidden` around its mount, and the rail's
 	   own chrome goes. A container change, never a second render. */

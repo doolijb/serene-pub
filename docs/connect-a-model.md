@@ -33,17 +33,17 @@ There are two kinds, and neither is wrong. Here's the honest trade:
 | **Your computer** | Needs a reasonably strong one: a graphics card with about **8 GB of memory** runs good small-to-medium models. Less memory, or no graphics card, still works but replies are slower and the models smaller. | Any computer, even an old laptop or a phone.                                                    |
 | **Quality**       | Good, and very good on a powerful machine.                                                                                                                                                                  | The largest, most capable models are only available this way.                                   |
 | **Rules**         | Your model, your rules.                                                                                                                                                                                     | Each service has its own content rules, and some refuse certain kinds of story.                 |
-| **Setting up**    | A few clicks and a download of several GB.                                                                                                                                                                  | Make an account, add credit, copy a key.                                                        |
+| **Setting up**    | A few clicks and a download of several GB.                                                                                                                                                                  | Make an account and copy a key. Free models need no credit.                                     |
 
-**Not sure?** If your computer is a gaming PC or a recent Mac with 16 GB of memory or more, try **local** first: it's free, and you can always add a service later. On a laptop without a graphics card, or on the Android app, go **hosted**.
+**Not sure?** If your computer is a gaming PC or a recent Mac with 16 GB of memory or more, try **local** first: it's free, and you can always add a service later. On a laptop without a graphics card, or on the Android app, go **hosted**: OpenRouter's free models cost nothing to try.
 
 ## If you chose local: KoboldCPP (recommended)
 
 Serene Pub can download, start and look after a program called **KoboldCPP**, which runs models on your computer. You never have to open it yourself.
 
 1. In the setup wizard's **Choose an AI** step, under **Or set one up**, choose **KoboldCPP, run by Serene Pub**. The **Models** view opens beside the wizard on **Set up chat**.
-2. **Pick a build.** Serene Pub lists versions of KoboldCPP for different kinds of computer, each with a short description saying which hardware it suits (for example, NVIDIA graphics cards, other graphics cards, or no graphics card). Pick the one that matches yours. It downloads and starts on its own.
-3. **Pick a model.** A list of recommended models appears. Serene Pub asks **How much memory does this machine have?** Answer with your graphics card's memory (or your Mac's memory), or **Not sure**. Rows that fit turn gold, and the first one that fits gets a gold **Get** button.
+2. **Pick a build.** Serene Pub lists versions of KoboldCPP for different kinds of computer, each with a short description saying which hardware it suits. It picks one for you from the graphics card it finds in the computer Serene Pub runs on: the full build for an NVIDIA card, the Mac build on a Mac with Apple silicon, and, for an AMD card or no card at all, the smaller build made for other graphics cards or none. The **Selected** box under the list says why, such as _Picked because this computer has an NVIDIA card._ To choose another, click it. If nothing was found, nothing is picked: choose the one that matches your computer. Press **Download & Start**, and it downloads and starts on its own.
+3. **Pick a model.** A list of recommended models appears, measured against how much memory your computer has. The line above the list says which **memory tier** it uses, such as **12 GB tier · Change**. The first time, Serene Pub proposes a tier from what it found and says why under that line, such as _Picked because this computer has an NVIDIA card with 12 GB._ A Mac counts about two-thirds of its memory, and a computer with no graphics card about half, because models share it with everything else. Press **Change** to answer **How much memory does this machine have?** yourself, or **Not sure**: your answer is kept and wins from then on. If nothing was found, it starts at **Not sure** until you answer. Rows that fit turn gold, and the first one that fits gets a gold **Get** button.
 4. Click **Get**. A small window lists the model's files; each says whether it **Fits**, is **Tight**, or is **Too big** for your memory. Choose one that fits and click **Download**. Models are several GB, so this can take a while.
 5. When the download finishes, the model becomes the one your sessions use, and **Set up chat** shows **Done**.
 
@@ -63,21 +63,29 @@ If you'd rather Serene Pub download models into Ollama for you, press **Let Sere
 
 ## If you chose hosted: OpenRouter (recommended)
 
-**OpenRouter** is one account and one key that reaches hundreds of models from many companies, including a few free ones. It's the easiest way to try several models and see which you like.
+**OpenRouter** is one account and one key that reaches hundreds of models from many companies, including some free ones. It's the easiest way to try several models and see which you like.
 
-1. Go to [openrouter.ai](https://openrouter.ai), make an account, and add some credit (a few dollars goes a long way).
+1. Go to [openrouter.ai](https://openrouter.ai) and make an account. You don't have to add credit: with none, your key still reaches OpenRouter's free models (see [Free models](#free-models) below). For every other model, add some credit; a few dollars goes a long way.
 2. In OpenRouter's settings, create an **API key** and copy it. An API key is a long password that lets Serene Pub use your account. Keep it private.
 3. In the setup wizard's **Choose an AI** step, choose **An online service**. In the **New connection** window that opens, type **OpenRouter** into the **Service** search, pick it, and click **Create**.
 4. Paste your key into the **API Key** field and click **Save**, at the foot of the view. Not sure what's next? The status card at the top of the connection always says, naming the button to press.
-5. Click **Choose a model** on the status card (or open the **Models** tab), find a model you like, and press **Use in Reply** beside it. That fills the **Reply** [loadout](./connections.md#loadouts), what session replies run on: a model on a connection, and the settings it is driven with. OpenRouter lists hundreds, so type part of a name, such as `mistral`, into the **Filter** box.
+5. Click **Choose a model** on the status card (or open the **Models** tab), find a model you like, and press **Use in Reply** beside it. That fills the **Reply** [loadout](./connections.md#loadouts), what session replies run on: a model on a connection, and the settings it is driven with. OpenRouter lists hundreds, so type part of a name, such as `mistral`, into the **Filter** box. With no credit, the free models are listed first, after any model already in Reply; type `free` to see only those.
 
-While you do this, the wizard beside the Connections view ticks off **Connection added**, **Key saved** and **Model chosen**, and the one step left has a button.
+Serene Pub asks OpenRouter whether your key has credit when you save or test it. A key with none gets its free models listed first, and until you pick one the status card says _This key has no credit yet, so paid models would be refused: pick a free one under **Models**, listed first, and press **Use in Reply**._
+
+While you do this, the wizard beside the Connections view ticks off **Connection added**, **Key saved** and **Model chosen**, and the one step left has a button. For OpenRouter, **Key saved** first reads _Paste your API key, then press Save; a key with no credit still gets free models, about 50 replies a day._, and once a key with no credit is saved it reads _No credit yet: free models only, about 50 replies a day_.
 
 :::tip What does it cost?
-Services charge by the amount of text sent and written, measured in **tokens** (roughly three-quarters of a word each). Every reply sends the story so far, so replies cost a little more as a session grows. With a mid-range model, a long evening's session typically costs somewhere between a few cents and a dollar. Each service shows prices per model and a running total in your account.
+Free models cost nothing, within their daily limit. Other models are charged by the amount of text sent and written, measured in **tokens** (roughly three-quarters of a word each). Every reply sends the story so far, so replies cost a little more as a session grows. With a mid-range model, a long evening's session typically costs somewhere between a few cents and a dollar. Each service shows prices per model and a running total in your account.
 :::
 
 **Prefer a particular company?** OpenAI and Anthropic (Claude) work the same way: pick them in the **Service** search, and paste a key from their own website. See [Where the API keys come from](./connections.md#where-the-api-keys-come-from). Many other services are listed too; see [the full list](./connections.md#openai-compatible-services).
+
+### Free models
+
+An OpenRouter account with no credit can use OpenRouter's **free** models, up to **50 requests a day** and 20 a minute. That's about 50 replies, or fewer when a session also asks the model for other work, such as summaries. A one-time purchase of $10 in credit raises the limit to **1,000 a day**. Adding credit also unlocks every other model, which is paid per message.
+
+Which models are free changes over time, and a busy free model can be slow, or refuse for a while. Many are run by providers that may keep what you send; OpenRouter's privacy settings decide whether you allow those.
 
 ### A model on another computer
 
@@ -101,6 +109,7 @@ That's it: your pub can write. The wizard now asks what you'd like to do first: 
 - **Replies are very slow.** On a computer without a graphics card, local models are slow; try a smaller model, or an online service.
 - **Replies are garbled, or the AI writes your lines too.** Leave it for now and finish Start here; if it persists, see [Troubleshooting](./troubleshooting.md#replies-are-garbled-or-wrong).
 - **The service refuses to write your scene.** That's its content rules, not Serene Pub. Try another model, or a local one.
+- **OpenRouter refuses every reply, and your key has no credit.** The model in Reply isn't a free one. Open the connection's **Models** tab and press **Use** on a free model (they're listed first), or add credit on OpenRouter.
 :::
 
 ## Changing it later

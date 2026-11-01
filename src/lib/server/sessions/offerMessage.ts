@@ -117,10 +117,12 @@ export async function offerMessage(db: Db, m: OfferedMessage): Promise<OfferOutc
 	 * with the Castellan, and a guest is never offered its composer.
 	 */
 	{
-		const { laneViewFor, laneViewAllows } = await import("$lib/server/channels/lanes")
+		const { laneViewFor, laneViewAllows, sessionLaneFacts, hiddenChannelRefusal } = await import("$lib/server/channels/lanes")
 		const view = await laneViewFor(db, m.sessionId, m.userId)
-		if (view && !view.isOwner && view.hidden.size && !laneViewAllows(view, m.channel))
-			return { refused: "That channel is the session owner's alone. Your text was kept." }
+		if (view && !view.isOwner && view.hidden.size && !laneViewAllows(view, m.channel)) {
+			const facts = await sessionLaneFacts(db, m.sessionId)
+			return { refused: `${hiddenChannelRefusal(facts?.shape, m.channel)} Your text was kept.` }
+		}
 	}
 	/**
 	 * 🚧 A member's line is an interaction (PLAN-layering D7, R11, R21; lane

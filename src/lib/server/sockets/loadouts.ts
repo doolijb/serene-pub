@@ -169,6 +169,24 @@ export async function buildLoadoutsList(): Promise<Sockets.Loadouts.List.Respons
 		return at
 	}
 
+	const voiceNames = new Map(
+		(
+			await db
+				.select({ id: schema.voicebankVoices.id, name: schema.voicebankVoices.name })
+				.from(schema.voicebankVoices)
+		).map((v) => [v.id, v.name])
+	)
+	const voiceFields = (r: LoadoutRow) => {
+		const speaks = r.transform === "text->audio"
+		const nameOf = (id: number | null) => (speaks && id != null ? (voiceNames.get(id) ?? null) : null)
+		return {
+			defaultVoiceId: speaks ? (r.defaultVoiceId ?? null) : null,
+			defaultVoiceName: nameOf(r.defaultVoiceId ?? null),
+			otherSpeakersVoiceId: speaks ? (r.otherSpeakersVoiceId ?? null) : null,
+			otherSpeakersVoiceName: nameOf(r.otherSpeakersVoiceId ?? null)
+		}
+	}
+
 	const summarise = (r: LoadoutRow): Sockets.Loadouts.Summary => {
 		const root = rootOf(r)
 		const conn = root.connectionId != null ? connById.get(root.connectionId) : undefined
@@ -219,6 +237,7 @@ export async function buildLoadoutsList(): Promise<Sockets.Loadouts.List.Respons
 			},
 			grades,
 			perImagePrice: model ? perImagePriceOf(model.facts) : null,
+			...voiceFields(r),
 			...(r.owner !== "core" && r.owner !== "pub" && !pluginsOn.has(r.owner)
 				? { pluginOff: true }
 				: {})
@@ -433,6 +452,34 @@ export const loadoutsUpdate: Handler<
 			}
 		}
 
+		// The loadout voice and the other-speakers pick: a speech loadout's own
+		// voicebank entries only (null clears; Auto for other speakers).
+		const voiceParams = [
+			["defaultVoiceId", params.defaultVoiceId],
+			["otherSpeakersVoiceId", params.otherSpeakersVoiceId]
+		] as const
+		let voicesMoved = false
+		for (const [key, value] of voiceParams) {
+			if (value === undefined) continue
+			voicesMoved = true
+			if (value === null) {
+				patch[key] = null
+				continue
+			}
+			if (row.transform !== "text->audio")
+				refuse(emitToUser, "loadouts:update", "Only a speech loadout has a voice.")
+			const [voice] = await db
+				.select()
+				.from(schema.voicebankVoices)
+				.where(eq(schema.voicebankVoices.id, value))
+				.limit(1)
+			if (!voice || voice.loadoutId !== row.id)
+				refuse(emitToUser, "loadouts:update", "That voice is not on this loadout.")
+			if (key === "defaultVoiceId" && !voice.enabled)
+				refuse(emitToUser, "loadouts:update", "That voice is turned off.")
+			patch[key] = value
+		}
+
 		const isDefault = defaultTransformOf(row) != null
 		await withStarConsequences(
 			db,
@@ -449,6 +496,15 @@ export const loadoutsUpdate: Handler<
 		}
 		emitToUser("loadouts:update", res)
 		await pushAfterWrite(emitToUser, isDefault)
+		if (voicesMoved) {
+			// A cleared loadout voice is refilled at once; the Voices panel's
+			// group header reads the same pointers.
+			const { ensureLoadoutVoice } = await import("$lib/server/speech/voicebank")
+			await ensureLoadoutVoice(db)
+			await emitToUser("loadouts:list", () => buildLoadoutsList())
+			const { buildList } = await import("./voicebank")
+			await emitToUser("voicebank:list", () => buildList())
+		}
 		return res
 	}
 }

@@ -33,6 +33,29 @@ import { CORE_ACTION_SPEC, actionIdentity } from "$lib/shared/actions/identity"
  */
 export type InvokeArgs = WidgetInvokeArgs
 
+/**
+ * 🚧 M2a a6: how a press's run answered — the fire's own answer
+ * (`sessions:fireAction`, when the run ENDS), told to whoever pressed. `ok`
+ * with the run's id, `halted` (+ its sentence as `reason`) when a step
+ * stopped it on purpose; `ok: false` with the sentence when it errored or was
+ * refused before any run, and `cancelled` when somebody pressed Stop.
+ */
+export type PressAnswer =
+	| { ok: true; runId: string; halted?: true; reason?: string; parked?: true }
+	| { ok: false; error: string; cancelled?: true }
+
+/**
+ * 🚧 M2a a6: a press that wants its answer (a frame's or a component's
+ * `invoke` with a `requestId`). `fired` is called synchronously from the fire
+ * when the press went out as a run; a press that asks first (confirm, the
+ * collect modal, the narrator's modal) is not fired then, and its caller
+ * answers at once instead. `answered` is called once, with the run's answer.
+ */
+export interface PressHearing {
+	fired(runId: string): void
+	answered(answer: PressAnswer): void
+}
+
 /** The two fields routing reads off an action, whatever list it came from — together, its identity. */
 export interface ActionRef {
 	specSlug: string
@@ -66,7 +89,13 @@ export interface ActionDispatch {
 	 * press is named as a run (`runId`) and takes the bespoke client flows
 	 * (the narrator's modal) rather than a thinner copy of them.
 	 */
-	fire: (action: ActionRef, args?: InvokeArgs) => void
+	fire: (action: ActionRef, args?: InvokeArgs, hearing?: PressHearing) => void
+	/**
+	 * 🚧 A key no venue lists, offered to the widget's own package as one of
+	 * its `pluginActions` (M0) — the host binds the owner.
+	 * ⚠ Not a session action.
+	 */
+	pluginAction?: (key: string, args?: InvokeArgs) => void
 }
 
 /**
@@ -76,7 +105,9 @@ export interface ActionDispatch {
 export function dispatchAction(
 	action: ActionRef,
 	dispatch: ActionDispatch,
-	args?: InvokeArgs
+	args?: InvokeArgs,
+	/** 🚧 M2a a6: who hears the press's run answer (a contributed action only; core's verbs run no run). */
+	hearing?: PressHearing
 ): void {
 	if (action.specSlug === CORE_ACTION_SPEC) {
 		const handler = dispatch.core[action.key]
@@ -88,5 +119,5 @@ export function dispatchAction(
 		handler(args)
 		return
 	}
-	dispatch.fire(action, args)
+	dispatch.fire(action, args, hearing)
 }

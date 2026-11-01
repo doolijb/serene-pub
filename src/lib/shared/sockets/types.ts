@@ -17,6 +17,7 @@ import type {
 } from "$lib/shared/entries/types"
 import type { MediaFrame } from "$lib/shared/media/frame"
 import type { ModelFacts } from "$lib/shared/connections/modelFacts"
+import type { MachineHardware as MachineHardwareShape } from "$lib/shared/connections/machineHardware"
 import type {
 	I18n as SdkI18n,
 	StoryCalendar as SdkStoryCalendar,
@@ -913,6 +914,9 @@ declare global {
 				interface Params {
 					sort?: "newest" | "oldest" | "largest" | "smallest" | "name"
 					kind?: string
+					/** Spoken-audio rows (`meta.spoken`) are excluded unless asked
+					 *  for (speech S8). Default false. */
+					includeSpoken?: boolean
 				}
 				interface Response {
 					media: ManagedMedia[]
@@ -1005,6 +1009,40 @@ declare global {
 				interface Response {
 					variants: number
 					bytes: number
+					/** Spoken-audio files reclaimed with the derived forms. */
+					spokenFiles?: number
+				}
+			}
+			/** Spoken lines folded row (speech S8). No `sessionId`: pub-wide, admin
+			 *  only; with one: that session's owner or an admin. */
+			namespace SpokenSummary {
+				interface Params {
+					sessionId?: number
+				}
+				interface Response {
+					count: number
+					bytes: number
+					keep: "forever" | "archived" | number
+					sessionId: number | null
+				}
+			}
+			namespace ClearSpoken {
+				interface Params {
+					sessionId?: number
+				}
+				interface Response {
+					cleared: number
+					bytes: number
+					sessionId: number | null
+				}
+			}
+			/** Admin only: the pub setting `speech.keepSpokenAudio`. */
+			namespace SetKeepSpokenAudio {
+				interface Params {
+					keep: "forever" | "archived" | number
+				}
+				interface Response {
+					keep: "forever" | "archived" | number
 				}
 			}
 			namespace CullOriginals {
@@ -1096,6 +1134,22 @@ declare global {
 				 * live on the genre hub `genreId` names.
 				 */
 				swaps?: { total: number; off: number; genreId: string | null }
+				/** 🚧 (M2c) The lorebooks it provides (`provides.lorebooks`), each with where it stands. Absent when it provides none. */
+				providedBooks?: ProvidedBook[]
+			}
+			/** 🚧 (M2c) One provided book on the plugin page. */
+			interface ProvidedBook {
+				slug: string
+				/** The book's name once imported, else its slug. */
+				name: string
+				/** The version the book is at (the plugin's, while it waits). */
+				version: string
+				/** Null until imported. */
+				lorebookId: number | null
+				/** `imported` · `held` (a newer version not applied: Review/Off) · `pending` (will import at the next sync) · `waiting` (not switched on, or not approved) · 🚧 `dismissed` (an administrator deleted it by hand; not imported again) · 🚧 `failed` (the last import or upgrade failed; `why` says how). */
+				state: "imported" | "held" | "pending" | "waiting" | "dismissed" | "failed"
+				/** The sentence that says why it is not simply imported. */
+				why?: string
 			}
 			/**
 			 * A plugin's settings surface (12 §6): the manifest's schema, the
@@ -1193,6 +1247,8 @@ declare global {
 					plugins: PluginRow[]
 					/** Whether the sandbox is actually on (SP_PLUGINS_ENABLED). */
 					sandboxEnabled: boolean
+					/** Whether SP_PLUGINS_ENABLED on this server decided `sandboxEnabled`. */
+					sandboxFromEnv: boolean
 				}
 			}
 			namespace Install {
@@ -1269,20 +1325,6 @@ declare global {
 					warnings: string[]
 				}
 			}
-			/**
-			 * The upload half of `installLocal`: a package zip, unzipped into
-			 * a temp folder under the data dir and installed from there.
-			 * Answers exactly what `installLocal` answers.
-			 */
-			namespace InstallPackage {
-				interface Params {
-					/** The uploaded file's name, for messages only. */
-					filename: string
-					/** The zip, base64; at most 8 MiB decoded. */
-					bytes: string
-				}
-				type Response = InstallLocal.Response
-			}
 			namespace SetEnabled {
 				interface Params {
 					pluginId: string
@@ -1313,6 +1355,12 @@ declare global {
 			namespace Uninstall {
 				interface Params {
 					pluginId: string
+					/** 🚧 (M2b) What to do with each person's own files; absent = keep. */
+					userFiles?: "keep" | "delete"
+					/** 🚧 (M2b) What to do with each person's saved data (the user annex); absent = keep. */
+					userAnnex?: "keep" | "delete"
+					/** 🚧 (M2c) What to do with the books (and their cards) the plugin provided; absent = keep. */
+					providedBooks?: "keep" | "delete"
 				}
 				interface Response {
 					plugins: PluginRow[]
@@ -1472,6 +1520,139 @@ declare global {
 					pluginId: string
 					settings?: PluginUserSettingsView | null
 					error?: string
+				}
+			}
+		}
+		/**
+		 * 🚧 Plugin actions (M0, SHAPES L12 Seams): a package's
+		 * `pluginActions`, run OUTSIDE a session for whoever is signed in —
+		 * `ctx.invoke(name, payload)` from a plugin page or frame, and the
+		 * host half of `file-pick` / `file-save`. Not under the restricted
+		 * `plugins:` prefix. ⚠ Not a session **action**.
+		 */
+		namespace PluginActions {
+			namespace Invoke {
+				interface Params {
+					pluginId: string
+					/** A key of the package's `pluginActions`. */
+					action: string
+					/**
+					 * What the handler receives: the invoke's payload, or
+					 * `{ name, mime, bytes }` for a picked file (`bytes` base64).
+					 */
+					input?: Record<string, unknown>
+					/** The asker's correlation id (`askerOf`), echoed on the reply and the refusal. */
+					requestId?: string
+				}
+				interface Response {
+					pluginId: string
+					action: string
+					/** The handler's `out.main` — JSON, the shape the pipeline runtime reads. */
+					result: unknown
+					requestId?: string
+				}
+			}
+		}
+		/**
+		 * 🚧 (M2c) `appletApi:librarySessions` / `appletApi:updateSession`: the doors behind
+		 * an applet frame's `library-sessions` and `update-session` requests. The
+		 * person is the socket's; the sessions are those of the extension's OWN
+		 * genres that the person owns.
+		 */
+		namespace PluginSessions {
+			type ListRequest = import("@serene-pub/sdk").WidgetRequests["library-sessions"]["params"]
+			type ListResult = import("@serene-pub/sdk").WidgetRequests["library-sessions"]["result"]
+			type ListParams = ListRequest & { pluginId: string; requestId?: string }
+			interface ListResponse {
+				pluginId: string
+				result: ListResult
+				requestId?: string
+			}
+			type UpdateRequest = import("@serene-pub/sdk").WidgetRequests["update-session"]["params"]
+			type UpdateResult = import("@serene-pub/sdk").WidgetRequests["update-session"]["result"]
+			type UpdateParams = UpdateRequest & { pluginId: string; requestId?: string }
+			interface UpdateResponse {
+				pluginId: string
+				result: UpdateResult
+				requestId?: string
+			}
+		}
+		/**
+		 * 🚧 (M2b) `appletApi:userAnnex`: the door behind an applet frame's
+		 * `user-annex` request. The person is the socket's signed-in user, never a
+		 * param. The request is the SDK's `user-annex` request params.
+		 */
+		namespace PluginUserAnnex {
+			type Request = import("@serene-pub/sdk").WidgetRequests["user-annex"]["params"]
+			type Result = import("@serene-pub/sdk").WidgetRequests["user-annex"]["result"]
+			type Params = Request & {
+				pluginId: string
+				/** The asker's correlation id (`askerOf`), echoed on the reply and the refusal. */
+				requestId?: string
+			}
+			interface Response {
+				pluginId: string
+				result: Result
+				requestId?: string
+			}
+		}
+		/**
+		 * 🚧 (M2b) The applet library doors (`sockets/appletLibrary.ts`): the
+		 * server halves of `library-characters`, `update-character` and
+		 * `library-lorebooks`. The person is the socket's, never a param.
+		 */
+		namespace AppletLibrary {
+			type Req<K extends keyof import("@serene-pub/sdk").WidgetRequests> =
+				import("@serene-pub/sdk").WidgetRequests[K]
+			type Asker = {
+				pluginId: string
+				/** The asker's correlation id, echoed on the reply and the refusal. */
+				requestId?: string
+			}
+			namespace Characters {
+				type Params = Req<"library-characters">["params"] & Asker
+				interface Response {
+					pluginId: string
+					result: Req<"library-characters">["result"]
+					requestId?: string
+				}
+			}
+			namespace UpdateCharacter {
+				type Params = Req<"update-character">["params"] & Asker
+				interface Response {
+					pluginId: string
+					result: Req<"update-character">["result"]
+					requestId?: string
+				}
+			}
+			namespace Lorebooks {
+				type Params = Req<"library-lorebooks">["params"] & Asker
+				interface Response {
+					pluginId: string
+					result: Req<"library-lorebooks">["result"]
+					requestId?: string
+				}
+			}
+		}
+		/**
+		 * 🚧 A plugin's string catalog for one language (M0, SHAPES L5):
+		 * the package's `lang/<locale>.json`, best match for `language`, so a
+		 * frame or component's `ctx.t` reads the plugin's own words first.
+		 */
+		namespace PluginCatalogs {
+			namespace Get {
+				interface Params {
+					pluginId: string
+					/** The viewer's language (`en`, `pt`, `pt-br`). */
+					language: string
+				}
+				interface Response {
+					pluginId: string
+					language: string
+					/** The catalog file that answered (`pt-br`), or null when none did. */
+					locale: string | null
+					/** English source text → translation. Empty when no catalog matches. */
+					entries: Record<string, string>
 				}
 			}
 		}
@@ -1851,6 +2032,15 @@ declare global {
 				 * server lacks (*Missing nodes: …*). The row reads `unfinished`.
 				 */
 				problem?: string | null
+				/**
+				 * 🚧 OpenRouter only: the key's account has never bought credit
+				 * (`is_free_tier` on `GET /api/v1/key`), so only free (`:free`)
+				 * models answer, about 50 requests a day. Present only when true;
+				 * the endpoint's models are then listed free first. Read on a passing
+				 * test and on every sync of a saved OpenRouter connection
+				 * (`server/connections/openRouterKey.ts`).
+				 */
+				freeTier?: boolean
 			}
 			namespace Get {
 				interface Params {
@@ -1997,6 +2187,27 @@ declare global {
 					// form shows it without having to re-read the row, which
 					// for an unsaved connection does not exist yet.
 					capabilities?: import("@serene-pub/sdk").CapabilitySet
+				}
+			}
+			/**
+			 * 🚧 `models:refreshSpeech` — re-run speech discovery for a saved
+			 * connection's speaking models (admin only). One model when `model`
+			 * is given, else every "tts" model.
+			 */
+			namespace RefreshSpeech {
+				interface Params {
+					connectionId: number
+					model?: string
+				}
+				interface Response {
+					connectionId: number
+					results: {
+						model: string
+						connectionModelId: number
+						speech: import("$lib/shared/connectionAdapters/speechFacts").SpeechFacts | null
+						error?: string
+					}[]
+					error?: string
 				}
 			}
 			namespace RefreshModels {
@@ -2238,7 +2449,9 @@ declare global {
 					 * capability layer). See `koboldcpp/visionProjector.ts`.
 					 */
 					visionProjector?: string | null
-				}
+									/** Voices and controls a speaking model declares (lane B, S1); absent when none stored. */
+					speech?: import("$lib/shared/connectionAdapters/speechFacts").SpeechFacts
+}
 				interface Response {
 					connectionId?: number
 					models?: ModelRow[]
@@ -2420,6 +2633,8 @@ declare global {
 					sizeMb?: number
 					/** transformers.js DataType the download requests (q8, fp32, …). */
 					dtype?: string
+					/** Variants the list publishes (a subset of fp32 | fp16 | q8 | q4); more than one opens the picker. */
+					dtypes?: string[]
 					dimensions?: number
 					maxInputTokens?: number
 					pooling?: "mean" | "cls" | "last_token"
@@ -2439,6 +2654,12 @@ declare global {
 					/** The CONNECTION. */
 					id: number
 					modelId: number
+					/**
+					 * Precision to fetch (fp32 | fp16 | q8 | q4). Accepted only when
+					 * the entry lists it in `catalog.dtypes` or it is the entry's
+					 * default; absent = the entry's default.
+					 */
+					dtype?: string
 				}
 				interface Response {
 					connectionId: number
@@ -2477,7 +2698,7 @@ declare global {
 					id: number
 					/** `org/name`. */
 					hubId: string
-					/** transformers.js DataType; unset = the export's default. */
+					/** fp32 | fp16 | q8 | q4 (`ONNX_DTYPES`); unset = the export's default. */
 					dtype?: string | null
 				}
 				interface Response extends Models.Response {
@@ -2921,6 +3142,15 @@ declare global {
 				 * chipped *plugin off*. Absent for core's and the pub's.
 				 */
 				pluginOff?: boolean
+				/**
+				 * The **loadout voice** (a voicebank entry on this loadout) and the
+				 * **other speakers** pick (null = Auto), with the entries' names.
+				 * Null on every loadout that is not `text->audio`.
+				 */
+				defaultVoiceId: number | null
+				defaultVoiceName: string | null
+				otherSpeakersVoiceId: number | null
+				otherSpeakersVoiceName: string | null
 			}
 			namespace List {
 				interface Params {}
@@ -2984,6 +3214,12 @@ declare global {
 					 * replaces the stored one (null or `{}` = all at defaults).
 					 */
 					workflowValues?: Record<string, unknown> | null
+					/**
+					 * `text->audio` only: the loadout voice / the other-speakers pick
+					 * (null = Auto). Refused unless the voice is on this loadout.
+					 */
+					defaultVoiceId?: number | null
+					otherSpeakersVoiceId?: number | null
 				}
 				interface Response {
 					loadout: Summary
@@ -3081,6 +3317,61 @@ declare global {
 				interface Params {}
 				interface Response {
 					removed: boolean
+				}
+			}
+		}
+
+		/**
+		 * 🚧 `models:presence` — which runtimes already hold a model file (admin;
+		 * gated). Read from the runtimes' own directories and stores; no table.
+		 */
+		namespace Models {
+			namespace Presence {
+				/** One row the finder is showing. `key` is the caller's row key, echoed back. */
+				interface Query {
+					key: string
+					repo?: string
+					file?: string
+					bytes?: number
+					tag?: string
+					packageId?: string
+					dtype?: string
+				}
+				/** Exactly the client's `DestinationKind`. */
+				type Runtime = "koboldcpp" | "ollama" | "onnx" | "audiocpp"
+				interface Holder {
+					runtime: Runtime
+					/** The connection that serves from that place, when one exists. */
+					connectionId: number | null
+					/** KoboldCPP: "text" | "image"; Ollama: the connection's name; ONNX: the cache lane; audio.cpp: null. */
+					where: string | null
+					/** What matched, in the holder's own words (file name, tag, repo id, package id). */
+					match: string
+				}
+				interface Result {
+					key: string
+					holders: Holder[]
+				}
+				interface Params {
+					queries: Query[]
+				}
+				interface Response {
+					results: Result[]
+					error?: string
+				}
+			}
+
+			/**
+			 * 🚧 `models:machineHardware` — the graphics card and memory of the
+			 * computer the pub runs on (admin; gated). Detected once per boot and
+			 * cached; the finder proposes a build from it, the person's answer wins.
+			 */
+			namespace MachineHardware {
+				interface Params {}
+				interface Response {
+					/** null when the asker may not see it. */
+					hardware: MachineHardwareShape | null
+					error?: string
 				}
 			}
 		}
@@ -3854,6 +4145,8 @@ declare global {
 					/** Only the session's owner changes them. */
 					canEdit: boolean
 					rulesOptions: RulesOptions
+					/** 🚧 "Update rules" (🚧 M0 L4): the session owner's offer; absent when there is none. */
+					upgrade?: { from: string; to: string; notes: string[] }
 				}
 				interface ErrorResponse {
 					error: string
@@ -4171,7 +4464,33 @@ declare global {
 					 * frame, the end frame too.
 					 */
 					kind: import("@serene-pub/sdk").RunKind
+					/**
+					 * 🚧 A line-bound run (speaking one line,
+					 * `RunStatusFrame.lineBound`): shown on that line only —
+					 * never a waiting row, the turn line, the composer's Stop
+					 * or the session list. Never carries `reply`.
+					 */
+					lineBound?: true
 				}
+			}
+			/**
+			 * 🚧 Server → client (M2a a6, 2026-10-31): the run a person's press
+			 * started (`sessions:fireAction`) has ended — whichever way: `ok`,
+			 * `halt`, `err` or `cancelled`. Broadcast to the session's users;
+			 * the session page hands it to its frames as the widget event
+			 * `run:ended` (`WidgetEvent`, SDK). `reason` is the sentence the
+			 * run's terminal frame showed (a halt's or an error's); absent on
+			 * `ok` and `cancelled`.
+			 */
+			namespace RunEnded {
+				interface Frame {
+					sessionId: number
+					runId: string
+					outcome: "ok" | "halt" | "err" | "cancelled"
+					reason?: string
+				}
+				interface Params {}
+				type Response = Frame
 			}
 			/**
 			 * Server → client: this session's list row moved — a message
@@ -4318,6 +4637,8 @@ declare global {
 					beforeId?: number
 					/** The current user's in-progress composer draft, if any */
 					userDraft?: string | null
+					/** 🚧 The genre's autoConvert moved this session's rules as it opened (🚧 M0 L4); on that one reply only. */
+					rulesetConverted?: { from: string; to: string }
 					/**
 					 * The requested session id — present on a not-found reply so
 					 * the interest scope can still be derived.
@@ -4392,6 +4713,16 @@ declare global {
 					 * `session.lorebookId`.
 					 */
 					starterKit?: StarterKits.Ref
+					/** 🚧 How it starts (F5); absent is 'new'. */
+					mode?: import("@serene-pub/sdk").SessionCreationMode
+					/** The session it follows or branches — required for 'next-chapter' and 'branch'. */
+					from?: number
+					/**
+					 * 🚧 (M2c) Started from an extension's launcher: the server judges
+					 * the extension's grant, that the genre is its own and that the
+					 * prefilled genre fields are declared, before running today's path.
+					 */
+					fromApplet?: { pluginId: string }
 				}
 				interface Response {
 					session?: SelectSession
@@ -4437,6 +4768,22 @@ declare global {
 				interface Response {
 					sessionId: number
 					genreId: string
+					error?: string
+				}
+			}
+			/**
+			 * 🚧 Move a session's rules to the published version of their
+			 * ruleset (M0, lane T4). Owner-only; a refusal is `error`.
+			 */
+			namespace ConvertRuleset {
+				interface Params {
+					id: number
+					/** The ruleset version to move to (semver) — the document's published one. */
+					to: string
+				}
+				interface Response {
+					id: number
+					rulesetVersion?: string
 					error?: string
 				}
 			}
@@ -4795,8 +5142,31 @@ declare global {
 					 * only an `error` no card is showing: a press refused
 					 * before any run started has no `runId` (PLAN-less-confusing
 					 * D4, 2026-10-11).
+					 *
+					 * 🚧 M2a a6 (2026-10-31): on every answer a run stands behind —
+					 * a success too — so the asker can match the run's
+					 * `sessions:runEnded` and a frame can be answered with it.
 					 */
 					runId?: string
+					/**
+					 * 🚧 M2a a6: the pressed run HALTED — a step stopped it on
+					 * purpose (a refusal, nothing to write), as distinct from
+					 * an error (`error` alone) or a stop (`cancelled`). `reason`
+					 * is the run's own sentence, the one `error` carries beside it.
+					 */
+					halted?: true
+					/** 🚧 M2a a6: why the run halted (with `halted`) — the sentence its terminal frame showed. */
+					reason?: string
+					/**
+					 * 🚧 M2a a6: the `runId` this press's params named, echoed on
+					 * EVERY answer to it — a refusal before any run, a Stop, a
+					 * park and a success alike — so the asker matches its own
+					 * press exactly, even with two presses of one action in
+					 * flight. Absent when the press named none. ⚠ Not `runId`,
+					 * which says a run stood behind the answer (a refusal before
+					 * any run has none, and the page toasts only those).
+					 */
+					askedRunId?: string
 					/**
 					 * The run was stopped on request rather than failing.
 					 *
@@ -4960,6 +5330,10 @@ declare global {
 					control: "integer" | "number" | "boolean" | "enum" | "string" | "text" | "list" | "json"
 					min?: number
 					max?: number
+					/** A `json` field type's runtime byte cap (`jsonFieldByteCap`, never the raw declaration). */
+					maxBytes?: number
+					/** A `json` field type's JSON Schema subset, when declared. */
+					jsonSchema?: Record<string, unknown>
 					/** An enum's choices, in order. */
 					members?: { key: string; label: string; description?: string }[]
 					/** What the session runs with now. */
@@ -5007,11 +5381,42 @@ declare global {
 					fields: Field[]
 					routines?: Routine[]
 				}
+				/**
+				 * 🚧 One seated envoy's Read aloud settings (speech follow-ups
+				 * B6): the keyed family `speechEnvoy*:<slug>` drawn as two
+				 * fields the asker may change, written through
+				 * `sessions:updateSetting` like any genre field.
+				 */
+				interface SpeechEnvoy {
+					slug: string
+					name: string
+					/** The envoy's declared face (an http(s) or data:image URL), when it has one. */
+					avatar?: string
+					voice: Field
+					narrationVoice: Field
+					/** What this envoy gets while `voice` is blank (read-only; from the resolver). */
+					fallback: SpeechFallback
+				}
+				/** What a speaker with no voice of its own gets. */
+				interface SpeechFallback {
+					kind: "other-speakers" | "auto" | "narrator"
+					voiceName: string | null
+					reason?: "avoids-narrator" | "shared"
+				}
 				interface Response {
 					sessionId: number
 					/** Who the form was derived for. Absent with `error`. */
 					viewer?: "owner" | "admin"
 					groups: Group[]
+					/** 🚧 The Read aloud card's Envoy voices: the genre's seated envoys; absent when none or the asker may not change voices. */
+					speechEnvoys?: SpeechEnvoy[]
+					/**
+					 * The voice the narrator gets while the session's override is blank
+					 * (the speaking loadout's voice, else its first entry; null when none).
+					 * Present whenever the narrator voice field is shown. `loadoutName`
+					 * only for administrators.
+					 */
+					speechNarrator?: { voiceName: string | null; loadoutName?: string }
 					error?: string
 				}
 			}
@@ -6153,6 +6558,8 @@ declare global {
 						 * §28). Absent when the genre offers no choice (Chat).
 						 */
 						rules?: GenreRulesOffer
+						/** 🚧 M2c: an applet genre's launcher title — the plugin's session-view frame title, else the plugin's name. */
+						appletTitle?: string
 						// Structurally mirrors SessionShape from @serene-pub/sdk,
 						// stated inline so the shared socket contract does not
 						// couple to the SDK package.
@@ -6171,6 +6578,14 @@ declare global {
 							lorebook?: "optional" | "required"
 							composer?: "text" | "none"
 							voice?: "character" | "narrator"
+							/** 🚧 A genre proposes full screen on a first open (SDK `SessionShape.fullscreen`). */
+							fullscreen?: "propose"
+							/** The plugin whose frame is the session view (SDK `SessionShape.view`). */
+							view?: string
+							/** 🚧 M2c: the genre's frame is also an applet, listed under Apps (SDK `SessionShape.applet`). */
+							applet?: true
+							/** 🚧 The creation mode the start form proposes (SDK `SessionShape.creationMode`, F5); never a lock. */
+							creationMode?: { propose: import("@serene-pub/sdk").SessionCreationMode }
 							/** SettingsSchema — the one field language. */
 							fields?: Record<string, any>
 						}
@@ -6271,6 +6686,8 @@ declare global {
 			namespace Delete {
 				interface Params {
 					id: number
+					/** 🚧 (M2c) Confirmed from an extension's launcher: its grant and genre are judged first. */
+					fromApplet?: { pluginId: string }
 				}
 				interface Response {
 					success?: string
@@ -6314,6 +6731,17 @@ declare global {
 			 * pushed to each member, their own, when the annex changes.
 			 */
 			namespace Annex {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					annex: Record<string, Record<string, unknown>>
+					error?: string
+				}
+			}
+			/** 🚧 The asker's view of the lorebook annex their session reads (M0): per owner, the values whose audience holds for them. */
+			namespace LorebookAnnex {
 				interface Params {
 					sessionId: number
 				}
@@ -11778,8 +12206,35 @@ declare global {
 					 */
 					kind?: OllamaModelKind
 				}
+				/** One choosable quant of a recommended row. */
+				interface RecommendedQuant {
+					label: string
+					/** The pull tag Ollama accepts: `hf.co/<repo>:<quant>`. */
+					tag: string
+					filename: string
+					sizeBytes?: number
+					/** True for exactly the quant the list recommends. */
+					recommended: boolean
+				}
+				/** A recommended.yaml row plus its quant list. */
+				interface RecommendedModel {
+					name: string
+					pull: string
+					size: number
+					recommended_vram: number
+					tags: string[]
+					details: {
+						parameter_size: string
+						quantization_level: string
+						modified_at: string
+						description: string
+					}
+					quants: RecommendedQuant[]
+					/** Why `quants` is empty (library name, or HF did not answer). */
+					quantsNote?: string
+				}
 				interface Response {
-					recommendedModels: any[]
+					recommendedModels: RecommendedModel[]
 					// Optional - see SearchAvailableModels.Response.error above for
 					// why the success-path handler defensively checks for this.
 					error?: string
@@ -12002,6 +12457,20 @@ declare global {
 					threads?: number
 					quant?: 0 | 1 | 2
 				}
+				/**
+				 * The speech slot (`--ttsmodel`, plus `--ttswavtokenizer` for the
+				 * two-file families). Its own shape rather than `Resident`: the
+				 * loader records paths, not knobs, and the wire mirrors the
+				 * loader's `AudioModelSlot` field for field (lane V finding V-6,
+				 * 2026-10-28).
+				 */
+				interface ResidentAudio {
+					/** Bare filename of the speech model, for display. */
+					ttsFile?: string
+					ttsModelPath: string
+					ttsWavTokenizerPath?: string
+					ttsGpu?: boolean
+				}
 				interface Response {
 					/**
 					 * What is resident, per kind — null if nothing is loaded, or if
@@ -12014,7 +12483,7 @@ declare global {
 					 * keeps working when that stops being true.
 					 */
 					config: {
-						resident: { text?: Resident; image?: Resident }
+						resident: { text?: Resident; image?: Resident; audio?: ResidentAudio }
 						rawConfigJson: string
 					} | null
 				}
@@ -12060,8 +12529,11 @@ declare global {
 					/** The tab the user was in. Stored with kind_source "declared";
 					 * the finished file is then sniffed and may correct it — a
 					 * declaration is a guess about a file, a detection is a
-					 * measurement of the file we now hold. Defaults to "text". */
-					kind?: ModelKindFilter
+					 * measurement of the file we now hold. Defaults to "text".
+					 * "speech" (a request only, never stored) files a KoboldCPP speech
+					 * model or codec in the text folder; anything else the detector
+					 * sees as speech or transcription is refused. */
+					kind?: ModelKindFilter | "speech"
 				}
 				interface Response {
 					success: boolean
@@ -12326,6 +12798,444 @@ declare global {
 				interface Params {}
 				interface Response {
 					success: boolean
+				}
+			}
+		}
+
+		/**
+		 * 🚧 audio.cpp, run by Serene Pub: the second managed service beside
+		 * KoboldCPP. Serene Pub downloads the audio.cpp binary and the speech and
+		 * transcription model packages, writes its `server.json`, and supervises
+		 * the process. Every handler is admin-only.
+		 *
+		 * Request events (client → server, ack'd): `audiocpp:getSettings`,
+		 * `audiocpp:updateSettings`, `audiocpp:listBinaryVariants`,
+		 * `audiocpp:listReleaseVersions`, `audiocpp:downloadBinary`,
+		 * `audiocpp:cancelBinaryDownload`, `audiocpp:installState`,
+		 * `audiocpp:listPackages`, `audiocpp:downloadPackage`,
+		 * `audiocpp:cancelPackageDownload`, `audiocpp:removePackage`,
+		 * `audiocpp:setPackageEnabled`, `audiocpp:confirmFamily`,
+		 * `audiocpp:getStatus`, `audiocpp:start`, `audiocpp:stop`,
+		 * `audiocpp:restart`.
+		 *
+		 * Pushes (server → client): `audiocpp:binaryDownloadProgress`,
+		 * `audiocpp:packageDownloadProgress`, `audiocpp:subprocessStatus`.
+		 *
+		 * A refused request answers on `audiocpp:<event>:error` with
+		 * `Sockets.ErrorResponse`, as KoboldCPP's do.
+		 */
+		namespace AudioCpp {
+			/** The compute backend an audio.cpp build runs on. */
+			type Backend = "cpu" | "vulkan" | "cuda" | "metal" | "rocm"
+			/** What a model package does: speech (`tts`), transcription (`asr`), or voice design (`vdes`). */
+			type PackageTask = "tts" | "asr" | "vdes"
+			/**
+			 * The five words KoboldCPP's subprocess status uses too — the shared
+			 * supervisor factory reports these. There is no "error" status; a
+			 * failure is `crashed` plus `StatusView.lastError`.
+			 */
+			type ProcessStatus =
+				| "stopped"
+				| "starting"
+				| "running"
+				| "crashed"
+				| "stopping"
+
+			/** Everything the settings page shows, secrets excluded. */
+			interface SettingsView {
+				/** The managed audio.cpp is switched on. */
+				enabled: boolean
+				/** Directory the binary is installed in; null until one is downloaded. */
+				binaryDir: string | null
+				/** The release asset name installed (e.g. `audio-v0.9.3-bin-ubuntu-x64-cpu-portable.tar.gz`); null until installed. */
+				binaryVariant: string | null
+				/** The release tag installed; null until installed. */
+				releaseTag: string | null
+				/** Port the process listens on (default 5002). */
+				port: number
+				/** Models directory as saved; null = `<models>/audio`. */
+				modelsDir: string | null
+				/** The effective models directory (what null resolves to, or the saved one). */
+				modelsDirResolved: string
+				/** Backend of the installed variant; null until installed. */
+				backend: Backend | null
+				/** GPU/device index to run on; null = audio.cpp's default device. */
+				deviceIndex: number | null
+				/** CPU threads; null = audio.cpp's default. */
+				threads: number | null
+				/** Most models held loaded at once; null = Serene Pub's rule (2 on GPU builds, 1 on CPU). */
+				maxLoadedModels: number | null
+				/** Milliseconds a loaded model idles before it is unloaded; null = audio.cpp's default. */
+				idleUnloadMs: number | null
+				/** Idle minutes before the process is stopped; 0 = never. */
+				subprocessTimeoutMinutes: number
+				/** Hash of the server.json the process was last spawned with; null until the first spawn. Differs from the current file's hash = a restart is due. */
+				configHash: string | null
+				/** `http://127.0.0.1:<port>`, derived from `port`. */
+				baseUrl: string
+			}
+			/** The editable subset of `SettingsView`. The install fields (`binaryDir`, `binaryVariant`, `releaseTag`, `backend`) and `configHash` are written by `downloadBinary` and the config writer, never here. */
+			interface EditableSettings {
+				/** Switch the managed audio.cpp on or off. */
+				enabled: boolean
+				/** Port to listen on. */
+				port: number
+				/** Models directory; null = `<models>/audio`. */
+				modelsDir: string | null
+				/** Device index; null = default device. */
+				deviceIndex: number | null
+				/** CPU threads; null = default. */
+				threads: number | null
+				/** Most models loaded at once; null = Serene Pub's rule. */
+				maxLoadedModels: number | null
+				/** Idle milliseconds before a model unloads; null = default. */
+				idleUnloadMs: number | null
+				/** Idle minutes before the process stops; 0 = never. */
+				subprocessTimeoutMinutes: number
+			}
+
+			namespace GetSettings {
+				interface Params {}
+				interface Response {
+					/** The current settings. */
+					settings: SettingsView
+				}
+			}
+			namespace UpdateSettings {
+				/** Any subset of the editable fields; absent fields are left alone. */
+				type Params = Partial<EditableSettings>
+				interface Response {
+					/** The settings after the update. */
+					settings: SettingsView
+				}
+			}
+
+			/** One installable build of audio.cpp. */
+			interface BinaryVariant {
+				/** Display name (e.g. "Linux, NVIDIA CUDA"). */
+				name: string
+				/** The release asset file name; what `downloadBinary` takes. */
+				assetName: string
+				/** Download size in bytes. */
+				sizeBytes: number
+				/** The compute backend this build runs on. */
+				backend: Backend
+				/** A `-portable` build (audio.cpp's own suffix: built to run on more CPUs, at some speed cost). */
+				portable: boolean
+				/** A second asset that must be fetched with it (e.g. the matching `cudart-*` archive on Windows CUDA). */
+				needsRuntimeAsset?: string
+				/** The build Serene Pub proposes for this machine. */
+				recommended?: boolean
+				/** Why to pick it (or not) — pickers explain why. */
+				reason?: string
+			}
+			namespace ListBinaryVariants {
+				interface Params {
+					/** Release tag to list; absent = the latest. */
+					tag?: string
+				}
+				interface Response {
+					/** Builds available for this release, this platform first. */
+					variants: BinaryVariant[]
+					/** The release tag the list is for. */
+					releaseTag: string
+				}
+			}
+			namespace ListReleaseVersions {
+				interface Params {}
+				interface ReleaseVersion {
+					/** Release tag. */
+					tag: string
+					/** ISO time the release was published. */
+					publishedAt: string
+					/** True for the newest release. */
+					isLatest: boolean
+				}
+				interface Response {
+					/** Releases, newest first. */
+					versions: ReleaseVersion[]
+				}
+			}
+			namespace DownloadBinary {
+				interface Params {
+					/** The release asset to install (`BinaryVariant.assetName`). */
+					assetName: string
+					/** The release tag to take it from. */
+					releaseTag: string
+				}
+				interface Response {
+					/** The download started; progress arrives on `audiocpp:binaryDownloadProgress`. */
+					success: boolean
+				}
+			}
+			namespace BinaryDownloadProgress {
+				interface DownloadState {
+					/** The asset being fetched. */
+					assetName: string
+					/** Where the download is. */
+					status:
+						| "starting"
+						| "downloading"
+						| "unpacking"
+						| "success"
+						| "error"
+						| "cancelled"
+					/** "runtime" = the second asset (the `cudart-*` archive); "binary" = audio.cpp itself. */
+					phase?: "binary" | "runtime"
+					/** Bytes received so far for this phase. */
+					downloaded: number
+					/** Bytes expected for this phase; 0 when unknown. */
+					total: number
+					/** The download has finished, one way or another. */
+					isDone: boolean
+					/** Why it failed, when `status` is "error". */
+					error?: string
+					/** False = no published checksum to check against; shown as "unverified". */
+					verified?: boolean
+				}
+				/** Push; `null` = nothing downloading. */
+				interface Response {
+					download: DownloadState | null
+				}
+			}
+			namespace CancelBinaryDownload {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace InstallState {
+				interface Params {}
+				interface Response {
+					/** A usable binary is on disk. */
+					installed: boolean
+					/** Absolute path of the executable; null when not installed. */
+					binaryPath: string | null
+					/** The version audio.cpp reports. */
+					version?: string
+					/** Backend of the installed build. */
+					backend?: Backend
+					/** The release tag installed. */
+					releaseTag?: string | null
+					/** The release asset name installed. */
+					variant?: string | null
+					/** False = installed without a published checksum to check. */
+					verified?: boolean
+				}
+			}
+
+			/** One speech or transcription model package, as the packages list shows it. */
+			interface PackageRow {
+				/** Stable id of the package. */
+				id: string
+				/** Display name. */
+				name: string
+				/** What it does. */
+				task: PackageTask
+				/** audio.cpp's spec family id (e.g. `kokoro_tts`, `qwen3_tts`, `parakeet_tdt`) — data from the list, never read from a file name. */
+				family: string
+				/** The family's variant (`customvoice`, `base`, `voicedesign`, …), when it has one. */
+				variant?: string
+				/** The files that make up the package, relative to its directory. */
+				files: string[]
+				/** Total download size in bytes, when known. */
+				sizeBytes?: number
+				/** VRAM it wants, in GB as the list quotes it; 0 = fine on CPU. */
+				recommendedVram?: number
+				/** Licence name, when known. */
+				license?: string
+				/** Free-form labels (languages, "multilingual", …). */
+				tags: string[]
+				/** A sentence about it. */
+				description?: string
+				/**
+				 * How sure the match is. `listed` = from audio.yaml; `matched` = a
+				 * family rule matched; `guessed` = needs a person to confirm
+				 * (`confirmFamily`), never auto-enabled.
+				 */
+				confidence: "listed" | "matched" | "guessed"
+				/** Where the package is: not on disk, being fetched, on disk, or on disk and in server.json. */
+				state: "available" | "downloading" | "downloaded" | "enabled"
+				/** Serene Pub proposes this one for this machine. */
+				recommended: boolean
+				/** Why to pick it — pickers explain why. */
+				reason?: string
+				/** Directory it lives in once downloaded. */
+				localDir?: string
+				/** The numeric precision of the files (`q8_0`, `bf16`, `f16`, …); from the list, else derived from the file name. */
+				precision?: string
+				/** Who runs it; absent = audio.cpp. A `koboldcpp` row is only ever in `families`, never in `packages`. */
+				runtime?: "audiocpp" | "koboldcpp"
+				/** KoboldCPP rows: the files to fetch one by one (`koboldcpp:downloadModel`, kind "speech"), model first, then its codec file. */
+				koboldCppFiles?: { filename: string; downloadUrl: string; sizeBytes?: number }[]
+			}
+			/** One model with every precision it comes in: what a picker shows as one row. */
+			interface PackageFamily {
+				/** Stable: `${runtime}:${family}:${variant ?? ""}:${model}`, model = the display name without its precision, slugged (two sizes of one family+variant are two families). */
+				key: string
+				family: string
+				variant: string | null
+				task: PackageTask
+				runtime: "audiocpp" | "koboldcpp"
+				/** The name without its precision, e.g. "Qwen3-TTS 1.7B CustomVoice". */
+				displayName: string
+				/** The precision a picker pre-selects: the recommended row if any, else q8_0, else the first. */
+				recommendedId: string
+				/** q8_0 first, then bf16/f16, then the rest. */
+				precisions: PackageRow[]
+			}
+			namespace ListPackages {
+				interface Params {}
+				interface Response {
+					/** Every audio.cpp package (not KoboldCPP's), listed, matched and guessed. */
+					packages: PackageRow[]
+					/** The same packages plus KoboldCPP's conversions, grouped by family and variant. */
+					families: PackageFamily[]
+				}
+			}
+			namespace DownloadPackage {
+				interface Params {
+					/** `PackageRow.id`. */
+					id: string
+				}
+				interface Response {
+					/** The download started; progress arrives on `audiocpp:packageDownloadProgress`. */
+					success: boolean
+				}
+			}
+			namespace PackageDownloadProgress {
+				interface PackageDownloadState {
+					/** `PackageRow.id`. */
+					packageId: string
+					/** Display name. */
+					name: string
+					/** Where the download is. */
+					status:
+						| "starting"
+						| "downloading"
+						| "success"
+						| "error"
+						| "cancelled"
+					/** Bytes received so far, over all files. */
+					downloaded: number
+					/** Bytes expected, over all files; 0 when unknown. */
+					total: number
+					/** The download has finished, one way or another. */
+					isDone: boolean
+					/** Files finished. */
+					filesDone: number
+					/** Files in the package. */
+					filesTotal: number
+					/** The file being fetched now. */
+					currentFile?: string
+					/** Why it failed. */
+					error?: string
+				}
+				/** Push; keyed by package id. */
+				interface Response {
+					downloads: Record<string, PackageDownloadState>
+				}
+			}
+			namespace CancelPackageDownload {
+				interface Params {
+					/** `PackageRow.id`. */
+					id: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace RemovePackage {
+				interface Params {
+					/** `PackageRow.id`. */
+					id: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SetPackageEnabled {
+				interface Params {
+					/** `PackageRow.id`. */
+					id: string
+					/** Put it in (or take it out of) server.json. The config rewrite and restart are the server's business. */
+					enabled: boolean
+				}
+				interface Response {
+					/** The package as it now stands. */
+					package: PackageRow
+				}
+			}
+			namespace ConfirmFamily {
+				interface Params {
+					/** Directory of the `guessed` package. */
+					localDir: string
+					/** The family the person says it is. */
+					family: string
+					/** What the person says it does. */
+					task: PackageTask
+				}
+				interface Response {
+					/** The package, now confirmed. */
+					package: PackageRow
+				}
+			}
+
+			/** The process, as `getStatus` and the `subprocessStatus` push both show it. */
+			interface StatusView {
+				/** Where the process is. */
+				status: ProcessStatus
+				/** Process id; null when not running. */
+				pid: number | null
+				/** ISO time it started; null when not running. */
+				startedAt: string | null
+				/** Times the supervisor has restarted it. */
+				restartCount: number
+				/** True when "running" is an audio.cpp already on the port that Serene Pub did not start — Stop cannot act on it. */
+				isExternal: boolean
+				/** The port. */
+				port: number
+				/** `http://127.0.0.1:<port>`. */
+				baseUrl: string
+				/** Version the running process reports. */
+				version?: string
+				/** Backend the running process uses. */
+				backend?: Backend
+				/** Models loaded right now. */
+				loaded: { id: string; device?: string }[]
+				/** The running process was spawned with the current server.json. */
+				configApplied: boolean
+				/** The last failure, if any. */
+				lastError: string | null
+			}
+			namespace GetStatus {
+				interface Params {}
+				interface Response {
+					status: StatusView
+				}
+			}
+			namespace Start {
+				interface Params {}
+				interface Response {
+					status: StatusView
+				}
+			}
+			namespace Stop {
+				interface Params {}
+				interface Response {
+					status: StatusView
+				}
+			}
+			namespace Restart {
+				interface Params {}
+				interface Response {
+					status: StatusView
+				}
+			}
+			namespace SubprocessStatus {
+				/** Push; the same shape as `GetStatus`. */
+				interface Response {
+					status: StatusView
 				}
 			}
 		}
@@ -12732,6 +13642,8 @@ declare global {
 						backgroundImagePath: string | null
 						backgroundOpacity: number
 						charaVaultIncludeNsfw: boolean
+						/** 🚧 How spoken lines play for this person (`spokenPlayback.ts`). */
+						spokenPlayback: import("$lib/shared/speech/spokenPlayback").SpokenPlayback
 						/**
 						 * The user's own choice (R5), or **null** meaning "follow
 						 * the instance default".
@@ -12757,6 +13669,11 @@ declare global {
 						loreWriteMode: LoreWriteMode | null
 						/** The resolved mode — theirs, else the instance's. */
 						effectiveLoreWriteMode: LoreWriteMode
+						/**
+						 * 🚧 This person's library write mode (M2c): null reads
+						 * Review. Sent as stored.
+						 */
+						libraryWriteMode?: LoreWriteMode | null
 						/**
 						 * 🚧 **Background routines** (R11; lane 7): this person's own
 						 * caps on their sessions' real-time routines — null following
@@ -12795,12 +13712,16 @@ declare global {
 			 */
 			namespace UpdateLoreWriteMode {
 				interface Params {
-					mode: LoreWriteMode | null
+					/** Absent leaves the lore write mode as it is. */
+					mode?: LoreWriteMode | null
+					/** 🚧 The library write mode (M2c); null reads Review. Absent leaves it. */
+					libraryWriteMode?: LoreWriteMode | null
 				}
 				interface Response {
 					success: boolean
 					mode: LoreWriteMode | null
 					effectiveMode: LoreWriteMode
+					libraryWriteMode?: LoreWriteMode | null
 				}
 			}
 			/** Pick a UI language, or null to follow the instance default (R5). */
@@ -12899,6 +13820,16 @@ declare global {
 			}
 			// ⚠ There is no `updateEasyPersonaCreation`: a persona is a
 			// character, so the switch below governs both surfaces.
+			/** 🚧 How spoken lines play for this person: auto, on press, or no player. */
+			namespace UpdateSpokenPlayback {
+				interface Params {
+					mode: import("$lib/shared/speech/spokenPlayback").SpokenPlayback
+				}
+				interface Response {
+					success: boolean
+					mode: import("$lib/shared/speech/spokenPlayback").SpokenPlayback
+				}
+			}
 			namespace UpdateEasyCharacterCreation {
 				interface Params {
 					enabled: boolean
@@ -15486,7 +16417,7 @@ declare global {
 				 * to move the session's story clock forward, payload `{ kind:
 				 * 'clock', by, unit }`; no owner, no slot, never superseded.
 				 */
-				kind: "value" | "clock"
+				kind: "value" | "clock" | "library"
 				payload: Record<string, unknown>
 				status: "pending" | "accepted" | "rejected" | "superseded"
 				proposedBy: string
@@ -15647,12 +16578,19 @@ declare global {
 				 * rows). 🚧 `clock` — a move of the session's story clock
 				 * (live scenes §15 G5): `clock` carries it, on the world.
 				 */
-				kind: "value" | "clock"
+				kind: "value" | "clock" | "library"
 				messageId: number | null
 				ownerKey: string
 				ownerLabel: string
 				updatedBy: string
 				createdAt: string
+				/** 🚧 `library` rows: what was made or changed, and its name. */
+				library?: {
+					op: "create-character" | "update-character" | "create-lorebook" | "attach-lorebook"
+					label: string
+					/** 🚧 Nothing was made, and why (the person's library write mode is Off). */
+					skipped?: string
+				}
 				/** Value rows. */
 				slotId?: string
 				slotLabel?: string
@@ -16417,6 +17355,121 @@ declare global {
 				}
 				type Response = AvailableSheet & { requestId?: string }
 				type ErrorResponse = DeclareSlot.ErrorResponse
+			}
+		}
+
+		/** 🚧 The voicebank (speech build seam S4). Admin-gated except `pickable`. */
+		namespace Voicebank {
+			type View = import("$lib/shared/speech/voicebank").VoicebankVoiceView
+			type Input = import("$lib/shared/speech/voicebank").VoicebankVoiceInput
+
+			namespace List {
+				type Params = Record<string, never>
+				interface Response {
+					voices: View[]
+					/** The default speaking loadout's model (a new voice starts on its loadout); null when unfilled. */
+					pairModelId: number | null
+					/** 🚧 The `text->audio` loadouts a voice may speak through (the entry form's Loadout picker). */
+					loadouts: import("$lib/shared/speech/voicebank").VoicebankLoadoutOption[]
+				}
+			}
+			namespace Create {
+				interface Params {
+					voice: Input
+				}
+				interface Response {
+					voice: View
+				}
+			}
+			namespace Update {
+				interface Params {
+					id: number
+					voice: Partial<Input>
+				}
+				interface Response {
+					voice: View
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					id: number
+				}
+			}
+			namespace Pickable {
+				type Params = Record<string, never>
+				interface Response {
+					voices: import("$lib/shared/speech/voicebank").VoicebankPickableVoice[]
+					/**
+					 * 🚧 The DEFAULT speaking loadout's model's controls the voice
+					 * try-out needs (`designsVoice`: the seed picks the person;
+					 * `instruction`: an inflection can be tried). Null when no
+					 * model speaks yet. Each voice's own: `voices[].controls`.
+					 */
+					controls?: Pick<
+						import("$lib/shared/connectionAdapters/speechFacts").SpeechControls,
+						"designsVoice" | "instruction"
+					> | null
+				}
+			}
+			/**
+			 * 🚧 The **voice try-out** (`server/speech/preview.ts` `previewVoice`):
+			 * one short line spoken on the speaking pair with the overrides
+			 * given, returned inline, stored nowhere. Any signed-in person; a
+			 * non-administrator may send only `text`, `description`,
+			 * `language`, `settings.seed` and `inflection` (A1: members do not
+			 * pick voices — their try uses the pub's default voice). One try in
+			 * flight per person; 60 s ceiling. Refusals answer
+			 * `voicebank:preview:error` with the `requestId` echoed.
+			 */
+			namespace Preview {
+				interface Params {
+					/** Echoed on the reply and the refusal, so the asking control claims its own. */
+					requestId: string
+					/** The line; blank speaks `VOICE_TRYOUT_SAMPLE_LINE`. At most `VOICE_TRYOUT_TEXT_MAX` characters. */
+					text?: string
+					/** Admins: a voicebank entry by slug (as a card's timbre names one). */
+					voice?: string | null
+					/** Admins: a service voice id on the speaking model, unsaved (the voicebank form's draft). */
+					voiceId?: string
+					/**
+					 * 🚧 Admins: the loadout an unsaved voicebank draft speaks
+					 * through. Absent: the resolved voice's loadout, else the
+					 * speaking loadout.
+					 */
+					loadoutId?: number | null
+					/** The timbre description to try with (the direction, where the model takes prose). */
+					description?: string | null
+					/** ISO 639-1; blank: the chain's. */
+					language?: string | null
+					/** The settings to try with; a non-administrator's are reduced to `seed`. */
+					settings?: import("$lib/shared/speech/voicebank").VoicebankSettings
+					/** An `INFLECTION_LABELS` label; sent only where the model takes prose and does not design its voice. */
+					inflection?: string | null
+				}
+				interface Response {
+					requestId: string
+					/** The clip's media type (`audio/wav`, `audio/mpeg`…). */
+					mime: string
+					/** The clip, base64. */
+					bytes: string
+					durationMs?: number
+					/** The voice and model the service says it spoke with. */
+					spokenAs: { voice: string; model: string } | null
+					/** The seed sent, when one was (a designing model's derived seed included). */
+					seed?: number
+					/** Request keys the service honoured / could not. */
+					applied: string[]
+					ignored: string[]
+					/** Things worth knowing that are not failures ("inflection not sent: …"). */
+					notes: string[]
+				}
+				interface ErrorResponse {
+					error: string
+					requestId?: string
+				}
 			}
 		}
 

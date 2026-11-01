@@ -8,7 +8,25 @@
 	 * runtime against the surface registry.
 	 */
 	import { page } from "$app/state"
+	import { setContext } from "svelte"
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
+	import { WIDGET_REQUESTS_KEY, type WidgetRequestHandler } from "$lib/shared/widgets/context"
+	import { guardWidgetRequests } from "$lib/client/components/sessionPage/requests/askers"
+	import { answerFilePick } from "$lib/client/components/sessionPage/requests/filePick"
+	import { answerFileSave } from "$lib/client/components/sessionPage/requests/fileSave"
+
+	// A plugin page has no session to answer for it, but it still owns the
+	// two requests that are about the extension itself: choosing a file for it
+	// and saving one from it (M0). Everything else is refused.
+	setContext<WidgetRequestHandler>(
+		WIDGET_REQUESTS_KEY,
+		guardWidgetRequests((async (kind: string, params: unknown, from: { owner: string }) =>
+			kind === "file-pick"
+				? answerFilePick(params as never, from)
+				: kind === "file-save"
+					? answerFileSave(params as never, from)
+					: Promise.reject(new Error(`'${String(kind)}' is not something this page answers`))) as never)
+	)
 
 	// The first path segment is the plugin id (a dotted slug, never slashed);
 	// the src is resolved server-side in the load, so a page that does not
@@ -18,10 +36,12 @@
 
 {#if data.src}
 	<div class="h-screen w-screen">
+		<!-- 🚧 M2c: a plugin page holds the `ui` API only — no session, and it is not an applet. -->
 		<PluginFrame
 			src={data.src}
 			title={data.title ?? "Extension"}
 			surface="page"
+			apis={["ui"]}
 		/>
 	</div>
 {:else}

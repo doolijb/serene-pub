@@ -89,6 +89,8 @@ Every change is tied to the message that made it. Go **Back** a turn, **regenera
 
 The story clock follows the same rule: a move that came with the message steps back with it, all but a reply's fixed tick on a regenerate or a swipe. See [What moves a session's clock](./lorebook-time.md#the-story-clock).
 
+A character or lorebook a session made for you (the Guide's drafts) follows it too. The ledger says what landed: *Made a character: Mara*, *Changed Mara*, *Made a lorebook: Saltmarsh*, *Read Saltmarsh into this session*. While one waits for you it reads *Proposes a character: Mara*, with **Accept** and **Reject** as for any held change. Going Back removes what that turn made; **Forward** returns it.
+
 ## What a session tracks
 
 A session tracks what its rules declare, and nothing more: no genre adds attributes, the lorebook's and the cards' stat sheets don't add any, and the session can't add its own. Change the rules (before play, or with the session's rules settings) and what is tracked changes with them. A value the session held on a stat it no longer tracks is kept: older sessions had theirs carried onto the rules' attribute of the same kind (health onto health), or written into the session's notes as a line under **Carried over from before**.
@@ -98,6 +100,14 @@ The session's settings have an **Attributes** section. Under rules that declare 
 ### Who carries what
 
 When the rules leave an attribute optional, the **Attributes** section lists **Who carries what**: each character (and the world or each place, where the rules put an attribute there), with a **Carries ‹attribute›** switch for each. The same switches are on the Stats widget, under each sheet, for the sheets you may change. Switched off, that attribute isn't shown on their sheet, isn't read into any prompt or by the rules, and can't be changed for them; what it held is kept, and comes back when it's switched on again. Whoever plays a character can switch their own; the session's owner can switch anyone's, and the world's and places'. An attribute the rules mark as required is always carried, so it isn't listed.
+
+### Who holds an attribute, and for how long
+
+A ruleset says three things about each attribute, in **Admin › Play › Rulesets** under **Attributes** (see [Making rules of your own](./rulesets.md#making-rules-of-your-own)):
+
+- **Held by** is the **owner**: the player, each character, the world or each place. (Older rules wrote this as `carriedBy`; those still read, and the editor shows "Several hold it (an older spelling). Pick one to replace it." when a list holds more than one.)
+- **Kept** is the **scope**. **For the session** starts fresh in each session. **Across sessions** is kept on the lorebook, so every session that reads it sees the same value; a change made in one session shows in the others.
+- **Kind** can be **Yes or no**, which makes the attribute a **flag**: a fact that is either true or not, about the world or a character (*the bridge is out*, *Wren is asleep*). A flag has no limits to set; it starts yes or no, and a rule or a person flips it.
 
 ## Stat shapes
 
@@ -129,6 +139,12 @@ The model's state-keeper reports items that changed hands in a list called `inve
 ### Story time
 
 A story date is written year first: `412`, `412-03`, `412-03-05` or `412-03-05 22:30`. Years can be negative, and months and days can go past 12 and 31, since a story calendar needn't match ours. If the lorebook has a calendar (see [Time, history and branches](./lorebook-time.md#the-calendar)), dates are written through it, such as `Tuesday, 5 March, Year 412, 22:30`, and a date the calendar has no room for is refused.
+
+A world's calendar can also say what the day is made of and how the year turns. Its **day periods** name the parts of the day by the hour each begins (morning, day, dusk and night, unless the calendar says otherwise), and its **seasons** say how many story days one season lasts. Neither is stored: see [Derived stats](#derived-stats).
+
+**The clock can move until an hour.** Besides moving by an amount, a pipeline step can move the story clock **until** a time: to the next 8:00, say. When the clock is already there, nothing moves and nothing is written. When the story has no clock yet, a move until a time starts one: on the story's first day (Year 1, month 1, day 1) at that time, so a game that opens at 10:00 has its clock at 10:00 from the start. A rule that runs **each hour** (hunger rising by one an hour, for example) runs once for every hour the clock passes; when the story has no clock yet, it waits and the session notes *The story has no clock yet; hourly routines wait.* One that applies only **while awake** skips the hours someone is marked asleep.
+
+**Where a character is by hour.** Rules can give a character a **schedule** field: a weekly routine saying where they are at each hour (the weekend is the last two days of the week). The cast reads it to place everyone at the story clock's hour. It reads the most recent saved copy of the zone that holds the schedule. To write one, see [Write your own rules](./sdk/guides/rulesets.md).
 
 ### Location
 
@@ -231,10 +247,11 @@ This part is for people building their own pipelines. Five steps work with stats
 
 ## Derived stats
 
-A **derived** stat is worked out every time it's read and never stored, because a stored age is a wrong age the day after. Two kinds:
+A **derived** stat is worked out every time it's read and never stored, because a stored age is a wrong age the day after. Three kinds:
 
 - **Age**, from a birthdate on the character, read against the story's present (the lorebook's clock, or its newest history entry). Missing either, age is absent, not zero.
 - **An expression**, written on the stat, computed from other values.
+- **A part of the world's clock.** **Part of the day** (morning, day, dusk, night, or whatever the world's calendar names) and **Season** are read from the story clock and the world's calendar. Without a clock, the day period is absent; without seasons on the calendar, so is the season.
 
 ## What isn't built yet
 

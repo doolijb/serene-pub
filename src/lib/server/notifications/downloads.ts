@@ -23,7 +23,7 @@ import { LOGBOOK_OBJECT_TYPES } from "$lib/shared/adminLogbook"
 import { raiseNotification } from "./store"
 import { messageWithoutQueryText } from "$lib/server/db/errors"
 
-export type DownloadSource = "koboldcpp" | "onnx" | "ollama"
+export type DownloadSource = "koboldcpp" | "audiocpp" | "onnx" | "ollama"
 
 /** Longest `error` a row carries. */
 export const DOWNLOAD_ERROR_MAX = 160

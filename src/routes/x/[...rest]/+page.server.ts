@@ -15,8 +15,8 @@ import { pluginsEnabled } from "$lib/server/plugins/flag"
  * is served (and CSP'd) by the plugin-ui route; this only picks the entry so
  * a disabled or page-less plugin renders the not-found state, never a dead
  * frame. The frame itself is opaque-origin, so no auth rides this load — the
- * page is vendor code, not user data. With the extension subsystem off
- * (`SP_PLUGINS_ENABLED`) no plugin has a page: the not-found state.
+ * page is vendor code, not user data. With `SP_PLUGINS_ENABLED` turning the
+ * extension subsystem off, no plugin has a page: the not-found state.
  */
 export const load: PageServerLoad = async ({ params }) => {
 	if (!pluginsEnabled()) return {}
@@ -29,6 +29,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		.select({
 			enabled: schema.plugins.enabled,
 			name: schema.plugins.name,
+			version: schema.plugins.version,
 			manifest: schema.plugins.manifest
 		})
 		.from(schema.plugins)
@@ -38,5 +39,5 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	const page = surfacesOf(plugin.manifest).page
 	if (!page) return {}
-	return { src: frameSrc(pluginId, page.entry), title: page.title ?? plugin.name }
+	return { src: frameSrc(pluginId, page.entry, plugin.version), title: page.title ?? plugin.name }
 }

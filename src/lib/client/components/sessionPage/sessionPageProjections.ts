@@ -27,6 +27,11 @@ import {
 } from "$lib/client/utils/messageSpeaker"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { describeProposal } from "$lib/shared/state/ledgerLines"
+import { readSpeechSessionSettings } from "$lib/shared/sessions/speechSettings"
+
+/** The server-stamped speech availability on the session record (a boolean + a sentence), when present. */
+const speechOf = (session: unknown) =>
+	(session as { speech?: { canSpeak: boolean; reason?: string } } | null | undefined)?.speech
 import { t } from "$lib/client/i18n/state.svelte"
 import type {
 	ConversationDossierV1,
@@ -698,6 +703,22 @@ export function projectConversationDossier(
 		// 🚧 The book's calendar (§15 G9): the conversation spells its
 		// dates — dividers, day marks, history markers — through it.
 		storyCalendar: src.data.storyCalendar ?? null,
+		// 🚧 Read aloud (speech S7): the conversation autoplays the newest
+		// line under `play`. Read off the session's stored genre fields — a
+		// write re-pushes the session — so a preset-level default the session
+		// never stored reads as its value only once stored (phase 1).
+		readAloud: readSpeechSessionSettings(
+			(session as { genreFields?: unknown }).genreFields
+		).readAloud,
+		// How spoken lines play for THIS viewer (their setting); playback only.
+		spokenPlayback: userSettingsCtx.settings?.spokenPlayback ?? "auto",
+		// 🚧 The runs in flight (the `sessions:runStatus` pushes the page hears):
+		// a spoken line whose pending run is here reads Speaking… (A4).
+		liveRunIds: src.data.liveRunIds,
+		// 🚧 Whether this pub can speak at all (server-read boolean + reason): the
+		// speak icons grey with the reason when it cannot. Read aloud Off is NOT
+		// a reason; on-demand still works.
+		...(speechOf(session) ? { speech: speechOf(session)! } : {}),
 		debugPrompts:
 			!!userCtx.user?.isAdmin &&
 			!!systemSettingsCtx.settings?.contextDebuggingEnabled,

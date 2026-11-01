@@ -242,6 +242,8 @@ export function mediaThumbUrl(id: number): string {
 }
 
 export interface CreateMediaInput extends MediaProvenance {
+	/** A sound's or clip's length, when the caller knows it (the speak step does). */
+	durationMs?: number | null
 	bytes: Buffer | Uint8Array
 	/** Display metadata only — never resolved, never part of a path. */
 	filename?: string | null
@@ -366,7 +368,9 @@ export async function createMedia(
 			// states no delays — `duration_ms` has never promised to be the
 			// animated/still flag, and `displayDerivable` says why it cannot be
 			// read as one.
-			durationMs: motion?.animated ? motion.durationMs : null,
+			// An animation's from its container; a sound's from the caller
+			// (the speak step reads the WAV header) — never sniffed here.
+			durationMs: motion?.animated ? motion.durationMs : (input.durationMs ?? null),
 			position: input.position ?? 0,
 			meta: input.meta ?? null
 		})

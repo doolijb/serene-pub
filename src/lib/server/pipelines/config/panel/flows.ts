@@ -163,6 +163,10 @@ export const OUTLET_WRITES: Record<string, string> = {
 	"core:outlet/attach-audio": "attaches audio",
 	"core:outlet/attach-image": "attaches an image",
 	"core:outlet/create-lore-entry": "adds a lore entry",
+	"core:outlet/create-character": "makes a character",
+	"core:outlet/update-character": "changes a character",
+	"core:outlet/create-lorebook": "makes a lorebook",
+	"core:outlet/attach-lorebook": "reads a lorebook into a session",
 	"core:outlet/link-lore-entries": "links lore entries",
 	"core:outlet/graph-proposal": "proposes a state change"
 }

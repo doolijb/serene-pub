@@ -54,6 +54,7 @@ const BRAND_ICONS: Record<ConnectionBrand, Component<any>> = {
  */
 const KIND_GLYPHS: Record<EndpointKind, ConnectionBrand | string> = {
 	"koboldcpp-managed": "koboldcpp",
+	"audiocpp-managed": "Cpu",
 	ollama: "ollama",
 	"onnx-embeddings": "Zap",
 	"onnx-entities": "ScanText",

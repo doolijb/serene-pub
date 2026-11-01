@@ -79,11 +79,15 @@ Up to three choices. You can do any of them later; this is only where to start.
 
 ### 4. Pick a character
 
-The AI plays the character you pick here. If you already have characters, press **Choose a character**: every one of them opens in a list, with a search box at the top. Click one and it shows on the step, with **Change** beside it to pick another. Or add one:
+The AI plays the character you pick here. The first card is **Nell Haverly**, marked **Comes with Serene Pub**: she keeps the Ninth Mile, a coaching inn where three roads meet. She's the easiest start, and needs nothing from the internet. Press **Pick**: the card reads **Adding…** for a moment, then she's one of your characters and chosen here, with **Change** beside her to pick another. If it says _Couldn't add this character. Try again._, press **Pick** again.
 
-- **Browse the library**: ready-made characters shared by the community. The easiest start. The **Library** opens beside the wizard (it stays closed until you press this). While you're on this step its button reads **Pick this character**: press it and the character is chosen here, marked **Picked** in the Library.
-- **Import a card**: a **character card** is a picture (or a small file) with a character written inside it, the format SillyTavern and similar apps use. Drop a `.png`, `.json` or `.charx` file, or press **Browse**.
+Nell's card stays hidden while you have her, unchanged, among your characters; she's in **Choose a character** instead. Rename or edit her and the card comes back, ready to add a fresh copy. Her inn is a [starter lorebook](./lorebooks.md#starter-lorebooks) too, **The Ninth Mile**, for when you want the place around her.
+
+If you already have characters, press **Choose a character**: every one of them opens in a list, with a search box at the top. Click one and it shows on the step, with **Change** beside it to pick another. Or add one:
+
 - **Create one**: a name, a picture and a few lines of personality, in a short guided form.
+- **Browse the library**: ready-made characters shared by the community. The **Library** opens beside the wizard (it stays closed until you press this). While you're on this step its button reads **Pick this character**: press it and the character is chosen here, marked **Picked** in the Library.
+- **Import a card**: a **character card** is a picture (or a small file) with a character written inside it, the format SillyTavern and similar apps use. Drop a `.png`, `.json` or `.charx` file, or press **Browse**.
 
 A character you import (from the library too) or create is chosen for you. Press **Continue**. Until a character is chosen, **Continue** is greyed out with _Pick a character to continue_ under it.
 
@@ -121,7 +125,7 @@ That's it: you're playing. Not happy with a reply? Hover it and press **Regenera
 
 Once you've started a session (and, if you run the pub, a model can reply), the home page stops showing the wizard. Instead it shows what you were doing:
 
-- One quiet line at the top: _Beta, pre-release 0.6.0-pr-6. Expect changes; keep backups of anything you can't lose._ (it names the version you run). The **×** puts it away in this browser until the next version. The wizard doesn't show it.
+- One quiet line at the top: _Beta, pre-release 0.6.0-pr-7. Expect changes; keep backups of anything you can't lose._ (it names the version you run). The **×** puts it away in this browser until the next version. The wizard doesn't show it.
 - A greeting, with how many sessions are waiting on your reply, an **Import a card** button and a **New session** button.
 - **Pick up where you left off**: your most recent sessions, newest first. A **Your turn** label with a gold dot marks one waiting on you; **Continue** opens it.
 - **Characters**: your characters as a list in two columns, each with its picture, its name and one line about it, ending with **New or import**. Click one to see its sessions; **All** opens the Characters view. The two icons beside **All** switch to a shelf of portrait cards and back; this browser remembers which.

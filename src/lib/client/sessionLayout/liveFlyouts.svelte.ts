@@ -111,7 +111,7 @@ export function createLiveFlyouts(input: LiveFlyoutsInput) {
 		}
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape" || e.defaultPrevented) return
-			// The shell's Escape steps a layer down (Stage only, Focus, the
+			// The shell's Escape steps a layer down (full screen, Focus, the
 			// dock) unless something took it — and folding the dock would
 			// untuck the sides under the user's hands.
 			e.preventDefault()

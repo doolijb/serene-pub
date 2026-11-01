@@ -55,10 +55,13 @@ import { registerAmendmentHandlers } from "./amendments"
 import { registerLorebookStoryTimeHandlers } from "./lorebookStoryTime"
 import { registerBindingSuggestionHandlers } from "./bindingSuggestions"
 import { registerMediaHandlers } from "./media"
+import { registerVoicebankHandlers } from "./voicebank"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
 import { registerOllamaHandlers } from "./ollama"
 import { registerKoboldCppHandlers } from "./koboldcpp"
+import { registerAudioCppHandlers } from "./audiocpp"
+import { registerModelPresenceHandlers } from "./modelPresence"
 import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
 import { registerNerHandlers } from "./ner"
@@ -303,6 +306,8 @@ export function connectSockets(io: {
 		registerComponentHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)
 		registerKoboldCppHandlers(socket, emitToUser, register)
+		registerAudioCppHandlers(socket, emitToUser, register)
+		registerModelPresenceHandlers(socket, emitToUser, register)
 		registerSystemSettingsHandlers(socket, emitToUser, register)
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerCharacterFolderHandlers(socket, emitToUser, register)
@@ -336,6 +341,7 @@ export function connectSockets(io: {
 		registerBindingSuggestionHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
 		registerMediaHandlers(socket, emitToUser, register)
+		registerVoicebankHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
 		registerVectorizationHandlers(socket, emitToUser, register)
 		registerNerHandlers(socket, emitToUser, register)

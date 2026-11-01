@@ -667,13 +667,15 @@ describe("registry statuses (R-2)", () => {
 
 	it("writes provisional for a flagged declaration, live for the rest", async () => {
 		await syncDefinitionRegistry(db, allDefinitions(), { release: "0.6.0" })
-		expect((await statusOf("core:oracle/speak"))?.status).toBe("provisional")
+		// `speak` was the flagged control here until the speech build bound it
+		// (2026-10-28, lane V): it is live now; `mcp-tool` (plans/28) is the control.
+		expect((await statusOf("core:oracle/speak"))?.status).toBe("live")
 		expect((await statusOf("core:oracle/mcp-tool"))?.status).toBe("provisional")
 		expect((await statusOf("core:outlet/attach-image"))?.status).toBe("live")
 		// The reader carries it back in the policy half, so the round trip is
 		// lossless — and the hash never saw it.
 		const back = (await readDefinitionRegistry(db)).find(
-			(e) => `${e.id}@${e.version}` === "core:oracle/speak@1"
+			(e) => `${e.id}@${e.version}` === "core:oracle/mcp-tool@1"
 		)
 		expect(back?.policy?.provisional).toBe(true)
 	})
@@ -682,29 +684,29 @@ describe("registry statuses (R-2)", () => {
 		await db
 			.update(schema.pipelineDefinitionRegistry)
 			.set({ status: "live", policy: null })
-			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/speak"))
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/mcp-tool"))
 		const result = await syncDefinitionRegistry(db, allDefinitions(), { release: "0.6.0" })
-		expect((await statusOf("core:oracle/speak"))?.status).toBe("provisional")
-		expect(result.republished).not.toContain("core:oracle/speak@1")
+		expect((await statusOf("core:oracle/mcp-tool"))?.status).toBe("provisional")
+		expect(result.republished).not.toContain("core:oracle/mcp-tool@1")
 		const [row] = await db
 			.select({ policy: schema.pipelineDefinitionRegistry.policy })
 			.from(schema.pipelineDefinitionRegistry)
-			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/speak"))
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/mcp-tool"))
 		expect((row?.policy as any)?.provisional).toBe(true)
 	})
 
 	it("binding a provisional definition moves no pointer: the row's status and policy move, its hash stays", async () => {
 		// V6's reversal of U6's choice, at the door that matters: the sync.
-		const speak = allDefinitions().find((d) => d.id === "core:oracle/speak@1")!
-		const { provisional: _p, ...bound } = speak
+		const flagged = allDefinitions().find((d) => d.id === "core:oracle/mcp-tool@1")!
+		const { provisional: _p, ...bound } = flagged
 		const before = (await readDefinitionRegistry(db)).find(
-			(e) => `${e.id}@${e.version}` === "core:oracle/speak@1"
+			(e) => `${e.id}@${e.version}` === "core:oracle/mcp-tool@1"
 		)
 		const result = await syncDefinitionRegistry(db, [bound as any], { release: "0.6.0" })
 		expect(result.republished).toEqual([])
-		expect((await statusOf("core:oracle/speak"))?.status).toBe("live")
+		expect((await statusOf("core:oracle/mcp-tool"))?.status).toBe("live")
 		const after = (await readDefinitionRegistry(db)).find(
-			(e) => `${e.id}@${e.version}` === "core:oracle/speak@1"
+			(e) => `${e.id}@${e.version}` === "core:oracle/mcp-tool@1"
 		)
 		expect(after?.policy?.provisional).toBeUndefined()
 		const { definitionContentHash } = await import(
@@ -713,7 +715,7 @@ describe("registry statuses (R-2)", () => {
 		expect(definitionContentHash(after!)).toBe(definitionContentHash(before!))
 		// Put the flag back for the tests that follow.
 		await syncDefinitionRegistry(db, allDefinitions(), { release: "0.6.0" })
-		expect((await statusOf("core:oracle/speak"))?.status).toBe("provisional")
+		expect((await statusOf("core:oracle/mcp-tool"))?.status).toBe("provisional")
 	})
 
 	it("a complete sync marks a slug the build no longer publishes removed — and only then", async () => {

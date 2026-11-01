@@ -25,6 +25,8 @@ import { rawRows } from "$lib/server/db/rawRows"
 import { buildAdminOverview } from "$lib/server/sockets/adminOverview"
 import { combosFor } from "$lib/server/sockets/connectionDefaults"
 import { capabilityDefaults } from "$lib/server/connections/capabilityDefaults"
+import { getAppDataDir } from "$lib/server/utils/appDataDir"
+import { storageSegment } from "$lib/server/plugins/SandboxManager"
 import { readLogRing, type LogRingLine } from "$lib/server/utils/logRing"
 import { redactForSupport, REDACTION_SUMMARY } from "./redact"
 import {
@@ -32,6 +34,34 @@ import {
 	SUPPORT_REPORT_FORMAT,
 	type SupportReportFacts
 } from "./render"
+
+/**
+ * The total bytes of the files under a plugin's storage folder
+ * (`extensions_data/<segment>`), or null when the folder does not exist.
+ * Symlinks are not followed; stops counting after 20 000 entries; never throws.
+ */
+export function pluginStorageBytes(dataDir: string, pluginId: string): number | null {
+	try {
+		const root = path.join(dataDir, "extensions_data", storageSegment(pluginId))
+		if (!fs.existsSync(root)) return null
+		let total = 0
+		let seen = 0
+		const stack = [root]
+		while (stack.length && seen < 20_000) {
+			const dir = stack.pop()!
+			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+				if (++seen > 20_000) break
+				const full = path.join(dir, entry.name)
+				if (entry.isSymbolicLink()) continue
+				if (entry.isDirectory()) stack.push(full)
+				else if (entry.isFile()) total += fs.lstatSync(full).size
+			}
+		}
+		return total
+	} catch {
+		return null
+	}
+}
 
 /** How far back plugin hook failures are counted. */
 const FAILURE_WINDOW_DAYS = 7
@@ -356,6 +386,28 @@ export async function gatherSupportReportFacts(
 		}
 	})
 
+	const fileSums = await db
+		.select({
+			pluginId: schema.pluginFiles.pluginId,
+			total: sql<number>`coalesce(sum(${schema.pluginFiles.bytes}), 0)::float8`,
+			inDb: sql<number>`coalesce(sum(${schema.pluginFiles.bytes}) filter (where ${schema.pluginFiles.storedAt} = 'db'), 0)::float8`,
+			onDisk: sql<number>`coalesce(sum(${schema.pluginFiles.bytes}) filter (where ${schema.pluginFiles.storedAt} = 'disk'), 0)::float8`
+		})
+		.from(schema.pluginFiles)
+		.groupBy(schema.pluginFiles.pluginId)
+	const sumsByPlugin = new Map(fileSums.map((r) => [r.pluginId, r]))
+	const dataDir = getAppDataDir()
+	const diskUse = installed.map((x) => {
+		const sums = sumsByPlugin.get(x.slug)
+		return {
+			slug: x.slug,
+			packageBytes: Number(sums?.total ?? 0),
+			dbBytes: Number(sums?.inDb ?? 0),
+			diskBytes: Number(sums?.onDisk ?? 0),
+			storageBytes: pluginStorageBytes(dataDir, x.slug)
+		}
+	})
+
 	const failedCalls = await db
 		.select({
 			pluginId: schema.pluginHookInvocations.pluginId,
@@ -498,6 +550,7 @@ export async function gatherSupportReportFacts(
 		plugins: {
 			sandboxEnabled: overview.extensions.sandboxEnabled,
 			installed,
+			diskUse,
 			failures: [...failureGroups.values()],
 			failureWindowDays: FAILURE_WINDOW_DAYS
 		},

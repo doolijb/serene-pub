@@ -1,0 +1,1 @@
+ALTER TABLE "plugins" ADD COLUMN "provided" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -10,8 +10,8 @@ or install, and it never replaces the widget it was cloned from. It sits beside 
 widget that layouts can place.
 
 :::note Who sees this
-Authoring is for admins, and only while the extension subsystem is on (the
-`SP_PLUGINS_ENABLED` environment variable, the same switch plugins use). With it off, the
+Authoring is for admins. It follows the same switch as plugins: on, unless the
+`SP_PLUGINS_ENABLED` environment variable turns it off. With it off, the
 **Components** page says so and does nothing else, and no authored component is drawn in any
 session.
 :::

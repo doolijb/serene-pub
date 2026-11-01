@@ -12,6 +12,7 @@ import { DrizzleQueryError, sql } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 import { driverErrorOf } from "$lib/server/db/errors"
 import {
+	databaseQuiet,
 	guardTransactions,
 	TransactionDeadlockError
 } from "$lib/server/db/transactionGuard"
@@ -154,5 +155,38 @@ describe("with the guard, in warn mode", () => {
 		} finally {
 			logged.mockRestore()
 		}
+	})
+})
+
+// 2026-10-30: closing PGlite under a query in flight throws, and under an open
+// transaction aborts it; the shutdown waits for quiet before it closes.
+describe("databaseQuiet", () => {
+	// Work that spans event-loop turns is a transaction awaiting between its
+	// statements (a query alone runs PGlite's WASM synchronously on this thread).
+	const holdTransaction = (db: Awaited<ReturnType<typeof freshDb>>["db"], ms: number, done: () => void) =>
+		db.transaction(async (t) => {
+			await t.execute(sql`insert into things (name) values ('a')`)
+			await new Promise((r) => setTimeout(r, ms))
+			done()
+		})
+
+	test("waits out an open transaction, and says when it timed out instead", async () => {
+		const { client, db } = await freshDb()
+		guardTransactions(client, "throw")
+		expect(await databaseQuiet(client, 50)).toBe(true)
+
+		let committed = false
+		const tx = holdTransaction(db, 200, () => (committed = true))
+		expect(await databaseQuiet(client, 5_000)).toBe(true)
+		expect(committed).toBe(true)
+		await tx
+
+		let late = false
+		const slow = holdTransaction(db, 500, () => (late = true))
+		expect(await databaseQuiet(client, 50)).toBe(false)
+		expect(late).toBe(false)
+		await slow
+		expect(await databaseQuiet(client, 50)).toBe(true)
+		await client.close()
 	})
 })

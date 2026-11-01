@@ -3193,6 +3193,30 @@ button[data-widget-part~="messages.composer-persona"] {
 	letter-spacing: var(--tracking-wide);
 	text-transform: uppercase;
 }
+/* ⋮ › Speech (heading audio control): the row's chevron sits at the right
+   edge. The sub-popout is a sibling portal of the ⋮ panel, so it is styled by
+   its own part, never as a descendant of the options panel. The player fills
+   the panel; it carries only `messages.message-speech-player`, which no
+   `messages.spoken-audio` rule reaches. */
+[data-widget-part~="messages.message-speech-open"] > sp-icon:last-child {
+	margin-inline-start: auto;
+}
+[data-widget-part~="messages.message-speech-panel"] {
+	border-radius: var(--radius-container);
+	width: min(90vw, 320px);
+	padding: calc(var(--spacing) * 4);
+	background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+}
+:where([data-widget-part~="messages.message-speech-panel"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: calc(var(--spacing) * 4);
+}
+[data-widget-part~="messages.message-speech-player"] {
+	display: block;
+	inline-size: 100%;
+	min-block-size: 2.25rem;
+}
+
 /* Between core's verbs and the contributed ones (Skeleton's `hr`). */
 [data-widget-part~="messages.message-options-divider"] {
 	display: block;
@@ -3467,6 +3491,218 @@ button[data-widget-part~="messages.composer-persona"] {
 	overflow-wrap: anywhere;
 	font-size: var(--text-xs);
 	color: var(--color-surface-700-300);
+}
+/* 🚧 The spoken line (speech build lane E 2026-10-28; polish pass 2026-10-29,
+   STYLE-GUIDE §6.16): one compact strip under a line that was read aloud —
+   state glyph · the browser's own player · clock · voice chip · mood chip · ⋯,
+   with the playing cue's words as a caption line beneath. Ink at rest muted by
+   the widget's muted opacity; no gold (a status and a name are ink, §2.3); the
+   only colour is the ember of Speaking… and the error tone of a hovered Stop.
+   Below 28rem of widget the clock and the chips drop under the player. */
+[data-widget-part~="messages.spoken-line"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+	min-inline-size: 0;
+	margin-top: calc(var(--spacing) * 1);
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="messages.spoken-state"] {
+	display: inline-flex;
+	flex: none;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="messages.spoken-line"][data-state="playing"] [data-widget-part~="messages.spoken-state"] {
+	opacity: 1;
+}
+[data-widget-part~="messages.spoken-audio"] {
+	flex: 1 1 11rem;
+	inline-size: auto;
+	min-inline-size: 0;
+	max-inline-size: 18rem;
+	block-size: 2rem;
+}
+/* The browser's own player already shows the clock; this part stays in the
+   markup for a skin that draws its own player, and is hidden in the default sheet. */
+[data-widget-part~="messages.spoken-time"] {
+	display: none;
+	flex: none;
+	font-variant-numeric: tabular-nums;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="messages.spoken-voice"],
+[data-widget-part~="messages.spoken-mood"] {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+	max-inline-size: 100%;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: var(--sp-w-font-meta);
+	line-height: 1.5;
+}
+[data-widget-part~="messages.spoken-voice"] > span:not([data-widget-part]) {
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="messages.spoken-face"] {
+	inline-size: 1rem;
+	block-size: 1rem;
+	border-radius: var(--sp-w-chip-radius);
+	object-fit: cover;
+}
+[data-widget-part~="messages.spoken-mood"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+/* The full "Spoken as …" sentence, for a screen reader only (`sr-only`). */
+[data-widget-part~="messages.spoken-sr"] {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border-width: 0;
+}
+/* The ⋯ and the strip's Stop: quiet square icon buttons. */
+[data-widget-part~="messages.spoken-menu"],
+[data-widget-part~="messages.spoken-stop"] {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	padding: var(--sp-w-icon-button-pad);
+	border: 0;
+	border-radius: var(--sp-w-icon-button-radius);
+	background: transparent;
+	color: inherit;
+	opacity: var(--sp-w-muted-opacity);
+	cursor: pointer;
+}
+[data-widget-part~="messages.spoken-menu"]:hover,
+[data-widget-part~="messages.spoken-menu"]:focus-visible {
+	background: var(--sp-w-hover-bg);
+	opacity: 1;
+}
+/* Stop is small and secondary (the heading's is the primary one): muted at rest,
+   the error tone only on hover or focus, never a box. */
+[data-widget-part~="messages.spoken-stop"]:hover,
+[data-widget-part~="messages.spoken-stop"]:focus-visible {
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+	opacity: 1;
+}
+[data-widget-part~="messages.spoken-menu"]:focus-visible,
+[data-widget-part~="messages.spoken-stop"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+[data-widget-part~="messages.spoken-missing"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	margin: 0;
+	opacity: var(--sp-w-muted-opacity);
+}
+/* The playing cue's words: one clamped line under the strip. */
+[data-widget-part~="messages.spoken-caption"] {
+	flex-basis: 100%;
+	margin: 0;
+	min-inline-size: 0;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-size: var(--sp-w-font-row);
+	font-style: italic;
+}
+/* Speaking… (speech follow-ups A4): the ember pulse — the one self-repeating
+   motion, "the model is working" (§8) — beside the status; still under reduced motion. */
+[data-widget-part~="messages.spoken-pending"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	margin: 0;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="messages.spoken-pulse"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 0.75);
+}
+[data-widget-part~="messages.spoken-pulse"] > span {
+	inline-size: 0.35rem;
+	block-size: 0.35rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--color-warning-500);
+}
+@media (prefers-reduced-motion: no-preference) {
+	[data-widget-part~="messages.spoken-pulse"] > span {
+		animation: sp-spoken-pulse 1.1s ease-in-out infinite;
+	}
+	[data-widget-part~="messages.spoken-pulse"] > span:nth-child(2) {
+		animation-delay: 0.18s;
+	}
+	[data-widget-part~="messages.spoken-pulse"] > span:nth-child(3) {
+		animation-delay: 0.36s;
+	}
+}
+@keyframes sp-spoken-pulse {
+	0%,
+	100% {
+		opacity: 0.3;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+/* The strip is quiet by default (owner 2026-10-29): the heading's speech icon
+   plays and stops the line, the ⋮ menu makes and remakes it and ⋮ › Speech
+   holds the full player, and the turn line says *Mira is speaking…*. So the
+   strip shows only the voice chip, the mood, the caption and *Not spoken yet*.
+   The `<audio>` stays in the markup and keeps playing — `display:none` stops
+   nothing a media element does, and keeps hidden controls out of the tab
+   order. *Speaking…* is only clipped, so its live region still announces. A
+   user style re-shows any of these parts. */
+[data-widget-part~="messages.spoken-state"],
+[data-widget-part~="messages.spoken-audio"],
+[data-widget-part~="messages.spoken-time"],
+[data-widget-part~="messages.spoken-menu"],
+[data-widget-part~="messages.spoken-stop"] {
+	display: none;
+}
+[data-widget-part~="messages.spoken-pending"] {
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+@container sp-widget (max-width: 28rem) {
+	/* Row 1 the player at full width (it shows its own play state); row 2 the chips and ⋯. */
+	[data-widget-part~="messages.spoken-state"] {
+		display: none;
+	}
+	[data-widget-part~="messages.spoken-audio"] {
+		flex-basis: 100%;
+		max-inline-size: none;
+	}
+}
+@media (pointer: coarse) {
+	[data-widget-part~="messages.spoken-menu"],
+	[data-widget-part~="messages.spoken-stop"] {
+		min-inline-size: 2.75rem;
+		min-block-size: 2.75rem;
+	}
 }
 [data-widget-part~="messages.media-remove"] {
 	position: absolute;

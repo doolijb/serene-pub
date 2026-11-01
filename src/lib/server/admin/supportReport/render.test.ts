@@ -83,6 +83,7 @@ function facts(over: Partial<SupportReportFacts> = {}): SupportReportFacts {
 					updatedAt: null
 				}
 			],
+			diskUse: [],
 			failures: [
 				{ slug: "acme.dice", name: "Dice", hook: "roll", outcome: "timeout", count: 3, lastAt: "2026-09-27T11:00:00.000Z", lastReason: "exceeded 5000ms" }
 			],
@@ -108,6 +109,7 @@ const HEADINGS = [
 	"## Connections",
 	"## Default loadouts",
 	"## Plugins",
+	"## Plugin disk use",
 	"## Plugin failures (last 7 days)",
 	"## Pipelines",
 	"## Recent failed runs",
@@ -127,6 +129,26 @@ describe("renderSupportReport", () => {
 		const md = renderSupportReport(facts())
 		const found = md.split("\n").filter((l) => /^#{1,2} /.test(l))
 		expect(found).toEqual(HEADINGS)
+	})
+
+	test("lists plugin disk use with KB, MB and none cells", () => {
+		const base = facts()
+		const md = renderSupportReport(
+			facts({
+				plugins: {
+					...base.plugins,
+					diskUse: [
+						{ slug: "acme.dice", packageBytes: 12 * 1024, dbBytes: 12 * 1024, diskBytes: 0, storageBytes: 3 * 1024 * 1024 },
+						{ slug: "acme.none", packageBytes: 0, dbBytes: 0, diskBytes: 0, storageBytes: null }
+					]
+				}
+			})
+		)
+		const section = md.slice(md.indexOf("## Plugin disk use"), md.indexOf("## Plugin failures"))
+		expect(section).toContain("| Plugin | Package | Kept in the database | On disk | Plugin storage |")
+		expect(section).toContain("12 KB")
+		expect(section).toContain("3 MB")
+		expect(section).toContain("none")
 	})
 
 	test("says what it is and what was redacted before anything else", () => {

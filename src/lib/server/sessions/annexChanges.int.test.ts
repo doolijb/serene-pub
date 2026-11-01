@@ -144,6 +144,12 @@ describe("annex deltas", () => {
 		const { retractAnnexDeltasAnchoredTo } = await import("$lib/server/sessions/annexChanges")
 		await db.transaction(async (tx) => retractAnnexDeltasAnchoredTo(tx as any, m2.id))
 		expect((await w.annex()).core).toEqual({ "retake-quietly": true })
+		// 🚧 M2a a8 / M2b: the Back moved core's document, so it moved core's annex document version (the column).
+		const [row] = await db
+			.select({ versions: schema.sessions.annexVersions })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, w.session.id))
+		expect(row!.versions).toMatchObject({ core: 1 })
 	}, 60_000)
 
 	it("annexAt: the annex as written through the fork", async () => {

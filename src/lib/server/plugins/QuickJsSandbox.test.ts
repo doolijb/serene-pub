@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, it, expect, afterEach } from "vitest"
 import { HOOK_CTX_KINDS, hookCtxKeysFor } from "./hookCtx"
 import { QuickJsSandbox } from "./QuickJsSandbox"
@@ -419,6 +422,42 @@ describe("QuickJsSandbox — the hook ctx per kind", () => {
 			opts({}, { kind: "oracle" })
 		)
 		expect(o.ok && o.value).toEqual({ fetch: "function", storage: "object" })
+	})
+
+	it("a query hook reads a file the package ships through ctx.package (M2a)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pkg-sandbox-"))
+		try {
+			mkdirSync(join(root, "assets"), { recursive: true })
+			writeFileSync(join(root, "assets", "a.json"), '{"hello":"world"}')
+			writeFileSync(join(root, "secret.txt"), "no")
+			rt = new QuickJsSandbox()
+			await rt.load("p1", `module.exports = { hooks: { read: async (input, ctx) => {
+				var ok = await ctx.package.read("assets/a.json");
+				var out = await ctx.package.read("secret.txt");
+				return {
+					kind: ok.kind,
+					isBytes: ok.value instanceof Uint8Array,
+					text: new TextDecoder().decode(ok.value),
+					outside: out.kind,
+					reason: out.reason
+				};
+			} } }`, "h1", { packageAssets: { root, dir: "assets" } })
+			const r = await rt.invoke({ pluginId: "p1", hookName: "read" }, opts({}, { kind: "query" }))
+			expect(r.ok).toBe(true)
+			if (r.ok)
+				expect(r.value).toEqual({
+					kind: "ok",
+					isBytes: true,
+					text: '{"hello":"world"}',
+					outside: "err",
+					reason: "package: 'secret.txt' is not one of this package's assets"
+				})
+			// A task's ctx has no package at all.
+			const t = await rt.invoke({ pluginId: "p1", hookName: "read" }, opts({}, { kind: "task" }))
+			expect(t.ok).toBe(false)
+		} finally {
+			rmSync(root, { recursive: true, force: true })
+		}
 	})
 
 	it("a chain-link hook has no storage either — parity with an in-app script", async () => {

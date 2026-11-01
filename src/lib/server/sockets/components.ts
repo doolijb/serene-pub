@@ -92,7 +92,7 @@ export class ComponentRefusal extends Error {
 
 export const COMPONENTS_ADMIN_ONLY = "Access denied. Only admin users can manage components."
 export const COMPONENTS_SUBSYSTEM_OFF =
-	"Authored components are part of the extension subsystem, which is off on this pub — set SP_PLUGINS_ENABLED to use them."
+	"Authored components are part of the extension subsystem, which SP_PLUGINS_ENABLED turns off on this server."
 
 const noCompiler = (reason: string) => `This pub has no component compiler: ${reason}.`
 

@@ -20,6 +20,13 @@
  * which is also the default, so a browser that stores nothing simply gets a
  * finder with no fit hints rather than a broken one.
  *
+ * ## A stored answer wins over a detected one
+ *
+ * The server can detect the graphics card and propose a tier
+ * (`hardwarePicks.ts`). That proposal only fills in while the person has never
+ * answered: `readStoredMemoryTier` returns null for "never answered", and
+ * detection never writes storage — only the person picking a tier does.
+ *
  * ⚠ **Not sure is a real answer, not a missing one.** It suppresses every fit
  * hint deliberately: a guess about somebody's hardware, rendered in moss
  * green, is worse than saying nothing.
@@ -143,6 +150,21 @@ export function readMemoryTier(): MemoryTier {
 		return parseMemoryTier(localStorage.getItem(MEMORY_TIER_KEY))
 	} catch {
 		return DEFAULT_MEMORY_TIER
+	}
+}
+
+/**
+ * The person's stored answer, or null when they never gave one (nothing
+ * stored, a value that is not a tier, or storage that throws).
+ */
+export function readStoredMemoryTier(): MemoryTier | null {
+	try {
+		const value = localStorage.getItem(MEMORY_TIER_KEY)
+		return MEMORY_TIERS.some((t) => t.value === value)
+			? (value as MemoryTier)
+			: null
+	} catch {
+		return null
 	}
 }
 

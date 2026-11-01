@@ -261,7 +261,10 @@ export function createConnections(deps: ConnectionsDeps) {
 		baseUrl?: string | null
 	}): boolean {
 		const kind = endpointKind(target.type)
-		const managed = kind === "koboldcpp-managed" || kind === "ollama"
+		const managed =
+			kind === "koboldcpp-managed" ||
+			kind === "audiocpp-managed" ||
+			kind === "ollama"
 		const row = list.find((c) => c.id === target.id)
 		const keyMissing = !!row && needsCredential(row)
 		const addressMissing =

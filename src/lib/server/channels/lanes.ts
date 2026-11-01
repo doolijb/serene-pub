@@ -20,7 +20,7 @@
 
 import { and, eq, not, or, sql, type SQL } from "drizzle-orm"
 import type { PgColumn } from "drizzle-orm/pg-core"
-import { channelAudience, channelDecls, formatChannel, parseChannel } from "@serene-pub/sdk"
+import { audienceHolds, channelAudience, channelDecls, formatChannel, parseChannel, type ParticipantRef } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import { channelPrefixWhere, DEFAULT_CHANNEL, nextLane } from "$lib/server/messages/channels"
@@ -73,6 +73,61 @@ export function isOwnerOnlyChannel(shape: unknown, slug: string): boolean {
 	const bare = parseChannel(slug).slug
 	if (!bare || bare === DEFAULT_CHANNEL) return false
 	return ownerOnlySlugsOf(shape).includes(bare)
+}
+
+/**
+ * 🚧 The slugs a genre's shape declares with `audience: { participants }`
+ * (M0, SHAPES L6) — read by the people named, the session's owner and
+ * pipelines; nobody else. `main` never is (the SDK refuses one).
+ */
+export function participantAudienceSlugsOf(shape: unknown): string[] {
+	return channelDecls(shape)
+		.map((d) => parseChannel(d.slug).slug)
+		.filter((slug) => {
+			if (slug === DEFAULT_CHANNEL) return false
+			const a = channelAudience(shape, slug)
+			return typeof a === "object"
+		})
+}
+
+/** The references a participants channel names, or null for any other channel. */
+function participantRefsOf(shape: unknown, slug: string): readonly ParticipantRef[] | null {
+	const a = channelAudience(shape, slug)
+	return typeof a === "object" ? a.participants : null
+}
+
+/**
+ * **THE predicate**: the channel slugs this viewer may NOT read, by
+ * audience. The session's owner reads every channel (empty set); anyone else
+ * is kept out of the owner-only channels and of each participants channel
+ * whose references they do not hold — resolved per viewer, because
+ * participant, person and admin are relative to the asker.
+ */
+export async function audienceHiddenSlugsFor(
+	db: Db,
+	sessionId: number,
+	shape: unknown,
+	userId: number,
+	isOwner: boolean
+): Promise<Set<string>> {
+	if (isOwner) return new Set()
+	const hidden = new Set<string>(ownerOnlySlugsOf(shape))
+	const slugs = participantAudienceSlugsOf(shape)
+	if (!slugs.length) return hidden
+	const refs = [...new Set(slugs.flatMap((slug) => participantRefsOf(shape, slug) ?? []))]
+	const { resolvePortrayals } = await import("$lib/server/pipelines/runtime/portrayals")
+	const portrayals = await resolvePortrayals(db, { sessionId, runOwnerUserId: userId, refs })
+	for (const slug of slugs) {
+		if (!audienceHolds(participantRefsOf(shape, slug) ?? [], portrayals, { userId })) hidden.add(slug)
+	}
+	return hidden
+}
+
+/** The sentence a person reads when they name a channel they may not use. */
+export function hiddenChannelRefusal(shape: unknown, channel: string): string {
+	return isOwnerOnlyChannel(shape, channel)
+		? "That channel is the session owner's alone."
+		: "That channel is only for the people in it."
 }
 
 /** Every channel of the shape with its lane mode, `main` first. */
@@ -270,8 +325,8 @@ export async function visibleChannelsFor(
 	userId: number
 ): Promise<LaneView> {
 	const isOwner = userId === session.userId
-	// 🚧 A channel for the owner alone is no part of anybody else's session (D6).
-	const hidden = new Set(isOwner ? [] : ownerOnlySlugsOf(session.shape))
+	// 🚧 A channel for the owner alone, or for the people named, is no part of anybody else's session (D6, L6).
+	const hidden = await audienceHiddenSlugsFor(db, session.id, session.shape, userId, isOwner)
 	const channels = laneModesOf(session.shape).filter((c) => !hidden.has(c.slug))
 	const personal = channels.filter((c) => c.lanes === "personal").map((c) => c.slug)
 	const mine = new Map<string, string | null>(personal.map((slug) => [slug, null]))
@@ -339,9 +394,23 @@ export async function laneReadersOf(db: Db, sessionId: number, channel: string |
 	if (!facts) return null
 	// 🚧 The owner's alone (D6): nobody else is pushed a row of it.
 	if (isOwnerOnlyChannel(facts.shape, ref.slug)) return new Set([facts.ownerUserId])
-	if (!isPersonalChannel(facts.shape, ref.slug)) return null
+	let readers: Set<number> | null = null
+	// 🚧 The people named (L6): the owner and the members who hold the references.
+	if (participantRefsOf(facts.shape, ref.slug)) {
+		readers = new Set<number>([facts.ownerUserId])
+		const guests = await db
+			.select({ userId: schema.sessionGuests.userId })
+			.from(schema.sessionGuests)
+			.where(eq(schema.sessionGuests.sessionId, sessionId))
+		for (const g of guests) {
+			const hidden = await audienceHiddenSlugsFor(db, sessionId, facts.shape, g.userId, false)
+			if (!hidden.has(ref.slug)) readers.add(g.userId)
+		}
+	}
+	if (!isPersonalChannel(facts.shape, ref.slug)) return readers
 	const owner = await laneOwner(db, sessionId, formatChannel(ref))
-	const readers = new Set<number>([facts.ownerUserId])
-	if (owner !== null) readers.add(owner)
-	return readers
+	const lane = new Set<number>([facts.ownerUserId])
+	if (owner !== null) lane.add(owner)
+	// A personal lane on a participants channel: the lane rule applies on top.
+	return readers ? new Set([...lane].filter((u) => readers!.has(u))) : lane
 }

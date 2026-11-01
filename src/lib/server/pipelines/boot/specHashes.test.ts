@@ -200,6 +200,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (core genres on the seams, merge GM): S2: the reply's commit reads its own mode (`reply-changes`), `asked` takes its params, and an `owners` step names whose changes (lane G1). Edited in place. (was "179a3507fd2182")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read; the changes branch's `message` names its params. Edited in place. (was "6cc089a5fe8b0")
 	// Moved 2026-10-23 (RF fix 3): the `reply` junction holds only what differs — the prose call; the changes call, its `owners`, `shape`, `asked` and, last, `message` — and ONE tail after it (`save` reading the junction's `text`, the commit's Apply, `spritePick`, `spriteShow`) runs once at the top-level keys; the never-reachable Review arm is gone. Edited in place. (was "b30e48c4270fb")
+	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was 'e396fa6e5ffb8')
+	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1ba28f5858a4c3')
 	"core:spec/story-respond@1.21.0": "e396fa6e5ffb8",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
@@ -241,7 +243,10 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '14bc517e7b7e62')
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was '21c627a8d31cf')
 	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "ff693a649fd3e")
-	"core:spec/guide-respond@1.2.0": "1273d3e728562b",
+	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was '1273d3e728562b')
+	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was 'd31a241a4fd6e')
+	// Moved 2026-10-31 (M2c path B; re-pinned by E): the reply drafts a card or book in a hidden block; `read-library-draft` takes it out and the `library` junction (on `$.libraryDraft.make`) feeds create-character / create-lorebook. Edited in place, version kept. (was "1273d3e728562b")
+	"core:spec/guide-respond@1.2.0": "145386e864cee6",
 	// Moved 2026-09-27 (characterDetail genre field): Chat and Adventure
 	// declare `fields.characterDetail` (CHARACTER_DETAIL_FIELD: full / brief /
 	// speaker-only). Proven: a copy of core-catalog/src with just those two
@@ -272,7 +277,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1244f17da8e07b')
 	// Moved 2026-10-21 (lane F1): Story's declaration lost `applyActionChanges` (R55). (was "ae777ed4f3b4e")
 	// Moved 2026-10-23 (core genres on the seams, merge GM): Story's `about` and its difficulty words corrected, in the genre shape it carries (lane G0, S7). Edited in place. (was "1b30b1e4ad7357")
-	"core:spec/story-create@2.2.0": "37a22c038f516",
+	// Moved 2026-10-28 (speech build, lane D + follow-up; pinned by lane V): the genre declaration carries the four speech fields `speechReadAloud`, `speechTemplate` (no default), `speechNarratorVoice`, `sessionLanguage`. Proven speech-only: the document with those four fields removed hashes back to the old pin. (was '37a22c038f516')
+	"core:spec/story-create@2.2.0": "fd12c6ff3be21",
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -310,7 +316,9 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-05 (rename, PLAN-catalogue-and-pipeline-names N4): the id was `core:spec/create-guide`; nothing else changed. (was "6b6c45bf731ba")
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '16fb2ead93ba5')
 	// Moved 2026-10-23 (core genres on the seams, merge GM): the Guide's `tools` field dropped and its `about` written (lane G0, S8). Edited in place. (was "16e203934af640")
-	"core:spec/guide-create@1.1.0": "c06cc623f9142",
+	// Moved 2026-10-28 (speech build, lane D + follow-up; pinned by lane V): the genre declaration carries the four speech fields `speechReadAloud`, `speechTemplate` (no default), `speechNarratorVoice`, `sessionLanguage`. Proven speech-only: the document with those four fields — Guide's whole `fields` map — removed hashes back to the old pin. (was 'c06cc623f9142')
+	// Moved 2026-10-31 (M2c path B; re-pinned by E): the Guide genre declares `writes.library { characters, lorebooks }`. Edited in place. (was "135f054ab8ea7f")
+	"core:spec/guide-create@1.1.0": "950a043b9ff9",
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
@@ -929,6 +937,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '142a27f931338')
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was '1bc0aee4f58ea7')
 	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "15aa6f9a036898")
+	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was '1f9200326c48e5')
+	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '3101ab26e6aea')
 	"core:spec/story-side-character@1.0.0": "1f9200326c48e5",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
@@ -1008,6 +1018,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1814fbb71316e4')
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O5/O7/O9): the `heard` transcribe-audio step before placement, `generate`'s speech sampling, `save`'s parts; every `generate-text` node names its speech sampling. Edited in place. (was '1d69e112b9b8a2')
 	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "14543f10b90f87")
+	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was '1015774ca55aa6')
+	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1b0768b11a79c')
 	"core:spec/story-narrate@1.11.0": "1015774ca55aa6",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
@@ -1474,7 +1486,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (core genres on the seams, merge GM): the Lair's relabels (_Ask me before each check_, _Decide checks at once_, _Show the outcomes_) and its recommended rulesets, in the genre shape it carries (lane G0, S6–S7). Edited in place. (was "c46bd3f8d3a77")
 	// Moved 2026-10-23 (RF fix 2): the genre shape it carries says `lorebook: 'optional'` — 'required' is retired; a Lair session may start without a book (its own book is the dungeon). Edited in place. (was "1cb73ccca537ee")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the genre it carries declares the Sanctum `lore: 'aside'` (pass 9 S1); the document is otherwise byte-identical. (was "1a7932ed813f14")
-	"core:spec/lair-create@1.0.0": "d927ed6661005",
+	// Moved 2026-10-28 (speech build, lane D + follow-up; pinned by lane V): the genre declaration carries the four speech fields `speechReadAloud`, `speechTemplate` (no default), `speechNarratorVoice`, `sessionLanguage`. Proven speech-only: the document with those four fields removed hashes back to the old pin. (was 'd927ed6661005')
+	"core:spec/lair-create@1.0.0": "3b5ac8f6f9ab1",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -1844,6 +1857,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (core genres on the seams, merge GM): _Deciding the checks_ as its status (lane G0, S7). Edited in place. (was "18ab1e1e72aac4")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "5cbe8f5325b1b")
 	// Moved 2026-10-23 (RF fix 2, Lair voice): the voice's `prompt` step places its reminder at no token trigger, so a delver's turn reads whose turn it is after the GM's first line. Edited in place. (was "ee12352ed2052")
+	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the delver branch's last steps (nested, so only a line a delver spoke is read) — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed and the later nodes' and clauses' positions shifted back, hashes back to the old pin. (was 'c4fe814f1e089')
+	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '73fa4f3b363fb')
 	"core:spec/lair-reply@1.0.0": "c4fe814f1e089",
 	// NEW 2026-10-21 (Lair rewrite L3, D5): a seat taken, told to the GM in the Sanctum.
 	"core:spec/lair-welcome@1.0.0": "1bf873c4b48d0b",
@@ -1881,6 +1896,12 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/dungeon-crawler-after-rest@1.0.0": "12de3951048577",
 	// NEW 2026-10-23 (genres GM, G1 ★5): Story's clock moved by the rest the rules raised, on `rest-taken`.
 	"core:spec/story-after-rest@1.0.0": "ef952f79caa2",
+	// 🚧 NEW 2026-10-28 (speech build, lane D + follow-up ★1; pinned by lane V): the
+	// per-line verbs Read aloud and Say it as… — message-line → cue → speak → attach {replace}.
+	// Moved 2026-10-29 (speech polish w1): both verbs `quick` (message heading), Say it as… is `drama` and collects mood suggestions + remember + preview. Proven: with those removed the old pin holds. (was '3f96a96de2af8')
+	"core:spec/speak-message@1.0.0": "1702bfb01171db",
+	// NEW 2026-10-28 (E M0, lane T5, SHAPES L3): the day's weather, a routine no genre mounts yet. 🚧
+	"core:spec/weather@1.0.0": "1123a7599ac1bc",
 }
 
 describe("published spec hashes", () => {

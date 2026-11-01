@@ -28,7 +28,9 @@ export function createPendingReplies(opts: {
 	const inFlight: ReplyRunStatus[] = $derived(
 		opts
 			.runs()
-			.filter((r) => r.reply != null)
+			// 🚧 A line-bound run (speaking a line) is never a waiting row —
+			// nor, through one, the turn line's pill or the composer's Stop.
+			.filter((r) => r.reply != null && !r.lineBound)
 			.map((r) => ({ runId: r.runId, status: r.status, channel: r.reply!.channel }))
 	)
 

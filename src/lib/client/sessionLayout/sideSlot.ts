@@ -33,7 +33,7 @@
  * and the slot was retired 2026-09-17. The no-reload law is unchanged: still
  * one mount, still this function choosing the container around it.
  *
- *   stage   — this side holds the conversation the phone and Stage only draw
+ *   stage   — this side holds the conversation the phone and full screen draw
  *             as the stage (QE, ./placementRules `stageOf`; brief 7a free
  *             placement): the mount fills the body, showing that one widget,
  *             and its other widgets are `display: none` around their mounts.
@@ -61,7 +61,7 @@ export interface SideSlotInput {
 	/** The mobile overlay is currently showing THIS side. */
 	overlayOwns: boolean
 	/**
-	 * This side holds the stage — the conversation the phone or Stage only
+	 * This side holds the stage — the conversation the phone or full screen
 	 * draws full width, wherever the desktop placed it (QE). Absent = no.
 	 */
 	stage?: boolean

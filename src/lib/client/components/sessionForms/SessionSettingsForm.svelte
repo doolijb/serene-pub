@@ -28,6 +28,9 @@
 	import SessionSettingField from "./SessionSettingField.svelte"
 	import SessionRoutineRow from "./SessionRoutineRow.svelte"
 	import { splitAdvanced } from "./sessionSettingsForm"
+	import SpeechSettingsBlock from "./SpeechSettingsBlock.svelte"
+	import { splitSpeechFields } from "./speechSettingsBlock"
+	import { getContext } from "svelte"
 
 	type Form = Sockets.Sessions.SettingsForm.Response
 	type Group = Sockets.Sessions.SettingsForm.Group
@@ -71,7 +74,12 @@
 	)
 
 	const viewer = $derived(form?.viewer ?? "owner")
-	const groups = $derived(form?.groups ?? [])
+	// The Read aloud settings are drawn once, as their own block (seam S7).
+	const split = $derived(splitSpeechFields(form?.groups ?? []))
+	const groups = $derived(split.rest)
+	const speechFields = $derived(split.speech)
+	const hasSpeech = $derived(Object.keys(speechFields).length > 0)
+	const userCtx: UserCtx = getContext("userCtx")
 	const statusOf = (key: string) => statuses.find((s) => s.registrationKey === key)
 
 	let asked = 0
@@ -162,7 +170,7 @@
 	</div>
 {/snippet}
 
-{#if groups.length}
+{#if groups.length || hasSpeech}
 	<div class="flex flex-col gap-3" data-testid="session-settings-form" data-viewer={viewer}>
 		{#each groups as g (g.kind + ":" + g.id)}
 			{@const headingId = `session-settings-${g.kind}-${g.id.replace(/[^a-z0-9]+/gi, "-")}`}
@@ -195,5 +203,24 @@
 				{/if}
 			</section>
 		{/each}
+		{#if hasSpeech}
+			<section class={cardClass} aria-labelledby="session-settings-read-aloud" data-settings-group="speech">
+				<h3 id="session-settings-read-aloud" class="mb-1 text-sm font-medium">Read aloud</h3>
+				<p class="text-surface-600-400 mb-3 text-xs">
+					Whether replies are spoken, and in what voice. Applies at once.
+				</p>
+				<SpeechSettingsBlock
+					fields={speechFields}
+					envoys={form?.speechEnvoys ?? []}
+					narratorLine={form?.speechNarrator}
+					isAdmin={viewer === "admin"}
+					{sessionId}
+					showSpokenLines={viewer === "owner" || !!userCtx?.user?.isAdmin}
+					{busy}
+					{refusal}
+					onwrite={write}
+				/>
+			</section>
+		{/if}
 	</div>
 {/if}

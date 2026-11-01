@@ -18,6 +18,7 @@ import {
 	type PluginUserSettingsRow
 } from "./settingsHost"
 import { isPluginSlug } from "./frameHost"
+import { packageAssetsOfRow } from "./packageHost"
 import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
 import { isReservedAuthoredNamespace } from "$lib/shared/widgets/authoredOwner"
 import type { InvocationRecord, PluginDescriptor } from "./SandboxManager"
@@ -26,11 +27,13 @@ import {
 	declaredPermissions,
 	effectivePermissions,
 	storageGrant,
+	perUserStorageGrant,
+	appletGrant,
 	networkGrant,
 	type PluginManifest
 } from "./permissions"
 
-interface PluginRow {
+export interface PluginRow {
 	pluginId: string
 	name: string
 	bundleSource: string
@@ -43,9 +46,19 @@ interface PluginRow {
 	adminDenied?: string[] | null
 	storageQuotaOverride?: number | null
 	settings?: Record<string, unknown> | null
+	/** The installed version: where its package files sit on disk (`ctx.package`, M2a). */
+	version?: string | null
 }
 
-function rowToDescriptor(
+/**
+ * The ONE descriptor builder (M2b fix): the boot read and every admin action
+ * that re-registers a plugin (install, approve, allow/deny, enable — the
+ * plugins socket) build the manager's descriptor here, so a grant in force
+ * after a restart is in force the moment it is given. Two builders drifted
+ * once: per-user storage, the user annex and package files read "not granted"
+ * after an admin action until the next boot.
+ */
+export function rowToDescriptor(
 	row: PluginRow,
 	userRows: readonly PluginUserSettingsRow[] = []
 ): PluginDescriptor {
@@ -71,7 +84,10 @@ function rowToDescriptor(
 		// the instance's, and each user's own for user-scoped fields. Handles
 		// for the hook, plaintext kept host-side for the fetch bridge and the
 		// scrub (R63).
-		...settingsDelivery(row.manifest, row.settings, userRows)
+		...settingsDelivery(row.manifest, row.settings, userRows),
+		// The declared assets folder of the installed version, for `ctx.package`
+		// (M2a): absent when the manifest declares none, so every read refuses.
+		packageAssets: packageAssetsOfRow(row.manifest, row.version)
 	}
 }
 
@@ -80,10 +96,19 @@ function permissionGrants(
 	manifest: PluginManifest | null | undefined,
 	adminDenied: string[] | null | undefined,
 	storageQuotaOverride?: number | null
-): { storageQuotaBytes?: number; networkHosts?: string[] } {
+): {
+	storageQuotaBytes?: number
+	userStorageQuotaBytes?: number
+	userAnnexGranted?: boolean
+	networkHosts?: string[]
+} {
 	const eff = effectivePermissions(declaredPermissions(manifest), adminDenied)
 	return {
 		storageQuotaBytes: storageGrant(eff, storageQuotaOverride),
+		// 🚧 (M2b) each person's own quota: declared, reviewed, not denied.
+		userStorageQuotaBytes: perUserStorageGrant(eff),
+		// 🚧 (M2b) the user annex: `applet:annex:user` declared, reviewed, not denied.
+		userAnnexGranted: appletGrant(eff).userAnnex,
 		networkHosts: networkGrant(eff)
 	}
 }

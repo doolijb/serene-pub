@@ -27,6 +27,16 @@ describe("openInModels", () => {
 		expect(c.openPanel).toHaveBeenCalledWith({ key: "loadouts", toggle: false })
 	})
 
+	it("a finder door sets modelsFinder and opens the Models view", () => {
+		const c = ctx()
+		openInModels(c, { finder: { connectionId: 4, capability: "text->audio" } })
+		expect(c.digest.modelsFinder).toEqual({
+			connectionId: 4,
+			capability: "text->audio"
+		})
+		expect(c.openPanel).toHaveBeenCalledWith({ key: "models", toggle: false })
+	})
+
 	it("opens the list when no door is given", () => {
 		const c = ctx()
 		openInModels(c, {})

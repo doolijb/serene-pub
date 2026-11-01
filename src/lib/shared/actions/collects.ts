@@ -20,6 +20,12 @@ export interface ListedCollects {
 		placeholder?: string
 		/** What an empty submit does — present whenever `need` is `optional`. */
 		ifEmpty?: string
+		/** Chips the modal offers above the box; `common` ones show first, the rest behind "More". */
+		suggestions?: Array<{ value: string; label: string; icon?: string; common?: boolean }>
+		/** `session`: the viewer's last answer is remembered per session and offered next time. */
+		remember?: "session"
+		/** One line drawn under the box while it holds a value: `{subject}` and `{value}` filled in. */
+		preview?: string
 	}
 	recipients?: {
 		label: string
@@ -56,11 +62,21 @@ export function listedCollects(
 	if (collects.text) {
 		const placeholder = text(collects.text.placeholder)
 		const ifEmpty = text(collects.text.ifEmpty)
+		const preview = text(collects.text.preview)
+		const suggestions = (collects.text.suggestions ?? []).map((x) => ({
+			value: x.value,
+			label: text(x.label) ?? x.value,
+			...(x.icon ? { icon: x.icon } : {}),
+			...(x.common ? { common: true } : {})
+		}))
 		out.text = {
 			need: collects.text.need,
 			label: text(collects.text.label) ?? "",
 			...(placeholder ? { placeholder } : {}),
-			...(ifEmpty ? { ifEmpty } : {})
+			...(ifEmpty ? { ifEmpty } : {}),
+			...(suggestions.length ? { suggestions } : {}),
+			...(collects.text.remember ? { remember: collects.text.remember } : {}),
+			...(preview ? { preview } : {})
 		}
 	}
 	if (collects.clockStep) {

@@ -20,7 +20,7 @@
  * `appliesTo` (which owner kinds may hold a slot at all).
  */
 import { and, eq } from "drizzle-orm"
-import { getAttributeSlot, getRuleset, i18nText, rulesetAttributeSlots, rulesetSections, type SlotAppliesTo } from "@serene-pub/sdk"
+import { getAttributeSlot, getRuleset, i18nText, rulesetAttributeOwners, rulesetAttributeSlots, rulesetSections, type SlotAppliesTo } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { castMemberKey } from "$lib/server/state/keys"
 import type { StateOwner } from "$lib/server/state/owners"
@@ -49,7 +49,7 @@ export interface CarryableAttribute {
 	rulesetId: string
 	attributeId: string
 	label: string
-	/** The owner kinds that carry it (`carriedBy`; default each character). */
+	/** The owner kinds that carry it (`owner`, ⏳ `carriedBy`; default each character). */
 	carriedBy: readonly SlotAppliesTo[]
 	/** Every holder carries it: never switched off. */
 	required: boolean
@@ -72,7 +72,7 @@ export function carryableAttributes(plays: readonly string[]): Map<string, Carry
 				rulesetId,
 				attributeId: a.id,
 				label: i18nText(a.name) ?? i18nText(getAttributeSlot(slotId)?.label) ?? a.id,
-				carriedBy: a.carriedBy?.length ? a.carriedBy : ["cast"],
+				carriedBy: rulesetAttributeOwners(a),
 				required: a.required === true
 			})
 		}

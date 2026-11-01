@@ -39,6 +39,10 @@ vi.mock("$lib/client/utils/toaster", () => ({
 	toaster: { error: () => {}, info: () => {}, success: () => {} }
 }))
 
+const opened: any[] = []
+const digest: Record<string, any> = {}
+const panelsCtx = { digest, openPanel: (o: any) => opened.push(o) }
+
 import ManagedModelsTab from "./ManagedModelsTab.svelte"
 
 /** What the server answers for a pair whose model holds this modality. */
@@ -105,6 +109,7 @@ function render(
 	mounted.push(
 		mount(ManagedModelsTab, {
 			target,
+			context: new Map([["panelsCtx", panelsCtx]]),
 			props: {
 				kind: overrides.kind ?? "koboldcpp",
 				connection: overrides.connection ?? connection,
@@ -112,7 +117,6 @@ function render(
 				isAdmin: true,
 				onOpenModel: () => {},
 				onSetDefault,
-				onGetModels: () => {},
 				onRefresh: () => {}
 			}
 		})
@@ -313,12 +317,14 @@ describe("the managed Models tab follows the model-row contract", () => {
 	})
 
 	test("no models is an empty state with one way in", () => {
-		const onGetModels = vi.fn()
+		opened.length = 0
+		delete digest.modelsFinder
 		const target = document.createElement("div")
 		document.body.appendChild(target)
 		mounted.push(
 			mount(ManagedModelsTab, {
 				target,
+				context: new Map([["panelsCtx", panelsCtx]]),
 				props: {
 					kind: "ollama",
 					connection: { ...connection, models: [] },
@@ -326,7 +332,6 @@ describe("the managed Models tab follows the model-row contract", () => {
 					isAdmin: true,
 					onOpenModel: () => {},
 					onSetDefault: () => {},
-					onGetModels,
 					onRefresh: () => {}
 				}
 			})
@@ -335,9 +340,10 @@ describe("the managed Models tab follows the model-row contract", () => {
 		const status = target.querySelector("[role='status']")!
 		expect(status.textContent).toContain("No models yet")
 		;[...status.querySelectorAll("button")]
-			.find((b) => b.textContent?.trim() === "Get a model")!
+			.find((b) => b.textContent?.trim() === "Get more…")!
 			.click()
-		expect(onGetModels).toHaveBeenCalledOnce()
+		expect(digest.modelsFinder).toEqual({ connectionId: connection.id })
+		expect(opened.length).toBe(1)
 	})
 })
 
@@ -449,5 +455,18 @@ describe("the sections follow the server's answer (satisfiableCapabilities)", ()
 			"odd.gguf"
 		])
 		expect(uses(target, "Use in Reply")).toHaveLength(1)
+	})
+
+	test("Get more… sets modelsFinder with the connection id and opens Models", () => {
+		opened.length = 0
+		delete digest.modelsFinder
+		const { target } = render()
+		const door = [...target.querySelectorAll("button")].find(
+			(b) => (b.textContent ?? "").includes("Get more…")
+		)
+		expect(door === undefined).toBe(false)
+		door!.click()
+		expect(digest.modelsFinder).toEqual({ connectionId: connection.id })
+		expect(opened[0].key).toBe("models")
 	})
 })

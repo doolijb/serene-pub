@@ -46,6 +46,12 @@
 	 */
 	let loadedText = $derived(loadedConfig?.resident?.text ?? null)
 	let loadedImage = $derived(loadedConfig?.resident?.image ?? null)
+	/**
+	 * 🚧 S10 (speech build): the co-resident speech model (`--ttsmodel`, plus
+	 * `--ttswavtokenizer` for Qwen3 TTS), as the wire's `ResidentAudio`.
+	 */
+	let loadedAudio = $derived(loadedConfig?.resident.audio ?? null)
+	const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p
 
 	const statusColors: Record<string, string> = {
 		running: "bg-success-500",
@@ -455,6 +461,30 @@
 									</span>
 									<span class="font-mono">
 										{loadedImage.threads}
+									</span>
+								</div>
+							{/if}
+						</div>
+					{/if}
+					{#if loadedAudio}
+						<div
+							class="mt-1 grid grid-cols-1 gap-x-3 gap-y-1 text-xs @lg/view:grid-cols-2"
+						>
+							<div class="flex justify-between gap-2">
+								<span class="text-surface-700-300">
+									Speech model
+								</span>
+								<span class="truncate font-mono">
+									{loadedAudio.ttsFile ?? baseName(loadedAudio.ttsModelPath)}
+								</span>
+							</div>
+							{#if loadedAudio.ttsWavTokenizerPath}
+								<div class="flex justify-between gap-2">
+									<span class="text-surface-700-300">
+										Speech tokenizer
+									</span>
+									<span class="truncate font-mono">
+										{baseName(loadedAudio.ttsWavTokenizerPath)}
 									</span>
 								</div>
 							{/if}

@@ -123,6 +123,29 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
+		 * 🚧 A line left reading **Speaking…** when the server stopped
+		 * (`metadata.spoken.pending`, speech follow-ups A2): its speech run
+		 * lived in memory, so nothing would ever clear the marker. Markers
+		 * written before this process started, whose run is not in flight
+		 * here, are cleared; an earlier recording is kept.
+		 */
+		name: "spoken-pending",
+		run: async () => {
+			const { clearDerelictSpokenPending } = await import(
+				"$lib/server/speech/onMessageSettled"
+			)
+			const cleared = await clearDerelictSpokenPending(
+				db,
+				new Date(performance.timeOrigin)
+			)
+			if (cleared)
+				console.log(
+					`[speech] cleared ${cleared} Speaking… marker(s) left when the server stopped`
+				)
+		}
+	},
+	{
+		/**
 		 * 🚧 A scene summary left `running` or `review` when the server
 		 * stopped has no run and no review behind it (both live in the
 		 * activity store, in memory): it would read *Summarizing…* or *Ready
@@ -244,7 +267,7 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		// Plugins load after every core startup task, so a plugin sees a fully
-		// bootstrapped core. Inert unless SP_PLUGINS_ENABLED is set.
+		// bootstrapped core. On unless SP_PLUGINS_ENABLED turns it off.
 		name: "plugins",
 		run: async () => {
 			const { bootstrapPlugins } = await import("$lib/server/plugins")

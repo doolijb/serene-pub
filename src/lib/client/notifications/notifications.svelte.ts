@@ -12,6 +12,12 @@
  * Writes are fire-and-forget: the server answers `read` and `dismiss` by
  * pushing the fresh list to every tab of this user, so two tabs agree without
  * either one patching its copy.
+ *
+ * Local rows (M0 U3): a widget's `notify` with `sticky` is raised in the
+ * browser (`raiseLocal`) — raising is never a socket verb. Such a row has a
+ * NEGATIVE id, lives for this tab's visit (a reload loses it), and is merged
+ * ahead of the server's rows in `open` / `cleared`, so every reader works
+ * unchanged. `read` / `dismiss` handle ids < 0 here and send only ids > 0.
  */
 import {
 	declareInterest,
@@ -20,17 +26,26 @@ import {
 import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
 import type {
 	NotificationLevel,
-	NotificationRow
+	NotificationRow,
+	NotificationVars
 } from "$lib/shared/notifications/kinds"
 import type { NotificationsListResponse } from "$lib/shared/sockets/notifications"
 
 const RANK: Record<NotificationLevel, number> = { info: 0, attention: 1, error: 2 }
 
+let nextLocalId = -1
+
 class NotificationsStore {
-	/** Open rows, newest raise first. */
-	open = $state<NotificationRow[]>([])
+	#server = $state<NotificationRow[]>([])
+	#serverCleared = $state<NotificationRow[]>([])
+	#local = $state<NotificationRow[]>([])
+	/** Open rows, newest raise first (local rows ahead of the server's). */
+	open = $derived([...this.#local.filter((r) => !r.clearedAt), ...this.#server])
 	/** Recently cleared rows, newest first (the Activity view's Earlier). */
-	cleared = $state<NotificationRow[]>([])
+	cleared = $derived([
+		...this.#local.filter((r) => r.clearedAt),
+		...this.#serverCleared
+	])
 	/** True once the first list has arrived. */
 	loaded = $state(false)
 
@@ -53,8 +68,8 @@ class NotificationsStore {
 
 	#apply = (data: NotificationsListResponse) => {
 		if (!data) return
-		this.open = data.open ?? []
-		this.cleared = data.cleared ?? []
+		this.#server = data.open ?? []
+		this.#serverCleared = data.cleared ?? []
 		this.loaded = true
 	}
 
@@ -96,10 +111,52 @@ class NotificationsStore {
 		)
 	}
 
+	/**
+	 * Raise a row in this browser only (a widget's sticky notice). An open
+	 * local row with the same `regarding` is replaced by a bumped copy.
+	 */
+	raiseLocal(input: {
+		kind: string
+		regarding: string
+		level: NotificationLevel
+		href: string
+		vars: NotificationVars
+	}): void {
+		const now = new Date().toISOString()
+		const prior = this.#local.find(
+			(r) => r.regarding === input.regarding && !r.clearedAt
+		)
+		if (prior) {
+			this.#local = this.#local.map((r) =>
+				r === prior
+					? { ...r, ...input, lastRaisedAt: now, readAt: null }
+					: r
+			)
+			return
+		}
+		const row: NotificationRow = {
+			id: nextLocalId--,
+			...input,
+			raisedAt: now,
+			lastRaisedAt: now,
+			readAt: null,
+			clearedAt: null,
+			clearedHow: null
+		}
+		this.#local = [row, ...this.#local]
+	}
+
 	/** Mark rows read (a `view`-clearing kind is cleared as viewed). */
 	read(ids: number[]): void {
-		const wanted = ids.filter((id) =>
-			this.open.some((r) => r.id === id && !r.readAt)
+		const local = ids.filter((id) => id < 0)
+		if (local.length) {
+			const now = new Date().toISOString()
+			this.#local = this.#local.map((r) =>
+				local.includes(r.id) && !r.readAt ? { ...r, readAt: now } : r
+			)
+		}
+		const wanted = ids.filter(
+			(id) => id > 0 && this.open.some((r) => r.id === id && !r.readAt)
 		)
 		if (!wanted.length) return
 		typedSocketOrNull()?.emit("notifications:read", { ids: wanted })
@@ -107,8 +164,18 @@ class NotificationsStore {
 
 	/** Clear rows as dismissed. */
 	dismiss(ids: number[]): void {
-		if (!ids.length) return
-		typedSocketOrNull()?.emit("notifications:dismiss", { ids })
+		const local = ids.filter((id) => id < 0)
+		if (local.length) {
+			const now = new Date().toISOString()
+			this.#local = this.#local.map((r) =>
+				local.includes(r.id) && !r.clearedAt
+					? { ...r, clearedAt: now, clearedHow: "dismissed" as const }
+					: r
+			)
+		}
+		const remote = ids.filter((id) => id > 0)
+		if (!remote.length) return
+		typedSocketOrNull()?.emit("notifications:dismiss", { ids: remote })
 	}
 }
 

@@ -84,7 +84,7 @@ import {
 } from "@serene-pub/sdk"
 import { randomUUID } from "node:crypto"
 import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
-import { loreWriteRefusal } from "$lib/server/messages/writes"
+import { loreWriteRefusal, libraryWriteRefusal, pluginLibraryRefusal } from "$lib/server/messages/writes"
 import {
 	checkLoreSources,
 	noteMessagesRead,
@@ -1051,6 +1051,78 @@ function describePromotion(
 }
 
 /**
+ * 🚧 Re-speaking a line (`attach-audio` with `replace`): remove the line's
+ * EARLIER spoken `core:audio` parts on the step and revision the new one lands
+ * on, and the spoken files behind them that nothing else shows.
+ *
+ * A part counts as spoken when its file is spoken media (`meta.spoken`) OR its
+ * file is gone — the retention sweep and "clear spoken audio" delete files only
+ * (lane C, L5), so a part naming a missing file is a dead earlier reading and
+ * is swept away with the rest. A person's own voice note (a file that exists
+ * and is not spoken) is never touched. The new file is never deleted, even when
+ * identical bytes made it the same row as the old one.
+ */
+async function replaceSpokenAudio(
+	db: Db,
+	target: { id: number; parts: Array<{ id: number; type: string; step: number; revision: number; data: unknown }>; activeRevisions?: unknown },
+	newAssetId: number | null
+): Promise<number> {
+	const { and, eq, inArray, sql } = await import("drizzle-orm")
+	const schema = await import("$lib/server/db/schema")
+	const steps = [...new Set(target.parts.map((x) => x.step))]
+	if (!steps.length) return 0
+	const step = Math.max(...steps)
+	const active = (target.activeRevisions ?? {}) as Record<string, number>
+	const revision = active[String(step)] ?? 0
+	const earlier = target.parts.filter(
+		(x) => x.type === "core:audio" && x.step === step && x.revision === revision
+	)
+	if (!earlier.length) return 0
+	const assetOf = (x: { data: unknown }) => {
+		const a = Number((x.data as { assetId?: unknown } | null)?.assetId)
+		return Number.isInteger(a) ? a : null
+	}
+	const assetIds = [...new Set(earlier.map(assetOf).filter((a): a is number => a !== null))]
+	const files = assetIds.length
+		? await db
+				.select({ id: schema.files.id, meta: schema.files.meta })
+				.from(schema.files)
+				.where(inArray(schema.files.id, assetIds))
+		: []
+	const { isSpokenMedia, deleteSpokenFiles } = await import("$lib/server/media/spoken")
+	const present = new Set(files.map((f) => f.id))
+	const spoken = new Set(files.filter((f) => isSpokenMedia(f.meta)).map((f) => f.id))
+	const doomed = earlier.filter((x) => {
+		const a = assetOf(x)
+		return a === null || !present.has(a) || spoken.has(a)
+	})
+	if (!doomed.length) return 0
+	await db.delete(schema.messageParts).where(
+		inArray(
+			schema.messageParts.id,
+			doomed.map((x) => x.id)
+		)
+	)
+	// Their files, unless another part still shows them (a deduped file can
+	// belong to two lines) or the new reading is the same row.
+	for (const a of new Set(doomed.map(assetOf).filter((x): x is number => x !== null))) {
+		if (a === newAssetId || !spoken.has(a)) continue
+		const [still] = await db
+			.select({ id: schema.messageParts.id })
+			.from(schema.messageParts)
+			.where(
+				and(
+					eq(schema.messageParts.type, "core:audio"),
+					sql`(${schema.messageParts.data}->>'assetId') = ${String(a)}`
+				)
+			)
+			.limit(1)
+		if (!still) await deleteSpokenFiles(db, [a])
+	}
+	return doomed.length
+}
+
+/**
  * Media references → the message parts that show them.
  *
  * A reference is a uuid, so the row has to be looked up — and looking it up is
@@ -1929,6 +2001,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	 * never writable again, kept — `merge` off replaces the declared keys
 	 * and leaves those where they are, so no write loses data it could not
 	 * itself have written.
+	 *
+	 * 🚧 `base` (M2a a8) is compare-and-set: the owner's **annex document
+	 * version** the writer read (`session-annex`'s `version`). Under the
+	 * lock, a `base` that is not the stored version writes nothing — the
+	 * result says `stale` and carries the fresh document and its version,
+	 * never a silent overwrite. Every write that moves the document bumps
+	 * the version (`bumpedAnnexVersionsSql`), with or without a `base`.
 	 */
 	const writeAnnexDocument = async (
 		node: NodeRef,
@@ -1937,7 +2016,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		value: Record<string, unknown>,
 		merge: boolean,
 		audienceOf: Record<string, readonly string[]>,
-		declared: ReadonlySet<string>
+		declared: ReadonlySet<string>,
+		base?: number
 	) => {
 		const { canonicalParticipantRef } = await import("@serene-pub/sdk")
 		// Stored in each reference's one spelling, so every reader's
@@ -1950,6 +2030,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		const { ownerVersionOf } = await import("$lib/server/plugins/annexMigrate")
 		const ownerVersion = await ownerVersionOf(db, owner)
 		const { recordAnnexDelta } = await import("$lib/server/sessions/annexChanges")
+		const { ownerDocForPipelines } = await import("$lib/server/sessions/coreAnnex")
+		const { annexVersionOf, bumpedAnnexVersionsSql } = await import("$lib/server/sessions/annexVersions")
 		const annex = await db.transaction(async (tx) => {
 			await tx.execute(
 				sql`select pg_advisory_xact_lock(hashtext('annex'), ${sessionId})`
@@ -1957,7 +2039,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			const [current] = await tx
 				.select({
 					annex: schema.sessions.annex,
-					audiences: schema.sessions.annexAudiences
+					audiences: schema.sessions.annexAudiences,
+					versions: schema.sessions.annexVersions
 				})
 				.from(schema.sessions)
 				.where(eq(schema.sessions.id, sessionId))
@@ -1969,6 +2052,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				!Array.isArray(held[owner])
 					? (held[owner] as Record<string, unknown>)
 					: {}
+			const version = annexVersionOf(current.versions, owner)
+			// A write built on a read the document has since moved past.
+			if (base !== undefined && base !== version)
+				return { previous, next: previous, changed: false, seen: false, stale: true, version }
 			const heldAudiences = (
 				(current.audiences ?? {}) as Record<string, Record<string, string[]>>
 			)[owner] ?? {}
@@ -1988,7 +2075,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				else delete nextAudiences[key]
 			}
 			if (sameJson(previous, next) && Object.hasOwn(held, owner))
-				return { previous, next, changed: false, seen: false }
+				return { previous, next, changed: false, seen: false, stale: false, version }
 			// Whether anybody's view can have moved: a value somebody
 			// may see was written, or one they could see was dropped.
 			// A pipelines-only write — most of them — pushes nothing.
@@ -2011,6 +2098,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				)
 				where ${schema.sessions.id} = ${sessionId}
 			`)
+			await tx.execute(sql`
+				update ${schema.sessions}
+				set ${sql.identifier("annex_versions")} = ${bumpedAnnexVersionsSql(schema.sessions.annexVersions, owner)}
+				where ${schema.sessions.id} = ${sessionId}
+			`)
 			const heldAll = (current.audiences ?? {}) as Record<string, unknown>
 			await recordAnnexDelta(tx as unknown as Db, {
 				sessionId,
@@ -2024,12 +2116,26 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				after: { document: next, audiences: nextAudiences },
 				runId: scope.runId ?? null
 			})
-			return { previous, next, changed: true, seen }
+			return { previous, next, changed: true, seen, stale: false, version: version + 1 }
 		})
 		if (annex === null)
 			throw new HostScopeError(
 				`${node.key}: session ${sessionId} no longer exists`
 			)
+		// 🚧 Stale (M2a a8): nothing written, nothing emitted — the fresh
+		// document and its version go back, for the spec to build on again.
+		if (annex.stale)
+			return {
+				written: false,
+				stale: true,
+				sessionId,
+				owner,
+				annex: ownerDocForPipelines(owner, annex.previous),
+				version: annex.version,
+				notes: [
+					`not written: the annex of '${owner}' moved since this run read it (version ${base}, now ${annex.version}) — the fresh document is on the annex port`
+				]
+			}
 		// An unchanged write wrote nothing: no artifact, no event.
 		if (annex.changed) record(node, "session", sessionId, "updated")
 		// `annex-changed` (R30/R45): the one event a pipeline's own
@@ -2067,8 +2173,132 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			written: annex.changed,
 			sessionId,
 			owner,
-			annex: annex.next
+			annex: ownerDocForPipelines(owner, annex.next),
+			version: annex.version
 		}
+	}
+
+	/**
+	 * 🚧 One owner's document written into the **lorebook annex** (M0,
+	 * SHAPES L9) — `writeAnnexDocument`'s twin at book scope, over the same
+	 * declaration-held write. `at` is the host's scope: a session routes like
+	 * every lore write (`loreWriteRefusal`, then `sessionLoreWriteTo` — the
+	 * attached book when writable, else the session's own book), and its
+	 * change is anchored to the turn and filed as an imprint (subject
+	 * `annex`), retractable and settled with the stretch. No session but a
+	 * lorebook in scope (a book-level run): that book, lasting at once — no
+	 * anchor, no imprint.
+	 */
+	const writeLorebookAnnexDocument = async (
+		node: NodeRef,
+		at: Pick<HostScope, "sessionId" | "lorebookId">,
+		owner: string,
+		value: Record<string, unknown>,
+		merge: boolean,
+		audienceOf: Record<string, readonly string[]>,
+		declared: ReadonlySet<string>,
+		/** 🚧 (M2b) Compare-and-set on the owner's annex document version on the book (`lorebook-annex`'s `version`). */
+		base?: number
+	) => {
+		const sessionId = at.sessionId
+		if (sessionId === undefined && at.lorebookId == null)
+			throw new HostScopeError(
+				"This step writes a lorebook's annex: run it in a session or on a lorebook."
+			)
+		let lorebookId: number
+		let anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null = null
+		if (sessionId !== undefined) {
+			const noLore = await loreWriteRefusal(db, sessionId)
+			if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
+			lorebookId = (await sessionLoreWriteTo(db, sessionId, turnMessageId)).lorebookId
+			anchor = await imprintAnchor(sessionId)
+		} else lorebookId = at.lorebookId!
+		const { writeLorebookAnnex, pushLorebookAnnexViews } = await import("$lib/server/lorebooks/annex")
+		const done = await writeLorebookAnnex(db, {
+			lorebookId,
+			owner,
+			value,
+			merge,
+			audienceOf,
+			declared,
+			anchor,
+			...(base !== undefined ? { base } : {})
+		})
+		// 🚧 (M2b) Stale: nothing written, nothing emitted — the fresh document and its version go back.
+		if (done.stale)
+			return {
+				written: false,
+				stale: true,
+				lorebookId,
+				owner,
+				annex: done.annex,
+				version: done.version,
+				notes: [
+					`not written: the lorebook annex of '${owner}' moved since this run read it (version ${base}, now ${done.version}) — the fresh document is on the annex port`
+				]
+			}
+		// An unchanged write wrote nothing: no artifact, no event.
+		if (done.changed) {
+			if (sessionId !== undefined) record(node, "session", sessionId, "updated")
+			// After the transaction (the emitter's plugin fan-out must never run
+			// inside one), and only when a value moved.
+			if (sessionId !== undefined)
+				await emit(
+					"core:event/lorebook-annex-changed@1",
+					{ sessionId, lorebookId, owner, keys: done.keys },
+					{ kind: "run" },
+					{ asChild: true }
+				)
+			else {
+				try {
+					const { pluginEvents } = await import("$lib/server/plugins/eventHost")
+					const { getManager } = await import("$lib/server/plugins")
+					const now = Date.now()
+					await pluginEvents().notify(
+						getManager(),
+						"core:event/lorebook-annex-changed@1",
+						{
+							event: "core:event/lorebook-annex-changed@1",
+							lorebookId,
+							at: now,
+							owner,
+							keys: done.keys
+						},
+						{ nowMs: now }
+					)
+				} catch (err) {
+					console.warn(`[lorebookAnnex] plugin fan-out for lorebook ${lorebookId} failed:`, err)
+				}
+			}
+			// Every member's own view, re-sent: of this session, or of every
+			// session that reads this book (attached to it, or its own book).
+			if (scope.io) {
+				const readers =
+					sessionId !== undefined
+						? [sessionId]
+						: [
+								...(
+									await db
+										.select({ id: schema.sessions.id })
+										.from(schema.sessions)
+										.where(eq(schema.sessions.lorebookId, lorebookId))
+								).map((r) => r.id),
+								...(
+									await db
+										.select({ id: schema.lorebooks.sessionId })
+										.from(schema.lorebooks)
+										.where(eq(schema.lorebooks.id, lorebookId))
+								)
+									.map((r) => r.id)
+									.filter((id): id is number => id != null)
+							]
+				for (const id of new Set(readers))
+					await pushLorebookAnnexViews(db, scope.io, id).catch((err) =>
+						console.warn(`[lorebookAnnex] the view push for session ${id} failed:`, err)
+					)
+			}
+		}
+		return { written: done.changed, lorebookId, owner, annex: done.annex, version: done.version }
 	}
 
 	/**
@@ -2088,6 +2318,124 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	) => {
 		if (!scope.artifacts || typeof entityId !== "number") return
 		scope.artifacts.push({ kind, entityId, action, nodeKey: node.key })
+	}
+
+	/**
+	 * 🚧 (M2c, path B) The four **library** outlets (`create-character`,
+	 * `update-character`, `create-lorebook`, `attach-lorebook`): the genre must
+	 * declare the write (`writes.library`, absent is off), the ACTING PERSON
+	 * (`actingPersonFor` — a press or a send by `scope.userId`, a routine by
+	 * the session's owner) must be allowed it (`personMay`), and their library
+	 * write mode decides whether it lands (Full, an `applied` row), waits for
+	 * their Accept (Review, a `pending` row, `main` = `{ proposed }`) or halts
+	 * (Off). `library/writes.ts` holds the writers, the undo and the redo.
+	 */
+	const libraryOutlet = async (
+		node: NodeRef,
+		op: import("$lib/server/library/writes").LibraryOp,
+		p: Record<string, any>
+	): Promise<Record<string, unknown>> => {
+		const lib = await import("$lib/server/library/writes")
+		const sessionId = scope.sessionId
+		if (sessionId === undefined)
+			throw new HostScopeError(
+				`${node.key} has no session to act in — the run was started without a session scope`
+			)
+		const input: Record<string, unknown> = {}
+		let target = sessionId
+		if (op === "create-character") input.card = p.card
+		else if (op === "update-character") {
+			input.characterId = p.characterId
+			input.changes = p.changes
+		} else if (op === "create-lorebook") input.lorebook = p.lorebook
+		else {
+			input.lorebookId = p.lorebookId
+			if (p.sessionId != null && p.sessionId !== "") {
+				const n = Number(p.sessionId)
+				if (!Number.isSafeInteger(n) || n <= 0)
+					return { halt: `${node.key}: sessionId names no session.` }
+				target = n
+			}
+			input.sessionId = target
+		}
+		const needs: import("$lib/server/messages/writes").LibraryNeed[] =
+			op === "create-character" || op === "update-character"
+				? ["characters"]
+				: op === "create-lorebook"
+					? ["lorebooks"]
+					: target === sessionId
+						? ["lorebooks-into-sessions"]
+						: ["lorebooks-into-sessions", "sessions"]
+		// 🚧 (ruling b1') a plugin's pipeline, or a plugin genre's session, writes nothing to anyone's library yet
+		const pluginNo = await pluginLibraryRefusal(db, sessionId, scope.ownerPluginId)
+		if (pluginNo) throw new HostScopeError(`${node.key}: ${pluginNo}`)
+		for (const need of needs) {
+			const no = await libraryWriteRefusal(db, sessionId, need)
+			if (no) throw new HostScopeError(`${node.key}: ${no}`)
+		}
+		const { actingPersonFor } = await import("$lib/server/auth/actingPerson")
+		const person = await actingPersonFor(
+			db,
+			scope.userId != null
+				? { via: "press", userId: scope.userId }
+				: { via: "routine", sessionId }
+		)
+		if (!person) return { halt: `${node.key}: ${lib.NOBODY_ACTING_SENTENCE}` }
+		const mode = await lib.libraryWriteModeFor(db, person.userId)
+		const ctx = { sessionId, updatedBy: `run:${scope.runId ?? "unknown"}` }
+		const made = (
+			applied: import("$lib/server/library/writes").LibraryApplied
+		): Record<string, unknown> => ({
+			written: true,
+			label: applied.label,
+			...(applied.result.characterId !== undefined ? { characterId: applied.result.characterId } : {}),
+			...(applied.result.lorebookId !== undefined ? { lorebookId: applied.result.lorebookId } : {})
+		})
+		try {
+			// 🚧 Off: nothing is made, and the session says why — a skipped line beside the reply, as a Time passes
+			// with no clock writes one. Not a halt: by now the reply has settled, and a halted run's reason reaches
+			// nobody but the Runs list (M2c re-proof).
+			if (mode === "off") {
+				const { label } = await lib.describeLibraryChange(db, person, op, input)
+				await lib.fileLibraryChange(
+					db,
+					ctx,
+					{ kind: "library", op, input, by: person.userId, label, skipped: lib.LIBRARY_OFF_SENTENCE },
+					"skipped"
+				)
+				return { written: false, skipped: lib.LIBRARY_OFF_SENTENCE }
+			}
+			if (mode === "review") {
+				const { label } = await lib.describeLibraryChange(db, person, op, input)
+				const proposed = await lib.fileLibraryChange(
+					db,
+					ctx,
+					{ kind: "library", op, input, by: person.userId, label },
+					"pending"
+				)
+				return { written: false, proposed }
+			}
+			const applied = await lib.applyLibraryChange(db, person, op, input)
+			await lib.fileLibraryChange(
+				db,
+				ctx,
+				{ kind: "library", op, input, by: person.userId, ...applied },
+				"applied"
+			)
+			const kind: RunArtifact["kind"] =
+				op === "create-character" || op === "update-character" ? "character" : "lorebook"
+			const id = applied.result.characterId ?? applied.result.lorebookId
+			record(
+				node,
+				kind,
+				id,
+				op === "update-character" ? "updated" : op === "attach-lorebook" ? "attached" : "created"
+			)
+			return made(applied)
+		} catch (e) {
+			if (e instanceof lib.LibraryWriteRefusal) return { halt: `${node.key}: ${e.message}` }
+			throw e
+		}
 	}
 
 	/**
@@ -2763,11 +3111,28 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * that kept a partial still reads: those words were shown.
 					 */
 					const { notAFailedReplySql: noFailedReplies } = await import("$lib/server/messages/failedReply")
+					/**
+					 * 🚧 A read over ALL channels leaves out the channels a
+					 * genre declares for the people named (`audience:
+					 * { participants }`, M0 L6); a read that names one
+					 * reads it. Owner-only channels are unchanged (D6).
+					 */
+					let outsideAudience: SQL | undefined
+					if (isAllChannels(channel)) {
+						const { participantAudienceSlugsOf, sessionLaneFacts } = await import("$lib/server/channels/lanes")
+						const facts = await sessionLaneFacts(db, sessionId)
+						const slugs = facts ? participantAudienceSlugsOf(facts.shape) : []
+						if (slugs.length)
+							outsideAudience = and(
+								...slugs.map((slug) => sql`NOT (${channelPrefixWhere(schema.sessionMessages.channel, slug)})`)
+							)
+					}
 					const windowWhere = and(
 						eq(schema.sessionMessages.sessionId, sessionId),
 						eq(schema.sessionMessages.isHidden, false),
 						eq(schema.sessionMessages.isGenerating, false),
 						channelWhere(schema.sessionMessages.channel, channel),
+						outsideAudience,
 						noTableLines,
 						noFailedReplies
 					)
@@ -2946,9 +3311,26 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return await resolveSessionSettings(db, sessionId)
 				}
 
+				case "plugin_storage": {
+					// 🚧 (M2a) One file of the running plugin's own storage. The
+					// owner and the person are the run's, never a port's.
+					const { readPluginStorage } = await import("./pluginStorageRead")
+					return await readPluginStorage(db, {
+						ownerPluginId: scope.ownerPluginId,
+						userId: scope.userId,
+						scope: q.scope,
+						as: q.as,
+						path: q.path
+					})
+				}
+
+				case "session_annex_version":
 				case "session_annex": {
 					/**
-					 * One owner's annex document (PLAN-turn-order §4.3).
+					 * One owner's annex document (PLAN-turn-order §4.3) — or,
+					 * read as `session_annex_version` (🚧 M2a a8), that owner's
+					 * annex document version (0 for a refused owner), which a
+					 * `set-session-annex` takes as its `base`.
 					 *
 					 * The owner is the running spec's own namespace unless
 					 * the node's params name another AND `sharedAnnex` is on
@@ -2962,7 +3344,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const sessionId = q.sessionId ?? scope.sessionId
 					assertScoped(node, q.sessionId, scope.sessionId)
 					if (sessionId === undefined) return null
-					if (q.view === "template") {
+					if (q.view === "template" && table === "session_annex") {
 						/**
 						 * The template view (typed templates P6, owner ruling
 						 * Q1): every DECLARED key of every owner in scope —
@@ -3002,16 +3384,21 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								? named
 								: null
 							: own
-					if (owner === null) return {}
+					if (owner === null) return table === "session_annex_version" ? 0 : {}
 					const [row] = await db
 						.select({
 							annex: schema.sessions.annex,
-							audiences: schema.sessions.annexAudiences
+							audiences: schema.sessions.annexAudiences,
+							versions: schema.sessions.annexVersions
 						})
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
 					if (!row) return null
+					if (table === "session_annex_version") {
+						const { annexVersionOf } = await import("$lib/server/sessions/annexVersions")
+						return annexVersionOf(row.versions, owner)
+					}
 					const annex = (row.annex ?? {}) as Record<string, unknown>
 					const doc = annex[owner]
 					const whole =
@@ -3042,6 +3429,61 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							aiHolds(refs, speaker as never)
 						)[owner] ?? {}
 					)
+				}
+
+				case "lorebook_annex_version":
+				case "lorebook_annex": {
+					/**
+					 * 🚧 One owner's document in the **lorebook annex** (M0,
+					 * SHAPES L9). The owner resolves exactly as the session
+					 * annex's does (own namespace unless the params name another
+					 * AND `sharedAnnex`; a refusal answers `{}`). A session reads
+					 * the union of the books it reads; a book-level run reads the
+					 * book its scope grants.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					const params = ((q.params ?? q) ?? {}) as {
+						owner?: unknown
+						sharedAnnex?: unknown
+					}
+					const own = annexOwnerOf(scope.specId)
+					const named =
+						typeof params.owner === "string" && params.owner.trim()
+							? params.owner.trim()
+							: null
+					const owner =
+						named && named !== own
+							? params.sharedAnnex === true
+								? named
+								: null
+							: own
+					if (owner === null) return table === "lorebook_annex_version" ? 0 : {}
+					// 🚧 (M2b) The version on the book a write from this run would land on.
+					if (table === "lorebook_annex_version") {
+						const { lorebookAnnexVersion } = await import("$lib/server/lorebooks/annex")
+						if (sessionId !== undefined) {
+							const { loreWriteBookIdOf } = await import("$lib/server/lorebooks/ownBook")
+							const id = await loreWriteBookIdOf(db, sessionId)
+							return id == null ? 0 : await lorebookAnnexVersion(db, id, owner)
+						}
+						const { lorebookId } = await lorebookInScope(db, node, scope, q)
+						return lorebookId === null ? null : await lorebookAnnexVersion(db, lorebookId, owner)
+					}
+					if (sessionId !== undefined) {
+						const [row] = await db
+							.select({ id: schema.sessions.id })
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, sessionId))
+							.limit(1)
+						if (!row) return null
+						const { sessionLorebookAnnex } = await import("$lib/server/lorebooks/annex")
+						return await sessionLorebookAnnex(db, sessionId, owner)
+					}
+					const { lorebookId } = await lorebookInScope(db, node, scope, q)
+					if (lorebookId === null) return null
+					const { bookLorebookAnnex } = await import("$lib/server/lorebooks/annex")
+					return await bookLorebookAnnex(db, lorebookId, owner)
 				}
 
 				case "history_attachments": {
@@ -4979,11 +5421,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 */
 					const sessionId = q.sessionId ?? scope.sessionId
 					assertScoped(node, q.sessionId, scope.sessionId)
-					if (sessionId === undefined) return { rows: [], at: null }
+					if (sessionId === undefined) return { rows: [], at: null, placements: [] }
 					const { presencesOnReading } = await import(
 						"$lib/server/state/presencesOnReading"
 					)
-					return await presencesOnReading(db, sessionId)
+					// 🚧 `atHour` (M0, SHAPES L3): a clock target; unwired, the present hour.
+					return await presencesOnReading(db, sessionId, q.atHour ?? null)
 				}
 
 				case "likeness_images": {
@@ -4997,6 +5440,21 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						"$lib/server/pipelines/runtime/illustrateScene"
 					)
 					return await likenessImagesFor(db, sessionId)
+				}
+
+				case "message_line": {
+					// 🚧 One row as a line to speak (`core:query/message-line@1`,
+					// speech ★1): its words, speaker and recorded sprite label.
+					// This session's only; hidden or still being written reads
+					// as null (`pipelines/speech/messageLine.ts`).
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
+					if (typeof q.messageId !== "number" || !Number.isInteger(q.messageId)) return null
+					const { messageLineFor } = await import(
+						"$lib/server/pipelines/speech/messageLine"
+					)
+					return await messageLineFor(db, sessionId, q.messageId)
 				}
 
 				case "graph_entry_links": {
@@ -6286,6 +6744,62 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									}
 								: undefined
 					}))
+				}
+
+				/**
+				 * 🚧 Speak (speech build, seam S3): a line's speech cues in, one
+				 * stored audio file out. Like generate-image the binding hands
+				 * over ids and gets a media REFERENCE back — never the
+				 * connection, never its key, never bytes. The connection the
+				 * line was spoken on rides on the REQUEST (`speakPlan`), not on
+				 * a port: plugins are blind to connections (R53).
+				 *
+				 * `streaming` is accepted and treated as off (A5). A failure
+				 * throws a `SpeechDispatchError`; the binding turns it into
+				 * "nothing spoken" so a delivered reply is never failed by its
+				 * read-aloud.
+				 */
+				case "core:oracle/speak": {
+					const { dispatchSpeech } = await import(
+						"$lib/server/pipelines/runtime/dispatchSpeech"
+					)
+					const speakParams = (p.params ?? {}) as Record<string, unknown>
+					return await line.hold(() =>
+						dispatchSpeech(db, {
+							cues: Array.isArray(p.cues) ? p.cues : null,
+							text: typeof p.text === "string" ? p.text : null,
+							speaker:
+								typeof p.speaker === "string" && p.speaker.trim()
+									? p.speaker
+									: null,
+							language:
+								typeof p.language === "string" && p.language.trim()
+									? p.language
+									: null,
+							template: p.template ?? null,
+							prompts: p.prompts ?? null,
+							variables: p.variables ?? null,
+							connectionId: refId(p.connection),
+							connectionModelId: connectionDescriptorModelId(p.connection),
+							samplingId: refId(p.sampling),
+							gapMs:
+								typeof speakParams.gapMs === "number" ? speakParams.gapMs : null,
+							streaming: speakParams.streaming,
+							sessionId: scope.sessionId ?? null,
+							userId: scope.userId ?? null,
+							runId: scope.runId,
+							nodeKey: node.key,
+							artifacts: scope.artifacts,
+							signal: line.signal,
+							// The plan, onto the request the receipt already holds,
+							// before the first call: a speak that fails still says
+							// which connection and voices it meant to use.
+							onPlan: (plan) => {
+								if (payload && typeof payload === "object")
+									(payload as Record<string, unknown>).speakPlan = plan
+							}
+						})
+					)
 				}
 
 				case "core:oracle/run-tool": {
@@ -7771,6 +8285,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					})
 					if (refusals.length)
 						throw new HostScopeError(`${node.key}: refused — ${refusals.join("; ")}`)
+					// 🚧 `base` (M2a a8): the annex document version the spec
+					// read — compare-and-set; absent writes as before.
+					const base = p.base
+					if (
+						base !== undefined &&
+						base !== null &&
+						!(typeof base === "number" && Number.isInteger(base) && base >= 0)
+					)
+						throw new HostScopeError(
+							`${node.key}: base is the annex document version a session-annex read gave (a whole number) — ${JSON.stringify(base)} is not one`
+						)
 					return await writeAnnexDocument(
 						node,
 						sessionId,
@@ -7778,7 +8303,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						value,
 						params.merge !== false,
 						Object.fromEntries(fields.map((f) => [f.key, f.see])),
-						new Set(fields.map((f) => f.key))
+						new Set(fields.map((f) => f.key)),
+						typeof base === "number" ? base : undefined
 					)
 				}
 
@@ -8061,15 +8587,152 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { dataAudienceFindings } = await import("@serene-pub/sdk")
 					const audienceFault = dataAudienceFindings(field.decl.see)
 					if (audienceFault) throw new HostScopeError(`${node.key}: refused — ${audienceFault}`)
-					const { annexFieldsOfOwner } = await import("$lib/server/sessions/annexFields")
+					const { annexFieldsOfOwner, annexScopeOf } = await import("$lib/server/sessions/annexFields")
+					// 🚧 A press on a lorebook-scope field writes the lorebook annex (M0).
+					const fieldScope = annexScopeOf(field.decl)
 					const ownerFields = await annexFieldsOfOwner(
 						db,
 						session?.genreId ?? "core:genre/chat",
-						field.owner
+						field.owner,
+						fieldScope
 					)
+					if (fieldScope === "lorebook")
+						return await writeLorebookAnnexDocument(
+							node,
+							scope,
+							field.owner,
+							{ [field.decl.key]: payload.value },
+							true,
+							{ [field.decl.key]: field.decl.see },
+							new Set(ownerFields.map((f) => f.key))
+						)
 					return await writeAnnexDocument(
 						node,
 						sessionId,
+						field.owner,
+						{ [field.decl.key]: payload.value },
+						true,
+						{ [field.decl.key]: field.decl.see },
+						new Set(ownerFields.map((f) => f.key))
+					)
+				}
+
+				case "core:outlet/set-lorebook-annex": {
+					/**
+					 * 🚧 The **lorebook annex** write (M0, SHAPES L9):
+					 * `set-session-annex`'s twin at book scope — one owner's
+					 * document, held to the owner's declaration of fields
+					 * declared `scope: 'lorebook'`, under the declared
+					 * audience. From a session it is an anchored, retractable
+					 * change routed like every lore write; from a book-level
+					 * run it is lasting at once.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined && scope.lorebookId == null)
+						throw new HostScopeError(
+							"This step writes a lorebook's annex: run it in a session or on a lorebook."
+						)
+					const params = (p.params ?? {}) as {
+						owner?: unknown
+						merge?: unknown
+						sharedAnnex?: unknown
+					}
+					const own = annexOwnerOf(scope.specId)
+					const named =
+						typeof params.owner === "string" && params.owner.trim()
+							? params.owner.trim()
+							: null
+					if (named && named !== own && params.sharedAnnex !== true)
+						return {
+							written: false,
+							...(sessionId !== undefined ? { sessionId } : {}),
+							notes: [
+								`refused: '${own}' may not write the lorebook annex of '${named}' — set 'Write another owner' on this node to allow it`
+							]
+						}
+					const owner = named ?? own
+					const value =
+						p.value && typeof p.value === "object" && !Array.isArray(p.value)
+							? (p.value as Record<string, unknown>)
+							: {}
+					const { annexWriteRefusals } = await import("@serene-pub/sdk")
+					const { annexFieldsOfOwner, sessionGenreOf } = await import(
+						"$lib/server/sessions/annexFields"
+					)
+					const genreId = sessionId !== undefined ? await sessionGenreOf(db, sessionId) : "core:genre/chat"
+					const fields = await annexFieldsOfOwner(db, genreId, owner, "lorebook")
+					const refusals = annexWriteRefusals(fields, {
+						owner,
+						keys: Object.keys(value),
+						genre: genreId,
+						values: value
+					})
+					if (refusals.length)
+						throw new HostScopeError(`${node.key}: refused — ${refusals.join("; ")}`)
+					// 🚧 (M2b) `base`: the annex document version the spec read — compare-and-set; absent writes as before.
+					const base = p.base
+					if (
+						base !== undefined &&
+						base !== null &&
+						!(typeof base === "number" && Number.isInteger(base) && base >= 0)
+					)
+						throw new HostScopeError(
+							`${node.key}: base is the annex document version a lorebook-annex read gave (a whole number) — ${JSON.stringify(base)} is not one`
+						)
+					return await writeLorebookAnnexDocument(
+						node,
+						scope,
+						owner,
+						value,
+						params.merge !== false,
+						Object.fromEntries(fields.map((f) => [f.key, f.see])),
+						new Set(fields.map((f) => f.key)),
+						typeof base === "number" ? base : undefined
+					)
+				}
+
+				case "core:outlet/set-lorebook-annex-field": {
+					/**
+					 * 🚧 A lorebook-annex field's write (M0): `{ field,
+					 * value }` judged again here off the declaration, as
+					 * `set-annex-field` does — for a field declared
+					 * `scope: 'lorebook'`. The owner is the declaring package.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined && scope.lorebookId == null)
+						throw new HostScopeError(
+							"This step writes a lorebook's annex: run it in a session or on a lorebook."
+						)
+					const payload = (p.payload ?? {}) as { field?: unknown; value?: unknown }
+					const { annexFieldValueRefusal, parseAnnexFieldAction, dataAudienceFindings } = await import(
+						"@serene-pub/sdk"
+					)
+					const target = parseAnnexFieldAction(payload.field)
+					if (!target)
+						throw new HostScopeError(
+							`${node.key}: refused — '${String(payload.field)}' is not an annex field's identity (<owner>:annex#<key>)`
+						)
+					const { annexFieldFor, annexFieldsOfOwner, annexScopeOf, sessionGenreOf } = await import(
+						"$lib/server/sessions/annexFields"
+					)
+					const genreId = sessionId !== undefined ? await sessionGenreOf(db, sessionId) : "core:genre/chat"
+					const field = await annexFieldFor(db, genreId, String(payload.field))
+					if (!field || annexScopeOf(field.decl) !== "lorebook")
+						throw new HostScopeError(
+							`${node.key}: refused — '${target.key}' is not a lorebook annex field '${target.owner}' declares for this session`
+						)
+					if (!field.decl.act?.length)
+						throw new HostScopeError(
+							`${node.key}: refused — '${target.key}' is set by '${target.owner}''s pipelines only`
+						)
+					const fault = annexFieldValueRefusal(field.decl, payload)
+					if (fault) throw new HostScopeError(`${node.key}: refused — ${fault}`)
+					const audienceFault = dataAudienceFindings(field.decl.see)
+					if (audienceFault) throw new HostScopeError(`${node.key}: refused — ${audienceFault}`)
+					const ownerFields = await annexFieldsOfOwner(db, genreId, field.owner, "lorebook")
+					return await writeLorebookAnnexDocument(
+						node,
+						scope,
 						field.owner,
 						{ [field.decl.key]: payload.value },
 						true,
@@ -8259,6 +8922,38 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key} has no session whose clock to advance — the run was started without a session scope`
 						)
 					const params = (p.params ?? {}) as { by?: unknown; unit?: unknown }
+					const hasTo = p.to !== undefined && p.to !== null
+					if (hasTo && p.by !== undefined && p.by !== null)
+						throw new HostScopeError(
+							`${node.key}: say how far to move the clock (by) or the moment to move it to (to), not both.`
+						)
+					// 🚧 `to` (M0, lane T1): an absolute moment of the
+					// day. A malformed target is the spec's mistake and halts
+					// even under `onRefusal: 'skip'`; a string is malformed.
+					let target: import("@serene-pub/contracts").ClockTargetV1 | null = null
+					if (hasTo) {
+						const t = p.to as Record<string, unknown> | null
+						const ok =
+							typeof t === "object" &&
+							t !== null &&
+							!Array.isArray(t) &&
+							Number.isInteger(t.hour) &&
+							(t.hour as number) >= 0 &&
+							(t.hour as number) <= 23 &&
+							(t.minute === undefined ||
+								(Number.isInteger(t.minute) &&
+									(t.minute as number) >= 0 &&
+									(t.minute as number) <= 59)) &&
+							(t.day === undefined ||
+								t.day === "today" ||
+								t.day === "tomorrow" ||
+								t.day === "next")
+						if (!ok)
+							throw new HostScopeError(
+								`${node.key}: to takes { hour: 0–23, minute?: 0–59, day?: 'today' | 'tomorrow' | 'next' }.`
+							)
+						target = t as unknown as import("@serene-pub/contracts").ClockTargetV1
+					}
 					const by = p.by !== undefined && p.by !== null ? p.by : (params.by ?? 1)
 					const unit =
 						typeof p.unit === "string" && p.unit.trim()
@@ -8280,7 +8975,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key}: onRefusal takes 'halt' or 'skip', not '${String(p.onRefusal)}'`
 						)
 					const updatedBy = `run:${scope.runId ?? "unknown"}`
-					const { advanceSessionStoryClock, StoryClockRefusal } = await import(
+					const { advanceSessionStoryClock, advanceSessionStoryClockTo, StoryClockRefusal } = await import(
 						"$lib/server/state/storyTime"
 					)
 					const step = {
@@ -8291,10 +8986,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					try {
 						moved = await db.transaction(async (tx) => {
 							const t = tx as unknown as Db
-							const done = await advanceSessionStoryClock(t, sessionId, step.by, step.unit)
+							const done = target
+								? await advanceSessionStoryClockTo(t, sessionId, target)
+								: await advanceSessionStoryClock(t, sessionId, step.by, step.unit)
+							// 🚧 A `to` move that did not move writes no ledger row.
+							if (target && (done as unknown as { by: number }).by === 0) return done
 							await recordClockMove(t, {
 								sessionId,
-								...step,
+								...(target
+									? { by: (done as unknown as { by: number }).by, unit: "minutes" as const }
+									: step),
 								cause,
 								updatedBy,
 								from: done.from,
@@ -8310,9 +9011,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						// ledger and on the receipt, and the run finishes. A
 						// malformed step is the spec's mistake and still halts.
 						const { clockStepRefusal } = await import("@serene-pub/sdk")
-						if (onRefusal !== "skip" || clockStepRefusal(step) !== null)
+						if (onRefusal !== "skip" || (!target && clockStepRefusal(step) !== null))
 							throw new HostScopeError(`${node.key}: ${e.message}`)
 						const skipped = await clockSkipReason(db, sessionId, e.message)
+						// 🚧 A refused `to` under 'skip' moves nothing and leaves no
+						// ledger row: it reports `moved: 0` and the sentence.
+						if (target) return { id: sessionId, sessionId, clock: null, label: "", skipped, moved: 0 }
 						await recordClockMove(db, { sessionId, ...step, cause, updatedBy, skipped })
 						record(node, "session", sessionId, "updated")
 						if (scope.io)
@@ -8321,6 +9025,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							} satisfies Sockets.State.Changed.Response)
 						return { id: sessionId, sessionId, clock: null, label: "", skipped }
 					}
+					// 🚧 A `to` move that stood where it was: no row, no events.
+					if (target && (moved as unknown as { by: number }).by === 0)
+						return { id: sessionId, sessionId, clock: moved.clock, label: moved.label, skipped: "", moved: 0 }
 					record(node, "session", sessionId, "updated")
 					// 🚧 A **time action** (live scenes §4, §15 G4): the clock
 					// moved on a person's press or the keeper's trusted move,
@@ -8364,7 +9071,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 						broadcastSessionRow(scope.io, sessionId)
 					}
-					return { id: sessionId, sessionId, clock: moved.clock, label: moved.label, skipped: "" }
+					return {
+						id: sessionId,
+						sessionId,
+						clock: moved.clock,
+						label: moved.label,
+						skipped: "",
+						...(target ? { moved: (moved as unknown as { by: number }).by } : {})
+					}
 				}
 
 				case "core:outlet/set-backdrop": {
@@ -8964,6 +9678,57 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return { id: created.id, sessionId: created.id }
 				}
 
+				// 🚧 Move the session's rules to another version of their ruleset
+				// (M0, lane T4): built-in, owner-only; a refusal is a halt.
+				case "core:outlet/convert-ruleset": {
+					assertBuiltInSpec(node)
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to convert — the run was started without a session scope`
+						)
+					const to = typeof p.to === "string" ? p.to.trim() : ""
+					{
+						const { sessionAccessFor } = await import(
+							"$lib/server/messages/permissions"
+						)
+						const access =
+							scope.userId != null
+								? await sessionAccessFor(db, sessionId, scope.userId)
+								: null
+						if (!access?.isOwner)
+							return { halt: "Only the session's owner can change its rules." }
+					}
+					const { convertSessionRuleset } = await import(
+						"$lib/server/sessions/convertRuleset"
+					)
+					const { StateRefusal } = await import("$lib/server/state/write")
+					let converted
+					try {
+						converted = await convertSessionRuleset(db, {
+							sessionId,
+							to,
+							userId: scope.userId as number
+						})
+					} catch (e) {
+						if (e instanceof StateRefusal) return { halt: e.message }
+						throw e
+					}
+					record(node, "session", sessionId, "updated")
+					await emit(
+						"core:event/ruleset-converted@1",
+						{
+							sessionId,
+							rulesetId: converted.rulesetId,
+							from: converted.from,
+							to: converted.to,
+							slots: converted.slots
+						},
+						{ kind: "edit" }
+					)
+					return { id: sessionId, sessionId }
+				}
+
 				// ── The form's answer (R-15 *Forms*; U5d, 2026-09-17) ──────
 				//
 				// Commits an oracle's answer to a form **exactly as a click
@@ -9164,6 +9929,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								? (targetRef as { ids?: { id?: unknown } }).ids?.id
 								: targetRef
 						)
+					// 🚧 Speech: an `audio` wired to nothing (the line had nothing to
+					// speak, or speaking it failed and the step answered null) writes
+					// nothing and is no failure — `written: false`, so no
+					// `message-updated` is caused. Image attaches keep their rule.
+					if (
+						node.definitionId.includes("attach-audio") &&
+						(p.audio === null || p.audio === undefined) &&
+						typeof p.uuid !== "string" &&
+						typeof p.data !== "string"
+					)
+						return { id: messageId, sessionId: scope.sessionId, written: false }
 					if (messageId === null)
 						throw new HostScopeError(
 							`${node.key} was given no message id to attach to — wire 'target' from the ` +
@@ -9208,11 +9984,48 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							throw new HostScopeError(
 								`${node.key}: no media ${uuid} to attach`
 							)
+						// 🚧 Re-speaking: the earlier spoken part(s) go first.
+						const swapped =
+							!isImage && p.params?.replace === true
+								? await replaceSpokenAudio(
+										db,
+										target,
+										typeof found.data.assetId === "number"
+											? found.data.assetId
+											: null
+									)
+								: 0
 						await appendParts(db, messageId, [found as any])
 						// The file already existed — this run attached it — and
 						// the message it landed on changed.
 						record(node, "file", found.data.assetId, "attached")
 						record(node, "message", messageId, "updated")
+						if (!isImage) {
+							// 🚧 S6: the line's `spoken` record, per swipe. No `meta`
+							// writes the part alone — except that replacing audio with
+							// none clears the record it would otherwise contradict.
+							const spokenMeta =
+								p.meta && typeof p.meta === "object" && "cueMap" in p.meta
+									? (p.meta as import("@serene-pub/sdk").SpokenMeta)
+									: null
+							if (spokenMeta || swapped) {
+								const { nextSpokenMetadata } = await import(
+									"$lib/server/pipelines/runtime/dispatchSpeech"
+								)
+								const { updateLegacy } = await import("$lib/server/messages/store")
+								const current = await legacyMessage(db, messageId)
+								if (current)
+									await updateLegacy(db, messageId, {
+										metadata: nextSpokenMetadata(
+											current.metadata as Record<string, any> | null,
+											spokenMeta
+										)
+									})
+							}
+							// Parts joined the row: send it with them, so the player
+							// appears without a reload.
+							await announceWithParts(messageId)
+						}
 						// The write-result's `id` is the MESSAGE row on both
 						// paths (ruled at the U6 review): it is what a later
 						// `target: $.attach.main` chains to. The asset rides
@@ -9279,6 +10092,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						sessionId: target.sessionId
 					}
 				}
+
+				case "core:outlet/create-character":
+					return await libraryOutlet(node, "create-character", p)
+				case "core:outlet/update-character":
+					return await libraryOutlet(node, "update-character", p)
+				case "core:outlet/create-lorebook":
+					return await libraryOutlet(node, "create-lorebook", p)
+				case "core:outlet/attach-lorebook":
+					return await libraryOutlet(node, "attach-lorebook", p)
 
 				case "core:outlet/create-lore-entry": {
 					/**

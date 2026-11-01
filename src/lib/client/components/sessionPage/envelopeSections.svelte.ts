@@ -195,6 +195,15 @@ export function createEnvelopeSections(d: EnvelopeSectionsDeps) {
 			}
 		},
 		/**
+		 * 🚧 M0 (L9): the lorebook annex as this viewer may see it — every
+		 * widget granted `lore` reads it as `lore.v1.annex`.
+		 */
+		loreAnnex: {
+			get current() {
+				return d.data.lorebookAnnex
+			}
+		},
+		/**
 		 * The dossier core's conversation is told (C0b); any widget granted
 		 * `session:full` reads the same one (C5): a plugin's, when an admin
 		 * granted its `widget:session:full`.

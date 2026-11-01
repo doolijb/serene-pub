@@ -42,7 +42,7 @@ import * as schema from "$lib/server/db/schema"
 import { isCoreEventId } from "./requirements"
 import { exportedSessionLayout } from "$lib/server/db/panelsFromStored"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
-import { isPluginSlug } from "./frameHost"
+import { isPluginSlug, readPluginFileBytes } from "./frameHost"
 import {
 	PLUGIN_BUILD_DIR,
 	documentFileName,
@@ -531,7 +531,7 @@ export async function exportGenrePackage(
 		.from(schema.pluginFiles)
 		.where(eq(schema.pluginFiles.pluginId, slug))) as any[]
 	for (const f of fileRows.sort((a, b) => a.path.localeCompare(b.path)))
-		files[f.path] = Buffer.from(f.content, "base64")
+		files[f.path] = await readPluginFileBytes(f)
 	const carried = (key: string): unknown =>
 		ownerManifest && ownerManifest[key] !== undefined ? ownerManifest[key] : undefined
 	let components = carried("components") as any[] | undefined

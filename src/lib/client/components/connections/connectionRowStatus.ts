@@ -83,7 +83,10 @@ import {
 	type LaneStatus,
 	type OllamaStatus
 } from "./endpointStatus"
-import type { KcppInstallState } from "./managedConnectionView"
+import type {
+	AcppInstallState,
+	KcppInstallState
+} from "./managedConnectionView"
 import type { EndpointKind } from "./modelManagement"
 import { servesChat } from "./readiness"
 
@@ -247,6 +250,13 @@ export interface RowStatusFacts {
 	 * disagree. Undefined for every other kind.
 	 */
 	kcppInstall?: KcppInstallState
+	/**
+	 * The managed audio.cpp's process — the same shape as `kcpp`, read
+	 * from `audiocpp:getStatus` (`loadedFiles` are the loaded ids).
+	 */
+	acpp?: KcppStatus | null
+	/** The managed audio.cpp install, read by `acppInstallState`. */
+	acppInstall?: AcppInstallState
 	/**
 	 * What the pub's defaults say about this connection, read by
 	 * `rowDefaults` from the summary the status strip reads too, so the row
@@ -449,6 +459,18 @@ function baseRowStatus(
 	switch (facts.kind) {
 		case "koboldcpp-managed":
 			return managedStatus(connection, facts, missing)
+		case "audiocpp-managed":
+			// The same five words and dots as KoboldCPP's: one scale for a
+			// process this pub runs. Its own install and process facts stand in.
+			return managedStatus(
+				connection,
+				{
+					...facts,
+					kcpp: facts.acpp ?? null,
+					kcppInstall: facts.acppInstall
+				},
+				missing
+			)
 		case "ollama":
 			return ollamaStatus(connection, facts, missing)
 		case "onnx-embeddings":

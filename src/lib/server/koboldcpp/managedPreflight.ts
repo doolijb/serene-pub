@@ -29,6 +29,8 @@ import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import { pingKoboldCPP } from "$lib/server/koboldcpp/kcppHttp"
 import { ensureModelLoaded, type ManagedModelRequest } from "./modelManager"
 import { modelsDirFor, resolveModelPath } from "./modelsDir"
+import { readdir } from "fs/promises"
+import { pickWavTokenizer, wavTokenizerNeed } from "./ttsTokenizer"
 
 // ensureModelLoaded() already waits out a normal, in-progress load — these
 // retries exist only for the rarer case where the subprocess itself needs a
@@ -59,7 +61,7 @@ type DistributiveOmit<T, K extends keyof never> = T extends unknown
  */
 export type ManagedModelSpec = DistributiveOmit<
 	ManagedModelRequest,
-	"path" | "mmprojPath"
+	"path" | "mmprojPath" | "wavTokenizerPath"
 >
 
 /**
@@ -80,8 +82,10 @@ async function resolveRequestPath(
 	// the bare filename goes into the .kcpps and koboldcpp resolves it against
 	// its own working directory, exactly as it did before there was a models
 	// directory setting. Nothing to contain it against, and nothing to stat.
-	if (!modelsDirFor(spec.kind, settings)) return spec.file
-	return resolveModelPath(spec.kind, spec.file, settings, { mustExist: true })
+	// Speech GGUFs live in the text folder, like embeddings (modelsDir.ts).
+	const dirKind = spec.kind === "audio" ? "embeddings" : spec.kind
+	if (!modelsDirFor(dirKind, settings)) return spec.file
+	return resolveModelPath(dirKind, spec.file, settings, { mustExist: true })
 }
 
 /**
@@ -139,6 +143,31 @@ export async function ensureManagedReady(
 	// there on the second attempt either, and there is no point spawning a
 	// process to load it.
 	const modelPath = await resolveRequestPath(spec, settings)
+	let audioExtra: { wavTokenizerFile?: string; wavTokenizerPath?: string } = {}
+	if (spec.kind === "audio") {
+		let tokenizer = spec.wavTokenizerFile
+		const dir = modelsDirFor("embeddings", settings)
+		if (!tokenizer && dir) {
+			tokenizer =
+				pickWavTokenizer(spec.file, await readdir(dir).catch(() => [])) ??
+				undefined
+		}
+		if (!tokenizer && wavTokenizerNeed(spec.file)) {
+			throw new Error(
+				`The speech model "${spec.file}" needs a wav tokenizer file (a "qwen3-tts-tokenizer" or "WavTokenizer" GGUF) in the models folder. Download it from huggingface.co/koboldcpp/tts.`
+			)
+		}
+		if (tokenizer) {
+			audioExtra = {
+				wavTokenizerFile: tokenizer,
+				wavTokenizerPath: dir
+					? await resolveModelPath("embeddings", tokenizer, settings, {
+							mustExist: true
+						})
+					: tokenizer
+			}
+		}
+	}
 	const request: ManagedModelRequest =
 		spec.kind === "text"
 			? {
@@ -153,7 +182,7 @@ export async function ensureManagedReady(
 							}
 						: {})
 				}
-			: { ...spec, path: modelPath }
+			: { ...spec, path: modelPath, ...audioExtra }
 
 	const totalAttempts = PREFLIGHT_RETRY_DELAYS_MS.length + 1
 	for (let attemptNum = 1; ; attemptNum++) {

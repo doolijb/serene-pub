@@ -13,6 +13,8 @@
 	 * Every row and word comes from `loadoutSheet.ts`.
 	 */
 	import * as Icons from "@lucide/svelte"
+	import { getContext } from "svelte"
+	import { openInModels } from "$lib/client/admin/railDoors"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { connectionTypeIcon } from "$lib/client/components/connections/connectionTypeIcon"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
@@ -27,6 +29,7 @@
 		modelLede,
 		NO_MODEL_FILTERS,
 		noMatchLine,
+		getAModelDoor,
 		noModelSentence,
 		pickFilter,
 		unfilledModelLine,
@@ -71,6 +74,9 @@
 		onClear,
 		onFill
 	}: Props = $props()
+
+	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
+	const door = $derived(getAModelDoor(options.length, transform))
 
 	const uid = $props.id()
 	let query = $state("")
@@ -165,6 +171,20 @@
 
 	{#if !options.length}
 		<p class="text-surface-600-400 text-sm">{noModelSentence(jobLabel)}</p>
+		{#if door}
+			<div>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					data-get-a-model
+					onclick={() =>
+						openInModels(panelsCtx, { finder: door.finder })}
+				>
+					<Icons.Download size={14} aria-hidden="true" />
+					{door.label}
+				</button>
+			</div>
+		{/if}
 	{:else}
 		<!-- The choice, said once above the list so scrolling or filtering
 		     the list never hides it. -->

@@ -455,3 +455,58 @@ export interface DraftWrite {
 export function nextDraftWrite(last: DraftWrite, content: string): DraftWrite {
 	return { content, write: last.write + 1 }
 }
+
+/**
+ * The last answer a collected text remembered for this key (`remember:
+ * 'session'`): a per-viewer convenience, so every storage access is guarded
+ * and a failure reads as nothing remembered.
+ */
+export function readRemembered(key: string): string {
+	if (!key) return ""
+	try {
+		return globalThis.localStorage?.getItem(key) ?? ""
+	} catch {
+		return ""
+	}
+}
+
+/** Remember a collected text's answer under its key; a failure is silent. */
+export function writeRemembered(key: string, value: string): void {
+	if (!key || !value.trim()) return
+	try {
+		globalThis.localStorage?.setItem(key, value.trim())
+	} catch {
+		/* private window or blocked storage: the answer is simply not kept */
+	}
+}
+
+/**
+ * A message excerpt made fit for a quoted preview: emphasis markers dropped,
+ * whitespace collapsed, quote characters trimmed from both ends (the
+ * template brings its own), an ellipsis kept.
+ */
+export function cleanSubject(subject: string): string {
+	const QUOTES = "\"'\u201C\u201D\u2018\u2019\u00AB\u00BB`"
+	const lead = new RegExp(`^[\\s${QUOTES}]+`)
+	const trail = new RegExp(`[\\s${QUOTES}]+$`)
+	return subject
+		.replace(/[*_]+/g, "")
+		.replace(/\s+/g, " ")
+		.replace(lead, "")
+		.replace(/(…|\.\.\.)$/, "\u0001")
+		.replace(trail, "")
+		.replace("\u0001", "…")
+		.replace(trail, "")
+}
+
+/**
+ * The one-line preview of a declared `preview` template: `{subject}` is the
+ * pressed message's first words, `{value}` the box's text. Empty when either
+ * is missing, so nothing half-filled is ever drawn.
+ */
+export function previewLine(template: string | undefined, subject: string, value: string): string {
+	const v = value.trim()
+	if (!template || !subject.trim() || !v) return ""
+	const clean = cleanSubject(subject)
+	return clean ? template.split("{subject}").join(clean).split("{value}").join(v) : ""
+}

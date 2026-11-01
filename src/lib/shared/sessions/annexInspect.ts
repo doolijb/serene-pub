@@ -81,7 +81,8 @@ const TYPE_WORDS: Record<string, string> = {
 	media: "Media",
 	enum: "Choice",
 	list: "List",
-	object: "Object"
+	object: "Object",
+	json: "JSON"
 }
 
 /** A declared shape, briefly: "Whole number, 1 to 20", "List of text", "One of: a, b". */

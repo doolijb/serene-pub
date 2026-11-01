@@ -462,7 +462,7 @@
 		     centres the column on the body (./tuckedSides rule (1)); the
 		     conversation reads it, so its scroll region covers it.
 		     While a SIDE is the stage (QE, `stageSide`) the middle stands down
-		     around its one mount, like a side does: Stage only marks it hidden,
+		     around its one mount, like a side does: full screen marks it hidden,
 		     and the phone stows it (`centerSlot`) or opens it as a sheet from
 		     the panels menu ("Middle") — the same element wearing
 		     `.zone-flyout.mobile`, never a second render. -->
@@ -480,7 +480,7 @@
 				: undefined}
 			tabindex={model.centerSlot === "overlay" ? -1 : undefined}
 			data-pop-keep={model.centerSlot === "overlay" ? "" : undefined}
-			data-stage-hidden={model.stageOnly && model.stageSide
+			data-stage-hidden={model.fullscreen && model.stageSide
 				? ""
 				: undefined}
 			bind:this={centerEl}
@@ -523,10 +523,10 @@
 				{#each middlePanels as p, i (p.key)}
 					{@const primary = p === model.middle.primary}
 					{@const above = i < model.middle.above.length}
-					<!-- Stage only draws the panel holding the middle's stage, alone
+					<!-- Full screen draws the panel holding the middle's stage, alone
 					     and filling; with none holding it, the primary panel. -->
 					{@const isStage =
-						model.stageOnly && model.stageMiddleKey === p.key}
+						model.fullscreen && model.stageMiddleKey === p.key}
 					<!-- A strip above is a header row: it rolls up with a
 					     furled session header (note 29), except while the
 					     layout is being edited. -->
@@ -537,7 +537,7 @@
 						bind:clientWidth={midWidths[p.key]}
 						bind:clientHeight={midHeights[p.key]}
 						style={primary || isStage ? "flex:1 1 0;" : stripStyle(p)}
-						data-stage-hidden={(model.stageOnly &&
+						data-stage-hidden={(model.fullscreen &&
 							(model.stageMiddleKey !== null ? !isStage : !primary)) ||
 						(above && shellPrefs.headerFurled && !model.editing)
 							? ""

@@ -490,14 +490,6 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
-	"plugins:installPackage": {
-		params: Sockets.Plugins.InstallPackage.Params
-		response: Sockets.Plugins.InstallPackage.Response
-	}
-	"plugins:installPackage:error": {
-		params: never
-		response: { error?: string }
-	}
 	"plugins:setEnabled": {
 		params: Sockets.Plugins.SetEnabled.Params
 		response: Sockets.Plugins.SetEnabled.Response
@@ -593,6 +585,74 @@ export type SocketEventMap = {
 	"pluginUserSettings:set:error": {
 		params: Sockets.PluginUserSettings.Set.Params
 		response: Sockets.PluginUserSettings.Set.Response
+	}
+	// 🚧 M0 (SHAPES L12 Seams, L5): plugin actions and catalogs.
+	"pluginActions:invoke": {
+		params: Sockets.PluginActions.Invoke.Params
+		response: Sockets.PluginActions.Invoke.Response
+	}
+	"pluginActions:invoke:error": {
+		params: never
+		response: { error?: string; pluginId?: string; action?: string; requestId?: string }
+	}
+	// 🚧 M2b: the user annex's frame door.
+	"appletApi:userAnnex": {
+		params: Sockets.PluginUserAnnex.Params
+		response: Sockets.PluginUserAnnex.Response
+	}
+	"appletApi:userAnnex:error": {
+		params: never
+		response: { error?: string; pluginId?: string; requestId?: string }
+	}
+	// 🚧 M2c: the applet session doors.
+	"appletApi:librarySessions": {
+		params: Sockets.PluginSessions.ListParams
+		response: Sockets.PluginSessions.ListResponse
+	}
+	"appletApi:librarySessions:error": {
+		params: never
+		response: { error?: string; pluginId?: string; requestId?: string }
+	}
+	"appletApi:updateSession": {
+		params: Sockets.PluginSessions.UpdateParams
+		response: Sockets.PluginSessions.UpdateResponse
+	}
+	"appletApi:updateSession:error": {
+		params: never
+		response: { error?: string; pluginId?: string; requestId?: string }
+	}
+	// 🚧 M2c: the applet library doors (characters, lorebooks).
+	"appletApi:libraryCharacters": {
+		params: Sockets.AppletLibrary.Characters.Params
+		response: Sockets.AppletLibrary.Characters.Response
+	}
+	"appletApi:libraryCharacters:error": {
+		params: never
+		response: { error?: string; pluginId?: string; requestId?: string }
+	}
+	"appletApi:updateCharacter": {
+		params: Sockets.AppletLibrary.UpdateCharacter.Params
+		response: Sockets.AppletLibrary.UpdateCharacter.Response
+	}
+	"appletApi:updateCharacter:error": {
+		params: never
+		response: { error?: string; pluginId?: string; requestId?: string }
+	}
+	"appletApi:libraryLorebooks": {
+		params: Sockets.AppletLibrary.Lorebooks.Params
+		response: Sockets.AppletLibrary.Lorebooks.Response
+	}
+	"appletApi:libraryLorebooks:error": {
+		params: never
+		response: { error?: string; pluginId?: string; requestId?: string }
+	}
+	"pluginCatalogs:get": {
+		params: Sockets.PluginCatalogs.Get.Params
+		response: Sockets.PluginCatalogs.Get.Response
+	}
+	"pluginCatalogs:get:error": {
+		params: never
+		response: { error?: string; pluginId?: string }
 	}
 	"plugins:setStorageQuota": {
 		params: Sockets.Plugins.SetStorageQuota.Params
@@ -924,6 +984,32 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	// 🚧 Re-probe a speaking model's speech facts (admin; gated). Failures
+	// arrive on the reply's own `error`; `:error` is kept for the convention.
+	"models:refreshSpeech": {
+		params: Sockets.Connections.RefreshSpeech.Params
+		response: Sockets.Connections.RefreshSpeech.Response
+	}
+	"models:refreshSpeech:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// 🚧 Which runtimes already hold a model file (admin; gated). Failures
+	// arrive on the reply's own `error`; `:error` is kept for the convention.
+	"models:presence": {
+		params: Sockets.Models.Presence.Params
+		response: Sockets.Models.Presence.Response
+	}
+	"models:presence:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// 🚧 This computer's graphics card and memory (admin; gated). Failures
+	// ride the reply's own `error`; there is no `:error` entry.
+	"models:machineHardware": {
+		params: Sockets.Models.MachineHardware.Params
+		response: Sockets.Models.MachineHardware.Response
+	}
 	"connections:scripts": {
 		params: Sockets.Connections.Scripts.Params
 		response: Sockets.Connections.Scripts.Response
@@ -1139,6 +1225,11 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.RunStatus.Params
 		response: Sockets.Sessions.RunStatus.Response
 	}
+	// 🚧 Server-pushed only (M2a a6): the run a press started has ended, with its outcome.
+	"sessions:runEnded": {
+		params: Sockets.Sessions.RunEnded.Params
+		response: Sockets.Sessions.RunEnded.Response
+	}
 	// Server-pushed only: who of a session's people has it open now (W10).
 	"sessions:attendance": {
 		params: Sockets.Sessions.Attendance.Params
@@ -1231,6 +1322,11 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Annex.Params
 		response: Sockets.Sessions.Annex.Response
 	}
+	// 🚧 M0 (L9): the asker's view of the LOREBOOK annex: a request and a push.
+	"sessions:lorebookAnnex": {
+		params: Sockets.Sessions.LorebookAnnex.Params
+		response: Sockets.Sessions.LorebookAnnex.Response
+	}
 	"sessions:setRulesetSettings": {
 		params: Sockets.Sessions.SetRulesetSettings.Params
 		response: Sockets.Sessions.SetRulesetSettings.Response
@@ -1238,6 +1334,12 @@ export type SocketEventMap = {
 	"sessions:setRulesetSettings:error": {
 		params: Sockets.Sessions.SetRulesetSettings.ErrorResponse
 		response: Sockets.Sessions.SetRulesetSettings.ErrorResponse
+	}
+	// 🚧 M0 (L4): "Update rules" — move a session to its ruleset's published
+	// version. Owner-only; a refusal is the reply's `error`.
+	"sessions:convertRuleset": {
+		params: Sockets.Sessions.ConvertRuleset.Params
+		response: Sockets.Sessions.ConvertRuleset.Response
 	}
 	// The session data panel: the whole annex against its declarations,
 	// for the session's owner and administrators. Request-only.
@@ -2935,6 +3037,156 @@ export type SocketEventMap = {
 		response: Sockets.CompletionTemplates.Options.Response
 	}
 
+	// audio.cpp, run by Serene Pub events (🚧 provisional)
+	"audiocpp:getSettings": {
+		params: Sockets.AudioCpp.GetSettings.Params
+		response: Sockets.AudioCpp.GetSettings.Response
+	}
+	"audiocpp:updateSettings": {
+		params: Sockets.AudioCpp.UpdateSettings.Params
+		response: Sockets.AudioCpp.UpdateSettings.Response
+	}
+	"audiocpp:listBinaryVariants": {
+		params: Sockets.AudioCpp.ListBinaryVariants.Params
+		response: Sockets.AudioCpp.ListBinaryVariants.Response
+	}
+	"audiocpp:listReleaseVersions": {
+		params: Sockets.AudioCpp.ListReleaseVersions.Params
+		response: Sockets.AudioCpp.ListReleaseVersions.Response
+	}
+	"audiocpp:downloadBinary": {
+		params: Sockets.AudioCpp.DownloadBinary.Params
+		response: Sockets.AudioCpp.DownloadBinary.Response
+	}
+	"audiocpp:cancelBinaryDownload": {
+		params: Sockets.AudioCpp.CancelBinaryDownload.Params
+		response: Sockets.AudioCpp.CancelBinaryDownload.Response
+	}
+	"audiocpp:installState": {
+		params: Sockets.AudioCpp.InstallState.Params
+		response: Sockets.AudioCpp.InstallState.Response
+	}
+	"audiocpp:listPackages": {
+		params: Sockets.AudioCpp.ListPackages.Params
+		response: Sockets.AudioCpp.ListPackages.Response
+	}
+	"audiocpp:downloadPackage": {
+		params: Sockets.AudioCpp.DownloadPackage.Params
+		response: Sockets.AudioCpp.DownloadPackage.Response
+	}
+	"audiocpp:cancelPackageDownload": {
+		params: Sockets.AudioCpp.CancelPackageDownload.Params
+		response: Sockets.AudioCpp.CancelPackageDownload.Response
+	}
+	"audiocpp:removePackage": {
+		params: Sockets.AudioCpp.RemovePackage.Params
+		response: Sockets.AudioCpp.RemovePackage.Response
+	}
+	"audiocpp:setPackageEnabled": {
+		params: Sockets.AudioCpp.SetPackageEnabled.Params
+		response: Sockets.AudioCpp.SetPackageEnabled.Response
+	}
+	"audiocpp:confirmFamily": {
+		params: Sockets.AudioCpp.ConfirmFamily.Params
+		response: Sockets.AudioCpp.ConfirmFamily.Response
+	}
+	"audiocpp:getStatus": {
+		params: Sockets.AudioCpp.GetStatus.Params
+		response: Sockets.AudioCpp.GetStatus.Response
+	}
+	"audiocpp:start": {
+		params: Sockets.AudioCpp.Start.Params
+		response: Sockets.AudioCpp.Start.Response
+	}
+	"audiocpp:stop": {
+		params: Sockets.AudioCpp.Stop.Params
+		response: Sockets.AudioCpp.Stop.Response
+	}
+	"audiocpp:restart": {
+		params: Sockets.AudioCpp.Restart.Params
+		response: Sockets.AudioCpp.Restart.Response
+	}
+	"audiocpp:binaryDownloadProgress": {
+		params: never
+		response: Sockets.AudioCpp.BinaryDownloadProgress.Response
+	}
+	"audiocpp:packageDownloadProgress": {
+		params: never
+		response: Sockets.AudioCpp.PackageDownloadProgress.Response
+	}
+	"audiocpp:subprocessStatus": {
+		params: never
+		response: Sockets.AudioCpp.SubprocessStatus.Response
+	}
+	"audiocpp:getSettings:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:updateSettings:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:listBinaryVariants:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:listReleaseVersions:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:downloadBinary:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:cancelBinaryDownload:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:installState:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:listPackages:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:downloadPackage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:cancelPackageDownload:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:removePackage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:setPackageEnabled:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:confirmFamily:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:getStatus:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:start:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:stop:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"audiocpp:restart:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// KoboldCPP events
 	"koboldcpp:setBaseUrl": {
 		params: Sockets.KoboldCPP.SetBaseUrl.Params
@@ -3476,6 +3728,10 @@ export type SocketEventMap = {
 	"userSettings:updateShowAllCharacterFields": {
 		params: Sockets.UserSettings.UpdateShowAllCharacterFields.Params
 		response: Sockets.UserSettings.UpdateShowAllCharacterFields.Response
+	}
+	"userSettings:updateSpokenPlayback": {
+		params: Sockets.UserSettings.UpdateSpokenPlayback.Params
+		response: Sockets.UserSettings.UpdateSpokenPlayback.Response
 	}
 	"userSettings:updateTheme": {
 		params: Sockets.UserSettings.UpdateTheme.Params
@@ -4185,6 +4441,83 @@ export type SocketEventMap = {
 	"media:changed": {
 		params: Sockets.Media.Changed.Params
 		response: Sockets.Media.Changed.Response
+	}
+	// 🚧 Spoken lines folded row + retention (speech S8, gated).
+	"media:spokenSummary": {
+		params: Sockets.Media.SpokenSummary.Params
+		response: Sockets.Media.SpokenSummary.Response
+	}
+	"media:spokenSummary:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:clearSpoken": {
+		params: Sockets.Media.ClearSpoken.Params
+		response: Sockets.Media.ClearSpoken.Response
+	}
+	"media:clearSpoken:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"media:setKeepSpokenAudio": {
+		params: Sockets.Media.SetKeepSpokenAudio.Params
+		response: Sockets.Media.SetKeepSpokenAudio.Response
+	}
+	"media:setKeepSpokenAudio:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// 🚧 The voicebank (speech S4). Admin-gated except `pickable`; every
+	// mutation re-pushes `voicebank:list`. Refusals arrive as `<event>:error`.
+	"voicebank:list": {
+		params: Sockets.Voicebank.List.Params
+		response: Sockets.Voicebank.List.Response
+	}
+	"voicebank:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"voicebank:create": {
+		params: Sockets.Voicebank.Create.Params
+		response: Sockets.Voicebank.Create.Response
+	}
+	"voicebank:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"voicebank:update": {
+		params: Sockets.Voicebank.Update.Params
+		response: Sockets.Voicebank.Update.Response
+	}
+	"voicebank:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"voicebank:delete": {
+		params: Sockets.Voicebank.Delete.Params
+		response: Sockets.Voicebank.Delete.Response
+	}
+	"voicebank:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"voicebank:pickable": {
+		params: Sockets.Voicebank.Pickable.Params
+		response: Sockets.Voicebank.Pickable.Response
+	}
+	"voicebank:pickable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// 🚧 The voice try-out: one line spoken inline, stored nowhere; any signed-in person.
+	"voicebank:preview": {
+		params: Sockets.Voicebank.Preview.Params
+		response: Sockets.Voicebank.Preview.Response
+	}
+	"voicebank:preview:error": {
+		params: Sockets.Voicebank.Preview.ErrorResponse
+		response: Sockets.Voicebank.Preview.ErrorResponse
 	}
 
 	// Tag events

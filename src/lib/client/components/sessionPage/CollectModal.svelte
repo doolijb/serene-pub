@@ -26,7 +26,12 @@
 	 */
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import CollectSuggestions from "./CollectSuggestions.svelte"
+	import { curlyQuotes } from "./curlyQuotes"
 	import {
+		previewLine,
+		readRemembered,
+		writeRemembered,
 		CLOCK_STEP_LIMIT,
 		CLOCK_STEP_UNITS,
 		clockStepProblem,
@@ -50,11 +55,25 @@
 		ownVoice?: string
 		/** Text to open with — S2's slash argument. */
 		initialText?: string
+		/** The first words of the message the action was pressed on: the declared preview's `{subject}`. */
+		subject?: string
+		/** Where a `remember`ing text keeps its last answer (session + action identity); empty, nowhere. */
+		rememberKey?: string
 		onSubmit: (collected: Collected) => void
 		onCancel: () => void
 	}
 
-	let { open, action, cast = [], ownVoice, initialText = "", onSubmit, onCancel }: Props = $props()
+	let {
+		open,
+		action,
+		cast = [],
+		ownVoice,
+		initialText = "",
+		subject = "",
+		rememberKey = "",
+		onSubmit,
+		onCancel
+	}: Props = $props()
 
 	let text = $state("")
 	let picked = $state<string[]>([])
@@ -69,7 +88,9 @@
 	// and the stepper at the action's default, going forward.
 	$effect(() => {
 		if (open) {
-			text = initialText
+			text =
+				initialText ||
+				(action?.collects?.text?.remember === "session" ? readRemembered(rememberKey) : "")
 			picked = []
 			const d = action?.collects?.clockStep?.default
 			stepBy = d?.by ?? 1
@@ -105,10 +126,12 @@
 	 * and nobody hears anything (L5, 2026-10-21).
 	 */
 	const hears = $derived(!!collects?.recipients?.overwrites)
+	const preview = $derived(previewLine(collects?.text?.preview, subject, text))
 	const uid = $props.id()
 
 	function submit() {
 		if (!ready) return
+		if (collects?.text?.remember === "session") writeRemembered(rememberKey, text)
 		onSubmit({
 			text,
 			recipients: [...picked],
@@ -252,6 +275,16 @@
 						{#if collects.text}
 							<div class="space-y-1">
 								<label for="{uid}-text" class="text-sm font-medium">{collects.text.label}</label>
+								{#if collects.text.suggestions?.length}
+									<CollectSuggestions
+										suggestions={collects.text.suggestions}
+										current={text}
+										onPick={(v) => {
+											text = v
+											field?.focus()
+										}}
+									/>
+								{/if}
 								<textarea
 									id="{uid}-text"
 									bind:this={field}
@@ -269,6 +302,11 @@
 										}
 									}}
 								></textarea>
+								{#if preview}
+									<p class="text-surface-700-300 text-xs break-words" aria-live="polite" data-collect-preview>
+										{curlyQuotes(preview)}
+									</p>
+								{/if}
 								{#if collects.text.need === "optional" && collects.text.ifEmpty}
 									<p id="{uid}-if-empty" class="text-surface-600-400 text-xs" data-collect-if-empty>
 										Left empty: {collects.text.ifEmpty}

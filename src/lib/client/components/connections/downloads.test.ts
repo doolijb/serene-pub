@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest"
 import {
+	audiocppBinaryItem,
+	audiocppPackageItems,
 	mattingItem,
 	aggregate,
 	downloads,
@@ -66,6 +68,57 @@ describe("the four feeds reconcile to one shape", () => {
 			source: "koboldcpp-binary",
 			name: "koboldcpp-linux-x64",
 			state: "in_flight"
+		})
+	})
+
+	test("audio.cpp packages are keyed by package id", () => {
+		expect(
+			audiocppPackageItems({
+				"tts/kokoro": {
+					packageId: "tts/kokoro",
+					name: "Kokoro 82M",
+					status: "downloading",
+					downloaded: 5,
+					total: 50,
+					isDone: false
+				},
+				"asr/whisper": {
+					name: "Whisper small",
+					status: "cancelled",
+					downloaded: 1,
+					total: 0,
+					isDone: true
+				}
+			})
+		).toMatchObject([
+			{
+				id: "audiocpp:tts/kokoro",
+				source: "audiocpp",
+				destinationLabel: "audio.cpp",
+				name: "Kokoro 82M",
+				totalBytes: 50,
+				state: "in_flight"
+			},
+			{ id: "audiocpp:asr/whisper", state: "cancelled" }
+		])
+	})
+
+	test("the audio.cpp binary is one item, or none", () => {
+		expect(audiocppBinaryItem(null)).toBeNull()
+		expect(
+			audiocppBinaryItem({
+				assetName: "audio-cpp-linux-x64",
+				status: "error",
+				downloaded: 10,
+				total: 100,
+				isDone: true,
+				error: "offline"
+			})
+		).toMatchObject({
+			id: "audiocpp-binary",
+			source: "audiocpp-binary",
+			state: "failed",
+			error: "offline"
 		})
 	})
 

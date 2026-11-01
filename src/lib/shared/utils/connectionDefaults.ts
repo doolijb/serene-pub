@@ -99,6 +99,15 @@ export const CONNECTION_DEFAULTS = {
 			}
 		}
 	},
+	[CONNECTION_TYPE.AUDIOCPP_MANAGED]: {
+		type: CONNECTION_TYPE.AUDIOCPP_MANAGED,
+		// Display only: where audio.cpp actually is comes from its own
+		// settings (the port), never from this row.
+		baseUrl: "http://127.0.0.1:5002",
+		modality: "tts",
+		model: "",
+		extraJson: {}
+	},
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE]: {
 		type: CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE,
 		// Display only, and the same value the managed text type carries: this
@@ -184,6 +193,22 @@ export const CONNECTION_DEFAULTS = {
 		extraJson: {
 			apiKey: ""
 		}
+	},
+	[CONNECTION_TYPE.ELEVENLABS]: {
+		type: CONNECTION_TYPE.ELEVENLABS,
+		baseUrl: "https://api.elevenlabs.io",
+		modality: "tts",
+		model: "eleven_flash_v2_5",
+		extraJson: {
+			apiKey: ""
+		}
+	},
+	[CONNECTION_TYPE.AUDIOCPP]: {
+		type: CONNECTION_TYPE.AUDIOCPP,
+		baseUrl: "http://127.0.0.1:8080",
+		modality: "tts",
+		model: "",
+		extraJson: {}
 	},
 
 	/**

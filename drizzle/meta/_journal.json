@@ -904,6 +904,97 @@
       "when": 1792947597840,
       "tag": "0128_pr6s2_core_annex",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1793227377859,
+      "tag": "0129_speech_voicebank",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1793228809051,
+      "tag": "0130_m0_sdk_gaps",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1793249250519,
+      "tag": "0131_user_spoken_playback",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1793256829024,
+      "tag": "0132_audiocpp_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1793257714361,
+      "tag": "0133_audiocpp_packages",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1793324040625,
+      "tag": "0134_voicebank_narration_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1793341940437,
+      "tag": "0135_voicebank_loadout",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1793341968748,
+      "tag": "0136_voicebank_drop_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1793357037691,
+      "tag": "0137_loadout_voices",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1793357048681,
+      "tag": "0138_voicebank_drop_stars",
+      "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1793437186536,
+      "tag": "0139_m2b_permission_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1793445342658,
+      "tag": "0140_m2c_provided_tombstone",
+      "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1793448073514,
+      "tag": "0141_m2c_library_write_mode",
+      "breakpoints": true
     }
   ]
 }

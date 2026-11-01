@@ -13,6 +13,8 @@
 	 *   (`ConnectionTypeForm`, shared with the Models view).
 	 * - **KoboldCPP runtime** — for the managed KoboldCPP: the manager's own
 	 *   settings, binary and server address (`KoboldCppSettingsTab`).
+	 * - **audio.cpp runtime** 🚧 — for audio.cpp, run by Serene Pub: its own
+	 *   settings and installed build (`AudioCppSettingsTab`).
 	 * - **Models** — what the host lists, with Refresh, Add by name, enable
 	 *   switches, Use and, on a local ONNX endpoint, Download / Cancel. The
 	 *   switches and Use are pending changes that wait for Save (owner ruling
@@ -79,6 +81,7 @@
 	import ModelTable from "$lib/client/components/connections/ModelTable.svelte"
 	import ModelRow from "$lib/client/components/connections/ModelRow.svelte"
 	import KoboldCppSettingsTab from "$lib/client/components/koboldcppManager/KoboldCppSettingsTab.svelte"
+	import AudioCppSettingsTab from "$lib/client/components/audiocppManager/AudioCppSettingsTab.svelte"
 	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
 	import {
 		endpointKind,
@@ -419,6 +422,9 @@
 	const isManagedKcpp = $derived(
 		(row?.type ?? connection?.type) === CONNECTION_TYPE.KOBOLDCPP_MANAGED
 	)
+	const isManagedAcpp = $derived(
+		(row?.type ?? connection?.type) === CONNECTION_TYPE.AUDIOCPP_MANAGED
+	)
 	const held = $derived(row ? defaultsHeldBy(row, defaults) : [])
 	const service = $derived(
 		serviceLabel({
@@ -752,6 +758,16 @@
 			</AdminFieldset>
 		{/if}
 
+		<!-- ── audio.cpp, run by Serene Pub: its own settings 🚧 ──── -->
+		{#if isManagedAcpp}
+			<AdminFieldset
+				title="audio.cpp runtime"
+				description="audio.cpp's port, models folder and idle settings. These save on their own; start, stop, change the build and get models in the Connections view."
+			>
+				<AudioCppSettingsTab onChangeBinary={openConnectionView} />
+			</AdminFieldset>
+		{/if}
+
 		<!-- ── Models ─────────────────────────────────────────────── -->
 		{#if row}
 			<!-- `#models`: Needs you's `connections:syncError` lands here. -->
@@ -797,6 +813,9 @@
 							{#if localOnnxBlocked}
 								Nothing is downloaded to this machine, and nothing can be
 								until it can run local models.
+							{:else if kind === "audiocpp-managed"}
+								No speech models on this machine yet. Get them in the audio.cpp
+								connection's Models tab.
 							{:else if isOnnx || kind === "koboldcpp-managed" || kind === "ollama"}
 								No models on this machine yet. Find and download them in
 								the Models view.

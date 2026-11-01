@@ -87,6 +87,8 @@ describe("modalityWord", () => {
 	it("uses the short word, falling back to the id", () => {
 		expect(modalityWord("text-gen")).toBe("Text")
 		expect(modalityWord("audio")).toBe("audio")
+		expect(modalityWord("tts")).toBe("Speech")
+		expect(modalityWord("asr")).toBe("Transcription")
 		expect(modalityWord(null)).toBe("—")
 	})
 })

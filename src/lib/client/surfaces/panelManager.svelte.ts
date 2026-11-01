@@ -606,6 +606,25 @@ export class SurfaceManager implements WidgetEventSource {
 		this.#emit({ kind: "story:moved" })
 	}
 
+	/**
+	 * 🚧 M2a a6: a press's run ended — the server's `sessions:runEnded` push
+	 * for this session (`runEnded.ts`), whoever pressed. Every subscriber hears
+	 * `run:ended` with the run's id and outcome, and its sentence on a halt or
+	 * an error, so a board redraws when anybody's move lands or is refused.
+	 */
+	announceRunEnded(run: { runId: string; outcome: "ok" | "halt" | "err" | "cancelled"; reason?: string }) {
+		this.#emit({ kind: "run:ended", runId: run.runId, outcome: run.outcome, ...(run.reason ? { reason: run.reason } : {}) })
+	}
+
+	/**
+	 * 🚧 The viewer's full screen changed (SHAPES L1): the corner control, a
+	 * key, or a `session-fullscreen` request. Every subscriber hears
+	 * `fullscreen`; on change only, never at mount.
+	 */
+	announceFullscreen(on: boolean) {
+		this.#emit({ kind: "fullscreen", on })
+	}
+
 	/* ── the session-level widget event source (PLAN 25) ──────────────────
 	 * Every widget's wire (`ComponentMount`), and a session-view frame's
 	 * (`PluginFrame`), fans out from here and filters to its declared channels. The

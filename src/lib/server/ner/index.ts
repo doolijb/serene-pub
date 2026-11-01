@@ -149,10 +149,12 @@ export async function loadNerModel(modelId: string): Promise<void> {
 	// fetched (`registeredNerModel`), or with no dtype override when the row
 	// records none: guessing a precision is how a working file stops loading.
 	const modelDef = findNerModel(modelId)
-	const registered = modelDef ? null : await registeredNerModel(modelId)
+	// Read for a catalogued model too: the download may have fetched another
+	// precision than the list's default, and the load must ask for those files.
+	const registered = await registeredNerModel(modelId)
 	if (!modelDef && !registered)
 		throw new Error(`Unknown entity model: ${modelId}`)
-	const dtype = modelDef?.dtype ?? registered?.dtype ?? null
+	const dtype = registered?.dtype ?? modelDef?.dtype ?? null
 
 	isLoading = true
 	classifier = null

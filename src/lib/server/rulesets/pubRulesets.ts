@@ -24,10 +24,11 @@
  * they are (parked data).
  */
 
-import { asc, count, eq } from "drizzle-orm"
+import { asc, count, eq, isNull } from "drizzle-orm"
 import {
 	_withdrawRuleset,
 	attributeSlots,
+	definePluginRuleset,
 	defineStoredRulesetDocument,
 	getAttributeSlot,
 	getRuleset,
@@ -39,6 +40,7 @@ import {
 	rulesetDocumentFindings,
 	rulesetDocumentOf,
 	rulesetDocumentOwnSlots,
+	rulesetDocumentProps,
 	rulesetDocumentUpgradeFindings,
 	rulesetDecides,
 	rulesetEntryTypeDecls,
@@ -60,12 +62,14 @@ import {
 	type FunctionRef,
 	type RulesetDecl,
 	type RulesetDocument,
+	type RulesetProps,
 	type RulesetPlaytest,
 	type RulesetTemplate,
 	type SlotId
 } from "@serene-pub/sdk"
 import { deriveEntryTypes, ENTRY_UNIVERSAL_PARTS } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
+import { keepCurrentRulesetVersions, keepRulesetVersion, registerKeptRulesetSlots, republishRefusal } from "$lib/server/rulesets/versions"
 import { declareSlot } from "$lib/server/state/declarations"
 import { OWNER_SLUG } from "$lib/server/pipelines/entities/pubGenres"
 
@@ -640,7 +644,9 @@ const inSections = (doc: RulesetDocument): RulesetDocument => {
 		version: doc.version,
 		// 🚧 The author's handbook pages and saved tests ride along (the SDK's kept keys do not name them yet).
 		...(Array.isArray(d.handbook) ? { handbook: d.handbook } : {}),
-		...(Array.isArray(d.playtests) ? { playtests: d.playtests } : {})
+		...(Array.isArray(d.playtests) ? { playtests: d.playtests } : {}),
+		// 🚧 How a session moves between versions (M0, SHAPES L4).
+		...(Array.isArray(d.upgrades) ? { upgrades: d.upgrades } : {})
 	} as unknown as RulesetDocument
 }
 
@@ -781,6 +787,10 @@ export async function publishPubRuleset(db: Db, rulesetId: string, params: Publi
 		if (upgrade.length && !params.acknowledgeUpgrade)
 			refuse(`Publishing would change what is stored:\n · ${upgrade.join("\n · ")}`)
 	}
+	{
+		const playing = await republishRefusal(db, rulesetId, draft.version, draft as unknown as Record<string, unknown>)
+		if (playing) refuse(playing)
+	}
 	registerDocument(draft, params.userId)
 	retiredIds.delete(rulesetId)
 	await db
@@ -792,6 +802,15 @@ export async function publishPubRuleset(db: Db, rulesetId: string, params: Publi
 			publishedVersion: draft.version
 		})
 		.where(eq(schema.rulesets.id, row.id))
+	// every published version is kept (M2b a7); `registerDocument` above withdrew and re-registered the current one,
+	// so the older versions' own slots are put back beside it
+	await keepRulesetVersion(db, {
+		rulesetId,
+		version: draft.version,
+		document: draft as unknown as Record<string, unknown>,
+		publishedBy: params.userId
+	})
+	await registerKeptRulesetSlots(db, rulesetId)
 	return { version: draft.version }
 }
 
@@ -835,6 +854,7 @@ export async function deletePubRuleset(db: Db, rulesetId: string): Promise<void>
  */
 export async function registerPubRulesets(db: Db): Promise<string[]> {
 	const lines: string[] = []
+	await keepCurrentRulesetVersions(db)
 	const rows = (await db
 		.select()
 		.from(schema.rulesets)
@@ -843,6 +863,9 @@ export async function registerPubRulesets(db: Db): Promise<string[]> {
 	for (const row of rows) {
 		if (!row.published) continue
 		const parsed = parseRulesetId(row.rulesetId)
+		// 🚧 A package's own row (created_by NULL, owned by an installed plugin) is that plugin's declaration:
+		// `registerPluginRulesets` below registers it through the plugin door.
+		if (parsed && row.createdBy === null && installed.has(parsed.owner) && row.ownerSlug === parsed.owner) continue
 		if (!parsed || installed.has(parsed.owner) || isReservedAttributeOwner(parsed.owner)) {
 			lines.push(`${row.rulesetId}: its owner '${parsed?.owner ?? "?"}' is now an installed plugin's name; the plugin's declaration wins.`)
 			continue
@@ -854,7 +877,74 @@ export async function registerPubRulesets(db: Db): Promise<string[]> {
 			lines.push(`${row.rulesetId}: ${e instanceof Error ? e.message : String(e)}`)
 		}
 	}
+	lines.push(...(await registerPluginRulesets(db)))
+	await registerKeptRulesetSlots(db)
 	return lines
+}
+
+/**
+ * 🚧 The rulesets a package shipped (`manifest.rulesets`, published as rows owned by the plugin's slug with
+ * `created_by` NULL — `plugins/pluginRulesets.ts`) into this process's registry, through the plugin door
+ * (`definePluginRuleset`): the ruleset and its own attribute slots, so the session's values land and a conversion
+ * finds the slots. A retired row (its plugin uninstalled) is withdrawn, slots and all — a session pinned to it parks
+ * with the sentence that says its plugin is not installed. With `pluginId`, that plugin's rows only (install,
+ * upgrade, uninstall); without, every package's (boot). Returns one line per row refused.
+ */
+export async function registerPluginRulesets(db: Db, pluginId?: string): Promise<string[]> {
+	const lines: string[] = []
+	const mine: string[] = []
+	const rows = (await db
+		.select()
+		.from(schema.rulesets)
+		.where(isNull(schema.rulesets.createdBy))
+		.orderBy(asc(schema.rulesets.id))) as Row[]
+	const installed = await pluginIds(db)
+	for (const row of rows) {
+		const parsed = parseRulesetId(row.rulesetId)
+		if (!parsed || row.ownerSlug !== parsed.owner) continue
+		if (pluginId ? row.ownerSlug !== pluginId : !installed.has(row.ownerSlug)) continue
+		_withdrawRuleset(row.rulesetId)
+		mine.push(row.rulesetId)
+		if (row.retiredAt || !row.published || !installed.has(row.ownerSlug)) {
+			retiredIds.add(row.rulesetId)
+			continue
+		}
+		try {
+			// the document's own bookkeeping (`upgrades`, read off the row by a conversion) is not a declaration prop
+			const { upgrades: _u, ...props } = rulesetDocumentProps(row.published as unknown as RulesetDocument) as RulesetProps & { upgrades?: unknown }
+			deriveEntryTypes(definePluginRuleset(row.ownerSlug, row.rulesetId, props as RulesetProps))
+			retiredIds.delete(row.rulesetId)
+		} catch (e) {
+			lines.push(`${row.rulesetId}: ${e instanceof Error ? e.message : String(e)}`)
+		}
+	}
+	// older kept versions' own slots, beside the ones just registered (M2b a7)
+	if (pluginId) for (const id of mine) await registerKeptRulesetSlots(db, id)
+	else await registerKeptRulesetSlots(db)
+	// 🚧 (M2c fix) each package's derived entry types get their registry rows here, at install, upgrade and boot — not
+	// only before a provided-book sync: an entry of such a type made by hand (`entries:create`) in a package that
+	// provides no book needs the row its FK points at. Idempotent; the rows are the plugin's own.
+	const { ensurePackageEntryTypes } = await import("$lib/server/plugins/packageEntryTypes")
+	const owners = new Set(
+		rows
+			.filter((r) => mine.includes(r.rulesetId) && !r.retiredAt && r.published && installed.has(r.ownerSlug))
+			.map((r) => r.ownerSlug)
+	)
+	for (const owner of owners) lines.push(...(await ensurePackageEntryTypes(db, owner)))
+	return lines
+}
+
+/**
+ * 🚧 The version a session starting on `rulesetId` is pinned to when nothing it adopts (a book, a kit) pins one: the
+ * published version of a pub or package ruleset's row, or null for a ruleset declared in code (M0 E-fix).
+ */
+export async function publishedRulesetVersion(db: Db, rulesetId: string): Promise<string | null> {
+	const [row] = await db
+		.select({ version: schema.rulesets.publishedVersion, retiredAt: schema.rulesets.retiredAt })
+		.from(schema.rulesets)
+		.where(eq(schema.rulesets.rulesetId, rulesetId))
+		.limit(1)
+	return row && !row.retiredAt && typeof row.version === "string" && row.version ? row.version : null
 }
 
 /** Tests only: forget which pub rulesets are retired. */

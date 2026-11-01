@@ -173,7 +173,8 @@ describe("Story, on a session with notes", () => {
 		const res = await resolveRulesetTurn(db as any, { owners: [`session:${w.session.id}`] })
 		if ("halt" in res) throw new Error(res.halt)
 		expect(res.ok.blocks).toEqual({})
-		expect(String(res.ok.facts.parked)).toContain("not installed")
+		// 🚧 A non-core id with no row reads as a plugin's (`rulesetOriginOf`), so it parks with the plugin sentence.
+		expect(String(res.ok.facts.parked)).toBe("These rules came with a plugin that is no longer installed.")
 	})
 
 	test("no session among the owners halts with the sentence", async () => {

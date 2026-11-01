@@ -548,3 +548,51 @@ describe("🚧 change lines after walk #2 (PLAN-dc-after-walk2 Q3-1)", () => {
 		expect(later.map((l) => l.text)).toEqual(["Health 10 (full)", "Health 10 → 7"])
 	})
 })
+
+describe("a library change (M2c)", () => {
+	const lib = (op: any, label: string, over: Partial<LedgerRow> = {}): LedgerRow => ({
+		id: 5,
+		kind: "library",
+		messageId: 10,
+		ownerKey: "world",
+		ownerLabel: "Library",
+		updatedBy: "run",
+		library: { op, label },
+		...over
+	})
+
+	test("a landed change is a line in plain words", () => {
+		const lines = ledgerLines([
+			lib("create-character", "Mara", { id: 1 }),
+			lib("update-character", "Mara", { id: 2 }),
+			lib("create-lorebook", "Saltmarsh", { id: 3 }),
+			lib("attach-lorebook", "Saltmarsh", { id: 4 })
+		])
+		expect(lines.map((l) => [l.kind, l.text])).toEqual([
+			["library", "Made a character: Mara"],
+			["library", "Changed Mara"],
+			["library", "Made a lorebook: Saltmarsh"],
+			["library", "Read Saltmarsh into this session"]
+		])
+	})
+
+	test("a change drafted under Off says it was not made, and why", () => {
+		const why = "Your library write mode is Off, so nothing is added to your library. You can change it under Settings › User."
+		const [line] = ledgerLines([lib("create-character", "Mira", { library: { op: "create-character", label: "Mira", skipped: why } })])
+		expect(line!.text).toBe(`Drafted a character, not added: Mira. ${why}`)
+	})
+
+	test("a row with no change in it is no line", () => {
+		expect(ledgerLines([lib("create-character", "x", { library: undefined })])).toEqual([])
+	})
+
+	test("a pending library proposal reads as a proposal, for the usual Accept / Reject", () => {
+		const text = (op: string, label = "Mara") =>
+			describeProposal({ kind: "library", payload: { kind: "library", op, label } }, {})
+		expect(text("create-character")).toBe("Proposes a character: Mara")
+		expect(text("update-character")).toBe("Proposes changing Mara")
+		expect(text("create-lorebook", "Saltmarsh")).toBe("Proposes a lorebook: Saltmarsh")
+		expect(text("attach-lorebook", "Saltmarsh")).toBe("Proposes reading Saltmarsh into this session")
+		expect(text("nonsense")).toContain("cannot describe")
+	})
+})

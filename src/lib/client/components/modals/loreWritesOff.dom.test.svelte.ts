@@ -95,3 +95,37 @@ describe("the compile under lorebook writes from sessions", () => {
 		expect(sent.map((s) => s.event)).toContain("scenes:compile")
 	})
 })
+
+
+describe("Library write mode control (M2c)", () => {
+	test("shows Review by default and writes 'full' when Full is chosen", async () => {
+		const { default: LoreWriteModePicker } = await import(
+			"$lib/client/components/inputs/LoreWriteModePicker.svelte"
+		)
+		const { LIBRARY_WRITE_MODE_CHOICES, effectiveLibraryWriteMode } = await import(
+			"$lib/shared/library/libraryWriteMode"
+		)
+		const host = document.createElement("div")
+		document.body.append(host)
+		const chosen: (string | null)[] = []
+		mounted.push(
+			mount(LoreWriteModePicker, {
+				target: host,
+				props: {
+					legend: "Library write mode",
+					name: "user-library-write-mode",
+					value: effectiveLibraryWriteMode(null),
+					wording: LIBRARY_WRITE_MODE_CHOICES,
+					onValueChange: (m: string | null) => chosen.push(m)
+				}
+			})
+		)
+		await settle()
+		const radios = [...host.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+		expect(radios.find((r) => r.checked)?.value).toBe("review")
+		expect(host.textContent).toContain("Review (default)")
+		radios.find((r) => r.value === "full")!.click()
+		await settle()
+		expect(chosen).toEqual(["full"])
+	})
+})

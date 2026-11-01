@@ -117,6 +117,36 @@ How messages *look* (bubbles, a novel page, compact lines) is the widget's [styl
 
 How a card and glass look comes from your theme, so a custom theme can restyle both.
 
+### Spoken lines
+
+When a line has been [read aloud](./sessions.md#read-aloud), the Messages widget draws one quiet row under it, after any pictures:
+
+- A **voice chip** with the voice's name, and the character's face when it is their own voice. Hover it to read how the line was spoken: the voice, the model and the mood.
+- The **mood** as a small chip, when the line had one.
+
+While a line plays (and only then), the words being spoken show as a caption under the row. The line's player is hidden: the heading icon plays and stops it, and the ⋮ menu holds the full player.
+
+While a line's audio is being made, whether it came with a reply or you pressed **Read aloud** or **Say it as…** yourself, the line above the message box says so beside who is typing, for example *Mira is speaking…* (or *Ann is typing… · Mira is speaking…*), and the line's heading icon is its **Stop**. Stopping ends only that line's audio. A line whose audio was cleared reads *Not spoken yet*, and its heading icon reads **Read aloud** again.
+
+A line with spoken audio has **one speech icon** in its heading, first among the quick icons. On a desktop it shows when you hover or focus the line; on a touch screen it is always there:
+
+- **Play the spoken line** (a speaker): press it to play the line, press it again to stop (_Stop_ pauses and goes back to the start). While the line plays the icon pulses softly.
+- While the line's audio is being made the icon works instead (a slow ember pulse; still when your system asks for less motion), its tooltip reads **Speaking…**, and it is **Stop speaking this line**: pressing it ends only that line's audio.
+- A line with no audio, or whose audio was cleared, shows **Read aloud** (a speaker) in the same place. A pub that has no voice yet greys it out, and its tooltip says why, for example _no voice is set up on this pub yet_. **Read replies aloud** being Off never greys it out. Choosing _No player_ under **Settings › Spoken lines** also shows **Read aloud** (**Say it again** once the line has audio), and no player is drawn for the line.
+
+The line's **⋮** menu lists the speech verbs itself:
+
+- **Read aloud** (**Say it again** once it has audio, for after you edit a line or change a voice).
+- **Say it as…** opens a small dialog. Pick a mood from the chips (the common ones first; **More** shows the rest, **Fewer** hides them again), or type your own (_tired_, _angry_). A line under the chips shows the first words with the mood, makes the audio once that way, and changes nothing for later. The last mood you chose is remembered for that session in this browser.
+- **Stop speaking this line** while the line is being spoken.
+- **Speech**, once the line has audio, opens a small popout beside the menu with the browser's **full player** for the line (play, scrub, volume). Closing the menu does not stop it.
+
+Every message [style](#style) hides the spoken line's own player, its play-state glyph and clock, its ⋯ menu and its **Speaking…** row (a screen reader still hears *Speaking…*); a style of your own can show any of them again.
+
+**One sound at a time.** Starting a line stops the one that was playing (stop means pause and go back to the start), wherever it was started: the heading icon, the ⋮ › Speech player, or **Make and play** when a new line arrives. A voice's **Try this voice** clip pauses a playing line, and a line pauses a playing clip.
+
+Under **Make and play**, the newest line plays by itself as its audio arrives, never older lines, and never when you open the session. When the browser refuses a sound nobody asked for, press the line's speech icon.
+
 ### A second Messages widget for one channel
 
 Some sessions have more than one channel. The [Lair](./genre-lair.md) has the story and the **Sanctum**, your talk with the Castellan. A layout can give a channel a widget of its own: a second **Messages** widget with its **Channel** setting on that channel. The Lair's own layout doesn't: it shows the Sanctum as a tab of the story (see [Channel tabs](#channel-tabs)).
@@ -286,7 +316,7 @@ The main panel is a place, not a widget: the big panel in the middle. Any panel 
 - **Move the main panel's last tab out**: the panel nearest it in the middle (the one just above, else the one just below) becomes the main panel.
 - **The middle is never left empty.** Put something there before you move the last panel out; otherwise the editor says *Put something in the middle first.*
 
-**Messages** can go in any column, or nowhere. Wherever the conversation sits, a phone and Stage only still open on it, and a side holding it always stays docked: it never tucks away to icons. In a layout with no conversation, a phone and Stage only open on the main panel instead.
+**Messages** can go in any column, or nowhere. Wherever the conversation sits, a phone and full screen still open on it, and a side holding it always stays docked: it never tucks away to icons. In a layout with no conversation, a phone and full screen open on the main panel instead.
 
 ### More than one of a widget
 
@@ -322,9 +352,9 @@ Below 1024px the sides are hidden and the main panel takes the full width. The *
 
 If you moved the conversation into a side, a phone still opens on the conversation, and the middle's panels join the list. With no conversation in the layout, it opens on the main panel.
 
-### Stage only, Dock, Half and Focus
+### Full screen, Dock, Half and Focus
 
-**Stage only** (**Ctrl .**, or **⌘ .** on a Mac) hides everything but the conversation (or, in a layout without one, the main panel); press it again, or Esc, to bring the layout back exactly as it was. It doesn't apply while the editor is open. Opening a sidebar view beside the session at **Dock**, **Half** or **Focus** width changes how much room the session has, which can tuck its sides. Both are explained in [Getting around](./getting-around.md#widths-dock-half-and-focus).
+**Full screen** (**Ctrl Shift F**, or **⌘ Shift F** on a Mac, or the header's **Full screen** button) hides everything but the conversation (or, in a layout without one, the main panel); press it again, or Esc, to bring the layout back exactly as it was. It works at every width, is remembered for each session, and doesn't apply while the editor is open. A genre with its own session view may open a session in full screen the first time, with a one-line notice (Press Esc… on a keyboard, Tap the corner… on a touch screen), and after that it remembers your choice. Opening a sidebar view beside the session at **Dock**, **Half** or **Focus** width changes how much room the session has, which can tuck its sides. Both are explained in [Getting around](./getting-around.md#widths-dock-half-and-focus).
 
 ## Editing on a phone
 

@@ -533,6 +533,29 @@ describe("adding a model by Hub id", () => {
 		)
 	}, 60_000)
 
+	it("refuses a dtype transformers.js does not offer", async () => {
+		const { conn } = await makeEndpoint(
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
+		)
+		hubAnswers = (url) =>
+			url.includes("/api/models/")
+				? {
+						ok: true,
+						body: {
+							private: false,
+							siblings: [{ rfilename: "onnx/model.onnx" }]
+						}
+					}
+				: { ok: true, body: { hidden_size: 8 } }
+		const h = await handlers()
+		const res = await h.connectionsAddHubModel.handler(
+			admin(),
+			{ id: conn.id, hubId, dtype: "int3" },
+			noop
+		)
+		expect(res.error).toMatch(/not a precision/)
+	}, 60_000)
+
 	it("reads an entity model's labels out of id2label", async () => {
 		const { conn } = await makeEndpoint(
 			CONNECTION_TYPE.LOCAL_ONNX_NER,
@@ -719,6 +742,68 @@ describe("downloading a model", () => {
 			quantization: "fp16",
 			status: "complete"
 		})
+	}, 60_000)
+
+	it("downloads a hub-added model at the dtype asked for, and records it", async () => {
+		const { conn, row } = await makeEndpoint(
+			CONNECTION_TYPE.LOCAL_ONNX_NER,
+			"some-org/hand-added-ner-2"
+		)
+		await testDb
+			.update(schema.connectionModels)
+			.set({ extraJson: { onnx: { addedByUser: true } } })
+			.where(eq(schema.connectionModels.id, row.id))
+		const h = await handlers()
+		const res = await h.connectionsDownloadModel.handler(
+			admin(),
+			{ id: conn.id, modelId: row.id, dtype: "q4" },
+			noop
+		)
+		expect(res.error).toBeUndefined()
+		const { activeDownload } = await import(
+			"$lib/server/localModels/onnxCache"
+		)
+		await activeDownload("ner", row.model)?.settled
+		expect(
+			transformers.AutoModelForTokenClassification.from_pretrained.mock
+				.lastCall?.[1]
+		).toMatchObject({ dtype: "q4" })
+		const [registered] = await testDb
+			.select()
+			.from(schema.localModels)
+			.where(eq(schema.localModels.filename, row.model))
+		expect(registered).toMatchObject({ quantization: "q4" })
+	}, 60_000)
+
+	it("refuses a dtype the catalogue entry does not list, and an unknown one", async () => {
+		const { conn, row } = await makeEndpoint(
+			CONNECTION_TYPE.LOCAL_ONNX_NER,
+			"Xenova/bert-base-NER"
+		)
+		const h = await handlers()
+		const bad = await h.connectionsDownloadModel.handler(
+			admin(),
+			{ id: conn.id, modelId: row.id, dtype: "fp16" },
+			noop
+		)
+		expect(bad.error).toMatch(/does not list fp16/)
+		const unknown = await h.connectionsDownloadModel.handler(
+			admin(),
+			{ id: conn.id, modelId: row.id, dtype: "int3" },
+			noop
+		)
+		expect(unknown.error).toMatch(/not a precision/)
+		expect(transformers.AutoModelForTokenClassification.from_pretrained).not.toHaveBeenCalled()
+		const ok = await h.connectionsDownloadModel.handler(
+			admin(),
+			{ id: conn.id, modelId: row.id, dtype: "q8" },
+			noop
+		)
+		expect(ok.error).toBeUndefined()
+		const { activeDownload } = await import(
+			"$lib/server/localModels/onnxCache"
+		)
+		await activeDownload("ner", row.model)?.settled
 	}, 60_000)
 
 	/**

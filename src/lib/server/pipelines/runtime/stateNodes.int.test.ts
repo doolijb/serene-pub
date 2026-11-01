@@ -226,6 +226,84 @@ describe("core:task/set-state@1", () => {
 		expect(written.validFromMessageId).toBe(w.message.id)
 	})
 
+	test("a declared worldRow files a cast member's change there, so Back on that row takes it", async () => {
+		// The run's own line (a press), posted after Verity spoke and with no
+		// speaker: under the turn lock alone her change could not file there.
+		declareSlots()
+		const w = await world()
+		const [press] = await testDb
+			.insert(schema.sessionMessages)
+			.values({ sessionId: w.session.id, role: "assistant", content: "…" })
+			.returning()
+		await testDb
+			.insert(schema.messages)
+			.values({ id: press.id, sessionId: w.session.id, role: "assistant" } as never)
+		const setState = await node("core:task/set-state@1")
+		const out: any = await setState(
+			{
+				scope: { sessionId: w.session.id },
+				params: { mode: "apply" },
+				worldRow: { status: "committed", ids: { id: press.id } },
+				changes: [{ owner: { kind: "session_cast", id: w.verity.id }, slotId: HP, value: 14 }]
+			},
+			{} as any
+		)
+		expect(out.value.applied).toHaveLength(1)
+		const [written] = await testDb
+			.select()
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.id, out.value.applied[0]))
+		expect(written.validFromMessageId).toBe(press.id)
+
+		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+		await retractStateAnchoredTo(testDb as unknown as Db, press.id)
+		const { valueOf } = await import("$lib/server/state/resolve")
+		expect(
+			await valueOf(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				owner: { kind: "session_cast", id: w.verity.id },
+				slotId: HP
+			})
+		).toBe(20)
+	})
+
+	test("a later change with no row of its own never files behind the row that holds hers", async () => {
+		// Her sheet set at a run's row after her latest reply (an interview, a
+		// press); the next change, from a run that declares no row, must still
+		// be in force — at her own reply it would sit behind that row, unseen.
+		declareSlots()
+		const w = await world()
+		const [press] = await testDb
+			.insert(schema.sessionMessages)
+			.values({ sessionId: w.session.id, role: "assistant", content: "…" })
+			.returning()
+		await testDb
+			.insert(schema.messages)
+			.values({ id: press.id, sessionId: w.session.id, role: "assistant" } as never)
+		const setState = await node("core:task/set-state@1")
+		const hp = (value: number, worldRow?: unknown) =>
+			setState(
+				{
+					scope: { sessionId: w.session.id },
+					params: { mode: "apply" },
+					...(worldRow ? { worldRow } : {}),
+					changes: [{ owner: { kind: "session_cast", id: w.verity.id }, slotId: HP, value }]
+				},
+				{} as any
+			)
+		expect(((await hp(14, { status: "committed", ids: { id: press.id } })) as any).value.applied).toHaveLength(1)
+		const later: any = await hp(9)
+		expect(later.value.applied).toHaveLength(1)
+		const { valueOf } = await import("$lib/server/state/resolve")
+		expect(
+			await valueOf(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				owner: { kind: "session_cast", id: w.verity.id },
+				slotId: HP
+			})
+		).toBe(9)
+	})
+
 	test("a refused change is a result, not the end of the turn", async () => {
 		declareSlots()
 		const w = await world()

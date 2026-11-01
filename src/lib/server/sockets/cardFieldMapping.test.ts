@@ -71,6 +71,14 @@ describe("characterFieldsFromParsedData", () => {
 
 		expect(row.creatorNotesMultilingual).toBeNull()
 	})
+
+	// 2026-10-29: the column is NOT NULL (default []). A card without the field
+	// — a lorebook's derived card, a V1 card — failed the whole import on null.
+	test("gives a card without alternate_greetings an empty list, never null", () => {
+		expect(characterFieldsFromParsedData({ name: "Vex" }).alternateGreetings).toEqual([])
+		expect(characterFieldsFromParsedData({ name: "Vex", alternate_greetings: "x" } as never).alternateGreetings).toEqual([])
+		expect(characterFieldsFromParsedData({ name: "Vex", alternate_greetings: ["hi"] }).alternateGreetings).toEqual(["hi"])
+	})
 })
 
 describe("personaFieldsFromParsedData", () => {

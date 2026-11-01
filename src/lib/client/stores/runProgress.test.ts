@@ -185,4 +185,31 @@ describe("runProgress", () => {
 			status: null
 		})
 	})
+
+	/**
+	 * 🚧 Speech polish (owner ruling 2026-10-29): a speak-message run shows on
+	 * its own line only — the card listed it as *Read Aloud · Speaking*. Its
+	 * frames carry `lineBound`, and the store drops them: never in flight,
+	 * never a receipt, and its start or end never retires the receipt the
+	 * card is showing for the reply before it.
+	 */
+	test("a line-bound run (speaking a line) is never listed, never a receipt, and leaves the reply's receipt standing", () => {
+		runProgress.started({ runId: "reply", sessionId: SESSION, label: "respond" })
+		runProgress.apply({ runId: "reply", sessionId: SESSION, done: true, outcome: "ok" })
+
+		runProgress.started({ runId: "speak", sessionId: SESSION, label: "read-aloud", lineBound: true })
+		runProgress.apply({
+			runId: "speak",
+			sessionId: SESSION,
+			nodeKey: "speak",
+			status: { i18n: { en: "Speaking" } },
+			lineBound: true
+		})
+		expect(runProgress.get("speak")).toBeUndefined()
+		expect(runProgress.forSession(SESSION)).toEqual([])
+		expect(runProgress.lastFinished(SESSION)).toMatchObject({ runId: "reply", label: "respond" })
+
+		runProgress.apply({ runId: "speak", sessionId: SESSION, done: true, outcome: "ok", lineBound: true })
+		expect(runProgress.lastFinished(SESSION)).toMatchObject({ runId: "reply", label: "respond" })
+	})
 })

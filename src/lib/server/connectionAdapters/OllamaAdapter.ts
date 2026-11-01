@@ -681,6 +681,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 export function ollamaModelModality(entry: unknown): string | undefined {
 	const caps = (entry as { capabilities?: unknown } | null)?.capabilities
 	if (!Array.isArray(caps)) return undefined
+	// 🚧 A speech model (Phonon, >= 0.40.11) only speaks: "tts".
+	if (caps.includes("speech")) return "tts"
 	const embeds = caps.includes("embedding")
 	const completes = caps.includes("completion")
 	if (embeds === completes) return undefined

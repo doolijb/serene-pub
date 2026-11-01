@@ -2,13 +2,13 @@
  * The plugin subsystem's public entry point: one process-wide `SandboxManager`
  * and the startup bootstrap that hydrates it from the database.
  *
- * Everything here is inert unless `SP_PLUGINS_ENABLED` is set — the manager
- * exists (so admin routes can register/install), but no enabled plugins load
- * and no hooks fire until the gate is on. That is what lets the whole surface
- * ship in 0.6.0 turned off.
+ * Everything here is on unless `SP_PLUGINS_ENABLED` turns it off — with the
+ * gate off the manager still exists (so admin routes can answer), but no
+ * enabled plugins load and no hooks fire.
  */
 
 import { SandboxManager, type InvocationRecord } from "./SandboxManager"
+import { afterTransaction } from "$lib/server/db/transactionGuard"
 import {
 	loadEnabledPlugins,
 	loadPluginManifests,
@@ -23,6 +23,7 @@ import { registerPluginHookPoints } from "./pluginHookPoints"
 import { registerPluginAnnex } from "./pluginAnnex"
 import { syncPluginVariables } from "./pluginVariables"
 import { pluginsEnabled } from "./flag"
+import { getAppDataDir } from "$lib/server/utils/appDataDir"
 import { syncPluginEngines } from "./engineHost"
 import { pluginEvents, syncPluginEventHooks } from "./eventHost"
 import { setRunStopObserver } from "$lib/server/pipelines/runtime/runRegistry"
@@ -35,19 +36,32 @@ let dbRef: Db | null = null
 /** Stops the hourly `core:event/schedule-tick@1` (`scheduleTick.ts`). */
 let stopScheduleTick: (() => void) | null = null
 
-/** Best-effort, fire-and-forget: a failed log write never affects a hook. */
-function persist(rec: InvocationRecord): void {
-	if (!dbRef) return
-	void writeInvocation(dbRef, rec).catch((e) =>
-		console.error("[plugins] invocation log write failed:", e)
-	)
+/**
+ * Best-effort, fire-and-forget: a failed log write never affects a hook. A hook
+ * can run inside a transaction (a migrate hook under `forwardTurn`), and this
+ * write uses the process handle, so it waits until that transaction settles
+ * (`afterTransaction`) — inside it, the outer handle would wait on the
+ * transaction's own mutex. `db` is for tests; the boot's handle otherwise.
+ * @internal
+ */
+export function persistInvocation(rec: InvocationRecord, db: Db | null = dbRef): void {
+	const handle = db
+	if (!handle) return
+	afterTransaction(() => {
+		void writeInvocation(handle, rec).catch((e) =>
+			console.error("[plugins] invocation log write failed:", e)
+		)
+	})
 }
 
 /** The process-wide manager. Lazily created; safe to call before bootstrap. */
 export function getManager(): SandboxManager {
 	if (!manager)
 		manager = new SandboxManager({
-			onInvocation: persist
+			onInvocation: (rec) => persistInvocation(rec),
+			dataDir: getAppDataDir(),
+			// ctx.annex('user') (M2b): the boot's handle, once there is one.
+			annexDb: () => dbRef
 		})
 	return manager
 }
@@ -61,6 +75,25 @@ export function getManager(): SandboxManager {
 export async function bootstrapPlugins(db: Db): Promise<void> {
 	const mgr = getManager()
 	dbRef = db
+
+	// Package folders are disk, whatever the flag: drop what no install keeps.
+	try {
+		const { cullPluginPackageDirs } = await import("./install")
+		for (const line of await cullPluginPackageDirs(db)) console.warn(`[plugins] ${line}`)
+	} catch (e) {
+		console.warn("[plugins] package folder cleanup failed:", e)
+	}
+	// Anything in plugin-uploads is an upload or unpack a previous run abandoned.
+	try {
+		const { rm } = await import("node:fs/promises")
+		const { join } = await import("node:path")
+		await rm(join(getAppDataDir(), "plugin-uploads"), {
+			recursive: true,
+			force: true
+		})
+	} catch (e) {
+		console.warn("[plugins] upload folder cleanup failed:", e)
+	}
 
 	// Cancelling a run reaches the hooks that run started. Registered against
 	// *this* manager rather than through `getManager()`, so a shutdown cannot
@@ -97,7 +130,7 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 					row.manifest,
 					row.pluginId
 				)
-				const registered = registerPluginDefinitions(declarations)
+				const registered = registerPluginDefinitions(declarations, row.pluginId)
 				// Its declared events too, from the same manifest (E1b).
 				const events = registerPluginEvents(row.manifest, row.pluginId)
 				// And its annex declaration (ruling 2026-09-26).
@@ -253,6 +286,22 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		} catch (e) {
 			console.warn("[plugins] widget-style sync failed:", e)
 		}
+	}
+
+	// 🚧 (M2c) Every enabled plugin's provided books, imported or upgraded as
+	// the admin who enabled it. Outside the sandbox gate: nothing of it runs in
+	// one. Idempotent, best-effort, and never stalls the boot.
+	try {
+		const { syncProvidedBooks } = await import("./providedBooks")
+		const { plugins: pluginsTable } = await import("$lib/server/db/schema")
+		const { eq } = await import("drizzle-orm")
+		const on = await db
+			.select({ pluginId: pluginsTable.pluginId })
+			.from(pluginsTable)
+			.where(eq(pluginsTable.enabled, true))
+		for (const { pluginId } of on) await syncProvidedBooks(db, pluginId)
+	} catch (e) {
+		console.warn("[plugins] provided-book sync failed:", e)
 	}
 
 	// In-app genres (PLAN-pipeline-canvas-and-genre-authoring §6.1), back in

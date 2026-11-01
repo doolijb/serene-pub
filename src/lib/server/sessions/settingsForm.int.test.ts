@@ -471,3 +471,67 @@ describe("the start form and the card (R32, §7)", () => {
 		expect((ruleBased.asks ?? []).map((a: any) => a.key)).not.toContain("rigour")
 	})
 })
+
+describe("a genre's json field (the json field type)", () => {
+	const JSON_GENRE = "acme.jsonfield:inlet/jsonfield"
+	const cfgAddress = { kind: "genre" as const, key: "cfg" }
+
+	beforeAll(async () => {
+		await testDb.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: JSON_GENRE,
+			version: 1,
+			kind: "inlet",
+			status: "live",
+			i18n: { name: { en: "Json Field Test" } },
+			ports: {},
+			sessionShape: {
+				composer: "text",
+				characters: { min: 0 },
+				fields: {
+					cfg: {
+						type: "json",
+						label: "Config",
+						maxBytes: 64,
+						jsonSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+						default: { n: 1 }
+					},
+					// A hostile declaration: held to the ceiling, never the raw number.
+					big: { type: "json", label: "Big", maxBytes: 10_000_000_000 }
+				}
+			}
+		} as any)
+	})
+
+	const jsonSession = () => makeSession("core-story-living", { genreId: `${JSON_GENRE}@1`, presetId: null })
+
+	test("an object is stored parsed and resolves as that object; the default resolves parsed too", async () => {
+		const w = await jsonSession()
+		const { updateSetting } = await import("./settingsForm")
+		const { resolveSessionSettings } = await import("./settings")
+		expect((await resolveSessionSettings(testDb as any, w.session.id))!.fields.cfg).toEqual({ n: 1 })
+		await updateSetting(testDb as any, w.session.id, admin(w), cfgAddress, { n: 7 })
+		const [row] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		expect((row!.genreFields as Record<string, unknown>).cfg).toEqual({ n: 7 })
+		expect((await resolveSessionSettings(testDb as any, w.session.id))!.fields.cfg).toEqual({ n: 7 })
+		const cfg = (await fieldsOf(await form(w, admin(w)))).find((x) => x.id === JSON.stringify(["genre", "cfg"]))!
+		expect(cfg).toMatchObject({ control: "json", maxBytes: 64, value: { n: 7 } })
+	})
+
+	test("over the cap and a schema misfit are refused with sentences; nothing is saved", async () => {
+		const w = await jsonSession()
+		const { updateSetting, SettingRefusal } = await import("./settingsForm")
+		await expect(updateSetting(testDb as any, w.session.id, admin(w), cfgAddress, { n: 1, pad: "x".repeat(100) })).rejects.toThrow(
+			/Config: the value is \d+ bytes of JSON, over its 64-byte cap\. Nothing was saved\./
+		)
+		await expect(updateSetting(testDb as any, w.session.id, admin(w), cfgAddress, { n: "seven" })).rejects.toBeInstanceOf(SettingRefusal)
+		await expect(updateSetting(testDb as any, w.session.id, admin(w), cfgAddress, { n: "seven" })).rejects.toThrow(/Config: .*Nothing was saved\./)
+		const [row] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		expect("cfg" in ((row!.genreFields ?? {}) as object)).toBe(false)
+	})
+
+	test("a hostile maxBytes declaration is held to the ceiling", async () => {
+		const w = await jsonSession()
+		const big = (await fieldsOf(await form(w, admin(w)))).find((x) => x.id === JSON.stringify(["genre", "big"]))!
+		expect(big.maxBytes).toBe(262144)
+	})
+})

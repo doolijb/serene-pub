@@ -55,7 +55,8 @@ import * as schema from "$lib/server/db/schema"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 import { SHARE_REFUSALS } from "$lib/shared/lorebooks/sessionNotes"
-import { STORY_CALENDAR_PRESETS, type StoryCalendar } from "@serene-pub/sdk"
+import { STORY_CALENDAR_PRESETS, parseStoryCalendar, type StoryCalendar } from "@serene-pub/sdk"
+import { getSessionGenre } from "$lib/server/pipelines/entities/sessionGenres"
 
 /** What a session's own book is named when the session has no name. */
 const UNNAMED = "Untitled session"
@@ -154,8 +155,37 @@ export async function ownBookFor(
 }
 
 /**
+ * The calendar an own book starts with when the caller names none: the session
+ * genre's declared `shape.calendar` — with `months`, the declaration IS the
+ * calendar; without, core's own-book calendar with the declared `periods` and
+ * `seasons` laid on it. No declaration, or one that does not parse: core's.
+ */
+async function genreCalendarOf(tx: Db, sessionId: number): Promise<StoryCalendar> {
+	const [session] = await tx
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return OWN_BOOK_CALENDAR
+	const decl = (await getSessionGenre(tx, session.genreId))?.shape.calendar
+	if (!decl) return OWN_BOOK_CALENDAR
+	try {
+		if (decl.months) return parseStoryCalendar(decl) ?? OWN_BOOK_CALENDAR
+		return (
+			parseStoryCalendar({
+				...OWN_BOOK_CALENDAR,
+				...(decl.periods !== undefined ? { periods: decl.periods } : {}),
+				...(decl.seasons !== undefined ? { seasons: decl.seasons } : {})
+			}) ?? OWN_BOOK_CALENDAR
+		)
+	} catch {
+		return OWN_BOOK_CALENDAR
+	}
+}
+
+/**
  * 🚧 The one insert of an own book: `kind` 'book', `story_calendar`
- * `OWN_BOOK_CALENDAR`, every `story_clock_*` NULL; a blank name reads
+ * the genre's declared calendar (else `OWN_BOOK_CALENDAR`), every `story_clock_*` NULL; a blank name reads
  * "Untitled session". `ON CONFLICT DO NOTHING` on the `session_id` index, then
  * a read on the same handle — two first writes both insert and one wins.
  * Inside a transaction, pass its `tx`.
@@ -169,8 +199,11 @@ export async function insertOwnBook(
 		overlayOf: number | null
 		primaryRuleset: string
 		rulesetVersion: string | null
+		/** The book's calendar; absent, the session's genre declares it (`shape.calendar`), else core's. */
+		calendar?: StoryCalendar | null
 	}
 ): Promise<OwnBookRow> {
+	const calendar = row.calendar !== undefined ? row.calendar : await genreCalendarOf(tx, row.sessionId)
 	await tx
 		.insert(schema.lorebooks)
 		.values({
@@ -181,7 +214,7 @@ export async function insertOwnBook(
 			overlayOf: row.overlayOf,
 			primaryRuleset: row.primaryRuleset,
 			rulesetVersion: row.rulesetVersion,
-			storyCalendar: OWN_BOOK_CALENDAR,
+			storyCalendar: calendar,
 			storyClockYear: null,
 			storyClockMonth: null,
 			storyClockDay: null,
@@ -379,6 +412,39 @@ export async function loreWriteTargetFor(
 		mode,
 		sourceMessageId: await turnAnchorOf(db, sessionId, opts.anchorMessageId)
 	}
+}
+
+/**
+ * 🚧 (M2b) The book a session's lore write would land on, read only: the
+ * attached book when `loreWriteRoute` sends the write there, else the
+ * session's own book when it has one — never made here (null: none yet, or
+ * no session). What `lorebook-annex`'s `version` reads for a compare-and-set.
+ */
+export async function loreWriteBookIdOf(db: Db, sessionId: number): Promise<number | null> {
+	const [session] = await db
+		.select({ userId: schema.sessions.userId, lorebookId: schema.sessions.lorebookId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return null
+	const attachedId = session.lorebookId ?? null
+	const [book] =
+		attachedId == null
+			? []
+			: await db
+					.select({ userId: schema.lorebooks.userId })
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, attachedId))
+					.limit(1)
+	const mode = await sessionLoreWriteMode(db, sessionId)
+	const route = loreWriteRoute({
+		attachedId,
+		bookOwnerId: book?.userId ?? null,
+		sessionOwnerId: session.userId,
+		mode
+	})
+	if (route === "book") return attachedId
+	return (await ownBookOf(db, sessionId))?.id ?? null
 }
 
 /**

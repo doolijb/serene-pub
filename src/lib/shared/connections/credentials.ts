@@ -69,21 +69,24 @@ export const KEY_URLS: Readonly<Record<string, string>> = {
 	horde: "https://aihorde.net/register",
 	// Account Settings → Get Persistent API Token, inside the app.
 	novelai: "https://novelai.net/",
-	bfl: "https://dashboard.bfl.ai/"
+	bfl: "https://dashboard.bfl.ai/",
+	elevenlabs: "https://elevenlabs.io/app/settings/api-keys"
 }
 
 /** Types that are a key away from working, whatever preset they carry. */
 const KEYED_TYPES: ReadonlySet<string> = new Set([
 	CONNECTION_TYPE.ANTHROPIC,
 	CONNECTION_TYPE.NOVELAI,
-	CONNECTION_TYPE.BFL
+	CONNECTION_TYPE.BFL,
+	CONNECTION_TYPE.ELEVENLABS
 ])
 
 /** Types whose key is their own (looked up by type, not preset), keyed or not. */
 const KEY_URL_BY_TYPE: ReadonlySet<string> = new Set([
 	CONNECTION_TYPE.HORDE,
 	CONNECTION_TYPE.NOVELAI,
-	CONNECTION_TYPE.BFL
+	CONNECTION_TYPE.BFL,
+	CONNECTION_TYPE.ELEVENLABS
 ])
 
 /**

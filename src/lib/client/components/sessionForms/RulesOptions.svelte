@@ -10,6 +10,7 @@
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 
 	let {
 		sessionId,
@@ -22,6 +23,11 @@
 	let canEdit = $state(false)
 	let error: string | null = $state(null)
 	let saving = $state(false)
+	/** 🚧 "Update rules" (🚧 M0 L4): the owner's offer, read with the options. */
+	let upgrade: { from: string; to: string; notes: string[] } | null = $state(null)
+	let confirming = $state(false)
+	let updating = $state(false)
+	let updateError: string | null = $state(null)
 
 	$effect(() => {
 		const id = sessionId
@@ -31,6 +37,7 @@
 				if (res.sessionId !== id) return
 				view = res.rulesOptions
 				canEdit = res.canEdit
+				upgrade = res.upgrade ?? null
 				saving = false
 				error = null
 			}
@@ -48,6 +55,38 @@
 			release()
 			releaseError()
 		}
+	})
+
+	function confirmUpdate() {
+		if (!upgrade || updating) return
+		const id = sessionId
+		const to = upgrade.to
+		updating = true
+		updateError = null
+		const release = declareInterest<"sessions:convertRuleset">(
+			"sessions:convertRuleset",
+			(res) => {
+				if (res.id !== id) return
+				release()
+				releaseConvert = null
+				updating = false
+				confirming = false
+				if (res.error) {
+					updateError = res.error
+					return
+				}
+				upgrade = null
+				socket.emit("sessions:setRulesetSettings", { sessionId: id })
+			}
+		)
+		releaseConvert = release
+		socket.emit("sessions:convertRuleset", { id, to })
+	}
+
+	let releaseConvert: (() => void) | null = null
+	$effect(() => () => {
+		releaseConvert?.()
+		releaseConvert = null
 	})
 
 	function choose(optionId: string, choiceId: string) {
@@ -73,6 +112,75 @@
 	const chosen = (o: Sockets.Sessions.SetRulesetSettings.Option) =>
 		o.choices.find((c) => c.id === o.value)
 </script>
+
+{#if view && upgrade && canEdit}
+	<section class={cardClass} aria-labelledby="session-rules-version">
+		<h3 id="session-rules-version" class="mb-1 text-sm font-medium">Rules version</h3>
+		<p class="text-surface-600-400 mb-3 text-xs">
+			This session plays {view.rulesetName} v{upgrade.from}. Version {upgrade.to} is installed.
+		</p>
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-primary-500"
+			onclick={() => {
+				updateError = null
+				confirming = true
+			}}
+		>
+			Update rules to v{upgrade.to}
+		</button>
+		{#if updateError}
+			<p class="text-error-600-400 mt-2 text-xs" role="alert">{updateError}</p>
+		{/if}
+	</section>
+	<Dialog
+		open={confirming}
+		role="alertdialog"
+		closeOnInteractOutside={false}
+		onOpenChange={(e) => {
+			if (!e.open && !updating) confirming = false
+		}}
+	>
+		<Portal>
+			<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl">
+					<Dialog.Title class="[font-family:var(--typo-heading--font-family)] text-lg font-semibold">
+						Update rules to v{upgrade.to}?
+					</Dialog.Title>
+					<Dialog.Description class="space-y-2 text-sm">
+						{#each upgrade.notes as note, i (i)}
+							<p>{note}</p>
+						{:else}
+							<p>These rules give no notes for this update.</p>
+						{/each}
+						<p class="text-surface-600-400 text-xs">
+							Stats the new version renames, removes or adds change in this session now; everything else stays. Back undoes this.
+						</p>
+					</Dialog.Description>
+					<div class="flex flex-wrap justify-end gap-2">
+						<button
+							type="button"
+							class="btn preset-tonal-surface"
+							disabled={updating}
+							onclick={() => (confirming = false)}
+						>
+							Not now
+						</button>
+						<button
+							type="button"
+							class="btn preset-filled-primary-500"
+							disabled={updating}
+							onclick={confirmUpdate}
+						>
+							{updating ? "Updating…" : "Update rules"}
+						</button>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
+{/if}
 
 {#if view?.installed && view.options.length}
 	<section class={cardClass} aria-labelledby="session-rules-options">

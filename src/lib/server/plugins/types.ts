@@ -9,7 +9,7 @@
  * it, which is what makes the security/speed dial safe to flip.
  */
 
-import type { PermissionConfig } from "./storageHost"
+import type { SandboxConfig } from "./packageHost"
 import type { HookCtxKind } from "./hookCtx"
 
 /** Which sandbox this is. Internal — never surfaced to a hook. */
@@ -66,6 +66,40 @@ export interface InvokeOptions {
 	 * guest's input; never reaches the guest.
 	 */
 	secrets?: { nonce: string; values: Record<string, string> }
+	/**
+	 * 🚧 (M2b) The acting person's own storage folder
+	 * (`extensions_user_data/<plugin>/<userId>`) — host-derived from the call's
+	 * `user` and the plugin's `storage-per-user` grant, never from the hook's
+	 * input. Absent when either is missing: `ctx.storage.user` then refuses.
+	 */
+	userStorageDir?: string
+	/**
+	 * 🚧 (M2b) What `ctx.annex('user')` starts from: the acting person's
+	 * documents for this plugin (loaded by the manager before the call), or the
+	 * sentence its methods reject with. Host-derived like `userStorageDir` —
+	 * never from the hook's input. Absent on a kind with no annex.
+	 */
+	userAnnexJob?: UserAnnexJob
+}
+
+/** 🚧 (M2b) The start of a call's `ctx.annex('user')`: documents to answer from, or why every method rejects. */
+export type UserAnnexJob =
+	| {
+			snapshot: Record<string, { doc: unknown; version: number; updatedAt: string }>
+			limits: {
+				keyMaxLength: number
+				bytesPerDoc: number
+				docsPerOwner: number
+				bytesPerOwner: number
+			}
+	  }
+	| { denied: string }
+
+/** 🚧 (M2b) One write a call buffered: `doc: null` removes the key; `base` is the snapshot's version (0 = absent). */
+export interface UserAnnexCallWrite {
+	key: string
+	doc: unknown | null
+	base: number
 }
 
 export interface HookRunSuccess {
@@ -75,6 +109,12 @@ export interface HookRunSuccess {
 	logs: string[]
 	durationMs: number
 	backend: SandboxKind
+	/**
+	 * 🚧 (M2b) What the call wrote through `ctx.annex('user')`, buffered and not
+	 * yet saved: the manager commits it after an OK call and then drops it from
+	 * the result. Absent when the call wrote nothing.
+	 */
+	userAnnexWrites?: UserAnnexCallWrite[]
 }
 
 export interface HookRunFailure {
@@ -117,7 +157,7 @@ export interface PluginSandbox {
 		bundleSource: string,
 		bundleHash: string,
 		/** The plugin's scoped storage grant, if any — omit to deny storage. */
-		config?: PermissionConfig
+		config?: SandboxConfig
 	): Promise<void>
 
 	/** Whether `pluginId` (at any bundle) is currently loaded. */

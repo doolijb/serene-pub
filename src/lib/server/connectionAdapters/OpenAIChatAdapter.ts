@@ -896,7 +896,12 @@ async function listModels(
 					// known — so the Images job can pick it and a chat slot
 					// cannot.
 					const image = openAIImageModelInfo(m?.id)
-					return image ? { ...m, ...image } : m
+					if (image) return { ...m, ...image }
+					// 🚧 OpenAI's speech models (`/audio/speech`, the speech
+					// dialect): spoken with, never chatted with.
+					return OPENAI_SPEECH_MODEL_RE.test(String(m?.id ?? ""))
+						? { ...m, modality: "tts" }
+						: m
 				})
 			}
 		} else {
@@ -910,6 +915,12 @@ async function listModels(
 		return { models: [], error: e.message || String(e) }
 	}
 }
+
+/**
+ * 🚧 OpenAI's own speech model ids (`gpt-4o-mini-tts`, `tts-1`, `tts-1-hd` and
+ * their dated snapshots), listed as modality `tts` when the host says nothing.
+ */
+const OPENAI_SPEECH_MODEL_RE = /^(gpt-[\w.]+-mini-tts|tts-1)(-|$)/i
 
 async function testConnection(
 	connection: SelectConnection

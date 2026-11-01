@@ -70,6 +70,13 @@ import { visionProjectorOf } from "$lib/shared/connections/hostCapabilities"
 import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import { starRefusal } from "$lib/server/connections/starRefusal"
 import {
+	OPENROUTER_KEY_FACTS_KEY,
+	freeModelsFirst,
+	isFreeModel,
+	openRouterKeyFactsOf,
+	recordOpenRouterKey
+} from "$lib/server/connections/openRouterKey"
+import {
 	configValuesNamingModel,
 	type ConfigValueNamingModel
 } from "$lib/server/connections/configValuesNamingModel"
@@ -93,6 +100,7 @@ import { redactConnections } from "$lib/server/connections/visibility"
 import { isGatedEvent } from "$lib/shared/sockets/interest"
 import { socketWants } from "./interest"
 import { readStoredFacts } from "$lib/shared/connections/modelFacts"
+import { readSpeechFacts } from "$lib/shared/connectionAdapters/speechFacts"
 import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import { hostKey, sameHost } from "$lib/shared/connections/hostKey"
 import { discoverLocalProviders } from "$lib/server/connections/discoverLocal"
@@ -317,7 +325,10 @@ export async function buildConnectionsList(): Promise<Sockets.Connections.List.R
 				// by `tokenCrypto`, and is what this projection exists to keep
 				// off the wire.
 				hasCredential: hasStoredCredential(c),
-				models: models.map((m) => modelRowView(c, m, local.get(m.id))),
+				models: freeFirstWhenNoCredit(
+					c,
+					models.map((m) => modelRowView(c, m, local.get(m.id)))
+				),
 				modelsSync: modelsSyncView(c)
 			}
 		})
@@ -557,8 +568,12 @@ export const connectionsCreate: Handler<
 		delete (data as any).modelsSyncError
 		// ComfyUI's server facts are the server's to write (a duplicated
 		// row would carry another server's checks): `imageGen/comfy/serverCheck`.
-		if ((data as any).extraJson && typeof (data as any).extraJson === "object")
+		// The key's credit tier is likewise the server's
+		// (`connections/openRouterKey`).
+		if ((data as any).extraJson && typeof (data as any).extraJson === "object") {
 			delete (data as any).extraJson.comfy
+			delete (data as any).extraJson[OPENROUTER_KEY_FACTS_KEY]
+		}
 		data.capabilities = {
 			resolved: resolveConnectionCapabilities(data)
 		}
@@ -718,16 +733,31 @@ export const connectionsUpdate: Handler<
 		// Server-owned facts under `extraJson.comfy` (`serverCheck.ts`) survive
 		// a save from a client's stale copy: the stored row's, never the form's.
 		if (updateData.extraJson && typeof updateData.extraJson === "object") {
-			const { comfy: _clientCopy, ...rest } = updateData.extraJson as Record<string, unknown>
-			const storedComfy = (
-				(
-					await db.query.connections.findFirst({
-						where: (c, { eq }) => eq(c.id, id),
-						columns: { extraJson: true }
-					})
-				)?.extraJson as Record<string, unknown> | undefined
-			)?.comfy
-			updateData.extraJson = storedComfy ? { ...rest, comfy: storedComfy } : rest
+			// `extraJson.openrouter` (the key's credit tier) too, except that a
+			// changed key drops it: the fact belonged to the old key.
+			const {
+				comfy: _clientCopy,
+				[OPENROUTER_KEY_FACTS_KEY]: _clientTier,
+				...rest
+			} = updateData.extraJson as Record<string, unknown>
+			const storedExtra = (
+				await db.query.connections.findFirst({
+					where: (c, { eq }) => eq(c.id, id),
+					columns: { extraJson: true }
+				})
+			)?.extraJson as Record<string, unknown> | undefined
+			const storedComfy = storedExtra?.comfy
+			const keyChanged =
+				decryptApiKeyField(storedExtra?.apiKey) !==
+				decryptApiKeyField((editable as any).extraJson?.apiKey)
+			const storedTier = keyChanged
+				? undefined
+				: storedExtra?.[OPENROUTER_KEY_FACTS_KEY]
+			updateData.extraJson = {
+				...rest,
+				...(storedComfy ? { comfy: storedComfy } : {}),
+				...(storedTier ? { [OPENROUTER_KEY_FACTS_KEY]: storedTier } : {})
+			}
 		}
 		// The endpoint row carries no model — strip a legacy `model` field off
 		// the payload before the write, then promote it to a real model row.
@@ -1289,6 +1319,9 @@ export const connectionsTest: Handler<
 						models,
 						error: modelsRes.error ?? null
 					})
+					// OpenRouter: does this key's account have credit? Read
+					// before the emits so they carry the answer (never throws).
+					await recordOpenRouterKey(db, stored!)
 					await emitToUser("connections:models", () =>
 						connectionModelsView(params.connection.id!)
 					)
@@ -1415,6 +1448,76 @@ export const connectionsRefreshModels: Handler<
 				connectionId: params.connection?.id
 			}
 			emitToUser("connections:refreshModels", res)
+			return res
+		}
+	}
+}
+
+/**
+ * 🚧 `models:refreshSpeech` — speech facts re-read for a saved connection's
+ * speaking models. Admin only (members never touch model plumbing). The speech
+ * store is imported lazily so adapters stay out of the socket-registration graph.
+ */
+export const modelsRefreshSpeech: Handler<
+	Sockets.Connections.RefreshSpeech.Params,
+	Sockets.Connections.RefreshSpeech.Response
+> = {
+	event: "models:refreshSpeech",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const msg = "Access denied. Only admin users can refresh speech facts."
+			emitToUser("error", {
+				error: msg,
+				connectionId: params?.connectionId,
+				results: []
+			})
+			throw new Error(msg)
+		}
+		const connectionId = Number(params?.connectionId)
+		if (!Number.isInteger(connectionId)) {
+			const res: Sockets.Connections.RefreshSpeech.Response = {
+				connectionId,
+				results: [],
+				error: "Connection not found."
+			}
+			emitToUser("models:refreshSpeech", res)
+			return res
+		}
+		const rateLimitKey = `${socket.user!.id}:models:refreshSpeech`
+		if (loginRateLimit.isRateLimited(rateLimitKey)) {
+			const res: Sockets.Connections.RefreshSpeech.Response = {
+				connectionId,
+				results: [],
+				error: "Rate limited. Please wait a moment and try again."
+			}
+			emitToUser("models:refreshSpeech", res)
+			return res
+		}
+		loginRateLimit.recordFailedAttempt(rateLimitKey)
+		try {
+			const { refreshSpeechFacts } = await import(
+				"$lib/server/connectionAdapters/speech/speechFactsStore"
+			)
+			const results = await refreshSpeechFacts(db, connectionId, {
+				model: params.model
+			})
+			await emitToUser("connections:models", () =>
+				connectionModelsView(connectionId)
+			)
+			const res: Sockets.Connections.RefreshSpeech.Response = {
+				connectionId,
+				results
+			}
+			emitToUser("models:refreshSpeech", res)
+			return res
+		} catch (error: any) {
+			console.error("Refresh speech facts error:", error)
+			const res: Sockets.Connections.RefreshSpeech.Response = {
+				connectionId,
+				results: [],
+				error: "Failed to refresh speech facts."
+			}
+			emitToUser("models:refreshSpeech", res)
 			return res
 		}
 	}
@@ -1561,8 +1664,21 @@ export async function connectionModelsView(
 		type: endpoint.type,
 		preset: endpoint.preset ?? null,
 		modelsSync: modelsSyncView(endpoint),
-		models: rows.map((m) => modelRowView(endpoint, m, local.get(m.id)))
+		models: freeFirstWhenNoCredit(
+			endpoint,
+			rows.map((m) => modelRowView(endpoint, m, local.get(m.id)))
+		)
 	}
+}
+
+/** An OpenRouter key with no credit: the free models first, else as given. */
+function freeFirstWhenNoCredit(
+	endpoint: { extraJson?: unknown },
+	rows: Sockets.Connections.Models.ModelRow[]
+): Sockets.Connections.Models.ModelRow[] {
+	return openRouterKeyFactsOf(endpoint)?.freeTier
+		? freeModelsFirst(rows, isFreeModel)
+		: rows
 }
 
 /**
@@ -1581,6 +1697,8 @@ function modelRowView(
 ): Sockets.Connections.Models.ModelRow {
 	// Validated field by field rather than cast: see `readStoredFacts`.
 	const facts = readStoredFacts(m.facts)
+	// Speech facts ride beside the stored facts (lane B, S1); `readStoredFacts` drops them.
+	const speech = readSpeechFacts(m.facts)
 	return {
 		id: m.id,
 		connectionId: m.connectionId,
@@ -1601,6 +1719,7 @@ function modelRowView(
 		// Omitted entirely when the host said nothing, so a consumer branches on
 		// presence rather than on an empty object that reads like an answer.
 		...(facts ? { facts } : {}),
+		...(speech ? { speech } : {}),
 		...(local ? { local } : {}),
 		// Only where the runtime launches the model; absent everywhere else.
 		...(takesVisionProjector(endpoint.type)
@@ -1619,7 +1738,8 @@ function modelsSyncView(endpoint: {
 	return {
 		at: endpoint.modelsSyncedAt?.toISOString() ?? null,
 		error: endpoint.modelsSyncError ?? null,
-		...(typeof problem === "string" && problem ? { problem } : {})
+		...(typeof problem === "string" && problem ? { problem } : {}),
+		...(openRouterKeyFactsOf(endpoint)?.freeTier ? { freeTier: true } : {})
 	}
 }
 
@@ -2303,6 +2423,14 @@ export const connectionsSyncModels: Handler<
 	}
 }
 
+function portOf(url: string | null | undefined): string {
+	try {
+		return new URL(url ?? "").port
+	} catch {
+		return ""
+	}
+}
+
 /**
  * Which model servers are running on this machine right now, and the chat
  * models each lists — the setup wizard's detected-provider cards. See
@@ -2312,7 +2440,7 @@ export const connectionsSyncModels: Handler<
  * one does, so the wizard reuses it rather than creating a second (the server
  * refuses a second Ollama to one host). A KoboldCPP that a managed connection
  * already addresses is left out: that is Serene Pub's own process, and the
- * managed card is its door.
+ * managed card is its door. So is Serene Pub's own audio.cpp (same port).
  */
 export const connectionsDiscoverLocal: Handler<
 	Sockets.Connections.DiscoverLocal.Params,
@@ -2338,6 +2466,18 @@ export const connectionsDiscoverLocal: Handler<
 			if (
 				p.type === CONNECTION_TYPE.KOBOLDCPP &&
 				atHost.some((r) => CONNECTION_TYPE.isManagedKoboldCpp(r.type))
+			)
+				continue
+			// Likewise Serene Pub's own audio.cpp: its port is the settings
+			// port on this machine (loopback is spelled 127.0.0.1 there and
+			// localhost here, which `sameHost` deliberately does not equate).
+			if (
+				p.type === CONNECTION_TYPE.AUDIOCPP &&
+				rows.some(
+					(r) =>
+						CONNECTION_TYPE.isManagedAudioCpp(r.type) &&
+						portOf(r.baseUrl) === portOf(p.baseUrl)
+				)
 			)
 				continue
 			providers.push({
@@ -2368,6 +2508,7 @@ export function registerConnectionHandlers(
 	register(socket, afterModelChange(connectionsSetDefault), emitToUser)
 	register(socket, connectionsTest, emitToUser)
 	register(socket, connectionsRefreshModels, emitToUser)
+	register(socket, modelsRefreshSpeech, emitToUser)
 	register(socket, connectionsCapabilities, emitToUser)
 	register(socket, afterModelChange(connectionsSetCapability), emitToUser)
 	register(socket, connectionsScripts, emitToUser)

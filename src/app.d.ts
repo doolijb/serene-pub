@@ -102,12 +102,11 @@ declare global {
 		/** Show the active view at a width. A no-op with no active view. */
 		setViewWidth: (width: "dock" | "half" | "focus") => void
 		/**
-		 * Stage only: the rail, the sidebar and the page's own chrome step
-		 * aside so a session is just its story and its composer. The shell
-		 * hides its half; `data-stage-only` on the shell root is the flag a
-		 * page reads to hide its own (a session's side zones).
+		 * The open session is in full screen (SHAPES L1): the shell hides its
+		 * half; `data-fullscreen` on the shell root is the flag a page reads.
+		 * Read-only: enter/leave through `useSessionFullscreen`.
 		 */
-		stageOnly: boolean
+		readonly fullscreen: boolean
 		/**
 		 * Open a view in the sidebar and make it active.
 		 *
@@ -230,7 +229,29 @@ declare global {
 				personaId?: number
 				genreId?: string
 				presetId?: number
+				/** How the session starts; the start form opens on this mode. */
+				mode?: import("@serene-pub/sdk").SessionCreationMode
+				/** The session a branch or next chapter follows. */
+				from?: number
+				/**
+				 * 🚧 M2c: an applet's `create-session` — the genre's declared fields, prefilled (the form shows only what a
+				 * plugin may not set: persona, lorebook, a name without a persona; one press when nothing is left).
+				 */
+				fields?: Record<string, unknown>
+				/** 🚧 M2c: a lorebook the applet proposes to attach. */
+				lorebookId?: number
+				/** 🚧 M2c: the plugin whose applet asked (its id), so the form can say so and collapse to a confirm. */
+				fromApplet?: string
 			}
+			/**
+			 * 🚧 M2c: an applet's `open-sessions` — open the Sessions view filtered to these genres (the plugin's own);
+			 * the view consumes it and clears the filter when the person changes it.
+			 */
+			sessionsGenres?: string[]
+			/** 🚧 M2c: an applet's `delete-session` — the Sessions view opens its own delete confirm for this session. */
+			deleteSessionId?: number
+			/** 🚧 M2c: the plugin whose applet asked for that confirm — sent as `sessions:delete`'s `fromApplet`. */
+			deleteSessionFromApplet?: string
 			tutorial?: boolean
 			/** Where the lorebook workspace should open — one address for the
 			 * book, the section, the entry and how it is presented. */
@@ -265,6 +286,13 @@ declare global {
 			 * readiness strip set it; the Models view consumes it once.
 			 */
 			connectionsJob?: string
+			/**
+			 * Open the **Models** view's **Get a model** dialog, pre-scoped: a
+			 * runtime's **Get more…** door names its connection, a loadout's
+			 * **Get a model…** door names the loadout's capability. The Models
+			 * view consumes it once.
+			 */
+			modelsFinder?: { capability?: string; connectionId?: number }
 			/**
 			 * Open the **Loadouts** view (I12) on one loadout's **sheet**, by
 			 * row id — a Models row's **Use in…** menu, the Pipelines settings
@@ -345,6 +373,11 @@ declare global {
 
 	interface OllamaSettingsCtx {
 		settings?: Omit<SelectOllamaSettings, "id">
+	}
+
+	/** 🚧 The settings of audio.cpp, run by Serene Pub (lane D wires it). */
+	interface AudioCppSettingsCtx {
+		settings?: Sockets.AudioCpp.SettingsView
 	}
 
 	interface KoboldCppSettingsCtx {

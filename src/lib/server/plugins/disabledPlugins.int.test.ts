@@ -157,7 +157,7 @@ describe("the subsystem switched off", () => {
 			expect(lit.owns(on.id)).toBe(false)
 			expect(lit.ownsId("acme.on:genre/x@1")).toBe(false)
 
-			delete process.env.SP_PLUGINS_ENABLED
+			process.env.SP_PLUGINS_ENABLED = "0"
 			const dark = await disabledPlugins(db)
 			expect(dark.owns(on.id)).toBe(true)
 			expect(dark.ownsId("acme.on:genre/x@1")).toBe(true)

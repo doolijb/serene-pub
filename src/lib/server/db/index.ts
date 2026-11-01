@@ -17,7 +17,7 @@ import {
 } from "./lock.js"
 import type { DbLock, LockState } from "./lock.js"
 import { closeBootPass, openBootPass } from "./devBootPass"
-import { guardTransactions } from "./transactionGuard"
+import { databaseQuiet, guardTransactions } from "./transactionGuard"
 import {
 	classifyDatabaseOpenFailure,
 	isDatabaseUnopenableError
@@ -262,26 +262,46 @@ export async function closeDatabase(): Promise<void> {
 	const client = (
 		db as unknown as { $client?: { close?: () => Promise<void> } }
 	).$client
+	// Quiet first (2026-10-30): PGlite's `close()` throws under a query in
+	// flight and aborts an open transaction, so a stop that landed mid-request
+	// lost its clean marker — or would have marked clean over cut-off work.
+	// Bounded well inside the services' shared shutdown deadline.
+	const quiet = client ? await databaseQuiet(client, CLOSE_QUIET_TIMEOUT_MS) : true
+	if (!quiet)
+		console.warn(
+			`Database still busy after ${CLOSE_QUIET_TIMEOUT_MS / 1000}s; closing anyway — ` +
+				`the shutdown stays marked unclean.`
+		)
 	try {
 		await client?.close?.()
-	} catch {
-		// Already closed, or never opened. Either way there is nothing to hold,
-		// and nothing that would justify calling this a clean shutdown.
+	} catch (error) {
+		// Already closed, or never opened, or closed under a query: nothing
+		// that would justify calling this a clean shutdown — said, not swallowed.
+		if (openRecorded)
+			console.warn(
+				`Database did not close cleanly (${String((error as Error)?.message ?? error)}); ` +
+					`the shutdown stays marked unclean.`
+			)
 		return
 	}
 
-	// Only once PGlite has actually let go, and only if this run ever claimed
-	// the directory: writing "clean" after a boot that could not open it would
-	// erase the very evidence of the kill that broke it.
-	if (!openRecorded) return
+	// Only once PGlite has actually let go on a quiet database, and only if
+	// this run ever claimed the directory: writing "clean" after a boot that
+	// could not open it would erase the very evidence of the kill that broke it.
+	if (!openRecorded || !quiet) return
 	openRecorded = false
 	const written = writeShutdownMarker(metaPath, "clean")
 	if (!written.ok) {
 		console.warn(
 			`Warning: could not record a clean shutdown in meta.json — ${written.reason}.`
 		)
+		return
 	}
+	console.log("Database closed and flushed; shutdown marked clean.")
 }
+
+/** How long a stop waits for in-flight database work before closing anyway (inside the services' 10 s deadline). */
+const CLOSE_QUIET_TIMEOUT_MS = 5_000
 
 // Last-resort, synchronous: 'exit' handlers cannot await, so this only stops
 // the lock-refresh timer and releases the lock (both synchronous). The real

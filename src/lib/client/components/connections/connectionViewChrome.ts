@@ -40,7 +40,13 @@ export interface ChromeFacts {
 	 * `problem`: something to fix ON the server, in its own words — a
 	 * ComfyUI whose workflow names nodes or a checkpoint it lacks (§4.9).
 	 */
-	modelsSync: { at: string | null; error: string | null; problem?: string | null }
+	modelsSync: {
+		at: string | null
+		error: string | null
+		problem?: string | null
+		/** OpenRouter: the key has no credit, so only free models answer. */
+		freeTier?: boolean
+	}
 	modelCount: number
 	missingCount: number
 	/** "3 minutes ago". Injected so the sentence is testable. */
@@ -170,7 +176,8 @@ function step(
  * 2. the draft differs from what is saved → press **Save**;
  * 3. the status line reports a failure → its words, then **Test again**
  *    (red with a saved key, gold without — the row's rule);
- * 4. it lists a chat model and chat is unset → **Models**, **Use in Reply**;
+ * 4. it lists a chat model and chat is unset → **Models**, **Use in Reply**
+ *    (a key with no credit is told to pick a free model, listed first);
  * 5. it is the chat default → which model replies, and **Start a session**;
  * 6. otherwise nothing: the status line has said it all.
  *
@@ -206,6 +213,16 @@ export function nextStep(facts: NextStepFacts): NextStep | null {
 			"test",
 			`${withStop(line.sentence)} Check the key and press `,
 			{ strong: "Test again" },
+			"."
+		)
+	if (!facts.chat && facts.servesChat && facts.modelsSync.freeTier)
+		return step(
+			"unfinished",
+			"models",
+			"This key has no credit yet, so paid models would be refused: pick a free one under ",
+			{ strong: "Models" },
+			", listed first, and press ",
+			{ strong: "Use in Reply" },
 			"."
 		)
 	if (!facts.chat && facts.servesChat)

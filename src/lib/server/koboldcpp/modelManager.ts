@@ -5,6 +5,7 @@ import {
 	fetchImageModelStatus,
 	fetchLoadedEmbeddingModel,
 	fetchModelStatusForPoll,
+	fetchSpeechModelStatus,
 	type ImageModelStatus,
 	type LoadedModel
 } from "./kcppHttp"
@@ -83,6 +84,19 @@ export type ManagedModelRequest =
 			 */
 			gpu?: boolean
 	  }
+	| {
+			/** koboldcpp's speech loader, `--ttsmodel` — co-resident with the
+			 * other three (see {@link planResidency}). */
+			kind: "audio"
+			file: string
+			path: string
+			/** `--ttswavtokenizer`: the Qwen3-TTS (and OuteTTS) codec file.
+			 * Kokoro needs none. */
+			wavTokenizerFile?: string
+			wavTokenizerPath?: string
+			/** `--ttsgpu`; only OuteTTS and Qwen3-TTS honour it. */
+			gpu?: boolean
+	  }
 
 export type ManagedModelKind = ManagedModelRequest["kind"]
 
@@ -96,6 +110,22 @@ export type Residency = {
 	text?: PlannedModel<"text">
 	image?: PlannedModel<"image">
 	embeddings?: PlannedModel<"embeddings">
+	/**
+	 * 🚧 S10 (speech build): koboldcpp's speech slot, `--ttsmodel` (+
+	 * `--ttswavtokenizer` for OuteTTS). Absolute paths, resolved by the
+	 * caller. Co-resident like embeddings; produced by the `audio` request
+	 * kind and carried by every other request (the standing speech model).
+	 */
+	audio?: AudioModelSlot
+}
+
+/** The speech slot's contents. `ttsFile` is the bare filename, for logs. */
+export type AudioModelSlot = {
+	ttsFile?: string
+	ttsModelPath: string
+	ttsWavTokenizerPath?: string
+	/** `--ttsgpu`: only OuteTTS and Qwen3-TTS honour it. */
+	ttsGpu?: boolean
 }
 
 /** The embeddings slot's contents: the request minus its discriminant. */
@@ -166,6 +196,8 @@ interface ModelManagerState {
 	 * Optional because a state object from an evaluation older than the slot
 	 * can still be on `globalThis` in a dev server; absent reads as none. */
 	embeddingModel?: EmbeddingModelSlot | null
+	/** The standing speech model; same rules as `embeddingModel`. */
+	audioModel?: AudioModelSlot | null
 }
 const globalScope = globalThis as unknown as {
 	__SERENE_PUB_KCPP_MODELS__?: ModelManagerState
@@ -174,7 +206,8 @@ const shared: ModelManagerState = (globalScope.__SERENE_PUB_KCPP_MODELS__ ??= {
 	ttlTimers: {},
 	loadingPromise: null,
 	loadedSignature: null,
-	embeddingModel: null
+	embeddingModel: null,
+	audioModel: null
 })
 const ttlTimers = shared.ttlTimers
 
@@ -271,6 +304,23 @@ async function standingEmbeddingModel(): Promise<EmbeddingModelSlot | null> {
 	}
 }
 
+/** The standing speech model, if its file (and tokenizer) is still there. */
+async function standingAudioModel(): Promise<AudioModelSlot | null> {
+	const standing = shared.audioModel ?? null
+	if (!standing) return null
+	try {
+		for (const p of [standing.ttsModelPath, standing.ttsWavTokenizerPath])
+			if (p && path.isAbsolute(p)) await fsPromises.access(p)
+		return standing
+	} catch {
+		console.warn(
+			`[KoboldCPP] speech model "${standing.ttsFile ?? standing.ttsModelPath}" is no longer on disk — loading without it`
+		)
+		shared.audioModel = null
+		return null
+	}
+}
+
 /**
  * Which of the models named by connections should be resident after this load.
  *
@@ -303,18 +353,34 @@ async function standingEmbeddingModel(): Promise<EmbeddingModelSlot | null> {
 export function planResidency(
 	req: ManagedModelRequest,
 	current: Residency,
-	standingEmbeddings: EmbeddingModelSlot | null = null
+	standingEmbeddings: EmbeddingModelSlot | null = null,
+	standingAudio: AudioModelSlot | null = null
 ): Residency {
+	// The speech slot rides along with EVERY request, like embeddings: an
+	// omitted `ttsmodel` would unload it. A request for another kind keeps
+	// what is resident, else the standing model (back after an idle unload).
 	if (req.kind === "embeddings") {
+		const audio = current.audio ?? standingAudio
 		return {
 			...(current.text ? { text: current.text } : {}),
 			...(current.image ? { image: current.image } : {}),
+			...(audio ? { audio } : {}),
+			...planEntry(req)
+		}
+	}
+	if (req.kind === "audio") {
+		const embeddings = current.embeddings ?? standingEmbeddings
+		return {
+			...(current.text ? { text: current.text } : {}),
+			...(current.image ? { image: current.image } : {}),
+			...(embeddings ? { embeddings } : {}),
 			...planEntry(req)
 		}
 	}
 	return {
 		...planEntry(req),
-		...(standingEmbeddings ? { embeddings: standingEmbeddings } : {})
+		...(standingEmbeddings ? { embeddings: standingEmbeddings } : {}),
+		...(standingAudio ? { audio: standingAudio } : {})
 	}
 }
 
@@ -327,6 +393,18 @@ function planEntry(req: ManagedModelRequest): Residency {
 	if (req.kind === "embeddings") {
 		const { kind: _kind, ...embeddings } = req
 		return { embeddings }
+	}
+	if (req.kind === "audio") {
+		return {
+			audio: {
+				ttsFile: req.file,
+				ttsModelPath: req.path,
+				...(req.wavTokenizerPath
+					? { ttsWavTokenizerPath: req.wavTokenizerPath }
+					: {}),
+				...(req.gpu ? { ttsGpu: true } : {})
+			}
+		}
 	}
 	const { kind: _kind, ...image } = req
 	return { image }
@@ -399,6 +477,18 @@ function residencyMatches(current: Residency, plan: Residency): boolean {
 			// Absent and 0 both leave koboldcpp's default.
 			(have.contextSize ?? 0) !== (plan.embeddings.contextSize ?? 0) ||
 			!!have.gpu !== !!plan.embeddings.gpu
+		) {
+			return false
+		}
+	}
+	if (plan.audio) {
+		const have = current.audio
+		if (
+			!have ||
+			have.ttsModelPath !== plan.audio.ttsModelPath ||
+			(have.ttsWavTokenizerPath ?? null) !==
+				(plan.audio.ttsWavTokenizerPath ?? null) ||
+			!!have.ttsGpu !== !!plan.audio.ttsGpu
 		) {
 			return false
 		}
@@ -563,6 +653,61 @@ async function waitForImageModelReady(
 			onTick: (elapsed) =>
 				console.log(
 					`[KoboldCPP] still waiting for image model "${expectedFile}" to finish loading… (${Math.round(elapsed / 1000)}s)`
+				)
+		}
+	)
+}
+
+/** A load that only CARRIED the speech model failed because of it. */
+class SpeechModelMissingError extends Error {}
+
+/**
+ * Wait for the speech model to finish loading: `tts` on the version endpoint
+ * says one is resident (never which), and like `txt2img` it does not go false
+ * in between, so the wait is for a change first unless the flag was known off.
+ */
+async function waitForAudioModelReady(
+	baseUrl: string,
+	expectedFile: string,
+	knownOffBeforeReload: boolean,
+	signal?: AbortSignal,
+	isAlive?: () => boolean
+): Promise<void> {
+	const startedAt = Date.now()
+	let sawSomethingChange = knownOffBeforeReload
+	let absentSince: number | null = null
+	await pollUntilReady(
+		async () => {
+			const { present, refused, determined } =
+				await fetchSpeechModelStatus(baseUrl)
+			if (!determined || !present) {
+				sawSomethingChange = true
+				if (determined && !refused) {
+					// Answering with no speech model: the listener only comes
+					// back after every model loaded, so a file koboldcpp could
+					// not open sent it to its launch config without one.
+					absentSince ??= Date.now()
+					if (Date.now() - absentSince >= 15_000)
+						throw new SpeechModelMissingError(
+							`The speech model "${expectedFile}" did not load — koboldcpp came back without one.`
+						)
+				} else absentSince = null
+				return refused ? "refused" : "not-ready"
+			}
+			absentSince = null
+			if (sawSomethingChange) return "ready"
+			if (Date.now() - startedAt >= IMAGE_RELOAD_SETTLE_MS) return "ready"
+			return "not-ready"
+		},
+		{
+			signal,
+			isAlive,
+			refusedGraceMs: EXTERNAL_REFUSAL_GRACE_MS,
+			hardTimeoutMs: isAlive ? 30 * 60_000 : 600_000,
+			label: `speech model "${expectedFile}"`,
+			onTick: (elapsed) =>
+				console.log(
+					`[KoboldCPP] still waiting for speech model "${expectedFile}" to finish loading… (${Math.round(elapsed / 1000)}s)`
 				)
 		}
 	)
@@ -751,6 +896,19 @@ export function buildConfigContent(plan: Residency): Record<string, unknown> {
 						: {}),
 					...(plan.embeddings.gpu ? { embeddingsgpu: true } : {})
 				}
+			: {}),
+		// 🚧 S10: both keys are plain strings (argparse default '') and neither
+		// is in reload_config's protected_args (verified against koboldcpp.py,
+		// 2026-10-28), so — like `embeddingsmodel` — omitting them on a later
+		// load would unload the speech model.
+		...(plan.audio
+			? {
+					ttsmodel: plan.audio.ttsModelPath,
+					...(plan.audio.ttsWavTokenizerPath
+						? { ttswavtokenizer: plan.audio.ttsWavTokenizerPath }
+						: {}),
+					...(plan.audio.ttsGpu ? { ttsgpu: true } : {})
+				}
 			: {})
 	}
 }
@@ -818,7 +976,8 @@ export async function ensureModelLoaded(opts: {
 	const plan = planResidency(
 		request,
 		current,
-		request.kind === "embeddings" ? null : await standingEmbeddingModel()
+		request.kind === "embeddings" ? null : await standingEmbeddingModel(),
+		request.kind === "audio" ? null : await standingAudioModel()
 	)
 
 	// Ask koboldcpp about the kind this REQUEST names, and only that one — a
@@ -838,7 +997,18 @@ export async function ensureModelLoaded(opts: {
 			: null
 
 	let verdict: Verdict
-	if (request.kind === "text") {
+	if (request.kind === "audio") {
+		// No endpoint names the speech model, and the `tts` flag only says one
+		// is resident: identity is our own record's, as for image. Unlike the
+		// others, silence is routine here (a long utterance holds the worker),
+		// so "unknown" never logs below.
+		const speech = await fetchSpeechModelStatus(baseUrl)
+		verdict = !speech.determined
+			? "unknown"
+			: speech.present
+				? "confirmed"
+				: "contradicted"
+	} else if (request.kind === "text") {
 		const loaded = textStatus!.modelName
 			? normalizeModelName(textStatus!.modelName)
 			: null
@@ -883,7 +1053,7 @@ export async function ensureModelLoaded(opts: {
 	// same single worker for minutes in exactly the same way, so the image half
 	// mirrors this rather than merely inheriting it.
 	if (recordMatches && verdict !== "contradicted") {
-		if (verdict === "unknown") {
+		if (verdict === "unknown" && request.kind !== "audio") {
 			console.log(
 				`[KoboldCPP] model status unavailable (busy loading or generating); trusting the in-process record for "${request.file}" instead of forcing a reload`
 			)
@@ -912,6 +1082,14 @@ export async function ensureModelLoaded(opts: {
 		!!textStatus.modelName &&
 		normalizeModelName(textStatus.modelName) ===
 			normalizeModelName(plan.text.file)
+	// Whether the `tts` flag was known off before the reload (see
+	// waitForAudioModelReady). Only asked when the plan carries speech.
+	const audioKnownOff = plan.audio
+		? await (async () => {
+				const st = await fetchSpeechModelStatus(baseUrl)
+				return st.determined && !st.present
+			})()
+		: false
 	const embeddingAlreadyReportedResident =
 		!!plan.embeddings &&
 		!!embeddingStatus?.determined &&
@@ -934,6 +1112,9 @@ export async function ensureModelLoaded(opts: {
 		connectionId,
 		plan.embeddings && request.kind !== "embeddings"
 			? `(keeping embedding model "${plan.embeddings.file}")`
+			: "",
+		plan.audio && request.kind !== "audio"
+			? `(keeping speech model "${plan.audio.ttsFile ?? plan.audio.ttsModelPath}")`
 			: ""
 	)
 
@@ -1002,6 +1183,18 @@ export async function ensureModelLoaded(opts: {
 		// whole budget for a chat model that is not coming back either. Each
 		// wait after the first knows the new process is already up.
 		let listenerUp = false
+		if (plan.audio) {
+			// Speech first, for the embeddings reason: it sees the reload
+			// through, and every later wait then knows the new process is up.
+			await waitForAudioModelReady(
+				baseUrl,
+				plan.audio.ttsFile ?? plan.audio.ttsModelPath,
+				!!audioKnownOff,
+				signal,
+				isAlive
+			)
+			listenerUp = true
+		}
 		if (plan.embeddings) {
 			await waitForEmbeddingModelReady(baseUrl, plan.embeddings.file, {
 				alreadyReportedResident: embeddingAlreadyReportedResident,
@@ -1048,6 +1241,15 @@ export async function ensureModelLoaded(opts: {
 			)
 			shared.embeddingModel = null
 		}
+		if (
+			err instanceof SpeechModelMissingError &&
+			request.kind !== "audio"
+		) {
+			console.warn(
+				`[KoboldCPP] ${err.message} Dropping it, so the ${request.kind} model loads without it.`
+			)
+			shared.audioModel = null
+		}
 		throw err
 	} finally {
 		shared.loadingPromise = null
@@ -1057,6 +1259,7 @@ export async function ensureModelLoaded(opts: {
 	// Standing only once it has loaded: a model that cannot load must never
 	// ride along into the next chat load.
 	if (request.kind === "embeddings") shared.embeddingModel = plan.embeddings!
+	if (request.kind === "audio") shared.audioModel = plan.audio!
 	resetTtl(baseUrl, adminPassword, ttlSecs)
 	return true
 }

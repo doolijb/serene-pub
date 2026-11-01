@@ -24,9 +24,11 @@
 import Handlebars from "handlebars"
 import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
 import { createContextLiquid } from "$lib/shared/utils/contextLiquid"
+import { renderJinja2 } from "$lib/server/pipelines/speech/jinja"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import {
+	CORE_JINJA2_ENGINE,
 	CORE_LIQUID_ENGINE,
 	CORE_TEMPLATE_ENGINE,
 	CORE_TEMPLATE_ENGINES,
@@ -159,6 +161,10 @@ function renderLiquid(ctx: RenderContext): string {
 
 renderers.set(CORE_TEMPLATE_ENGINE, { render: renderHandlebars, owner: "core" })
 renderers.set(CORE_LIQUID_ENGINE, { render: renderLiquid, owner: "core" })
+// 🚧 Jinja2 (the SDK engine + the speech filters) — speak's line templates and
+// inflection layouts are written in it. One of CORE_TEMPLATE_ENGINES (speech
+// ★7, 2026-10-28), so no plugin may claim or release it.
+renderers.set(CORE_JINJA2_ENGINE, { render: renderJinja2, owner: "core" })
 
 export class TemplateEngineError extends Error {}
 
@@ -203,7 +209,8 @@ export function releaseRenderer(engineId: string, owner: string): void {
 /** Test-only: drop plugin-registered engines, keeping core's. */
 export function _resetRenderers(): void {
 	for (const id of [...renderers.keys()])
-		if (!isCoreTemplateEngine(id)) renderers.delete(id)
+		if (!isCoreTemplateEngine(id) && renderers.get(id)?.owner !== "core")
+			renderers.delete(id)
 }
 
 export const knownEngines = () =>

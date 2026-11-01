@@ -36,6 +36,11 @@ import { INTEREST_SYNC_INTERVAL_MS } from "$lib/shared/sockets/interest"
 
 vi.mock("$app/environment", () => ({ dev: true, building: false }))
 vi.mock("./socketInstance", () => ({ getSocket: () => socket }))
+// 🚧 M2c: the applet API's client half asks through the typed socket over this same fake.
+vi.mock("./loadSockets.client", async () => {
+	const { createTypedSocket } = await import("./typedSocket")
+	return { useTypedSocket: () => createTypedSocket() }
+})
 
 import {
 	_resetInterestForTests,
@@ -775,5 +780,48 @@ describe("the typed socket flushes a pending sync", () => {
 			"characters:list",
 			"characterFolders:list"
 		])
+	})
+})
+
+describe("🚧 M2c: the applet API's answers reach a person who is not an admin", () => {
+	test("no applet API event, nor its :error, sits under a restricted prefix", async () => {
+		const { APPLET_API_EVENTS, isRestrictedInterest } = await import("$lib/shared/sockets/interest")
+		for (const e of APPLET_API_EVENTS) {
+			expect(isRestrictedInterest(e)).toBe(false)
+			expect(isRestrictedInterest(`${e}:error`)).toBe(false)
+		}
+		// The admin's plugin events stay admin-only.
+		expect(isRestrictedInterest("plugins:list")).toBe(true)
+		expect(isRestrictedInterest("plugins:setEnabled")).toBe(true)
+	})
+
+	test("a guest's library-sessions answer and update-session refusal arrive within the request — no timeout", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {})
+		const { answerLibrarySessions, answerUpdateSession } = await import(
+			"$lib/client/components/sessionPage/requests/library"
+		)
+		const listed = answerLibrarySessions({}, { owner: "fx.m2c" })
+		await settle()
+		const ask = socket!.emits.find((e) => e.event === "appletApi:librarySessions")!
+		expect(ask.payload).toMatchObject({ pluginId: "fx.m2c" })
+		socket!.dispatch("appletApi:librarySessions", {
+			requestId: ask.payload.requestId,
+			pluginId: "fx.m2c",
+			result: { rows: [{ id: 3, name: "Shared", genreId: "fx.m2c:genre/life", updatedAt: 1 }] }
+		})
+		await expect(listed).resolves.toEqual({ rows: [{ id: 3, name: "Shared", genreId: "fx.m2c:genre/life", updatedAt: 1 }] })
+
+		const updated = answerUpdateSession({ sessionId: 9, name: "Mine now" }, { owner: "fx.m2c" })
+		await settle()
+		const write = socket!.emits.find((e) => e.event === "appletApi:updateSession")!
+		socket!.dispatch("appletApi:updateSession:error", {
+			requestId: write.payload.requestId,
+			pluginId: "fx.m2c",
+			error: "That session is not one this extension can reach."
+		})
+		await expect(updated).rejects.toThrow("That session is not one this extension can reach.")
+		// Both keys were declared for this non-admin: nothing refused.
+		const declared = syncs().flatMap((e) => e.payload.keys as string[])
+		expect(declared).toEqual(expect.arrayContaining(["appletApi:librarySessions", "appletApi:updateSession:error"]))
 	})
 })

@@ -32,7 +32,8 @@
 	} from "$lib/client/components/frames/widgetWire.svelte"
 	import { frameInvokeVerdict } from "$lib/client/components/frames/frameActivation"
 	import { frameStateKey } from "$lib/client/components/frames/framePort"
-	import { createGuardedReceiver, interactionAfter, summarize } from "./receiverPolicy"
+	import { frameVersionOf } from "$lib/client/components/frames/frameOwner"
+	import { createGuardedReceiver, interactionAfter, shouldForward, summarize, TIMEUPDATE_MIN_MS } from "./receiverPolicy"
 	import {
 		acquireWorker,
 		currentEvent,
@@ -260,15 +261,39 @@
 			// receiver's, made here.
 			idPrefix: pageIdsHere() ? "" : `sp-r${++boxes}-${mountId.slice(0, 8)}-`,
 			warn: (message) => console.warn(`${label()}: ${message}`),
-			fnFor: (handle, event) => () => {
-				const e = currentEvent(event)
-				lastInteractionAt = interactionAfter(event, e, lastInteractionAt, Date.now())
-				postToWorker(worker, {
-					k: "fn",
-					mountId,
-					id: handle[FN],
-					detail: summarize(e, event, undefined)
-				})
+			fnFor: (handle, event) => {
+				const send = (seen?: Event) => {
+					const e = seen ?? currentEvent(event)
+					lastInteractionAt = interactionAfter(event, e, lastInteractionAt, Date.now())
+					postToWorker(worker, {
+						k: "fn",
+						mountId,
+						id: handle[FN],
+						detail: summarize(e, event, undefined)
+					})
+				}
+				if (event !== "timeupdate") return () => send()
+				// A media clock: at most ~4 a second, the newest one kept (trailing).
+				let lastAt: number | null = null
+				let timer: ReturnType<typeof setTimeout> | null = null
+				let latest: Event | undefined
+				return () => {
+					const now = Date.now()
+					// The event is only "current" while it is dispatched: keep it for a trailing send.
+					const seen = currentEvent(event)
+					if (shouldForward(event, lastAt, now)) {
+						lastAt = now
+						send(seen)
+						return
+					}
+					latest = seen
+					if (timer) return
+					timer = setTimeout(() => {
+						timer = null
+						lastAt = Date.now()
+						send(latest)
+					}, TIMEUPDATE_MIN_MS - (now - (lastAt ?? now)))
+				}
 			}
 		})
 		/**
@@ -359,6 +384,7 @@
 		bind:this={box}
 		class="sp-remote-box h-full w-full overflow-auto {klass}"
 		data-sp-owner={owner}
+		data-sp-version={frameVersionOf(src)}
 		data-sp-widget-box=""
 		data-sp-card={placement?.chrome?.card ? "on" : "off"}
 		data-sp-backing={backing}

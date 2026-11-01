@@ -12,6 +12,8 @@ import {
 	editorHeader,
 	EDITOR_CARDS,
 	filterModelOptions,
+	getAModelDoor,
+	noModelSentence,
 	loadoutForJob,
 	loadoutNeeds,
 	mergeTargets,
@@ -657,5 +659,18 @@ describe("job doors", () => {
 		expect(loadoutForJob("text->text", list)).toBe(1)
 		expect(loadoutForJob("text->image", list)).toBe(7)
 		expect(loadoutForJob("text->video", list)).toBeNull()
+	})
+})
+
+describe("getAModelDoor", () => {
+	test("offered only when no model fits, scoped to the loadout's capability", () => {
+		expect(getAModelDoor(0, "text->text")).toEqual({
+			label: "Get a model…",
+			finder: { capability: "text->text" }
+		})
+		expect(getAModelDoor(3, "text->text")).toBe(null)
+	})
+	test("the empty sentence no longer points at a place", () => {
+		expect(noModelSentence("replies").includes("in Models")).toBe(false)
 	})
 })

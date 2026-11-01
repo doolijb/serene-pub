@@ -25,6 +25,15 @@
 	import CardStatsTab from "./CardStatsTab.svelte"
 	import LikenessTab, { type LikenessDraft } from "./LikenessTab.svelte"
 	import { likenessOfExtensions } from "$lib/shared/characters/likeness"
+	import VoiceTab from "./VoiceTab.svelte"
+	import {
+		EMPTY_TIMBRE_DRAFT,
+		extensionsForSave,
+		timbreDraftOf,
+		type TimbreDraft
+	} from "./voiceTab"
+	import { canPickVoice } from "$lib/shared/characters/timbre"
+	import { openInLoadouts } from "$lib/client/admin/railDoors"
 	import { socketCardStatsApi } from "./cardStatsApi"
 	import {
 		CAST_LINE_NOTE,
@@ -79,6 +88,11 @@
 		 * sent beside the character and stored in its extensions.
 		 */
 		likeness: LikenessDraft
+		/**
+		 * 🚧 The card's timbre (speech build) — not a column: a save writes
+		 * it into `extensions.serenepub.timbre`.
+		 */
+		timbre: TimbreDraft
 	}
 
 	// Zod validation schema
@@ -237,7 +251,8 @@
 		lorebookId: null,
 		tags: [],
 		strokes: [],
-		likeness: { prompt: "", negative: "" }
+		likeness: { prompt: "", negative: "" },
+		timbre: { ...EMPTY_TIMBRE_DRAFT, settings: {} }
 	})
 	let originalCharacterData: EditCharacterData = $state({
 		id: undefined,
@@ -267,14 +282,15 @@
 		lorebookId: null,
 		tags: [],
 		strokes: [],
-		likeness: { prompt: "", negative: "" }
+		likeness: { prompt: "", negative: "" },
+		timbre: { ...EMPTY_TIMBRE_DRAFT, settings: {} }
 	})
 	/**
 	 * The three groups this form's fields belong to. A field is always open
 	 * inside its group: folding one away hides whether it is filled, which is
 	 * the question a character sheet answers at a glance.
 	 */
-	type FormTab = "profile" | "voice" | "notes" | "likeness" | "stats"
+	type FormTab = "profile" | "voice" | "speech" | "notes" | "likeness" | "stats"
 	const FORM_TABS: Array<{
 		value: FormTab
 		label: string
@@ -284,6 +300,7 @@
 		{ value: "voice", label: "Voice", icon: Icons.MessageSquareQuote },
 		{ value: "notes", label: "Notes", icon: Icons.NotebookPen },
 		{ value: "likeness", label: "Likeness", icon: Icons.ScanFace },
+		{ value: "speech", label: "Speech", icon: Icons.Volume2 },
 		{ value: "stats", label: "Stats", icon: Icons.HeartPulse }
 	]
 	let activeFormTab: FormTab = $state("profile")
@@ -319,6 +336,7 @@
 		],
 		notes: ["creatorNotes", "creatorNotesMultilingual"],
 		likeness: [],
+		speech: [],
 		stats: []
 	}
 
@@ -537,6 +555,22 @@
 		})
 	}
 
+	/** The card's stored extensions, for the timbre write (kept whole). */
+	let storedExtensions: unknown = $state(undefined)
+	const userCtxForVoice: { user?: { isAdmin?: boolean | null } | null } | undefined =
+		getContext("userCtx")
+	const mayPickVoice = $derived(canPickVoice(userCtxForVoice?.user))
+
+	/** `extensions` for a save: only when the timbre moved. */
+	function savedExtensions() {
+		return extensionsForSave(
+			storedExtensions,
+			$state.snapshot(editCharacterData.timbre),
+			$state.snapshot(originalCharacterData.timbre),
+			{ canPickVoice: mayPickVoice }
+		)
+	}
+
 	/** The likeness as a save sends it, beside the character, not on it. */
 	function savedLikeness() {
 		const l = $state.snapshot(editCharacterData.likeness)
@@ -550,7 +584,9 @@
 	}
 
 	function handleCreate() {
-		const { likeness: _likeness, ...newCharacter } = savedCharacter()
+		const { likeness: _likeness, timbre: _timbre, ...newCharacter } = savedCharacter()
+		const extensions = savedExtensions()
+		if (extensions) (newCharacter as any).extensions = extensions
 		const avatarFile = newCharacter._avatarFile
 		delete newCharacter._avatarFile
 		isSaving = true
@@ -565,7 +601,9 @@
 	}
 
 	function handleUpdate() {
-		const { likeness: _likeness, ...updatedCharacter } = savedCharacter()
+		const { likeness: _likeness, timbre: _timbre, ...updatedCharacter } = savedCharacter()
+		const extensions = savedExtensions()
+		if (extensions) (updatedCharacter as any).extensions = extensions
 		if (!updatedCharacter.id) return
 		const avatarFile = updatedCharacter._avatarFile
 		delete updatedCharacter._avatarFile
@@ -786,9 +824,11 @@
 					negative: l.negative ?? ""
 				}
 			})(),
+			timbre: timbreDraftOf(characterData.extensions),
 			_avatar: "",
 			_avatarFile: undefined
 		}
+		storedExtensions = characterData.extensions
 		originalCharacterData = $state.snapshot(editCharacterData)
 	}
 
@@ -1996,6 +2036,22 @@
 		</div>
 
 		<div
+			id="character-panel-speech"
+			role="tabpanel"
+			aria-labelledby="character-panel-speech-tab"
+			hidden={activeFormTab !== "speech"}
+			class="space-y-3"
+		>
+			<VoiceTab
+				characterName={editCharacterData.name}
+				bind:timbre={editCharacterData.timbre}
+				openVoices={panelsCtx
+					? () => openInLoadouts(panelsCtx, {})
+					: undefined}
+			/>
+		</div>
+
+		<div
 			id="character-panel-stats"
 			role="tabpanel"
 			aria-labelledby="character-panel-stats-tab"
@@ -2015,7 +2071,9 @@
 		     adds is its title (polish parity L5), not a sentence under it. -->
 		<div
 			class="flex flex-col gap-1 pt-2"
-			hidden={activeFormTab === "stats" || activeFormTab === "likeness"}
+			hidden={activeFormTab === "stats" ||
+				activeFormTab === "likeness" ||
+				activeFormTab === "speech"}
 			title={SHOW_ALL_FIELDS_HINT}
 		>
 			<Switch

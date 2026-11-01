@@ -515,6 +515,49 @@ async function assertSlashNamesFree(
 }
 
 /**
+ * 🚧 **A package's specs its new build does not ship** (2026-10-31): on a
+ * reinstall or upgrade, every spec this package owns that the build does not
+ * publish has its active version marked `retired` — the treatment the boot
+ * gives a definition this build does not publish. The rows stay (the pointer
+ * too), so a session, a receipt or a registration naming the spec still
+ * reads its document by id; what stops is its contribution: the slash-name
+ * and envoy checks (`installedActions`) and every reader of `published`
+ * leave it out. A later build that ships it again republishes it (the pointer
+ * move sets `published`). Returns the slugs it retired. Run before
+ * `assertInstallSlashNamesFree`, so the install is judged on what it ships.
+ */
+export async function retireUnshippedPluginSpecs(
+	db: Db,
+	sourcePluginId: number,
+	shipped: ReadonlySet<string>
+): Promise<string[]> {
+	const owned = await db
+		.select({ slug: schema.pipelineSpecs.slug, activeVersionId: schema.pipelineSpecs.activeVersionId })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.sourcePluginId, sourcePluginId))
+	const retired: string[] = []
+	for (const spec of owned) {
+		if (shipped.has(spec.slug) || spec.activeVersionId == null) continue
+		const changed = await db
+			.update(schema.pipelineSpecVersions)
+			.set({ status: "retired" })
+			.where(
+				and(
+					eq(schema.pipelineSpecVersions.id, spec.activeVersionId),
+					ne(schema.pipelineSpecVersions.status, "retired")
+				)
+			)
+			.returning({ id: schema.pipelineSpecVersions.id })
+		if (changed.length) retired.push(spec.slug)
+	}
+	if (retired.length) {
+		invalidateDeclaredEnvoys()
+		;(await import("$lib/server/pipelines/registrations/resolve")).invalidateRegistrations()
+	}
+	return retired
+}
+
+/**
  * The whole install's rule, run once: every active version's actions
  * together (U5c review, S2). What a batch publish owes after its last
  * pointer move — the per-publish check let each batch-mate through against
@@ -912,6 +955,10 @@ async function installedActions(
 			schema.pipelineSpecVersions,
 			eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
 		)
+		// A spec its package's current build does not ship is retired in place (its active
+		// version kept for what pins it, `retireUnshippedPluginSpecs`): it
+		// contributes nothing any more.
+		.where(ne(schema.pipelineSpecVersions.status, "retired"))
 	return await inRegisteringGenres(
 		db,
 		rows

@@ -7,6 +7,25 @@
 	import { ollamaChatDefaultModelName } from "$lib/client/components/ollamaManager/defaultModel"
 	import { enableManager } from "$lib/client/components/connections/managers"
 	import { canRunLocalRuntimes } from "$lib/client/components/connections/addMenuItems"
+	import {
+		ollamaRecommendedRows,
+		ollamaHubRows,
+		quantsFromOllama,
+		quantsFromOllamaRecommended,
+		SerialAsk,
+		type OllamaRecommended,
+		type OllamaHubResult,
+		type QuantFile
+	} from "$lib/client/components/connections/finder"
+	import {
+		MEMORY_TIERS,
+		fitSentence,
+		parseMemoryTier,
+		readMemoryTier,
+		writeMemoryTier,
+		type MemoryTier
+	} from "$lib/client/components/connections/memoryTier"
+	import QuantFieldset from "$lib/client/accessibility/QuantFieldset.svelte"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -82,6 +101,10 @@
 		socket.emit("ollama:pullModel", { modelName: pullModelName.trim() })
 	}
 
+	function downloadPull(pull: string) {
+		socket.emit("ollama:pullModel", { modelName: pull })
+	}
+
 	function cancelPull(modelName: string) {
 		socket.emit("ollama:cancelPull", { modelName })
 	}
@@ -90,25 +113,53 @@
 		$state([])
 	let recommendedLoaded = $state(false)
 
+	let tier = $state<MemoryTier>(readMemoryTier())
+	function changeTier(event: Event) {
+		tier = parseMemoryTier((event.currentTarget as HTMLSelectElement).value)
+		writeMemoryTier(tier)
+	}
+
 	let searchTerm = $state("")
 	let searchResults: Sockets.Ollama.SearchAvailableModels.Response["models"] =
 		$state([])
 	let searching = $state(false)
 	let searched = $state(false)
 
+	// Replies carry no echo of the ask: one in flight, stale ones dropped.
+	const searchAsks = new SerialAsk()
+
 	function searchHuggingFace(event: SubmitEvent) {
 		event.preventDefault()
-		if (!searchTerm.trim()) return
+		const term = searchTerm.trim()
+		if (!term) return
 		searching = true
 		searched = false
-		socket.emit("ollama:searchAvailableModels", {
-			searchTerm: searchTerm.trim(),
-			source: OllamaModelSearchSource.HUGGING_FACE
-		})
+		searchResults = []
+		searchAsks.ask(() =>
+			socket.emit("ollama:searchAvailableModels", {
+				searchTerm: term,
+				source: OllamaModelSearchSource.HUGGING_FACE
+			})
+		)
 	}
 
-	function downloadPull(pull: string) {
-		socket.emit("ollama:pullModel", { modelName: pull })
+	const rowContext = $derived({
+		tier,
+		query: "",
+		present: new Set(models.map((m) => m.name || m.model))
+	})
+	const recommendedRows = $derived(
+		ollamaRecommendedRows(
+			recommendedModels as unknown as OllamaRecommended[],
+			rowContext
+		)
+	)
+	const hubRows = $derived(
+		ollamaHubRows(searchResults as unknown as OllamaHubResult[])
+	)
+
+	function pullTag(quant: QuantFile) {
+		if (quant.tag) downloadPull(quant.tag)
 	}
 
 	let pullStatusText = $derived(
@@ -208,6 +259,7 @@
 	function handleSearchAvailableModels(
 		msg: Sockets.Ollama.SearchAvailableModels.Response
 	) {
+		if (searchAsks.settle()) return
 		searching = false
 		searched = true
 		searchResults = msg.models || []
@@ -221,6 +273,7 @@
 		}
 	}
 	function handleSearchAvailableModelsError(msg: { error?: string }) {
+		if (searchAsks.settle()) return
 		searching = false
 		searched = true
 		error = msg.error || "Search failed."
@@ -429,32 +482,54 @@
 		</div>
 	{/if}
 
+	<div class="a11y-field">
+		<label for="a11y-ollama-tier">Memory on this machine</label>
+		<p class="a11y-hint">
+			Sizes are judged against this. Not sure shows no hints.
+		</p>
+		<select id="a11y-ollama-tier" value={tier} onchange={changeTier}>
+			{#each MEMORY_TIERS as t (t.value)}
+				<option value={t.value}>{t.label}</option>
+			{/each}
+		</select>
+	</div>
+
 	<h2>Recommended models</h2>
 	{#if !recommendedLoaded}
 		<p>Loading…</p>
-	{:else if recommendedModels.length === 0}
+	{:else if recommendedRows.length === 0}
 		<p>No recommendations available right now.</p>
 	{:else}
 		<ul class="a11y-list">
-			{#each recommendedModels as m}
+			{#each recommendedRows as row (row.key)}
+				{@const m = recommendedModels.find(
+					(r) => `ollama:${r.pull || r.name}` === row.key
+				)}
 				<li class="a11y-list-item">
-					<h3>{m.name}</h3>
-					<p>{m.details?.description}</p>
+					<h3>{row.name}</h3>
+					{#if row.description}<p>{row.description}</p>{/if}
 					<p class="a11y-hint">
-						{m.details?.parameter_size} · {m.details
-							?.quantization_level}
-						{#if m.recommended_vram}· Recommended VRAM: {m.recommended_vram}
-							GB{/if}
+						{[
+							row.facts,
+							row.sizeLabel,
+							row.tier ? row.tier.label : null,
+							fitSentence(row.fit, tier),
+							row.presence ? "Already pulled" : null
+						]
+							.filter(Boolean)
+							.join(" · ")}
 					</p>
-					<div class="a11y-list-item-actions">
-						<button
-							type="button"
-							class="a11y-btn a11y-btn-small"
-							onclick={() => downloadPull(m.pull)}
-						>
-							Download
-						</button>
-					</div>
+					{#if m}
+						<QuantFieldset
+							repo={row.name}
+							id="a11y-ollama-rec-{row.key}"
+							quants={quantsFromOllamaRecommended(m)}
+							note={m.quantsNote ?? null}
+							{tier}
+							onFallback={() => downloadPull(m.pull || m.name)}
+							onDownload={pullTag}
+						/>
+					{/if}
 				</li>
 			{/each}
 		</ul>
@@ -479,25 +554,29 @@
 		</button>
 	</form>
 	{#if searched}
-		{#if searchResults.length === 0}
+		{#if hubRows.length === 0}
 			<p>No GGUF models found for that search.</p>
 		{:else}
 			<ul class="a11y-list">
-				{#each searchResults as m}
+				{#each hubRows as row (row.key)}
+					{@const model = searchResults.find(
+						(m) => m.name === row.name
+					)}
 					<li class="a11y-list-item">
-						<h3>{m.name}</h3>
-						{#if m.description}<p>{m.description}</p>{/if}
-						<div class="a11y-list-item-actions">
-							{#each m.pullOptions || [] as opt}
-								<button
-									type="button"
-									class="a11y-btn a11y-btn-small"
-									onclick={() => downloadPull(opt.pull)}
-								>
-									Download {opt.label}
-								</button>
-							{/each}
-						</div>
+						<h3>{row.name}</h3>
+						{#if row.description}<p>{row.description}</p>{/if}
+						<p class="a11y-hint">{row.detail}</p>
+						{#if model}
+							<QuantFieldset
+								repo={row.name}
+								id="a11y-ollama-hub-{row.key}"
+								quants={quantsFromOllama(
+									model as unknown as OllamaHubResult
+								)}
+								{tier}
+								onDownload={pullTag}
+							/>
+						{/if}
 					</li>
 				{/each}
 			</ul>

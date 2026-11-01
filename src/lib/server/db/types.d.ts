@@ -355,6 +355,11 @@ export global {
 	export type InsertKoboldCppSettings =
 		typeof schema.koboldCppSettings.$inferInsert
 
+	export type SelectAudiocppSettings =
+		typeof schema.audiocppSettings.$inferSelect
+	export type InsertAudiocppSettings =
+		typeof schema.audiocppSettings.$inferInsert
+
 	export type SelectUserSettings = typeof schema.userSettings.$inferSelect
 	export type InsertUserSettings = typeof schema.userSettings.$inferInsert
 

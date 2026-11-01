@@ -1,4 +1,5 @@
 import { db } from "$lib/server/db"
+import { withoutProvidedMark, keepStoredProvidedMark } from "$lib/server/plugins/providedMarks"
 import { readMedia, toClientMedia } from "$lib/server/media"
 import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import { and, eq, inArray } from "drizzle-orm"
@@ -76,6 +77,7 @@ import {
 	withLikeness,
 	type CharacterLikeness
 } from "$lib/server/characters/likeness"
+import { applyTimbreUpdate } from "$lib/server/characters/timbre"
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -472,6 +474,8 @@ async function importedLikenessChecked(
 	userId: number,
 	dbOrTx: Db
 ): Promise<Record<string, unknown> | undefined> {
+	// 🚧 (M2c) A file never brings a plugin's ownership mark with it.
+	extensions = withoutProvidedMark(extensions)
 	const likeness = readLikeness(extensions)
 	if (!likeness?.imageMediaId) return extensions
 	return withLikeness(
@@ -535,6 +539,16 @@ export const charactersCreate: Handler<
 				(carded as any).extensions = withLikeness(
 					(carded as any).extensions,
 					await likenessForWrite(params.likeness, socket.user!.id)
+				)
+			// 🚧 The timbre (speech build S5): a create that carries one is
+			// checked exactly as an update is, against nothing stored — a
+			// member's `voice` is dropped, an unknown voice refuses (lane V
+			// finding V-2, 2026-10-28).
+			if ((carded as any).extensions !== undefined)
+				(carded as any).extensions = await applyTimbreUpdate(
+					(carded as any).extensions,
+					null,
+					{ db, user: socket.user }
 				)
 
 			const [character] = await db
@@ -684,6 +698,23 @@ export const charactersUpdate: Handler<
 				(data as any).extensions = withLikeness(
 					"extensions" in data ? data.extensions : stored.extensions,
 					await likenessForWrite(params.likeness, userId)
+				)
+
+			// 🚧 The timbre (speech build S5): a save that carries `extensions`
+			// has its `serenepub.timbre` validated against the stored one; a
+			// member's `voice` is kept as stored. A refusal throws (below).
+			if ("extensions" in data && data.extensions !== undefined && stored)
+				(data as any).extensions = await applyTimbreUpdate(
+					data.extensions,
+					stored.extensions,
+					{ db, user: socket.user }
+				)
+			// 🚧 (M2c) A save keeps the STORED plugin-ownership mark and drops
+			// a sent one: only the plugin's own import writes it.
+			if ("extensions" in data && data.extensions !== undefined && stored)
+				(data as any).extensions = keepStoredProvidedMark(
+					data.extensions,
+					stored.extensions
 				)
 
 			// Strokes (DESIGN-card-strokes §A.3). Sent: they are the new
@@ -904,7 +935,9 @@ export function characterFieldsFromParsedData(
 				? data.mes_example
 				: [data.mes_example]
 			: undefined,
-		alternateGreetings: data.alternate_greetings || null,
+		// NOT NULL, default []: a card without the field (a V1 card, a
+		// generated one) imports with none, never a refused insert.
+		alternateGreetings: Array.isArray(data.alternate_greetings) ? data.alternate_greetings : [],
 		creatorNotes: data.creator_notes || null,
 		postHistoryInstructions: data.post_history_instructions || null,
 		characterVersion: data.character_version || null,

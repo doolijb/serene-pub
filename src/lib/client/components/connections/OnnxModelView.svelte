@@ -44,6 +44,8 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
+	import QuantPicker from "./QuantPicker.svelte"
+	import { defaultQuant, quantChoice, quantsFromOnnx } from "./finder"
 	import { idleMinutes } from "./endpointStatus"
 	import { formatProgress } from "./modelManagement"
 	import {
@@ -175,11 +177,26 @@
 		busy = false
 	})
 
+	/**
+	 * The precisions the list publishes for this entry. More than one opens
+	 * the quant picker on the entry's default; exactly one is sent as it
+	 * stands; the press ALWAYS carries a `dtype` when the list named one.
+	 */
+	const precisions = $derived(quantsFromOnnx(local?.catalog))
+	let choosing = $state(false)
 	function download() {
+		if (quantChoice(precisions) === "picker") {
+			choosing = true
+			return
+		}
+		sendDownload(defaultQuant(precisions)?.dtype)
+	}
+	function sendDownload(dtype?: string) {
 		busy = true
 		socket.emit("connections:downloadModel", {
 			id: connection.id!,
-			modelId: model.id
+			modelId: model.id,
+			...(dtype ? { dtype } : {})
 		})
 	}
 	function cancelDownload() {
@@ -733,3 +750,18 @@
 		<span class="min-w-0">{unavailable}</span>
 	</p>
 {/snippet}
+
+{#if choosing}
+	<QuantPicker
+		open={true}
+		repo={model.name}
+		quants={precisions}
+		tier="unsure"
+		noun="precision"
+		onCancel={() => (choosing = false)}
+		onDownload={(quant) => {
+			choosing = false
+			sendDownload(quant.dtype)
+		}}
+	/>
+{/if}

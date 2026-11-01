@@ -33,6 +33,7 @@ import type { ImageAdapterExports } from "$lib/server/imageAdapters/BaseImageAda
 import type { EmbeddingAdapterExports } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import type { NerAdapterExports } from "$lib/server/nerAdapters/BaseNerAdapter"
 import type { TranscriptionAdapterExports } from "$lib/server/transcriptionAdapters/BaseTranscriptionAdapter"
+import type { SpeechAdapterExports } from "$lib/server/connectionAdapters/speech/BaseSpeechAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 /** The modules that serve one connection type. At least one is always present. */
@@ -50,6 +51,12 @@ export interface AdapterModules {
 	 * `transcribeAudio` (O9).
 	 */
 	transcription?: () => Promise<TranscriptionAdapterExports>
+	/**
+	 * 🚧 Loads the speech-family module — the one that can implement
+	 * `synthesizeSpeech` (PLAN-speech-build S9). Lives under
+	 * `connectionAdapters/speech/`.
+	 */
+	speech?: () => Promise<SpeechAdapterExports>
 }
 
 export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
@@ -77,7 +84,10 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// the second row unnecessary instead. Not the "load-bearing absence"
 		// the entity block warns about: that is a family a type CANNOT serve.
 		embedding: async () =>
-			(await import("../embeddingAdapters/OllamaEmbeddingAdapter")).default
+			(await import("../embeddingAdapters/OllamaEmbeddingAdapter")).default,
+		// 🚧 Phonon speech (>= 0.40.11): `/v1/audio/speech`, four fields only.
+		speech: async () =>
+			(await import("../connectionAdapters/speech/profiles/ollama")).default
 	},
 
 	[CONNECTION_TYPE.OPENAI]: {
@@ -122,7 +132,10 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// switch; which model hears is the model's reads (O3).
 		transcription: async () =>
 			(await import("../transcriptionAdapters/OpenAITranscriptionAdapter"))
-				.default
+				.default,
+		// 🚧 `/audio/speech` on the same service (speech dialect, B1).
+		speech: async () =>
+			(await import("../connectionAdapters/speech/profiles/openai")).default
 	},
 
 	[CONNECTION_TYPE.LLAMACPP]: {
@@ -158,7 +171,12 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// response, and the adapter refuses one that is not the pair's.
 		embedding: async () =>
 			(await import("../embeddingAdapters/KoboldCppEmbeddingAdapter"))
-				.default
+				.default,
+		// 🚧 Speech: koboldcpp's `/v1/audio/speech`, when a speech model is
+		// loaded (`tts` on /api/extra/version — probed, like text->image).
+		speech: async () =>
+			(await import("../connectionAdapters/speech/profiles/koboldcpp"))
+				.koboldCppSpeech
 	},
 
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED]: {
@@ -179,7 +197,12 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 				await import(
 					"../embeddingAdapters/KoboldCppManagedEmbeddingAdapter"
 				)
-			).default
+			).default,
+		// 🚧 Speech through the same managed process (`ttsmodel` rides the
+		// reload_config plan: `Residency.audio`).
+		speech: async () =>
+			(await import("../connectionAdapters/speech/profiles/koboldcpp"))
+				.koboldCppManagedSpeech
 	},
 
 	[CONNECTION_TYPE.ANTHROPIC]: {
@@ -274,6 +297,37 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// `onnxruntime-node` native addon has no Android build at all.
 		ner: async () =>
 			(await import("../nerAdapters/LocalOnnxNerAdapter")).default
+	},
+
+	// 🚧 Native ElevenLabs speech: the speech family is this type's only module.
+	[CONNECTION_TYPE.ELEVENLABS]: {
+		speech: async () =>
+			(await import("../connectionAdapters/speech/ElevenLabsSpeechAdapter"))
+				.default
+	},
+
+	// 🚧 audio.cpp speaks and transcribes, and does nothing else: no
+	// `text->text`, ever.
+	[CONNECTION_TYPE.AUDIOCPP]: {
+		speech: async () =>
+			(await import("../connectionAdapters/speech/profiles/audiocpp"))
+				.default,
+		transcription: async () =>
+			(await import("../transcriptionAdapters/AudioCppTranscriptionAdapter"))
+				.default
+	},
+
+	// 🚧 audio.cpp, run by Serene Pub: one process Serene Pub runs. Its base URL
+	// comes from the process (`ensureAudioCppReady`), never the row. Listing
+	// and testing ride on the speech module because the type's declared
+	// modality is `tts` (`modelSync.adapterIO`). No text module, ever.
+	[CONNECTION_TYPE.AUDIOCPP_MANAGED]: {
+		speech: async () =>
+			(await import("../connectionAdapters/speech/profiles/audiocpp"))
+				.audiocppManagedSpeech,
+		transcription: async () =>
+			(await import("../transcriptionAdapters/AudioCppTranscriptionAdapter"))
+				.audioCppManagedTranscription
 	}
 }
 

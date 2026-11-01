@@ -7,15 +7,18 @@
 	 */
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
 	import { isServableEntry } from "@serene-pub/sdk"
-	import { ownerOf } from "./context.svelte"
+	import { ownerOf, ownerVersionOf } from "./context.svelte"
 	import { vouchFor } from "./activation"
 	import type { SpElementProps } from "./spElement.svelte"
 
 	let { attrs, emit, host }: SpElementProps = $props()
 	const owner = $derived(ownerOf(host))
+	// Versioned like a session view's document (M2a), so the document is told
+	// its `assetsBase` and a new install never serves it a stale copy.
+	const version = $derived(ownerVersionOf(host))
 	const src = $derived(
 		owner && owner !== "core" && attrs.src && isServableEntry(attrs.src)
-			? `/plugin-ui/${owner}/${attrs.src}`
+			? `/plugin-ui/${owner}/${attrs.src}${version ? `?v=${encodeURIComponent(version)}` : ""}`
 			: null
 	)
 	const frameProps = $derived.by(() => {

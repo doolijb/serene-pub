@@ -73,6 +73,13 @@ const config = {
 					"https:",
 					"https://raw.githubusercontent.com"
 				],
+				// Sound: spoken lines play from /media (self); the voice try-out
+				// plays a clip the socket returned, from an object URL (blob:).
+				// With no media-src the browser fell back to default-src 'self'
+				// and the try-out's player showed an empty 0:00 clip on a
+				// production build (owner report, 2026-10-29). A tab opened
+				// before the fix keeps the old policy until it is reloaded.
+				"media-src": ["self", "blob:"],
 				"style-src": [
 					"self",
 					"unsafe-inline",

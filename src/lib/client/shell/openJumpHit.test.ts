@@ -8,7 +8,7 @@
 import { describe, expect, test, vi } from "vitest"
 import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
 import { helpRouter } from "./helpRouter.svelte"
-import { openJumpHit } from "./openJumpHit"
+import { openJumpHit, openSessionPage } from "./openJumpHit"
 import type { JumpHit } from "$lib/shared/sockets/jump"
 
 const goto = vi.fn(async () => {})
@@ -163,6 +163,42 @@ describe("openJumpHit — the page kinds", () => {
 		expect(openPanel).not.toHaveBeenCalled()
 		// NOT `digest.sessionId`, which opens the sidebar's edit form instead.
 		expect(panelsCtx.digest).toEqual({})
+	})
+})
+
+describe("openSessionPage — the one way a session opens", () => {
+	test("from a focused view it navigates and leaves Focus to the navigation; on its own address it steps Focus down", async () => {
+		goto.mockClear()
+		const sets: Array<string | null> = []
+		const ctx = {
+			isMobileMenuOpen: true,
+			mobilePanel: "sessions",
+			get fullPageView() {
+				return "sessions"
+			},
+			set fullPageView(v: string | null) {
+				sets.push(v)
+			}
+		} as unknown as PanelsCtx
+		// Start (or Open session) from a focused Sessions view: the goto alone.
+		// Stepping Focus down first popped Focus's shallow entry and raced the
+		// goto back to the page under it (Home), so the session's first open —
+		// where a genre's full-screen proposal runs — never happened.
+		await openSessionPage(ctx, 7)
+		expect(goto.mock.calls).toEqual([["/sessions/7"]])
+		expect(sets).toEqual([])
+		expect(ctx.isMobileMenuOpen).toBe(false)
+		expect(ctx.mobilePanel).toBeNull()
+		// Already on that session's address: nothing navigates, so Focus steps down here.
+		vi.stubGlobal("location", { pathname: "/sessions/7" })
+		try {
+			goto.mockClear()
+			await openSessionPage(ctx, 7)
+			expect(goto).not.toHaveBeenCalled()
+			expect(sets).toEqual([null])
+		} finally {
+			vi.unstubAllGlobals()
+		}
 	})
 })
 

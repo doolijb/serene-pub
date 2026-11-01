@@ -46,6 +46,8 @@ Start one by picking the **Guide** genre on the start screen, or **Talk to an AI
 
 **Your own notes.** A Guide session can read a lorebook. Entries whose keywords come up in the conversation are handed to Serene beside the docs, as your own reference notes, so you can tell her how your own setup is arranged. She never writes to the lorebook.
 
+**Drafting for your library.** Ask Serene for a character or a lorebook and she drafts one. It waits in the session for **Accept** unless your **Library write mode** (Settings › User) says otherwise; **Back** takes it back. See [Sessions](./sessions.md#back-and-forward).
+
 :::note Admins only
 What Serene is told is part of the Guide's pipeline settings: open **Admin › Pipelines** and edit the **System prompt** on the Guide's reply. The change reaches the next answer.
 :::
@@ -64,7 +66,7 @@ A genre Serene Pub or a plugin ships stays as written. Copy it to change it.
 
 ### Bundling it
 
-**Export as plugin…** on the genre's page writes a zip in the plugin package layout: the genre, its pipelines as documents, its presets, layouts, and any frames. Another pub installs it from **Admin › Plugins › Install a package…**. Both need plugins switched on (`SP_PLUGINS_ENABLED`). A package cannot be installed on the pub that still has the genre it was exported from: its owner name belongs to your in-app work there, and the install is refused rather than taking those pipelines over. The package carries no code, so it installs its declarations and nothing runs in a sandbox; anything that needs code — a node with storage or network, a custom event, a Svelte widget — is a plugin built with the SDK.
+**Export as plugin…** on the genre's page writes a zip in the plugin package layout: the genre, its pipelines as documents, its presets, layouts, and any frames. Another pub installs it from **Admin › Plugins › Install a package…**. Both need plugins on, which they are unless `SP_PLUGINS_ENABLED` turns them off. A package cannot be installed on the pub that still has the genre it was exported from: its owner name belongs to your in-app work there, and the install is refused rather than taking those pipelines over. The package carries no code, so it installs its declarations and nothing runs in a sandbox; anything that needs code — a node with storage or network, a custom event, a Svelte widget — is a plugin built with the SDK.
 
 Tick **Include the source** in the export dialog to get that plugin's starting point: the same package plus a `src/` folder, `package.json` and a README, which `npx serene-pub build .` turns back into the same package. The pipelines stay as the documents the pub saved, and the genre and presets as data. What a pub never stores — the code behind a plugin's own node, for one — is listed in the README under *What is left for you to write*, and in the export's warnings.
 

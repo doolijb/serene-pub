@@ -1,9 +1,10 @@
 import { eq, gt, sql, and } from "drizzle-orm"
 import fs from "node:fs"
 import path from "node:path"
-import { plugins, sessions } from "$lib/server/db/schema"
+import { lorebooks, plugins, sessions } from "$lib/server/db/schema"
 import type { SandboxManager } from "./SandboxManager"
 import { fireMigrate } from "./lifecycle"
+import { bumpedAnnexVersionsSql } from "$lib/server/sessions/annexVersions"
 
 /**
  * 🚧 The `migrate(fromVersion)` lifecycle hook's host half (pr-6 G1 / R-n, ruled 2026-10-24):
@@ -81,12 +82,44 @@ async function storeOwnerDocument(
 			)
 			where ${sessions.id} = ${sessionId}
 		`)
+		// 🚧 A migrated document is a moved one: a write built on the old read is stale (M2a a8).
+		await tx.execute(sql`
+			update ${sessions}
+			set ${sql.identifier("annex_versions")} = ${bumpedAnnexVersionsSql(sessions.annexVersions, owner)}
+			where ${sessions.id} = ${sessionId}
+		`)
 	})
 }
 
 /**
- * Run `migrate` over every session's document of `owner`, from to version; store what it
- * returns. Sessions in id order, pages of 200. Never throws.
+ * 🚧 Store `document` as `owner`'s **lorebook annex** document (M0, S2), under the
+ * lorebook annex's lock and `jsonb_set`. A lasting write: no imprint, no event.
+ */
+async function storeLorebookOwnerDocument(
+	db: Db,
+	owner: string,
+	lorebookId: number,
+	document: Record<string, unknown>
+): Promise<void> {
+	await db.transaction(async (tx) => {
+		await tx.execute(sql`select pg_advisory_xact_lock(hashtext('lorebook-annex'), ${lorebookId})`)
+		await tx.execute(sql`
+			update ${lorebooks}
+			set ${sql.identifier("annex")} = jsonb_set(
+				coalesce(${lorebooks.annex}, '{}'::jsonb),
+				ARRAY[${owner}]::text[],
+				${JSON.stringify(document)}::jsonb,
+				true
+			),
+			${sql.identifier("annex_versions")} = ${bumpedAnnexVersionsSql(lorebooks.annexVersions, owner)}
+			where ${lorebooks.id} = ${lorebookId}
+		`)
+	})
+}
+
+/**
+ * Run `migrate` over every session's document of `owner`, then every lorebook's, from to
+ * version; store what it returns. Each in id order, pages of 200. Never throws.
  */
 export async function migrateAnnexOwner(
 	db: Db,
@@ -118,7 +151,8 @@ export async function migrateAnnexOwner(
 						sessionId: row.id,
 						fromVersion: versions.fromVersion,
 						version: versions.version,
-						document: held
+						document: held,
+						scope: { kind: "session", sessionId: row.id }
 					})
 					if (document) {
 						await storeOwnerDocument(db, owner, row.id, document)
@@ -127,6 +161,42 @@ export async function migrateAnnexOwner(
 				} catch (e) {
 					left++
 					console.warn(`[plugins] '${owner}' migrate for session ${row.id} failed:`, e)
+				}
+			}
+			if (page.length < PAGE) break
+		}
+		// The same moment over the lorebook annex's documents (SHAPES L9 Migration): told which
+		// by `scope`, with no `sessionId` at all.
+		after = 0
+		for (;;) {
+			const page = await db
+				.select({ id: lorebooks.id, annex: lorebooks.annex })
+				.from(lorebooks)
+				.where(and(gt(lorebooks.id, after), sql`${lorebooks.annex} ? ${owner}`))
+				.orderBy(lorebooks.id)
+				.limit(PAGE)
+			if (!page.length) break
+			for (const row of page) {
+				after = row.id
+				const held = (row.annex as Record<string, unknown> | null)?.[owner]
+				if (!isPlain(held)) {
+					left++
+					continue
+				}
+				try {
+					const { document } = await fireMigrate(mgr, owner, {
+						fromVersion: versions.fromVersion,
+						version: versions.version,
+						document: held,
+						scope: { kind: "lorebook", lorebookId: row.id }
+					})
+					if (document) {
+						await storeLorebookOwnerDocument(db, owner, row.id, document)
+						migrated++
+					} else left++
+				} catch (e) {
+					left++
+					console.warn(`[plugins] '${owner}' migrate for lorebook ${row.id} failed:`, e)
 				}
 			}
 			if (page.length < PAGE) break
@@ -156,7 +226,8 @@ export async function migrateOwnerDocument(
 			sessionId,
 			fromVersion,
 			version,
-			document
+			document,
+			scope: { kind: "session", sessionId }
 		})
 		return out.document ?? document
 	} catch {

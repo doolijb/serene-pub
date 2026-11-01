@@ -217,7 +217,9 @@
 		const type =
 			manager.panel === "koboldcpp"
 				? CONNECTION_TYPE.KOBOLDCPP_MANAGED
-				: CONNECTION_TYPE.OLLAMA
+				: manager.panel === "audiocpp"
+					? CONNECTION_TYPE.AUDIOCPP_MANAGED
+					: CONNECTION_TYPE.OLLAMA
 		const row =
 			(selectedRow?.type === type ? selectedRow : null) ??
 			conns.listed.find((c) => c.type === type)
@@ -285,6 +287,15 @@
 			panelsCtx!.digest.connectionsDoor = undefined
 			if (door === "setup-chat") openSetupChat()
 			else openInLoadouts(panelsCtx, { job: "text->text" })
+		})
+	})
+	/** `modelsFinder`: a Get more… / Get a model… door, consumed once. */
+	$effect(() => {
+		const door = panelsCtx?.digest.modelsFinder
+		if (!door) return
+		untrack(() => {
+			panelsCtx!.digest.modelsFinder = undefined
+			openFinder(door)
 		})
 	})
 	// `connectionsJob` is the Loadouts view's door now (`LoadoutsSidebar`

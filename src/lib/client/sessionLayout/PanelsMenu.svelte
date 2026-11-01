@@ -185,7 +185,7 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div
 		class="pop-scrim"
-		data-stage-hidden={model.stageOnly ? "" : undefined}
+		data-stage-hidden={model.fullscreen ? "" : undefined}
 		onclick={closeMobilePanels}
 	></div>
 {/if}
@@ -194,12 +194,12 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div
 		class="pop-scrim"
-		data-stage-hidden={model.stageOnly ? "" : undefined}
+		data-stage-hidden={model.fullscreen ? "" : undefined}
 		onclick={() => mobileSidePanels.closeMenu()}
 	></div>
 	<div
 		class="panels-menu"
-		data-stage-hidden={model.stageOnly ? "" : undefined}
+		data-stage-hidden={model.fullscreen ? "" : undefined}
 		role="dialog"
 		aria-modal="true"
 		aria-label="Session panels"

@@ -30,6 +30,7 @@
 	import PanelSplit from "../panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
+	import { openSessionPage } from "$lib/client/shell/openJumpHit"
 	import {
 		groupSessions,
 		isAwaitingUser
@@ -41,6 +42,7 @@
 		patchedRow
 	} from "$lib/client/sessions/sessionRowPatches.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
+	import { appletRows, genreNamesFor } from "$lib/client/sessions/appletRows"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -88,6 +90,10 @@
 	let isStarting = $state(false)
 	/** What the start screen opens knowing, when a caller knew something. */
 	let startPrefill: PanelsCtx["digest"]["createSession"] = $state(undefined)
+	/** 🚧 M2c: the offered genres, for the Apps group and an applet's `open-sessions` filter. */
+	let offeredGenres: Sockets.Sessions.Genres.Response["genres"] = $state([])
+	/** 🚧 M2c: genre ids an applet asked the list to show; empty = no such filter. */
+	let appletGenreIds: string[] = $state([])
 	let viewingId: number | null = $state(null)
 	let returnToViewId: number | null = $state(null)
 	let sessionFormHasChanges = $state(false)
@@ -275,6 +281,9 @@
 		applyRowChanged(msg)
 	}
 	function handleRunStatus(msg: Sockets.Sessions.RunStatus.Response) {
+		// 🚧 A line-bound run (speaking a line) shows on its line only — and
+		// its end frame must not clear a reply's status here.
+		if (msg.lineBound) return
 		runStatuses.set(msg.sessionId, msg.status)
 	}
 	/** The row's status: the push's word where one arrived, else the list's. */
@@ -456,15 +465,9 @@
 		showEditSessionForm = true
 	}
 
+	/** Start and Open session go into the session the one way (`openSessionPage`). */
 	function handleOpenSession(sessionId: number) {
-		goto(`/sessions/${sessionId}`)
-		panelsCtx.fullPageView = null
-		if (panelsCtx.isMobileMenuOpen) {
-			panelsCtx.isMobileMenuOpen = false
-		}
-		if (panelsCtx.mobilePanel) {
-			panelsCtx.mobilePanel = null
-		}
+		void openSessionPage(panelsCtx, sessionId)
 	}
 
 	function handleViewLorebook(lorebookId: number) {
@@ -531,15 +534,19 @@
 
 	let showDeleteModal = $state(false)
 	let sessionToDelete: number | null = $state(null)
+	/** 🚧 M2c: the plugin whose applet asked for this confirm (null for the person's own ⋮ › Delete). */
+	let deleteFromApplet: string | null = null
 	let isDeleting = $state(false)
 
 	function handleDeleteClick(sessionId: number) {
 		sessionToDelete = sessionId
+		deleteFromApplet = null
 		showDeleteModal = true
 	}
 	function cancelDelete() {
 		showDeleteModal = false
 		sessionToDelete = null
+		deleteFromApplet = null
 	}
 	function confirmDelete() {
 		// Guard against double-submit (eg. an impatient re-click while the
@@ -552,9 +559,13 @@
 				panelsCtx.fullPageView = null
 			}
 			isDeleting = true
-			socket.emit("sessions:delete", { id: sessionToDelete })
+			socket.emit("sessions:delete", {
+				id: sessionToDelete,
+				...(deleteFromApplet ? { fromApplet: { pluginId: deleteFromApplet } } : {})
+			})
 			showDeleteModal = false
 			sessionToDelete = null
+			deleteFromApplet = null
 		}
 	}
 	function handleSessionsDelete(msg: Sockets.Sessions.Delete.Response) {
@@ -620,6 +631,11 @@
 		const lower = search.toLowerCase()
 
 		let filtered = [...patchedSessions]
+
+		if (appletFilterNames.length)
+			filtered = filtered.filter((session) =>
+				appletFilterNames.includes(session.genreName as string)
+			)
 
 		// If searching by character ID, filter sessions that include that character
 		if (searchByCharacterId) {
@@ -689,6 +705,7 @@
 	let listIsNarrowed = $derived(
 		!!search ||
 			activeChip !== "all" ||
+			appletGenreIds.length > 0 ||
 			!!searchByCharacterId ||
 			!!searchByPersonaId
 	)
@@ -770,6 +787,41 @@
 		}
 		startPrefill = prefill
 		openStartForm()
+	})
+
+	$effect(() =>
+		interest.requestWithInterest(
+			"sessions:genres",
+			{},
+			(msg: Sockets.Sessions.Genres.Response) => {
+				offeredGenres = msg.genres || []
+			}
+		)
+	)
+	const appRows = $derived(appletRows(offeredGenres as never))
+	const appletFilterNames = $derived(
+		genreNamesFor(appletGenreIds, offeredGenres)
+	)
+
+	/** 🚧 M2c: an applet's `open-sessions` — show only its genres until cleared. */
+	$effect(() => {
+		const ids = panelsCtx.digest.sessionsGenres
+		if (!ids) return
+		delete panelsCtx.digest.sessionsGenres
+		appletGenreIds = [...ids]
+	})
+
+	/** 🚧 M2c: an applet's `delete-session` — the existing confirm, for a session in the list. */
+	// Read once the list has landed, so a request that arrives with the view does not find it empty.
+	$effect(() => {
+		const id = panelsCtx.digest.deleteSessionId
+		if (id === undefined || isLoading) return
+		const from = panelsCtx.digest.deleteSessionFromApplet
+		delete panelsCtx.digest.deleteSessionId
+		delete panelsCtx.digest.deleteSessionFromApplet
+		if (!sessions.some((x) => x.id === id)) return
+		handleDeleteClick(id)
+		deleteFromApplet = from ?? null
 	})
 
 	$effect(() => {
@@ -957,6 +1009,7 @@
 				     half-answered start screen without knowing there is one. -->
 				<StartSessionForm
 					prefill={startPrefill}
+					sessions={sessions}
 					bind:hasChanges={sessionFormHasChanges}
 					onCreated={handleSessionCreated}
 					onCancel={closeStartForm}
@@ -1147,6 +1200,13 @@
 							() => pickFilter("all")
 						)}
 					{/if}
+					{#if appletFilterNames.length}
+						{@render narrowingChip(
+							`Showing ${appletFilterNames.join(", ")} · Clear`,
+							"Clear the genre filter",
+							() => (appletGenreIds = [])
+						)}
+					{/if}
 					{#if searchCharacter}
 						{@render narrowingChip(
 							searchCharacter.nickname || searchCharacter.name,
@@ -1166,6 +1226,34 @@
 		{/snippet}
 
 		{#snippet list()}
+			{#if appRows.length && !isLoading}
+				<!-- 🚧 M2c: plugins that offer an applet. Pressing a row opens
+				     its launcher full screen; a plugin with two applet genres is
+				     one row. -->
+				<ListGroupLabel id="sessions-group-apps" label="Apps" />
+				<ul class="flex min-w-0 flex-col" aria-labelledby="sessions-group-apps">
+					{#each appRows as app (app.pluginId)}
+						<li>
+							<button
+								type="button"
+								class="hover:bg-surface-200-800 flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left"
+								data-applet-row={app.pluginId}
+								onclick={() => goto(`/apps/${app.pluginId}`)}
+							>
+								<Icons.LayoutGrid
+									size={16}
+									class="text-surface-600-400 shrink-0"
+									aria-hidden="true"
+								/>
+								<span class="flex min-w-0 flex-1 flex-col">
+									<span class="truncate text-lead font-medium">{app.label}</span>
+									<span class="text-surface-600-400 truncate text-chip">{app.subtitle}</span>
+								</span>
+							</button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 			{#if isLoading}
 				<LoadingState message="Loading sessions…" />
 			{:else if filteredSessions.length === 0}

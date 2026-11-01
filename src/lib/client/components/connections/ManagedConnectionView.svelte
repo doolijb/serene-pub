@@ -12,7 +12,7 @@
 	 *
 	 * The status card, the tab strip and the setup routing are this file's.
 	 * The tabs are components of their own: `ManagedModelsTab` (the runtime's
-	 * models, in modality lanes), the model finder, the downloads list,
+	 * models, in modality lanes, and the Get more… door), the downloads list,
 	 * `KoboldCppSettingsTab` and the connection's settings.
 	 *
 	 * The connection's OWN settings — name, form, notes, capabilities, stop
@@ -22,12 +22,12 @@
 	 *
 	 * ## Tabs, and the two that are not here
 	 *
-	 * Models · Get models · Downloads · Settings. "Get models" is a door to
-	 * the one model finder (ruling R3) — the managers' old Available tabs are
-	 * retired — and Downloads is the manager's own list until the one
+	 * Models · Arriving · Settings. Getting a model is the Models view's one
+	 * **Get a model** dialog (ruling R3), reached by the Models tab's **Get
+	 * more…** door; the Get tab and the managers' old Available tabs are
+	 * retired. Arriving is the manager's own list until the one
 	 * downloads view (R4) can be filtered by destination.
 	 */
-	import ModelFinderView from "./ModelFinderView.svelte"
 	import DownloadsView from "./DownloadsView.svelte"
 	import { getContext, onMount } from "svelte"
 	import type { Snippet } from "svelte"
@@ -42,13 +42,23 @@
 	import KoboldCppSettingsTab from "$lib/client/components/koboldcppManager/KoboldCppSettingsTab.svelte"
 	import KoboldCppSetupScreen from "$lib/client/components/koboldcppManager/KoboldCppSetupScreen.svelte"
 	import KoboldCppBinaryVariantPicker from "$lib/client/components/koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
+	import AudioCppSetupScreen from "$lib/client/components/audiocppManager/AudioCppSetupScreen.svelte"
+	import AudioCppBinaryVariantPicker from "$lib/client/components/audiocppManager/AudioCppBinaryVariantPicker.svelte"
+	import AudioCppModelsTab from "$lib/client/components/audiocppManager/AudioCppModelsTab.svelte"
+	import AudioCppProcessTab from "$lib/client/components/audiocppManager/AudioCppProcessTab.svelte"
+	import AudioCppSettingsTab from "$lib/client/components/audiocppManager/AudioCppSettingsTab.svelte"
 
 	import { isLoopbackAddress } from "$lib/shared/connections/host"
-	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { declareInterest, onConnect } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { downloads } from "./downloads.svelte"
 	import {
+		acppApplyLine,
+		acppBuildLine,
+		acppInstallState,
+		acppLoadedLine,
+		acppProcessLine,
 		duplicateOllamaHosts,
 		capabilitiesServedBy,
 		contextLabel,
@@ -149,10 +159,16 @@
 	const ollamaSettingsCtx: OllamaSettingsCtx = $state(
 		getContext("ollamaSettingsCtx") ?? { settings: undefined }
 	)
+	const audioCppSettingsCtx: AudioCppSettingsCtx = $state(
+		getContext("audioCppSettingsCtx") ?? { settings: undefined }
+	)
 	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
 
 	const label = $derived(managedLabel(kind))
 	const isKcpp = $derived(kind === "koboldcpp")
+	/** 🚧 audio.cpp, run by Serene Pub — the third kind (plan 2026-10-28 D10). */
+	const isAcpp = $derived(kind === "audiocpp")
+	const isOllama = $derived(kind === "ollama")
 
 	// ── KoboldCPP: which screen, and what the process is doing ──────────────
 	const managedMode = $derived(
@@ -242,15 +258,27 @@
 		addressField = savedAddress
 	})
 
+	// ── audio.cpp: install, process, build ──────────────────────────────────
+	const acppSettings = $derived(audioCppSettingsCtx.settings)
+	/** The same reading the index row makes (`acppInstallState`). */
+	const acppInstall = $derived(acppInstallState(acppSettings))
+	const acppHasBinary = $derived(!!acppSettings?.binaryVariant)
+	const acppOffline = $derived(isAcpp && acppInstall === "offline")
+	let acppStatus = $state<Sockets.AudioCpp.StatusView | null>(null)
+	let acppInstalled = $state<Sockets.AudioCpp.InstallState.Response | null>(
+		null
+	)
+	let acppBusy = $state<"start" | "stop" | "restart" | null>(null)
+
 	const stage = $derived(
 		managedStage(kind, {
 			managedMode,
-			hasBinary,
+			hasBinary: isAcpp ? acppHasBinary : hasBinary,
 			pickerRequested,
 			connected: externalConnected
 		})
 	)
-	const tabs = $derived(managedTabs(stage))
+	const tabs = $derived(managedTabs(stage, kind))
 
 	// ── The status card's three lines ───────────────────────────────────────
 	// The uptime is a clock, not a fact that arrives with a push: derived from
@@ -259,7 +287,7 @@
 	// only while there is something running to count.
 	let now = $state(Date.now())
 	$effect(() => {
-		const run = subStatus?.status
+		const run = isAcpp ? acppStatus?.status : subStatus?.status
 		if (run !== "running" && run !== "stopping") return
 		const timer = setInterval(() => (now = Date.now()), 1000)
 		return () => clearInterval(timer)
@@ -304,6 +332,33 @@
 	const processError = $derived(
 		subStatus?.status === "crashed" ? (subStatus.lastError ?? null) : null
 	)
+	/** audio.cpp's card: offline outranks the process, as KoboldCPP's does. */
+	const acppStatusLine = $derived(
+		acppOffline
+			? {
+					dot: "quiet" as StatusDot,
+					label: "Offline",
+					meta: "Switched off"
+				}
+			: (acppProcessLine(acppStatus, now) ?? {
+					dot: "quiet" as StatusDot,
+					label: "Not checked yet",
+					meta: null
+				})
+	)
+	const acppLoaded = $derived(acppLoadedLine(acppStatus))
+	const acppBuild = $derived(
+		acppBuildLine({
+			version: acppStatus?.version ?? acppInstalled?.version,
+			backend:
+				acppStatus?.backend ??
+				acppInstalled?.backend ??
+				acppSettings?.backend,
+			releaseTag: acppInstalled?.releaseTag ?? acppSettings?.releaseTag,
+			verified: acppInstalled?.verified
+		})
+	)
+	const acppApply = $derived(acppApplyLine(acppStatus))
 
 	const DOT: Record<StatusDot, string> = {
 		ok: "bg-success-500",
@@ -383,6 +438,20 @@
 	function unloadModel() {
 		unloading = true
 		socket.emit("koboldcpp:unloadModel", {})
+	}
+	/** Offline = switched off with the build kept: Start switches it back on. */
+	function acppStart() {
+		acppBusy = "start"
+		if (acppOffline) socket.emit("audiocpp:updateSettings", { enabled: true })
+		socket.emit("audiocpp:start", {})
+	}
+	function acppStop() {
+		acppBusy = "stop"
+		socket.emit("audiocpp:stop", {})
+	}
+	function acppRestart() {
+		acppBusy = "restart"
+		socket.emit("audiocpp:restart", {})
 	}
 	function testAddress() {
 		isTesting = true
@@ -589,7 +658,7 @@
 		}
 	})
 	$effect(() => {
-		if (!isAdmin || isKcpp) return
+		if (!isAdmin || !isOllama) return
 		const releases = [
 			declareInterest<"ollama:version">(
 				"ollama:version",
@@ -653,8 +722,93 @@
 		testAddress()
 	})
 
+	// ── audio.cpp: the process, the build, and the setup screen's finish ────
+	// `audiocpp:` is restricted (admin-only) interest, as `koboldcpp:` is.
+	function handleAcppStatus(msg: { status: Sockets.AudioCpp.StatusView }) {
+		if (msg?.status) acppStatus = msg.status
+		acppBusy = null
+	}
+	function handleAcppActionError() {
+		// Layout's catch-all `:error` toast has already said why.
+		acppBusy = null
+	}
+	function handleAcppInstallState(msg: Sockets.AudioCpp.InstallState.Response) {
+		acppInstalled = msg
+	}
+	/**
+	 * A finished binary download changes the settings (binary, backend,
+	 * release) — asked for again here so the view leaves the setup screen
+	 * without waiting for some other push to carry them.
+	 */
+	function handleAcppBinaryProgress(
+		msg: Sockets.AudioCpp.BinaryDownloadProgress.Response
+	) {
+		if (msg?.download?.status !== "success") return
+		// One click = download, then switch on (lead ruling on lane B's ★B3).
+		// Idempotent: the Add menu may already have switched it on.
+		socket.emit("audiocpp:updateSettings", { enabled: true })
+		socket.emit("audiocpp:getSettings", {})
+		socket.emit("audiocpp:installState", {})
+		socket.emit("audiocpp:getStatus", {})
+	}
+	$effect(() => {
+		if (!isAdmin || !isAcpp) return
+		const releases = [
+			declareInterest<"audiocpp:getStatus">(
+				"audiocpp:getStatus",
+				handleAcppStatus
+			),
+			declareInterest<"audiocpp:subprocessStatus">(
+				"audiocpp:subprocessStatus",
+				handleAcppStatus
+			),
+			declareInterest<"audiocpp:start">("audiocpp:start", handleAcppStatus),
+			declareInterest<"audiocpp:stop">("audiocpp:stop", handleAcppStatus),
+			declareInterest<"audiocpp:restart">(
+				"audiocpp:restart",
+				handleAcppStatus
+			),
+			declareInterest<"audiocpp:start:error">(
+				"audiocpp:start:error",
+				handleAcppActionError
+			),
+			declareInterest<"audiocpp:stop:error">(
+				"audiocpp:stop:error",
+				handleAcppActionError
+			),
+			declareInterest<"audiocpp:restart:error">(
+				"audiocpp:restart:error",
+				handleAcppActionError
+			),
+			declareInterest<"audiocpp:installState">(
+				"audiocpp:installState",
+				handleAcppInstallState
+			),
+			declareInterest<"audiocpp:binaryDownloadProgress">(
+				"audiocpp:binaryDownloadProgress",
+				handleAcppBinaryProgress
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+	/** The process and the build, asked for once there is a build to ask about. */
+	$effect(() => {
+		if (!isAdmin || !isAcpp || !acppHasBinary) return
+		socket.emit("audiocpp:getStatus", {})
+		socket.emit("audiocpp:installState", {})
+	})
+	/** A push sent while the socket was down is gone: ask again on reconnect. */
+	$effect(() =>
+		onConnect(() => {
+			if (!isAdmin || !isAcpp || !acppHasBinary) return
+			socket.emit("audiocpp:getStatus", {})
+		})
+	)
+
 	onMount(() => {
-		if (!isAdmin || isKcpp) return
+		if (!isAdmin || !isOllama) return
 		checkOllama()
 		socket.emit("ollama:isUpdateAvailable", { connectionId })
 	})
@@ -776,7 +930,7 @@
 			},
 			{ separator: true },
 			{
-				label: isKcpp
+				label: !isOllama
 					? `Remove ${label} from this pub`
 					: "Remove this connection",
 				icon: Icons.Trash2,
@@ -961,7 +1115,44 @@
 					{@render addressRow("http://localhost:5001")}
 				{/if}
 			</section>
-		{:else if !isKcpp && ollamaLine}
+		{:else if isAcpp && acppHasBinary}
+			<section class="panel-card flex flex-col gap-2" aria-label="Status">
+				<div class="flex min-w-0 items-center gap-2">
+					{@render statusDot(acppStatusLine.dot)}
+					<span class="shrink-0 text-sm font-medium">
+						{acppStatusLine.label}
+					</span>
+					{#if acppStatusLine.meta}
+						<span
+							class="text-surface-600-400 min-w-0 flex-1 truncate text-xs"
+						>
+							· {acppStatusLine.meta}
+						</span>
+					{/if}
+				</div>
+				{#if acppBuild}
+					<p class="text-surface-600-400 truncate text-xs">
+						{acppBuild}
+					</p>
+				{/if}
+				<div class="flex min-w-0 items-center gap-2">
+					<Icons.AudioLines
+						size={14}
+						class="text-surface-500 shrink-0"
+						aria-hidden="true"
+					/>
+					<span class="min-w-0 flex-1 truncate text-xs">
+						{acppLoaded.text}
+					</span>
+				</div>
+				{#if acppApply}
+					<div class="flex min-w-0 items-center gap-2 text-xs">
+						{@render statusDot("pending")}
+						<span>{acppApply}</span>
+					</div>
+				{/if}
+			</section>
+		{:else if isOllama && ollamaLine}
 			<section class="panel-card flex flex-col gap-2" aria-label="Status">
 				<div class="flex min-w-0 items-center gap-2">
 					{@render statusDot(ollamaLine.dot)}
@@ -1050,6 +1241,34 @@
 					}}
 				/>
 			</div>
+		{:else if isAcpp && !acppSettings}
+			<p class="text-surface-600-400 text-sm">Loading audio.cpp…</p>
+		{:else if stage === "acpp-binary"}
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				{#if acppHasBinary}
+					<!-- Change binary: the picker alone, with a way back. -->
+					<div class="flex flex-col gap-3">
+						<button
+							type="button"
+							class="btn btn-sm hover:preset-tonal self-start"
+							onclick={() => (pickerRequested = false)}
+						>
+							<Icons.ArrowLeft size={14} aria-hidden="true" />
+							Keep the installed build
+						</button>
+						<AudioCppBinaryVariantPicker
+							onDownloadStarted={() => {
+								pickerRequested = false
+								tab = "downloads"
+							}}
+						/>
+					</div>
+				{:else}
+					<!-- First install: stays here until the binary is recorded
+					     (the picker shows the download's progress meanwhile). -->
+					<AudioCppSetupScreen onDownloadStarted={() => {}} />
+				{/if}
+			</div>
 		{:else if stage === "kcpp-external-setup"}
 			<div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
 				<p class="text-surface-600-400 text-sm">
@@ -1130,7 +1349,11 @@
 					aria-labelledby="managed-connection-models-tab"
 					hidden={tab !== "models"}
 				>
-					{#if tab === "models"}
+					{#if tab === "models" && isAcpp}
+						<div class="flex flex-col py-3">
+							<AudioCppModelsTab {connectionId} />
+						</div>
+					{:else if tab === "models"}
 						<ManagedModelsTab
 							kind={isKcpp ? "koboldcpp" : "ollama"}
 							connection={textConnection}
@@ -1139,27 +1362,26 @@
 							onOpenModel={(c, m) => onOpenModel?.(c, m)}
 							onSetDefault={(cap, c, m) =>
 								onSetDefault?.(cap, c, m)}
-							onGetModels={() => (tab = "get")}
 							onRefresh={onRefreshModels}
 						/>
 					{/if}
 				</div>
 				<div
-					id="managed-connection-get"
+					id="managed-connection-process"
 					role="tabpanel"
-					aria-labelledby="managed-connection-get-tab"
-					hidden={tab !== "get"}
+					aria-labelledby="managed-connection-process-tab"
+					hidden={tab !== "process"}
 				>
-					{#if tab === "get"}
-						<!-- The one finder (R3), in place and scoped to this
-						     connection — it was a button that left the view
-						     for the same finder (plan 2026-09-24 C3). -->
+					{#if tab === "process" && isAcpp}
 						<div class="flex flex-col py-3">
-							<ModelFinderView
-								{connectionId}
-								inTab
-								onBack={() => (tab = "models")}
-								{onOpenConnection}
+							<AudioCppProcessTab
+								status={acppStatus}
+								install={acppInstalled}
+								offline={acppOffline}
+								busy={acppBusy}
+								onStart={acppStart}
+								onStop={acppStop}
+								onRestart={acppRestart}
 							/>
 						</div>
 					{/if}
@@ -1199,6 +1421,11 @@
 									onUpdateBinary={() =>
 										(pickerRequested = true)}
 								/>
+							{:else if isAcpp}
+								<AudioCppSettingsTab
+									onChangeBinary={() =>
+										(pickerRequested = true)}
+								/>
 							{:else}
 								{@render ollamaVersionSection()}
 							{/if}
@@ -1233,14 +1460,14 @@
 										<span
 											class="text-error-600-400 block text-sm"
 										>
-											{isKcpp
+											{!isOllama
 												? `Remove ${label} from this pub`
 												: "Remove this connection"}
 										</span>
 										<span
 											class="text-surface-600-400 block text-xs"
 										>
-											{isKcpp
+											{!isOllama
 												? "Keeps downloaded models on disk."
 												: "Ollama keeps running outside Serene Pub."}
 										</span>
@@ -1303,7 +1530,7 @@
 						class="btn preset-tonal"
 						onclick={() => (confirmRemove = false)}
 					>
-						{isKcpp ? `Keep ${label}` : "Keep it"}
+						{!isOllama ? `Keep ${label}` : "Keep it"}
 					</button>
 					<button
 						type="button"

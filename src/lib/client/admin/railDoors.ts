@@ -18,6 +18,12 @@ type DoorCtx = Pick<PanelsCtx, "digest" | "openPanel">
 /** Where the Models view should land. Nothing given → its list. */
 export interface ModelsDoor {
 	connectionsJob?: string
+	/**
+	 * Also open the **Get a model** dialog, pre-scoped: a runtime's **Get
+	 * more…** names its connection, a loadout's **Get a model…** its
+	 * capability. The Models view consumes it once.
+	 */
+	finder?: { capability?: string; connectionId?: number }
 }
 
 /**
@@ -30,6 +36,7 @@ export interface ModelsDoor {
 export function openInModels(ctx: DoorCtx | undefined, door: ModelsDoor = {}) {
 	if (!ctx) return
 	if (door.connectionsJob) return openInLoadouts(ctx, { job: door.connectionsJob })
+	if (door.finder) ctx.digest.modelsFinder = { ...door.finder }
 	ctx.openPanel({ key: "models", toggle: false })
 }
 

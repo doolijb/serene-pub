@@ -15,6 +15,7 @@
 	 */
 
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
 
@@ -29,6 +30,7 @@
 			| "string[]"
 			| "secret"
 			| "object"
+			| "json"
 		label?: string | ({ en: string } & Record<string, string>)
 		description?: string | ({ en: string } & Record<string, string>)
 		min?: number
@@ -45,6 +47,8 @@
 		advanced?: true
 		showIf?: { field: string; equals: unknown }
 		format?: "json"
+		/** For `json`: the most its JSON text may weigh, in bytes. */
+		maxBytes?: number
 		/** Shown while nothing is stored: the value a run reads (B16x). */
 		default?: unknown
 		/**
@@ -110,6 +114,28 @@
 	/** One level of `showIf`, no rules engine — the SDK's own rule. */
 	const visible = (decl: FieldDecl): boolean =>
 		!decl.showIf || shown(decl.showIf.field) === decl.showIf.equals
+
+	/** The id of the `json` field the person is in; its parse error waits until they leave (§6.12). */
+	let jsonFocusId = $state("")
+	/** The `json` field typed in since it was entered: only a touched field commits when left. */
+	let jsonTouchedId = $state("")
+	/** A `json` field's form value is JSON text (SDK `valuesForForm`); a stray non-text default is formatted. */
+	const jsonTextOf = (v: unknown): string =>
+		typeof v === "string" ? v : v === undefined || v === null ? "" : (JSON.stringify(v, null, 2) ?? "")
+	function jsonIssue(decl: FieldDecl, v: unknown): string | null {
+		const t = jsonTextOf(v)
+		if (t.trim() === "") return null
+		try {
+			const parsed = JSON.parse(t)
+			if (decl.maxBytes != null) {
+				const size = new TextEncoder().encode(JSON.stringify(parsed)).length
+				if (size > decl.maxBytes) return `This is ${size} bytes of JSON; the most is ${decl.maxBytes}.`
+			}
+			return null
+		} catch (e) {
+			return `This is not valid JSON (${e instanceof Error ? e.message : String(e)}).`
+		}
+	}
 
 	const asLines = (v: unknown): string =>
 		Array.isArray(v) ? v.join("\n") : String(v ?? "")
@@ -193,6 +219,46 @@
 	}
 </script>
 
+<!-- A `json` field: a code field over its JSON text, committed when left. -->
+{#snippet jsonCode(
+	id: string,
+	key: string,
+	decl: FieldDecl,
+	value: unknown,
+	set: (v: unknown) => void,
+	live: (v: unknown) => void
+)}
+	{@const issue = jsonFocusId === id ? null : jsonIssue(decl, value)}
+	<div
+		class="flex flex-col gap-1"
+		onfocusin={() => (jsonFocusId = id)}
+		onfocusout={() => {
+			if (jsonFocusId === id) jsonFocusId = ""
+			if (jsonTouchedId === id) {
+				jsonTouchedId = ""
+				set(jsonTextOf(value))
+			}
+		}}
+	>
+		<CodeField
+			{id}
+			value={jsonTextOf(value)}
+			oninput={(v) => {
+				jsonTouchedId = id
+				live(v)
+			}}
+			rows={6}
+			label={text(decl.label, key)}
+			describedBy={issue ? `${id}-issue` : undefined}
+			invalid={!!issue}
+			readonly={disabled}
+		/>
+		{#if issue}
+			<p id="{id}-issue" class="text-error-600-400 text-xs">{issue}</p>
+		{/if}
+	</div>
+{/snippet}
+
 <!-- One control, for a top-level field or an object's member: `id` labels it,
      `value` is what it shows, `set` commits (`live` writes as it is typed). -->
 {#snippet control(
@@ -222,6 +288,8 @@
 				oninput={(e) => live(e.currentTarget.value)}
 				onchange={(e) => set(e.currentTarget.value)}
 			></textarea>
+		{:else if decl.type === "json"}
+			{@render jsonCode(id, key, decl, value, set, live)}
 		{:else if decl.type === "boolean"}
 			<label class="flex items-center gap-2 text-sm">
 				<input
@@ -348,6 +416,15 @@
 								(values[key] = e.currentTarget.value)}
 							onchange={() => oncommit?.()}
 						></textarea>
+					{:else if decl.type === "json"}
+						{@render jsonCode(
+							`sf-${key}`,
+							key,
+							decl,
+							shown(key),
+							(v) => commit(key, v),
+							(v) => (values[key] = v)
+						)}
 					{:else if decl.type === "boolean"}
 						<label class="flex items-center gap-2 text-sm">
 							<input

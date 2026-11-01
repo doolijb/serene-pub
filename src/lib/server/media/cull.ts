@@ -28,6 +28,7 @@ import {
 	type MediaVariantName
 } from "$lib/shared/constants/MediaVisibility"
 import type { FileRow, VariantRow } from "./index"
+import { findSpoken, notSpokenSql } from "./spoken"
 import {
 	displayDerivable,
 	removeVariant,
@@ -144,6 +145,12 @@ export interface DerivedCullable {
 	/** The rows themselves, so the action does not have to re-run the scan and
 	 *  risk acting on a different set than the one it priced. */
 	variantIds: number[]
+	/**
+	 * Spoken-audio FILES (`meta.spoken`) — derived forms in their own right, so
+	 * they are culled whole (row + bytes), not as variants. Counted in `files`
+	 * and `bytes` above so the priced set is the acted-on set.
+	 */
+	spokenFileIds: number[]
 }
 
 /** Every freely re-derivable row this user owns — the safe action, priced. */
@@ -164,11 +171,16 @@ export async function cullableDerived(
 				eq(schema.variants.cache, true)
 			)
 		)
+	// Spoken audio is derived class: reproducible, never an original.
+	const spoken = await findSpoken(db, eq(schema.files.userId, userId))
+	const spokenIds = new Set(spoken.ids)
+	const plain = rows.filter((r) => !spokenIds.has(r.fileId))
 	return {
-		files: new Set(rows.map((r) => r.fileId)).size,
-		variants: rows.length,
-		bytes: rows.reduce((sum, r) => sum + r.bytes, 0),
-		variantIds: rows.map((r) => r.id)
+		files: new Set(plain.map((r) => r.fileId)).size + spoken.ids.length,
+		variants: plain.length,
+		bytes: plain.reduce((sum, r) => sum + r.bytes, 0) + spoken.bytes,
+		variantIds: plain.map((r) => r.id),
+		spokenFileIds: spoken.ids
 	}
 }
 
@@ -203,7 +215,9 @@ export async function cullableOriginals(
 		.select({ file: schema.files, variant: schema.variants })
 		.from(schema.files)
 		.innerJoin(schema.variants, eq(schema.variants.fileId, schema.files.id))
-		.where(eq(schema.files.userId, userId))
+		// Spoken audio is never an original: it is derived, and goes with the
+		// derived sweep, not the irreversible one.
+		.where(and(eq(schema.files.userId, userId), notSpokenSql()))
 
 	const byFile = new Map<number, { file: FileRow; variants: VariantRow[] }>()
 	for (const { file, variant } of rows) {

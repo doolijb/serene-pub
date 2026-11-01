@@ -155,6 +155,26 @@ export const DATA_UPGRADES: DataUpgrade[] = [
 	{
 		afterMigration: "0128_pr6s2_core_annex",
 		load: () => import("./0128_pr6s2_core_annex")
+	},
+	// 🚧 M0 (P2): plugin files over 64 KB move to disk (plugin-files-to-disk).
+	{
+		afterMigration: "0130_m0_sdk_gaps",
+		load: () => import("./0130_m0_sdk_gaps")
+	},
+	// 🚧 Voice loadouts: each voicebank entry gets the loadout it speaks through.
+	{
+		afterMigration: "0135_voicebank_loadout",
+		load: () => import("./0135_voicebank_loadout")
+	},
+	// 🚧 Narration fallback: the voicebank stars move onto their loadout's voice.
+	{
+		afterMigration: "0137_loadout_voices",
+		load: () => import("./0137_loadout_voices")
+	},
+	// 🚧 M2b (a8 ruling): annex document versions leave core's runtime key for `sessions.annex_versions`.
+	{
+		afterMigration: "0139_m2b_permission_model",
+		load: () => import("./0139_m2b_permission_model")
 	}
 ]
 

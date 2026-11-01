@@ -154,6 +154,34 @@ export async function fetchImageModelStatus(
 	}
 }
 
+/**
+ * Whether koboldcpp currently has a speech model loaded (`tts` on
+ * `/api/extra/version`). Like the image flag it says AN speech model is
+ * resident, never which; no endpoint names it.
+ */
+export async function fetchSpeechModelStatus(
+	baseUrl: string,
+	timeoutMs = 5000
+): Promise<ImageModelStatus> {
+	try {
+		const resp = await fetch(`${baseUrl}/api/extra/version`, {
+			signal: AbortSignal.timeout(timeoutMs)
+		})
+		if (!resp.ok)
+			return { present: false, refused: false, determined: false }
+		const data = await resp.json()
+		return {
+			present: flagsFrom(data).tts,
+			refused: false,
+			determined: true
+		}
+	} catch (err) {
+		const cause = (err as { cause?: { code?: string } })?.cause
+		const refused = cause?.code === "ECONNREFUSED"
+		return { present: false, refused, determined: refused }
+	}
+}
+
 /** What `/api/v1/model` answers when no TEXT model is loaded. */
 export const KCPP_NO_TEXT_MODEL = "inactive"
 

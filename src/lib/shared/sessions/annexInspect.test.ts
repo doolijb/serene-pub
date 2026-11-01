@@ -56,6 +56,7 @@ describe("annexShapeWords — a declared shape, briefly", () => {
 		expect(annexShapeWords({ type: "integer", min: 1, max: 20 })).toBe("Whole number, 1 to 20")
 		expect(annexShapeWords({ type: "boolean" })).toBe("Yes or no")
 		expect(annexShapeWords({ type: "string" })).toBe("Text")
+		expect(annexShapeWords({ type: "json" })).toBe("JSON")
 		expect(annexShapeWords({ type: "list", item: { type: "integer" } })).toBe("List of whole number")
 		expect(annexShapeWords({ type: "object", fields: { a: { type: "string" } } })).toBe("Object (a)")
 		expect(annexShapeWords({ type: "enum", of: ["a", "b"] })).toBe("One of: a, b")

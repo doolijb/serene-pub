@@ -13,7 +13,20 @@
 		open = flag(attrs.open)
 	})
 	const scope = $derived(portalScope(host))
-	type Side = "top" | "bottom" | "left" | "right" | "top-start" | "top-end" | "bottom-start" | "bottom-end"
+	type Side = "top" | "bottom" | "left" | "right" | "top-start" | "top-end" | "bottom-start" | "bottom-end" | "left-start" | "left-end" | "right-start" | "right-end"
+	const placement = $derived((attrs.placement ?? "bottom") as Side)
+	/**
+	 * A panel placed beside its trigger (a sub-popout, ⋮ › Speech) that fits on
+	 * neither side drops below it instead: on a phone-width screen a side panel
+	 * would hang off the edge, and shifting it along a side placement only
+	 * moves it up or down.
+	 */
+	const flip = $derived.by((): boolean | Side[] => {
+		const [side, align] = placement.split("-") as [string, string | undefined]
+		if (side !== "left" && side !== "right") return true
+		const other = `${side === "left" ? "right" : "left"}${align ? `-${align}` : ""}` as Side
+		return [other, "bottom-end", "bottom-start", "top-end", "top-start"]
+	})
 </script>
 
 <Popover
@@ -23,7 +36,7 @@
 		if (!e.open) returnFocus(triggerBox, panel)
 		emit("open-change", { open: e.open })
 	}}
-	positioning={{ placement: (attrs.placement ?? "bottom") as Side }}
+	positioning={{ placement, flip }}
 >
 	<Popover.Trigger>
 		{#snippet element(attributes)}

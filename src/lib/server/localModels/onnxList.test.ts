@@ -163,6 +163,28 @@ afterAll(async () => {
 })
 
 describe("parsing a published list", () => {
+	it("reads dtypes variants, keeping only known precisions, and exposes them", async () => {
+		stubFetch((url) => ({
+			ok: true,
+			text: url.includes("embeddings")
+				? `models:
+  - id: org/multi
+    name: multi
+    dtype: q8
+    dtypes: [fp32, q8, q4, int3, q8]
+    dimensions: 8
+`
+				: "models: []\n"
+		}))
+		const models = await recommendedEmbeddingModels()
+		const multi = models.find((m) => m.id === "org/multi")!
+		expect(multi.dtypes).toEqual(["fp32", "q8", "q4"])
+		expect(catalogView(multi)).toMatchObject({
+			dtype: "q8",
+			dtypes: ["fp32", "q8", "q4"]
+		})
+	})
+
 	it("maps every field the catalog view carries", async () => {
 		stubFetch(bothLists)
 		const models = await recommendedEmbeddingModels()

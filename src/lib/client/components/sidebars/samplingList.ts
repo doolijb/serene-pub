@@ -2,9 +2,8 @@
  * What a list of sampling configs says about each one, pure so it is tested
  * (`samplingList.test.ts`): how the rows group, which jobs and pipelines pick
  * a config, the row's second line, what its glyphs and the Delete dialog say,
- * and which config opens first. Read by a job's sheet in the Models view
- * (`connections/JobPickerDialog`) and by Admin › Sampling; the Sampling view
- * they were written for is gone (plan 2026-10-11).
+ * and which config opens first. Read by a loadout's sheet (`LoadoutSheet`,
+ * `connections/jobSheet`), the Sampling view's dialogs and Admin › Sampling.
  *
  * The ★ ("Default for …") reads EVERY job's `connection_defaults` row, never
  * one canonical transform per shape: a config that is the default for Vision

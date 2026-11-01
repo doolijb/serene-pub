@@ -24,7 +24,7 @@ import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { uniqueName } from "$lib/shared/connections/connectionName"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 
-export type ManagerKind = "koboldcpp" | "ollama"
+export type ManagerKind = "koboldcpp" | "ollama" | "audiocpp"
 
 /** The fields of a list row this decision reads. */
 export interface ManagerRow {
@@ -37,10 +37,15 @@ export interface ManagerPlan {
 	kind: ManagerKind
 	/** What a person calls it, for the toast and the accessible name. */
 	label: string
-	/** The system-settings event that sets this manager's flag. */
+	/**
+	 * The event that switches this manager on. KoboldCPP and Ollama have a
+	 * system-settings flag; audio.cpp's own settings carry its `enabled`, so
+	 * its event is `audiocpp:updateSettings` (the same `{ enabled: true }`).
+	 */
 	settingsEvent:
 		| "systemSettings:updateKoboldCppManagerEnabled"
 		| "systemSettings:updateOllamaManagerEnabled"
+		| "audiocpp:updateSettings"
 	/** The row that already IS this manager's connection, if there is one. */
 	existingConnectionId: number | null
 	/** What to create when there is none. Absent when there is one. */
@@ -69,6 +74,12 @@ const MANAGERS: Record<
 		type: CONNECTION_TYPE.OLLAMA,
 		defaultName: "Ollama",
 		settingsEvent: "systemSettings:updateOllamaManagerEnabled"
+	},
+	audiocpp: {
+		label: "audio.cpp",
+		type: CONNECTION_TYPE.AUDIOCPP_MANAGED,
+		defaultName: "audio.cpp",
+		settingsEvent: "audiocpp:updateSettings"
 	}
 }
 
@@ -134,7 +145,9 @@ export function enableManager(
 	rows: readonly ManagerRow[]
 ): { connectionId: number | null; plan: ManagerPlan } {
 	const plan = managerPlan(kind, rows)
-	socket.emit(plan.settingsEvent, { enabled: true })
+	if (plan.settingsEvent === "audiocpp:updateSettings")
+		socket.emit("audiocpp:updateSettings", { enabled: true })
+	else socket.emit(plan.settingsEvent, { enabled: true })
 	if (plan.existingConnectionId == null && plan.create)
 		socket.emit("connections:create", { connection: plan.create as any })
 	return { connectionId: plan.existingConnectionId, plan }

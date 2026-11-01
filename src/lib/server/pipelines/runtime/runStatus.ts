@@ -107,6 +107,14 @@ export interface RunStatusFrame {
 	reply?: { channel: string }
 	/** 🚧 What the run is FOR — the registry's own kind (`RunHandle.kind`), the fact the busy door reads. On every frame, the end frame too (sprint 2, G3). */
 	kind: RunKind
+	/**
+	 * 🚧 A **line-bound run** (`RunHandle.lineBound`, owner ruling
+	 * 2026-10-29): speaking one line, shown on that line only. Such a frame
+	 * never carries `reply`; the page keeps the run in `liveRunIds` (its
+	 * line's *Speaking…*) and leaves it out of the waiting row, the turn
+	 * line, the composer's Stop and the session list. On every frame.
+	 */
+	lineBound?: true
 }
 
 export interface StatusRelayOptions {
@@ -142,6 +150,8 @@ export interface StatusRelayOptions {
 	reply?: { channel: string }
 	/** 🚧 The run's kind, said on every frame (sprint 2, G3). */
 	kind: RunKind
+	/** 🚧 The run is line-bound (`RunStatusFrame.lineBound`); then `reply` is ignored. */
+	lineBound?: boolean
 }
 
 export interface StatusRelay {
@@ -268,6 +278,12 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 	let queueShown = false
 	/** Whether the reasoning phase's status is the one showing. */
 	let reasoningShown = false
+	/** 🚧 Where the run shows, on every frame: on its line only, else a reply's channel when it is one. */
+	const placement: Pick<RunStatusFrame, "reply" | "lineBound"> = opts.lineBound
+		? { lineBound: true }
+		: opts.reply
+			? { reply: opts.reply }
+			: {}
 
 	/**
 	 * Memoized: resolved once for the whole run, on the first status that
@@ -324,7 +340,7 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 				runId,
 				status: filled,
 				kind: opts.kind,
-				...(opts.reply ? { reply: opts.reply } : {})
+				...placement
 			} satisfies RunStatusFrame).catch(() => {})
 		try {
 			opts.onStatus?.(nodeKey, filled)
@@ -349,7 +365,7 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 					runId,
 					status: null,
 					kind: opts.kind,
-					...(opts.reply ? { reply: opts.reply } : {})
+					...placement
 				} satisfies RunStatusFrame).catch(() => {})
 		})
 

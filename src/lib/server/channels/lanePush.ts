@@ -20,7 +20,7 @@
  */
 
 import { DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
-import { filterRowsForView, isOwnerOnlyChannel, laneReadersOf, laneViewFor, sessionLaneFacts } from "./lanes"
+import { filterRowsForView, laneReadersOf, laneViewFor, sessionLaneFacts } from "./lanes"
 
 type Recipient = { userId: number; data: any }
 
@@ -57,18 +57,29 @@ export async function laneScopedRecipients(
 	 */
 	if (event === "sessions:turnOrder" && Array.isArray(payload.turnOrder?.order)) {
 		const facts = await sessionLaneFacts(db, sessionId)
-		const hidden = (e: unknown) => {
-			const ch = (e as { channel?: unknown } | null)?.channel
-			return typeof ch === "string" && !!facts && isOwnerOnlyChannel(facts.shape, ch)
-		}
-		if (!facts || !payload.turnOrder.order.some(hidden)) return everyone
-		const guests = { ...payload, turnOrder: { ...payload.turnOrder, order: payload.turnOrder.order.filter((e: unknown) => !hidden(e)) } }
-		return userIds.map((userId) => ({ userId, data: userId === facts.ownerUserId ? payload : guests }))
+		if (!facts) return everyone
+		const channelsOf = [
+			...new Set<string>(
+				payload.turnOrder.order
+					.map((e: unknown) => (e as { channel?: unknown } | null)?.channel)
+					.filter((ch: unknown): ch is string => typeof ch === "string" && nonMain({ channel: ch }))
+			)
+		]
+		const readers = new Map<string, Set<number> | null>()
+		for (const ch of channelsOf) readers.set(ch, await laneReadersOf(db, sessionId, ch))
+		if (![...readers.values()].some((r) => r)) return everyone
+		return userIds.map((userId) => {
+			const order = payload.turnOrder.order.filter((e: unknown) => {
+				const ch = (e as { channel?: unknown } | null)?.channel
+				const r = typeof ch === "string" ? readers.get(ch) : null
+				return !r || r.has(userId)
+			})
+			return { userId, data: order.length === payload.turnOrder.order.length ? payload : { ...payload, turnOrder: { ...payload.turnOrder, order } } }
+		})
 	}
 	if (event !== "sessions:get" && event !== "sessions:refresh" && typeof payload.channel === "string" && nonMain({ channel: payload.channel })) {
-		const facts = await sessionLaneFacts(db, sessionId)
-		if (facts && isOwnerOnlyChannel(facts.shape, payload.channel))
-			return everyone.filter((r) => r.userId === facts.ownerUserId)
+		const readers = await laneReadersOf(db, sessionId, payload.channel)
+		if (readers) return everyone.filter((r) => readers.has(r.userId))
 	}
 	if (event === "sessions:get" || event === "sessions:refresh") {
 		const rows: unknown[] = [

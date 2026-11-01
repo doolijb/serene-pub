@@ -1,0 +1,109 @@
+name: Capability report
+description: How a model or service did on an item from the 0.6 test checklist.
+title: "Capability: "
+labels: ["capability report"]
+body:
+    - type: markdown
+      attributes:
+          value: |
+              Thanks for testing. One report per checklist item, please: it keeps each result easy to find.
+
+              The checklist is [TESTING-CHECKLIST-0.6.0.md](https://github.com/doolijb/serene-pub/blob/develop/TESTING-CHECKLIST-0.6.0.md). Results for items marked **assumed** help most, whether they work or not.
+    - type: dropdown
+      id: section
+      attributes:
+          label: Which part of the checklist?
+          options:
+              - "1. Anthropic (Claude) — native API"
+              - "2. OpenAI Chat Completions — and the 22 services behind it"
+              - "3. Ollama — native API"
+              - "4. KoboldCPP — direct connection"
+              - "5. KoboldCPP Manager (managed text)"
+              - "6. KoboldCPP Manager (Image) — new in 0.6.0"
+              - "7. Stable Diffusion (A1111-compatible)"
+              - "8. Llama.cpp (completion endpoint)"
+              - "9. LM Studio — via its SDK"
+              - "10. Media, conversion & attachments (new in 0.6.0)"
+              - "11. Capability UI"
+              - "12. Onboarding & platforms"
+              - "Not on the checklist"
+      validations:
+          required: true
+    - type: input
+      id: item
+      attributes:
+          label: Which item?
+          description: The item's name as the checklist writes it.
+          placeholder: Streaming
+      validations:
+          required: true
+    - type: dropdown
+      id: declared
+      attributes:
+          label: What the checklist declares
+          description: The marking beside the item in the checklist's Declared line.
+          options:
+              - native
+              - emulated
+              - assumed
+              - "— (not offered)"
+              - Not sure
+      validations:
+          required: true
+    - type: dropdown
+      id: result
+      attributes:
+          label: How did it go?
+          options:
+              - It works
+              - It fails, and the message says why
+              - It fails confusingly
+              - "It's offered, but can't work"
+              - Something else
+      validations:
+          required: true
+    - type: textarea
+      id: happened
+      attributes:
+          label: What happened
+          description: What you did, what you expected, and what you saw. Paste any error message word for word.
+      validations:
+          required: true
+    - type: input
+      id: model
+      attributes:
+          label: Model
+          description: The exact model name, as the service or program shows it.
+          placeholder: llama3.1:8b
+      validations:
+          required: true
+    - type: input
+      id: backend
+      attributes:
+          label: Service or program, and its version
+          placeholder: Ollama 0.12.3
+      validations:
+          required: true
+    - type: input
+      id: os
+      attributes:
+          label: Your system
+          placeholder: Windows 11
+      validations:
+          required: true
+    - type: input
+      id: version
+      attributes:
+          label: Serene Pub version
+          description: Settings › About shows it.
+          placeholder: 0.6.0-pr-7
+      validations:
+          required: true
+    - type: textarea
+      id: report
+      attributes:
+          label: Support report
+          description: Optional. An administrator can copy one from Admin › Diagnostics.
+          render: text
+      validations:
+          required: false

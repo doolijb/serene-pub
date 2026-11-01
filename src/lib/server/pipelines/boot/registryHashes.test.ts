@@ -167,7 +167,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (U6, R-2, 2026-09-17): a `target` in-port — the row the part lands
 	// on, the port `update-message` takes — and bound. The host's commit read
 	// `p.target?.id` already; the declaration now says so. (was "c499561b77704")
-	"core:outlet/attach-audio@1": "1f92305dec26b9",
+	// Moved 2026-10-28 (speech build, lane A; pinned by lane V): a `meta` in-port
+	// (`S.spokenMeta`, the S6 record kept on the line) and a `params` slot
+	// (`replace`, swap the line's earlier speech). Proven speech-only: the
+	// contracts diff for this definition is exactly those two. (was "1f92305dec26b9")
+	"core:outlet/attach-audio@1": "1b89057ef5ad36",
 	// Same day, same port, same reason. (was "1427daa9dd3b33")
 	"core:outlet/attach-image@1": "1a83777d127f38",
 	// Moved (L2/L3, contracts batch 2, 2026-09-17) — answer 3, and nothing
@@ -448,7 +452,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `action` · `keeper` · `tick`) and `onRefusal` (`halt` · `skip`), out-port
 	// `skipped`.
 	// (was "cdff1f3a47f7c")
-	"core:outlet/advance-story-clock@1": "7918829884527",
+	// E M0 2026-10-28: the `to` clock-target in-port (lane T1, SHAPES L3) and the `moved` out-port. (was "7918829884527")
+	"core:outlet/advance-story-clock@1": "118e5d7be719d3",
 	"core:inlet/session-created@1": "1bac3a1f2d1149",
 	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
 	// just a line: it inserts a row and conflicts with nothing.
@@ -579,7 +584,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `provisional: true` (U6, R-2, 2026-09-17): declared, not bound, plans/14
 	// owns the handler. Policy since V6 — binding it moves nothing here.
 	// I12 (2026-10-12): the additive `loadout` slot every model call declares. (was "15b834f7e24c86")
-	"core:oracle/speak@1": "d72aee8a96401",
+	// Moved 2026-10-28 (speech build, lane A, seam S3; pinned by lane V) — and
+	// bound, the provisional flag gone: the CONTRACT changed, not the policy.
+	// In: `cues` (+ `speaker`, `language`; `text` kept as the one-release
+	// alias); out: `audio`, `cueMap`, `spokenAs`, `meta`; slots `prompts`
+	// {direction}, `template` (jinja2), `variables`, `params` {streaming,
+	// gapMs}; `review.fields` ['cues','text']; `skipCodeBlocks` left with the
+	// cue task. (was "d72aee8a96401")
+	"core:oracle/speak@1": "115012f3717eba",
+	// 🚧 NEW 2026-10-28 (speech build, lane A): a line's text → its speech
+	// cues (who speaks each span, in which voice, with which inflection).
+	"core:task/cue-lines@1": "34df3bdd9d588",
+	// 🚧 NEW 2026-10-28 (speech build, lane D follow-up ★1): one saved line's
+	// text, speaker and recorded inflection, for Read aloud / Say it as….
+	"core:query/message-line@1": "1affa775a4525c",
 	// 🚧 New 2026-10-21 (PLAN-layering lane 8, O9): the transcribe step before placement.
 	"core:oracle/transcribe-audio@1": "184cad092b0093",
 	// Re-projected by **0113** — `loreType`, on the same terms as `name-entry`
@@ -1030,7 +1048,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:query/vector-search@1": "3ecd7d4089af2",
 	// New 2026-10-02 (lorebooks C2/R4, E-2): the cast's presences as the run's
 	// session reads them — its line, and `at` its story clock. A new type.
-	"core:query/cast-presences@1": "68689a20c23d4",
+	// E M0 2026-10-28: the `atHour` in-port and `placements` out-port (lane T3/T4, SHAPES L3). (was "68689a20c23d4")
+	"core:query/cast-presences@1": "b8400a3942873",
 	// The third retrieval mechanism (design §13.5), added 2026-09-06 — retrieval by
 	// the names a scene is using, over annotations written in the background. A
 	// **new** type id, so the registry inserts it and nothing conflicts: no
@@ -1785,12 +1804,18 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// E1 (2026-09-23): also reads the recorded-event envelope. Was "13b58d70fb2f59".
 	"core:inlet/session-event@1": "124b78685ea899",
 	// V1 (2026-09-23): the AI view (`view`, `speaker`).
-	"core:query/session-annex@1": "2e774d630cb76",
+	// Moved 2026-10-31 (M2a a8, re-pinned by E): out-port `version` — the owner
+	// document's annex version a compare-and-set write names as its `base`
+	// (was "2e774d630cb76").
+	"core:query/session-annex@1": "15bee8d8cf821c",
 	// Moved 2026-09-27 (no back-compat before distribution, owner ruling): the
 	// `see` in-port and `audienceFrom` are gone — the audience stored is the
 	// annex declaration's. Nothing else moved: with the port and the contract
 	// key put back the descriptor hashes to the old pin (was "1f42d118c9b036").
-	"core:outlet/set-session-annex@1": "7bc796f8c8b43",
+	// Moved 2026-10-31 (M2a a8, re-pinned by E): in-port `base` (compare-and-set
+	// on the owner document's annex version; a stale write is not written and
+	// answers the fresh annex) and out-port `version` (was "7bc796f8c8b43").
+	"core:outlet/set-session-annex@1": "9f6f32307dbf0",
 	// NEW (2026-10-15, Dungeon Crawler's interview): a player seat named by a
 	// pipeline — the seat-name door's pipeline outlet. 🚧
 	// Moved 2026-10-18 (owner ruling ★6, P3-1): the `retire` in-port — a new character after a death is a NEW seat, the fallen's retired. `@1` evolves in place. (was "8f8583a68b71d")
@@ -1803,6 +1828,23 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:outlet/set-stat-config@1": "a7ec91e849f91",
 	// 2026-09-26: annex fields — the one write every declared field goes through.
 	"core:outlet/set-annex-field@1": "18bd0af3e04563",
+	// NEW 2026-10-28 (E M0): the lorebook annex's read and two writes (lane S1, SHAPES L9) and the ruleset conversion (lane T4, SHAPES L4). 🚧
+	// Moved 2026-10-31 (M2b, lorebook annex `base`; re-pinned by E): the query's out-port
+	// `version` (was "f7b0c5dddbcc"); the write's in-port `base` (compare-and-set on the
+	// book's annex version) and out-port `version` (was "14aaff8ed20d3a").
+	"core:query/lorebook-annex@1": "12ad179f3d88f9",
+	"core:outlet/set-lorebook-annex@1": "164fa2ca90211b",
+	// New 2026-10-31 (M2c; pinned by E): the plugin-storage query (P) — the running plugin's own pub/me file, read-only, 4 MiB cap.
+	"core:query/plugin-storage@1": "15cf634ca965a9",
+	// New 2026-10-31 (M2c path B; pinned by E): the Guide's draft reader (T) and the four library outlets (T), each with review.fields.
+	"core:task/read-library-draft@1": "143fcc2d9e0fb7",
+	"core:outlet/create-character@1": "11cab3736ed8b5",
+	"core:outlet/update-character@1": "17f8558f4845b3",
+	"core:outlet/create-lorebook@1": "5c69133a08a97",
+	"core:outlet/attach-lorebook@1": "f1ea74dec6786",
+	"core:outlet/set-lorebook-annex-field@1": "44910c1fc9bad",
+	// 2026-10-28 (E-fix T-1): convert-ruleset declares `review: { fields: [] }`, so its pin moved.
+	"core:outlet/convert-ruleset@1": "10aa7d8fcd40b7",
 	/** Recording a declared event (E1, R45/R47): the write whose event its literal names. */
 	"core:outlet/record-event@1": "5b03e0d2f7394",
 	// The `test:` fixtures are published by the same module as everything else,
@@ -2213,8 +2255,11 @@ describe("published type content hashes", () => {
 		).not.toBe(before)
 		expect(hashOf({ ...generate, review: { fields: ["context"] } })).not.toBe(before)
 
-		// And the three flagged definitions, bound: no pin above moves.
-		for (const id of ["core:oracle/speak@1", "core:oracle/mcp-tool@1", "core:oracle/mcp-resource@1"]) {
+		// And the flagged definitions, bound: no pin above moves. (`speak` was the
+		// third; the speech build bound it 2026-10-28 — its pin moved for its
+		// contract, recorded above, and it carries no flag now.)
+		expect(getDefinition("core:oracle/speak@1")!.provisional).toBeUndefined()
+		for (const id of ["core:oracle/mcp-tool@1", "core:oracle/mcp-resource@1"]) {
 			const d = getDefinition(id)!
 			expect(d.provisional, id).toBe(true)
 			const { provisional: _p, ...bound } = d

@@ -42,6 +42,7 @@ import {
 	type ReceiverRefusal,
 	type RemoteEventDetail
 } from "@serene-pub/sdk"
+import { ensureOneSoundAtATime } from "./oneSoundAtATime"
 
 export interface PolicyOptions {
 	/** Prefix for every id the remote writes — unique per box. */
@@ -69,8 +70,29 @@ const DROPPED: Record<ReceiverRefusal["dropped"], string> = {
 	property: "a remote speaks in attributes; dropped"
 }
 
+/**
+ * Host elements 1.8: `audio`'s `playing` attribute. Present, the page plays it;
+ * absent after present, the page pauses it. A play the browser refuses is
+ * answered with a `pause` event so the component's state stays honest.
+ */
+export function syncPlaying(el: Element, on: boolean): void {
+	if (!(el instanceof HTMLAudioElement)) return
+	if (!on) {
+		el.pause()
+		return
+	}
+	const refused = () => el.dispatchEvent(new Event("pause"))
+	try {
+		const p = el.play() as Promise<void> | undefined
+		if (p && typeof p.catch === "function") p.catch(refused)
+	} catch {
+		refused()
+	}
+}
+
 /** A receiver for one box, and the guarded connection the worker's records go through. */
 export function createGuardedReceiver(box: Element, o: PolicyOptions) {
+	ensureOneSoundAtATime(box.ownerDocument)
 	const receiver = new DOMRemoteReceiver({ root: box, elements: receiverElementPolicy() })
 	// The receiver's own id → node map, the one it applies records by (and
 	// prunes as nodes leave): the guard judges by it, so what the guard
@@ -89,12 +111,23 @@ export function createGuardedReceiver(box: Element, o: PolicyOptions) {
 		if (name !== "value" && el instanceof HTMLInputElement) el.checked = el.hasAttribute("checked")
 	}
 	const controls = new MutationObserver((records) => {
+		// Every `playing` removal before any addition: the previous line flips off
+		// before the new one flips on, whatever order the batch carries them.
+		const playing = records.filter(
+			(r) => r.type === "attributes" && r.attributeName === "playing" && r.target instanceof HTMLAudioElement
+		)
+		for (const r of playing) if (!(r.target as Element).hasAttribute("playing")) syncPlaying(r.target as Element, false)
+		for (const r of playing) if ((r.target as Element).hasAttribute("playing")) syncPlaying(r.target as Element, true)
 		for (const r of records) {
-			if (r.type === "attributes") syncControl(r.target as Element, r.attributeName)
-			else
+			if (r.type === "attributes") {
+				if (r.attributeName !== "playing") syncControl(r.target as Element, r.attributeName)
+			} else
 				for (const n of r.addedNodes)
 					if (n instanceof Element) {
 						syncControl(n, null)
+						// An audio landing with `playing` plays; one without is left alone.
+						for (const a of [n, ...n.querySelectorAll("audio[playing]")])
+							if (a instanceof HTMLAudioElement && a.hasAttribute("playing")) syncPlaying(a, true)
 						n.querySelectorAll("input, textarea").forEach((c) => syncControl(c, null))
 						// A field placed with `autofocus` takes focus as it lands, the
 						// caret at its end (a remote cannot call `focus`).
@@ -110,7 +143,7 @@ export function createGuardedReceiver(box: Element, o: PolicyOptions) {
 					}
 		}
 	})
-	controls.observe(box, { subtree: true, childList: true, attributes: true, attributeFilter: ["value", "checked"] })
+	controls.observe(box, { subtree: true, childList: true, attributes: true, attributeFilter: ["value", "checked", "playing"] })
 	return {
 		receiver,
 		connection: guardedConnection(receiver.connection, nodeOf, {
@@ -123,6 +156,22 @@ export function createGuardedReceiver(box: Element, o: PolicyOptions) {
 	}
 }
 
+/** The `audio` events whose summary carries `{ currentTime, duration, paused }`. */
+const AUDIO_EVENTS = new Set(["loadedmetadata", "play", "pause", "ended", "timeupdate"])
+
+/** `timeupdate` reaches a worker about four times a second, never more. */
+export const TIMEUPDATE_MIN_MS = 250
+
+/**
+ * Whether an event goes to the worker now. Only `timeupdate` is gated: it fires
+ * 4–66 times a second, so one within {@link TIMEUPDATE_MIN_MS} of the last sent
+ * waits (the caller keeps the newest and sends it when the gap is over).
+ */
+export function shouldForward(type: string, lastAt: number | null, now: number): boolean {
+	if (type !== "timeupdate") return true
+	return lastAt === null || now - lastAt >= TIMEUPDATE_MIN_MS
+}
+
 /** The event summary a remote listener is called back with — chosen here, never the event. */
 export function summarize(event: Event | undefined, type: string, detail: unknown): RemoteEventDetail {
 	const out: RemoteEventDetail = { type }
@@ -132,6 +181,13 @@ export function summarize(event: Event | undefined, type: string, detail: unknow
 		} catch {
 			/* not cloneable: no detail */
 		}
+		return out
+	}
+	const media = event?.target
+	if (media instanceof HTMLAudioElement && AUDIO_EVENTS.has(type)) {
+		// `audio`'s declared detail (host elements 1.7): seconds, 0 until known.
+		const known = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0)
+		out.detail = { currentTime: known(media.currentTime), duration: known(media.duration), paused: media.paused }
 		return out
 	}
 	const t = event?.target as HTMLInputElement | null

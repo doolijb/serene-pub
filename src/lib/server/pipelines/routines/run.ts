@@ -83,11 +83,46 @@ const beat = (ms: number) =>
 		;(t as { unref?: () => void }).unref?.()
 	})
 
+/**
+ * The routine queue's wait while its session is busy (2026-10-30): it always
+ * yields to the event loop, because a wait that settled in a microtask let the
+ * drain loop spin while a run held the session busy with an empty event chain,
+ * so timers and I/O never ran and the heap grew until the process died.
+ *
+ * Nothing on the event chain: the beat alone. Something on it: the chain going
+ * idle or the beat, whichever comes first. When the chain wins, the beat's
+ * timer is cleared and the wait still ends on a macrotask (`setImmediate`);
+ * when the beat wins, the idle promise settles later unheard
+ * (`sessionEventsIdle` registers no listener, only a reaction on the chain's
+ * own promise, released when the chain ends).
+ */
+export function waitQuietForRoutines(
+	sessionId: number,
+	ms: number = QUIET_POLL_MS
+): Promise<void> {
+	if (!sessionEventsPending(sessionId)) return beat(ms)
+	return new Promise<void>((resolve) => {
+		let done = false
+		const finish = () => {
+			if (done) return
+			done = true
+			clearTimeout(timer)
+			resolve()
+		}
+		const timer = setTimeout(finish, ms)
+		;(timer as { unref?: () => void }).unref?.()
+		void sessionEventsIdle(sessionId).then(
+			() => setImmediate(finish),
+			() => setImmediate(finish)
+		)
+	})
+}
+
 /** The one queue, per process (on `globalThis`, as the event queues are). */
 const QUEUE_KEY = Symbol.for("serene-pub.routineQueue")
 export const routineQueue: RoutineQueue = ((globalThis as Record<symbol, unknown>)[QUEUE_KEY] ??= new RoutineQueue({
 	busy: sessionBusyForRoutines,
-	waitQuiet: (sessionId) => Promise.race([sessionEventsIdle(sessionId), beat(QUIET_POLL_MS)]),
+	waitQuiet: (sessionId) => waitQuietForRoutines(sessionId),
 	run: (f) => runRoutineFiring(f),
 	refused: (f, reason) => routineLine(f.db as Db, { firing: f, reason, kind: "skipped" })
 })) as RoutineQueue

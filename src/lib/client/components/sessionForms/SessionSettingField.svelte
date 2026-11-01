@@ -13,6 +13,7 @@
 	 * schema renderer from the genre's own declaration when the caller hands
 	 * it in (`decl`), committed whole.
 	 */
+	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import SchemaForm from "$lib/client/components/pipelines/SchemaForm.svelte"
 	import { fieldDomId, sourceWords, valueText } from "./sessionSettingsForm"
@@ -70,9 +71,52 @@
 	const schemaDecl = $derived(
 		decl ? { [schemaKey]: { ...decl, label: field.label, description: field.description } } : null
 	)
+	/** The `json` field type (any JSON, stored parsed): a code field, never the schema renderer's. */
+	const isJsonType = $derived(field.control === "json" && (field.maxBytes != null || decl?.type === "json"))
+	const prettyJson = (v: unknown): string => {
+		if (v === null || v === undefined) return ""
+		try {
+			return JSON.stringify(v, null, 2) ?? ""
+		} catch {
+			return String(v)
+		}
+	}
+	/** What the person is typing; null until they type, and again once the stored value moves. */
+	let jsonDraft = $state<string | null>(null)
+	let jsonFocused = $state(false)
+	$effect(() => {
+		void field.value
+		jsonDraft = null
+	})
+	const jsonText = $derived(jsonDraft ?? prettyJson(field.value))
+	/** What stops the text being written, in the parser's words or the cap's. */
+	const jsonIssue = $derived.by((): string | null => {
+		if (!isJsonType || jsonText.trim() === "") return null
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(jsonText)
+		} catch (e) {
+			return `This is not valid JSON (${e instanceof Error ? e.message : String(e)}). Nothing was saved.`
+		}
+		if (field.maxBytes != null) {
+			const size = new TextEncoder().encode(JSON.stringify(parsed)).length
+			if (size > field.maxBytes) return `This is ${size} bytes of JSON; this field holds at most ${field.maxBytes}. Nothing was saved.`
+		}
+		return null
+	})
+	/** A parse error is held back while the field has focus (§6.12). */
+	const shownJsonIssue = $derived(jsonFocused ? null : jsonIssue)
+	function commitJson() {
+		jsonFocused = false
+		if (jsonDraft === null || jsonIssue) return
+		if (jsonText.trim() === "") return onwrite(null)
+		const parsed = JSON.parse(jsonText) as unknown
+		if (JSON.stringify(parsed) === JSON.stringify(field.value)) return
+		onwrite(parsed)
+	}
 	/** Drawn by the schema renderer: a control only the declaration describes. */
 	const drawnBySchema = $derived(
-		!!schemaDecl && (field.control === "json" || (field.control === "list" && !(members ?? field.members)?.length))
+		!!schemaDecl && !isJsonType && (field.control === "json" || (field.control === "list" && !(members ?? field.members)?.length))
 	)
 </script>
 
@@ -80,7 +124,11 @@
 	{#if !field.editable}
 		<!-- Read-only: the value's name and why (§6.17), never a disabled control. -->
 		<p class="text-surface-600-400 text-xs" id="{id}-label">{field.label}</p>
-		<p class="text-sm" aria-labelledby="{id}-label">{shown}</p>
+		{#if isJsonType}
+			<pre class="bg-surface-100-900 overflow-x-auto whitespace-pre-wrap rounded-base p-2 font-mono text-xs" aria-labelledby="{id}-label" data-testid="session-setting-json-readonly">{prettyJson(field.value) || shown}</pre>
+		{:else}
+			<p class="text-sm" aria-labelledby="{id}-label">{shown}</p>
+		{/if}
 		{#if field.readOnlyReason}
 			<p class="text-surface-600-400 text-xs" data-testid="session-setting-readonly">{field.readOnlyReason}</p>
 		{/if}
@@ -169,6 +217,24 @@
 				</label>
 			{/each}
 		</fieldset>
+	{:else if isJsonType}
+		<!-- The json field type: a code field over the formatted value; text that
+		     parses is written as the PARSED value when the field is left. -->
+		<div class="flex flex-col gap-1 text-xs" onfocusin={() => (jsonFocused = true)} onfocusout={commitJson}>
+			<label class="text-surface-600-400" for={id}>{field.label} · JSON</label>
+			<CodeField
+				{id}
+				value={jsonText}
+				oninput={(v) => (jsonDraft = v)}
+				rows={6}
+				label={field.label}
+				describedBy="{id}-help{shownJsonIssue ? ` ${id}-issue` : ''}"
+				invalid={!!shownJsonIssue}
+			/>
+			{#if shownJsonIssue}
+				<p id="{id}-issue" class="text-error-600-400" data-testid="session-setting-json-issue">{shownJsonIssue}</p>
+			{/if}
+		</div>
 	{:else if schemaDecl}
 		<!-- A control only the genre's declaration describes (an object):
 		     the one schema renderer, each commit written whole. -->

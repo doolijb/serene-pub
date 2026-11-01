@@ -68,6 +68,7 @@ import { BaseImageAdapter } from "$lib/server/imageAdapters/BaseImageAdapter"
 import { BaseEmbeddingAdapter } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import { BaseNerAdapter } from "$lib/server/nerAdapters/BaseNerAdapter"
 import { BaseTranscriptionAdapter } from "$lib/server/transcriptionAdapters/BaseTranscriptionAdapter"
+import { BaseSpeechAdapter } from "$lib/server/connectionAdapters/speech/BaseSpeechAdapter"
 import {
 	ADAPTER_MANIFEST,
 	adapterCapabilities
@@ -176,6 +177,12 @@ beforeAll(async () => {
 				(await modules.transcription()).Adapter,
 				BaseTranscriptionAdapter
 			))
+				found.add(a)
+		// 🚧 The sixth family (speech build, lane B, 2026-10-28): `text->audio`
+		// is proven by `synthesizeSpeech()` on the type's speech module. Walked
+		// by lane V — the manifest declared it before this loop knew the slot.
+		if (modules?.speech)
+			for (const a of actionsOf((await modules.speech()).Adapter, BaseSpeechAdapter))
 				found.add(a)
 		IMPLEMENTED.set(type, found)
 	}

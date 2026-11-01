@@ -220,7 +220,7 @@ describe("a stored 'core' plugin row", () => {
 
 		const { load } = await import("../../../routes/x/[...rest]/+page.server")
 		const page = (rest: string) => load({ params: { rest } } as never) as Promise<Record<string, unknown>>
-		expect(await page(TWIN)).toMatchObject({ src: `/plugin-ui/${TWIN}/ui/panel.html` })
+		expect(await page(TWIN)).toMatchObject({ src: `/plugin-ui/${TWIN}/ui/panel.html?v=1.0.0` })
 		expect(await page("core")).toEqual({})
 	})
 

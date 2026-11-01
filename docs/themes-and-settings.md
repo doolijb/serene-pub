@@ -42,6 +42,7 @@ Each setting is a card: its name, one sentence saying what it does, and the cont
 - **Language**: the language the app is shown in, or **Pub default** to follow whatever an administrator has set for everyone. See [Languages](./languages.md).
 - **Time zone**: the zone real-world dates and times are shown in (when a session was last active, when an account was made). It starts as your browser's zone the first time you open the app; pick another and it follows you to every device. Times are stored the same way whatever you pick, and in-story time (a session's or lorebook's own clock) is never affected.
 - **Lorebook writes from sessions**: how your sessions may change the lorebooks you own (the stats they record, a summary, a compiled history, a graph). **Full**, **Review changes** or **Off**, or follow the pub's default. A lorebook can be stricter in its own Book settings, never looser. See [Lorebooks](./lorebooks.md#what-a-session-may-write).
+- **Library write mode**: what happens when Serene or a session adds to your library (a character or a lorebook it drafted). **Full** adds it at once, **Review (default)** keeps it in the session until you accept it, **Off** adds nothing. Back takes back anything it added. See [Sessions](./sessions.md#back-and-forward).
 - **Background routines**: limits on your sessions' [routines](./sessions.md#routines) that run on the real clock: **Stop after nobody has played for (minutes)** and **Most runs in a row**. Leave a box empty to follow the pub's limit, shown beside it; you can only set a lower one. See [Pub settings › Background routines](./system-settings.md#background-routines).
 - **Show all character fields**: the character form shows every field, including the less common ones, instead of just the usual few. See [Characters](./characters.md).
 - **Easy character creation**: on (the default), **New** in the Characters view opens a short guided creator for a character or a persona; off, it goes straight to the full form.
@@ -56,7 +57,7 @@ Switches save as soon as you flip them.
 
 Some plugins let each person make their own choices, such as a dice plugin's default roll. When a switched-on plugin offers one, the **User** tab shows an **Extension settings** card with that plugin's choices. What you save there applies to you only.
 
-A choice you haven't set shows the value everyone gets: what an administrator set in **Admin › Plugins**, or the plugin's own default. Once you save your own, **Use the default for …** clears it again. Settings for the whole pub, such as an API key the plugin uses, are never on this card.
+A choice you haven't set shows the value everyone gets: what an administrator set in **Admin › Plugins**, or the plugin's own default. Once you save your own, **Use the default for …** clears it again. Settings for the whole pub, such as an API key the plugin uses, are never on this card. A choice that holds structured data (JSON) is a code field: what you type is saved only once it is valid JSON, and a plugin can limit its size and shape, in which case Save says what does not fit.
 
 ## Reading and motion
 

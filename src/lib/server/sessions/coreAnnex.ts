@@ -3,7 +3,7 @@
  * runtime keys → annex owner `core`"; shapes: ~/.claude/plans/briefs/pr6s2-G-shapes.md
  * §G-1).
  *
- * Core keeps four pieces of runtime state on its own annex owner, `core`,
+ * Core keeps five pieces of runtime state on its own annex owner, `core`,
  * beside core's DECLARED annex fields (`retake-quietly`, `story-goals`, …) in
  * the same owner document:
  *
@@ -12,7 +12,14 @@
  *  - `laneReads` — `{ "<userId>": { "<canonical lane>": <message id> } }`,
  *    written by `markLaneRead`;
  *  - `rulesetDecks` — `{ [methodKey]: DeckState }`, written by the ruleset
- *    resolver's `writeDecks`.
+ *    resolver's `writeDecks`;
+ *  - 🚧 `rulesetConversions` — a list of `{ messageId, rulesetId, from, to }`, written by
+ *    `convertSessionRuleset` and read by `retractStateAnchoredTo` (Back puts `from` back);
+ *
+ * (`annexVersions`, the annex document versions, was a runtime key here for a day
+ * (M2a a8); since M2b it is the column `sessions.annex_versions` —
+ * `sessions/annexVersions.ts` — and this migration's data upgrade moved any stored
+ * value there.)
  *
  * They are runtime state, never a story change:
  *
@@ -37,7 +44,14 @@ import * as schema from "$lib/server/db/schema"
 export const CORE_ANNEX_OWNER = "core"
 
 /** 🚧 The core runtime keys, in the `core` owner's document. */
-export const CORE_RUNTIME_KEYS = Object.freeze(["turnOrder", "turnTally", "laneReads", "rulesetDecks"] as const)
+export const CORE_RUNTIME_KEYS = Object.freeze([
+	"turnOrder",
+	"turnTally",
+	"laneReads",
+	"rulesetDecks",
+	/** 🚧 `{ messageId, rulesetId, from, to }[]` — the conversions Back takes back (M0, lane T4); `state/write.ts` reads and writes it. */
+	"rulesetConversions"
+] as const)
 
 export type CoreRuntimeKey = (typeof CORE_RUNTIME_KEYS)[number]
 
@@ -89,7 +103,7 @@ export async function lockSessionAnnex(tx: Db, sessionId: number): Promise<void>
 	await tx.execute(sql`select pg_advisory_xact_lock(hashtext('annex'), ${sessionId})`)
 }
 
-/** One owner's document as a pipeline may see it — `core`'s without the four runtime keys; any other owner's as it is. Pure. */
+/** One owner's document as a pipeline may see it — `core`'s without the runtime keys; any other owner's as it is. Pure. */
 export function ownerDocForPipelines(owner: string, doc: Record<string, unknown>): Record<string, unknown> {
 	if (owner !== CORE_ANNEX_OWNER) return doc
 	if (!Object.keys(doc).some((k) => RUNTIME.has(k))) return doc
@@ -97,7 +111,7 @@ export function ownerDocForPipelines(owner: string, doc: Record<string, unknown>
 }
 
 /**
- * The annex as a pipeline may see it: `core` without the four runtime keys
+ * The annex as a pipeline may see it: `core` without the runtime keys
  * (dropped when that leaves it empty); every other owner untouched. Pure.
  */
 export function annexForPipelines(annex: Record<string, unknown>): Record<string, unknown> {

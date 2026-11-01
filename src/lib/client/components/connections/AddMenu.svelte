@@ -32,6 +32,8 @@
 		onAddKoboldCpp: () => void
 		/** Switch the Ollama manager on and open its connection. */
 		onAddOllama: () => void
+		/** Switch the audio.cpp manager on and open its connection. */
+		onAddAudioCpp?: () => void
 		/**
 		 * Hides the KoboldCPP and Ollama items — false in the Android app, where
 		 * the server refuses both (`canRunLocalRuntimes`).
@@ -42,6 +44,7 @@
 		onAddConnection,
 		onAddKoboldCpp,
 		onAddOllama,
+		onAddAudioCpp = () => {},
 		canRunLocalRuntimes = true
 	}: Props = $props()
 
@@ -65,6 +68,16 @@
 			title: "KoboldCPP, run by Serene Pub",
 			blurb: "Install and manage a local runtime",
 			run: onAddKoboldCpp
+		},
+		{
+			key: "audiocpp",
+			icon: connectionTypeIcon(
+				CONNECTION_TYPE.AUDIOCPP_MANAGED,
+				Icons.Cpu
+			),
+			title: "audio.cpp, run by Serene Pub",
+			blurb: "Install and manage a local speech runtime",
+			run: onAddAudioCpp
 		},
 		{
 			key: "ollama",

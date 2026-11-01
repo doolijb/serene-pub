@@ -35,6 +35,7 @@ export async function storeGeneratedMedia(
 				? { sessionId: scope.sessionId }
 				: { bucket: "generated" }),
 			allowMedia: true,
+			...(item.durationMs != null ? { durationMs: Math.round(item.durationMs) } : {}),
 			meta: {
 				...(item.meta ?? {}),
 				...(scope.runId != null ? { runId: scope.runId } : {}),

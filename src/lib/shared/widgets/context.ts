@@ -27,6 +27,7 @@ import {
 	WIDGET_SCOPED_SECTIONS,
 	type SessionCharactersV1,
 	type SessionDossierV1,
+	type SessionLoreV1,
 	type SessionPersonaV1,
 	type SessionStateV1,
 	type WidgetScopedSections,
@@ -402,6 +403,10 @@ export function makeInvoke(
 ): WidgetVerbs["invoke"] {
 	return (ref, args) => {
 		const found = findAction(actions(), ref)
+		if (!found && actionDispatch.pluginAction) {
+			actionDispatch.pluginAction(ref, args)
+			return
+		}
 		if (!found)
 			throw new Error(
 				`widget "${widgetId}" invoked action "${ref}", which no venue of this session lists`
@@ -472,28 +477,39 @@ export const SESSION_STATE_KEY = "sessionStateSection"
 export const SESSION_CHARACTERS_KEY = "sessionCharactersSection"
 
 /**
+ * 🚧 M0 (L9): the viewer's lorebook-annex view, `{ current }`, for a widget
+ * granted `lore` (`lore.v1.annex`). Set by the session page.
+ */
+export const SESSION_LORE_ANNEX_KEY = "sessionLorebookAnnex"
+
+/**
  * 🚧 Which page context each scoped section is read off — scope → the key
  * its `{ current }` handle is set under. A host reads a granted scope's
  * section off that handle and nowhere else ({@link projectScopedSections}).
  * `persona` shares the cast's handle: its section is cut from
- * `characters.v1` ({@link personaSection}). `lore` has no entry because it
- * carries no page data: the lore is paged by request (`session-entries`),
- * the scope is the grant to ask, and its section is the grant marker
- * ({@link LORE_GRANTED}).
+ * `characters.v1` ({@link personaSection}). `lore` reads the viewer's
+ * lorebook-annex view ({@link SESSION_LORE_ANNEX_KEY}); the lore entries are
+ * paged by request (`session-entries`), and with no view yet its section is
+ * the frozen grant marker ({@link LORE_GRANTED}).
  */
 export const SCOPED_SECTION_CONTEXT_KEYS: Readonly<Partial<Record<WidgetSectionScope, string>>> = Object.freeze({
 	"session:full": SESSION_DOSSIER_KEY,
 	"session:state": SESSION_STATE_KEY,
 	characters: SESSION_CHARACTERS_KEY,
-	persona: SESSION_CHARACTERS_KEY
+	persona: SESSION_CHARACTERS_KEY,
+	lore: SESSION_LORE_ANNEX_KEY
 })
 
 /**
- * 🚧 The `lore` section (`lore.v1`, C4): the **lore grant marker**. Posted
- * whenever the scope is granted and never otherwise, so its presence means
- * granted and its absence means not, with no "not yet" between.
+ * 🚧 The `lore` section (`lore.v1`, C4): the **lore grant marker**, with an
+ * empty annex. Posted whenever the scope is granted and never otherwise, so
+ * its presence means granted and its absence means not, with no "not yet"
+ * between; the annex fills in when the viewer's view arrives.
  */
-export const LORE_GRANTED: Readonly<WidgetScopedSections["lore"]["v1"]> = Object.freeze({ granted: true })
+export const LORE_GRANTED = Object.freeze({
+	granted: true,
+	annex: Object.freeze({})
+}) as Readonly<SessionLoreV1>
 
 /**
  * 🚧 `persona.v1`, cut from `characters.v1`: the viewer's own personas in
@@ -523,7 +539,10 @@ const SCOPED_SECTION_SUPPLIERS: {
 	"session:state": (h: unknown) => (h ?? null) as SessionStateV1 | null,
 	characters: (h: unknown) => (h ?? null) as SessionCharactersV1 | null,
 	persona: (h: unknown) => personaSection(h as SessionCharactersV1 | null | undefined),
-	lore: () => LORE_GRANTED
+	lore: (h: unknown) =>
+		h && Object.keys(h as object).length
+			? { granted: true as const, annex: h as SessionLoreV1["annex"] }
+			: LORE_GRANTED
 })
 
 /**

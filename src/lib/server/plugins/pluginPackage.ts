@@ -23,13 +23,15 @@
  */
 
 import { readFile, readdir, stat } from "node:fs/promises"
-import { extname, isAbsolute, join, resolve } from "node:path"
-import type { SpecDocument } from "@serene-pub/sdk"
-import { isSafeUiPath, type PluginFileInput } from "./frameHost"
+import { isAbsolute, join, resolve } from "node:path"
+import { mimeForUiPath } from "./pluginMime"
+import { genreCreateSpecFindings, type SpecDocument } from "@serene-pub/sdk"
+import { isSafeUiPath } from "./frameHost"
 import { manifestDisplayTextFindings } from "./store"
+import { PLUGIN_BUILD_DIR } from "$lib/shared/plugins/packageManifest"
 
 /** Where `serene-pub build` writes, relative to the package root. */
-export const PLUGIN_BUILD_DIR = "dist/plugin"
+export { PLUGIN_BUILD_DIR }
 
 /**
  * The plugin slug grammar, restated from `defineExtension`.
@@ -40,12 +42,35 @@ export const PLUGIN_BUILD_DIR = "dist/plugin"
  */
 const SLUG = /^[a-z0-9]+([.-][a-z0-9]+)*$/
 
-/** The event a genre's one required member answers (24 §3). */
-const SESSION_CREATED = "core:event/session-created@1"
+const MIB = 1024 * 1024
 
-/** Ceilings on what one package may hand the reader, so a wrong `dir` fails fast. */
-const MAX_UI_FILES = 256
-const MAX_UI_BYTES = 8 * 1024 * 1024
+const positiveEnv = (name: string, fallback: number): number => {
+	const n = Number(process.env[name])
+	return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+/** The largest package this pub installs, in MB, counted as the files it unpacks to (`SP_PLUGIN_PACKAGE_MAX_MB`). */
+export const PLUGIN_PACKAGE_MAX_MB: number = positiveEnv("SP_PLUGIN_PACKAGE_MAX_MB", 512)
+/** The most files one package may hold (`SP_PLUGIN_FILES_MAX`). */
+export const PLUGIN_FILES_MAX: number = positiveEnv("SP_PLUGIN_FILES_MAX", 10_000)
+
+/** The refusal for a package whose files total too many bytes. */
+export const packageTooLargeSentence = (bytes: number): string =>
+	`This package is ${Math.ceil(bytes / MIB)} MB; this pub allows ${PLUGIN_PACKAGE_MAX_MB} MB (SP_PLUGIN_PACKAGE_MAX_MB). Nothing was installed.`
+
+/** The refusal for a package that holds too many files. */
+export const packageTooManyFilesSentence = (count: number): string =>
+	`This package has ${count.toLocaleString("en")} files; this pub allows ${PLUGIN_FILES_MAX.toLocaleString("en")} (SP_PLUGIN_FILES_MAX). Nothing was installed.`
+
+/** One file of a package, not yet read: where it is and what it weighs. */
+export interface PluginPackageFile {
+	path: string
+	mime: string
+	kind: "ui" | "asset"
+	bytes: number
+	/** Absolute path of the file in the package folder. */
+	source: string
+}
 
 /**
  * The manifest, in the shape this app reads it.
@@ -80,14 +105,15 @@ export interface PluginPackage {
 	/** One per `manifest.pipelines` entry, in the manifest's order. */
 	documents: SpecDocument[]
 	/**
-	 * The package's client-side files, as `plugins:install` takes them.
+	 * The package's files, listed and sized but not read (install copies them).
 	 *
 	 * Everything under `ui/` plus any declared surface entry outside it —
 	 * read as a set rather than only the declared entries, because a frame
 	 * document loads its own script and stylesheet and a surface whose entry
-	 * alone was stored renders blank.
+	 * alone was stored renders blank. Then the `assets` dir and `lang/*.json`,
+	 * kind `asset`.
 	 */
-	files: PluginFileInput[]
+	files: PluginPackageFile[]
 }
 
 /** A package this instance will not read, with every reason at once. */
@@ -107,29 +133,9 @@ export class PluginPackageError extends Error {
 export const documentFileName = (specId: string): string =>
 	`${specId.replace(/[:/]/g, "_")}.json`
 
-/** The media type a stored frame file is served with, by extension. */
-const MIME: Record<string, string> = {
-	".html": "text/html; charset=utf-8",
-	".htm": "text/html; charset=utf-8",
-	".js": "text/javascript; charset=utf-8",
-	".mjs": "text/javascript; charset=utf-8",
-	".css": "text/css; charset=utf-8",
-	".json": "application/json; charset=utf-8",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif": "image/gif",
-	".webp": "image/webp",
-	".ico": "image/x-icon",
-	".woff": "font/woff",
-	".woff2": "font/woff2",
-	".txt": "text/plain; charset=utf-8",
-	".map": "application/json; charset=utf-8"
-}
-
-export const mimeForUiPath = (path: string): string =>
-	MIME[extname(path).toLowerCase()] ?? "application/octet-stream"
+// The MIME table lives in the leaf `./pluginMime` (no imports), so `frameHost` can read it
+// without pulling this module — and the database — into the definition registry's imports.
+export { mimeForUiPath }
 
 const exists = async (path: string): Promise<boolean> => {
 	try {
@@ -320,17 +326,9 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 					`A package declares only its own genres; referencing another's is done ` +
 					`from a spec's input binding.`
 			)
-		const creates = documents.filter(
-			(d) =>
-				(d as any).input?.genre === id &&
-				(d as any).input?.event === SESSION_CREATED
-		)
-		if (creates.length !== 1)
-			findings.push(
-				`genre '${id}' ships ${creates.length} create pipelines — every genre needs ` +
-					`exactly one spec answering '${SESSION_CREATED}' (24 §3). A genre is its ` +
-					`create pipeline's published row, so a genre without one reaches no picker.`
-			)
+		// The SDK's rule, the one the packager runs too (`serene-pub check`/`build`):
+		// a package the packager passes is never refused here on this count.
+		findings.push(...genreCreateSpecFindings([{ id }], documents))
 		// `shape` is optional in the SDK and load-bearing here:
 		// `listSessionGenres` filters on it, so a genre that declares none is
 		// installed, listed by nothing, and impossible to start. Refused at the
@@ -377,32 +375,42 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 		wanted.add(entry)
 	}
 
-	const files: PluginFileInput[] = []
-	let bytes = 0
-	for (const path of [...wanted].sort()) {
-		if (!isSafeUiPath(path)) continue
-		if (files.length >= MAX_UI_FILES) {
+	// Assets: the declared dir (`manifest.assets.dir`, default `assets`) and
+	// `lang/*.json` — the folder IS the declaration (SHAPES L5).
+	const assetPaths = new Set<string>()
+	const assetsDecl = (manifest as { assets?: unknown }).assets
+	if (assetsDecl && typeof assetsDecl === "object" && !Array.isArray(assetsDecl)) {
+		const rawDir = (assetsDecl as { dir?: unknown }).dir
+		const dir = typeof rawDir === "string" ? rawDir : "assets"
+		const first = dir.split("/")[0]
+		if (!isSafeUiPath(dir) || first === "ui" || first === "dist" || first === "lang")
 			findings.push(
-				`the package ships more than ${MAX_UI_FILES} client files; refused rather ` +
-					`than truncated, because a half-stored surface is worse than none.`
+				`manifest.assets.dir '${dir}' is not a servable folder — relative, no '..', ` +
+					`and not 'ui', 'dist' or 'lang', which the package already uses.`
 			)
-			break
-		}
-		const data = await readFile(join(root, path))
-		bytes += data.byteLength
-		if (bytes > MAX_UI_BYTES) {
-			findings.push(
-				`the package's client files exceed ${MAX_UI_BYTES} bytes; refused rather ` +
-					`than truncated.`
-			)
-			break
-		}
-		files.push({
-			path,
-			mime: mimeForUiPath(path),
-			data: data.toString("base64")
-		})
+		else for (const rel of await walk(join(root, dir))) assetPaths.add(`${dir}/${rel}`)
 	}
+	try {
+		for (const e of await readdir(join(root, "lang"), { withFileTypes: true }))
+			if (e.isFile() && e.name.endsWith(".json")) assetPaths.add(`lang/${e.name}`)
+	} catch {
+		/* no lang folder */
+	}
+
+	const files: PluginPackageFile[] = []
+	let bytes = 0
+	const collect = async (path: string, kind: "ui" | "asset") => {
+		if (!isSafeUiPath(path)) return
+		const source = join(root, path)
+		const size = (await stat(source)).size
+		bytes += size
+		files.push({ path, mime: mimeForUiPath(path), kind, bytes: size, source })
+	}
+	for (const path of [...wanted].sort()) await collect(path, "ui")
+	for (const path of [...assetPaths].sort()) if (!wanted.has(path)) await collect(path, "asset")
+
+	if (bytes > PLUGIN_PACKAGE_MAX_MB * MIB) findings.push(packageTooLargeSentence(bytes))
+	if (files.length > PLUGIN_FILES_MAX) findings.push(packageTooManyFilesSentence(files.length))
 
 	if (findings.length) throw new PluginPackageError(root, findings)
 	return { dir: root, manifest, documents, files }

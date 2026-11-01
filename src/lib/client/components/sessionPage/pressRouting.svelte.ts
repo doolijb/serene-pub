@@ -22,8 +22,10 @@ import {
 	dispatchAction,
 	type ActionDispatch,
 	type CoreVerbHandlers,
-	type InvokeArgs
+	type InvokeArgs,
+	type PressHearing
 } from "$lib/shared/widgets/invokeAction"
+import { createPressAnswers } from "$lib/client/components/sessionPage/pressAnswers"
 import {
 	collectedFire,
 	draftHolds,
@@ -41,6 +43,7 @@ import type { SessionPageData } from "$lib/client/components/sessionPage/session
 import type { ActionList } from "$lib/client/components/sessionPage/actionList.svelte"
 import type {
 	EmitFireAction,
+	FiredPress,
 	TurnFlow
 } from "$lib/client/components/sessionPage/turnFlow.svelte"
 import type { MessageControls } from "$lib/client/components/sessionPage/messageControls.svelte"
@@ -237,12 +240,20 @@ export function createPressRouting(d: PressRoutingDeps) {
 					throw new Error("'edit' carries the new text — { content }")
 				socket.emit("sessionMessages:update", { ...m, content })
 			}),
-		stop: (args) =>
-			args?.messageId != null
+		stop: (args) => {
+			// 🚧 A spoken line's Stop (speech follow-ups A4) names the speak run
+			// it ends: the existing run cancel, never a message cancel.
+			const runId = args?.payload?.runId
+			if (typeof runId === "string" && runId) {
+				socket.emit("pipelines:cancelRun", { runId })
+				return
+			}
+			return args?.messageId != null
 				? withMessage("stop", args, (m) =>
 						handleAbortMessage(new Event("invoke"), m)
 					)
-				: handleAbortLastMessage(new Event("invoke")),
+				: handleAbortLastMessage(new Event("invoke"))
+		},
 		branch: (args) =>
 			withMessage("branch", args, (m) =>
 				handleBranchMessage(new Event("invoke"), m)
@@ -297,14 +308,24 @@ export function createPressRouting(d: PressRoutingDeps) {
 		),
 		// The text a press supplies (S2's slash argument) is the draft's:
 		// the run spends it (D1) when the composer still holds it.
-		fire: (a, args) =>
+		fire: (a, args, hearing) =>
 			fireOfferedAction(
 				a,
 				args,
 				args?.text !== undefined
 					? { text: args.text, fromDraft: true }
-					: undefined
+					: undefined,
+				false,
+				hearing
 			)
+	}
+
+	/** 🚧 M2a a6: the presses waiting on their run's answer (`pressAnswers.ts`). */
+	const pressAnswers = createPressAnswers()
+	/** Fire, and say the run's name to whoever waits on its answer. */
+	function fireHeard(p: FiredPress, hearing?: PressHearing) {
+		const runId = emitFireAction(p)
+		if (hearing && typeof runId === "string") pressAnswers.wait(runId, p.identity ?? p.fn, hearing)
 	}
 
 	/** A press refused before it fired (S2): said, and nothing runs; the draft stays. */
@@ -319,6 +340,7 @@ export function createPressRouting(d: PressRoutingDeps) {
 		msg: Sockets.Sessions.FireAction.Response
 	) {
 		if (msg.sessionId !== sessionId) return
+		pressAnswers.settle(msg)
 		// The draft a text-taking press spent when it fired (note 31) comes
 		// back when its run was refused, failed or was stopped — into an
 		// empty composer only, never over what the person has typed since.
@@ -390,7 +412,9 @@ export function createPressRouting(d: PressRoutingDeps) {
 		 */
 		supplied?: Collected & { fromDraft?: boolean },
 		/** 🚧 The person already answered this action's question (`confirm`). */
-		confirmed = false
+		confirmed = false,
+		/** 🚧 M2a a6: who waits on the run's answer — heard only when the press fires now (not after a question or a modal). */
+		hearing?: PressHearing
 	) {
 		// The functions with a bespoke client flow: both halves of the narrator
 		// split open the same modal — whose first step *is* the choice between
@@ -472,23 +496,29 @@ export function createPressRouting(d: PressRoutingDeps) {
 		if (route.route === "fire") {
 			if (supplied?.fromDraft && route.collected.text)
 				spendDraft(identity!, route.collected.text)
-			emitFireAction({
+			fireHeard(
+				{
+					fn: a.key,
+					identity,
+					messageId: args?.messageId,
+					payload: args?.payload,
+					blockId: args?.blockId,
+					...route.collected
+				},
+				hearing
+			)
+			return
+		}
+		fireHeard(
+			{
 				fn: a.key,
 				identity,
 				messageId: args?.messageId,
 				payload: args?.payload,
-				blockId: args?.blockId,
-				...route.collected
-			})
-			return
-		}
-		emitFireAction({
-			fn: a.key,
-			identity,
-			messageId: args?.messageId,
-			payload: args?.payload,
-			blockId: args?.blockId
-		})
+				blockId: args?.blockId
+			},
+			hearing
+		)
 	}
 	/**
 	 * The draft the last press spent, until its run answers (D1, note 31) —
@@ -605,6 +635,19 @@ export function createPressRouting(d: PressRoutingDeps) {
 		},
 		set collecting(press: typeof collecting) {
 			collecting = press
+		},
+		/**
+		 * The first words of the message the collecting action was pressed on
+		 * (the modal's preview `{subject}`); empty when it names none.
+		 */
+		get collectSubject() {
+			const content = messageById(collecting?.args?.messageId)?.content ?? ""
+			const flat = content.replace(/\s+/g, " ").trim()
+			return flat.length > 60 ? `${flat.slice(0, 60).trimEnd()}…` : flat
+		},
+		/** The key the modal remembers a collected text under: this session + the action's identity. */
+		get collectRememberKey() {
+			return collecting ? `sp:collect:${sessionId}:${collecting.identity}` : ""
 		},
 		get collectCast() {
 			return collectCast

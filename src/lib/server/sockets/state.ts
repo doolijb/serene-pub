@@ -254,7 +254,9 @@ const proposalRows = async (
 ): Promise<Sockets.State.ProposalRow[]> => {
 	const slots = earshotSlots()
 	return (await listedProposals(db, sessionId))
-		.filter((row: any) => proposalHeard(hearing, slots, row.payload, links))
+		// 🚧 A library change (M2c path B) names no holder and no slot: it is the session's, heard by all who see its proposals;
+		// accepting it is judged as the person who presses Accept (`decideProposal`).
+		.filter((row: any) => row.kind === "library" || proposalHeard(hearing, slots, row.payload, links))
 		.map(toProposalRow)
 }
 
@@ -966,6 +968,36 @@ async function ledgerFor(
 				...(max !== undefined ? { max } : {})
 			}
 		}),
+		// 🚧 What a library outlet made or changed (M2c path B), landed (Full) or accepted (Review): the world's lines, as
+		// the clock's are — a pending one is a proposal, listed with the others.
+		...(
+			await db
+				.select()
+				.from(schema.stateProposals)
+				.where(
+					and(
+						eq(schema.stateProposals.sessionId, sessionId),
+						eq(schema.stateProposals.kind, "library"),
+						inArray(schema.stateProposals.status, ["applied", "accepted", "skipped"])
+					)
+				)
+		).map((row) => {
+			const payload = (row.payload ?? {}) as { op?: unknown; label?: unknown; skipped?: unknown }
+			return {
+				id: row.id,
+				kind: "library" as const,
+				messageId: row.messageId,
+				ownerKey: "world",
+				ownerLabel: worldLabel,
+				updatedBy: row.proposedBy ?? "",
+				createdAt: new Date(row.decidedAt ?? row.createdAt).toISOString(),
+				library: {
+					op: payload.op as NonNullable<Sockets.State.LedgerRow["library"]>["op"],
+					label: typeof payload.label === "string" ? payload.label : "",
+					...(row.status === "skipped" && typeof payload.skipped === "string" ? { skipped: payload.skipped } : {})
+				}
+			}
+		}),
 		// 🚧 The clock's moves (live scenes §15 G5): the world's lines, heard
 		// by everyone — the clock is the session's own, never a holder's.
 		...(await clockLedgerRows(db, sessionId, links.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId)))).map((move) => ({
@@ -1384,12 +1416,17 @@ export const stateSet: Handler<
 				if (notYours) throw new StateRefusal(notYours)
 				// A lore reference names an entry of this session's lorebook (3a).
 				await assertLoreRefsInSession(db, sessionId, { value: params.value, slotId: params.slotId })
+				// 🚧 A slot that lives on the world (`scope: 'world'`, M0) is written to the book.
+				const written =
+					getAttributeSlot(params.slotId)?.scope === "world"
+						? await (await import("$lib/server/state/worldScope")).worldOwnerOf(db, sessionId, target)
+						: target
 				return setValue(
 					db,
 					// The caller, so a `card` owner is checked as theirs.
 					{ sessionId, updatedBy: "user", userId: socket.user!.id },
 					{
-						owner: target,
+						owner: written,
 						slotId: params.slotId,
 						value: params.value
 					}
@@ -1909,7 +1946,13 @@ export const sessionsSetRulesetSettings: Handler<
 			const found = await sessionRulesetSettingsOf(db, sessionId)
 			if (!found) refuse(emitToUser, event, "Session not found.", { sessionId })
 			const rulesetId = typeof params?.rulesetId === "string" && params.rulesetId ? params.rulesetId : found.primaryRuleset
-			const res = { sessionId, canEdit: access.isOwner, rulesOptions: rulesOptionsFor(rulesetId, found.stored[rulesetId] ?? {}) }
+			const upgrade = access.isOwner ? await (await import("$lib/server/sessions/convertRuleset")).rulesetUpgradeOffer(db, sessionId) : null
+			const res = {
+				sessionId,
+				canEdit: access.isOwner,
+				rulesOptions: rulesOptionsFor(rulesetId, found.stored[rulesetId] ?? {}),
+				...(upgrade ? { upgrade } : {})
+			}
 			emitToUser(event, res)
 			return res
 		}
@@ -1926,7 +1969,8 @@ export const sessionsSetRulesetSettings: Handler<
 			if (e instanceof RulesetSettingsRefusal) refuse(emitToUser, event, e.message, { sessionId })
 			throw e
 		}
-		const res = { sessionId, canEdit: true, rulesOptions }
+		const upgrade = access.isOwner ? await (await import("$lib/server/sessions/convertRuleset")).rulesetUpgradeOffer(db, sessionId) : null
+		const res = { sessionId, canEdit: true, rulesOptions, ...(upgrade ? { upgrade } : {}) }
 		emitToUser(event, res)
 		// Every member's page reads the session afresh (its row carries the
 		// stored values); a later turn plays by them.

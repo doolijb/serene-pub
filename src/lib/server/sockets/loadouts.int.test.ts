@@ -97,6 +97,52 @@ describe("loadouts sockets", () => {
 		expect(res.transforms.find((t) => t.id === "text->text")?.defaultLoadoutId).toBe(reply.id)
 	}, 60_000)
 
+	test("the loadout voice and other speakers: accepted on a speech loadout's own entries, refused otherwise", async () => {
+		const { loadoutsList, loadoutsUpdate } = await S()
+		const list = await loadoutsList.handler(socketFor(), {}, noopEmit)
+		const narration = list.loadouts.find((l) => l.loadoutId === "core:loadout/tts@1")!
+		const reply = list.loadouts.find((l) => l.loadoutId === "core:loadout/reply@1")!
+		// Non-speech loadouts carry nulls.
+		expect(reply).toMatchObject({ defaultVoiceId: null, defaultVoiceName: null, otherSpeakersVoiceId: null, otherSpeakersVoiceName: null })
+		const mk = async (slug: string, loadoutId: number, enabled = true) =>
+			(
+				await testDb
+					.insert(schema.voicebankVoices)
+					.values({ slug, name: `Name ${slug}`, voiceId: slug, loadoutId, enabled })
+					.returning()
+			)[0]!
+		const mine = await mk("v-mine", narration.id)
+		const mine2 = await mk("v-mine2", narration.id)
+		const off = await mk("v-off", narration.id, false)
+		const foreign = await mk("v-foreign", reply.id)
+		const emitted: any[] = []
+		const emit = (event: string, data: any) => emitted.push({ event, data })
+
+		const ok = await loadoutsUpdate.handler(socketFor(), { id: narration.id, defaultVoiceId: mine.id, otherSpeakersVoiceId: mine2.id }, emit)
+		expect(ok.loadout).toMatchObject({
+			defaultVoiceId: mine.id,
+			defaultVoiceName: "Name v-mine",
+			otherSpeakersVoiceId: mine2.id,
+			otherSpeakersVoiceName: "Name v-mine2"
+		})
+		// The Voices panel's group header refreshes too.
+		expect(emitted.map((e) => e.event)).toContain("voicebank:list")
+
+		const refused = async (id: number, params: Record<string, unknown>) => {
+			emitted.length = 0
+			await expect(loadoutsUpdate.handler(socketFor(), { id, ...params } as any, emit)).rejects.toThrow()
+			return emitted.find((e) => e.event === "loadouts:update:error")?.data?.error
+		}
+		expect(await refused(narration.id, { defaultVoiceId: foreign.id })).toBe("That voice is not on this loadout.")
+		expect(await refused(narration.id, { otherSpeakersVoiceId: 999999 })).toBe("That voice is not on this loadout.")
+		expect(await refused(narration.id, { defaultVoiceId: off.id })).toBe("That voice is turned off.")
+		expect(await refused(reply.id, { defaultVoiceId: foreign.id })).toBe("Only a speech loadout has a voice.")
+		// Other speakers back to Auto.
+		const auto = await loadoutsUpdate.handler(socketFor(), { id: narration.id, otherSpeakersVoiceId: null }, emit)
+		expect(auto.loadout).toMatchObject({ otherSpeakersVoiceId: null, otherSpeakersVoiceName: null, defaultVoiceId: mine.id })
+		await testDb.delete(schema.voicebankVoices)
+	}, 60_000)
+
 	test("a pair change swaps a sampling config the new pair cannot speak, and says so", async () => {
 		const { loadoutsCreate, loadoutsUpdate } = await S()
 		const { c, m } = await pair("drawer", { "text->image": 1 }, CONNECTION_TYPE.A1111)

@@ -14,7 +14,7 @@ You need a session to try it in. Any session works, including one with a single 
 
 Open the **Lorebooks** view from the rail and press **New** at the top of the list of books (from inside a book, press the back arrow at the top, **Lorebooks**, first to get back to the list). Give it a name and press **Create**.
 
-When the pub has [starter lorebooks](#starter-starter lorebooks), the dialog opens with two choices at the top: **Blank**, an empty book, or **Start from a starter lorebook**, a book that starts out with a world, a cast and rules already in it. For your first book, either works.
+When the pub has [starter lorebooks](#starter-lorebooks), the dialog opens with two choices at the top: **Blank**, an empty book, or **Start from a starter lorebook**, a book that starts out with a world and its rules already in it. For your first book, either works.
 
 If a session is open, the dialog also offers **Read it into this session**. Leave it on: that's step 3 done for you.
 
@@ -240,7 +240,9 @@ Three verbs carry a session's notes further. They are in the **Session notes** r
 
 ## Starter lorebooks
 
-A **starter lorebook** is a ready-made world to start from: entries, places, a cast and the rules its stories are told by. Starting from one copies the whole starter lorebook, so what you make is yours to change, and the starter lorebook stays as it was for the next person.
+A **starter lorebook** is a ready-made world to start from: entries, places, often a cast, and the rules its stories are told by. Starting from one copies the whole starter lorebook, so what you make is yours to change, and the starter lorebook stays as it was for the next person.
+
+Serene Pub comes with two. **The Ninth Mile** is listed first: a coaching inn where three roads meet, on the night a storm closes all three. It holds four entries about the inn, its roads and its household, one lead to start from (_The night the roads close_), and the Freeform rules: no dice and nothing to learn. It has no cast of its own, because its keeper, Nell Haverly, is the character the setup wizard offers first (see [Pick a character](./getting-started.md#4-pick-a-character)): add her to a session that reads the book and there's one Nell, not two. **Brackenvale** is a river vale with a market town, ten places, seven people and five leads, played by the Vis Itineris rules with their library.
 
 Each starter lorebook in a list shows its name, *Rules:* and the rules it plays, a line about it, what it holds (*Holds 12 entries, 3 places and 2 cast members*) and where it comes from: *Comes with Serene Pub*, *Comes with a plugin*, or *Made by* the admin who made it.
 
@@ -257,6 +259,8 @@ Starter lorebooks come with Serene Pub and with plugins, and administrators can 
 
 Deleting a starter lorebook takes it off every list. Lorebooks and sessions already started from it keep everything they copied.
 
+A plugin can also bring lorebooks of its own, which are added to the administrator's library once the plugin is approved; see [Plugins](./plugins.md#pictures-sound-and-data-that-come-with-a-package).
+
 ## Sharing a lorebook
 
 On a pub with [user accounts](./users-and-accounts.md), you can let another person read one of your lorebooks. Choose **Share…** from the book's **⋯** menu and tick the people; untick to take it back.
@@ -265,11 +269,12 @@ They get the book read-only: it appears on their shelf under **Shared with you**
 
 ## Creating, importing, duplicating and deleting
 
-**New**, over the list of books, asks for a name and the book's **Rules** (**Freeform** unless you pick others; you can change them later in Book settings). Everything else, such as cast, dates and places, appears as you use it. When the pub has starter lorebooks, **Blank** and **Start from a starter lorebook** sit at the top of the dialog: pick a starter lorebook and the book starts as a copy of it, named after it and playing its rules (see [Starter lorebooks](#starter-starter lorebooks)). A book's **⋯** menu in the list has **Book settings** and **Duplicate** as well; a book shared with you has **Duplicate**. With no books yet, the list says what a lorebook is and offers **New lorebook**.
+**New**, over the list of books, asks for a name and the book's **Rules** (**Freeform** unless you pick others; you can change them later in Book settings). Everything else, such as cast, dates and places, appears as you use it. When the pub has starter lorebooks, **Blank** and **Start from a starter lorebook** sit at the top of the dialog: pick a starter lorebook and the book starts as a copy of it, named after it and playing its rules (see [Starter lorebooks](#starter-lorebooks)). A book's **⋯** menu in the list has **Book settings** and **Duplicate** as well; a book shared with you has **Duplicate**. With no books yet, the list says what a lorebook is and offers **New lorebook**.
 
 The upload button beside **New** (**Import a lorebook**) reads a SillyTavern lorebook or character book file, a lorebook exported by Serene Pub 0.5, or a book Serene Pub wrote into a character card. It always makes a new book; it never fills the one you have open.
 
 - A SillyTavern file comes in as **World lore**. See [Importing from SillyTavern](./importing-from-sillytavern.md).
+- A book whose entries use a ruleset's own kinds of entry (a household, a spell) brings them back as those kinds when a ruleset that declares them is installed here, fields included; if none is, they come in as **World lore**. The entries need not belong to the book's own rules.
 - A Serene Pub 0.5 file brings its world lore, character lore with the cast member it belongs to, dated history with its scenes, and its cast with their cards.
 - Importing a book you already have is detected and asks whether to overwrite it or import it as new. Before overwriting, it lists what the file can't bring back (such as branches, dated changes and scenes captured from sessions), and those are lost. It also says how many of your characters the file carries an edited copy of: either choice rewrites those characters from the file.
 - Files over 32 MB, or far larger than any real book, are refused with the reason.
@@ -281,6 +286,16 @@ An imported book is queued for search indexing straight away. If the book was sa
 **Duplicate** makes a full copy under a new name: every entry on every line, the cast, branches, links, scenes, dated changes, stats and stat sheets, tags, calendar and clock. Character cards are shared, not copied. Scenes in the copy keep their summaries but not the session messages they were captured from, and the undo of a past merge stays with the original. The copy isn't read into any session until you say so.
 
 **Delete this lorebook** asks first, naming the book and what goes with it: its entries (and how many are places), its cast, and its history, scenes, relationships and branches. Sessions reading it keep their messages but stop reading lore from it. It can't be undone.
+
+## The lorebook annex
+
+Some extensions and genres keep a little free-form saved state on the lorebook itself, called its **annex**: a town's reputation, the score a campaign's rival has reached, a map seed. It is about the world, not one playthrough, so every session that reads the book sees the same values. It isn't an entry and doesn't show as one; it's something the genre or extension reads and writes.
+
+- **A session's writes land like an entry-field write.** If the session reads a lorebook you can write to, a change goes into that book. If not (the book is someone else's, or its **Writes from sessions** keeps the session out), it goes into the session's own notes instead, as with any other session write (see [What a session may write](#what-a-session-may-write)).
+- **Back takes it back.** A write made during a turn goes back with that turn, the way a stat or an entry change does.
+- **Each person sees what they're meant to.** The genre or extension says who sees each value (everyone, the owner, a participant), so two people reading the same book can see different parts of it.
+
+Authors: see the SDK guide [Storage](./sdk/guides/storage.md#the-lorebook-annex).
 
 ## Going further
 

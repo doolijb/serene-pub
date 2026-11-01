@@ -44,7 +44,17 @@ export interface RoadConnection {
 	modality?: string | null
 	hasCredential?: boolean
 	models: readonly RoadModel[]
-	modelsSync: { at: string | null; error: string | null }
+	modelsSync: { at: string | null; error: string | null; freeTier?: boolean }
+}
+
+/** Preset `openrouter`, or an address on openrouter.ai whatever the preset. */
+function isOpenRouterRoad(c: Pick<RoadConnection, "preset" | "baseUrl">): boolean {
+	if (c.preset === "openrouter") return true
+	try {
+		return new URL(String(c.baseUrl ?? "")).hostname.toLowerCase() === "openrouter.ai"
+	} catch {
+		return false
+	}
 }
 
 export type ServiceRoadLineId = "connection" | "key" | "model"
@@ -176,7 +186,12 @@ export function serviceRoadChecklist(
 	const modelDone = facts.chatConnectionId != null
 
 	let keyDetail: string | null = null
-	if (keyMissing) keyDetail = "Paste your API key, then press Save."
+	if (keyMissing)
+		keyDetail = isOpenRouterRoad(subject)
+			? "Paste your API key, then press Save; a key with no credit still gets free models, about 50 replies a day."
+			: "Paste your API key, then press Save."
+	else if (subject?.modelsSync.freeTier)
+		keyDetail = "No credit yet: free models only, about 50 replies a day"
 	else if (
 		subject &&
 		!subject.hasCredential &&

@@ -54,7 +54,7 @@ describe("file storage", () => {
 
 		const file = await readPluginFile(db, "acme/x", "ui/index.html")
 		expect(file).toBeTruthy()
-		expect(Buffer.from(file!.content, "base64").toString()).toBe(
+		expect(Buffer.from(file!.content!, "base64").toString()).toBe(
 			"<h1>hi</h1>"
 		)
 		// Traversal never reads even if a row somehow existed.
@@ -71,7 +71,7 @@ describe("file storage", () => {
 		])
 		expect(await readPluginFile(db, "acme/y", "b.js")).toBeUndefined()
 		const a = await readPluginFile(db, "acme/y", "a.js")
-		expect(Buffer.from(a!.content, "base64").toString()).toBe("y")
+		expect(Buffer.from(a!.content!, "base64").toString()).toBe("y")
 	})
 })
 
@@ -248,5 +248,25 @@ describe("the composed CSP", () => {
 			"network:api.example.com"
 		])
 		expect(revoked).toContain("connect-src 'none'")
+	})
+
+	it("opens connect-src for the frame's own two GET doors, and nothing else", () => {
+		const doors = { host: "localhost:5174", pluginId: "my-plugin" }
+		const csp = frameCsp({ permissions: {} }, null, doors)
+		const connect = csp.split("; ").find((d) => d.startsWith("connect-src"))!
+		expect(connect).toBe(
+			"connect-src localhost:5174/plugin-assets/my-plugin/ localhost:5174/plugin-data/my-plugin/"
+		)
+		expect(connect).not.toContain("'self'")
+		expect(connect).not.toContain("*")
+		expect(csp).not.toContain("other-plugin")
+		// Network grants still project beside the doors.
+		const asked = { permissions: { network: { hosts: ["api.example.com"] } } }
+		const both = frameCsp(asked, reviewMarks(declaredPermissions(asked)), doors)
+		expect(both).toContain("localhost:5174/plugin-data/my-plugin/ https://api.example.com")
+		// A host outside the host-source grammar cannot smuggle a directive.
+		const evil = frameCsp({ permissions: {} }, null, { host: "x; script-src *", pluginId: "my-plugin" })
+		expect(evil).toContain("connect-src 'none'")
+		expect(evil).not.toContain("script-src *")
 	})
 })

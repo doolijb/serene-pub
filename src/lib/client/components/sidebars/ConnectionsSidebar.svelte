@@ -484,6 +484,7 @@
 		type: string | null | undefined
 	): ManagerKind | null {
 		if (type === CONNECTION_TYPE.KOBOLDCPP_MANAGED) return "koboldcpp"
+		if (type === CONNECTION_TYPE.AUDIOCPP_MANAGED) return "audiocpp"
 		if (type === CONNECTION_TYPE.OLLAMA) return "ollama"
 		return null
 	}
@@ -498,13 +499,17 @@
 	 * switches it on and lands on the row that appears — the same two halves
 	 * the Add menu does.
 	 */
-	function openManager(manager: ModelManager | "ollama" | "koboldcpp") {
+	function openManager(
+		manager: ModelManager | "ollama" | "koboldcpp" | "audiocpp"
+	) {
 		const kind: ManagerKind =
 			typeof manager === "string" ? manager : manager.panel
 		const type =
 			kind === "koboldcpp"
 				? CONNECTION_TYPE.KOBOLDCPP_MANAGED
-				: CONNECTION_TYPE.OLLAMA
+				: kind === "audiocpp"
+					? CONNECTION_TYPE.AUDIOCPP_MANAGED
+					: CONNECTION_TYPE.OLLAMA
 		const row = connectionsList.find((c) => c.type === type && c.id != null)
 		if (row) void openConnection(row)
 		else handleEnableManager(kind)
@@ -542,6 +547,9 @@
 					: "systemSettings:updateOllamaManagerEnabled",
 				{ enabled: false }
 			)
+		// audio.cpp's switch is its own settings' `enabled`, not a system flag.
+		if (kind === "audiocpp")
+			socket.emit("audiocpp:updateSettings", { enabled: false })
 		for (const id of ids) socket.emit("connections:delete", { id })
 		// `handleConnectionsDelete` only lands the view when the row it
 		// answers for is the open one; the image row is not, so navigate here
@@ -1122,7 +1130,11 @@
 			connectionId={selectedConnectionId ?? 0}
 			title={connection?.name ??
 				selectedRow?.name ??
-				(kind === "koboldcpp" ? "KoboldCPP" : "Ollama")}
+				(kind === "koboldcpp"
+					? "KoboldCPP"
+					: kind === "audiocpp"
+						? "audio.cpp"
+						: "Ollama")}
 			isAdmin={userCtx.user?.isAdmin ?? false}
 			capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
 			managedConnectionIds={removalIds(kind)}
@@ -1388,6 +1400,8 @@
 	{@const managed =
 		endpointKind(connection?.type ?? selectedRow?.type) ===
 			"koboldcpp-managed" ||
+		endpointKind(connection?.type ?? selectedRow?.type) ===
+			"audiocpp-managed" ||
 		endpointKind(connection?.type ?? selectedRow?.type) === "ollama"}
 	<span
 		class="shrink-0 rounded-full px-1.5 py-0.5 text-meta font-normal {managed

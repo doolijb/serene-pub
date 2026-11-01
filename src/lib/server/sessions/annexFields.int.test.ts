@@ -241,7 +241,7 @@ describe("annex fields — a widget sets a declared value through core's one pip
 			kind: "refused",
 			error: expect.stringMatching(/not available while its plugin is turned off/)
 		})
-		delete process.env.SP_PLUGINS_ENABLED
+		process.env.SP_PLUGINS_ENABLED = "0"
 		try {
 			const flagOff = await press(ownerId, annexFieldAction(OWNER, "last-roll"), { value: 5 })
 			expect(flagOff).toEqual({

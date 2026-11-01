@@ -265,6 +265,17 @@ describe("a story with no clock yet", () => {
 		expect((await clockOf(set.session.id)).day).toBe(6)
 	})
 
+	test("a move TO a moment starts the clock on the story's first day, stored, and later moves go on from it (M1 E-fix T-4)", async () => {
+		const w = await world({ clock: false })
+		const out: any = await (await host(w)).commit!({ to: { hour: 10, minute: 0, day: "today" }, cause: "tick", onRefusal: "skip" }, advance)
+		expect(out.skipped ?? "").toBe("")
+		expect(await clockOf(w.session.id)).toEqual({ year: 1, month: 1, day: 1, hour: 10, minute: 0 })
+		const [row] = await clockRows(w.session.id)
+		expect(row).toMatchObject({ status: "applied", payload: { by: 600, unit: "minutes", from: { year: 1, month: 1, day: 1, hour: 0 } } })
+		await (await host(w)).commit!({ by: 21, unit: "hours", cause: "action", onRefusal: "skip" }, advance)
+		expect(await clockOf(w.session.id)).toEqual({ year: 1, month: 1, day: 2, hour: 7, minute: 0 })
+	})
+
 	test("unwired, a refusal still halts with the sentence and writes nothing", async () => {
 		const w = await world({ clock: false })
 		await expect((await host(w)).commit!({ by: 3, unit: "hours" }, advance)).rejects.toThrow(/no present/)

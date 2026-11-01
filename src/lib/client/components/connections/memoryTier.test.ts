@@ -8,6 +8,7 @@ import {
 	matchesTier,
 	parseMemoryTier,
 	readMemoryTier,
+	readStoredMemoryTier,
 	tierBudget,
 	tierLabel,
 	writeMemoryTier
@@ -132,5 +133,29 @@ describe("storage is a convenience, never a dependency", () => {
 			setItem: () => {}
 		})
 		expect(readMemoryTier()).toBe(DEFAULT_MEMORY_TIER)
+	})
+
+	test("the stored answer is null until the person gave one", () => {
+		const store = new Map<string, string>()
+		vi.stubGlobal("localStorage", {
+			getItem: (k: string) => store.get(k) ?? null,
+			setItem: (k: string, v: string) => void store.set(k, v)
+		})
+		expect(readStoredMemoryTier()).toBeNull()
+		store.set(MEMORY_TIER_KEY, "a-lot")
+		expect(readStoredMemoryTier()).toBeNull()
+		store.set(MEMORY_TIER_KEY, "unsure")
+		expect(readStoredMemoryTier()).toBe("unsure")
+		store.set(MEMORY_TIER_KEY, "8gb")
+		expect(readStoredMemoryTier()).toBe("8gb")
+	})
+
+	test("a throwing accessor has no stored answer", () => {
+		vi.stubGlobal("localStorage", {
+			get getItem(): never {
+				throw new Error("site data blocked")
+			}
+		})
+		expect(readStoredMemoryTier()).toBeNull()
 	})
 })

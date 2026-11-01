@@ -158,6 +158,7 @@ export function serviceLabel(connection: {
 }): string {
 	const kind = endpointKind(connection.type)
 	if (kind === "koboldcpp-managed") return "KoboldCPP"
+	if (kind === "audiocpp-managed") return "audio.cpp"
 	if (kind === "ollama") return "Ollama"
 	if (isLocalOnnxType(connection.type)) return "ONNX"
 	if (connection.type === CONNECTION_TYPE.OPENAI)

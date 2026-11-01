@@ -1,4 +1,9 @@
 import {
+	fetchHfRepoSiblings,
+	ollamaQuantRows
+} from "$lib/server/connections/hfGgufQuants"
+import {
+	type RecommendedEntry,
 	chatEntries,
 	embeddingEntries,
 	fetchRecommendedGguf
@@ -461,6 +466,29 @@ export const ollamaPullModelHandler: Handler<
 	event: "ollama:pullModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		// An `hf.co/<repo>:<quant>` pull of a speech or transcription GGUF is
+		// refused here with the same sentence KoboldCPP's download gives
+		// (lane MV finding V5, 2026-10-29): Ollama would refuse it at the
+		// manifest with a bare "Failed to download model".
+		{
+			const m = /^hf\.co\/([^:\s]+)(?::([^\s]+))?$/i.exec(String(params.modelName ?? "").trim())
+			if (m) {
+				const { speechRefusal } = await import("$lib/server/koboldcpp/speechRefusal")
+				const { getAudioLists } = await import("$lib/server/audio/audioList")
+				const refusal = speechRefusal(
+					{
+						filename: `${m[1]!.split("/").pop()}${m[2] ? `-${m[2]}` : ""}.gguf`,
+						modelUrl: `https://huggingface.co/${m[1]}`,
+						kind: "text"
+					},
+					await getAudioLists(db)
+				)
+				if (refusal) {
+					emitToUser("ollama:pullModel:error", { error: refusal })
+					throw new Error(refusal)
+				}
+			}
+		}
 		const host = await ollamaHost(params.connectionId)
 		const key = pullKey(host.connectionId, params.modelName)
 		// Only the admin who started the pull is told how it settled. `pulled`
@@ -902,6 +930,33 @@ export const ollamaCancelPullHandler: Handler<
 	}
 }
 
+/** A yaml row plus its quant list, resolved through the shared HF reader. */
+async function withQuants(
+	entry: RecommendedEntry
+): Promise<Sockets.Ollama.RecommendedModels.RecommendedModel> {
+	const m = /^hf\.co\/([^:]+)(?::(.+))?$/i.exec(entry.pull)
+	if (!m) {
+		return {
+			...entry,
+			quants: [],
+			quantsNote: "Ollama's library lists no quants for this name."
+		}
+	}
+	const siblings = await fetchHfRepoSiblings(m[1])
+	if (!siblings) {
+		return {
+			...entry,
+			quants: [],
+			quantsNote:
+				"Hugging Face did not answer; the list's own quant is used."
+		}
+	}
+	return {
+		...entry,
+		quants: ollamaQuantRows(m[1], siblings, m[2] ?? "")
+	}
+}
+
 export const ollamaRecommendedModelsHandler: Handler<
 	Sockets.Ollama.RecommendedModels.Params,
 	Sockets.Ollama.RecommendedModels.Response
@@ -920,8 +975,11 @@ export const ollamaRecommendedModelsHandler: Handler<
 					? embeddingEntries(all)
 					: chatEntries(all)
 
+			const recommendedModels = await Promise.all(
+				models.map((m) => withQuants(m))
+			)
 			const res: Sockets.Ollama.RecommendedModels.Response = {
-				recommendedModels: models
+				recommendedModels
 			}
 			emitToUser("ollama:recommendedModels", res)
 			return res

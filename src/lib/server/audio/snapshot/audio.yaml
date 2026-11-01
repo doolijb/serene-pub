@@ -1,0 +1,412 @@
+# The recommended AUDIO models run by Serene Pub (audio.cpp). Same discipline as recommended.yaml,
+# separate file: these are audio.cpp "packages", not Ollama/KoboldCPP pulls. Seeded once from
+# audio.cpp's model_specs by tools/from-audiocpp-specs.py, then hand-curated. The app never parses
+# a spec: task and family are data HERE.
+#
+# id: string                audio.cpp package id; also the model id in the server config. Unique.
+# name: string              Hugging Face repo the files come from
+# revision: string          branch or tag of that repo (main)
+# display_name: string      shown on the card
+# family: string            audio.cpp family id; must exist in audio-families.yaml
+# task: tts | asr | vdes    tts = speech out, asr = speech in, vdes = text-to-speech whose voice is described in prose
+# variant: string           optional; qwen3_tts only: customvoice | base | voicedesign
+# precision: string         the numeric precision of the files: q8_0 | bf16 | f16 | q4 | orig ... Every entry
+#                           carries one (the spec's own 'precision'); a package with several precisions of the
+#                           same family+variant is one row with a precision picker. Absent -> the app derives
+#                           it from the file name or the id.
+# runtime: audiocpp | koboldcpp
+#                           optional; who runs the files. Absent = audiocpp. A koboldcpp entry is NOT an
+#                           audio.cpp package: audio.cpp's download, enable and server config never see it.
+#                           It is offered as a download into KoboldCPP's text models folder.
+# files: string[]           repo-relative paths, exactly as audio.cpp's spec lists them. For runtime koboldcpp:
+#                           bare file names at the root of the repo (no '/'), the model first, then the codec
+#                           file it needs (Qwen3-TTS -> qwen3-tts-tokenizer of the same precision; OuteTTS ->
+#                           WavTokenizer; Kokoro -> none)
+# target_directory: string  folder the package lives in (under <models>/<tts|asr>/<family>/)
+# strip_prefix: string      removed from the front of each file path when it is written
+#                           (runtime koboldcpp: omit both - files land flat in KoboldCPP's text models folder,
+#                           and the app ignores them if present)
+# size_bytes: number        exact total of ALL the files (a koboldcpp entry: model + codec), from the Hugging Face listing (bytes, not GB)
+# recommended_vram: number  GB of video memory the package wants; 0 = fine on a CPU
+# license: string           the upstream model's licence id, only when verified on its model card
+# tags: string[]
+# details
+#    description: string
+#
+# tags vocabulary - keep to this list so filtering stays predictable
+#   voices:     preset-voices | instruction-voices
+#   delivery:   streaming
+#   language:   multilingual
+#   notice:     opt-in-notice
+# preset-voices means a fixed set of named voices; instruction-voices means the voice or its delivery is
+# steered by a sentence of prose. multilingual means more than one language in one package.
+# opt-in-notice means the card must state its cost (speed, video memory) before it can be turned on.
+
+models:
+  # Text to speech
+  - id: kokoro_82m_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Kokoro 82M (Q8_0)"
+    family: kokoro_tts
+    task: tts
+    precision: q8_0
+    files:
+      - "Kokoro-82M-GGUF/kokoro-82m-q8_0.gguf"
+    target_directory: "Kokoro-82M-GGUF"
+    strip_prefix: "Kokoro-82M-GGUF"
+    size_bytes: 189550976
+    recommended_vram: 0
+    license: apache-2.0
+    tags: [preset-voices, multilingual]
+    details:
+      description: "Small and fast, and the one to start with: 54 ready-made voices across nine languages and dialects, quick enough on an ordinary processor that no graphics card is needed."
+
+  - id: kokoro_82m_bf16
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Kokoro 82M (BF16)"
+    family: kokoro_tts
+    task: tts
+    precision: bf16
+    files:
+      - "Kokoro-82M-GGUF/kokoro-82m-bf16.gguf"
+    target_directory: "Kokoro-82M-GGUF"
+    strip_prefix: "Kokoro-82M-GGUF"
+    size_bytes: 211956384
+    recommended_vram: 0
+    license: apache-2.0
+    tags: [preset-voices, multilingual]
+    details:
+      description: "Small and fast, and the one to start with: 54 ready-made voices across nine languages and dialects, quick enough on an ordinary processor that no graphics card is needed."
+
+  - id: qwen3_tts_1_7b_customvoice_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 1.7B CustomVoice (Q8_0)"
+    family: qwen3_tts
+    task: tts
+    variant: customvoice
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF/qwen3-tts-12hz-1.7b-customvoice-q8_0.gguf"
+    target_directory: "Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF"
+    size_bytes: 2817055200
+    recommended_vram: 6
+    license: apache-2.0
+    tags: [instruction-voices, preset-voices, multilingual]
+    details:
+      description: "Expressive speech in ten languages. Pick a ready-made voice and steer how it speaks with a sentence such as 'whispering, a little afraid'. Wants a graphics card; slow on a processor alone."
+
+  - id: qwen3_tts_1_7b_customvoice_bf16
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 1.7B CustomVoice (BF16)"
+    family: qwen3_tts
+    task: tts
+    variant: customvoice
+    precision: bf16
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF/qwen3-tts-12hz-1.7b-customvoice-bf16.gguf"
+    target_directory: "Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF"
+    size_bytes: 4179155488
+    recommended_vram: 10
+    license: apache-2.0
+    tags: [instruction-voices, preset-voices, multilingual]
+    details:
+      description: "Expressive speech in ten languages. Pick a ready-made voice and steer how it speaks with a sentence such as 'whispering, a little afraid'. Wants a graphics card; slow on a processor alone."
+
+  - id: qwen3_tts_1_7b_base_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 1.7B Base (Q8_0)"
+    family: qwen3_tts
+    task: tts
+    variant: base
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf"
+    target_directory: "Qwen3-TTS-12Hz-1.7B-Base-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-1.7B-Base-GGUF"
+    size_bytes: 2695186240
+    recommended_vram: 6
+    license: apache-2.0
+    tags: [multilingual]
+    details:
+      description: "The base Qwen3-TTS model in ten languages. It carries no ready-made voices: it speaks in a voice cloned from a short reference clip, so it suits a voice you already have. Wants a graphics card."
+
+  - id: qwen3_tts_1_7b_base_bf16
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 1.7B Base (BF16)"
+    family: qwen3_tts
+    task: tts
+    variant: base
+    precision: bf16
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-bf16.gguf"
+    target_directory: "Qwen3-TTS-12Hz-1.7B-Base-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-1.7B-Base-GGUF"
+    size_bytes: 4203169600
+    recommended_vram: 10
+    license: apache-2.0
+    tags: [multilingual]
+    details:
+      description: "The base Qwen3-TTS model in ten languages. It carries no ready-made voices: it speaks in a voice cloned from a short reference clip, so it suits a voice you already have. Wants a graphics card."
+
+  - id: qwen3_tts_1_7b_voicedesign_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 1.7B VoiceDesign (Q8_0)"
+    family: qwen3_tts
+    task: vdes
+    variant: voicedesign
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf"
+    target_directory: "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF"
+    size_bytes: 2817000064
+    recommended_vram: 6
+    license: apache-2.0
+    tags: [instruction-voices, multilingual]
+    details:
+      description: "Invents a voice from a description you write, such as 'a gravelly old sailor, slow and warm'. There are no preset voices: the description is the voice. Wants a graphics card."
+
+  - id: qwen3_tts_1_7b_voicedesign_bf16
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 1.7B VoiceDesign (BF16)"
+    family: qwen3_tts
+    task: vdes
+    variant: voicedesign
+    precision: bf16
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-bf16.gguf"
+    target_directory: "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF"
+    size_bytes: 4179100352
+    recommended_vram: 10
+    license: apache-2.0
+    tags: [instruction-voices, multilingual]
+    details:
+      description: "Invents a voice from a description you write, such as 'a gravelly old sailor, slow and warm'. There are no preset voices: the description is the voice. Wants a graphics card."
+
+  - id: qwen3_tts_0_6b_base_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 0.6B Base (Q8_0)"
+    family: qwen3_tts
+    task: tts
+    variant: base
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-0.6B-Base-GGUF/qwen3-tts-12hz-0.6b-base-q8_0.gguf"
+    target_directory: "Qwen3-TTS-12Hz-0.6B-Base-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-0.6B-Base-GGUF"
+    size_bytes: 1991217728
+    recommended_vram: 3
+    license: apache-2.0
+    tags: [multilingual]
+    details:
+      description: "The smaller base Qwen3-TTS model: ten languages, voice cloned from a short reference clip, no ready-made voices. Lighter on video memory than the 1.7B models."
+
+  - id: qwen3_tts_0_6b_base_bf16
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-TTS 0.6B Base (BF16)"
+    family: qwen3_tts
+    task: tts
+    variant: base
+    precision: bf16
+    files:
+      - "Qwen3-TTS-12Hz-0.6B-Base-GGUF/qwen3-tts-12hz-0.6b-base-bf16.gguf"
+    target_directory: "Qwen3-TTS-12Hz-0.6B-Base-GGUF"
+    strip_prefix: "Qwen3-TTS-12Hz-0.6B-Base-GGUF"
+    size_bytes: 2516161088
+    recommended_vram: 5
+    license: apache-2.0
+    tags: [multilingual]
+    details:
+      description: "The smaller base Qwen3-TTS model: ten languages, voice cloned from a short reference clip, no ready-made voices. Lighter on video memory than the 1.7B models."
+
+  - id: kitten_tts2_20261021_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "KittenTTS 2 (2026-10-21, Q8_0)"
+    family: kitten_tts2
+    task: tts
+    precision: q8_0
+    files:
+      - "KittenTTS2-GGUF/kitten-tts2-20261021-q8_0.gguf"
+    target_directory: "KittenTTS2-GGUF"
+    strip_prefix: "KittenTTS2-GGUF"
+    size_bytes: 3343404128
+    recommended_vram: 7
+    license: stellon-labs-community-license
+    tags: [preset-voices, multilingual, opt-in-notice]
+    details:
+      description: "A large, experimental multilingual voice model with many character voices. It is slow and hungry for video memory (about 7 GB), so it is never suggested for you: turn it on only if you want it and have the card for it."
+
+  - id: kokoro_82m_q4_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Kokoro 82M (Q4)"
+    family: kokoro_tts
+    task: tts
+    precision: q4
+    files:
+      - "Kokoro_no_espeak_Q4.gguf"
+    size_bytes: 198096736
+    recommended_vram: 0
+    tags: [preset-voices, multilingual]
+    details:
+      description: "The same small, fast Kokoro voices, converted for KoboldCPP. Needs no graphics card."
+
+  - id: qwen3_tts_1_7b_customvoice_q8_0_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Qwen3-TTS 1.7B CustomVoice (Q8_0)"
+    family: qwen3_tts
+    task: tts
+    variant: customvoice
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-CustomVoice-Q8_0.gguf"
+      - "qwen3-tts-tokenizer-q8_0.gguf"
+    size_bytes: 2708152832
+    recommended_vram: 6
+    tags: [instruction-voices, preset-voices, multilingual]
+    details:
+      description: "Expressive speech in ten languages with ready-made voices, converted for KoboldCPP. Wants a graphics card. Includes the codec file it needs."
+
+  - id: qwen3_tts_1_7b_customvoice_f16_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Qwen3-TTS 1.7B CustomVoice (F16)"
+    family: qwen3_tts
+    task: tts
+    variant: customvoice
+    precision: f16
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-CustomVoice-F16.gguf"
+      - "qwen3-tts-tokenizer-f16.gguf"
+    size_bytes: 4180746752
+    recommended_vram: 10
+    tags: [instruction-voices, preset-voices, multilingual]
+    details:
+      description: "Expressive speech in ten languages with ready-made voices, converted for KoboldCPP. Wants a graphics card. Includes the codec file it needs."
+
+  - id: qwen3_tts_1_7b_base_q8_0_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Qwen3-TTS 1.7B Base (Q8_0)"
+    family: qwen3_tts
+    task: tts
+    variant: base
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-Base-q8_0.gguf"
+      - "qwen3-tts-tokenizer-q8_0.gguf"
+    size_bytes: 2732184288
+    recommended_vram: 6
+    tags: [multilingual]
+    details:
+      description: "The base Qwen3-TTS model in ten languages, converted for KoboldCPP; it speaks in a voice cloned from a short reference clip. Wants a graphics card. Includes the codec file it needs."
+
+  - id: qwen3_tts_1_7b_base_f16_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Qwen3-TTS 1.7B Base (F16)"
+    family: qwen3_tts
+    task: tts
+    variant: base
+    precision: f16
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-Base-f16.gguf"
+      - "qwen3-tts-tokenizer-f16.gguf"
+    size_bytes: 4204778208
+    recommended_vram: 10
+    tags: [multilingual]
+    details:
+      description: "The base Qwen3-TTS model in ten languages, converted for KoboldCPP; it speaks in a voice cloned from a short reference clip. Wants a graphics card. Includes the codec file it needs."
+
+  - id: qwen3_tts_1_7b_voicedesign_q8_0_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Qwen3-TTS 1.7B VoiceDesign (Q8_0)"
+    family: qwen3_tts
+    task: vdes
+    variant: voicedesign
+    precision: q8_0
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-VoiceDesign-Q8_0.gguf"
+      - "qwen3-tts-tokenizer-q8_0.gguf"
+    size_bytes: 2708152832
+    recommended_vram: 6
+    tags: [instruction-voices, multilingual]
+    details:
+      description: "Invents a voice from a description you write, converted for KoboldCPP. Wants a graphics card. Includes the codec file it needs."
+
+  - id: qwen3_tts_1_7b_voicedesign_f16_koboldcpp
+    name: koboldcpp/tts
+    revision: main
+    runtime: koboldcpp
+    display_name: "Qwen3-TTS 1.7B VoiceDesign (F16)"
+    family: qwen3_tts
+    task: vdes
+    variant: voicedesign
+    precision: f16
+    files:
+      - "Qwen3-TTS-12Hz-1.7B-VoiceDesign_F16.gguf"
+      - "qwen3-tts-tokenizer-f16.gguf"
+    size_bytes: 4180746752
+    recommended_vram: 10
+    tags: [instruction-voices, multilingual]
+    details:
+      description: "Invents a voice from a description you write, converted for KoboldCPP. Wants a graphics card. Includes the codec file it needs."
+
+  # Speech to text
+  - id: parakeet_tdt_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Parakeet-TDT 0.6B v3 (Q8_0)"
+    family: parakeet_tdt
+    task: asr
+    precision: q8_0
+    files:
+      - "Parakeet-TDT-0.6B-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf"
+    target_directory: "Parakeet-TDT-0.6B-v3-GGUF"
+    strip_prefix: "Parakeet-TDT-0.6B-v3-GGUF"
+    size_bytes: 915735760
+    recommended_vram: 0
+    license: cc-by-4.0
+    tags: [multilingual]
+    details:
+      description: "Fast, accurate transcription of 25 European languages with automatic language detection. Runs well on an ordinary processor, so it is the one to start with for speech to text."
+
+  - id: qwen3_asr_0_6b_q8_0
+    name: audio-cpp/audio.cpp-gguf
+    revision: main
+    display_name: "Qwen3-ASR 0.6B (Q8_0)"
+    family: qwen3_asr
+    task: asr
+    precision: q8_0
+    files:
+      - "Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf"
+    target_directory: "Qwen3-ASR-0.6B-GGUF"
+    strip_prefix: "Qwen3-ASR-0.6B-GGUF"
+    size_bytes: 1151279968
+    recommended_vram: 2
+    license: apache-2.0
+    tags: [multilingual]
+    details:
+      description: "Transcription for about thirty languages and many Chinese dialects, with language identification, and robust against noisy audio. A good pick when Parakeet's European languages are not enough."

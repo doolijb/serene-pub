@@ -18,6 +18,7 @@
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import LoadingState from "$lib/client/components/LoadingState.svelte"
+	import SpeechVoices from "$lib/client/components/speech/SpeechVoices.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { Menu, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -656,6 +657,11 @@
 					</p>
 				{/if}
 			</div>
+			{/if}
+
+			{#if row.modality === "tts"}
+				<!-- 🚧 Speech: a speaking model's voices. -->
+				<SpeechVoices {connectionId} {row} />
 			{/if}
 
 			<!-- REMOVE, or the door to whoever owns this row. -->

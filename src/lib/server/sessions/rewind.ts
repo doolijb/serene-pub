@@ -68,7 +68,7 @@ import {
 	type TurnYieldRow
 } from "$lib/server/sessions/turnYield"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
-import type { RetractedState } from "$lib/server/state/write"
+import type { RetractedState, RulesetConversionRecord } from "$lib/server/state/write"
 import { REWIND_REFUSALS, type RewindState } from "$lib/shared/sessions/rewind"
 import { sessionArchivedRefusal } from "$lib/server/sessions/archive"
 
@@ -594,7 +594,16 @@ export async function forwardTurn(
 				})
 			}
 			for (const row of rows) {
-				const state = reviveRetractedState((row.taken as Partial<RewoundTakenV1> | null)?.state)
+				const raw = (row.taken as Partial<RewoundTakenV1> | null)?.state
+				const state = reviveRetractedState(raw)
+				// 🚧 A ruleset conversion the row took back (its version move, M0 lane T4) rides the record with the
+				// values; Forward re-pins it with them, so "Update rules" is not offered again (M1 E-fix T-3).
+				const conversions = (raw as { conversions?: unknown } | null | undefined)?.conversions
+				if (state && Array.isArray(conversions) && conversions.length)
+					state.conversions = conversions.filter(
+						(c): c is RulesetConversionRecord =>
+							!!c && typeof c === "object" && typeof (c as RulesetConversionRecord).to === "string"
+					)
 				if (state) await restoreRetractedState(t, state)
 			}
 			if (turn) {

@@ -21,7 +21,7 @@ Pick your system below and follow only that section. Each one ends with the same
 1. Go to the [Serene Pub downloads page](https://github.com/doolijb/serene-pub/releases) and download the **Windows** `.zip` file from the newest release.
 2. Find the file in your **Downloads** folder, right-click it and choose **Extract All…**. Pick somewhere easy to find, such as your **Documents** folder. Don't skip this: opened straight from the `.zip`, Windows shows only part of the folder and the app can't start.
 3. Open the extracted `serene-pub` folder and double-click **Serene Pub** (`Serene Pub.exe`).
-4. Windows may show **Windows protected your PC**. Click **More info**, then **Run anyway**. Serene Pub isn't signed with a paid certificate, so Windows doesn't recognise it yet; you only see this the first time.
+4. Windows may show **Windows protected your PC**. If it does, click **More info**, then **Run anyway**. Windows warns about a new program until enough people have run it, so a new release of Serene Pub can get this warning for a while. You only see it the first time. (How the Windows download is signed: [Code signing policy](./code-signing-policy.md).)
 5. A Serene Pub icon appears in the system tray, at the bottom right of the taskbar (click the **^** arrow if it's hidden there), and after a few seconds Serene Pub opens in its own window.
 
 <!-- SHOT: the Windows tray icon with its menu open, and the Serene Pub window beside it -->

@@ -61,6 +61,34 @@ describe("plugin store", () => {
 		})
 	})
 
+	it("a declared assets folder rides on the descriptor with the installed version, for ctx.package (M2a)", async () => {
+		await upsertPlugin(db, {
+			pluginId: "acme.shipped",
+			name: "Shipped",
+			version: "1.2.0",
+			bundleSource: BUNDLE,
+			bundleHash: "hash-shipped",
+			backends: ["quickjs"],
+			manifest: { name: "Shipped", assets: { dir: "assets" } }
+		})
+		await upsertPlugin(db, {
+			pluginId: "acme.bare",
+			name: "Bare",
+			version: "1.0.0",
+			bundleSource: BUNDLE,
+			bundleHash: "hash-bare",
+			backends: ["quickjs"],
+			manifest: { name: "Bare" }
+		})
+		await setEnabled(db, "acme.shipped", true)
+		await setEnabled(db, "acme.bare", true)
+		const all = await loadEnabledPlugins(db)
+		expect(all.find((d) => d.id === "acme.shipped")?.packageAssets).toEqual({ version: "1.2.0", dir: "assets" })
+		expect(all.find((d) => d.id === "acme.bare")?.packageAssets).toBeUndefined()
+		await removePlugin(db, "acme.shipped")
+		await removePlugin(db, "acme.bare")
+	})
+
 	it("a manifest whose name has no en, or is blank, is refused at install with the sentence; a string or a map with en installs (R-20, U5i)", async () => {
 		const install = (manifest: Record<string, unknown>) =>
 			upsertPlugin(db, {
@@ -364,6 +392,42 @@ describe("plugin store", () => {
 			await mgr.dispose()
 		}
 	})
+
+	// 2026-10-29: a hook can run inside a transaction (a migrate hook under
+	// `forwardTurn`); its log row is written on the process handle once that
+	// transaction settles (`afterTransaction`), never inside it, where the
+	// guard throws (dev/test) or the outer handle waits on the transaction.
+	it("a hook invoked under a transaction logs its row after the commit, and the guard does not fire", async () => {
+		const { persistInvocation } = await import("./index")
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+		const mgr = new SandboxManager({ onInvocation: (rec: InvocationRecord) => persistInvocation(rec, db) })
+		try {
+			mgr.register({
+				id: "acme.txlog",
+				name: "Tx Log",
+				bundleSource: BUNDLE,
+				bundleHash: "h-txlog",
+				backends: ["quickjs"],
+				backend: "quickjs",
+				sequential: false
+			})
+			mgr.markReady()
+			const countOf = async () =>
+				(await db.select().from(pluginHookInvocations).where(eq(pluginHookInvocations.pluginId, "acme.txlog"))).length
+			await db.transaction(async (tx) => {
+				await mgr.callHook("acme.txlog", "v", { n: 1 }, { kind: "oracle", timeoutMs: 500 })
+				// still inside: the row waits for the commit
+				await tx.select().from(plugins).limit(1)
+			})
+			await vi.waitFor(async () => expect(await countOf()).toBe(1), { timeout: 10_000 })
+			expect(errors.mock.calls.map((c) => String(c[0]))).not.toContainEqual(
+				expect.stringContaining("invocation log write failed")
+			)
+		} finally {
+			errors.mockRestore()
+			await mgr.dispose()
+		}
+	}, 60_000)
 
 	it("a logged invocation survives its plugin's uninstall (denormalized identity)", async () => {
 		await removePlugin(db, "acme.logme")

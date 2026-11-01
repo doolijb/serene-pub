@@ -9,10 +9,19 @@
 	 *
 	 * A secret is never shown: the view carries `{$secretSet}` only, and an
 	 * edit is the plaintext typed now (absent = unchanged, null = clear).
+	 *
+	 * 🚧 A `json` field (M2a a5, one field language) is JSON text in a code
+	 * field (STYLE-GUIDE §6.12). Text that parses is the edit, parsed; text
+	 * that does not is no edit at all (the draft goes back to the saved
+	 * value), and the parser's words show under the field once it is left.
+	 * Its byte cap and schema are the server's to judge on Save.
 	 */
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
+	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
+	import { SvelteMap } from "svelte/reactivity"
+	import { untrack } from "svelte"
 
 	interface Props {
 		/** The (possibly narrowed) schema to draw, in declaration order. */
@@ -45,6 +54,41 @@
 	const description = (decl: any): string | null =>
 		i18nTextIn(decl?.description) ?? null
 	const idOf = (key: string) => `${idPrefix}-${key}`
+
+	// A json field's text as typed, and why it does not parse — by key.
+	const jsonTexts = new SvelteMap<string, string>()
+	const jsonErrors = new SvelteMap<string, string>()
+	let jsonFocused = $state<string | null>(null)
+	const pretty = (v: unknown) => (v === undefined || v === null ? "" : JSON.stringify(v, null, 2))
+	const jsonTextOf = (key: string) => jsonTexts.get(key) ?? pretty(valueOf(key))
+	function onJsonInput(key: string, text: string) {
+		jsonTexts.set(key, text)
+		// Emptied: cleared, as every other field here.
+		if (!text.trim()) {
+			jsonErrors.delete(key)
+			onEdit(key, null)
+			return
+		}
+		try {
+			const parsed = JSON.parse(text)
+			jsonErrors.delete(key)
+			onEdit(key, parsed)
+		} catch (e) {
+			jsonErrors.set(key, e instanceof Error ? e.message : String(e))
+			onEdit(key, values?.[key])
+		}
+	}
+	// A fresh view (a save landed, a reload): the text of a key with no edit pending is the view's again.
+	$effect(() => {
+		void values
+		untrack(() => {
+			for (const k of [...jsonTexts.keys()])
+				if (!(k in draft)) {
+					jsonTexts.delete(k)
+					jsonErrors.delete(k)
+				}
+		})
+	})
 </script>
 
 {#each Object.entries(schema) as [key, decl] (key)}
@@ -138,6 +182,22 @@
 							.filter(Boolean)
 					)}
 			/>
+		{:else if decl.type === "json"}
+			{@const issue = jsonFocused === key ? null : (jsonErrors.get(key) ?? null)}
+			<CodeField
+				id={idOf(key)}
+				value={jsonTextOf(key)}
+				oninput={(t) => onJsonInput(key, t)}
+				rows={6}
+				describedBy={issue ? `${idOf(key)}-issue` : undefined}
+				invalid={!!issue}
+				onfocuschange={(f) => (jsonFocused = f ? key : jsonFocused === key ? null : jsonFocused)}
+			/>
+			{#if issue}
+				<p id="{idOf(key)}-issue" class="text-error-600-400 text-xs" data-testid="plugin-setting-json-issue">
+					<span class="font-medium">Error:</span> this is not valid JSON ({issue}), so it is not saved until it is.
+				</p>
+			{/if}
 		{:else if decl.type === "text"}
 			<textarea
 				id={idOf(key)}

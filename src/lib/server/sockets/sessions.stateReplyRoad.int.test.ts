@@ -495,16 +495,29 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 		])
 
 		// Applied: rows, no proposals, and the version moved once per row.
+		// 🚧 Weather is world-scope (M0, SHAPES F4): the keeper's write is
+		// re-owned onto the session's book (`worldOwnerOf`), so it is not a
+		// session-layer row; mood stays on the session.
 		const rows = await testDb
 			.select()
 			.from(schema.attributeValues)
 			.where(eq(schema.attributeValues.sessionId, w.session.id))
 			.orderBy(asc(schema.attributeValues.id))
-		expect(rows.map((r) => r.slotId).sort()).toEqual(
-			expect.arrayContaining([WEATHER, MOOD])
-		)
-		expect(rows.map((r) => r.stateVersion).sort()).toEqual(
-			rows.map((_, i) => i + 1)
+		expect(rows.map((r) => r.slotId)).toContain(MOOD)
+		expect(rows.map((r) => r.slotId)).not.toContain(WEATHER)
+		const { attachedOrOwnBookOf } = await import("$lib/server/lorebooks/ownBook")
+		const book = await attachedOrOwnBookOf(testDb as unknown as Db, w.session.id)
+		const bookWeather = (
+			await testDb
+				.select()
+				.from(schema.attributeValues)
+				.where(eq(schema.attributeValues.slotId, WEATHER))
+		).filter((r) => r.ownerKind === "lorebook" && r.ownerId === book)
+		expect(bookWeather).toHaveLength(1)
+		// The session's state version still moves once per write, the book's row included.
+		const written = [...rows, ...bookWeather]
+		expect(written.map((r) => r.stateVersion).sort()).toEqual(
+			written.map((_, i) => i + 1)
 		)
 		const proposals = await testDb
 			.select()
@@ -514,7 +527,7 @@ describe("the keeper's changes over sessions:fireTurn", () => {
 		const { stateFor } = await import("$lib/server/state/resolve")
 		const state = await stateFor(testDb as unknown as Db, w.session.id)
 		expect(state.world.weather).toBe("storm")
-		expect(state.version).toBe(rows.length)
+		expect(state.version).toBe(written.length)
 
 		const changed = emitted.findIndex((e) => e.event === "state:changed")
 		expect(changed).toBeGreaterThanOrEqual(0)

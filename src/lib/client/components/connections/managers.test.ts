@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest"
-import { managerPlan, uniqueName } from "./managers"
+import { vi } from "vitest"
+import { enableManager, managerPlan, uniqueName } from "./managers"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 describe("uniqueName", () => {
@@ -56,5 +57,36 @@ describe("managerPlan", () => {
 			enabled: true,
 			baseUrl: "http://localhost:11434/"
 		})
+	})
+})
+
+describe("audio.cpp, run by Serene Pub", () => {
+	test("plans a create with its defaults and the audio.cpp event", () => {
+		const plan = managerPlan("audiocpp", [])
+		expect(plan.label).toBe("audio.cpp")
+		expect(plan.settingsEvent).toBe("audiocpp:updateSettings")
+		expect(plan.create).toMatchObject({
+			name: "audio.cpp",
+			type: CONNECTION_TYPE.AUDIOCPP_MANAGED,
+			enabled: true,
+			baseUrl: "http://127.0.0.1:5002"
+		})
+	})
+
+	test("returns the row that is already there", () => {
+		const plan = managerPlan("audiocpp", [
+			{ id: 9, name: "audio.cpp", type: CONNECTION_TYPE.AUDIOCPP_MANAGED }
+		])
+		expect(plan.existingConnectionId).toBe(9)
+	})
+
+	test("enabling emits audiocpp:updateSettings { enabled: true }", () => {
+		const emit = vi.fn()
+		const { connectionId } = enableManager("audiocpp", { emit } as any, [])
+		expect(connectionId).toBeNull()
+		expect(emit).toHaveBeenCalledWith("audiocpp:updateSettings", {
+			enabled: true
+		})
+		expect(emit.mock.calls[1][0]).toBe("connections:create")
 	})
 })

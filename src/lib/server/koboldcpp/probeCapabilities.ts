@@ -79,19 +79,19 @@ export function flagsFrom(data: unknown): KoboldCppFlags {
  * `websearch` and `admin` are deliberately absent — they are server features,
  * not things a model turns one kind of data into.
  *
- * ## ⚠ Two of these answers are currently UNRESOLVED, and that is correct
+ * ## ⚠ `audio->text` is currently UNRESOLVED, and that is correct
  *
- * 🚧 O3 (2026-10-21): they are KEPT — in `probe.found`, and filed now that
- * `…->audio` names a modality (`tts`) rather than none — but not resolved:
- * KoboldCPP loads its speech and whisper models beside the text model and
- * its listing names neither, so there is no model row to state them on, and
- * no adapter here calls its speech or transcription routes (none is verified
- * in this adapter's code, so none is guessed). What the probe DOES fill is
- * the loaded text model's reads: `vision` makes it see (`listModels`).
+ * `text->audio` is RESOLVED (speech build, 2026-10-28): `speech/profiles/
+ * koboldcpp.ts` speaks `/v1/audio/speech` (verified in koboldcpp.py), the
+ * manifest declares it `{unproven: true}` on both KoboldCPP types, and the
+ * `tts` flag grades it. Which model speaks is still unnamed by any endpoint:
+ * the external listing carries one `tts` row when the flag is on.
  *
- * `text->audio` and `audio->text` are not declared in `ADAPTER_MANIFEST` for
- * either KoboldCPP type, because no adapter implements `synthesizeSpeech` or
- * `transcribeAudio` — the manifest's key
+ * `audio->text` is not so: KoboldCPP loads its whisper model beside the text
+ * model and its listing names it, so there is no model row to state it on,
+ * and no adapter here calls its transcription route. It is KEPT in
+ * `probe.found` but not declared in `ADAPTER_MANIFEST` for either KoboldCPP
+ * type, because no adapter implements `transcribeAudio` — the manifest's key
  * space is derived from which actions exist, so a capability nothing can call
  * cannot be declared. `resolveCapabilities` iterates `supports` only, so it
  * ignores an answer to a question that was never asked.
@@ -127,8 +127,9 @@ export function capabilitiesFromFlags(flags: KoboldCppFlags): CapabilitySet {
 		"text->text": graded("text->text", true),
 		"text->image": graded("text->image", flags.txt2img),
 		"text+image->text": graded("text+image->text", flags.vision),
-		// Recorded, not currently resolved — see the note above.
+		// Resolved: declared `{unproven: true}` on both types (speech build).
 		"text->audio": graded("text->audio", flags.tts),
+		// Recorded, not currently resolved — see the note above.
 		"audio->text": graded("audio->text", flags.transcribe),
 		"text->embedding": graded("text->embedding", flags.embeddings)
 	}

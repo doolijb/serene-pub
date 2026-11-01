@@ -49,7 +49,7 @@ import type { KeptImprint } from "$lib/shared/entries/types"
 import { assertRetractable, settledLineOf } from "$lib/server/sessions/settle"
 
 /** What an imprint is written on: its subject's kind. */
-export const IMPRINT_SUBJECTS = ["entry", "relationship", "member", "overlay"] as const
+export const IMPRINT_SUBJECTS = ["entry", "relationship", "member", "overlay", "annex"] as const
 export type ImprintSubject = (typeof IMPRINT_SUBJECTS)[number]
 
 /**
@@ -276,6 +276,50 @@ const SUBJECTS: Record<ImprintSubject, SubjectAccess> = {
 			fed[kind!] = group
 			extra.ruleFed = fed
 			await db.update(schema.lorebooks).set({ extraJson: extra }).where(eq(schema.lorebooks.id, id))
+		}
+	},
+	/**
+	 * A key of the book's **lorebook annex** (`lorebooks.annex`), by the
+	 * book's own id: the field is `<owner>/<key>`. Owners may hold `/`
+	 * (`core:genre/story`), keys never do — the split is the last `/`.
+	 */
+	annex: {
+		async row(db, id) {
+			const [row] = await db
+				.select({ id: schema.lorebooks.id, annex: schema.lorebooks.annex })
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.id, id))
+				.limit(1)
+			return row ? { ...row, lorebookId: row.id } : null
+		},
+		bookOf: (row) => row.lorebookId as number,
+		read(row, field) {
+			const at = field.lastIndexOf("/")
+			const document = ((row.annex ?? {}) as Record<string, any>)[field.slice(0, at)]
+			return document && typeof document === "object" ? document[field.slice(at + 1)] : undefined
+		},
+		async write(db, id, field, value) {
+			const [book] = await db
+				.select({ annex: schema.lorebooks.annex })
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.id, id))
+				.limit(1)
+			if (!book) return
+			const at = field.lastIndexOf("/")
+			const owner = field.slice(0, at)
+			const key = field.slice(at + 1)
+			const annex = { ...((book.annex ?? {}) as Record<string, unknown>) }
+			const document = { ...((annex[owner] ?? {}) as Record<string, unknown>) }
+			if (value === undefined) delete document[key]
+			else document[key] = value
+			if (Object.keys(document).length) annex[owner] = document
+			else delete annex[owner]
+			// 🚧 (M2b) Taking a key back moves the owner's annex document version.
+			const { bumpedAnnexVersionsSql } = await import("$lib/server/sessions/annexVersions")
+			await db
+				.update(schema.lorebooks)
+				.set({ annex, annexVersions: bumpedAnnexVersionsSql(schema.lorebooks.annexVersions, owner) as never })
+				.where(eq(schema.lorebooks.id, id))
 		}
 	}
 }

@@ -447,7 +447,13 @@ export async function clockLedgerRows(
 	const out: ClockLedgerRow[] = []
 	for (const row of rows) {
 		const p = (row.payload ?? {}) as Partial<ClockMovePayload>
-		const step = stepOf(p)
+		// 🚧 A skipped row is kept even with no step (a refused `to` move is
+		// recorded as `by: 0`, lane T1); every other row needs one.
+		const step =
+			stepOf(p) ??
+			(row.status === "skipped"
+				? { by: typeof p.by === "number" ? p.by : 0, unit: p.unit ?? "minutes" }
+				: null)
 		if (!step) continue
 		out.push({
 			id: row.id,

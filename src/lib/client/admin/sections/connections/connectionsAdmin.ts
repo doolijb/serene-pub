@@ -21,7 +21,10 @@ const MODALITY_WORD: Record<string, string> = {
 	"text-gen": "Text",
 	"image-gen": "Image",
 	embeddings: "Embeddings",
-	ner: "Named entities"
+	ner: "Named entities",
+	// 🚧 the speech build's modalities (audio.cpp, run by Serene Pub files as tts).
+	tts: "Speech",
+	asr: "Transcription"
 }
 export const MODALITY_ORDER = ["text-gen", "image-gen", "embeddings", "ner"]
 

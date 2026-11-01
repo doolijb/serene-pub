@@ -60,8 +60,8 @@ export interface FiredPress {
 	clockStep?: { by: number; unit: string }
 }
 
-/** The one fire a press becomes (`emitFireAction` on the page). */
-export type EmitFireAction = (p: FiredPress) => void
+/** The one fire a press becomes (`emitFireAction` on the page); returns the run id it named the press with (M2a a6). */
+export type EmitFireAction = (p: FiredPress) => string | void
 
 export interface TurnFlowDeps {
 	socket: TypedSocket

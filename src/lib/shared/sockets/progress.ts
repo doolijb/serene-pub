@@ -27,6 +27,13 @@ export interface RunProgress {
 	 * conversation copy of its channel; an unknown one on the main copy.
 	 */
 	channel?: string
+	/**
+	 * 🚧 A line-bound run (speaking one line, owner ruling 2026-10-29): it
+	 * shows on its line only, so the progress card never draws it — not in
+	 * flight and not as a receipt (`runProgress` drops its frames). On every
+	 * frame of such a run.
+	 */
+	lineBound?: true
 	/** Which spec is running, when a pipeline is what started this. */
 	specId?: string
 	/** Which node inside it, so a multi-step run reads as steps rather than one bar. */

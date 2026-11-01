@@ -275,7 +275,8 @@ export function createSessionStore() {
 					runId: frame.runId,
 					kind: frame.kind,
 					status: frame.status,
-					...(frame.reply ? { reply: frame.reply } : {})
+					...(frame.reply ? { reply: frame.reply } : {}),
+					...(frame.lineBound ? { lineBound: true as const } : {})
 				})
 			})
 		},

@@ -31,7 +31,7 @@ import {
 import type { DefaultsSummaryEntry } from "./defaultsSummary"
 import type { KcppStatus, LaneStatus, OllamaStatus } from "./endpointStatus"
 import { getModelDisabledReason } from "./jobPicker"
-import { kcppInstallState } from "./managedConnectionView"
+import { acppInstallState, kcppInstallState } from "./managedConnectionView"
 import { endpointKind } from "./modelManagement"
 import type { EntryFacts } from "./readiness"
 import { timeAgo } from "$lib/client/utils/timeAgo"
@@ -65,6 +65,11 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 	const kcppInstall = $derived(
 		kcppInstallState(koboldCppSettingsCtx.settings)
 	)
+	// audio.cpp's row reads its install the same way, from its own settings.
+	const audioCppSettingsCtx: AudioCppSettingsCtx = $state(
+		getContext("audioCppSettingsCtx") ?? { settings: undefined }
+	)
+	const acppInstall = $derived(acppInstallState(audioCppSettingsCtx.settings))
 	/** The flag for the readiness rows; unknown until settings arrive. */
 	const koboldCppManagerEnabled = $derived(
 		kcppInstall === "loading"
@@ -84,6 +89,9 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 	const hasKcpp = $derived(
 		rows.some((c) => endpointKind(c.type) === "koboldcpp-managed")
 	)
+	const hasAcpp = $derived(
+		rows.some((c) => endpointKind(c.type) === "audiocpp-managed")
+	)
 	/**
 	 * ⚠ `type === OLLAMA`, never `endpointKind(...) === "ollama"`: that kind
 	 * also covers an Ollama *embeddings* connection, which is a plain API to
@@ -100,6 +108,8 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 	)
 
 	let kcpp = $state<KcppStatus | null>(null)
+	/** The managed audio.cpp's process, in the same shape (no files list). */
+	let acpp = $state<KcppStatus | null>(null)
 	/**
 	 * Each Ollama connection's own host status, by connection id. One shared
 	 * status painted every Ollama row with the manager's answer (plan
@@ -146,6 +156,21 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 	function reaskKcpp() {
 		socket.emit("koboldcpp:getSubprocessStatus", {})
 		socket.emit("koboldcpp:getLoadedConfig", {})
+	}
+
+	function handleAcppStatus(
+		msg:
+			| Sockets.AudioCpp.GetStatus.Response
+			| Sockets.AudioCpp.SubprocessStatus.Response
+	) {
+		acpp = {
+			run: msg.status?.status ?? null,
+			loadedFiles: (msg.status?.loaded ?? []).map((m) => m.id),
+			downloads: []
+		}
+	}
+	function reaskAcpp() {
+		socket.emit("audiocpp:getStatus", {})
 	}
 
 	function handleOllamaVersion(msg: Sockets.Ollama.Version.Response) {
@@ -256,6 +281,20 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 		return () => releases.forEach((release) => release())
 	})
 	$effect(() => {
+		if (!hasAcpp || !isAdmin) return
+		const releases = [
+			declareInterest<"audiocpp:getStatus">(
+				"audiocpp:getStatus",
+				handleAcppStatus
+			),
+			declareInterest<"audiocpp:subprocessStatus">(
+				"audiocpp:subprocessStatus",
+				handleAcppStatus
+			)
+		]
+		return () => releases.forEach((release) => release())
+	})
+	$effect(() => {
 		if (!hasOllama || !isAdmin) return
 		const releases = [
 			declareInterest<"ollama:version">(
@@ -324,6 +363,10 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 		socket.emit("koboldcpp:getLoadedConfig", {})
 	})
 	$effect(() => {
+		if (!hasAcpp || !isAdmin) return
+		reaskAcpp()
+	})
+	$effect(() => {
 		if (!ollamaIdsKey || !isAdmin) return
 		for (const id of untrack(() => ollamaIds)) {
 			socket.emit("ollama:version", { connectionId: id })
@@ -349,6 +392,7 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 		onConnect(() => {
 			if (!isAdmin) return
 			if (hasKcpp) reaskKcpp()
+			if (hasAcpp) reaskAcpp()
 			for (const id of ollamaIds) {
 				socket.emit("ollama:version", { connectionId: id })
 				socket.emit("ollama:listRunningModels", { connectionId: id })
@@ -407,6 +451,8 @@ export function useLiveStatus(getRows: () => Row[], opts: LiveStatusOptions) {
 					: null,
 			lane: laneFor(connection),
 			kcppInstall: kind === "koboldcpp-managed" ? kcppInstall : undefined,
+			acpp: kind === "audiocpp-managed" ? acpp : null,
+			acppInstall: kind === "audiocpp-managed" ? acppInstall : undefined,
 			defaults: rowDefaults(
 				(opts.entries?.() ?? []) as any,
 				opts.capabilityDefaults?.()

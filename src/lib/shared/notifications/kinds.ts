@@ -261,6 +261,16 @@ export const GOAL_REACHED = defineNotificationKind({
 	cta: "Open session"
 })
 
+/** 🚧 A widget's notice it asked to keep (`notify` with `sticky`, M0 SHAPES L6): raised in the browser, never by the server. */
+export const WIDGET_NOTICE = defineNotificationKind({
+	id: "core:notification/widget-notice@1",
+	level: "info",
+	clearsOn: "resolve",
+	title: "{text}",
+	detail: "In {session}",
+	cta: "Open session"
+})
+
 /**
  * The `regarding` keys, built in one place so a raise and its clear can never
  * spell the same thing two ways.

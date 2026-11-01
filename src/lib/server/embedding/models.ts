@@ -25,6 +25,8 @@ export interface EmbeddingModelDef {
 	 * versus ~300MB/~568MB quantized, for negligible retrieval-quality loss.
 	 */
 	dtype?: DataType
+	/** Other precisions the list publishes for this entry (variants). */
+	dtypes?: DataType[]
 
 	/* ── What the PUBLISHED list adds ────────────────────────────────────
 	 * Every field below is optional so that one shape serves both the

@@ -50,6 +50,8 @@ interface OpenTransaction {
 	open: boolean
 	/** Where `db.transaction` was called, for the sentence. */
 	openedAt: string
+	/** Work deferred with {@link afterTransaction}, run once the transaction settles. */
+	after?: Array<() => void>
 }
 
 const context = new AsyncLocalStorage<OpenTransaction>()
@@ -82,6 +84,29 @@ function sentence(what: string, opened: OpenTransaction): string {
 }
 
 /**
+ * Run `fn` once the transaction this code runs inside has settled (committed
+ * or rolled back), or now when it runs inside none. For work that must use the
+ * OUTER handle and cannot be handed `tx` — a fire-and-forget write a callback
+ * deep in another subsystem makes (the plugin hook log): inside the
+ * transaction it would wait on the transaction's own mutex.
+ */
+export function afterTransaction(fn: () => void): void {
+	const opened = context.getStore()
+	if (opened?.open) (opened.after ??= []).push(fn)
+	else fn()
+}
+
+/**
+ * Is this code running inside an open transaction? For a caller that would
+ * otherwise have to query the OUTER handle and cannot be handed `tx` (the
+ * plugin sandbox loading a person's annex for a hook): it declines instead of
+ * waiting on the transaction's own mutex.
+ */
+export function insideTransaction(): boolean {
+	return context.getStore()?.open === true
+}
+
+/**
  * Wrap `client` so an outer-handle query inside its own transaction is a
  * loud failure. Idempotent per client; safe to call on every construction.
  */
@@ -103,6 +128,7 @@ export function guardTransactions(
 	const originalTransaction = client.transaction.bind(client)
 	const originalQuery = client.query.bind(client)
 	const originalExec = client.exec.bind(client)
+	const work = workOf(client)
 
 	client.transaction = async (callback) => {
 		// A transaction opened on the outer handle inside another one is the
@@ -110,25 +136,100 @@ export function guardTransactions(
 		// savepoint on the transaction's own handle and never reaches here.)
 		refuse("a transaction was opened")
 		const marker: OpenTransaction = { open: true, openedAt: stackOf(2) }
-		return await originalTransaction((tx) =>
-			context.run(marker, async () => {
+		work.begin()
+		try {
+			return await originalTransaction((tx) =>
+				context.run(marker, async () => {
+					try {
+						return await callback(tx)
+					} finally {
+						// Settled — the commit or rollback that follows is PGlite's
+						// own, and anything scheduled to run after it is not a
+						// wait on this transaction.
+						marker.open = false
+					}
+				})
+			)
+		} finally {
+			work.end()
+			// Committed or rolled back: what waited for that runs now, on the outer handle.
+			for (const fn of marker.after?.splice(0) ?? [])
 				try {
-					return await callback(tx)
-				} finally {
-					// Settled — the commit or rollback that follows is PGlite's
-					// own, and anything scheduled to run after it is not a
-					// wait on this transaction.
-					marker.open = false
+					fn()
+				} catch (e) {
+					console.error("[db] work deferred past a transaction failed:", e)
 				}
-			})
-		)
+		}
 	}
 	client.query = async (...args) => {
 		refuse("a query was issued")
-		return await originalQuery(...args)
+		work.begin()
+		try {
+			return await originalQuery(...args)
+		} finally {
+			work.end()
+		}
 	}
 	client.exec = async (...args) => {
 		refuse("a statement was executed")
-		return await originalExec(...args)
+		work.begin()
+		try {
+			return await originalExec(...args)
+		} finally {
+			work.end()
+		}
 	}
+}
+
+/** What is in flight on a guarded client: queries, statements and whole transactions. */
+interface Work {
+	inFlight: number
+	idle: Set<() => void>
+	begin(): void
+	end(): void
+}
+
+const workByClient = new WeakMap<object, Work>()
+
+function workOf(client: object): Work {
+	let w = workByClient.get(client)
+	if (!w) {
+		const work: Work = {
+			inFlight: 0,
+			idle: new Set(),
+			begin: () => {
+				work.inFlight++
+			},
+			end: () => {
+				work.inFlight--
+				if (work.inFlight === 0) for (const resolve of [...work.idle]) resolve()
+			}
+		}
+		workByClient.set(client, (w = work))
+	}
+	return w
+}
+
+/**
+ * Resolve `true` once nothing is in flight on `client` — no query, no
+ * statement, no open transaction — or `false` when `timeoutMs` passes first.
+ * What closing the database waits on (2026-10-30): PGlite's `close()` throws
+ * ("memory access out of bounds") under a query in flight and aborts an open
+ * transaction, so a shutdown that closed mid-request either lost its clean
+ * marker or marked clean over cut-off work. Only a guarded client is counted;
+ * any other answers `true` at once.
+ */
+export function databaseQuiet(client: object, timeoutMs: number): Promise<boolean> {
+	const work = workByClient.get(client)
+	if (!work || work.inFlight === 0) return Promise.resolve(true)
+	return new Promise<boolean>((resolve) => {
+		const done = (quiet: boolean) => {
+			clearTimeout(timer)
+			work.idle.delete(onIdle)
+			resolve(quiet)
+		}
+		const onIdle = () => done(true)
+		const timer = setTimeout(() => done(false), timeoutMs)
+		work.idle.add(onIdle)
+	})
 }

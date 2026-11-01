@@ -40,6 +40,8 @@
 	 * irreversible thing on this screen, and it asks first (an `alertdialog`).
 	 */
 	import * as Icons from "@lucide/svelte"
+	import { getContext } from "svelte"
+	import { openInModels } from "$lib/client/admin/railDoors"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
@@ -74,7 +76,6 @@
 			connectionId: number,
 			model: { id: number; name: string }
 		) => void
-		onGetModels: () => void
 		onRefresh: () => void
 	}
 	let {
@@ -84,11 +85,21 @@
 		isAdmin,
 		onOpenModel,
 		onSetDefault,
-		onGetModels,
 		onRefresh
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+
+	/**
+	 * **Get more…**: the Models view's Get a model dialog, on this runtime's
+	 * connection (the finder narrows to what it can hold).
+	 */
+	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
+	function onGetModels() {
+		openInModels(panelsCtx, {
+			finder: connection ? { connectionId: connection.id } : {}
+		})
+	}
 
 	let query = $state("")
 	let pendingDelete = $state<{ connectionId: number; model: ModelOf } | null>(
@@ -408,7 +419,7 @@
 		<EmptyState
 			icon={Icons.Boxes}
 			message="No models yet. Get one and it appears here."
-			ctaLabel="Get a model"
+			ctaLabel="Get more…"
 			onCta={onGetModels}
 		/>
 	{:else}
@@ -502,7 +513,7 @@
 			/>
 			<span class="min-w-0 flex-1">
 				<span class="block text-chip font-medium">
-					Get another model
+					Get more…
 				</span>
 				<span class="text-surface-600-400 block text-meta">
 					Recommended lists and Hugging Face

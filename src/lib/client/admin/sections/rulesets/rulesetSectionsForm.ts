@@ -90,7 +90,12 @@ export interface AttributeRow {
 	/** A label's or a list's words, comma-joined. */
 	of: string
 	start: string
+	/** ⏳ Only a legacy list of two or more holders; else `[]`. */
 	carriedBy: string[]
+	/** 🚧 What it survives (`session` · `world`); "" for the default (session). */
+	scope: string
+	/** 🚧 The one holder (`player` · `cast` · `world` · `location`); "" for the default (each character). */
+	owner: string
 	/** `holder` · `gm` · `everyone` · a scope function's id; "" for the default (everyone). */
 	visibility: string
 	changedBy: string[]
@@ -336,7 +341,9 @@ function attributeRow(a: RulesetAttributeDecl): AttributeRow {
 		max: numberText(a.bounds?.max),
 		of: joined(a.of),
 		start: Array.isArray(a.start) ? (a.start as unknown[]).join(", ") : numberText(a.start),
-		carriedBy: list(a.carriedBy),
+		carriedBy: a.owner === undefined && list(a.carriedBy).length > 1 ? list(a.carriedBy) : [],
+		scope: str(a.scope),
+		owner: str(a.owner) || (list(a.carriedBy).length === 1 ? list(a.carriedBy)[0]! : ""),
 		visibility: str(a.visibility),
 		changedBy: list(a.changedBy),
 		tags: joined(a.tags),
@@ -524,6 +531,8 @@ export function newAttribute(form: SectionsForm, name = ""): AttributeRow {
 		of: "",
 		start: "",
 		carriedBy: [],
+		scope: "",
+		owner: "",
 		visibility: "",
 		changedBy: [],
 		tags: "",
@@ -631,6 +640,7 @@ function startOf(row: AttributeRow): unknown {
 	const t = row.start.trim()
 	if (!t) return undefined
 	if (row.kind === "list") return splitWords(t)
+	if (row.kind === "flag") return t === "true" ? true : t === "false" ? false : undefined
 	if (row.kind === "label" || row.kind === "text" || (!row.kind && !NUMBER.test(t))) return t
 	return num(t) ?? t
 }
@@ -642,10 +652,15 @@ export function writeAttribute(row: AttributeRow): Json {
 	setOrDrop(o, "slot", row.slot.trim() || undefined)
 	setOrDrop(o, "borrowed", row.slot.trim() && row.borrowed ? true : undefined)
 	setOrDrop(o, "kind", row.kind || undefined)
-	setOrDrop(o, "bounds", WORD_KINDS.includes(row.kind) ? undefined : bounded(row))
+	setOrDrop(o, "bounds", WORD_KINDS.includes(row.kind) || row.kind === "flag" ? undefined : bounded(row))
 	setOrDrop(o, "of", (row.kind === "label" || row.kind === "list") && splitWords(row.of).length ? splitWords(row.of) : undefined)
 	setOrDrop(o, "start", startOf(row))
-	setOrDrop(o, "carriedBy", row.carriedBy.length ? [...row.carriedBy] : undefined)
+	// One holder is said as `owner`; a legacy list of several stays ⏳ `carriedBy` (and then no `owner`), never both.
+	const several = row.carriedBy.length > 1
+	const owner = several ? undefined : row.owner || undefined
+	setOrDrop(o, "carriedBy", several ? [...row.carriedBy] : undefined)
+	setOrDrop(o, "scope", row.scope || undefined)
+	setOrDrop(o, "owner", owner)
 	setOrDrop(o, "visibility", row.visibility || undefined)
 	setOrDrop(o, "changedBy", row.changedBy.length ? [...row.changedBy] : undefined)
 	setOrDrop(o, "tags", splitWords(row.tags).length ? splitWords(row.tags) : undefined)

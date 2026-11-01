@@ -54,3 +54,12 @@ export function setHostParticipants(fn: ((ref: string) => HostParticipant | null
 export function ownerOf(el: Element): string | null {
 	return el.closest("[data-sp-owner]")?.getAttribute("data-sp-owner") ?? null
 }
+
+/**
+ * The installed version of that owner's package, as its component box carries
+ * it (`data-sp-version`, M2a), or `null` — what `sp-frame` addresses its
+ * document with, so the document is told its `assetsBase`.
+ */
+export function ownerVersionOf(el: Element): string | null {
+	return el.closest("[data-sp-owner]")?.getAttribute("data-sp-version") || null
+}

@@ -45,6 +45,7 @@
  * file changed would orphan an index.
  */
 
+import { isOnnxDtype } from "$lib/shared/constants/onnxDtypes"
 import type { EmbeddingModelDef } from "$lib/server/embedding/models"
 import type { NerModelDef } from "$lib/server/ner/models"
 
@@ -86,6 +87,7 @@ interface RawListEntry {
 	id?: unknown
 	name?: unknown
 	dtype?: unknown
+	dtypes?: unknown
 	size?: unknown
 	dimensions?: unknown
 	max_input_tokens?: unknown
@@ -137,6 +139,13 @@ type Pooling = (typeof POOLINGS)[number]
 const poolingOf = (v: unknown): Pooling | undefined =>
 	POOLINGS.includes(v as Pooling) ? (v as Pooling) : undefined
 
+/** `dtypes: [fp32, fp16, q8, q4]` — the known precisions only, each once. */
+function dtypesOf(v: unknown): EmbeddingModelDef["dtypes"] {
+	const list = strArray(v)?.filter(isOnnxDtype)
+	const out = [...new Set(list ?? [])]
+	return out.length ? (out as EmbeddingModelDef["dtypes"]) : undefined
+}
+
 /** The fields both defs share, lifted off a raw entry. */
 function commonFields(raw: RawListEntry) {
 	const sizeMb = num(raw.size)
@@ -149,6 +158,7 @@ function commonFields(raw: RawListEntry) {
 		sizeMb,
 		tier: tierOf(raw.tier),
 		dtype: str(raw.dtype) as EmbeddingModelDef["dtype"],
+		dtypes: dtypesOf(raw.dtypes),
 		maxInputTokens: num(raw.max_input_tokens),
 		tags: strArray(raw.tags),
 		license: str(d.license),
@@ -456,6 +466,7 @@ export function catalogView(
 	if (def.tier) view.tier = def.tier
 	if (def.sizeMb != null) view.sizeMb = def.sizeMb
 	if (def.dtype) view.dtype = def.dtype
+	if (def.dtypes?.length) view.dtypes = [...def.dtypes]
 	if (embedding.dimensions != null) view.dimensions = embedding.dimensions
 	if (def.maxInputTokens != null) view.maxInputTokens = def.maxInputTokens
 	if (embedding.pooling) view.pooling = embedding.pooling

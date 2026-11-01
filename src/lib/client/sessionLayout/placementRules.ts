@@ -10,12 +10,12 @@
  * follows; the tests in ./placementRules.test.ts say which way each is set.
  *
  * **QE — when the conversation is not in the middle, what do the phone and
- * Stage only show?** Recommended (1): *the conversation is the stage.* The
- * phone's centre and Stage only draw the first primary log full width,
+ * Full screen show?** Recommended (1): *the conversation is the stage.* The
+ * phone's centre and full screen draw the first primary log full width,
  * wherever the desktop placed it; on the phone the middle's other widgets join
  * the panels menu ("Middle"), and the log's own side does not list it.
  * (2) *Literal:* both draw the middle, and a conversation placed in a side is
- * reached through the panels menu — Stage only hides it with the sides.
+ * reached through the panels menu — full screen hides it with the sides.
  */
 import { primaryLogOf } from "./channelClaims"
 
@@ -44,7 +44,7 @@ export interface StageInput {
 }
 
 /**
- * The stage for the phone and Stage only (QE), or null when nothing is drawn
+ * The stage for the phone and full screen (QE), or null when nothing is drawn
  * as one — which leaves the middle exactly as it is drawn, hiding nothing.
  *
  * Under (1) it is the layout's primary log (`primaryLogOf`: the first
@@ -55,7 +55,7 @@ export interface StageInput {
  * With NO conversation placed (R-B, owner review 2026-10-14 — a layout may
  * hold none) the stage is the primary panel, whatever it holds (`middle` is
  * its tabs); with nothing in the middle either, the first panel drawn in a
- * side — so the phone and Stage only never draw an empty page.
+ * side — so the phone and full screen never draw an empty page.
  */
 export function stageOf(o: StageInput): StagePick | null {
 	const log = STAGE_FOLLOWS_CONVERSATION
@@ -76,7 +76,7 @@ export function stageOf(o: StageInput): StagePick | null {
 
 /**
  * The layout's primary log and the zone holding it, wherever it sits —
- * whatever QE says. QE decides what the phone and Stage only DRAW; this is
+ * whatever QE says. QE decides what the phone and full screen DRAW; this is
  * where the log IS, which the desktop needs either way: a side holding it
  * neither tucks nor folds to an icon (`SessionLayout`'s `logSide`).
  */

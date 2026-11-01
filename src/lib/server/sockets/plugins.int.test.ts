@@ -23,11 +23,14 @@ vi.mock("$lib/server/db", async () => {
 })
 
 beforeAll(async () => {
+	// Plugins run by default since 2026-10-30; this suite exercises the off state.
+	vi.stubEnv("SP_PLUGINS_ENABLED", "0")
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "sp-plugins-sock-int-"))
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
 }, 60_000)
 
 afterAll(async () => {
+	vi.unstubAllEnvs()
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
@@ -665,5 +668,34 @@ describe("consent writes always answer", () => {
 			"plugins:reviewPermissions:error"
 		])
 		expect(c.events[0].data.error).toMatch(/acme\.gone/)
+	}, 60_000)
+})
+
+describe("uninstall: what the plugin kept for each person's saved data (M2b)", () => {
+	test("keeps the user annex by default; deletes it when asked", async () => {
+		const h = await import("./plugins")
+		const c = collector()
+		const [{ id: uid }] = await testDb
+			.insert(schema.users)
+			.values({ username: "annex-uninstall-person" })
+			.returning({ id: schema.users.id })
+		for (const pluginId of ["acme.annexkeep", "acme.annexdrop"]) {
+			await h.pluginsInstall.handler(
+				adminSocket,
+				{ pluginId, name: pluginId, bundleSource: BUNDLE, backends: ["quickjs"] },
+				c.emit
+			)
+			await testDb
+				.insert(schema.userAnnexes)
+				.values({ userId: uid, owner: pluginId, key: "profile", doc: "x", version: 1 })
+		}
+		await h.pluginsUninstall.handler(adminSocket, { pluginId: "acme.annexkeep" }, c.emit)
+		await h.pluginsUninstall.handler(
+			adminSocket,
+			{ pluginId: "acme.annexdrop", userAnnex: "delete" },
+			c.emit
+		)
+		const rows = await testDb.select().from(schema.userAnnexes).where(eq(schema.userAnnexes.userId, uid))
+		expect(rows.map((r) => r.owner)).toEqual(["acme.annexkeep"])
 	}, 60_000)
 })

@@ -42,6 +42,8 @@
 	import ModelCard from "./sheet/ModelCard.svelte"
 	import SamplingCard from "./sheet/SamplingCard.svelte"
 	import WorkflowCard from "./sheet/WorkflowCard.svelte"
+	import VoiceCard from "./sheet/VoiceCard.svelte"
+	import { voicesOfLoadout } from "./loadoutVoices"
 	import ConfirmDialog from "./sheet/ConfirmDialog.svelte"
 	import { impliedNeeds } from "$lib/shared/loadouts/consequence"
 	import {
@@ -84,6 +86,8 @@
 		onClose: () => void
 		/** Open another loadout (a merge parent, a duplicate). */
 		onOpenLoadout?: (id: number) => void
+		/** The Voice card's "Add a voice" door: the host opens the Voices panel on this loadout. */
+		onAddVoice?: (loadoutId: number) => void
 	}
 	let {
 		loadout,
@@ -92,7 +96,8 @@
 		list,
 		connections,
 		onClose,
-		onOpenLoadout
+		onOpenLoadout,
+		onAddVoice
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -143,6 +148,8 @@
 				notice = null
 				explanation = null
 				problem = null
+				voiceProblem = null
+				voiceWrite = null
 				busy = null
 				asking = null
 				mergeOpen = false
@@ -297,6 +304,43 @@
 	function moveDial(row: DialRow, value: unknown) {
 		draft.workflowValues = setDial(draft.workflowValues, row, value)
 	}
+
+	// ── Voices (text->audio only; written at once, not through Save) ──────
+	let entries = $state<Sockets.Voicebank.List.Response["voices"]>([])
+	useInterest<"voicebank:list">("voicebank:list", (msg) => {
+		entries = msg?.voices ?? []
+	})
+	$effect(() => {
+		if (loadout?.transform === "text->audio")
+			untrack(() => socket.emit("voicebank:list", {}))
+	})
+	const loadoutVoices = $derived(
+		loadout ? voicesOfLoadout(entries, loadout.id) : []
+	)
+	let voiceWrite = $state<null | "voice" | "others">(null)
+	let voiceProblem = $state<{ at: "voice" | "others"; text: string } | null>(
+		null
+	)
+	function writeVoice(
+		at: "voice" | "others",
+		params: { defaultVoiceId?: number | null; otherSpeakersVoiceId?: number | null }
+	) {
+		if (!loadout || voiceWrite) return
+		voiceProblem = null
+		voiceWrite = at
+		socket.emit("loadouts:update", { id: loadout.id, ...params })
+	}
+	useInterest<"loadouts:update">("loadouts:update", (msg) => {
+		if (voiceWrite && msg.loadout?.id === loadout?.id) voiceWrite = null
+	})
+	useInterest<"loadouts:update:error">("loadouts:update:error", (msg) => {
+		if (!voiceWrite) return
+		voiceProblem = {
+			at: voiceWrite,
+			text: msg?.error ?? "That voice was not set."
+		}
+		voiceWrite = null
+	})
 
 	// ── Saving ────────────────────────────────────────────────────────────
 	/** What Save still has to send after the row exists (create, duplicate). */
@@ -872,6 +916,21 @@
 								/>
 							{/if}
 						</fieldset>
+						{#if loadout && !creating && draft.transform === "text->audio" && !merged}
+							<VoiceCard
+								voices={loadoutVoices}
+								defaultVoiceId={loadout.defaultVoiceId ?? null}
+								otherSpeakersVoiceId={loadout.otherSpeakersVoiceId ?? null}
+								problem={voiceProblem}
+								busy={voiceWrite != null}
+								onVoice={(id) => writeVoice("voice", { defaultVoiceId: id })}
+								onOthers={(id) =>
+									writeVoice("others", { otherSpeakersVoiceId: id })}
+								onAddVoice={onAddVoice
+									? () => onAddVoice(loadout!.id)
+									: undefined}
+							/>
+						{/if}
 
 						{#if mergeOpen && !merged}
 							<div class="panel-card flex flex-col gap-2">

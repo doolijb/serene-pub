@@ -117,3 +117,23 @@ describe("note 29 · furling the session header", () => {
 		expect(byLabel("Show the session header")).not.toBeNull()
 	}, 60_000)
 })
+
+describe("the cluster never sits under the identity (2026-10-30)", () => {
+	test("Settings, Layout and Full screen take their words by the bar's width, and the identity row clips at its own edge", async () => {
+		await mountHeader()
+		// (Session settings draws only with the shell's panels context, which this mount has not.)
+		for (const label of ["Customize layout", "Full screen (Ctrl+Shift+F)"]) {
+			const word = byLabel(label)?.querySelector("span")
+			expect(word, label).toBeTruthy()
+			// A container rule (`.sp-head-label`), never the window's `lg:`.
+			expect(word!.classList.contains("sp-head-label"), label).toBe(true)
+			expect(word!.className, label).not.toMatch(/\blg:/)
+		}
+		// A ten-face cast covered Back at 1280 with the dock open: the row clips
+		// rather than overflowing onto the buttons.
+		const { readFileSync } = await import("node:fs")
+		const src = readFileSync("src/lib/client/components/Header.svelte", "utf8")
+		const row = /\.sp-head-row \{([^}]*)\}/.exec(src)?.[1] ?? ""
+		expect(row).toMatch(/overflow:\s*hidden/)
+	}, 60_000)
+})

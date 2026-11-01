@@ -62,6 +62,7 @@ import {
 import { formatSize } from "./modelDisplay"
 import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 import { modalityOfTransform } from "$lib/shared/constants/connectionSections"
+import { modelKindsAllow } from "$lib/shared/connections/modelKinds"
 import {
 	localOnnxDisabledReason,
 	type LocalOnnxAvailability
@@ -88,9 +89,15 @@ export interface CapabilityModel extends IndexModel {
  */
 function modalityRulesOut(
 	model: CapabilityModel,
-	jobModality: string | null
+	jobModality: string | null,
+	capability?: string
 ): boolean {
-	return !!model.modality && !!jobModality && model.modality !== jobModality
+	if (!model.modality || !jobModality) return false
+	// Set-based when the transform is known (lane V V-7): an `asr` row is
+	// for `audio->text` although the job's modality, keyed by output side,
+	// says text-gen.
+	if (capability) return !modelKindsAllow(model, capability, modalityOfTransform)
+	return model.modality !== jobModality
 }
 
 export interface CapabilityConnection extends IndexConnection {
@@ -128,6 +135,7 @@ const READY_SENTENCES: Record<string, string> = {
 /** A `@lucide/svelte` export name per endpoint kind — `ConnectionRow`'s marks. */
 const KIND_ICONS: Record<EndpointKind, string> = {
 	"koboldcpp-managed": "Cpu",
+	"audiocpp-managed": "Cpu",
 	ollama: "Server",
 	"onnx-embeddings": "Zap",
 	"onnx-entities": "ScanText",
@@ -509,7 +517,7 @@ export function candidateRows(
 			// "hidden" from THIS picker: every switched-off image model on a
 			// KoboldCPP that also chats inflated the chat picker's line.
 			if (!model.enabled || model.missingSince != null) {
-				if (!modalityRulesOut(model, jobModality)) hidden++
+				if (!modalityRulesOut(model, jobModality, capability)) hidden++
 				continue
 			}
 			if (!(model.satisfiableCapabilities ?? []).includes(capability))

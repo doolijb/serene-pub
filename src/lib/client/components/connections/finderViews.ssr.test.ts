@@ -43,7 +43,14 @@ describe("the model finder", () => {
 		expect(html).toContain("Download to")
 		// The four scopes, always all four — the pills are how a person who
 		// arrived from the wrong door corrects it.
-		for (const label of ["Chat", "Images", "Embeddings", "Entities"])
+		for (const label of [
+			"Chat",
+			"Images",
+			"Embeddings",
+			"Entities",
+			"Speech",
+			"Transcription"
+		])
 			expect(html).toContain(label)
 	})
 
@@ -58,6 +65,41 @@ describe("the model finder", () => {
 		expect(html).toContain("Nothing here can hold an embeddings model yet.")
 		expect(html).not.toContain("Add KoboldCPP, run by Serene Pub")
 		expect(html).toContain("Add → A connection")
+	})
+
+	test("Speech with nothing to hold it offers audio.cpp and KoboldCPP", () => {
+		const html = finder({ capability: "text->audio" })
+		expect(html).toContain("Nothing here can hold a speech model yet.")
+		expect(html).toContain("Add audio.cpp, run by Serene Pub")
+		expect(html).toContain("Add KoboldCPP, run by Serene Pub")
+	})
+
+	test("Transcription offers only audio.cpp", () => {
+		const html = finder({ capability: "audio->text" })
+		expect(html).toContain(
+			"Nothing here can hold a transcription model yet."
+		)
+		expect(html).toContain("Add audio.cpp, run by Serene Pub")
+		expect(html).not.toContain("Add KoboldCPP, run by Serene Pub")
+	})
+
+	test("a connection narrows the For pills but keeps Download to", () => {
+		const html = render(ModelFinderView, {
+			props: { connectionId: 1 },
+			context: new Map([
+				connectionsTestContext([
+					{
+						id: 1,
+						name: "KoboldCPP",
+						type: "koboldcpp_managed"
+					} as any
+				])
+			])
+		}).body
+		expect(html).toContain("Download to")
+		expect(html).toContain("Speech")
+		expect(html).not.toContain("Embeddings")
+		expect(html).not.toContain("Transcription")
 	})
 
 	test("the memory tier is named and changeable even with no destination", () => {

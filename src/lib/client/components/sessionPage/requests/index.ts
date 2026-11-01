@@ -36,6 +36,22 @@ import { answerChangeSprite } from "./changeSprite"
 import { answerClearSceneImage, type SceneImagePins } from "./clearSceneImage"
 import { answerDecideProposal, type DecideProposalDeps } from "./decideProposal"
 import { answerDraft, type DraftDeps } from "./draft"
+import { answerFilePick } from "./filePick"
+import {
+	answerLibraryCharacters,
+	answerLibraryLorebooks,
+	answerLibrarySessions,
+	answerUpdateCharacter,
+	answerUpdateSession
+} from "./library"
+import { answerUserAnnex } from "./userAnnex"
+import {
+	answerCreateSession,
+	answerDeleteSession,
+	answerOpenSession,
+	answerOpenSessions
+} from "./navigation"
+import { answerFileSave } from "./fileSave"
 import { answerFireTurn, type FireTurnDeps } from "./fireTurn"
 import { answerForwardTurn, answerRewindTurn, type RewindTurnDeps } from "./rewindTurn"
 import { answerInspectRun, type InspectRunDeps } from "./inspectRun"
@@ -100,6 +116,11 @@ import {
 } from "$lib/client/stores/widgetSettings.svelte"
 import { widgetSettingsSchema } from "$lib/shared/widgets/settings"
 import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
+import { answerNotify } from "./notify"
+import {
+	answerSessionFullscreen,
+	type SessionFullscreenControl
+} from "./sessionFullscreen"
 
 /** Which widget asks — what a `WidgetRequestHandler` is handed beside the params. */
 type RequestFrom = Parameters<WidgetRequestHandler>[2]
@@ -134,6 +155,10 @@ export interface WidgetRequestDeps {
 	canControlMessage(msg: SelectSessionMessage): boolean
 
 	// ── Panels ──
+	/** The shell's panels context (navigation requests set its digest and open the Sessions view). */
+	panelsCtx(): PanelsCtx
+	/** The viewer's user id, null when unknown. */
+	viewerId(): number | null
 	castMemberOf: OpenCharacterDeps["castMemberOf"]
 	openCastMember: OpenCharacterDeps["openCastMember"]
 	openCharactersPanel: OpenCharacterDeps["openCharactersPanel"]
@@ -246,6 +271,8 @@ export interface WidgetRequestDeps {
 	writeTieShown: TieShownWrite
 	/** 🚧 Stats (RF fix 8): one of the rules' optional attributes carried or not (`state:setCarry`). */
 	writeCarry: AttributeCarryWrite
+	/** 🚧 The open session's full screen (SHAPES L1), or null with no session. */
+	fullscreen(): SessionFullscreenControl | null
 }
 
 /**
@@ -289,6 +316,11 @@ const sceneBoundaryDeps = (d: WidgetRequestDeps): SceneBoundaryDeps => ({
 	confirmRemoveScene: d.confirmRemoveScene,
 	deleteScene: d.deleteScene,
 	mergeScene: d.mergeScene
+})
+
+const navDeps = (d: WidgetRequestDeps) => ({
+	panelsCtx: d.panelsCtx() as any,
+	viewerId: () => d.viewerId()
 })
 
 /** How the page answers one request kind. */
@@ -513,7 +545,37 @@ export const WIDGET_REQUEST_ANSWERS: {
 		answerSetOwnerFace(p, d.sessionId(), d.writeOwnerFace),
 	// 🚧 Backdrop (D3): the session's generated pictures, for the chooser's
 	// *From this session* — the Album's `generated` source over a `messages` page.
-	"session-images": (p, _from, d) => answerSessionImages(p, d)
+	"session-images": (p, _from, d) => answerSessionImages(p, d),
+	// 🚧 M0 (SHAPES L12 Seams): declared in the SDK, answered by lane P4;
+	// until then the page refuses both, and the refusal is the asking widget's (R77).
+	"file-pick": (p, from) => answerFilePick(p, from),
+	"file-save": (p, from) => answerFileSave(p, from),
+	// 🚧 M0 (SHAPES L1, L6): declared in the SDK, answered by lanes U2
+	// (full screen) and U3 (the one toaster); until then the page refuses both.
+	"session-fullscreen": (p, _from, d) =>
+		answerSessionFullscreen(p, d.fullscreen()),
+	notify: (p, from, d) => answerNotify(p, from, d.sessionId()),
+	// 🚧 M2b: the `ui` API's navigation requests and the `applet` API's library requests — declared in the SDK, the
+	// client half wired (the front-end API gate in the widget wire); the app answers them from M2c. Until then each is
+	// refused in words, and the refusal is the asking widget's (R77).
+	"create-session": (p, from, d) => answerCreateSession(p, from, navDeps(d)),
+	"open-session": (p, from, d) => answerOpenSession(p, from, navDeps(d)),
+	"open-sessions": (p, from, d) => answerOpenSessions(p, from, navDeps(d)),
+	"delete-session": (p, from, d) => answerDeleteSession(p, from, navDeps(d)),
+	// 🚧 M2c: the library requests over S's `plugins:*` handlers (briefs/m2-S-to-U.md §7). Only a mount without a
+	// session holds the applet API, so these rows are reached from the applet launcher (`routes/apps/[pluginId]`).
+	"library-characters": (p, from) => answerLibraryCharacters(p, from),
+	"update-character": (p, from) => answerUpdateCharacter(p, from),
+	"library-lorebooks": (p, from) => answerLibraryLorebooks(p, from),
+	"library-sessions": (p, from) => answerLibrarySessions(p, from),
+	"update-session": (p, from) => answerUpdateSession(p, from),
+	"user-annex": (p, from) => answerUserAnnex(p, from),
+	"plugin-storage": () => notYet("plugin-storage")
+}
+
+/** 🚧 M2b: a request kind the SDK declares and the app does not answer yet, refused in words. */
+function notYet(kind: WidgetRequestKind): never {
+	throw new Error(`'${kind}' is not available yet: Serene Pub answers it in a later update`)
 }
 
 /**

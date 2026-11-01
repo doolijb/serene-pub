@@ -44,6 +44,9 @@ export function stateMoved(receipt: Receipt): boolean {
 					out?.rejected?.some((r) => typeof r?.proposalId === "number")
 			)
 		}
+		// 🚧 A library change landed or was proposed (M2c path B): the ledger and the proposals moved.
+		if (/^core:outlet\/(create-character|update-character|create-lorebook|attach-lorebook)@/.test(def))
+			return (node.output as { status?: unknown } | null)?.status === "committed"
 		// 🚧 A seat named or renamed: the sheet's head reads its name.
 		if (def.startsWith("core:outlet/set-seat-name"))
 			return (node.output as { status?: unknown } | null)?.status === "committed"

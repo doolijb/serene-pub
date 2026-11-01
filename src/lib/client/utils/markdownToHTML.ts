@@ -27,9 +27,19 @@ export function replaceQuotedTextMarkers(html: string): string {
 		.replaceAll("[[/QT]]", "</span>")
 }
 
+/**
+ * 🚧 An HTML comment never shows (a finished one is dropped by the browser); one still being written — a reply
+ * streaming its hidden draft block, `<!--draft:character {…}-->` (M2c path B) — is cut from where it opens, so
+ * its JSON never flashes on screen before the `-->` arrives.
+ */
+export function withoutOpenComment(md: string): string {
+	const open = md.lastIndexOf("<!--")
+	return open >= 0 && md.indexOf("-->", open + 4) < 0 ? md.slice(0, open) : md
+}
+
 export function renderMarkdownWithQuotedText(md: string): string {
 	// Fix italic formatting with trailing spaces before processing
-	const fixedMd = fixItalicSpaces(md)
+	const fixedMd = fixItalicSpaces(withoutOpenComment(md))
 	const markedMd = markQuotedText(fixedMd)
 	let html = marked.parse(markedMd) as string
 	// Sanitize BEFORE injecting our own trusted quoted-text markup — html at

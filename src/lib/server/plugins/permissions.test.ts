@@ -10,6 +10,8 @@ import {
 	storageGrant,
 	networkGrant,
 	permissionStates,
+	appletGrant,
+	perUserStorageGrant,
 	declaredWidgetScopes,
 	panelGrants,
 	grantedWidgetScopes,
@@ -22,6 +24,7 @@ import {
 	widgetScopePermissions
 } from "./permissions"
 import { WIDGET_SCOPED_SECTIONS } from "@serene-pub/sdk"
+import { permissionGroup } from "$lib/shared/plugins/declaredPermissions"
 
 const manifest = {
 	permissions: {
@@ -275,7 +278,8 @@ describe("permissions", () => {
 		})
 
 		it("folds an invalid quota to the default identically in both forms (fails closed)", () => {
-			const DEFAULT = 5 * 1024 * 1024
+			// 64 MB since M0 (lane P4, by ruling).
+			const DEFAULT = 64 * 1024 * 1024
 			const cases: { permissions: any }[] = [
 				{ permissions: { storage: { quotaBytes: -5 } } }, // object form
 				{ permissions: ["storage:-5"] }, // compiled form
@@ -303,7 +307,7 @@ describe("permissions", () => {
 			})
 			// bare storage → default quota
 			expect(d.find((p) => p.key === "storage")?.config?.quotaBytes).toBe(
-				5 * 1024 * 1024
+				64 * 1024 * 1024
 			)
 			// bare network (no host) → the inert `network` key, empty allowlist
 			expect(d.find((p) => p.key === "network")?.config?.host).toBe(null)
@@ -708,7 +712,7 @@ describe("a declared key containing '#' is refused, so it can never spell anothe
 
 	it("closes the same collision for a payload mark — a decoy shaped like storage's reviewed quota", () => {
 		const realMark = reviewMarks(declaredPermissions({ permissions: ["storage"] }))[0]
-		expect(realMark).toBe('__reviewed:storage#{"quotaBytes":5242880}')
+		expect(realMark).toBe('__reviewed:storage#{"quotaBytes":67108864}')
 		const storagey = { permissions: ["storage", realMark.slice("__reviewed:".length)] }
 		const declared = declaredPermissions(storagey)
 		expect(declared.map((p) => p.key)).toEqual(["storage"])
@@ -727,5 +731,72 @@ describe("a declared key containing '#' is refused, so it can never spell anothe
 			}
 		}).map((p) => p.key)
 		expect(keys).toEqual(["network:a.com", "resource:lore:read", "event:e"])
+	})
+})
+
+describe("🚧 permission groups (M2b): both manifest shapes read to the same keys and groups", () => {
+	const declared = {
+		storage: { perUser: { quotaBytes: 4096 } },
+		session: { scopes: ["session:state"] },
+		applet: {
+			characters: "write",
+			lorebooks: "read",
+			sessions: { genres: ["acme:genre/a@1", "acme:genre/b@1"] },
+			annex: { user: true }
+		}
+	}
+	const compiled = [
+		"widget:session:state",
+		"applet:characters:write",
+		"applet:lorebooks:read",
+		"applet:sessions:acme:genre/a@1",
+		"applet:sessions:acme:genre/b@1",
+		"applet:annex:user",
+		"storage-per-user:4096"
+	]
+	const effective = (m: unknown, ...denied: string[]) => {
+		const d = declaredPermissions(m as never)
+		return effectivePermissions(d, reviewed(d, ...denied))
+	}
+
+	it("the declared object and the compiled key list read to the same keys, in the same groups", () => {
+		const a = declaredPermissions({ permissions: declared } as never)
+		const b = declaredPermissions({ permissions: compiled } as never)
+		expect(a.map((p) => p.key).sort()).toEqual(b.map((p) => p.key).sort())
+		for (const p of a) {
+			expect(permissionGroup(p.key)).toBe(
+				p.key.startsWith("widget:") ? "session" : "applet"
+			)
+		}
+		expect(permissionGroup("network:x.com")).toBe("system")
+		expect(permissionGroup("storage")).toBe("system")
+	})
+
+	it("appletGrant: write holds read, and a denied genre is out", () => {
+		const g = appletGrant(effective({ permissions: declared }, "applet:sessions:acme:genre/b@1"))
+		expect(g.characters).toBe("write")
+		expect(g.lorebooks).toBe("read")
+		expect(g.sessionGenres).toEqual(["acme:genre/a@1"])
+		expect(g.userAnnex).toBe(true)
+		const both = appletGrant(
+			effective({ permissions: { applet: { characters: "read" } } })
+		)
+		expect(both.characters).toBe("read")
+		expect(appletGrant(effective({ permissions: declared }, "applet:characters:write")).characters).toBeUndefined()
+	})
+
+	it("perUserStorageGrant: the quota, clamped into the band; denied is none", () => {
+		expect(perUserStorageGrant(effective({ permissions: declared }))).toBe(4096)
+		const tiny = effective({ permissions: { storage: { perUser: { quotaBytes: 1 } } } })
+		expect(perUserStorageGrant(tiny)).toBeGreaterThanOrEqual(1024)
+		expect(perUserStorageGrant(effective({ permissions: declared }, "storage-per-user"))).toBeUndefined()
+		expect(perUserStorageGrant([])).toBeUndefined()
+	})
+
+	it("an unreviewed package grants no applet key", () => {
+		const d = declaredPermissions({ permissions: declared } as never)
+		const g = appletGrant(effectivePermissions(d, []))
+		expect(g.characters).toBeUndefined()
+		expect(g.sessionGenres).toEqual([])
 	})
 })

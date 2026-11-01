@@ -11,8 +11,8 @@
  * load. What's served is vendor code a plugin shipped — never user data; the
  * data plane is the MessageChannel the host feeds, which *is* session-scoped.
  * Only enabled plugins serve at all, so the surface follows the admin's
- * switch — and nothing serves while the extension subsystem is off
- * (`SP_PLUGINS_ENABLED`): a 404, as if no plugin were installed.
+ * switch — and nothing serves while `SP_PLUGINS_ENABLED` turns the extension
+ * subsystem off: a 404, as if no plugin were installed.
  *
  * Every response carries the CSP composed from the plugin's grants: the same
  * declared, admin-deniable `network:<host>` permission that governs the
@@ -26,6 +26,8 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
 	readPluginFile,
+	readPluginFileBytes,
+	framePermissionsPolicy,
 	frameCsp,
 	notCoreRow,
 	parseFrameSrc
@@ -51,18 +53,25 @@ export const GET: RequestHandler = async (event) => {
 	if (!plugin?.enabled) return new Response("Not found", { status: 404 })
 
 	const file = await readPluginFile(db, pluginId, path)
-	if (!file) return new Response("Not found", { status: 404 })
+	// Only `ui` rows are documents; an `asset` row is `/plugin-assets`'s.
+	if (!file || file.kind !== "ui") return new Response("Not found", { status: 404 })
 
 	// Revalidated on every load, answered 304 while nothing about the response
 	// changed: an update to a plugin reaches the next page load (a component
 	// module, a document inside `sp-frame`). The tag covers the policy too —
 	// a grant an admin withdrew must reach a frame whose bytes did not change.
-	const csp = frameCsp(plugin.manifest, plugin.adminDenied)
-	const etag = `"${createHash("sha256").update(`${file.hash}\n${file.mime}\n${csp}`).digest("hex").slice(0, 40)}"`
-	const cacheHeaders = { ETag: etag, "Cache-Control": "private, no-cache", "Content-Security-Policy": csp }
+	const csp = frameCsp(plugin.manifest, plugin.adminDenied, { host: event.url.host, pluginId })
+	const policy = framePermissionsPolicy(plugin.manifest, plugin.adminDenied)
+	const etag = `"${createHash("sha256").update(`${file.hash}\n${file.mime}\n${csp}\n${policy ?? ""}`).digest("hex").slice(0, 40)}"`
+	const cacheHeaders: Record<string, string> = {
+		ETag: etag,
+		"Cache-Control": "private, no-cache",
+		"Content-Security-Policy": csp,
+		...(policy ? { "Permissions-Policy": policy } : {})
+	}
 	if (event.request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: cacheHeaders })
 
-	return new Response(new Uint8Array(Buffer.from(file.content, "base64")), {
+	return new Response(new Uint8Array(await readPluginFileBytes(file)), {
 		headers: {
 			"Content-Type": file.mime,
 			...cacheHeaders,

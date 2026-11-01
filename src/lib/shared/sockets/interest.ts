@@ -117,6 +117,10 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// (R-19). The sessions sidebar declares it BARE (every session it
 		// lists); a session page may declare its own scope.
 		["sessions:runStatus", (payload) => payload?.sessionId],
+		// 🚧 M2a a6: `{ sessionId, runId, outcome, reason? }` — the run a press
+		// started has ended; the session page relays it to its frames
+		// (`run:ended`). Scoped to the session.
+		["sessions:runEnded", (payload) => payload?.sessionId],
 
 		// `{ sessionId, messageCount, lastMessage, updatedAt }` — the session's
 		// list row moved. The sessions sidebar and the home page both declare
@@ -132,6 +136,8 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 
 		// `{ sessionId, annex }` — the viewer's own annex view (R57).
 		["sessions:annex", (payload) => payload?.sessionId],
+		// 🚧 M0 (L9): `{ sessionId, annex }` — the viewer's lorebook-annex view.
+		["sessions:lorebookAnnex", (payload) => payload?.sessionId],
 
 		// 🚧 `{ sessionId, backdropMediaId }` — the session's backdrop moved
 		// (a pipeline's `set-backdrop` or a person's `sessions:setBackdrop`).
@@ -456,6 +462,7 @@ export const RESTRICTED_INTEREST_PREFIXES: readonly string[] = [
 	"tunnels:",
 	"allowedHosts:",
 	"invites:",
+	"audiocpp:",
 	"koboldcpp:",
 	"ollama:",
 	"ner:",
@@ -492,6 +499,26 @@ export const RESTRICTED_INTEREST_PREFIXES: readonly string[] = [
 export function isRestrictedInterest(key: InterestKey): boolean {
 	return RESTRICTED_INTEREST_PREFIXES.some((p) => key.startsWith(p))
 }
+
+/**
+ * 🚧 (M2b/M2c) The **applet API**'s answers — the person-facing doors behind an
+ * applet's `user-annex` and library requests (`sockets/userAnnex.ts`,
+ * `appletLibrary.ts`, `appletSessions.ts`). Any signed-in person asks them:
+ * each handler resolves the person from the socket and narrows by the plugin's
+ * grant and `personMay`. So the family is NOT under a restricted prefix — the
+ * way `pluginActions:` / `pluginCatalogs:` / `pluginUserSettings:` sit outside
+ * the admin-only `plugins:` (they were `plugins:*` until E's M2c gate found a
+ * non-admin's frame never heard its answer). Their `:error` siblings likewise.
+ * ⚠ Not the `applet:<what>:<level>` permission keys (a manifest's grants).
+ */
+export const APPLET_API_EVENTS = Object.freeze([
+	"appletApi:userAnnex",
+	"appletApi:libraryCharacters",
+	"appletApi:updateCharacter",
+	"appletApi:libraryLorebooks",
+	"appletApi:librarySessions",
+	"appletApi:updateSession"
+] as const)
 
 /**
  * Events the interest gate applies to. Everything NOT listed keeps the room
@@ -594,6 +621,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// The viewer's annex view (R57, V1c) — consumer: the session page,
 	// SCOPED, which hands it to its widgets as `annex.v1`.
 	"sessions:annex",
+	// 🚧 M0 (L9) — consumer: the session page, SCOPED, which hands it to its
+	// widgets as `lore.v1.annex`.
+	"sessions:lorebookAnnex",
 	// The session data panel's read — consumer: client/components/
 	// sessionForms/SessionAnnexPanel.svelte, SCOPED. Its `:error` twin is
 	// never gated.
@@ -689,6 +719,8 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// client/components/sidebars/SessionsSidebar.svelte, on the registry, and
 	// the session page's inbox, SCOPED (its waiting row, `pendingReply.ts`).
 	"sessions:runStatus",
+	// 🚧 M2a a6 — the end of a press's run, with its outcome: the session page relays it to frames as `run:ended` (U's client half).
+	"sessions:runEnded",
 	"sessions:saveDraft",
 	"sessions:setCastSeatEnabled",
 	"sessions:setEnvoySeat",
@@ -953,8 +985,12 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"media:list",
 	"media:regenerateThumbnail",
 	"media:setCachePolicy",
+	// Lane E's admin Media panel folded row + session media; born gated 2026-10-28.
+	"media:setKeepSpokenAudio",
 	"media:setFrame",
 	"media:setVisibility",
+	"media:clearSpoken",
+	"media:spokenSummary",
 	"narrativeGraph:applyProposal",
 	"narrativeGraph:buildLog",
 	"narrativeGraph:checkNodeMergeReferences",
@@ -1067,7 +1103,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"plugins:getSettings",
 	"plugins:install",
 	"plugins:installLocal",
-	"plugins:installPackage",
 	"plugins:kill",
 	"plugins:list",
 	"plugins:logs",
@@ -1085,6 +1120,13 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// `plugins:` prefix — every signed-in person reads and writes their own.
 	// Consumer: client/components/settingsTabs/PluginUserSettingsCard.svelte.
 	"pluginUserSettings:list",
+	// 🚧 M0 (SHAPES L12 Seams, L5): plugin actions and catalogs — NOT
+	// under the restricted `plugins:` prefix; any signed-in person. Gated so a
+	// handler's answer (a file's bytes) reaches only the tab awaiting it.
+	// Consumers: client/components/frames/pluginActions.ts (`awaitReply`),
+	// client/components/frames/pluginCatalogs.svelte.ts. Refusals stay ungated (rule 1).
+	"pluginActions:invoke",
+	"pluginCatalogs:get",
 	"samplingConfigs:create",
 	"samplingConfigs:delete",
 	"samplingConfigs:get",
@@ -1128,6 +1170,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"userSettings:updateLoreWriteMode",
 	"userSettings:updateShowAllCharacterFields",
 	"userSettings:updateShowHomePageBanner",
+	"userSettings:updateSpokenPlayback",
 	"userSettings:updateTheme",
 	"userSettings:uploadBackground",
 	"users:create",
@@ -1154,6 +1197,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// It is also the one gated event whose cost is a broadcast rather than a
 	// reply: `broadcastToSessionUsers` reads the owner and the guest roster —
 	// two queries — for every chunk, so the gate is applied BEFORE them.
+	"models:presence",
+	"models:machineHardware",
+	"models:refreshSpeech",
 	"sessionMessage",
 
 	// Slice 8 (2026-09-15): the connections group, deferred until the
@@ -1207,6 +1253,30 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// the handler is admin-only.
 	"admin:logbook",
 	"admin:supportReport",
+	// `audiocpp:` — 🚧 audio.cpp, run by Serene Pub; every handler admin-only.
+	// The three pushes (`binaryDownloadProgress`, `packageDownloadProgress`,
+	// `subprocessStatus`) leave through per-user closures that call the gated
+	// `emitToUser`, like the `koboldcpp:` ones.
+	"audiocpp:binaryDownloadProgress",
+	"audiocpp:cancelBinaryDownload",
+	"audiocpp:cancelPackageDownload",
+	"audiocpp:confirmFamily",
+	"audiocpp:downloadBinary",
+	"audiocpp:downloadPackage",
+	"audiocpp:getSettings",
+	"audiocpp:getStatus",
+	"audiocpp:installState",
+	"audiocpp:listBinaryVariants",
+	"audiocpp:listPackages",
+	"audiocpp:listReleaseVersions",
+	"audiocpp:packageDownloadProgress",
+	"audiocpp:removePackage",
+	"audiocpp:restart",
+	"audiocpp:setPackageEnabled",
+	"audiocpp:start",
+	"audiocpp:stop",
+	"audiocpp:subprocessStatus",
+	"audiocpp:updateSettings",
 	// `koboldcpp:` — client/components/koboldcppManager/**,
 	// connections/ManagedConnectionView (the managed connection's view since
 	// the 2026-09-17 fold), routes/document-view/settings/system
@@ -1378,7 +1448,17 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"cardState:declareSlot",
 	"cardState:updateSlot",
 	"cardState:declareSheet",
-	"cardState:updateSheet"
+	"cardState:updateSheet",
+
+	// voicebank — born gated 2026-10-28; consumers: lane E's admin Voices panel
+	// and the card's Voice picker, on the registry.
+	"voicebank:list",
+	"voicebank:create",
+	"voicebank:update",
+	"voicebank:delete",
+	"voicebank:pickable",
+	// the voice try-out (2026-10-29): the card's Speech tab and the voicebank form
+	"voicebank:preview"
 ])
 
 export function isGatedEvent(event: string): boolean {

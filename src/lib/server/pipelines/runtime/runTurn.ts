@@ -89,7 +89,7 @@ import {
 } from "$lib/server/pipelines/runtime/liveRow"
 import { noteRun } from "$lib/server/pipelines/runtime/capPause"
 import { createStatusRelay } from "$lib/server/pipelines/runtime/runStatus"
-import { runKindOf, runKindOfFamily } from "$lib/server/pipelines/runtime/runRegistry"
+import { runKindOf, runKindOfFamily, runLineBoundOf } from "$lib/server/pipelines/runtime/runRegistry"
 import {
 	messageStreamSteps,
 	stepStatuses,
@@ -819,10 +819,14 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					// A reply, on the turn's channel: the session page draws a
 					// waiting row from it until the reply's own row opens.
 					// 🚧 Never a routine's (lane 6): it runs after the turn,
-					// and nothing it says is a reply on its way.
-					...(triggerFamilyOf(request) === "routine"
-						? {}
-						: { reply: { channel: request.channel || "main" } })
+					// and nothing it says is a reply on its way. 🚧 Never a
+					// line-bound run's (speaking a line, 2026-10-29): it shows
+					// on its line only.
+					...(runLineBoundOf(runId)
+						? { lineBound: true }
+						: triggerFamilyOf(request) === "routine"
+							? {}
+							: { reply: { channel: request.channel || "main" } })
 				})
 
 	const scope: HostScope = {
@@ -1195,6 +1199,8 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 						: {})
 				})
 	}).catch(async (error: unknown) => {
+		// 🚧 A run that threw settles no line (A1): forget what it landed.
+		(await import("$lib/server/pipelines/runtime/settledLines")).dropLandedLines(runId)
 		// 🚧 Every run records its receipt (lair fix 2): a throw ends the run
 		// as `err` (the executor wrote the reason), and the receipt is saved
 		// before the throw goes on to the caller, as a returned one is below.
@@ -1248,6 +1254,25 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 			io: request.io
 		})
 
+	/**
+	 * 🚧 **Message settled** (speech follow-ups A1): each line this run wrote
+	 * is settled now that its receipt is closed — the moment work that must
+	 * never hold the line (reading it aloud) may start, as its own run. A
+	 * preview wrote nothing. Never throws, never awaits the listeners' work.
+	 */
+	{
+		const settled = await import("$lib/server/pipelines/runtime/settledLines")
+		if (request.preview) settled.dropLandedLines(runId)
+		else
+			await settled.emitMessagesSettled(request.db, {
+				runId,
+				sessionId: request.sessionId,
+				userId: request.userId,
+				artifacts,
+				...(request.lineage ? { lineage: request.lineage } : {}),
+				io: request.io
+			})
+	}
 	/**
 	 * The forms this run put to a person, announced now: whatever the run's
 	 * outcome, a form it wrote is on the row and waits. Before the AI's

@@ -643,6 +643,40 @@ export async function sync() {
 		)
 		await moveConnectionDefaultsToLoadouts(db)
 
+		// The voicebank's default voice, once the Narration loadout is
+		// synced (idempotent; boot never fails on it).
+		try {
+			const { ensureLoadoutVoice } = await import("$lib/server/speech/voicebank")
+			await ensureLoadoutVoice(db)
+		} catch (err) {
+			console.warn("[boot] voicebank default not seeded:", err)
+		}
+
+		// 🚧 Speech defaults (lane V finding V-1, 2026-10-29): Reply and Images
+		// are starred on a fresh pub, Narration and Transcription were not, so
+		// Read aloud read "Unavailable" until someone pressed Set as default.
+		// Star the shipped loadout by seed key ONLY when nothing is flagged
+		// for that transform; the pair is never written here, so a filled but
+		// unstarred Narration on an upgraded pub keeps its model.
+		try {
+			const { defaultLoadoutFor } = await import("$lib/server/loadouts")
+			const { sidesOf } = await import("$lib/shared/capabilities/sides")
+			const STARRED_BY_SEED: Record<string, string> = {
+				"text->audio": "core:loadout/tts@1",
+				"audio->text": "core:loadout/transcription@1"
+			}
+			for (const [transform, seedKey] of Object.entries(STARRED_BY_SEED)) {
+				if (await defaultLoadoutFor(db, transform)) continue
+				const { input, output } = sidesOf(transform as never)
+				await db
+					.update(schema.loadouts)
+					.set({ defaultForInput: input, defaultForOutput: output, updatedAt: new Date() })
+					.where(eq(schema.loadouts.seedKey, seedKey))
+			}
+		} catch (err) {
+			console.warn("[boot] speech default loadouts not starred:", err)
+		}
+
 		const SEEDED_SAMPLING_DEFAULTS: Record<string, string> = {
 			"text->text": "sampling-default",
 			"text->image": "sampling-image-default"

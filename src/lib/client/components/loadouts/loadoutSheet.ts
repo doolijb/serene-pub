@@ -552,7 +552,23 @@ export function filterModelOptions(
 
 /** The Model card's line when nothing here can do the job. */
 export function noModelSentence(label: string): string {
-	return `No model here can do ${label} yet. Add a connection in Connections, or get a model in Models.`
+	return `No model here can do ${label} yet. Add a connection in Connections, or get a model.`
+}
+
+/** The Model card's **Get a model…** door label. */
+export const GET_A_MODEL_LABEL = "Get a model…"
+
+/**
+ * The Model card's door to the finder: offered when no model fits (the
+ * options list is empty), scoped to the loadout's capability — its transform
+ * id, the vocabulary the finder's scopes key on. `null` when a model fits.
+ */
+export function getAModelDoor(
+	optionCount: number,
+	transform: string
+): { label: string; finder: { capability: string } } | null {
+	if (optionCount > 0 || !transform) return null
+	return { label: GET_A_MODEL_LABEL, finder: { capability: transform } }
 }
 
 /** The Model card's opening sentence: what its choice decides. */

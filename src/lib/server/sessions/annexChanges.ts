@@ -20,6 +20,7 @@ import { and, desc, eq, gt, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { AnnexDeltaSide } from "$lib/server/db/schema"
 import { CORE_RUNTIME_KEYS } from "./coreAnnex"
+import { bumpedAnnexVersionsSql } from "./annexVersions"
 import { migrateOwnerDocument, ownerVersionOf } from "$lib/server/plugins/annexMigrate"
 
 export type { AnnexDeltaSide } from "$lib/server/db/schema"
@@ -96,6 +97,12 @@ async function landOwner(tx: Db, sessionId: number, owner: string, side: AnnexDe
 		update ${schema.sessions}
 		set ${sql.identifier("annex")} = ${annexExpr},
 		${sql.identifier("annex_audiences")} = ${audiencesExpr}
+		where ${schema.sessions.id} = ${sessionId}
+	`)
+	// 🚧 Back and Forward move the document, so they move its annex document version (M2a a8).
+	await tx.execute(sql`
+		update ${schema.sessions}
+		set ${sql.identifier("annex_versions")} = ${bumpedAnnexVersionsSql(schema.sessions.annexVersions, owner)}
 		where ${schema.sessions.id} = ${sessionId}
 	`)
 }

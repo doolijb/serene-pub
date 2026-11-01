@@ -12,6 +12,23 @@
 	import { useStarConfirm } from "$lib/client/components/connections/useStarConfirm.svelte"
 	import { enableManager } from "$lib/client/components/connections/managers"
 	import { canRunLocalRuntimes } from "$lib/client/components/connections/addMenuItems"
+	import {
+		kcppRecommendedRows,
+		kcppHubRows,
+		quantsFromKcpp,
+		SerialAsk,
+		type QuantFile
+	} from "$lib/client/components/connections/finder"
+	import {
+		MEMORY_TIERS,
+		fitSentence,
+		parseMemoryTier,
+		readMemoryTier,
+		writeMemoryTier,
+		type MemoryTier
+	} from "$lib/client/components/connections/memoryTier"
+	import { downloadParams } from "$lib/client/components/koboldcppManager/availableTab"
+	import QuantFieldset from "$lib/client/accessibility/QuantFieldset.svelte"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -37,6 +54,10 @@
 	let availableModels: Sockets.KoboldCPP.ListModels.Response["availableModels"] =
 		$state([])
 	let embeddingModels: Sockets.KoboldCPP.ListModels.Response["availableModels"] =
+		$state([])
+	// Every file the directory holds, whatever its kind: what a row's
+	// "already here" is judged against.
+	let allFiles: Sockets.KoboldCPP.ListModels.Response["availableModels"] =
 		$state([])
 	let modelsDirSet = $state(true)
 	let loaded = $state(false)
@@ -210,6 +231,15 @@
 		socket.emit("koboldcpp:stopSubprocess", {})
 	}
 
+	// Text or Image: the one choice that drives the recommended list, the
+	// search and where a download lands. Speech is the finder's own scope.
+	let kind = $state<"text" | "image">("text")
+	let tier = $state<MemoryTier>(readMemoryTier())
+	function changeTier(event: Event) {
+		tier = parseMemoryTier((event.currentTarget as HTMLSelectElement).value)
+		writeMemoryTier(tier)
+	}
+
 	let searchTerm = $state("")
 	let searchResults: Sockets.KoboldCPP.SearchModels.Response["models"] =
 		$state([])
@@ -224,29 +254,72 @@
 		$state([])
 	let recommendedLoaded = $state(false)
 
-	function searchModels(event: SubmitEvent) {
-		event.preventDefault()
-		if (!searchTerm.trim()) return
+	// The replies carry no echo of what was asked, so one ask is in flight at
+	// a time and a stale reply is dropped (the finder's own rule).
+	const recommendedAsks = new SerialAsk()
+	const searchAsks = new SerialAsk()
+
+	function askRecommended() {
+		recommendedLoaded = false
+		recommendedModels = []
+		const asked = kind
+		recommendedAsks.ask(() =>
+			socket.emit("koboldcpp:recommendedModels", { kind: asked })
+		)
+	}
+	function askSearch() {
+		const term = searchTerm.trim()
+		if (!term) return
 		searching = true
 		searched = false
-		socket.emit("koboldcpp:searchModels", { searchTerm: searchTerm.trim() })
+		searchResults = []
+		const asked = kind
+		searchAsks.ask(() =>
+			socket.emit("koboldcpp:searchModels", {
+				searchTerm: term,
+				kind: asked
+			})
+		)
+	}
+	function searchModels(event: SubmitEvent) {
+		event.preventDefault()
+		askSearch()
+	}
+	function changeKind(next: "text" | "image") {
+		if (next === kind) return
+		kind = next
+		askRecommended()
+		if (searched || searching) askSearch()
 	}
 
-	function downloadModel(
-		modelName: string,
-		opt: {
-			label: string
-			filename: string
-			downloadUrl: string
-			sizeBytes?: number
-		}
+	const rowContext = $derived({
+		tier,
+		query: "",
+		present: new Set(allFiles.map((f) => f.name))
+	})
+	const recommendedRows = $derived(
+		kcppRecommendedRows(recommendedModels, rowContext)
+	)
+	const hubRows = $derived(kcppHubRows(searchResults, kind))
+
+	/** Starts a download with the chosen Text / Image kind on it. */
+	function downloadQuant(
+		model: Sockets.KoboldCPP.SearchModels.ModelResult,
+		quant: QuantFile
 	) {
-		socket.emit("koboldcpp:downloadModel", {
-			modelName,
-			filename: opt.filename,
-			downloadUrl: opt.downloadUrl,
-			sizeBytes: opt.sizeBytes
-		})
+		socket.emit(
+			"koboldcpp:downloadModel",
+			downloadParams(
+				model,
+				{
+					label: quant.name,
+					filename: quant.filename ?? quant.name,
+					downloadUrl: quant.url ?? "",
+					sizeBytes: quant.bytes
+				},
+				kind
+			)
+		)
 	}
 
 	function cancelDownload(filename: string) {
@@ -300,6 +373,7 @@
 		embeddingModels = (msg.availableModels || []).filter(
 			(m) => m.kind === "embeddings"
 		)
+		allFiles = msg.availableModels || []
 		modelsDirSet = msg.modelsDirSet
 		loaded = true
 	}
@@ -370,6 +444,7 @@
 		refresh()
 	}
 	function handleSearchModels(msg: Sockets.KoboldCPP.SearchModels.Response) {
+		if (searchAsks.settle()) return
 		searching = false
 		searched = true
 		searchResults = msg.models || []
@@ -391,13 +466,22 @@
 		downloads = msg.downloads || {}
 		if (Object.values(downloads).some((d) => d.isDone)) refresh()
 	}
+	function handleSearchModelsError(msg: { error?: string }) {
+		if (searchAsks.settle()) return
+		searching = false
+		searched = true
+		error = msg?.error || "Search failed."
+		announce(error)
+	}
 	function handleRecommendedModels(
 		msg: Sockets.KoboldCPP.RecommendedModels.Response
 	) {
+		if (recommendedAsks.settle()) return
 		recommendedLoaded = true
 		recommendedModels = msg.models || []
 	}
 	function handleRecommendedModelsError() {
+		if (recommendedAsks.settle()) return
 		recommendedLoaded = true
 		error = "Failed to load recommended models."
 		announce(error)
@@ -472,6 +556,10 @@
 		"koboldcpp:searchModels",
 		handleSearchModels
 	)
+	useInterest<"koboldcpp:searchModels:error">(
+		"koboldcpp:searchModels:error",
+		handleSearchModelsError
+	)
 	useInterest<"koboldcpp:downloadModel">(
 		"koboldcpp:downloadModel",
 		handleDownloadModel
@@ -532,7 +620,7 @@
 	})
 
 	onMount(() => {
-		socket.emit("koboldcpp:recommendedModels", {})
+		askRecommended()
 		refresh()
 	})
 </script>
@@ -703,39 +791,79 @@
 		</form>
 	{/if}
 
-	<h2>Recommended models</h2>
+	<h2>Get a model</h2>
+	<fieldset>
+		<legend>What kind of model</legend>
+		<div class="a11y-field">
+			<input
+				type="radio"
+				id="a11y-kcpp-kind-text"
+				name="a11y-kcpp-kind"
+				value="text"
+				checked={kind === "text"}
+				onchange={() => changeKind("text")}
+			/>
+			<label for="a11y-kcpp-kind-text">Text</label>
+		</div>
+		<div class="a11y-field">
+			<input
+				type="radio"
+				id="a11y-kcpp-kind-image"
+				name="a11y-kcpp-kind"
+				value="image"
+				checked={kind === "image"}
+				onchange={() => changeKind("image")}
+			/>
+			<label for="a11y-kcpp-kind-image">Image</label>
+		</div>
+	</fieldset>
+	<div class="a11y-field">
+		<label for="a11y-kcpp-tier">Memory on this machine</label>
+		<p class="a11y-hint">
+			Sizes are judged against this. Not sure shows no hints.
+		</p>
+		<select id="a11y-kcpp-tier" value={tier} onchange={changeTier}>
+			{#each MEMORY_TIERS as t (t.value)}
+				<option value={t.value}>{t.label}</option>
+			{/each}
+		</select>
+	</div>
+
+	<h2>Recommended {kind} models</h2>
 	{#if !recommendedLoaded}
 		<p>Loading…</p>
-	{:else if recommendedModels.length === 0}
+	{:else if recommendedRows.length === 0}
 		<p>No recommendations available right now.</p>
 	{:else}
 		<ul class="a11y-list">
-			{#each recommendedModels as m}
+			{#each recommendedRows as row (row.key)}
+				{@const model = recommendedModels.find(
+					(m) => `kcpp:${m.name}` === row.key
+				)}
 				<li class="a11y-list-item">
-					<h3>{m.ollamaName ?? m.name}</h3>
-					{#if m.description}<p>{m.description}</p>{/if}
+					<h3>{model?.ollamaName ?? row.name}</h3>
+					{#if row.description}<p>{row.description}</p>{/if}
 					<p class="a11y-hint">
-						{#if m.parameterSize}{m.parameterSize}{/if}
-						{#if m.recommendedVram != null}· Recommended VRAM: {m.recommendedVram}
-							GB{/if}
+						{[
+							row.facts,
+							row.sizeLabel,
+							row.tier ? row.tier.label : null,
+							fitSentence(row.fit, tier),
+							row.presence ? "Already on disk" : null
+						]
+							.filter(Boolean)
+							.join(" · ")}
 					</p>
-					<div
-						class="a11y-list-item-actions"
-						role="group"
-						aria-label="Download options for {m.ollamaName ??
-							m.name}"
-					>
-						{#each m.pullOptions as opt}
-							<button
-								type="button"
-								class="a11y-btn a11y-btn-small"
-								onclick={() => downloadModel(m.name, opt)}
-								disabled={!modelsDirSet}
-							>
-								Download {opt.label}
-							</button>
-						{/each}
-					</div>
+					{#if model}
+						<QuantFieldset
+							repo={model.name}
+							id="a11y-kcpp-rec-{row.key}"
+							quants={quantsFromKcpp(model, kind)}
+							{tier}
+							disabled={!modelsDirSet}
+							onDownload={(q) => downloadQuant(model, q)}
+						/>
+					{/if}
 				</li>
 			{/each}
 		</ul>
@@ -775,30 +903,28 @@
 	{#if searched}
 		{#if !modelsDirSet}
 			<p>Set a models directory above before downloading.</p>
-		{:else if searchResults.length === 0}
+		{:else if hubRows.length === 0}
 			<p>No GGUF models found for that search.</p>
 		{:else}
 			<ul class="a11y-list">
-				{#each searchResults as m}
+				{#each hubRows as row (row.key)}
+					{@const model = searchResults.find(
+						(m) => m.name === row.name
+					)}
 					<li class="a11y-list-item">
-						<h3>{m.name}</h3>
-						{#if m.description}<p>{m.description}</p>{/if}
-						<div
-							class="a11y-list-item-actions"
-							role="group"
-							aria-label="Download options for {m.name}"
-						>
-							{#each m.pullOptions as opt}
-								<button
-									type="button"
-									class="a11y-btn a11y-btn-small"
-									onclick={() => downloadModel(m.name, opt)}
-									disabled={!modelsDirSet}
-								>
-									Download {opt.label}
-								</button>
-							{/each}
-						</div>
+						<h3>{row.name}</h3>
+						{#if row.description}<p>{row.description}</p>{/if}
+						<p class="a11y-hint">{row.detail}</p>
+						{#if model}
+							<QuantFieldset
+								repo={model.name}
+								id="a11y-kcpp-hub-{row.key}"
+								quants={quantsFromKcpp(model, kind)}
+								{tier}
+								disabled={!modelsDirSet}
+								onDownload={(q) => downloadQuant(model, q)}
+							/>
+						{/if}
 					</li>
 				{/each}
 			</ul>
