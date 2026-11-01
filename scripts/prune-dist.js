@@ -707,10 +707,20 @@ export function dirSizeBytes(dir) {
 //     library shipped twice; dropping the duplicate (dedupeOrtLibraries) takes
 //     off 42.5, and Node 26 adds ~23.6, so ~379.9, at the old line.
 // Both are MiB, as check-dist-size.js measures.
+//
+// Raised for the three Unix targets, 405 -> 425 (2026-10-31), for growth in
+// the app's own code, not a dependency. The pr-6 CI bundles, read from their
+// zips' central directories, were linux-x64 404.7 MiB, macos-x64 403.3,
+// macos-arm64 401.7 and windows-x64 345.7, so the 405 line had already lost
+// its margin by pr-6. pr-7's linux-x64 CI run measured 407.9: app/build
+// 59.8 -> 62.3 (speech, Apps, docs) and @serene-pub/* 11.6 -> 12.1, with every
+// third-party package the same size as pr-6. The same ~3.2 puts macos-x64 at
+// ~406.5 and macos-arm64 at ~404.9. 425 restores the ~18 MB margin 405 was
+// set with. windows-x64 (~349) stays under 380 and is unchanged.
 export const SIZE_THRESHOLD_MB = {
-	"linux-x64": 405,
-	"macos-x64": 405,
-	"macos-arm64": 405,
+	"linux-x64": 425,
+	"macos-x64": 425,
+	"macos-arm64": 425,
 	"windows-x64": 380
 }
 
