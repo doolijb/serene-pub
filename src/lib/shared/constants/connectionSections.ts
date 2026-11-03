@@ -110,12 +110,12 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 	},
 	{
 		modality: "tts",
-		label: "Spoken reply",
+		label: "Speech",
 		description:
 			"Connections that read replies aloud.",
 		icon: "AudioLines",
 		starCapability: "text->audio",
-		starVerb: "spoken reply",
+		starVerb: "speech",
 		emptyMessage:
 			"No speech connections yet. Add one to hear replies read aloud."
 	}
