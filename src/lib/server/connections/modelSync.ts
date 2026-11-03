@@ -80,6 +80,7 @@ import { getNerAdapter } from "../utils/getNerAdapter"
 import { getSpeechAdapter } from "../connectionAdapters/speech/getSpeechAdapter"
 import { SPEECH_FACTS_KEY } from "$lib/shared/connectionAdapters/speechFacts"
 import { ADAPTER_REGISTRY } from "../adapters/registry"
+import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { capabilityDefault } from "./capabilityDefaults"
 import {
@@ -496,6 +497,16 @@ export async function syncConnectionModels(
 async function fetchListing(
 	connection: SelectConnection
 ): Promise<ModelListing> {
+	// Stored rows carry the apiKey ENCRYPTED (tokenCrypto, at rest); the
+	// adapters take it plaintext, as the test/socket paths send it. Syncing
+	// the envelope verbatim authenticates as garbage — at startup every
+	// keyed connection reads error until a manual test clears it.
+	const extraJson = (connection.extraJson ?? {}) as Record<string, unknown>
+	const apiKey = decryptApiKeyField(extraJson.apiKey)
+	const asStored =
+		apiKey === undefined
+			? connection
+			: { ...connection, extraJson: { ...extraJson, apiKey } }
 	let timer: ReturnType<typeof setTimeout> | undefined
 	const timeout = new Promise<ModelListing>((resolve) => {
 		timer = setTimeout(
@@ -510,13 +521,26 @@ async function fetchListing(
 	try {
 		const { listModels } = await adapterIO(connection.type)
 		const listing = (await Promise.race([
-			listModels(connection as any),
+			listModels(asStored as any),
 			timeout
 		])) as ModelListing
-		return {
+		const result = {
 			models: Array.isArray(listing?.models) ? listing.models : [],
 			error: listing?.error ?? null
 		}
+		// A sync nobody forced — the one a list asks for as it opens, or at
+		// boot — fails silently into a red row otherwise. Name the endpoint
+		// and the failure; never credentials (see logComfyFetch-style shape).
+		if (result.error) {
+			const row = connection as { id?: unknown; name?: unknown }
+			console.error("[sync-models]", {
+				connectionId: typeof row.id === "number" ? row.id : null,
+				name: typeof row.name === "string" ? row.name : null,
+				type: (connection as { type?: unknown }).type ?? null,
+				error: result.error
+			})
+		}
+		return result
 	} catch (e: any) {
 		return { models: [], error: e?.message ?? String(e) }
 	} finally {

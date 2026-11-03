@@ -107,6 +107,17 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		starVerb: "entity extraction",
 		emptyMessage:
 			"No entity connections yet. One finds the people, places and things a message names, so lore can be matched by name even when no keyword is set."
+	},
+	{
+		modality: "tts",
+		label: "Spoken reply",
+		description:
+			"Connections that read replies aloud.",
+		icon: "AudioLines",
+		starCapability: "text->audio",
+		starVerb: "spoken reply",
+		emptyMessage:
+			"No speech connections yet. Add one to hear replies read aloud."
 	}
 ]
 

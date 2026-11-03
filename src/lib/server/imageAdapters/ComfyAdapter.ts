@@ -813,6 +813,30 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 // ── Test and list ─────────────────────────────────────────────────────────────
 
+/**
+ * What a failed ComfyUI call looked like — host, endpoint, status and body
+ * shape, never credentials. Without this a proxy login page parses as
+ * "Unexpected token '<'" with no hint that no auth header went out.
+ */
+function logComfyFetch(
+	endpoint: string,
+	connection: { baseUrl?: string | null; extraJson?: unknown },
+	res: { status: number; headers: { get(name: string): string | null } } | null,
+	note?: string
+): void {
+	const extra = (connection.extraJson ?? {}) as Record<string, unknown>
+	const key = typeof extra.apiKey === "string" ? extra.apiKey : ""
+	console.error("[comfy]", {
+		root: rootOf(connection),
+		endpoint,
+		status: res?.status ?? "no-response",
+		contentType: res?.headers.get("content-type") ?? null,
+		authHeaderSent: Object.keys(authHeaders(connection))[0] ?? "none",
+		keyPresent: key.length > 0,
+		...(note ? { note } : {})
+	})
+}
+
 /** The full `/object_info`, summarised. Throws with the host's words. */
 export async function fetchObjectInfo(connection: {
 	baseUrl?: string | null
@@ -821,8 +845,16 @@ export async function fetchObjectInfo(connection: {
 	const res = await fetch(`${rootOf(connection)}/object_info`, {
 		headers: authHeaders(connection)
 	})
-	if (!res.ok) throw new Error(`ComfyUI's /object_info answered HTTP ${res.status}`)
-	return summariseObjectInfo(await res.json())
+	if (!res.ok) {
+		logComfyFetch("/object_info", connection, res)
+		throw new Error(`ComfyUI's /object_info answered HTTP ${res.status}`)
+	}
+	try {
+		return summariseObjectInfo(await res.json())
+	} catch (e) {
+		logComfyFetch("/object_info", connection, res, "body is not JSON")
+		throw e
+	}
 }
 
 async function listModels(
@@ -847,7 +879,12 @@ async function listModels(
 			Object.assign(merged, await res.json())
 		}
 		if (!reached) return { models: [], error: "ComfyUI did not answer." }
-		return { models: modelNamesOf(summariseObjectInfo(merged)) }
+		try {
+			return { models: modelNamesOf(summariseObjectInfo(merged)) }
+		} catch (e) {
+			logComfyFetch("/object_info/*", connection, null, "body is not JSON")
+			throw e
+		}
 	} catch (e) {
 		return { models: [], error: e instanceof Error ? e.message : String(e) }
 	}
@@ -862,7 +899,8 @@ async function testConnection(connection: SelectConnection): Promise<{
 		const res = await fetch(`${rootOf(connection)}/system_stats`, {
 			headers: authHeaders(connection)
 		})
-		if (!res.ok)
+		if (!res.ok) {
+			logComfyFetch("/system_stats", connection, res)
 			return {
 				ok: false,
 				error:
@@ -870,6 +908,7 @@ async function testConnection(connection: SelectConnection): Promise<{
 						? `ComfyUI refused the request (HTTP ${res.status}). If it sits behind a proxy, set its key.`
 						: `HTTP ${res.status}`
 			}
+		}
 		const stats = (await res.json().catch(() => ({}))) as {
 			system?: { comfyui_version?: string }
 			devices?: Array<{ name?: string; vram_total?: number }>
@@ -892,6 +931,7 @@ async function testConnection(connection: SelectConnection): Promise<{
 			}
 		}
 	} catch (e) {
+		logComfyFetch("/system_stats", connection, null, "request failed or body is not JSON")
 		return { ok: false, error: e instanceof Error ? e.message : String(e) }
 	}
 }
