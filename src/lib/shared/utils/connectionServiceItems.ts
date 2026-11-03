@@ -206,6 +206,8 @@ export function serviceSetupNeed(service: {
 	// A host this pub only talks to, though it runs on the person's machine:
 	// its address is the whole setup (DESIGN-image-generation §4.9).
 	if (service.type === CONNECTION_TYPE.COMFYUI) return "address"
+	// Same: an audio.cpp server Serene Pub does not run — address only.
+	if (service.type === CONNECTION_TYPE.AUDIOCPP) return "address"
 	if (service.category === "local") return "local"
 	return "address"
 }
