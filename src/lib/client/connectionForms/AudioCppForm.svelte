@@ -23,8 +23,7 @@
 			class="input"
 		/>
 		<p class="text-surface-600-400 text-xs">
-			An audio.cpp server Serene Pub does not run — point this at its
-			address. See audio.cpp, run by Serene Pub for the managed one.
+			The address of an audio.cpp server you run yourself.
 		</p>
 	</div>
 {/if}

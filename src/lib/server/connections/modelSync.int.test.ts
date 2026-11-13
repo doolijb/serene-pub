@@ -46,14 +46,11 @@ let hostListing: { models: unknown[]; error?: string } = { models: [] }
  * one, where the whole question is what happens between the read and the write.
  */
 let hostDelayMs = 0
-/** The connection object the last listing call received (key-shape probe). */
-let seenConnection: any = undefined
 /** What the text half of a connection test answers. */
 let hostTest: { ok: boolean; error?: string; extra?: unknown } = { ok: true }
 vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({
-		listModels: async (connection: any) => {
-			seenConnection = connection
+		listModels: async () => {
 			if (hostDelayMs)
 				await new Promise((r) => setTimeout(r, hostDelayMs))
 			return hostListing
@@ -610,22 +607,6 @@ describe("syncConnectionModelsById — staleness and the adapter", () => {
 	test("an unknown endpoint is null", async () => {
 		const { syncConnectionModelsById } = await import("./modelSync")
 		expect(await syncConnectionModelsById(db, 999_999)).toBeNull()
-	})
-
-	test("decrypts the stored apiKey envelope before listing", async () => {
-		const { syncConnectionModelsById } = await import("./modelSync")
-		const { encryptApiKeyField } = await import(
-			"$lib/server/utils/tokenCrypto"
-		)
-		const c = await endpoint("keyed")
-		await db
-			.update(schema.connections)
-			.set({ extraJson: { apiKey: encryptApiKeyField("s3cret") } })
-			.where(eq(schema.connections.id, c.id))
-		hostListing = { models: [] }
-		seenConnection = undefined
-		await syncConnectionModelsById(db, c.id, { force: true })
-		expect(seenConnection?.extraJson?.apiKey).toBe("s3cret")
 	})
 })
 

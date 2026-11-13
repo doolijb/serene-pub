@@ -139,8 +139,14 @@ export function storedCapabilities(connection: {
  */
 const modalityAllows = (type: string, capability: CapabilityId): boolean => {
 	const modality = CONNECTION_TYPE.modalityOf(type)
-	if (SECTION_STAR_CAPABILITIES.has(capability))
-		return MODALITY_FOR_STAR_CAPABILITY[capability] === modality
+	if (SECTION_STAR_CAPABILITIES.has(capability)) {
+		if (MODALITY_FOR_STAR_CAPABILITY[capability] === modality) return true
+		// Speech has a section of its own now, but chat-type hosts speak too
+		// (an OpenAI-compatible endpoint, KoboldCPP). An undetermined TEXT row
+		// answered yes to speech before the section existed, and refusing it
+		// would break a working setup until the row is next tested.
+		return capability === "text->audio" && modality === "text-gen"
+	}
 	// Everything a section does not star keeps the old answer, which an
 	// undetermined TEXT row depends on: vision, documents, speech and every
 	// feature were permitted before the column existed and must stay permitted

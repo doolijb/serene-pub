@@ -841,14 +841,14 @@ function logComfyFetch(
 	note?: string
 ): void {
 	const extra = (connection.extraJson ?? {}) as Record<string, unknown>
-	const key = typeof extra.apiKey === "string" ? extra.apiKey : ""
 	console.error("[comfy]", {
 		root: rootOf(connection),
 		endpoint,
 		status: res?.status ?? "no-response",
 		contentType: res?.headers.get("content-type") ?? null,
 		authHeaderSent: Object.keys(authHeaders(connection))[0] ?? "none",
-		keyPresent: key.length > 0,
+		// Stored encrypted or handed in plain: either way a key is set.
+		keyPresent: Boolean(extra.apiKey),
 		...(note ? { note } : {})
 	})
 }
