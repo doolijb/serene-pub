@@ -1,19 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { resolveDrawn, type DrawnZone, type SessionLayoutV1 } from "@serene-pub/sdk"
 import {
 	STAGE_MEASURE_PX,
 	balancedGutters,
 	columnInsetPx,
 	middleZone,
 	stagePlanPx,
-	sidesTucked,
-	tuckThresholdPx,
-	toggleTuckedFlyout,
-	tuckedSidesOf,
-	type TuckedFlyout
+	tuckThresholdPx
 } from "./tuckedSides"
-import { MIN_CENTER_PX, emptyColumnsPx, sideFlowPx } from "./sideSlot"
-import { STORY_WORLD_LAYOUT, LAIR_LAYOUT } from "@serene-pub/core-catalog"
+import { emptyColumnsPx } from "./sideSlot"
 
 describe("tuckThresholdPx — derived from the zones' own minimums", () => {
 	it("is the sides' footprints, their gaps and the stage's measure", () => {
@@ -32,42 +26,6 @@ describe("tuckThresholdPx — derived from the zones' own minimums", () => {
 
 	it("the stage measure is the conversation's 40rem + 3.5rem column", () => {
 		expect(STAGE_MEASURE_PX).toBe(40 * 16 + 3.5 * 16)
-	})
-})
-
-describe("sidesTucked — the collapse decision, from the CONTAINER width", () => {
-	const base = { leftPx: 0, rightPx: 264, gapPx: 8 }
-
-	it("tucks when the sides would squeeze the stage under its measure", () => {
-		// 1280 window, 64 rail, 400 dock open → an 816 session box.
-		expect(sidesTucked({ ...base, bodyPx: 816 })).toBe(true)
-	})
-
-	it("stays docked with room for the sides and the whole measure", () => {
-		// 1440 window, sidebar closed → 1376.
-		expect(sidesTucked({ ...base, bodyPx: 1376 })).toBe(false)
-		expect(sidesTucked({ ...base, bodyPx: 264 + 8 + STAGE_MEASURE_PX })).toBe(
-			false
-		)
-		expect(
-			sidesTucked({ ...base, bodyPx: 264 + 8 + STAGE_MEASURE_PX - 1 })
-		).toBe(true)
-	})
-
-	it("never tucks with nothing docked on either side", () => {
-		expect(sidesTucked({ leftPx: 0, rightPx: 0, gapPx: 8, bodyPx: 300 })).toBe(
-			false
-		)
-	})
-
-	it("an unmeasured box (0) is not an answer of 'no room'", () => {
-		expect(sidesTucked({ ...base, bodyPx: 0 })).toBe(false)
-	})
-
-	it("counts both sides when both are docked", () => {
-		const both = { leftPx: 264, rightPx: 264, gapPx: 8 }
-		expect(sidesTucked({ ...both, bodyPx: 1200 })).toBe(true)
-		expect(sidesTucked({ ...both, bodyPx: 1300 })).toBe(false)
 	})
 })
 
@@ -133,30 +91,6 @@ describe("balancedGutters — the stage centred in the available width", () => {
 		expect(
 			balancedGutters({ bodyPx: 1000, startPx: 0, endPx: 300, stagePx: 500 })
 		).toEqual({ start: 200, end: 0 })
-	})
-})
-
-describe("toggleTuckedFlyout — one tucked panel out at a time", () => {
-	const a: TuckedFlyout = { side: "right", key: "scene-portraits" }
-	const b: TuckedFlyout = { side: "left", key: "notes" }
-
-	it("opens the panel asked for", () => {
-		expect(toggleTuckedFlyout(null, a)).toEqual(a)
-	})
-
-	it("asking for the open one again closes it", () => {
-		expect(toggleTuckedFlyout(a, { ...a })).toBeNull()
-	})
-
-	it("opening another closes the first — even across sides", () => {
-		expect(toggleTuckedFlyout(a, b)).toEqual(b)
-	})
-
-	it("the same key on the other side is a different panel", () => {
-		expect(toggleTuckedFlyout(a, { side: "left", key: a.key })).toEqual({
-			side: "left",
-			key: a.key
-		})
 	})
 })
 
@@ -251,180 +185,5 @@ describe("stagePlanPx — a classic scrollbar is planned for, so the rows centre
 			expect(Math.abs(composer + W / 2 - body / 2)).toBeLessThanOrEqual(1)
 			expect(Math.abs(rows - composer)).toBeLessThanOrEqual(1)
 		}
-	})
-})
-
-describe("tuckedSidesOf — the side holding the log never tucks (brief 7a review)", () => {
-	const rail = 264
-	const gap = 8
-	it("with the log in the middle, both sides tuck together, exactly as before", () => {
-		const o = { leftPx: rail, rightPx: rail, gapPx: gap, logSide: null, middleMinPx: MIN_CENTER_PX }
-		const need = tuckThresholdPx(o)
-		expect(tuckedSidesOf({ ...o, bodyPx: need - 1 })).toEqual({ left: true, right: true })
-		expect(tuckedSidesOf({ ...o, bodyPx: need })).toEqual({ left: false, right: false })
-	})
-
-	it("Adventure with the log moved left, at a 1280 window: nothing tucks", () => {
-		// Seen live: 264 + 264 + gaps + the log's measure (≈1250) tucked a
-		// ~1216px body, and the log became a rail icon. The middle holds no
-		// log now, so it is owed the centre's reserve, not the log's measure.
-		const o = { leftPx: rail, rightPx: rail, gapPx: gap, logSide: "left" as const, middleMinPx: MIN_CENTER_PX }
-		expect(tuckedSidesOf({ ...o, bodyPx: 1216 })).toEqual({ left: false, right: false })
-	})
-
-	it("tight enough that the middle's reserve is at stake: the OTHER side tucks, the log's never", () => {
-		const o = { leftPx: rail, rightPx: rail, gapPx: gap, middleMinPx: MIN_CENTER_PX }
-		const need = rail + rail + 2 * gap + MIN_CENTER_PX
-		expect(tuckedSidesOf({ ...o, logSide: "left", bodyPx: need - 1 })).toEqual({ left: false, right: true })
-		expect(tuckedSidesOf({ ...o, logSide: "right", bodyPx: need - 1 })).toEqual({ left: true, right: false })
-	})
-
-	it("the log alone in the right rail of a ~966px body (a 1030 window): it stays a rail", () => {
-		// Seen live: the Chat session with Messages in the right tucked at
-		// 1030×800 and drew a World State strip over a blank body.
-		const o = { leftPx: 0, rightPx: rail, gapPx: gap, logSide: "right" as const, middleMinPx: MIN_CENTER_PX }
-		expect(tuckedSidesOf({ ...o, bodyPx: 966 }).right).toBe(false)
-	})
-})
-
-describe("tuckedSidesOf — the same cases, read off the drawn layout (C5)", () => {
-	/**
-	 * A layout's tuck inputs as the SDK's one reader draws them: a side's
-	 * docked footprint is its rung's `width × columns` when it docks a panel
-	 * (0 when it does not), and the log's side is the side whose drawn
-	 * panels hold the conversation.
-	 */
-	const tuckOf = (layout: SessionLayoutV1, inline: number) => {
-		const d = resolveDrawn(layout, { inline })
-		const px = (z: DrawnZone) =>
-			z.panels.length && z.rung?.mode === "rail"
-				? z.rung!.width * z.rung!.columns
-				: 0
-		const holdsLog = (z: DrawnZone) => z.instances.some((i) => i.widgetId === "messages")
-		return {
-			leftPx: px(d.left),
-			rightPx: px(d.right),
-			gapPx: 8,
-			logSide: holdsLog(d.left) ? ("left" as const) : holdsLog(d.right) ? ("right" as const) : null,
-			middleMinPx: MIN_CENTER_PX
-		}
-	}
-	const sides = (left: string[], right: string[]): SessionLayoutV1 => ({
-		panels: {
-			version: 1,
-			left: left.map((id) => ({ key: `l-${id}`, tabs: [id] })),
-			right: right.map((id) => ({ key: `r-${id}`, tabs: [id] })),
-			middle: { above: [], primary: { key: "p0", tabs: ["stats#world"] }, below: [] }
-		}
-	})
-
-	it("Adventure with the log moved left, at a 1280 window: nothing tucks", () => {
-		const o = tuckOf(sides(["messages"], ["scene-portraits", "stats"]), 1280)
-		// The 1200–1440 rung: 248 each side.
-		expect([o.leftPx, o.rightPx, o.logSide]).toEqual([248, 248, "left"])
-		expect(tuckedSidesOf({ ...o, bodyPx: 1216 })).toEqual({ left: false, right: false })
-	})
-
-	it("tight enough that the middle's reserve is at stake: the OTHER side tucks, the log's never", () => {
-		const o = tuckOf(sides(["messages"], ["stats"]), 1280)
-		expect([o.leftPx, o.rightPx]).toEqual([248, 248])
-		const need = 248 + 248 + 2 * 8 + MIN_CENTER_PX
-		expect(tuckedSidesOf({ ...o, bodyPx: need - 1 })).toEqual({ left: false, right: true })
-	})
-
-	it("the log alone in the right rail of a ~966px body (a 1030 window): it stays a rail", () => {
-		const o = tuckOf(sides([], ["messages"]), 1030)
-		expect([o.leftPx, o.rightPx, o.logSide]).toEqual([0, 264, "right"])
-		expect(tuckedSidesOf({ ...o, bodyPx: 966 }).right).toBe(false)
-	})
-})
-
-describe("tuckedSidesOf — a layout holding no conversation (R-B, no lock)", () => {
-	const draw = (left: string[], right: string[], primary: string[]): SessionLayoutV1 => ({
-		panels: {
-			version: 1,
-			left: left.map((id) => ({ key: `l-${id}`, tabs: [id] })),
-			right: right.map((id) => ({ key: `r-${id}`, tabs: [id] })),
-			middle: { above: [], primary: { key: "p0", tabs: primary }, below: [] }
-		}
-	})
-
-	it("no side holds a log, so neither is kept from tucking: both tuck together, as with the log in the middle", () => {
-		const d = resolveDrawn(draw(["stats"], ["places"], ["map"]), { inline: 1280 })
-		expect(d.left.instances.concat(d.right.instances, d.middle.instances).some((i) => i.widgetId === "messages")).toBe(false)
-		const o = { leftPx: 248, rightPx: 248, gapPx: 8, logSide: null, middleMinPx: MIN_CENTER_PX }
-		const need = tuckThresholdPx(o)
-		expect(tuckedSidesOf({ ...o, bodyPx: need - 1 })).toEqual({ left: true, right: true })
-		expect(tuckedSidesOf({ ...o, bodyPx: need })).toEqual({ left: false, right: false })
-	})
-})
-
-describe("the shipped layouts at a 1280 window (body 1216) — the flow counts only what is docked (lane E1)", () => {
-	/**
-	 * A side's flow footprint as the model computes it (./sideSlot
-	 * `sideFlowPx`): a side whose every panel is in the rail is RAIL ONLY and
-	 * takes the rail's width, never the column it does not draw.
-	 */
-	const flowOf = (z: DrawnZone) =>
-		sideFlowPx({
-			slot: "inline",
-			populated: z.panels.length > 0 && z.rung!.mode !== "hidden",
-			mode: z.rung!.mode,
-			widthPx: z.rung!.width * z.rung!.columns,
-			tucked: z.panels.every((p) => !p.pinned)
-		})
-	const tuckAt = (layout: SessionLayoutV1, bodyPx: number) => {
-		const d = resolveDrawn(layout, { inline: bodyPx })
-		return {
-			px: [flowOf(d.left), flowOf(d.right)],
-			tucked: tuckedSidesOf({
-				leftPx: flowOf(d.left),
-				rightPx: flowOf(d.right),
-				gapPx: 8,
-				bodyPx,
-				logSide: null,
-				middleMinPx: MIN_CENTER_PX
-			})
-		}
-	}
-
-	it("Adventure as shipped: the left is all rail, so it costs a rail, and the party's column docks", () => {
-		// Lane L's finding: a left of unpinned cards once counted its full
-		// 264px and tucked BOTH sides at 1280. It is a rail; it costs a rail.
-		expect(tuckAt(STORY_WORLD_LAYOUT, 1216)).toEqual({
-			px: [36, 248],
-			tucked: { left: false, right: false }
-		})
-	})
-
-	it("Adventure with its left docked instead: two columns, still beside the stage at 1216", () => {
-		const docked: SessionLayoutV1 = {
-			...STORY_WORLD_LAYOUT,
-			panels: {
-				...STORY_WORLD_LAYOUT.panels!,
-				left: STORY_WORLD_LAYOUT.panels!.left.map(({ pinned: _p, ...rest }) => rest)
-			}
-		}
-		expect(tuckAt(docked, 1216)).toEqual({
-			px: [248, 248],
-			tucked: { left: false, right: false }
-		})
-	})
-
-	it("Lair as shipped: two DOCKED columns on the 1200–1440 rung (248 each) fit a 1216px body beside the stage's measure", () => {
-		// 248 + 248 + 2×8 + 696 = 1208 ≤ 1216. At 264 a side it needed 1240,
-		// and both sides tucked at a 1280 window (lane E1's ladder finding).
-		expect(tuckThresholdPx({ leftPx: 248, rightPx: 248, gapPx: 8 })).toBe(1208)
-		expect(tuckAt(LAIR_LAYOUT, 1216)).toEqual({
-			px: [248, 248],
-			tucked: { left: false, right: false }
-		})
-		// Still a threshold, not a guarantee: under 1208 on the same rung they tuck.
-		expect(tuckAt(LAIR_LAYOUT, 1207).tucked).toEqual({ left: true, right: true })
-		// From 1440 the rung is 264 again, and 1240 fits.
-		expect(tuckAt(LAIR_LAYOUT, 1440)).toEqual({
-			px: [264, 264],
-			tucked: { left: false, right: false }
-		})
 	})
 })

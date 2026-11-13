@@ -13,6 +13,11 @@
  *
  * `face` is the picture the member is drawn with (`face_media_id`); not a
  * *portrait* (the picture pipeline), not an *avatar* (the card's own picture).
+ *
+ * `postHistoryInstructions` and `creatorNotes` are retold like the prose
+ * fields; `likeness` is how to draw the member (a prompt and a reference
+ * picture) — not the face. These three live on the member's cast version only
+ * (no `lorebook_bindings` column).
  */
 export const RETOLD_FIELDS = [
 	"description",
@@ -21,7 +26,10 @@ export const RETOLD_FIELDS = [
 	"firstMessage",
 	"alternateGreetings",
 	"exampleDialogues",
-	"face"
+	"face",
+	"postHistoryInstructions",
+	"creatorNotes",
+	"likeness"
 ] as const
 
 export type RetoldField = (typeof RETOLD_FIELDS)[number]

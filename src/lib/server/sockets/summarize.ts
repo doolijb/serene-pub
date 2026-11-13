@@ -2,7 +2,6 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { refusable } from "./refusable"
 import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
@@ -11,11 +10,6 @@ import {
 	loreWriteRefusal,
 	loreWritesOffRefusal
 } from "$lib/server/messages/writes"
-import { sessionEvents } from "@serene-pub/sdk"
-import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
-import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
-import { assertOwnedBook } from "$lib/server/utils/ownedBook"
-import { strictRulesRefusal } from "$lib/server/rulesets/bookRules"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { loreSourceIdsOf } from "$lib/server/pipelines/runtime/loreSources"
 
@@ -34,87 +28,6 @@ async function summarizeActionIdentities(): Promise<{ world: string; character: 
 		}
 	}
 	return summarizeIdentities
-}
-
-/** The columns that say where a session reads its book, as one row has them. */
-type SessionLine = {
-	lorebookId: number | null
-	lorebookBranchId: number | null
-	storyClockYear: number | null
-	storyClockMonth: number | null
-	storyClockDay: number | null
-	storyClockHour: number | null
-	storyClockMinute: number | null
-}
-
-/**
- * Which of a session's line columns moved, named the way `sessions:update`'s
- * `session-updated` names them — `lorebookId`, `lorebookBranchId` and the five
- * clock columns as one `storyClock`, in that order.
- */
-export function sessionLineChanges(
-	before: SessionLine,
-	after: SessionLine
-): string[] {
-	const changed: string[] = []
-	if ((before.lorebookId ?? null) !== (after.lorebookId ?? null))
-		changed.push("lorebookId")
-	if ((before.lorebookBranchId ?? null) !== (after.lorebookBranchId ?? null))
-		changed.push("lorebookBranchId")
-	const clock = (r: SessionLine) =>
-		JSON.stringify([
-			r.storyClockYear ?? null,
-			r.storyClockMonth ?? null,
-			r.storyClockDay ?? null,
-			r.storyClockHour ?? null,
-			r.storyClockMinute ?? null
-		])
-	if (clock(before) !== clock(after)) changed.push("storyClock")
-	return changed
-}
-
-/**
- * Tell every tab that the session now reads its book somewhere else.
- *
- * `sessions:setLorebook` moves the book, the line and the clock — the same
- * three things `sessions:update` announces with `state:changed` (so every tab
- * reads its state afresh) and a `session-updated` under the person's
- * `settings` cause (which never fires a turn). It announced neither, so other
- * tabs and the session lists kept the old book until a reload. Best-effort, as
- * there: an emitter failing must not fail the write that already landed.
- */
-async function announceSessionLineMoved(
-	io: any,
-	sessionId: number,
-	userId: number,
-	before: SessionLine,
-	after: SessionLine
-): Promise<void> {
-	const changed = sessionLineChanges(before, after)
-	if (changed.length === 0) return
-	try {
-		await broadcastToSessionUsers(io, sessionId, "state:changed", {
-			sessionId
-		} satisfies Sockets.State.Changed.Response)
-		const { emitSessionEvent } = await import(
-			"$lib/server/pipelines/runtime/sessionEvents"
-		)
-		await emitSessionEvent(db, {
-			sessionId,
-			userId,
-			event: sessionEvents.sessionUpdated,
-			payload: {
-				sessionId,
-				changed,
-				cause: { kind: "settings", userId }
-			},
-			io
-		})
-	} catch (err) {
-		console.warn("[sessions:setLorebook] session-updated emit failed:", err)
-	}
-	// The session lists show which book a session reads.
-	broadcastSessionRow(io, sessionId)
 }
 
 export const sessionsSummarizeHandler: Handler<
@@ -504,131 +417,6 @@ export const sessionsSummarizeHandler: Handler<
 	}
 }
 
-export const sessionsSetLorebookHandler: Handler<
-	Sockets.Sessions.SetLorebook.Params,
-	Sockets.Sessions.SetLorebook.Response
-> = refusable(
-	"sessions:setLorebook",
-	async (socket, params: Sockets.Sessions.SetLorebook.Params, emitToUser) => {
-		const userId = socket.user!.id
-		const { sessionId, lorebookId } = params
-
-		// Verify ownership — shared helper, see sessionsSummarizeHandler above.
-		const sessionAccess = await checkSessionAccess(sessionId, userId)
-		if (!sessionAccess.isOwner) {
-			throw new Error("Session not found or access denied.")
-		}
-		const session = await db.query.sessions.findFirst({
-			where: eq(schema.sessions.id, sessionId)
-		})
-
-		if (!session) {
-			throw new Error("Session not found or access denied.")
-		}
-
-		// The book lock (PLAN-lorebook-kinds §A): once play has written, the
-		// session keeps the book it has.
-		const { bookChangeRefusal, rulesFromBook } = await import(
-			"$lib/server/sessions/bookLock"
-		)
-		const locked = await bookChangeRefusal(
-			db as unknown as Db,
-			{ id: session.id, lorebookId: session.lorebookId ?? null },
-			lorebookId
-		)
-		if (locked) throw new Error(locked)
-
-		// If attaching a lorebook, verify the user owns it — and that the
-		// session's genre plays by the book's rules, as a book chosen at the
-		// start would be checked (`strictRulesRefusal`).
-		if (lorebookId !== null) {
-			// 🚧 A starter lorebook is started from, never read (PLAN-lorebook-kinds §B).
-			const { kitReadRefusal } = await import("$lib/server/lorebooks/starterKits")
-			const kitRefusal = await kitReadRefusal(db as unknown as Db, lorebookId)
-			if (kitRefusal) throw new Error(kitRefusal)
-			await assertOwnedBook(db, userId, lorebookId)
-			const [book] = await db
-				.select({
-					name: schema.lorebooks.name,
-					primaryRuleset: schema.lorebooks.primaryRuleset
-				})
-				.from(schema.lorebooks)
-				.where(eq(schema.lorebooks.id, lorebookId))
-			const refusal = book ? strictRulesRefusal(session.genreId, book) : null
-			if (refusal) throw new Error(refusal)
-		}
-
-		// A new book starts at its most recently used line, the session's
-		// clock at that line's present (ruling 15, story-time P3) — the one
-		// rule `sessionLinePatch` keeps for every path. The session's
-		// story-time stats come with it, checked against the new book's
-		// calendar and written in one transaction under its lock.
-		const { sessionLinePatch } = await import("./sessions")
-		// Before play, the session takes the book's Rules with it (ruling 6).
-		const rules =
-			lorebookId !== null && lorebookId !== session.lorebookId
-				? await rulesFromBook(
-						db as unknown as Db,
-						{ genreId: session.genreId, rigour: session.rigour ?? null },
-						lorebookId
-					)
-				: null
-		const updated = await db.transaction(async (tx) => {
-			const linePatch = await sessionLinePatch(tx, {
-				before: {
-					lorebookId: session.lorebookId ?? null,
-					lorebookBranchId: session.lorebookBranchId ?? null
-				},
-				session: { id: session.id, name: session.name },
-				lorebookId
-			})
-			const [row] = await tx
-				.update(schema.sessions)
-				.set({ lorebookId, ...linePatch, ...(rules ?? {}) })
-				.where(eq(schema.sessions.id, sessionId))
-				.returning()
-			return row
-		})
-
-		// The session's own book follows its book (`overlay_of`, and the
-		// Rules), the resync `ownBookFor` keeps.
-		{
-			const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
-			await ownBookFor(db as unknown as Db, sessionId)
-		}
-
-		// Attaching a book to a session is one of the two ways the two meet,
-		// and the cast arrives on its own from either (ruling 2026-09-12).
-		// Imported lazily: this is the only reference summarize.ts has to the
-		// sessions module, and a static one would tie the two files' load
-		// order together for a single call.
-		if (lorebookId !== null) {
-			const { runLorebookBindingCheck } = await import("./sessions")
-			await runLorebookBindingCheck(
-				socket,
-				sessionId,
-				lorebookId,
-				emitToUser
-			).catch(console.error)
-		}
-
-		await announceSessionLineMoved(
-			socket.io,
-			sessionId,
-			userId,
-			session,
-			updated
-		)
-
-		const response: Sockets.Sessions.SetLorebook.Response = {
-			session: updated
-		}
-		emitToUser("sessions:setLorebook", response)
-		return response
-	},
-	"The session's lorebook could not be changed."
-)
-
 export function registerSummarizeHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -639,5 +427,4 @@ export function registerSummarizeHandlers(
 	) => void
 ) {
 	register(socket, sessionsSummarizeHandler, emitToUser)
-	register(socket, sessionsSetLorebookHandler, emitToUser)
 }

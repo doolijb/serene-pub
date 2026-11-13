@@ -9,11 +9,19 @@
  * `portrayals.ts` is asserted here with those rows and nothing mocked.
  */
 
-import { describe, it, expect, beforeAll } from "vitest"
+import { describe, it, expect, beforeAll, afterEach } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { participantRowId, resolvePortrayals, turnRefs } from "./portrayals"
+import { memberFormSwitch } from "$lib/server/state/memberForm"
+
+// ⏳ (S4) The two `turnRefs` tests below pin the card form (switch OFF); the
+// member form is `host.seatForm.int.test.ts`'s.
+let switchWas = memberFormSwitch.on
+afterEach(() => {
+	memberFormSwitch.on = switchWas
+})
 
 let db: TestDb
 let sessionId: number
@@ -246,6 +254,8 @@ describe("resolvePortrayals — the table", () => {
 	})
 
 	it("turnRefs asks about the speaker, the live cast, the live presences, the owner and the run owner", async () => {
+		switchWas = memberFormSwitch.on
+		memberFormSwitch.on = false
 		const refs = await turnRefs(db as any, sessionId, `character:${castId}`)
 		// Both persona rows are live presences and are asked about — the
 		// guest's, and the leaver's, which the resolver then answers `none`.
@@ -314,6 +324,8 @@ describe("resolvePortrayals — the table", () => {
 
 describe("🚧 player-seat:<id> — a card-less player seat (2026-10-14)", () => {
 	it("is its player's while they are a member and the seat is live; else nobody's; never the AI's", async () => {
+		switchWas = memberFormSwitch.on
+		memberFormSwitch.on = false
 		const [mine, leavers, gone] = await db
 			.insert(schema.sessionPersonas)
 			.values([

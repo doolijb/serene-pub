@@ -54,6 +54,8 @@ import type {
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter, type BlockRole } from "./PromptBlockFormatter"
 import { strokeList } from "./strokeList"
+import { explicitLayoutText } from "./contextHandlebarsHelpers"
+import { VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
 import {
 	CONTEXT_LIQUID_REFUSED_TAGS,
 	LIQUID_PARSE_LIMIT
@@ -278,6 +280,25 @@ export function createContextLiquid({
 	// `{{ character.strokes | strokeList: "description" }}` — the Handlebars
 	// helper of the same name (`strokeList.ts`).
 	liquid.registerFilter("strokeList", strokeList)
+	// `{{ characters | layout: "core/json@1" }}` — the Handlebars helper of the
+	// same name. A filter is its own namespace: `CONTEXT_LIQUID_REFUSED_TAGS`
+	// refuses a `{% layout %}` *tag* and leaves this alone. The render
+	// pre-pass has rewritten the head to the key's name as a string and
+	// written the text out (`LAYOUT_RENDERS_CONTEXT_KEY`).
+	liquid.registerFilter(
+		VARIABLE_LAYOUT_HELPER,
+		function (
+			this: { context?: { environments?: unknown } },
+			key: unknown,
+			reference: unknown
+		) {
+			return explicitLayoutText(
+				this?.context?.environments,
+				key,
+				reference
+			)
+		}
+	)
 
 	return liquid
 }

@@ -1,0 +1,45 @@
+# BRIEF m2e-D-w4 — ★46 contract line, shared `declaredFieldRefusal`, ★E-2 Advanced fold (server half)
+
+You are a `lane-worker` under lane supervisor **m2e-D**. Work from `/home/jody/github/serene-pub` (app) and `/home/jody/github/serene-pub-sdk` (SDK). Everything below is RULED by the owner (2026-11-04); build it, do not re-open it. Worker w3 edits provided books / starter kits / `sockets/plugins.ts` / `src/lib/shared/sockets/types.ts` at the same time — stay out of those.
+
+This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work.
+Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`.
+Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`.
+Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'.
+**Shared-tree rule (coordinator, 2026-11-04):** another programme's lanes build in the same trees (they edit `src/lib/server/auth/actingPerson.ts`, `src/lib/server/sockets/sessions.ts`, SDK `sdk/src/storyTime.ts`, `core-catalog/src/genres/story/ask.ts`). You should not need those. If you must touch one: re-read it immediately before every edit, keep hunks additive and small, never reformat it, and note in your report any hunk there that is not yours. Never run prettier `--write` on a file you did not create.
+
+## Goal
+
+### 1. ★46 contract line
+Ruling: *"★46 → keep in the task; one contract-doc line on `core:task/read-library-draft@1`."* In `../serene-pub-sdk/contracts/src/tasks.ts` (~5430–5445, `core:task/read-library-draft@1`): ONE description line saying the task also turns a plain `See: /docs/<path>` line into a markdown link. No behaviour change. If a test or generated doc snapshots that description, update it.
+
+### 2. Shared `declaredFieldRefusal`
+Move the pure function at `src/lib/server/sockets/appletSessions.ts:72` (`declaredFieldRefusal(fields, declared, genreId)`) into **`src/lib/shared/sessions/declaredFieldRefusal.ts`**, exported as `declaredFieldRefusal(fields: unknown, declared: readonly string[] | null, genreId: string): string | null` — the exact same sentences (_"The fields are an object of values."_ / _"'<key>' is not a field of the genre '<genreId>'."_). The server imports it from there (re-export from appletSessions only if other server files import it from there — check, and prefer switching them). A small unit test `src/lib/shared/sessions/declaredFieldRefusal.test.ts`. Lane C switches the client's `navigation.ts` — NOT you.
+
+### 3. ★E-2 the Advanced fold (server half)
+Ruling: *"★E-2 → yes: a setting with no group lands under an Advanced fold in every derived form."* Challenger (accepted): *"★E-2's trigger is exactly the warning's (missing description, group or reach on a user-facing field), one SDK-exported predicate shared by `cli/src/compiler.ts:1773` and the server deriver `src/lib/server/sessions/settingsForm.ts:277,667` — so the fold is lane D's; lane C only draws it. Lane D reports which core fields would move; where an everyday field would (core genres declare `group` once, `core-catalog/src/registry/genres.ts:206`), fix the declaration in core-catalog, never the rule."*
+- Export ONE predicate from `../serene-pub-sdk/sdk/src/settings.ts` (beside `reach` / `group`), e.g. `undescribedSettingParts(decl): Array<'description' | 'group' | 'reach'>` (empty = described) — name it per §24 (grep first; 🚧). It encodes exactly what `W_SETTING_UNDESCRIBED` checks today in `cli/src/compiler.ts` ~1760–1800 (read every place `undescribed(` is called: genre fields skip `reach === 'admin'`; check what the other call sites test — widget settings, plugin settings, etc. — and make the predicate serve them, or say which stay local and why). Export it from the SDK index the way its neighbours are.
+- `cli/src/compiler.ts` uses it (no change in what it warns about — the existing compiler tests must stay green; run them).
+- `src/lib/server/sessions/settingsForm.ts` (277 and 667 decide `advanced` today): a user-facing field the predicate flags gets `advanced: true` IN ADDITION to the current reasons (keep `decl.advanced` and the `!d.quick && !exposed && !fdecl?.reach` rule unless the predicate subsumes it — say which). Everything else about the field is unchanged. The fold is drawn by the client from `advanced` (no wire change). Read how `advanced` fields are ordered/grouped today in the deriver output; if the deriver is what puts them "last", keep that true.
+- **Report which core fields move** — run the predicate over every core-catalog genre field / setting the deriver shows (write a throwaway script in the scratchpad `/tmp/claude-1000/-home-jody-github-serene-pub/66e86768-ea43-4e92-bc4d-5f956a670b22/scratchpad/`, or a test) and list them. Core genres declare `group` once (`../serene-pub-sdk/core-catalog/src/registry/genres.ts:206`), so auto-advance, "Who speaks next is decided by" and "Character detail" would fold. Where an **everyday** field would move, **fix its declaration in core-catalog** (add `description` one sentence of purpose / `group` / `reach` as missing), never the rule. "Everyday" = a field a session owner plausibly changes in normal play (what speaks next, auto-advance, character detail, reply length, scene/story options shown at session start); a tuning knob nobody touches in play may fold — list both sets with your reasoning. Copy rules for any `description` you write (STYLE-GUIDE §10, quoted): one sentence, plain words, says what it does for the person, no "we", no jargon ("pipeline", "node", "LLM"), it is a **session**, never a chat. **List every declaration you touched** (file:line, field, what you added).
+- Tests: the `src/lib/server/sessions/settingsForm*` tests — add: an undescribed user-facing field → `advanced: true`; a described one → not; the core fields that still fold (snapshot the list). SDK: a test for the predicate in `../serene-pub-sdk/sdk-tests/` (find the settings tests) and the compiler warning tests stay green.
+
+## Rules (quoted)
+- CLAUDE.md P3 *"Few settings"*, P4 *"Power controls are purposeful. Grouped by the task, each with one sentence of purpose"*, P5 *"A user-facing declaration without purpose, group and reach gets a validation warning and lands under Advanced. Derive without painting us into a corner."*
+- Decisions: implementation inside scope is yours — name each choice. A new name → 🚧 with a one-line §25 draft (what it is; what it is **not**). Findings → **Noticed, not done**, never fixed in passing.
+- NOMENCLATURE §1: R1 one word, one meaning · R2 distinctive words · R3 qualify, never the bare noun · R4 casual words are not type names · R6 mark 🚧. §24: grep a new word across `src`, the SDK and the schema first.
+- SDK: edit it in `/home/jody/github/serene-pub-sdk`; after SDK changes run `npm run sdk:build` from the APP root `/home/jody/github/serene-pub` (check `pgrep -af "vite dev"` first), then the SDK tests you touched (`npm run sdk:test -- <file>` if that form works — check package.json — else the full `npm run sdk:test`; heavy DOM tests: don't run them separately). Never `git checkout`/`restore`/`stash` in the SDK repo. Removing or renaming a published SDK name is the owner's call — you add, never rename.
+- Tests: targeted files only (`npx vitest run <file>`); never pipe vitest into `head` (use `2>&1 | tail -60`).
+
+## Files owned (this worker)
+`../serene-pub-sdk/sdk/src/settings.ts` (+ `sdk/src/index.ts` export line), `../serene-pub-sdk/cli/src/compiler.ts`, `../serene-pub-sdk/contracts/src/tasks.ts`, `../serene-pub-sdk/core-catalog/src/**` (declarations only — NOT `core-catalog/src/genres/story/ask.ts` unless unavoidable, see shared-tree rule), `../serene-pub-sdk/sdk-tests/**` for these, `src/lib/server/sessions/settingsForm*.ts`, `src/lib/server/sockets/appletSessions.ts`, `src/lib/shared/sessions/declaredFieldRefusal*.ts`, any server file that imports `declaredFieldRefusal`.
+NOT yours: `src/lib/client/**` (incl. `navigation.ts`), `src/routes/**`, `NOMENCLATURE.md`, `STYLE-GUIDE.md`, `docs/**`, provided books / starter kits / `sockets/plugins.ts` / `src/lib/shared/sockets/types.ts`.
+
+## Out of scope
+No new setting, no wire change, no client drawing, no behaviour change in ★46.
+
+## Done means
+Green: `settingsForm*` tests; the compiler warning tests; the SDK predicate test; `declaredFieldRefusal.test.ts`; `appletSessions` tests if any; any contracts/docs snapshot test touched. `sdk:build` clean. `npx prettier --check` on files you created.
+
+## Report
+Write `plans/briefs/REPORT-m2e-D-w4.md` (if Write is refused, put the full report in your final message): changed files; tests with pass/fail counts; the predicate's name; the list of core fields that would move, which you fixed (every declaration touched) and which still fold; new names with §25 drafts; decisions; **Noticed, not done**; any foreign hunk seen.

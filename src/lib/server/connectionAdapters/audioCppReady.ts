@@ -14,7 +14,7 @@
 /** What a model row needs from one enabled package. */
 export type EnabledAudioCppPackage = Pick<
 	Sockets.AudioCpp.PackageRow,
-	"id" | "name" | "task" | "family" | "variant"
+	"id" | "name" | "task" | "family" | "variant" | "sizeBytes"
 >
 
 /**
@@ -51,17 +51,22 @@ export async function listEnabledAudioCppPackages(
 	// process was never told about would be a model nothing can serve.
 	const enabled = await packages.enabledPackagesForConfig(db, lists)
 	if (!enabled.length) return []
-	// The display names live on the package listing, not the config entries.
-	const names = new Map(
+	// The display names and sizes live on the package listing, not the config
+	// entries; the size becomes the row's model facts (Models list totals).
+	const listing = new Map(
 		(await packages.listAudioCppPackages(db, { lists, backend: null })).map(
-			(p) => [p.id, p.name] as const
+			(p) => [p.id, p] as const
 		)
 	)
-	return enabled.map((p) => ({
-		id: p.id,
-		name: names.get(p.id) ?? p.id,
-		task: p.task,
-		family: p.family,
-		...(p.variant ? { variant: p.variant } : {})
-	}))
+	return enabled.map((p) => {
+		const listed = listing.get(p.id)
+		return {
+			id: p.id,
+			name: listed?.name ?? p.id,
+			task: p.task,
+			family: p.family,
+			...(p.variant ? { variant: p.variant } : {}),
+			...(listed?.sizeBytes ? { sizeBytes: listed.sizeBytes } : {})
+		}
+	})
 }

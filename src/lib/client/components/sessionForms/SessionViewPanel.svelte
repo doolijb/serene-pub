@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
 	import Avatar from "$lib/client/components/Avatar.svelte"
+	import { seatCardsAsShown } from "$lib/client/components/sessionPage/projections/characters"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
@@ -19,7 +20,16 @@
 		SESSION_ARCHIVE_CONFIRM,
 		SESSION_ARCHIVE_LABELS
 	} from "$lib/shared/sessions/archive"
-	import { SHARE_CONFIRMS, SHARE_LABELS } from "$lib/shared/lorebooks/sessionNotes"
+	import {
+		FOLD_CONFIRM,
+		FOLD_LABEL,
+		SHARE_CONFIRMS,
+		SHARE_LABELS
+	} from "$lib/shared/lorebooks/sessionNotes"
+	import { getContext } from "svelte"
+	import { SvelteMap, SvelteSet } from "svelte/reactivity"
+	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
+	import SessionRunsTab from "./SessionRunsTab.svelte"
 
 	interface Props {
 		sessionId: number
@@ -71,6 +81,28 @@
 
 	const socket = useTypedSocket()
 
+	// Receipts are an administrator's (R55): the Runs tab, and the strip that
+	// carries it, exist only for one. Tolerates no context (a bare mount).
+	const userCtx = getContext<
+		{ user?: { id: number; isAdmin?: boolean } } | undefined
+	>("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+	let activeTab = $state("details")
+	/** Stays true once Runs has been opened: a curious admin only pays for the read. */
+	let runsOpened = $state(false)
+	$effect(() => {
+		if (activeTab === "runs") runsOpened = true
+	})
+	$effect(() => {
+		void sessionId
+		activeTab = "details"
+		runsOpened = false
+	})
+	const VIEW_TABS = [
+		{ value: "details", label: "Details", icon: Icons.Info },
+		{ value: "runs", label: "Runs", icon: Icons.Receipt }
+	]
+
 	let session = $state<Sockets.Sessions.Get.Response["session"] | null>(null)
 	let isLoading = $state(true)
 
@@ -120,14 +152,30 @@
 	 * session only" until applied to the lorebook. Empty with no lorebook.
 	 */
 	let overlayItems = $state<Sockets.Sessions.OverlayItems.Item[]>([])
+	/** Why a history day stayed with the session at the last Apply, by its notes entry. */
+	const heldDayReasons = new SvelteMap<number, string>()
+	/** The reader may Apply and Take back (the lorebook's owner), not "owns the session". */
+	let mayApply = $state(false)
+	/** The lorebook takes this session's changes by itself as scenes close. */
+	let appliesItself = $state(false)
 	$effect(() => {
 		const id = sessionId
 		overlayItems = []
+		mayApply = false
+		appliesItself = false
 		const onItems = (res: Sockets.Sessions.OverlayItems.Response) => {
-			if (res.sessionId === id) overlayItems = res.items ?? []
+			if (res.sessionId !== id) return
+			overlayItems = res.items ?? []
+			mayApply = !!res.mayApply
+			appliesItself = !!res.appliesItself
 		}
 		const releaseItems = declareInterest<"sessions:overlayItems">("sessions:overlayItems", onItems)
-		const releaseApplied = declareInterest<"sessions:applyOverlay">("sessions:applyOverlay", () => {})
+		heldDayReasons.clear()
+		const releaseApplied = declareInterest<"sessions:applyOverlay">("sessions:applyOverlay", (res) => {
+			// A day that could not be merged says why, beside its item.
+			heldDayReasons.clear()
+			for (const held of res?.heldDays ?? []) heldDayReasons.set(held.notesEntryId, held.reason)
+		})
 		socket.emit("sessions:overlayItems", {
 			sessionId: id
 		} satisfies Sockets.Sessions.OverlayItems.Params)
@@ -136,18 +184,107 @@
 			releaseApplied()
 		}
 	})
-	function applyOverlay(entryIds?: number[]) {
+	/** What was applied to the lorebook from this session, newest first. */
+	let batches = $state<Sockets.Sessions.AppliedBatches.Batch[]>([])
+	let mayTakeBack = $state(false)
+	const openBatches = new SvelteSet<string>()
+	const pendingBatches = new SvelteSet<string>()
+	const refusals = new SvelteMap<string, string>()
+	$effect(() => {
+		const id = sessionId
+		batches = []
+		mayTakeBack = false
+		openBatches.clear()
+		pendingBatches.clear()
+		refusals.clear()
+		const onBatches = (res: Sockets.Sessions.AppliedBatches.Response) => {
+			if (res.sessionId !== id) return
+			batches = res.batches ?? []
+			mayTakeBack = !!res.mayApply
+			const live = new Set(batches.map((b) => b.batch))
+			for (const key of [...openBatches]) if (!live.has(key)) openBatches.delete(key)
+			for (const key of [...pendingBatches]) if (!live.has(key)) pendingBatches.delete(key)
+			for (const key of [...refusals.keys()]) if (!live.has(key)) refusals.delete(key)
+		}
+		const onTakeBack = (res: Sockets.Sessions.TakeBackApply.Response) => {
+			if (res.sessionId !== id || !res.batch) return
+			pendingBatches.delete(res.batch)
+			if (res.refused) refusals.set(res.batch, res.refused)
+		}
+		const releaseBatches = declareInterest<"sessions:appliedBatches">(
+			"sessions:appliedBatches",
+			onBatches
+		)
+		const releaseTakeBack = declareInterest<"sessions:takeBackApply">(
+			"sessions:takeBackApply",
+			onTakeBack
+		)
+		// A failure that is not a refusal answers on `:error`: free the buttons again.
+		const releaseTakeBackError = declareInterest<"sessions:takeBackApply:error">(
+			"sessions:takeBackApply:error",
+			() => pendingBatches.clear()
+		)
+		socket.emit("sessions:appliedBatches", {
+			sessionId: id
+		} satisfies Sockets.Sessions.AppliedBatches.Params)
+		return () => {
+			releaseBatches()
+			releaseTakeBack()
+			releaseTakeBackError()
+		}
+	})
+	function takeBack(batch: string) {
+		refusals.delete(batch)
+		pendingBatches.add(batch)
+		socket.emit("sessions:takeBackApply", {
+			sessionId,
+			batch
+		} satisfies Sockets.Sessions.TakeBackApply.Params)
+	}
+	function toggleBatch(batch: string) {
+		if (openBatches.has(batch)) openBatches.delete(batch)
+		else openBatches.add(batch)
+	}
+	const CAUSES = {
+		"scene-close": "as a scene closed",
+		"scene-summary": "when a scene's summary was saved",
+		"close-out": "at Close out"
+	} as const
+	function batchSummary(b: Sockets.Sessions.AppliedBatches.Batch): string {
+		const cause = b.by ? `by ${b.by.name}` : b.automatic ? CAUSES[b.automatic] : ""
+		return [
+			b.count === 1 ? "1 change" : `${b.count} changes`,
+			cause,
+			timeAgo(b.at)
+		]
+			.filter(Boolean)
+			.join(" · ")
+	}
+	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
+	function openWriteSetting() {
+		if (!panelsCtx || lorebookId == null) return
+		panelsCtx.digest.lore = { lorebookId, scope: "all", settings: true }
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+	function applyOverlay(entryIds?: number[], amendmentIds?: number[], linkIds?: number[]) {
 		socket.emit("sessions:applyOverlay", {
 			sessionId,
-			...(entryIds ? { entryIds } : {})
+			...(entryIds ? { entryIds } : {}),
+			...(amendmentIds ? { amendmentIds } : {}),
+			...(linkIds ? { linkIds } : {})
 		} satisfies Sockets.Sessions.ApplyOverlay.Params)
 	}
+	/** A changed value as short text: a string trimmed to one line, a list joined with commas, nothing as "empty". */
+	function shortValue(v: unknown): string {
+		if (v == null || v === "") return "empty"
+		if (Array.isArray(v)) return v.length ? v.map((x) => shortValue(x)).join(", ") : "empty"
+		if (typeof v === "string") return v.trim().split("\n")[0]!.trim() || "empty"
+		if (typeof v === "object") return JSON.stringify(v)
+		return String(v)
+	}
 
-	let characters = $derived(
-		(session as any)?.sessionCharacters
-			?.map((cc: any) => cc.character)
-			.filter(Boolean) ?? []
-	)
+	// Each seated card as its cast member shows it: its name and face.
+	let characters = $derived(seatCardsAsShown(session))
 	let personas = $derived(
 		(session as any)?.sessionPersonas
 			?.map((cp: any) => cp.persona)
@@ -294,14 +431,12 @@
 				},
 			isOwner &&
 				lorebookId != null && {
-					label: SHARE_LABELS.cloneWithChanges,
-					icon: Icons.CopyPlus,
+					label: FOLD_LABEL(shareBookName),
+					icon: Icons.Merge,
 					onSelect: () => {
 						const book = shareBookName
-						ask(
-							SHARE_CONFIRMS.cloneWithChanges(book),
-							SHARE_LABELS.cloneWithChanges,
-							() => socket.emit("sessions:cloneWithChanges", { sessionId })
+						ask(FOLD_CONFIRM(book), FOLD_LABEL(book), () =>
+							socket.emit("sessions:foldInParent", { sessionId })
 						)
 					}
 				},
@@ -347,6 +482,50 @@
 	{#if isLoading}
 		<LoadingState message="Loading session…" />
 	{:else if session}
+		{#if isAdmin}
+			<div class="flex min-h-0 flex-1 flex-col">
+				<PanelTabStrip
+					bind:value={activeTab}
+					tabs={VIEW_TABS}
+					ariaLabel="Session"
+					panelIdPrefix="session-view"
+				/>
+				<!-- Both panels stay mounted once shown; `hidden` alone hides
+				     them — no `display` on these divs. -->
+				<div
+					id="session-view-details"
+					role="tabpanel"
+					aria-labelledby="session-view-details-tab"
+					hidden={activeTab !== "details"}
+					class="min-h-0 flex-1 overflow-y-auto"
+				>
+					{@render details()}
+				</div>
+				<div
+					id="session-view-runs"
+					role="tabpanel"
+					aria-labelledby="session-view-runs-tab"
+					hidden={activeTab !== "runs"}
+					class="min-h-0 flex-1 overflow-y-auto"
+				>
+					{#if runsOpened}
+						<SessionRunsTab {sessionId} />
+					{/if}
+				</div>
+			</div>
+		{:else}
+			{@render details()}
+		{/if}
+	{:else}
+		<EmptyState
+			icon={Icons.MessageSquareOff}
+			message="Session not found."
+		/>
+	{/if}
+</div>
+
+{#snippet details()}
+	{#if session}
 		<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 			<!-- Hero: the one place this panel says which session it is
 			     showing, in the same shape the row used, scaled up. -->
@@ -464,38 +643,145 @@
 					</section>
 				{/if}
 
-				{#if lorebookId != null && overlayItems.length > 0}
+				{#if lorebookId != null && (overlayItems.length > 0 || batches.length > 0)}
 					<section class="panel-card" aria-label="This session only">
-						<div class="mb-1.5 flex items-center gap-2">
-							<p class="text-surface-600-400 text-xs">This session only</p>
-							{#if isOwner && overlayItems.length > 1}
-								<button
-									class="btn btn-sm preset-tonal-surface ml-auto"
-									onclick={() => applyOverlay()}
-									type="button"
-								>
-									Apply all to the lorebook
-								</button>
-							{/if}
-						</div>
-						<ul class="flex flex-col gap-1.5">
-							{#each overlayItems as item (item.entryId)}
-								<li class="flex min-w-0 items-center gap-2">
-									<span class="min-w-0 flex-1 truncate text-sm">
-										{item.title || "Untitled entry"}
-									</span>
-									{#if isOwner}
-										<button
-											class="btn btn-sm preset-tonal-surface shrink-0"
-											onclick={() => applyOverlay([item.entryId])}
-											type="button"
-										>
-											Apply to the lorebook
-										</button>
-									{/if}
-								</li>
-							{/each}
-						</ul>
+						{#if appliesItself}
+							<p class="text-surface-600-400 mb-1.5 text-xs">
+								The lorebook takes this session's changes by itself as each scene closes.
+								{#if mayApply && panelsCtx}
+									<button
+										class="text-primary-ink hover:underline"
+										onclick={openWriteSetting}
+										type="button"
+									>
+										Writes from sessions to this book
+									</button>
+								{/if}
+							</p>
+						{/if}
+						{#if overlayItems.length > 0}
+							<div class="mb-1.5 flex items-center gap-2">
+								<p class="text-surface-600-400 text-xs">This session only</p>
+								{#if mayApply && overlayItems.length > 1}
+									<button
+										class="btn btn-sm preset-tonal-surface ml-auto"
+										onclick={() => applyOverlay()}
+										type="button"
+									>
+										Apply all to the lorebook
+									</button>
+								{/if}
+							</div>
+							<ul class="flex flex-col gap-1.5">
+								{#each overlayItems as item (item.amendmentId != null ? `a${item.amendmentId}` : item.linkId != null ? `l${item.linkId}` : item.notesEntryId != null ? `d${item.notesEntryId}` : `e${item.entryId}`)}
+									<li class="flex min-w-0 items-center gap-2">
+										<div class="min-w-0 flex-1">
+											<span class="block truncate text-sm">
+												{item.title || (item.kind === "link" ? "Untitled link" : "Untitled entry")}
+											</span>
+											{#if item.kind === "entry-change"}
+												{#each item.changes ?? [] as change (change.field)}
+													<span class="text-surface-600-400 block truncate text-xs">
+														{change.label}: {shortValue(change.before)} → {shortValue(change.after)}
+													</span>
+												{/each}
+												{#if item.notesEntryId != null && heldDayReasons.has(item.notesEntryId)}
+													<span class="text-surface-600-400 block text-xs" role="status">
+														{heldDayReasons.get(item.notesEntryId)}
+													</span>
+												{/if}
+												{#if item.conflict}
+													<span class="text-surface-600-400 block text-xs">{item.conflict}</span>
+												{/if}
+											{/if}
+										</div>
+										{#if mayApply && !item.conflict}
+											<button
+												class="btn btn-sm preset-tonal-surface shrink-0"
+												onclick={() =>
+													item.kind === "link" && item.linkId != null
+														? applyOverlay(undefined, undefined, [item.linkId])
+														: item.kind === "entry-change" && item.amendmentId != null
+															? applyOverlay(undefined, [item.amendmentId])
+															: item.kind === "entry-change" && item.notesEntryId != null
+																? applyOverlay([item.notesEntryId])
+																: applyOverlay([item.entryId])}
+												type="button"
+											>
+												Apply to the lorebook
+											</button>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if batches.length > 0}
+							<p class="text-surface-600-400 mb-1.5 text-xs {overlayItems.length > 0 ? 'mt-3' : ''}">
+								Applied to the lorebook
+							</p>
+							<ul class="flex flex-col gap-1.5" aria-label="Applied to the lorebook from this session">
+								{#each batches as b (b.batch)}
+									{@const open = openBatches.has(b.batch)}
+									<li class="min-w-0">
+										<div class="flex min-w-0 items-center gap-2">
+											<button
+												type="button"
+												class="text-surface-600-400 flex min-w-0 flex-1 items-center gap-1 text-left text-xs hover:underline"
+												aria-expanded={open}
+												onclick={() => toggleBatch(b.batch)}
+											>
+												<Icons.ChevronRight
+													size={12}
+													class="shrink-0 transition-transform {open ? 'rotate-90' : ''}"
+													aria-hidden="true"
+												/>
+												<span class="min-w-0 truncate">{batchSummary(b)}</span>
+											</button>
+											{#if mayTakeBack}
+												<button
+													class="text-primary-ink shrink-0 text-xs hover:underline disabled:opacity-40"
+													type="button"
+													disabled={pendingBatches.has(b.batch)}
+													aria-label={b.count === 1
+														? "Take back this change"
+														: `Take back these ${b.count} changes`}
+													onclick={() => takeBack(b.batch)}
+												>
+													Take back
+												</button>
+											{/if}
+										</div>
+										{#if refusals.has(b.batch)}
+											<p class="text-surface-600-400 text-xs" role="status">{refusals.get(b.batch)}</p>
+										{/if}
+										{#if open}
+											<ul class="mt-1 flex flex-col gap-1 pl-4">
+												{#each b.items as item, itemIndex (itemIndex)}
+													<li class="min-w-0">
+														{#if item.kind === "entry-change"}
+															<span class="block truncate text-sm">{item.title || "Untitled entry"}</span>
+															{#each item.changes ?? [] as change (change.field)}
+																<span class="text-surface-600-400 block truncate text-xs">
+																	{change.label}: {shortValue(change.before)} → {shortValue(change.after)}
+																</span>
+															{/each}
+														{:else if item.kind === "link"}
+															<span class="block truncate text-sm">
+																{item.title || "Untitled link"} · link
+															</span>
+														{:else}
+															<span class="block truncate text-sm">
+																{item.title || "Untitled entry"} · new entry
+															</span>
+														{/if}
+													</li>
+												{/each}
+											</ul>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/if}
 					</section>
 				{/if}
 
@@ -522,13 +808,8 @@
 				{/if}
 			</div>
 		</div>
-	{:else}
-		<EmptyState
-			icon={Icons.MessageSquareOff}
-			message="Session not found."
-		/>
 	{/if}
-</div>
+{/snippet}
 
 {#snippet groupBadge()}
 	{#if badgeSrc}

@@ -1,0 +1,1 @@
+ALTER TABLE "koboldcpp_settings" ADD COLUMN "koboldcpp_managed_co_load" boolean DEFAULT true NOT NULL;

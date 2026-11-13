@@ -83,7 +83,7 @@ const ids = (xs: readonly { id: string }[] | undefined) => (xs ?? []).map((x) =>
 describe("core no longer has an Inventory widget (R79)", () => {
 	test("not declared, not offered — and its id is retired", () => {
 		expect(ids(CORE_WIDGETS)).not.toContain("inventory")
-		expect(ids(coreDefaultWidgets())).not.toContain("inventory")
+		expect(ids(coreDefaultWidgets(true))).not.toContain("inventory")
 		expect(RETIRED_WIDGET_IDS.has("inventory")).toBe(true)
 	})
 })
@@ -93,7 +93,7 @@ describe("a stored placement of 'inventory' is ignored on every layout path", ()
 		const m = new SurfaceManager()
 		m.init(
 			1,
-			coreDefaultWidgets(),
+			coreDefaultWidgets(true),
 			{ ...STORED_PANELS, ...STORED } as never,
 			() => {}
 		)

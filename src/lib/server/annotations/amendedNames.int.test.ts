@@ -2,7 +2,7 @@
  * The book's vocabulary knows amended names (plan C1, owner ruling R1
  * "hybrid", 2026-09-30).
  *
- * A cast amendment that renames a member, or an entry amendment that retitles
+ * A cast version that renames a member, or an entry amendment that retitles
  * an entry, gives them a name the stored row does not carry. The gazetteer
  * read only the stored names, so a renamed member's new name was nobody's:
  * mentions of it resolved to no one, and the cast suggestions offered it as a
@@ -15,6 +15,11 @@ import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
+import {
+	insertCastMember,
+	writeCastVersion,
+	type CastVersionChanges
+} from "$lib/server/characters/versions"
 import { releaseDataDir, type TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -52,16 +57,32 @@ async function makeBook() {
 			.insert(schema.characters)
 			.values({ userId: user.id, name, description: "" })
 			.returning()
-		const [row] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
-				lorebookId: book!.id,
-				binding: `{{char:${n}}}`,
-				name,
-				characterId: card!.id
+		const { member: row } = await insertCastMember(testDb as unknown as Db, {
+			lorebookId: book!.id,
+			binding: `{{char:${n}}}`,
+			name,
+			characterId: card!.id
+		})
+		return { card: card!, member: row }
+	}
+	/** A dated cast version of the member, written by the book's owner. */
+	const rename = async (
+		memberId: number,
+		year: number,
+		changes: CastVersionChanges
+	) => {
+		await testDb.transaction((tx) =>
+			writeCastVersion(tx as unknown as Db, {
+				member: memberId,
+				changes,
+				writtenBy: `user:${user.id}`,
+				at: {
+					branchId: null,
+					date: { year, month: null, day: null },
+					personalPosition: null
+				}
 			})
-			.returning()
-		return { card: card!, member: row! }
+		)
 	}
 	const entry = async (name: string) =>
 		(
@@ -70,7 +91,7 @@ async function makeBook() {
 				.values(worldLoreValues([{ lorebookId: book!.id, name, content: "" }]))
 				.returning()
 		)[0]!
-	return { book: book!, member, entry }
+	return { book: book!, member, entry, rename }
 }
 
 describe("the book's vocabulary reads amended names (C1)", () => {
@@ -78,14 +99,12 @@ describe("the book's vocabulary reads amended names (C1)", () => {
 		"a renamed member answers to the new name and the old; a retitled entry too",
 		async () => {
 			const { loadVocabulary } = await import("$lib/server/annotations")
-			const { book, member, entry } = await makeBook()
+			const { book, member, entry, rename } = await makeBook()
 			const vell = await member(1, "Vell")
 			const keep = await entry("Old Keep")
-			await testDb.insert(schema.castAmendments).values({
-				lorebookId: book.id,
-				lorebookBindingId: vell.member.id,
-				year: 10,
-				fields: { name: "Vellira", aliases: ["The Grey Hand"] }
+			await rename(vell.member.id, 10, {
+				name: "Vellira",
+				aliases: ["The Grey Hand"]
 			})
 			await testDb.insert(schema.entryAmendments).values({
 				lorebookId: book.id,
@@ -112,16 +131,11 @@ describe("the book's vocabulary reads amended names (C1)", () => {
 		"an amended name never takes a name another member already holds",
 		async () => {
 			const { loadVocabulary } = await import("$lib/server/annotations")
-			const { book, member } = await makeBook()
+			const { book, member, rename } = await makeBook()
 			const vell = await member(1, "Vell")
 			const rook = await member(2, "Rook")
 			// Vell is called Rook on some line: the stored Rook keeps it.
-			await testDb.insert(schema.castAmendments).values({
-				lorebookId: book.id,
-				lorebookBindingId: vell.member.id,
-				year: 5,
-				fields: { name: "Rook" }
-			})
+			await rename(vell.member.id, 5, { name: "Rook" })
 			const { gazetteer } = await loadVocabulary(testDb as any, book.id)
 			expect(gazetteer.byName.get("rook")).toEqual({
 				kind: "character",
@@ -135,15 +149,10 @@ describe("the book's vocabulary reads amended names (C1)", () => {
 		"moves the vocabulary's hash, so stored annotations re-read",
 		async () => {
 			const { loadVocabulary } = await import("$lib/server/annotations")
-			const { book, member } = await makeBook()
+			const { book, member, rename } = await makeBook()
 			const vell = await member(1, "Vell")
 			const before = (await loadVocabulary(testDb as any, book.id)).hash
-			await testDb.insert(schema.castAmendments).values({
-				lorebookId: book.id,
-				lorebookBindingId: vell.member.id,
-				year: 10,
-				fields: { name: "Vellira" }
-			})
+			await rename(vell.member.id, 10, { name: "Vellira" })
 			expect((await loadVocabulary(testDb as any, book.id)).hash).not.toBe(
 				before
 			)
@@ -152,17 +161,12 @@ describe("the book's vocabulary reads amended names (C1)", () => {
 	)
 
 	it(
-		"a cast suggestion cannot add a member under a name an amendment gave another",
+		"a cast suggestion cannot add a member under a name a cast version gave another",
 		async () => {
 			const { takenNames } = await import("$lib/server/bindingSuggestions")
-			const { book, member } = await makeBook()
+			const { book, member, rename } = await makeBook()
 			const vell = await member(1, "Vell")
-			await testDb.insert(schema.castAmendments).values({
-				lorebookId: book.id,
-				lorebookBindingId: vell.member.id,
-				year: 10,
-				fields: { name: "Vellira" }
-			})
+			await rename(vell.member.id, 10, { name: "Vellira" })
 			const taken = await takenNames(testDb as any, book.id)
 			expect(taken.has("vell")).toBe(true)
 			expect(taken.has("vellira")).toBe(true)

@@ -122,7 +122,74 @@ export async function capabilityDefault(
 	capability: string
 ): Promise<CapabilityDefault | undefined> {
 	const row = await defaultLoadoutFor(db, capability)
-	return row ? effectiveValues(db, row) : undefined
+	return row ? await effectiveValues(db, row) : undefined
+}
+
+/**
+ * ## What a RUN resolves to, as against what is registered
+ *
+ * `capabilityDefault(s)` say what is filled, and every display, refusal and
+ * write reads them. These two say what a run will use, which adds exactly one
+ * thing: the ★B Vision fallback below. Kept apart on purpose (review
+ * 2026-11-10): while the fallback rode inside the registered readers, the
+ * Defaults matrix showed Vision as filled with Reply's pair, a Vision sampling
+ * pick changed nothing, and the modality refusal said "this model is in the
+ * Vision loadout" to an admin switching Reply's reads to text — the one way to
+ * switch the automatic behaviour off (P1). Callers: the capability resolver
+ * (`capabilityTarget.ts`), `capabilityIsSetUp`, the config world and the
+ * served-transform set; the Loadouts list says the cause in words.
+ */
+export async function resolvedCapabilityDefaults(
+	db: Db
+): Promise<Record<string, CapabilityDefault>> {
+	const out = await capabilityDefaults(db)
+	if (out[VISION]?.connectionId == null) {
+		const seen = await visionFallback(db, out["text->text"])
+		if (seen) out[VISION] = seen
+	}
+	return out
+}
+
+export async function resolvedCapabilityDefault(
+	db: Db,
+	capability: string
+): Promise<CapabilityDefault | undefined> {
+	const values = await capabilityDefault(db, capability)
+	if (values?.connectionId != null || capability !== VISION) return values
+	return (await visionFallback(db, await capabilityDefault(db, "text->text"))) ?? values
+}
+
+/** The job where a picture is mandatory input — the Vision loadout's transform. */
+const VISION = "text+image->text"
+
+/**
+ * ★B (owner ruling 2026-11-10): an unfilled Vision loadout runs on Reply's
+ * pair exactly when that pair reads pictures — "Reply reads what its model
+ * reads", so the model a person already filled serves the likeness helper
+ * and a caption without a second loadout to fill. Decided by the same judge
+ * every reading call is judged by (`capabilityRefusal` on the merged pair):
+ * a Reply model that does not see leaves Vision unfilled, and nothing is
+ * guessed. Returns Reply's values, or undefined.
+ */
+export async function visionFallback(
+	db: Db,
+	reply: CapabilityDefault | undefined
+): Promise<CapabilityDefault | undefined> {
+	if (reply?.connectionId == null) return undefined
+	const [{ mergeEndpointModel, connectionModelById }, { capabilityRefusal }] = await Promise.all([
+		import("./models"),
+		import("$lib/server/pipelines/runtime/capabilityGuard")
+	])
+	const connection = await db.query.connections.findFirst({
+		where: (c, { eq }) => eq(c.id, reply.connectionId!)
+	})
+	if (!connection) return undefined
+	const model =
+		reply.connectionModelId != null
+			? await connectionModelById(db, reply.connectionModelId)
+			: null
+	const pair = mergeEndpointModel(connection as any, model as any)
+	return capabilityRefusal(pair, VISION as any) ? undefined : reply
 }
 
 /**

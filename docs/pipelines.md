@@ -12,7 +12,7 @@ Sessions work well on the shipped presets. Come here when you want to change a p
 
 What the settings show depends on your role. You only see settings your role can change somewhere.
 
-- **Everyone** can choose, in their own session's settings, which **prompt** each step uses (among the prompts there are), the settings a pipeline offers its sessions (Story's reply tick, the sprite choice, who may take a turn), and whether each **routine** runs **Off**, on **Review** or **Full**. That is all a non-administrator sees: no model, no sampling, no switches, and no writing or editing prompts.
+- **Everyone** can choose, in their own session's settings, which **prompt** each step uses (among the prompts there are), the settings a pipeline offers its sessions (the sprite choice, who may take a turn), and whether each **routine** runs **Off**, on **Review** or **Full**. That is all a non-administrator sees: no model, no sampling, no switches, and no writing or editing prompts.
 - **Administrators** change everything else: in **Admin › Pipelines** the model each call uses, sampling, switches, the Advanced settings, and writing, editing and deleting prompts; in **Admin › Presets** what each preset runs. What they save on a pipeline's page is the genre's defaults for it, so it reaches every session of that genre that hasn't changed it. Sampling for one session alone, and a routine's timing in one session, are also an administrator's choice.
 - **Nobody picks a connection for a session.** A session's replies use the model its pipeline names, else the [loadout](./connections.md#loadouts) the step names. To change it, an administrator changes the pipeline in Admin › Pipelines (see [Sessions → Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
 
@@ -28,7 +28,7 @@ A pipeline runs for one of three reasons:
 | **Action pipeline** | a person presses its action: a composer button, a message-menu item, a slash command | Story's **Narrate**, **Look** and **Rest**; the Lair's **Nudge** |
 | **Routine** | its timing says it is due: after each round, every five turns, every hour, when a scene opens | Story's **Note what changed** and **Look back over the story** |
 
-Putting a pipeline on an event, an action or a timing is a **registration**. The genre's defaults are its list of registrations, plus the values of its settings, plus which preset is its default. A preset changes that list: it adds a registration, drops one, or changes one's values or mode. Story's **Minimal** preset is Story's defaults with the three routines dropped and the reply told not to read the scene.
+Putting a pipeline on an event, an action or a timing is a **registration**. The genre's defaults are its list of registrations, plus the values of its settings, plus which preset is its default. A preset changes that list: it adds a registration, drops one, or changes one's values or mode. Story's **Minimal** preset is Story's defaults with the four routines dropped and the reply told not to read the scene.
 
 **A pipeline must fit what starts it.** Each event hands the pipeline a few things: the session always, and sometimes the message, who is speaking, the scene or the story clock. A pipeline that reads something its event doesn't hand over can't be registered there, and the editor says why in one sentence, such as _Reply reads the speaker; Scene opened carries none._ Plugin authors can see what every event carries in [Events and what they carry](./sdk/events.md).
 
@@ -42,7 +42,7 @@ On Story's **Living** preset, with one person and one character:
 2. Your line asks for an answer, so the reply runs: whoever is due speaks.
 3. The reply lands and the turn ends. Once everyone taking part has had a turn (everyone the turn order seats or has lined up, and every person who spoke), the round ends.
 4. **Note what changed** (a routine, _After each round_) is due. It waits until the reply and anything the reply set off have finished, then reads the reply and notes what it made true: health, belongings, the place, the time.
-5. Every fifth turn, **Look back over the story** (_Every 5 turns_) waits its turn the same way and files a summary, new lore and the cast.
+5. Every fifth turn, **Look back over the story** (_Every 5 turns_) waits its turn the same way and files new lore and the cast.
 6. The session's settings show exactly this: Story's settings, a card for each pipeline the preset runs that offers anything, and a **Routines** list with both routines and their modes. Nothing there is set twice.
 
 ## Routines
@@ -57,6 +57,8 @@ A **routine** is a pipeline that runs on its own between turns, when the events 
 - in story time, on the session's [story clock](#the-story-clock): _Every 30 minutes of story time_, or on a schedule in the story's own calendar.
 
 Every line on a lane is a **turn** of that lane, by its speaker; the story's lane also counts **rounds**. A routine on _After each turn_ or _After each round_ offers the other of the two as **When it runs** on its row (Story's **Note what changed** runs after each round unless you switch it). A routine or action whose pipeline needs a model the pub has none of (one that draws, speaks, hears or sees) is **unavailable**: it never runs, and its row says what it needs (_Unavailable: needs a model that can draw pictures._). A preset's card on the start form says what it needs and what would make it better (_Needs: a text model · Better with: an image model_), and administrators see the same on the preset and on its notices.
+
+A genre can ask to be told which seats changed. A genre that declares `turnSeatChanges: true` hands each turn the seats that were added, removed or changed (benched or brought back, or who plays them moved) since the previous turn of that lane, so a routine on _After each turn_ can react to them; turn on **Allow stacking** for such a routine so no turn's list is lost. No core genre asks for it, and a genre that does not gets nothing extra.
 
 Whoever can open the session's settings picks each routine's mode: **Off** (it doesn't run), **Review** (it runs, and holds what it would change for you to accept) or **Full** (it runs and applies what it changes). The preset decides the starting mode, and a routine the preset leaves **Off** is still listed so you can turn it on. A routine the preset drops isn't offered.
 
@@ -76,17 +78,27 @@ The session's owner can also run a routine by hand (**Run now**): **Routines** i
 
 What ran, what it wrote and what it skipped is in the **While you were away** widget, which any session can add from its layout (see [Session layout](./session-layout.md#the-widgets)).
 
+Every run of one session, not only its routines', is listed for administrators in the **Runs** widget (also from the layout's tray) and in the **Runs** tab of the session's details in the Sessions view: what started each run, its pipeline, how it ended and where it stopped, how long it took, its steps, and a way into the run inspector. The **Runs** tab of a pipeline in the Pipelines view lists that pipeline's runs across every session.
+
 ## Summaries and the lorebook
 
 A summarizer registers three ways: on an **action** (a summary you ask for), on an **event** (a scene ending, say) and as a **routine** (on a cadence). Each registration has its own values, so one summarizer can run on a cadence with a minimum age of 20 messages and again on [Close out](./sessions.md#close-out) with none. The host refuses a run whose span is younger than its registration's minimum age. A routine's minimum is 20; an action's or an event's is 0. See [Summarization](./summarization.md#which-summarizer-runs).
 
 Lore outlets carry **sources**: the ids of the messages a write was generated from.
 
-- A write **with** sources is committed. It moves the session's settle line to the newest of them, and from there [Back](./sessions.md#back-and-forward) stops at that line.
+- A write **with** sources is committed. It moves the session's settle line to the newest of them, and from there [Back](./sessions.md#back-and-forward) stops at that line. The exception is a session whose scenes end by themselves: its write waits in Session notes, and the line moves when the write is applied to the lorebook.
 - A write **without** sources is a change, taken back with its turn.
 - Core's own generated writes (summaries, scene summaries, compile, the graph build) always pass sources.
 
 A lore write that creates an entry can **match** an entry already there, by its id, its name or one of its keys, and update that one instead; two candidates are refused, naming both. It can also **bind** a new entry to a character, so that it is that character's lore.
+
+**Scenes first.** Pipelines put story events into scenes first; history is compiled from scenes by a person's press of **Compile** (see [Compiling scenes into a history entry](./summarization.md#compiling-scenes-into-a-history-entry)).
+
+- **Note it in the scene** adds a note to the session's open scene on the run's channel, or to a named scene. It adds no message and never writes history. Retaking, regenerating or deleting the turn takes the note back; **Forward** puts it back. It is refused, in words, for a note with no text (*a note needs text.*), a genre that keeps no scenes (*this genre keeps no scenes.*), lore writes **Off**, a scene that doesn't exist, a scene of another session (*that scene belongs to another session.*), no scene open (*no scene is open to note; open one first (propose-scene-cue@1).*) and a run with no session. Notes are read with the scene when it is summarized and compiled.
+- **A pipeline's history write** (a lore entry of type history) files onto the day's entry, adding its text as a new paragraph; when the day's entry already existed, its receipt says *filed onto ‹date›'s entry*. Retaking the turn takes the paragraph back, and removes the entry if the write made it. With no date in its fields it uses the session's story day (its story clock, as it stands). A month or day without a year is refused: *‹step›: a history date needs a year. Give this write a year in its fields, or leave the date out to use the story's day.* With no date and no story date at all: *‹step›: history needs a date. Give this write a year in its fields, or give the story a dated history entry first.* On a branch session's line, a date on or before the fork is refused with the fork rule's sentence (see [Forking](./lorebook-time.md#forking)): compile changes that day by amendment instead. Re-dating a history entry in a pipeline gets the same date, line and one-per-date checks (see [History entries and scenes](./lorebook-time.md#history-entries-and-scenes)).
+- The chat tool **write_entry** refuses history: *History comes from scenes: capture the moment and compile it, or write world lore.*
+- **Change a cast member** can set a member's **Status in world** (active, deceased, missing, departed) and visibility (normal, legendary, hidden), dated and taken back with its turn like its other changes.
+- **Bench or bring back a seat** puts a seat out of the turns, or back in them. It names the seat (a character seat or a player seat) and whether it is benched. **Back**, retaking, regenerating or deleting the turn puts the seat back as it was, and **Forward** does it again; if a person benched or brought back the same seat afterwards, theirs wins. A seat already that way is left as it is, and an envoy or a removed seat is refused. A genre must opt in with `writes.seats: true` (left out, it is off, unlike lore and scenes, which are on); without it the write is refused in words: *This session's genre ('‹name›') does not bench or bring back seats.* A person's own **Bench** and drag in **Participants** are never held back by it. See [Bench a seat](./group-sessions.md#bench-a-seat).
 
 A channel says what it carries for lore: **story**, **aside** or **never**. A genre can also declare that its history settles as it is written: every turn is kept as it is played and Back is refused. A preset cannot loosen that.
 
@@ -100,7 +112,10 @@ A preset's page shows, from the top:
 
 - **The genre's defaults**: what every preset of the genre starts from, read-only.
 - **What this preset runs**: each registration as _when → which pipeline_ (_After each round → Note what changed_, _Rest → Rest_), marked **The genre's**, **Changed here** or **Added here**. Change a routine's **Mode**, its timing's settings and **Allow stacking**, give any registration an **Only when…** condition picked from the properties the genre declares (or **Always run**), **Drop** one of the genre's (and **Restore** it), or **Remove** one you added. **Add a pipeline** asks what starts it (an event, an action or a routine and its timing) and then lists the pipelines that fit it; one that doesn't fit is shown greyed, with the reason.
-- **Settings**: each of the genre's settings, with the genre's value beside it. **Set it for this preset** gives the preset its own value; **Lock** keeps sessions from changing it; **Ask at start** puts it on the start screen under **Before you start**; **Use the genre's** goes back.
+- **Settings**: each of the genre's settings, with the genre's value beside it. **Set it for this preset** gives the preset its own value; **Lock** keeps sessions from changing it (every setting but **Rules**: a preset's rules are only the start form's first choice, and rules the genre can't play are never offered); **Ask at start** puts it on the start screen under **Before you start**; **Use the genre's** goes back.
+- **Variable layouts**: how this preset's sessions write out a variable, where it differs from the pub's choice. Empty, it reads _Uses the pub's layout for every variable._ **Change a variable's layout** asks for a variable (only those this preset's pipelines write out) and then a layout, each previewed against its example. Each row shows _(pub's: ‹name›)_ and **Remove**, which goes back to the pub's. Changes show _Waiting for Save_ (or _Removed — waiting for Save_, with **Put back**) and take effect on **Save**. A layout with no reference yet asks for one first (**Give it a reference**). On a shipped preset the rows are words only: _This preset ships with Serene Pub or a plugin, and updates replace it. Clone it to change its variable layouts._ A row whose layout is gone (its plugin was removed) says the pub's layout is used instead, and the presets list marks the preset _Variable layout missing_. See [Context templates → Variable layouts](./context-templates.md#variable-layouts-where-the-headings-and-fences-come-from).
+
+For example, on a **Small models** preset: **Change a variable's layout** → _Characters_ → a _Prose_ layout you wrote, the same for _Personas_, then **Save**. Sessions on that preset write those two as prose. Every other preset keeps the pub's layout, no template was copied, and the Characters page in **Admin › Variable layouts** shows _Chosen by the Small models preset_.
 
 The presets Serene Pub ships are read-only: only whether they are offered can change. **Clone this preset** makes an editable copy with a new title and description; a preset never builds on another, so a clone is a copy of the changes, not a link to them. A preset marked _Hidden_ isn't offered when someone starts a session; only administrators see it. An administrator changes a genre's default with **Default preset** on its page in **Admin › Genres**.
 
@@ -229,7 +244,7 @@ On the pipeline's Admin page, edits wait for the save row at the foot of the pag
 
 ### What always keeps a stored value
 
-Some settings are a pick from a list rather than a number or a switch: which prompt, context template, layout, model or sampling config. The pick is stored, and it shows in Changes with only the new side filled in. **Reset** still works: the step goes back to what Serene Pub ships for it.
+Some settings are a pick from a list rather than a number or a switch: which prompt, context template, model or sampling config. The pick is stored, and it shows in Changes with only the new side filled in. **Reset** still works: the step goes back to what Serene Pub ships for it.
 
 A step that renders a context template may accept more than one template language. The prompt-building step accepts Handlebars and Liquid, so its template picker lists both, with each row's language beside it, and its `+` button splits into one per language. See [Context templates → Choosing the language](./context-templates.md#choosing-the-language).
 
@@ -260,8 +275,8 @@ A source that found nothing this turn still reserves its share and hands what it
 Each source's entries arrive in the prompt as a **band** with a name a context template uses, such as `worldLore`, `characterLore` or `history`. A plugin can add its own: Twenty Questions adds `secretEntry` (the thing the character is thinking of) and `briefing`, and its template places them with `{{{secretEntry}}}` and `{{{briefing}}}`.
 
 - **A template renders only the bands it names.** If you pick a different context template for a plugin's pipeline, place its bands yourself. If a band's entries were chosen but the template never places them, the run's report says so.
-- **How a band looks is a setting.** Each band appears in the prompt-building step's settings beside world lore and history, where you can pick its layout, such as prose instead of JSON.
-- **A name means one thing in one prompt.** Two plugins may each have a band called `clue`, or a plugin may use a name core uses, as long as the two never meet in the same pipeline. A pipeline where they do is refused, with both sources named. A pipeline that feeds the prompt-building step its own data under a core name says so, and that name's layout setting then offers the plugin's layouts.
+- **How a band looks is its variable layout.** Each band has its own row on **Admin › Variable layouts**, beside world lore and history, where an administrator chooses how it is written out (such as prose instead of JSON) for the whole pub. A [preset](#presets) may differ, and the step's settings link there with **Change layouts**.
+- **A name means one thing in one prompt.** Two plugins may each have a band called `clue`, or a plugin may use a name core uses, as long as the two never meet in the same pipeline. A pipeline where they do is refused, with both sources named. A pipeline that feeds the prompt-building step its own data under a core name says so, and that name is then written out by the plugin's variable layouts.
 - **A template must fit the step.** Choosing a template that uses a name the step doesn't supply is refused, with the name it probably meant. A choice made earlier that no longer fits is kept and shows a notice on the pipeline's page until it is fixed. See [Context templates → Templates are checked when you save them](./context-templates.md#templates-are-checked-when-you-save-them).
 
 ## An envoy's prompts are settings
@@ -310,7 +325,7 @@ Each change reaches one reply only. A reply that fails before saving leaves the 
 
 ## Forms, and when pipelines set each other off
 
-A message can carry a **form**: a question with options, addressed to one participant, such as Story's **Ask**. If a person plays that participant, the form waits for their click. If the AI does, Serene Pub runs an **answer** pipeline that reads the participant's card and the conversation, picks an option, and presses it exactly as a click would. A form is answered once, and every screen greys it afterwards.
+A message can carry a **form**: a question with options, addressed to one participant, such as the Lair's **Roll**. If a person plays that participant, the form waits for their click. If the AI does — only in a genre that opts in; elsewhere the AI does not answer, the form is the owner's, and the answer pipeline's run in the runs list says why — Serene Pub runs an **answer** pipeline that reads the participant's card and the conversation, picks an option, and presses it exactly as a click would. A form is answered once, and every screen greys it afterwards.
 
 Pipelines can set each other off this way, so there are limits. A chain of pipelines answering one another may go four deep and sixteen runs wide; a pipeline that writes a message each time a message completes pauses after four in a row. When a chain reaches a limit, it pauses and the session owner sees **Keep going?**, which says how many more requests the chain is about to make (_The AI is about to make 3 more requests in a chain._); **Details** names the pipelines so far. **Continue** allows one more round of the same size; **Stop here** ends it and keeps what is done. With nobody there it simply waits, and a restart ends it.
 
@@ -318,7 +333,7 @@ While any run in the chain is waiting for review, the rest of the session is not
 
 ## The cast a pipeline reads
 
-A pipeline sees every member of the session's cast, including characters switched off in the cast list; each carries whether it is enabled. Turn-taking, `{{characterNames}}` and the speaker pickers skip characters that are switched off, but their cards are still sent, so a character the others talk about stays recognisable. Card detail for non-speakers follows the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)).
+A pipeline sees every live seat in the session's cast, benched ones included; each carries whether it is enabled (not benched), on player seats as well as character seats. Turn-taking, `{{characterNames}}`, the `characters` variable and the speaker pickers leave out benched seats, so a benched seat is out of the prompt. Card detail for non-speakers follows the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)).
 
 ## Attachments in a prompt
 
@@ -373,7 +388,7 @@ Each step has a time limit. A step that runs out of time is marked _timed out_, 
 
 On the left is every step in the order it ran, with how long it took and a marker on the ones that called a model. Select one to see:
 
-- **Prompt**: what the step sent. Lore and history are a table showing each item's source, token cost, whether it made it in, and why. The messages follow as readable text. A prompt-building step also says what happened to the post-history reminder: _included at message 12_, or _suppressed, 278 tokens is below the 3000 trigger_. Under it, **Variable layouts** lists each value the template placed, the layout it rendered through (_Titled JSON block (Serene Pub's)_, or _built-in default_ when none was picked), and which variable it held, such as `core:var/world-lore@1` for core's own world lore.
+- **Prompt**: what the step sent. Lore and history are a table showing each item's source, token cost, whether it made it in, and why. The messages follow as readable text. A prompt-building step also says what happened to the post-history reminder: _included at message 12_, or _suppressed, 278 tokens is below the 3000 trigger_. Under it, **Variable layouts** lists each value the template placed, the layout it rendered through (_Titled JSON block (Serene Pub's)_, _(from a plugin)_, _(made here)_, or _built-in default_ when no layout exists for it), which variable it held, such as `core:var/world-lore@1` for core's own world lore, and why that layout: _named by the template_, _leftover pick_, _the preset's_, _the pub's_, _the pipeline's choice for this step_, _the variable's default_, _automatic_, or _no layout for it_. A layout a template named that wasn't found reads _named core/prose@1, which wasn't found; used Titled JSON block_.
 - **Output**: what the step produced.
 - **Wire**, on a step that called a model: the address, the exact request (with **Copy request**) and the raw response, plus every stop sequence and whether it was sent. This is where you see which sampling settings a service actually received.
 - **Notes**: anything the step recorded about itself.
@@ -403,7 +418,8 @@ Switching a plugin off in **Admin › Plugins** removes everything it provides f
 **Library**, at the top of **Admin › Pipelines**, opens the pipeline library: everything the pipelines are built from, and what uses each piece. Its tabs are **Pipelines**, **Prompts**, **Context templates** and **Variable layouts**.
 
 - **Pipelines** lists every pipeline with its version and number of steps; each opens its page in Admin.
-- **Prompts**, **Context templates** and **Variable layouts** are grouped by the step or variable that uses them, not by pipeline, because a step and its prompts are shared by every pipeline that reuses it. Each can be edited, duplicated or deleted here, and each group of templates or layouts has **New** to write another. A group with nothing written yet uses its step's built-in default.
+- **Prompts** and **Context templates** are grouped by the step that uses them, not by pipeline, because a step and its prompts are shared by every pipeline that reuses it. **Variable layouts** are grouped by variable and language. Each can be edited, duplicated or deleted here, and each group has **New** to write another. A group with nothing written yet uses its step's built-in default.
+- On the **Variable layouts** tab, a layout's _Used by_ names everything that uses it: _This pub's layout_ when the pub writes its variable out with it, _Preset ‹name›_ for each preset that chooses it, _Named by ‹template›_ for each context template that names it, and the pipelines whose steps still hold a pick from before layouts moved. Which layout is in use, and what writes the variable out with another, is on the variable's page in **Admin › Variable layouts**. Deleting a layout here is refused the same way as there.
 
 Every row says what uses it (_Used by …_) or _Not used by any pipeline_, so you know before deleting whether anything depends on it. Deleting something still in use names what holds it, and is refused until those point somewhere else.
 
@@ -421,7 +437,7 @@ At the foot of an event's page, the **event map** draws events, pipelines and li
 
 ## For plugin authors
 
-This page is for people setting up what is installed. If you are writing a pipeline or a plugin (shipping a genre and its defaults, a preset or a routine, declaring actions and forms, recording events, keeping state in the annex, adding a lore source or a ranker, choosing which step streams), start with the SDK guides: [Your first plugin](./sdk/guides/your-first-plugin.md), [Genres, presets and routines](./sdk/guides/genres-presets-and-routines.md), [Forms and effects](./sdk/guides/forms-and-effects.md), [Events](./sdk/guides/events.md) and [Storage](./sdk/guides/storage.md). [Events and what they carry](./sdk/events.md) lists what each event, action and routine hands a pipeline.
+This page is for people setting up what is installed. If you are writing a pipeline or a plugin (shipping a genre and its defaults, a preset or a routine, declaring actions and forms, recording events, keeping state in the annex, adding a lore source or a ranker, choosing which step streams), start with the SDK guides: [Your first plugin](./sdk/guides/your-first-plugin.md), [Genres, presets and routines](./sdk/guides/genres-presets-and-routines.md), [Forms and effects](./sdk/guides/forms-and-effects.md), [Events](./sdk/guides/events.md) and [Storage](./sdk/guides/storage.md). [Events and what they carry](./sdk/events.md) lists what each event, action and routine hands a pipeline. A pipeline should put story events into scenes, not write history: see [Story events: scenes first](./sdk/guides/writing-lore-from-a-pipeline.md#story-events-scenes-first). The packager warns `W_WRITES_HISTORY` on a pipeline that writes history directly (a pipeline started by `summarize-request@1` is exempt, because its save is previewed), and conformance law **C40** checks that no pipeline the shipped catalogue holds writes history directly.
 
 ## Related
 

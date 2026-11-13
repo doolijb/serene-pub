@@ -58,17 +58,24 @@ export interface LedgerRow {
 
 /** 🚧 What a library row did: the op, and the card's or book's name. */
 export interface LedgerLibraryChange {
-	op: LibraryOp
+	/** ⏳ "attach-lorebook" is a row written before 0.6 removed the op. */
+	op: LibraryOp | "attach-lorebook"
 	label: string
 	/** 🚧 Nothing was made, and why. */
 	skipped?: string
 }
 
-/** 🚧 The four library ops (`LibraryChangePayload.op`). */
-export type LibraryOp = "create-character" | "update-character" | "create-lorebook" | "attach-lorebook"
+/** 🚧 The three library ops (`LibraryChangePayload.op`). */
+export type LibraryOp =
+	| "create-character"
+	| "update-character"
+	| "create-lorebook"
 
 /** A library change in the ledger's words, once it has landed (applied or accepted). */
-export function libraryChangeText(op: LibraryOp, label: string): string {
+export function libraryChangeText(
+	op: LibraryOp | "attach-lorebook",
+	label: string
+): string {
 	switch (op) {
 		case "create-character":
 			return `Made a character: ${label}`
@@ -76,13 +83,17 @@ export function libraryChangeText(op: LibraryOp, label: string): string {
 			return `Changed ${label}`
 		case "create-lorebook":
 			return `Made a lorebook: ${label}`
-		case "attach-lorebook":
+		case "attach-lorebook": // ⏳ a row written before 0.6 removed the op
 			return `Read ${label} into this session`
 	}
 }
 
 /** 🚧 A library change drafted and NOT made, with why (the person's library write mode is Off). */
-export function librarySkippedText(op: LibraryOp, label: string, why: string): string {
+export function librarySkippedText(
+	op: LibraryOp | "attach-lorebook",
+	label: string,
+	why: string
+): string {
 	switch (op) {
 		case "create-character":
 			return `Drafted a character, not added: ${label}. ${why}`
@@ -90,13 +101,16 @@ export function librarySkippedText(op: LibraryOp, label: string, why: string): s
 			return `Drafted a change to ${label}, not made. ${why}`
 		case "create-lorebook":
 			return `Drafted a lorebook, not added: ${label}. ${why}`
-		case "attach-lorebook":
+		case "attach-lorebook": // ⏳ a row written before 0.6 removed the op
 			return `Did not read ${label} into this session. ${why}`
 	}
 }
 
 /** A library change before it has: the proposal's line, with Accept / Reject beside it. */
-export function libraryProposalText(op: LibraryOp, label: string): string {
+export function libraryProposalText(
+	op: LibraryOp | "attach-lorebook",
+	label: string
+): string {
 	switch (op) {
 		case "create-character":
 			return `Proposes a character: ${label}`
@@ -104,12 +118,38 @@ export function libraryProposalText(op: LibraryOp, label: string): string {
 			return `Proposes changing ${label}`
 		case "create-lorebook":
 			return `Proposes a lorebook: ${label}`
-		case "attach-lorebook":
+		case "attach-lorebook": // ⏳ a row written before 0.6 removed the op
 			return `Proposes reading ${label} into this session`
 	}
 }
 
-const LIBRARY_OPS: readonly string[] = ["create-character", "update-character", "create-lorebook", "attach-lorebook"]
+// ⏳ "attach-lorebook": a row written before 0.6 removed the op
+const LIBRARY_OPS: readonly string[] = [
+	"create-character",
+	"update-character",
+	"create-lorebook",
+	"attach-lorebook"
+]
+
+/** 🚧 The sentence a skipped move leaves when the story has no clock to move (§15 G7). */
+export const NO_STORY_CLOCK_YET =
+	"This story has no clock yet: set one in the lorebook to track time."
+
+/** 🚧 Why a clock move was skipped: the story has no clock yet, or the clock refused the step. */
+export const CLOCK_SKIP_KINDS = ["no-clock", "refused"] as const
+export type ClockSkipKind = (typeof CLOCK_SKIP_KINDS)[number]
+
+/**
+ * 🚧 Why a clock move was skipped; null when it was not. Derived from the
+ * stored sentence, the one fact every row carries: the no-clock sentence is
+ * `"no-clock"`, any other sentence `"refused"`. Nothing stores a kind.
+ */
+export function clockSkipKindOf(move: {
+	skipped?: string | null
+}): ClockSkipKind | null {
+	if (!move.skipped) return null
+	return move.skipped === NO_STORY_CLOCK_YET ? "no-clock" : "refused"
+}
 
 /** 🚧 A clock row's move: the step, and where the clock went — or why it did not. */
 export interface LedgerClockMove {
@@ -126,6 +166,8 @@ export interface LedgerClockMove {
 	from?: StoryTimeParts | null
 	to?: StoryTimeParts | null
 	skipped?: string | null
+	/** Why a skipped move did not happen; absent on a row written before 2026-11-04 (read through `clockSkipKindOf`). */
+	reason?: ClockSkipKind | null
 }
 
 /** What one slot read for one owner before the session touched it. */
@@ -517,14 +559,20 @@ function clockStoryTime(move: LedgerClockMove): { storyTime?: LedgerStoryTime } 
 /**
  * 🚧 A clock move's line (live scenes §15 G5): "Time passes: 3 hours (Day 4,
  * 14:00 → Day 4, 17:00)", "Time goes back: 1 day (…)", or — a move the
- * story had no clock for (G7) — the step and why it did not happen.
+ * story had no clock for (G7) — "…, not on the clock. {why}"; a step the
+ * clock refused reads "…, not moved. {why}".
  */
 export function clockMoveText(move: LedgerClockMove): string {
 	// 🚧 A skipped move that moves nothing (`by` 0: a note, not a step) is its sentence alone.
 	if (move.skipped && move.by === 0) return move.skipped
 	const span = clockSpanWords(move.by, move.unit)
-	const head = move.by < 0 ? `Time goes back: ${span}` : `Time passes: ${span}`
-	if (move.skipped) return `${head}, not on the clock. ${move.skipped}`
+	const head =
+		move.by < 0 ? `Time goes back: ${span}` : `Time passes: ${span}`
+	// The served kind when the row carries one (the server derived it); else the sentence's.
+	if (move.skipped)
+		return (move.reason ?? clockSkipKindOf(move)) === "no-clock"
+			? `${head}, not on the clock. ${move.skipped}`
+			: `${head}, not moved. ${move.skipped}`
 	return move.fromLabel && move.toLabel
 		? `${head} (${move.fromLabel} → ${move.toLabel})`
 		: head

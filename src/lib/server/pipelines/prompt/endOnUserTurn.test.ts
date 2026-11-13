@@ -54,6 +54,11 @@ describe("endOnUserTurn", () => {
 		})
 	})
 
+	it("a seed label wins over the last line's speaker: Aria is handed the turn after the Narrator's line", () => {
+		const out = endOnUserTurn([sys("You are Aria."), bot("Narrator: The wind rises.")], { seedLabel: "Aria" })
+		expect(out.ok && out.messages.at(-1)).toEqual({ role: "user", content: speakerCue("Aria") })
+	})
+
 	it("instructions alone: the dropped seed's speaker is handed the turn; with nobody named, refused in a sentence", () => {
 		const named = endOnUserTurn([sys("Greet the party.")], { seedLabel: "Narrator" })
 		expect(named.ok && named.messages.at(-1)).toEqual({ role: "user", content: speakerCue("Narrator") })

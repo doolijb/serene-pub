@@ -59,6 +59,8 @@
  */
 
 import { withSeatName } from "$lib/server/sessions/seatName"
+import { seatCardsAsRead } from "$lib/server/pipelines/prompt/seatCards"
+import { cardsNow } from "$lib/server/cast/seatedCast"
 import type { TaskType } from "$lib/server/utils/resolveTaskConfig"
 import {
 	resolveCapabilityTarget,
@@ -160,6 +162,8 @@ export interface DispatchRequest {
 	capability?: string
 	/** Null in narrator mode, matching the legacy adapter's own convention. */
 	currentCharacterId?: number | null
+	/** 🚧 The member speaking a card-less character seat; set only when `currentCharacterId` is null. */
+	currentCastMemberId?: number | null
 	/** Forwarded verbatim; carries `isNarratorResponse` among other things. */
 	generatingMessageMetadata?: Record<string, unknown>
 	/**
@@ -413,20 +417,76 @@ const SESSIONLESS = Object.freeze({
 	lorebook: null
 })
 
-async function loadAdapterSession(db: Db, sessionId: number | undefined) {
+/** `lorebook_bindings` ⏳ frozen content columns — left out of a relational read of bindings. */
+const BINDING_FROZEN_OFF = {
+	description: false,
+	personality: false,
+	scenario: false,
+	firstMessage: false,
+	alternateGreetings: false,
+	exampleDialogues: false,
+	faceMediaId: false,
+	retold: false,
+	ownName: false,
+	ownNickname: false,
+	timbre: false,
+	spriteSet: false,
+	nodeState: false,
+	nodeVisibility: false
+} as const
+
+/** Exported for tests. */
+export async function loadAdapterSession(
+	db: Db,
+	sessionId: number | undefined
+) {
 	if (sessionId === undefined) return { ...SESSIONLESS } as any
 	const session = await db.query.sessions.findFirst({
 		where: (c: any, { eq }: any) => eq(c.id, sessionId),
 		with: {
 			sessionCharacters: { with: { character: true } },
 			sessionPersonas: { with: { persona: true } },
-			lorebook: { with: { lorebookBindings: true } }
+			// The binding's frozen content columns (⏳, nothing writes them) are
+			// never loaded.
+			lorebook: {
+				with: {
+					lorebookBindings: { columns: BINDING_FROZEN_OFF }
+				}
+			}
 		}
 	})
 	if (!session)
 		throw new DispatchError(
 			`there is no session ${sessionId} to generate in — it was deleted while the run was in flight`
 		)
+	// 🚧 Every card as its current card version has it ("Everything in session
+	// is cast -> active card", owner 2026-11-05) — the rows' content columns
+	// are stale. A seat's member is then read over it (`seatCardsAsRead`).
+	const nowOf = await cardsNow(
+		db,
+		[
+			...(session.sessionCharacters ?? []).map(
+				(cc: any) => cc.character?.id
+			),
+			...(session.sessionPersonas ?? []).map((cp: any) => cp.persona?.id)
+		].filter((id): id is number => typeof id === "number")
+	)
+	const cardNow = <T extends { id: number } | null>(card: T): T =>
+		card && nowOf.has(card.id)
+			? ({ ...card, ...nowOf.get(card.id)! } as T)
+			: card
+	session.sessionCharacters = (session.sessionCharacters ?? []).map(
+		(cc: any) => ({
+			...cc,
+			character: cardNow(cc.character)
+		})
+	)
+	session.sessionPersonas = (session.sessionPersonas ?? []).map(
+		(cp: any) => ({
+			...cp,
+			persona: cardNow(cp.persona)
+		})
+	)
 
 	// Same filter the legacy path applies: these FKs are nullable with
 	// `onDelete: "set null"`, so a deleted character leaves a row with nothing
@@ -434,18 +494,39 @@ async function loadAdapterSession(db: Db, sessionId: number | undefined) {
 	// on the rows it does list.
 	return {
 		...session,
-		sessionCharacters: (session.sessionCharacters ?? []).filter(
-			(cc: any) => cc.character !== null
+		// 🚧 Each card read as the member its seat seats (S2): the name the
+		// model's stops and labels use is the member's.
+		sessionCharacters: await seatCardsAsRead(
+			db,
+			sessionId,
+			(session.sessionCharacters ?? []).filter(
+				(cc: any) =>
+					cc.character !== null ||
+					(cc.castMemberId != null && cc.envoySlug == null)
+			),
+			// 🚧 A card-less character seat reads as its member (no `id`).
+			{ cardless: true }
 		),
 		// 🚧 Every seat with a card or a name (2026-10-14), in the host's
 		// cast-read shape: a card-less player seat rides with `persona: null`, and
 		// a seat name wins over its card's (`withSeatName`). A row with
-		// neither is a departed card's leftover, and nobody.
-		sessionPersonas: (session.sessionPersonas ?? [])
+		// neither is a departed card's leftover, and nobody. A seat's card is
+		// read as the member it seats first (★pT-1, 2026-11-05: "Everything in
+		// session is cast -> active card"), then the seat name wins.
+		sessionPersonas: (
+			await seatCardsAsRead(
+				db,
+				sessionId,
+				(session.sessionPersonas ?? []).map((cp: any) => ({
+					...cp,
+					character: cp.persona
+				}))
+			)
+		)
 			.filter((cp: any) => cp.persona !== null || cp.seatName)
-			.map((cp: any) => ({
+			.map(({ character, ...cp }: any) => ({
 				...cp,
-				persona: withSeatName(cp.persona, cp.seatName),
+				persona: withSeatName(character, cp.seatName),
 				seatId: cp.id,
 				seatUserId: cp.userId ?? null
 			}))
@@ -455,14 +536,18 @@ async function loadAdapterSession(db: Db, sessionId: number | undefined) {
 /**
  * 🚧 The labels of the session's voices nobody in the cast is (lair fix 2,
  * 2026-10-22): what the person's own lines are called (`playerLabelFor` — the
- * Lair's *Dungeon Master*) and the genre's envoys by their declared names
- * (*Castellan*, *Oracle*), as a transcript labels their lines. Stopped on
- * like a participant's label (`ComposeStopsInput.nonCastLabels`) and taken
- * off a reply's front when one opens it (`ReplyFacts.strayLabels`). None for
- * a request made in no session.
+ * Lair's *Dungeon Master*), the genre's envoys by their declared names
+ * (*Castellan*, *Oracle*), and the narrator's names — the session's current
+ * one (`narratorNameFor`) and every older one narration was written under
+ * (`metadata.narratorName` on its stored messages) — as a transcript labels
+ * their lines. Stopped on like a participant's label
+ * (`ComposeStopsInput.nonCastLabels`) and taken off a reply's front when one
+ * opens it (`ReplyFacts.strayLabels`). Each source fails on its own: one that
+ * throws leaves the others' labels. None for a request made in no session.
  */
-async function nonCastLabelsFor(db: Db, sessionId: number | undefined): Promise<string[]> {
+export async function nonCastLabelsFor(db: Db, sessionId: number | undefined): Promise<string[]> {
 	if (sessionId === undefined) return []
+	const names: string[] = []
 	try {
 		const [{ playerLabelFor }, { sessionDeclaredEnvoys }, { i18nText }] = await Promise.all([
 			import("$lib/server/pipelines/entities/sessionGenres"),
@@ -473,14 +558,48 @@ async function nonCastLabelsFor(db: Db, sessionId: number | undefined): Promise<
 			playerLabelFor(db, sessionId),
 			sessionDeclaredEnvoys(db, sessionId)
 		])
-		const names = [
-			label?.trim() ?? "",
-			...envoys.map((e) => (i18nText(e.name as Parameters<typeof i18nText>[0], "en") ?? "").trim())
-		]
-		return [...new Set(names.filter(Boolean))]
+		names.push(
+			label ?? "",
+			...envoys.map((e) => i18nText(e.name as Parameters<typeof i18nText>[0], "en") ?? "")
+		)
 	} catch {
-		return []
+		// the player label and envoys are lost together; the narrator's names stand
 	}
+	// The narrator's names count only once the session has a narration line:
+	// that is the line a model copies its label from, and it keeps a session
+	// that never narrated (Chat, an oracle read) from paying for a world build
+	// on every dispatch (P1: nothing automatic until the genre's narrator has
+	// actually spoken here).
+	let narrated = false
+	try {
+		const [{ eq, and, isNotNull, or, sql }, schema] = await Promise.all([
+			import("drizzle-orm"),
+			import("$lib/server/db/schema")
+		])
+		const nameField = sql<string | null>`${schema.sessionMessages.metadata}->>'narratorName'`
+		const rows = await db
+			.selectDistinct({ name: nameField, narration: schema.sessionMessages.isNarratorResponse })
+			.from(schema.sessionMessages)
+			.where(
+				and(
+					eq(schema.sessionMessages.sessionId, sessionId),
+					or(isNotNull(nameField), eq(schema.sessionMessages.isNarratorResponse, true))
+				)
+			)
+		narrated = rows.length > 0
+		names.push(...rows.map((r) => r.name ?? ""))
+	} catch {
+		// the older narrator names are lost; the rest stand
+	}
+	if (narrated) {
+		try {
+			const { narratorNameFor } = await import("$lib/server/pipelines/runtime/host")
+			names.push((await narratorNameFor(db, sessionId, undefined)) ?? "")
+		} catch {
+			// the narrator's current name is lost; the rest stand
+		}
+	}
+	return [...new Set(names.map((n) => n.trim()).filter(Boolean))]
 }
 
 /**
@@ -1071,6 +1190,7 @@ export async function dispatchGeneration(
 	const nonCastLabels = await nonCastLabelsFor(request.db, request.sessionId)
 	const stops = composeStopsFor(connection, session, {
 		currentCharacterId: request.currentCharacterId ?? null,
+		currentCastMemberId: request.currentCastMemberId ?? null,
 		explicit: request.stopSequences,
 		nonCastLabels,
 		ownLabels: assembledOwnLabels(request.compiledPrompt),
@@ -1376,7 +1496,8 @@ export async function dispatchGeneration(
 			// A seedless prompt's speaker (Assemble's `replyLabel`).
 			typeof (request.compiledPrompt as { replyLabel?: unknown } | null)?.replyLabel === "string"
 				? (request.compiledPrompt as { replyLabel: string }).replyLabel
-				: null
+				: null,
+			request.currentCastMemberId ?? null
 		)
 		const facts: ReplyFacts = {
 			opensInReasoning: promptOpensReasoning(request.compiledPrompt)

@@ -35,8 +35,12 @@ import { CARRIED_ZONE_TYPE, i18nText, rulesetZoneTypes, tieSidesOf, ZONE_HOLDS_A
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import type { StateOwner } from "$lib/server/state/owners"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { seatOf } from "$lib/server/sessions/seats"
 import { attributeSlotsOf, facetOf, sectionsOf } from "./functionRun"
 import { slotKey } from "$lib/server/state/keys"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import type { EngineChange, EngineInput, OwnerView, ZoneEntry, ZoneOp } from "./types"
 
 type Db = any
@@ -185,6 +189,11 @@ export async function zonesOnWire(
  * from its key (`character:N` a cast member, `location:N` a place) as an
  * owner with no sheet, its zones read beside the moment's, so the other
  * side is stamped and a side's field moved wherever its holder is.
+ *
+ * 🚧 ⏳ Once the flip is on (`memberForm.ts`) a `seated-member:<M>` key is a
+ * far end too (owner `seated_member`, named as the member is read in the
+ * session) and so is a `player-seat:<S>` (owner `player_seat`, named by its
+ * seat's member, else its card); `character:N` keeps its path.
  */
 export async function farEndsOf(
 	db: Db,
@@ -204,15 +213,37 @@ export async function farEndsOf(
 	}
 	const owners: OwnerView[] = []
 	for (const key of keys) {
+		if (memberFormOn()) {
+			const sm = /^(seated-member|player-seat):(\d+)$/.exec(key)
+			if (sm) {
+				const id = Number(sm[2])
+				const seat = await seatOf(db, sessionId, key)
+				const memberId = sm[1] === "seated-member" ? id : (seat?.castMemberId ?? null)
+				const read = memberId != null ? await memberAsRead(db, memberId, { sessionId }) : null
+				const name =
+					read?.name ||
+					(seat?.cardId != null ? (await cardsNow(db, [seat.cardId])).get(seat.cardId)?.name : undefined)
+				if (typeof name !== "string" || !name) continue
+				if (sm[1] === "player-seat" && !seat) continue
+				owners.push({ key, owner: { kind: sm[1] === "seated-member" ? "seated_member" : "player_seat", id } as StateOwner, name, stats: [], repertoires: [], custom: [], bag: {} })
+				continue
+			}
+		}
 		const m = /^(character|location):(\d+)$/.exec(key)
 		if (!m) continue
 		const id = Number(m[2])
 		const [row] =
 			m[1] === "character"
-				? await db.select({ name: schema.characters.name }).from(schema.characters).where(eq(schema.characters.id, id)).limit(1)
+				? [{ name: (await cardsNow(db, [id])).get(id)?.name }]
 				: await db.select({ name: schema.lorebookEntries.title }).from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, id)).limit(1)
 		if (typeof row?.name !== "string") continue
-		owners.push({ key, owner: { kind: m[1] === "character" ? "session_cast" : "session_location", id } as StateOwner, name: row.name, stats: [], repertoires: [], custom: [], bag: {} })
+		// 🚧 A seated character is named as their seat's cast member is read (their own name, else their active card's); a seat with no member yet reads the card.
+		const seat = m[1] === "character" ? await seatOf(db, sessionId, key) : null
+		const read =
+			seat?.castMemberId != null
+				? await memberAsRead(db, seat.castMemberId, { sessionId })
+				: null
+		owners.push({ key, owner: { kind: m[1] === "character" ? "session_cast" : "session_location", id } as StateOwner, name: read?.name || row.name, stats: [], repertoires: [], custom: [], bag: {} })
 	}
 	return { owners, zones: owners.length ? await zonesFor(db, sessionId, input.ruleset.id, owners) : {} }
 }

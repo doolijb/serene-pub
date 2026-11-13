@@ -36,6 +36,7 @@
 
 import { and, asc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import {
 	getAttributeSlot,
 	sheetSlotAppliesTo,
@@ -47,8 +48,6 @@ import {
 import { mainCutOf, readingOf, rowsOnReading, type LineReading } from "$lib/server/state/reading"
 import {
 	MAIN_HEAD,
-	castMemberAt,
-	castOverlaysFor,
 	placesOnReading,
 	type EntryReading
 } from "$lib/server/state/entriesOnReading"
@@ -56,6 +55,7 @@ import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { deleteOwnedRows } from "$lib/server/lorebooks/tableRegistry"
 import { castKey, slotKey } from "$lib/server/state/keys"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import { membersAsRead } from "$lib/server/cast/memberAsRead"
 import type { StateOwner } from "$lib/server/state/owners"
 import {
 	inForce,
@@ -83,7 +83,7 @@ export interface LorebookLinks {
 	cast: LorebookCastLink[]
 	/**
 	 * A **dated card** → the member it draws (plan A25): a card a cast
-	 * amendment draws a member with, on any line and at any date. A seat
+	 * version's parent draws a member with, on any line and at any date. A seat
 	 * holding one is that member, as a seat holding their linked card
 	 * (`cast[].characterId`) is.
 	 */
@@ -95,9 +95,9 @@ export interface LorebookLinks {
  * The book's owners **as the reading sees them** (finding #41): its places on
  * the reading's line as the book sees them (plan A27 place sight `"book"`:
  * archived ones gone, Off ones kept), titled as amended by then, and its cast
- * members named as amended by then. With no reading, main at its head.
+ * members named as their versions read by then. With no reading, main at its head.
  *
- * ⚠ A member's `characterId` stays their OWN card even when an amendment draws
+ * ⚠ A member's `characterId` stays their OWN card even when a cast version draws
  * them with another: it is the key a session seat holds (`normalizeOwner`'s
  * `session_cast` translation, `cardMemberAt`), and the dated card is how
  * they are drawn, not who they are. A seat holding the dated card finds them
@@ -108,17 +108,22 @@ export async function lorebookLinks(
 	lorebookId: number,
 	reading: EntryReading = MAIN_HEAD
 ): Promise<LorebookLinks> {
-	const [members, overlays, places, cards] = await Promise.all([
-		db
-			.select({
-				id: schema.lorebookBindings.id,
-				characterId: schema.lorebookBindings.characterId,
-				name: schema.lorebookBindings.name
-			})
-			.from(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
-			.orderBy(asc(schema.lorebookBindings.id)),
-		castOverlaysFor(db, lorebookId, reading),
+	const members = await db
+		.select({
+			id: schema.lorebookBindings.id,
+			characterId: schema.lorebookBindings.characterId,
+			name: schema.lorebookBindings.name
+		})
+		.from(schema.lorebookBindings)
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
+		.orderBy(asc(schema.lorebookBindings.id))
+	const [reads, places, cards] = await Promise.all([
+		// Names as the reading has them: each member's version in force.
+		membersAsRead(
+			db,
+			members.map((m) => m.id),
+			{ reading }
+		),
 		// The book's own sight (plan A27): a place switched Off is still
 		// the author's to edit; only archived ones are gone.
 		placesOnReading(db, lorebookId, reading, "book"),
@@ -133,11 +138,10 @@ export async function lorebookLinks(
 		lorebookId,
 		datedCards,
 		cast: members.map((m) => {
-			const c = castMemberAt(m, overlays, reading, { keepCard: true })
 			return {
 				castMemberId: m.id,
 				characterId: m.characterId ?? null,
-				name: typeof c.name === "string" ? c.name : (m.name ?? "")
+				name: reads.get(m.id)?.name ?? m.name ?? ""
 			}
 		}),
 		locations: places
@@ -375,7 +379,8 @@ export function assertOwnerInBook(links: LorebookLinks, owner: LorebookOwnerFilt
  * owners — or null when it names nothing usable. `"world"` and
  * `{ kind: 'lorebook' }` are the world; the session-layer kinds are accepted
  * and translated (R5: `session` → `lorebook`, `session_location` → `location`
- * by the same entry id, `session_cast` → the cast member whose card it is).
+ * by the same entry id, `session_cast` → the cast member whose card it is;
+ * 🚧 ⏳ once the flip is on, `seated_member` → the member itself).
  */
 export function normalizeOwner(
 	raw: unknown,
@@ -403,6 +408,9 @@ export function normalizeOwner(
 			// A character not bound into this book: nobody the book can name.
 			return { kind: "cast_member", id: id ?? -1 }
 		}
+		// 🚧 ⏳ Flip on (`memberForm.ts`): a seat's `seated_member` owner *is* the cast member (`lorebook_bindings.id`).
+		case "seated_member":
+			return memberFormOn() && num !== undefined ? { kind: "cast_member", id: num } : null
 		default:
 			return null
 	}

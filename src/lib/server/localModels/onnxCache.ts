@@ -42,8 +42,12 @@ import { getAppDataDir } from "$lib/server/utils/appDataDir"
 import {
 	catalogView,
 	recommendedEmbeddingModels,
-	recommendedNerModels
+	recommendedEmbeddingSnapshot,
+	recommendedNerModels,
+	recommendedNerSnapshot
 } from "./onnxList"
+import type { EmbeddingModelDef } from "$lib/server/embedding/models"
+import type { NerModelDef } from "$lib/server/ner/models"
 import type { OnnxCatalogView, OnnxModality } from "./onnxList"
 
 export type { OnnxCatalogView, OnnxModality }
@@ -197,7 +201,10 @@ async function walk(dir: string, depth = 0): Promise<DirScan> {
 	return out
 }
 
-async function scan(modelId: string, modality: OnnxCacheLane): Promise<DirScan> {
+async function scan(
+	modelId: string,
+	modality: OnnxCacheLane
+): Promise<DirScan> {
 	const key = scanKey(modelId, modality)
 	const cached = scans.get(key)
 	if (cached) return cached
@@ -416,6 +423,72 @@ export async function catalogMapFor(
 	return new Map(defs.map((d) => [d.id, catalogView(d)]))
 }
 
+/**
+ * Did somebody ask for a local ONNX model? True when a complete `onnx`
+ * `local_models` row exists for embeddings or named entities (a model is on
+ * disk), or a loadout names one of the two local ONNX connections.
+ *
+ * The ONE gate, read by the boot warm of the recommended lists
+ * (`warmRecommendedList`) and by the `connections:list` projection
+ * (`localModelStates`). The two connections always exist, so their existence
+ * does not say anyone asked; a network call nobody asked for breaks P1.
+ */
+export async function localOnnxAskedFor(db: Db): Promise<boolean> {
+	const schema = await import("$lib/server/db/schema")
+	const { and, eq, inArray } = await import("drizzle-orm")
+	const [onDisk] = await db
+		.select({ id: schema.localModels.id })
+		.from(schema.localModels)
+		.where(
+			and(
+				eq(schema.localModels.format, "onnx"),
+				inArray(schema.localModels.modality, ["embeddings", "ner"]),
+				eq(schema.localModels.status, "complete")
+			)
+		)
+		.limit(1)
+	if (onDisk) return true
+	const [named] = await db
+		.select({ id: schema.loadouts.id })
+		.from(schema.loadouts)
+		.innerJoin(
+			schema.connections,
+			eq(schema.loadouts.connectionId, schema.connections.id)
+		)
+		.where(
+			inArray(schema.connections.type, [
+				CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+				CONNECTION_TYPE.LOCAL_ONNX_NER
+			])
+		)
+		.limit(1)
+	return Boolean(named)
+}
+
+/**
+ * The catalogue with no network: the process snapshot when the list has been
+ * loaded, else the built-in one. For the list projection when nobody asked for
+ * a local ONNX model (owner ★C-5, 2026-11-04) — opening Connections must not
+ * be what reaches GitHub.
+ */
+async function catalogSnapshotMapFor(
+	modality: OnnxModality
+): Promise<Map<string, OnnxCatalogView>> {
+	const snap =
+		modality === "embeddings"
+			? recommendedEmbeddingSnapshot()
+			: recommendedNerSnapshot()
+	let defs: ReadonlyArray<EmbeddingModelDef | NerModelDef> = snap
+	if (defs.length === 0) {
+		defs =
+			modality === "embeddings"
+				? (await import("$lib/server/embedding/models"))
+						.EMBEDDING_MODELS
+				: (await import("$lib/server/ner/models")).NER_MODELS
+	}
+	return new Map(defs.map((d) => [d.id, catalogView(d)]))
+}
+
 /** The lane's resident model id, read without loading anything. */
 async function laneLoadedModelId(
 	modality: OnnxModality
@@ -590,7 +663,9 @@ export async function localModelStates(
 	const modality = onnxModalityOf(endpoint.type)
 	if (!modality || rows.length === 0) return out
 	const [catalog, registry, loadedModelId] = await Promise.all([
-		catalogMapFor(modality),
+		(await localOnnxAskedFor(db))
+			? catalogMapFor(modality)
+			: catalogSnapshotMapFor(modality),
 		registryMapFor(db, modality),
 		laneLoadedModelId(modality)
 	])

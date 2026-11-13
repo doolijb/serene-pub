@@ -144,6 +144,7 @@ describe("buildConfigContent with the speech slot (fixture 5)", () => {
 			contextsize: 4096,
 			flashattention: false,
 			batchsize: 512,
+			smartcache: 4,
 			jinja: true,
 			ttsmodel: QWEN.path,
 			ttswavtokenizer: QWEN.wavTokenizerPath,

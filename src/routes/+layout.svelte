@@ -393,7 +393,11 @@
 		role="alert"
 	>
 		<div class="w-full max-w-lg space-y-4 text-center">
-			<h1 class="[font-family:var(--typo-heading--font-family,inherit)] text-2xl font-semibold">Can't reach Serene Pub</h1>
+			<h1
+				class="[font-family:var(--typo-heading--font-family,inherit)] text-2xl font-semibold"
+			>
+				Can't reach Serene Pub
+			</h1>
 			<p class="text-sm opacity-90">
 				The page loaded, but the realtime connection Serene Pub needs
 				for sessions and live updates could not be established.

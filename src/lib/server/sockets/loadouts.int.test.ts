@@ -97,6 +97,32 @@ describe("loadouts sockets", () => {
 		expect(res.transforms.find((t) => t.id === "text->text")?.defaultLoadoutId).toBe(reply.id)
 	}, 60_000)
 
+	test("★B — the list says Vision falls back to Reply only while Reply's model sees", async () => {
+		const { loadoutsList } = await S()
+		const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
+		const visionOf = async () => {
+			const res = await loadoutsList.handler(socketFor(), {}, noopEmit)
+			return res.loadouts.find((l) => l.loadoutId === "core:loadout/vision@1")!
+		}
+		// Reply on a model nobody says sees (the test above): nothing to fall back to.
+		expect(await visionOf()).toMatchObject({ filled: false, fallbackName: null })
+		// The admin's own switch says it sees: Vision now reads as Reply's.
+		const [c] = await testDb
+			.insert(schema.connections)
+			.values({ name: "seer", type: CONNECTION_TYPE.OPENAI, capabilities: { overrides: { "text+image->text": "native" } } } as any)
+			.returning()
+		const [m] = await testDb
+			.insert(schema.connectionModels)
+			.values({ connectionId: c!.id, model: "seer-m", name: "seer model" } as any)
+			.returning()
+		await setCapabilityDefault(testDb as any, "text->text", { connectionId: c!.id, connectionModelId: m!.id })
+		expect(await visionOf()).toMatchObject({
+			filled: false,
+			fallbackName: "Reply",
+			consequence: "Unfilled — falls back to Reply"
+		})
+	}, 60_000)
+
 	test("the loadout voice and other speakers: accepted on a speech loadout's own entries, refused otherwise", async () => {
 		const { loadoutsList, loadoutsUpdate } = await S()
 		const list = await loadoutsList.handler(socketFor(), {}, noopEmit)

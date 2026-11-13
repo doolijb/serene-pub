@@ -16,13 +16,15 @@
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { adminRedirect } from "$lib/client/components/componentEditor/editorState"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 
 	type CoreRow = Sockets.Components.CoreList.Response["components"][number]
 	const BLANK = ""
@@ -32,7 +34,9 @@
 	const interest = getAdminInterestContext()
 
 	let core = $state<CoreRow[]>([])
-	let compiler = $state<{ available: boolean; reason?: string }>({ available: true })
+	let compiler = $state<{ available: boolean; reason?: string }>({
+		available: true
+	})
 	let start = $state(BLANK)
 	let framework = $state<Sockets.Components.Framework>("svelte")
 	let label = $state("")
@@ -49,9 +53,11 @@
 		pendingIntent = null
 		saving = false
 		label = ""
-		toaster.success({ title: "Component added" })
+		notify.success({ title: "Component added" })
 		if (intent === "continue")
-			void goto(`/admin/components/${res.component.id}`, { replaceState: true })
+			void goto(`/admin/components/${res.component.id}`, {
+				replaceState: true
+			})
 		else if (intent === "save") void goto("/admin/components")
 	}
 	function refused(res: Sockets.ErrorResponse) {
@@ -64,14 +70,30 @@
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			interest.declareInterest<"components:clone">("components:clone", made),
-			interest.declareInterest<"components:create">("components:create", made),
-			interest.declareInterest<"components:clone:error">("components:clone:error", refused),
-			interest.declareInterest<"components:create:error">("components:create:error", refused),
+			interest.declareInterest<"components:clone">(
+				"components:clone",
+				made
+			),
+			interest.declareInterest<"components:create">(
+				"components:create",
+				made
+			),
+			interest.declareInterest<"components:clone:error">(
+				"components:clone:error",
+				refused
+			),
+			interest.declareInterest<"components:create:error">(
+				"components:create:error",
+				refused
+			),
 			interest.requestWithInterest("components:coreList", {}, (res) => {
 				core = res.components
 				const from = adminPage.url.searchParams.get("from")
-				if (from && res.components.some((c) => c.slug === from && c.cloneable)) start = from
+				if (
+					from &&
+					res.components.some((c) => c.slug === from && c.cloneable)
+				)
+					start = from
 			}),
 			interest.requestWithInterest("components:list", {}, (res) => {
 				compiler = res.compiler
@@ -91,8 +113,16 @@
 		saving = true
 		pendingIntent = intent
 		const name = label.trim() || undefined
-		if (start) socket.emit("components:clone", { slug: start, ...(name ? { label: name } : {}) })
-		else socket.emit("components:create", { framework, ...(name ? { label: name } : {}) })
+		if (start)
+			socket.emit("components:clone", {
+				slug: start,
+				...(name ? { label: name } : {})
+			})
+		else
+			socket.emit("components:create", {
+				framework,
+				...(name ? { label: name } : {})
+			})
 	}
 </script>
 
@@ -108,12 +138,18 @@
 	canSave={compiler.available && !saving}
 	errors={compiler.available
 		? formErrors
-		: [`Authoring is not available on this pub: it has no component compiler${compiler.reason ? ` (${compiler.reason})` : ""}.`]}
+		: [
+				`Authoring is not available on this pub: it has no component compiler${compiler.reason ? ` (${compiler.reason})` : ""}.`
+			]}
 	onSave={save}
 >
 	<AdminFieldset title="Component">
 		<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
-			<AdminField id="component-new-start" label="Start from" help="A clone is a new widget beside core's, never in its place.">
+			<AdminField
+				id="component-new-start"
+				label="Start from"
+				help="A clone is a new widget beside core's, never in its place."
+			>
 				<Select
 					label="Start from"
 					labelHidden
@@ -121,7 +157,11 @@
 						{ value: BLANK, label: "Blank" },
 						...core
 							.filter((c) => c.cloneable)
-							.map((c) => ({ value: c.slug, label: `Clone of ${c.title}`, hint: c.framework }))
+							.map((c) => ({
+								value: c.slug,
+								label: `Clone of ${c.title}`,
+								hint: c.framework
+							}))
 					]}
 					bind:value={start}
 					describedBy={describedBy("component-new-start", false)}
@@ -137,11 +177,17 @@
 							{ value: "vanilla", label: "Vanilla" }
 						]}
 						value={framework}
-						onValueChange={(v) => (framework = v === "vanilla" ? "vanilla" : "svelte")}
+						onValueChange={(v) =>
+							(framework =
+								v === "vanilla" ? "vanilla" : "svelte")}
 					/>
 				</AdminField>
 			{/if}
-			<AdminField id="component-new-label" label="Name" help="Optional — a default is assigned.">
+			<AdminField
+				id="component-new-label"
+				label="Name"
+				help="Optional — a default is assigned."
+			>
 				<input
 					id="component-new-label"
 					class="input"

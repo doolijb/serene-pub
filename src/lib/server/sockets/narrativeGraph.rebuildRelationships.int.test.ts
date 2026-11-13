@@ -26,6 +26,8 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { castVersionsInForce } from "$lib/server/cast/memberAsRead"
+import { insertCastMember } from "$lib/server/characters/versions"
 import { applyAtReview } from "./fixtures/graphReview"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -68,22 +70,16 @@ async function makeLorebookWithTwoBindings(userId: number, label: string) {
 		.insert(schema.lorebooks)
 		.values({ name: label, userId })
 		.returning()
-	const [a] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId: lorebook.id,
-			binding: "{{char:1}}",
-			name: "Aria"
-		})
-		.returning()
-	const [b] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId: lorebook.id,
-			binding: "{{char:2}}",
-			name: "Bram"
-		})
-		.returning()
+	const { member: a } = await insertCastMember(testDb, {
+		lorebookId: lorebook.id,
+		binding: "{{char:1}}",
+		name: "Aria"
+	})
+	const { member: b } = await insertCastMember(testDb, {
+		lorebookId: lorebook.id,
+		binding: "{{char:2}}",
+		name: "Bram"
+	})
 	return { lorebook, a, b }
 }
 
@@ -509,7 +505,11 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 		})
 		expect(after).toHaveLength(before.length) // UPDATE, never INSERT
 		const aria = after.find((n) => n.id === a.id)!
-		expect(aria.nodeState).toBe("deceased")
+		// The state is a cast version's: the frozen column is not written.
+		expect(aria.nodeState).toBe("active")
+		const read = (await castVersionsInForce(testDb, [a.id])).get(a.id)!
+		expect(read.version.nodeState).toBe("deceased")
+		expect(read.version.summary).toBe("a fallen scout")
 		expect(aria.summary).toBe("a fallen scout")
 		// Identity fields stay owned by entity sync.
 		expect(aria.name).toBe("Aria")
@@ -525,15 +525,12 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 			.insert(schema.lorebooks)
 			.values({ name: "No Clobber", userId: user.id })
 			.returning()
-		const [hand] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
-				lorebookId: lorebook.id,
-				binding: "{{char:1}}",
-				name: "Aria",
-				summary: "user wrote this"
-			})
-			.returning()
+		const { member: hand } = await insertCastMember(testDb, {
+			lorebookId: lorebook.id,
+			binding: "{{char:1}}",
+			name: "Aria",
+			summary: "user wrote this"
+		})
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
@@ -565,6 +562,11 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 		// can't distinguish a hand edit from a prior build's output, so it is
 		// never overwritten — enforced in the WHERE, not by reading first.
 		expect(row!.summary).toBe("user wrote this")
-		expect(row!.nodeState).toBe("missing")
+		expect(row!.nodeState).toBe("active")
+		const read = (await castVersionsInForce(testDb, [hand.id])).get(
+			hand.id
+		)!
+		expect(read.version.nodeState).toBe("missing")
+		expect(read.version.summary).toBe("user wrote this")
 	})
 })

@@ -14,16 +14,20 @@
 	import BookRulesPicker from "$lib/client/components/lorebookForms/BookRulesPicker.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import type { RulesChoice } from "$lib/shared/rulesets/rulesOffer"
+	import RulesFitLine from "./RulesFitLine.svelte"
+	import { isFreeformBook, type RulesetGenreFit } from "./rulesFitWords"
 
 	interface Props {
 		lorebookId: number
 		/** The book's rules as stored (`lorebooks.primary_ruleset`). */
 		current: string
+		/** 🚧 s22-V: how each enabled genre rates these rules; absent for Freeform. */
+		fits?: RulesetGenreFit[] | null
 	}
 
-	let { lorebookId, current }: Props = $props()
+	let { lorebookId, current, fits = null }: Props = $props()
 
 	const socket = useTypedSocket()
 	let picked = $state("")
@@ -76,7 +80,7 @@
 					requestId
 			})
 			asking = null
-			toaster.success({
+			notify.success({
 				title: "Rules changed",
 				description: `New sessions on this book play ${next.name}.`
 			})
@@ -106,8 +110,8 @@
 		Rules
 	</p>
 	<p class="text-surface-700-300 text-sm">
-		The rules this book's stories are told by. Every session you start on
-		it plays them.
+		The rules this book's stories are told by. Every session you start on it
+		plays them.
 	</p>
 	<BookRulesPicker
 		bind:value={picked}
@@ -116,16 +120,18 @@
 		disabled={saving}
 		{onpick}
 	/>
+	<RulesFitLine {fits} freeform={isFreeformBook(current)} mode="details" />
 	{#if asking}
 		<div
-			class="border-surface-200-800 flex flex-col gap-2 rounded-base border p-3"
+			class="border-surface-200-800 rounded-base flex flex-col gap-2 border p-3"
 			role="group"
 			aria-label="Change the rules"
 			data-lore-book-rules-confirm
 		>
+			<!-- prettier-ignore -->
 			<p class="text-sm">
-				Change to <strong>{asking.name}</strong>? New sessions on this
-				book play {asking.name}. Sessions already reading it keep
+				Change to <strong>{asking.name}</strong>? New sessions on this book play {asking.name}. Sessions already
+				reading it keep
 				{currentName}, since a session's rules are set when it starts.
 			</p>
 			<div class="flex justify-end gap-2">

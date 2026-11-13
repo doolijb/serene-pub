@@ -19,6 +19,11 @@
  * And the one that makes it usable: `create-lore-entry@1` takes its `links`
  * and writes them in the same transaction — a room whose exits do not resolve
  * fails WITH the room.
+ *
+ * (sense-b4) These pin a pipeline's links and new entries landing in the
+ * session's lorebook (the pub default, Full) for sessions whose scenes do not
+ * end by themselves. For a session whose scenes do, the last block shows the
+ * same writes landing in its own book; the predicate is switched per session.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -33,6 +38,12 @@ import {
 	WORLD_LORE_TYPE_ID,
 	entryInsert
 } from "$lib/server/utils/lorebookEntries"
+
+const scenesEnd = vi.hoisted(() => new Set<number>())
+vi.mock("$lib/server/lorebooks/ownBook", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/lorebooks/ownBook")>()),
+	scenesEndByThemselves: async (_db: unknown, sessionId: number) => scenesEnd.has(sessionId)
+}))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -144,7 +155,7 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-describe("core:outlet/link-lore-entries — a link between two entries", () => {
+describe("(scenes do not end by themselves) core:outlet/link-lore-entries — a link between two entries", () => {
 	it(
 		"lands a row between two entries of the session's lorebook, `to` by name",
 		async () => {
@@ -304,7 +315,7 @@ describe("core:outlet/link-lore-entries — a link between two entries", () => {
 	)
 })
 
-describe("core:outlet/create-lore-entry — the kind, and the links, in one commit", () => {
+describe("(scenes do not end by themselves) core:outlet/create-lore-entry — the kind, and the links, in one commit", () => {
 	it(
 		"names a pipeline as the row's writer, never a person",
 		async () => {
@@ -395,7 +406,9 @@ describe("core:outlet/create-lore-entry — the kind, and the links, in one comm
 				{
 					name: "",
 					content: "It happened.",
-					params: { entryType: HISTORY_TYPE_ID }
+					params: { entryType: HISTORY_TYPE_ID },
+					// A pipeline history write needs a date (hist-B1, 2026-11-10).
+					fields: { year: 1, month: 1, day: 1 }
 				},
 				SAVE as any
 			)) as { id: number }
@@ -468,7 +481,7 @@ describe("core:outlet/create-lore-entry — the kind, and the links, in one comm
  * undo of the run must never delete a link somebody else drew) nor reported
  * as a write (`written: false`, so the executor emits no `lore-link-created`).
  */
-describe("the descriptor, and the second call (places plan B2)", () => {
+describe("(scenes do not end by themselves) the descriptor, and the second call (places plan B2)", () => {
 	let guardroomId: number
 	let drownedId: number
 	const hostWith = async (artifacts: any[]) => {
@@ -663,7 +676,7 @@ describe("the descriptor, and the second call (places plan B2)", () => {
  * request (a one-way door where both ways was asked) was answered as the
  * link, so the way back never existed and the run said it stood.
  */
-describe("the second call, as the session reads it (places plan B2, review round)", () => {
+describe("(scenes do not end by themselves) the second call, as the session reads it (places plan B2, review round)", () => {
 	let n = 100
 	const room = (name: string) => addEntry(bookId, name, ++n)
 	const hostFor = async (sessionId: number, artifacts: any[] = []) => {
@@ -873,6 +886,65 @@ describe("the second call, as the session reads it (places plan B2, review round
 			})
 			// The standing row starts at the Guardroom, whatever was asked.
 			expect(mirror).toMatchObject({ id: door, fromEntryId: a, written: false })
+		},
+		60_000
+	)
+})
+
+describe("a session whose scenes end by themselves: its pipeline's links and new entries go to its own book", () => {
+	const endingSession = async () => {
+		const [s] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false, lorebookId: bookId })
+			.returning()
+		scenesEnd.add(s!.id)
+		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+		const own = await ownBookFor(db as any, s!.id)
+		return { id: s!.id, own }
+	}
+	const branchCount = async () =>
+		(await db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, bookId))).length
+
+	it(
+		"a link between two lorebook entries lands in the own book, none in the lorebook, no line forked",
+		async () => {
+			const s = await endingSession()
+			// Two rooms no earlier test has linked (a standing link would answer instead).
+			const attic = await addEntry(bookId, "The Attic Twin", 70)
+			const pantry = await addEntry(bookId, "The Pantry Twin", 71)
+			const before = (await links(bookId)).length
+			const lines = await branchCount()
+			const res = (await (await host(s.id)).commit!(
+				{ from: attic, to: "  the pantry twin ", description: "a stair down" },
+				LINK as any
+			)) as { id: number; lorebookId: number }
+			expect(res.lorebookId).toBe(s.own.id)
+			const rows = await links(s.own.id)
+			expect(rows).toHaveLength(1)
+			expect(rows[0]).toMatchObject({ id: res.id, fromEntryId: attic, toEntryId: pantry })
+			expect((await links(bookId)).length).toBe(before)
+			expect(await branchCount()).toBe(lines)
+		},
+		60_000
+	)
+
+	it(
+		"a new entry and its links land in the own book, none in the lorebook",
+		async () => {
+			const s = await endingSession()
+			const before = (await links(bookId)).length
+			const lines = await branchCount()
+			const res = (await (await host(s.id)).commit!(
+				{ name: "The Landing Twin", content: "A landing.", links: ["The Hall", cellarId] },
+				SAVE as any
+			)) as { id: number; linkIds: number[]; lorebookId: number; route?: string }
+			expect(res).toMatchObject({ route: "own-book", lorebookId: s.own.id })
+			const [row] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, res.id))
+			expect(row!.lorebookId).toBe(s.own.id)
+			expect(res.linkIds).toHaveLength(2)
+			expect((await links(s.own.id)).map((r) => r.id).sort()).toEqual([...res.linkIds].sort())
+			expect((await links(bookId)).length).toBe(before)
+			expect(await branchCount()).toBe(lines)
 		},
 		60_000
 	)

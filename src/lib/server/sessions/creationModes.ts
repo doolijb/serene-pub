@@ -20,9 +20,13 @@ import { verbEnablementRefusal } from "$lib/server/messages/verbs"
 import { cardlessPlayerSeatOf, writeSeatName } from "$lib/server/sessions/seatName"
 import { lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 import { bumpedAnnexVersionsSql } from "$lib/server/sessions/annexVersions"
-import { recordAnnexDelta } from "$lib/server/sessions/annexChanges"
+import { isTimelessAnnexKey } from "$lib/server/sessions/annexChanges"
+import { annexImprintKey, fileSessionImprint } from "$lib/server/sessions/sessionImprints"
 import { annexScopeOf, declaredAnnexFields, sessionGenreOf } from "$lib/server/sessions/annexFields"
 import { ownerVersionOf } from "$lib/server/plugins/annexMigrate"
+import { loadSeatMap, memberFormOf, storedSeatRef } from "$lib/server/state/seatRefs"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { castOwnerOf, type StateOwner } from "$lib/server/state/owners"
 import { applyChangeSet, newestMessageId, type StateChange } from "$lib/server/state/write"
 import { sessionLinks, valueOf, vocabularyFor } from "$lib/server/state/resolve"
 
@@ -167,12 +171,24 @@ export async function seedNextChapter(
 		.filter((d): d is NonNullable<typeof d> => !!d && d.nextChapter === true && d.type !== "derived")
 	const newLinks = await sessionLinks(db, sessionId)
 	const newCast = new Set(newLinks.cast.map((m) => m.characterId))
+	// 🚧 A seat is the same character when it holds the same cast member; the
+	// card match below is the fallback (the two sessions' own books hold
+	// different members). Two seats on one member: the first in link order.
+	const newByMember = new Map<number, number>()
+	for (const m of newLinks.cast)
+		if (m.seatMemberId != null && !newByMember.has(m.seatMemberId))
+			newByMember.set(m.seatMemberId, m.characterId)
+	const newSeatMembers = new Set<number>([
+		...newByMember.keys(),
+		...(newLinks.seatedMembers ?? []).map((m) => m.seatMemberId)
+	])
 	const newSeatId = await cardlessPlayerSeatOf(db, sessionId, userId)
 	const known = { links: fromLinks, vocabulary }
 	const changes: StateChange[] = []
+	let newSeatMap: Awaited<ReturnType<typeof loadSeatMap>> | undefined
 	const carry = async (
-		from: { kind: "session" | "session_cast" | "player_seat"; id: number },
-		to: { kind: "session" | "session_cast" | "player_seat"; id: number },
+		from: StateOwner,
+		to: StateOwner,
 		slotId: string
 	) => {
 		const value = await valueOf(db, { sessionId: fromSessionId, owner: from, slotId }, known)
@@ -186,13 +202,37 @@ export async function seedNextChapter(
 				decl.id
 			)
 		if (!decl.appliesTo.includes("cast")) continue
-		for (const member of fromLinks.cast)
-			if (newCast.has(member.characterId))
+		for (const member of fromLinks.cast) {
+			const target =
+				(member.seatMemberId != null
+					? newByMember.get(member.seatMemberId)
+					: undefined) ??
+				(newCast.has(member.characterId) ? member.characterId : undefined)
+			if (target === undefined) continue
+			if (!memberFormOn()) {
 				await carry(
 					{ kind: "session_cast", id: member.characterId },
-					{ kind: "session_cast", id: member.characterId },
+					{ kind: "session_cast", id: target },
 					decl.id
 				)
+				continue
+			}
+			// 🚧 ⏳ Flip on (`memberForm.ts`): the old seat's own owner → the new session's seat for the same card (skipped when none answers).
+			newSeatMap ??= await loadSeatMap(db, sessionId)
+			const to = memberFormOf(newSeatMap, { kind: "session_cast", id: target })
+			if (to) await carry(castOwnerOf(member), to as StateOwner, decl.id)
+		}
+		// 🚧 ⏳ Flip on: a card-less character seat carries by its member, to the
+		// new session's seat on the same member (card or card-less); none, none.
+		if (memberFormOn())
+			for (const seat of fromLinks.seatedMembers ?? []) {
+				if (!newSeatMembers.has(seat.seatMemberId)) continue
+				await carry(
+					{ kind: "seated_member", id: seat.seatMemberId },
+					{ kind: "seated_member", id: seat.seatMemberId },
+					decl.id
+				)
+			}
 		if (oldSeatId !== null && newSeatId !== null)
 			await carry(
 				{ kind: "player_seat", id: oldSeatId },
@@ -234,7 +274,15 @@ export async function seedNextChapter(
 		values[f.decl.key] = value
 		wanted.set(f.owner, values)
 		const audiences = seeAs.get(f.owner) ?? {}
-		const see = [...new Set(f.decl.see.map((r) => canonicalParticipantRef(r)))].sort()
+		// 🚧 seat-cast S3: each `seated-member:<memberId>` in a declared audience goes
+		// through the door into the card form it is stored in; a member no seat of
+		// the new session holds is dropped (never stored raw).
+		const seated: string[] = []
+		for (const r of f.decl.see) {
+			const stored = await storedSeatRef(db, sessionId, r)
+			if (stored !== null) seated.push(stored)
+		}
+		const see = [...new Set(seated.map((r) => canonicalParticipantRef(r)))].sort()
 		if (see.length) audiences[f.decl.key] = see
 		seeAs.set(f.owner, audiences)
 	}
@@ -288,18 +336,27 @@ export async function seedNextChapter(
 				set ${sql.identifier("annex_versions")} = ${bumpedAnnexVersionsSql(schema.sessions.annexVersions, owner)}
 				where ${schema.sessions.id} = ${sessionId}
 			`)
-			await recordAnnexDelta(tx as unknown as Db, {
-				sessionId,
-				messageId: anchor,
-				owner,
-				ownerVersion: versions.get(owner) ?? null,
-				before: {
-					document: Object.hasOwn(held, owner) ? previous : null,
-					audiences: Object.hasOwn(heldAll, owner) ? heldAudiences : null
-				},
-				after: { document: next, audiences: nextAudiences },
-				runId: null
-			})
+			// ST3: one imprint row per key whose value or audience moved.
+			for (const k of new Set([
+				...Object.keys(previous),
+				...Object.keys(next),
+				...Object.keys(heldAudiences),
+				...Object.keys(nextAudiences)
+			])) {
+				if (isTimelessAnnexKey(owner, k)) continue
+				await fileSessionImprint(
+					tx as unknown as Db,
+					{ sessionId, messageId: anchor, runId: null },
+					{ kind: "annex", key: annexImprintKey(owner, k) },
+					previous[k],
+					next[k],
+					{
+						ownerVersion: versions.get(owner) ?? null,
+						audienceBefore: heldAudiences[k] ?? null,
+						audienceAfter: nextAudiences[k] ?? null
+					}
+				)
+			}
 			held[owner] = next
 			heldAll[owner] = nextAudiences
 		}

@@ -63,19 +63,15 @@ async function seat() {
 			userId: ownerId,
 			isGroup: true,
 			name: "mirror",
-			annex: {
-				core: {
-					turnOrder: {
-						v: 1,
-						order: [],
-						candidates: [a!, b!].map((c, position) => ({ ref: `character:${c.id}`, kind: "character", name: c.name, position })),
-						basedOnAt: 1,
-						computedAt: 1,
-						runId: null,
-						event: null,
-						strategy: null
-					}
-				}
+			turnOrder: {
+				v: 1,
+				order: [],
+				candidates: [a!, b!].map((c, position) => ({ ref: `character:${c.id}`, kind: "character", name: c.name, position })),
+				basedOnAt: 1,
+				computedAt: 1,
+				runId: null,
+				event: null,
+				strategy: null
 			}
 		} as any)
 		.returning()

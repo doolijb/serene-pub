@@ -7,12 +7,16 @@
  * is gone is a dangling reference — the only case that warns.
  */
 
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
+
 export type CastTagKind = "character" | "persona" | "background" | "unknown"
 
 /** The fields read here — the binding list rows carry more. */
 export interface CastTagRow {
 	binding: string
 	name?: string | null
+	ownName?: string | null
+	ownNickname?: string | null
 	characterId?: number | null
 	character?: {
 		name?: string | null
@@ -25,9 +29,10 @@ function rowFor(rows: readonly CastTagRow[], tag: string) {
 	return rows.find((b) => b.binding == tag)
 }
 
-/** Card nickname, card name, the member's own name, then the raw tag. */
+/** The name shown for a carded member (their own in this book, else the card's), the row's own name, then the raw tag. */
 export function castMemberLabel(row: CastTagRow | undefined, tag: string) {
-	return row?.character?.nickname || row?.character?.name || row?.name || tag
+	const shown = row ? memberShownName(row, row.character) : ""
+	return shown || row?.name || tag
 }
 
 export function castTagLabel(rows: readonly CastTagRow[], tag: string) {

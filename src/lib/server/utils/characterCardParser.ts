@@ -1121,6 +1121,8 @@ export interface CharacterCardV3Input {
 	firstMessage?: string | null
 	exampleDialogues?: string | string[] | null
 	creatorNotes?: string | null
+	/** The notes in other languages, and the main note under its language: out as `creator_notes_multilingual`. */
+	creatorNotesMultilingual?: Record<string, string> | null
 	systemPrompt?: string | null
 	postHistoryInstructions?: string | null
 	alternateGreetings?: string[] | null
@@ -1131,6 +1133,7 @@ export interface CharacterCardV3Input {
 	depthPromptDepth?: number | null
 	depthPromptRole?: string | null
 	source?: string[] | null
+	/** Out as `data.group_only_greetings` (the V3 spec location), with a ⏳ copy under `extensions`. */
 	groupOnlyGreetings?: string[] | null
 	aliases?: string[] | null
 	summary?: string | null
@@ -1174,6 +1177,8 @@ export function buildCharacterCardV3(character: CharacterCardV3Input) {
 			...(character.source && character.source.length > 0
 				? { source: character.source }
 				: {}),
+			// ⏳ A copy under `extensions` for readers that look there (the
+			// spec location is `data.group_only_greetings`, above).
 			...(character.groupOnlyGreetings &&
 			character.groupOnlyGreetings.length > 0
 				? { group_only_greetings: character.groupOnlyGreetings }
@@ -1209,6 +1214,17 @@ export function buildCharacterCardV3(character: CharacterCardV3Input) {
 			system_prompt: character.systemPrompt || "",
 			post_history_instructions: character.postHistoryInstructions || "",
 			alternate_greetings: character.alternateGreetings || [],
+			...(character.groupOnlyGreetings &&
+			character.groupOnlyGreetings.length > 0
+				? { group_only_greetings: character.groupOnlyGreetings }
+				: {}),
+			...(character.creatorNotesMultilingual &&
+			Object.keys(character.creatorNotesMultilingual).length > 0
+				? {
+						creator_notes_multilingual:
+							character.creatorNotesMultilingual
+					}
+				: {}),
 			tags: character.tags || [],
 			creator: character.creator || "",
 			character_version: character.characterVersion || "",

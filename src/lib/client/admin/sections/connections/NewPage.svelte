@@ -17,7 +17,7 @@
 		adminGoto,
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import {
 		CONNECTION_DEFAULTS,
@@ -29,13 +29,17 @@
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 
 	const socket = useTypedSocket()
 
 	let names = $state<string[]>([])
 	useInterest<"connections:list">("connections:list", (msg) => {
-		names = msg.connectionsList.map((c) => (c.name ?? "").trim().toLowerCase())
+		names = msg.connectionsList.map((c) =>
+			(c.name ?? "").trim().toLowerCase()
+		)
 	})
 	onMount(() => socket.emit("connections:list", {}))
 
@@ -65,7 +69,9 @@
 			: names.includes(trimmed.toLowerCase())
 				? `A connection named "${trimmed}" already exists.`
 				: null
-		serviceError = service ? null : "Choose the service this connection talks to."
+		serviceError = service
+			? null
+			: "Choose the service this connection talks to."
 		formErrors = []
 		if (nameError || serviceError || !service) return
 		const { type, presetValue, presetSlug } = service
@@ -85,7 +91,9 @@
 				type,
 				enabled: true,
 				preset: presetSlug,
-				...(preset ? preset.connectionDefaults : (CONNECTION_DEFAULTS[type] ?? {}))
+				...(preset
+					? preset.connectionDefaults
+					: (CONNECTION_DEFAULTS[type] ?? {}))
 			} as any
 		})
 	}
@@ -97,9 +105,10 @@
 		const intent = pendingIntent
 		pendingIntent = null
 		saving = false
-		toaster.success({ title: `Added ${msg.connection.name}` })
+		notify.success({ title: `Added ${msg.connection.name}` })
 		if (intent !== "another") landed = true
-		if (intent === "continue") void adminGoto(`/admin/connections/${msg.connection.id}`)
+		if (intent === "continue")
+			void adminGoto(`/admin/connections/${msg.connection.id}`)
 		else if (intent === "save") void adminGoto("/admin/connections")
 		else {
 			names = [...names, name.trim().toLowerCase()]
@@ -118,7 +127,10 @@
 		else formErrors = [error]
 	}
 	useInterest<"connections:create">("connections:create", handleCreate)
-	useInterest<"connections:create:error">("connections:create:error", handleCreateError)
+	useInterest<"connections:create:error">(
+		"connections:create:error",
+		handleCreateError
+	)
 </script>
 
 <AdminChangeForm
@@ -131,12 +143,19 @@
 	{saving}
 	dirty={!!name.trim() || !!service}
 	errors={formErrors}
-	fieldErrors={{ "new-connection-name": nameError, "new-connection-service": serviceError }}
+	fieldErrors={{
+		"new-connection-name": nameError,
+		"new-connection-service": serviceError
+	}}
 	onSave={save}
 >
 	<AdminFieldset title="Service">
 		{#key formKey}
-			<div data-field="new-connection-service" id="new-connection-service" tabindex="-1">
+			<div
+				data-field="new-connection-service"
+				id="new-connection-service"
+				tabindex="-1"
+			>
 				<ConnectionServicePicker
 					bind:selectedItem={service}
 					label="Service"
@@ -166,7 +185,10 @@
 				bind:value={name}
 				oninput={() => (nameTouched = true)}
 				aria-invalid={!!nameError}
-				aria-describedby={describedBy("new-connection-name", !!nameError)}
+				aria-describedby={describedBy(
+					"new-connection-name",
+					!!nameError
+				)}
 			/>
 		</AdminField>
 	</AdminFieldset>

@@ -148,6 +148,12 @@ beforeAll(async () => {
 		])
 		.returning()
 	const [vBinding, bBinding, npcBinding] = bindings
+	// Both cast members are seated: ★4 (2026-11-08) reads "background" as "not
+	// seated", and these two are the party the narrator must not read.
+	await db.insert(schema.sessionCharacters).values([
+		{ sessionId, characterId: verity, castMemberId: vBinding.id },
+		{ sessionId, characterId: brask, castMemberId: bBinding.id }
+	] as any)
 
 	await db.insert(schema.lorebookEntries).values([
 		...worldLoreValues([

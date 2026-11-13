@@ -20,7 +20,8 @@
 		laterLabel: (edge: GraphEdge) => string | null
 		isNew: (edge: GraphEdge) => boolean
 		onKeep: (edge: GraphEdge) => void
-		onSeeInGraph: () => void
+		/** Absent while advanced controls are off (the Graph lens is hidden): no See in graph. */
+		onSeeInGraph?: () => void
 		/**
 		 * The member at the far end, by graph key, as they read at the
 		 * moment; undefined for an entry end or a member not on this line.
@@ -49,13 +50,15 @@
 		<h4 class="flex-1 text-sm font-semibold">
 			Relationships {rows.length}
 		</h4>
-		<button
-			class="btn btn-sm preset-tonal-surface shrink-0"
-			type="button"
-			onclick={onSeeInGraph}
-		>
-			<Icons.Network size={14} aria-hidden="true" /> See in graph
-		</button>
+		{#if onSeeInGraph}
+			<button
+				class="btn btn-sm preset-tonal-surface shrink-0"
+				type="button"
+				onclick={onSeeInGraph}
+			>
+				<Icons.Network size={14} aria-hidden="true" /> See in graph
+			</button>
+		{/if}
 	</div>
 
 	{#if momentLine}

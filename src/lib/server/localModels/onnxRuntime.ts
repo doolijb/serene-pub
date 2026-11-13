@@ -32,7 +32,7 @@
  * permanent "this machine cannot".
  */
 
-import { isAndroidWrapper } from "$lib/server/utils"
+import { isAndroidWrapper } from "$lib/server/utils/androidWrapper"
 
 /**
  * The verdict. `reason` is a lower-case clause, so each surface can lead it

@@ -125,11 +125,27 @@
 		// The sprites session's field (S4): a set NAME, resolved against
 		// whichever card the member resolves to at that moment — so a card
 		// swap and a sprite set stay independent.
-		spriteSet: "sprite set"
+		spriteSet: "sprite set",
+		// A cast member's words (cast versions): what differs from the
+		// version before. The opener and the alternates are one field to a
+		// reader, "greetings".
+		description: "description",
+		personality: "personality",
+		scenario: "scenario",
+		firstMessage: "greetings",
+		alternateGreetings: "greetings",
+		exampleDialogues: "example dialogues",
+		faceMediaId: "face",
+		retold: "what is told in their own words",
+		ownName: "name in this book",
+		ownNickname: "nickname in this book",
+		timbre: "voice"
 	}
 
 	function saysWhat(fields: Record<string, unknown>): string {
-		const named = Object.keys(fields).map((k) => FIELD_LABELS[k] ?? k)
+		const named = [
+			...new Set(Object.keys(fields).map((k) => FIELD_LABELS[k] ?? k))
+		]
 		return named.length ? named.join(", ") : "nothing"
 	}
 
@@ -254,8 +270,13 @@
 			</button>
 		{:else if confirming === row.id}
 			<span class="text-surface-700-300 min-w-0 flex-1 text-xs">
-				Delete the amendment dated {formatDate(row)}? The entry reads as
-				it did without it{where ? ` (${where})` : ""}.
+				{#if subject === "cast"}
+					Delete the change dated {formatDate(row)}? They read as they
+					did without it, from then on{where ? ` (${where})` : ""}.
+				{:else}
+					Delete the amendment dated {formatDate(row)}? The entry
+					reads as it did without it{where ? ` (${where})` : ""}.
+				{/if}
 			</span>
 			<button
 				class="btn btn-sm preset-tonal-error shrink-0"

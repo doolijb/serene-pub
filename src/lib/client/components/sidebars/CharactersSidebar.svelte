@@ -1,3 +1,8 @@
+<script lang="ts" module>
+	/** Numbers the page asks: `chr-page-1`, `chr-page-2`… (no `crypto.randomUUID` on plain-http LAN). */
+	let pageSeq = 0
+</script>
+
 <script lang="ts">
 	import Badge from "$lib/client/components/Badge.svelte"
 	import {
@@ -6,8 +11,16 @@
 	} from "$lib/client/contexts/characterImports.svelte"
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import {
+		declareInterest,
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import {
+		onCharactersPage,
+		onCharactersPageFailed
+	} from "$lib/client/contexts/characterRows.svelte"
+	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { flip } from "svelte/animate"
 	import { fade } from "svelte/transition"
@@ -24,12 +37,20 @@
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { cardFileForUpload } from "$lib/client/utils/cardUpload"
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
-	import CharacterListItem from "../listItems/CharacterListItem.svelte"
+	import CharacterRowItem from "../listItems/CharacterRowItem.svelte"
+	import { openCastMember } from "../characterForms/openCastMember"
+	import { copyAsk, rowDoor, rowGroups } from "./characterRowsView"
+	import {
+		CHARACTER_ROWS_DEFAULT_LIMIT,
+		CHARACTER_ROWS_MAX_LIMIT,
+		CHARACTER_ROWS_STALE_CURSOR,
+		type CharacterRow,
+		type CharacterRowsFilters
+	} from "$lib/shared/characters/characterRows"
 	import CharacterViewPanel from "../characterForms/CharacterViewPanel.svelte"
-	import CharacterCardItem from "../listItems/CharacterCardItem.svelte"
 	import CharacterFolderHeader from "../listItems/CharacterFolderHeader.svelte"
 	import CharacterFolderNameModal from "../modals/CharacterFolderNameModal.svelte"
 	import CharacterMoveToFolderModal from "../modals/CharacterMoveToFolderModal.svelte"
@@ -37,6 +58,7 @@
 	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import LoadingState from "../LoadingState.svelte"
 	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
+	import CardImportConflictModal from "../modals/CardImportConflictModal.svelte"
 	import { describeOverwriteLosses } from "$lib/client/lorebooks/overwriteLosses"
 	import { lorebookImportedToast } from "$lib/client/lorebooks/lorebookImportedToast"
 	import CharacterExportModal from "../modals/CharacterExportModal.svelte"
@@ -64,8 +86,16 @@
 	// the dock and ~1376px full page, and both must land in the right shape.
 	const vm = new ViewModeTracker()
 
-	let characterList: any[] = $state([])
+	/** The loaded rows, in the server's order (`characters:page`). */
+	let rows: CharacterRow[] = $state([])
+	/** The cursor of the next page; null when the loaded rows are the end. */
+	let nextCursor: string | null = $state(null)
+	/** True until the first page lands. */
 	let isLoading = $state(true)
+	/** True while a next-page ask is out. */
+	let loadingMore = $state(false)
+	/** The one ask whose reply this view takes: its id, and whether it carried a cursor. */
+	let pending: { requestId: string; withCursor: boolean } | null = null
 	// Rows in the 400px dock, cards at Half and Focus (PLAN-0-5-polish-parity
 	// L6, 2026-10-24 — 0.5's behaviour: three portrait cards across a 400px
 	// column was a column of thumbnails nobody could read). A stored choice
@@ -93,7 +123,7 @@
 	let characterToDeleteName = $derived(
 		characterToDelete === undefined
 			? undefined
-			: characterList.find((c) => c.id === characterToDelete)?.name
+			: rows.find((r) => r.cardId === characterToDelete)?.shownName
 	)
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
@@ -169,54 +199,54 @@
 	})
 
 	/**
-	 * The filter popout's one pick, on top of whatever the filter box says.
+	 * The filter popout's picks, on top of whatever the filter box says.
 	 *
-	 * One at a time rather than a set: `All` is the resting state, and two
-	 * picks lit at once would have to mean either "and" or "or" without the
-	 * popout being able to say which.
+	 * **Show** is one pick at a time rather than a set: `All` is the resting
+	 * state, and two picks lit at once would have to mean either "and" or "or"
+	 * without the popout being able to say which. The other groups are
+	 * independent of it and of each other, and every pick narrows (they stack
+	 * as "and"). All of them are asked of the server (`characters:page`
+	 * `filters`), none is applied here.
 	 */
 	type CharacterChip = "all" | "favorite" | "persona" | `tag:${string}`
-	let chipFilter: CharacterChip = $state("all")
+	let chipFilter = $state<CharacterChip>("all")
+	type CardPick = "all" | "has" | "none"
+	let cardPick = $state<CardPick>("all")
+	type WordsPick = "all" | "card" | "own"
+	let wordsPick = $state<WordsPick>("all")
+	/** The picked lorebook, with the name its chip says. */
+	let lorebookPick: { id: number; name: string } | null = $state(null)
+	/** The picked session, with the name its chip says. */
+	let storyPick: { id: number; name: string } | null = $state(null)
+	let inMyStories = $state(false)
 
 	/** Whether the toolbar's filter popout is showing. */
 	let filterOpen = $state(false)
 
 	/**
-	 * A pick for every tag any character carries, taken from the whole list
-	 * rather than the filtered one — a set that reshuffled under the cursor as
-	 * the filter box narrowed would move the row being aimed at.
-	 *
-	 * The whole tag record and not just its name: `characters:list` carries
-	 * `colorPreset` already, so the popout's dot is coloured from the payload
-	 * this view has rather than a second lookup.
+	 * A pick for every tag the loaded rows carry, with the tag's colour. The
+	 * picked tag is always in the set, so a narrowing that leaves no row
+	 * carrying it still shows as the pick it is.
 	 */
 	let chipTags = $derived.by(() => {
 		const byName = new Map<string, { name: string; colorPreset?: string }>()
-		for (const c of characterList) {
-			for (const ct of (c as any).characterTags ?? []) {
-				if (!ct?.tag?.name || byName.has(ct.tag.name)) continue
-				byName.set(ct.tag.name, {
-					name: ct.tag.name,
-					colorPreset: ct.tag.colorPreset ?? undefined
+		for (const r of rows) {
+			for (const t of r.tags) {
+				if (!t.name || byName.has(t.name)) continue
+				byName.set(t.name, {
+					name: t.name,
+					colorPreset: t.colorPreset ?? undefined
 				})
 			}
+		}
+		if (chipFilter.startsWith("tag:")) {
+			const picked = chipFilter.slice(4)
+			if (!byName.has(picked)) byName.set(picked, { name: picked })
 		}
 		return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
 	})
 
-	/**
-	 * A tag pick whose tag has left every character reads as `All`, so the
-	 * popout only ever shows a pick that is still on the list.
-	 */
-	let activeChip = $derived.by(() => {
-		if (chipFilter.startsWith("tag:")) {
-			const name = chipFilter.slice(4)
-			return chipTags.some((t) => t.name === name) ? chipFilter : "all"
-		}
-		return chipFilter
-	})
-
-	/** The popout as rendered: the two standing picks, then the tags. */
+	/** The Show group as rendered: the two standing picks, then the tags. */
 	let filterOptions: Array<{
 		value: CharacterChip
 		label: string
@@ -237,91 +267,267 @@
 		}))
 	])
 
-	/**
-	 * What the dismissible chip under the toolbar says. Undefined at `All`,
-	 * which is the same condition as "there is no chip".
-	 */
-	let activeFilterLabel = $derived(
-		activeChip === "all"
-			? undefined
-			: filterOptions.find((o) => o.value === activeChip)?.label
-	)
+	const cardOptions: Array<{ value: CardPick; label: string }> = [
+		{ value: "all", label: "All" },
+		{ value: "has", label: "Has a card" },
+		{ value: "none", label: "No card" }
+	]
+	const wordsOptions: Array<{ value: WordsPick; label: string }> = [
+		{ value: "all", label: "All" },
+		{ value: "card", label: "Follows its card" },
+		{ value: "own", label: "Has its own words" }
+	]
+
+	/** The lorebooks the Lorebook group offers, by name. Asked when the popout first opens. */
+	let lorebookOptions: { id: number; name: string }[] = $state([])
+	/** The sessions the Story group offers, by name. Asked when In my stories is first turned on. */
+	let sessionOptions: { id: number; name: string }[] = $state([])
+	let releaseLorebooks: (() => void) | null = null
+	let releaseSessions: (() => void) | null = null
+
+	function byName(a: { name: string }, b: { name: string }) {
+		return a.name.localeCompare(b.name)
+	}
+
+	function askLorebookOptions() {
+		if (releaseLorebooks) return
+		releaseLorebooks = requestWithInterest("lorebooks:list", {}, (msg) => {
+			lorebookOptions = (msg.lorebookList ?? [])
+				.filter((b) => b.id != null && !!b.name)
+				.map((b) => ({ id: b.id!, name: b.name! }))
+				.sort(byName)
+		})
+	}
+
+	function askSessionOptions() {
+		if (releaseSessions) return
+		releaseSessions = requestWithInterest("sessions:list", {}, (msg) => {
+			sessionOptions = (msg.sessionList ?? [])
+				.filter((x) => x.id != null && !!x.name)
+				.map((x) => ({ id: x.id!, name: x.name! }))
+				.sort(byName)
+		})
+	}
+
+	function handleFilterOpenChange(open: boolean) {
+		filterOpen = open
+		if (open) askLorebookOptions()
+	}
 
 	/** The dot's colour for a tag, or the neutral one an uncoloured tag gets. */
 	function tagDotPreset(colorPreset?: string): string {
-		return (
-			colorPreset ||
-			"bg-primary-500/20 text-primary-ink"
-		)
+		return colorPreset || "bg-primary-500/20 text-primary-ink"
 	}
 
-	/** A pick applies and closes the popout: one choice, one interaction. */
-	function pickFilter(value: CharacterChip) {
-		chipFilter = value
+	/** A radio pick applies and closes the popout: one choice, one interaction. */
+	function closeAfter(apply: () => void) {
+		apply()
 		filterOpen = false
 	}
+
+	/** The switch: flipping it does not close the popout. Off clears a Story pick. */
+	function toggleInMyStories() {
+		inMyStories = !inMyStories
+		if (inMyStories) askSessionOptions()
+		else storyPick = null
+	}
+
+	/** One dismissible chip per narrowing in force, in the popout's order. */
+	let activeChips = $derived.by(() => {
+		const chips: Array<{ key: string; label: string; clear: () => void }> =
+			[]
+		if (chipFilter !== "all") {
+			chips.push({
+				key: "show",
+				label:
+					filterOptions.find((o) => o.value === chipFilter)?.label ??
+					chipFilter,
+				clear: () => (chipFilter = "all")
+			})
+		}
+		if (cardPick !== "all") {
+			chips.push({
+				key: "card",
+				label: cardOptions.find((o) => o.value === cardPick)!.label,
+				clear: () => (cardPick = "all")
+			})
+		}
+		if (wordsPick !== "all") {
+			chips.push({
+				key: "words",
+				label: wordsOptions.find((o) => o.value === wordsPick)!.label,
+				clear: () => (wordsPick = "all")
+			})
+		}
+		if (lorebookPick) {
+			chips.push({
+				key: "lorebook",
+				label: lorebookPick.name,
+				clear: () => (lorebookPick = null)
+			})
+		}
+		if (storyPick) {
+			chips.push({
+				key: "story",
+				label: storyPick.name,
+				clear: () => (storyPick = null)
+			})
+		}
+		if (inMyStories) {
+			chips.push({
+				key: "stories",
+				label: "In my stories",
+				clear: () => {
+					inMyStories = false
+					storyPick = null
+				}
+			})
+		}
+		return chips
+	})
 
 	/**
 	 * Whether anything is currently hiding rows — the empty state offers to
 	 * create a character only when the list is genuinely empty, not when a
 	 * filter has emptied it.
 	 */
-	let listIsNarrowed = $derived(!!search || activeChip !== "all")
+	let listIsNarrowed = $derived(!!search.trim() || activeChips.length > 0)
+	/** A narrowing other than the Show group's (Card, Words, Lorebook, Story, In my stories). */
+	let otherPickActive = $derived(
+		cardPick !== "all" ||
+			wordsPick !== "all" ||
+			!!lorebookPick ||
+			!!storyPick ||
+			inMyStories
+	)
 	/** The Personas filter with none to show and no search: the empty state
 	 *  offers to write one (plan F3). */
-	let personaEmpty = $derived(!search && activeChip === "persona")
+	let personaEmpty = $derived(
+		!search && chipFilter === "persona" && !otherPickActive
+	)
 
-	// Filtered list
-	let filteredCharacters: any[] = $derived.by(() => {
-		let list = [...characterList]
-		// Sort favorites first
-		list.sort((a, b) => {
-			if (a.isFavorite && !b.isFavorite) return -1
-			if (!a.isFavorite && b.isFavorite) return 1
-			return 0
-		})
+	/* ── the page ────────────────────────────────────────────────────────
+	 *
+	 * The rows come from `characters:page`, one page at a time, narrowed by
+	 * the server. The search box is debounced into `appliedQ`; the picks apply
+	 * at once.
+	 */
 
-		// The chip narrows first, then the text: the two stack, so a tag chip
-		// plus a typed word means both, never either.
-		if (activeChip === "favorite") {
-			list = list.filter((c: any) => c.isFavorite)
-		} else if (activeChip === "persona") {
-			list = list.filter((c: any) => c.isPersona)
-		} else if (activeChip.startsWith("tag:")) {
-			const name = activeChip.slice(4)
-			list = list.filter((c: any) =>
-				(c.characterTags ?? []).some(
-					(ct: any) => ct?.tag?.name === name
-				)
-			)
+	let appliedQ = $state("")
+	$effect(() => {
+		const q = search.trim()
+		if (q === untrack(() => appliedQ)) return
+		const timer = setTimeout(() => (appliedQ = q), 250)
+		return () => clearTimeout(timer)
+	})
+
+	/** What this view asks the server to narrow to. */
+	let filters: CharacterRowsFilters = $derived.by(() => {
+		const f: CharacterRowsFilters = {}
+		if (chipFilter === "favorite") f.favorites = true
+		else if (chipFilter === "persona") f.personas = true
+		else if (chipFilter.startsWith("tag:")) f.tags = [chipFilter.slice(4)]
+		if (cardPick !== "all") f.hasCard = cardPick === "has"
+		if (wordsPick !== "all") f.follows = wordsPick
+		if (lorebookPick) f.lorebookId = lorebookPick.id
+		if (inMyStories) {
+			f.inMyStories = true
+			if (storyPick) f.sessionId = storyPick.id
 		}
+		if (appliedQ) f.q = appliedQ
+		return f
+	})
 
-		if (!search) return list
-
-		const searchLower = search.toLowerCase()
-		return list.filter((c: any) => {
-			// Search by name
-			if (c.name!.toLowerCase().includes(searchLower)) return true
-
-			// Search by description
-			if (
-				c.description &&
-				c.description.toLowerCase().includes(searchLower)
-			)
-				return true
-
-			// Search by tags
-			if (c.characterTags) {
-				const tagMatch = c.characterTags.some(
-					(ct: any) =>
-						ct.tag &&
-						ct.tag.name.toLowerCase().includes(searchLower)
-				)
-				if (tagMatch) return true
-			}
-
-			return false
+	function askPage(limit: number, cursor?: string) {
+		const requestId = `chr-page-${++pageSeq}`
+		pending = { requestId, withCursor: cursor !== undefined }
+		loadingMore = cursor !== undefined
+		socket.emit("characters:page", {
+			requestId,
+			limit,
+			filters: { ...filters },
+			...(cursor !== undefined ? { cursor } : {})
 		})
+	}
+
+	function askFirstPage(limit = CHARACTER_ROWS_DEFAULT_LIMIT) {
+		askPage(limit)
+	}
+
+	function askNextPage() {
+		if (nextCursor === null || pending) return
+		askPage(CHARACTER_ROWS_DEFAULT_LIMIT, nextCursor)
+	}
+
+	function handleCharactersPage(msg: Sockets.Characters.Page.Response) {
+		if (!pending || msg.requestId !== pending.requestId) return
+		const withCursor = pending.withCursor
+		pending = null
+		isLoading = false
+		loadingMore = false
+		if (withCursor) {
+			const seen = new Set(rows.map((r) => r.rowKey))
+			rows = [...rows, ...msg.rows.filter((r) => !seen.has(r.rowKey))]
+		} else {
+			rows = msg.rows
+		}
+		nextCursor = msg.nextCursor
+	}
+
+	// The characters-rows context already toasted a refusal (never a stale
+	// cursor): a stale cursor is asked again from page one, silently; any
+	// other refusal just stops the spinners.
+	function handleCharactersPageFailed(
+		msg: Sockets.Characters.Page.ErrorResponse
+	) {
+		if (!pending || msg.requestId !== pending.requestId) return
+		const withCursor = pending.withCursor
+		pending = null
+		isLoading = false
+		loadingMore = false
+		if (withCursor && msg.error === CHARACTER_ROWS_STALE_CURSOR)
+			askFirstPage()
+	}
+
+	onCharactersPage(handleCharactersPage)
+	onCharactersPageFailed(handleCharactersPageFailed)
+
+	// On mount, and whenever a pick or the applied search changes. The ask
+	// reads and writes the pending state, so it runs untracked.
+	$effect(() => {
+		void filters
+		untrack(() => askFirstPage())
+	})
+
+	// A `characters:list` push is what every own write makes the server send
+	// (delete, persona flip, folder move, Copy, import): coalesced, then the
+	// window already loaded is asked again so it stays loaded.
+	let reaskTimer: ReturnType<typeof setTimeout> | undefined
+	function scheduleReask() {
+		clearTimeout(reaskTimer)
+		reaskTimer = setTimeout(() => {
+			askFirstPage(
+				Math.min(
+					Math.max(rows.length, CHARACTER_ROWS_DEFAULT_LIMIT),
+					CHARACTER_ROWS_MAX_LIMIT
+				)
+			)
+		}, 150)
+	}
+
+	// The end of the list scrolling into view asks for the next page; the
+	// Load more button is the same ask for a pointer that never scrolls
+	// there. Re-observed after each page, so a sentinel still in view asks
+	// again.
+	let sentinel: HTMLElement | null = $state(null)
+	$effect(() => {
+		void rows.length
+		if (!sentinel || typeof IntersectionObserver === "undefined") return
+		const observer = new IntersectionObserver((entries) => {
+			if (entries.some((e) => e.isIntersecting)) untrack(askNextPage)
+		})
+		observer.observe(sentinel)
+		return () => observer.disconnect()
 	})
 
 	/* ── folders ─────────────────────────────────────────────────────────
@@ -371,48 +577,17 @@
 	}
 
 	/**
-	 * The list as the folders shape it: everything at the top level first
-	 * under no header, then one group per folder in the server's order
-	 * (position, then name).
+	 * The loaded rows as the list draws them (`rowGroups`): the asker's own
+	 * cards at the top level, then one group per folder in the server's order
+	 * (position, then name), then card-less rows under Only in lorebooks, then
+	 * Shared with you last.
 	 *
-	 * Built from the ALREADY filtered and sorted list, so a folder the filter
-	 * has emptied produces no group and therefore no header (§6.4) — an empty
-	 * header would be a promise of rows that are not there. A row whose
-	 * `folderId` names a folder this list does not have falls back to the top
-	 * level rather than disappearing.
+	 * A folder the loaded rows leave empty produces no group and therefore no
+	 * header (§6.4) — an empty header would be a promise of rows that are not
+	 * there. A row whose `folderId` names a folder this list does not have
+	 * falls back to the top level rather than disappearing.
 	 */
-	let folderGroups = $derived.by(() => {
-		const known = new Set(folders.map((f) => f.id))
-		const byFolder = new Map<number, any[]>()
-		const ungrouped: any[] = []
-		// Characters other people shared with the reader: their own group at
-		// the end, under Shared with you (PLAN-private-messages §6.7).
-		const shared: any[] = []
-		for (const c of filteredCharacters) {
-			if (c.isSharedWithMe) {
-				shared.push(c)
-				continue
-			}
-			const folderId = (c as any).folderId
-			if (folderId == null || !known.has(folderId)) {
-				ungrouped.push(c)
-				continue
-			}
-			const bucket = byFolder.get(folderId)
-			if (bucket) bucket.push(c)
-			else byFolder.set(folderId, [c])
-		}
-		return {
-			ungrouped,
-			shared,
-			groups: folders
-				.map((folder) => ({
-					folder,
-					characters: byFolder.get(folder.id) ?? []
-				}))
-				.filter((group) => group.characters.length > 0)
-		}
-	})
+	let groups = $derived(rowGroups(rows, folders))
 
 	/**
 	 * A row's tag names, as `characters:update` wants them back.
@@ -423,24 +598,22 @@
 	 * character as a side effect of flipping one flag. Sending the names it
 	 * already has back unchanged is what makes the write a no-op for tags.
 	 */
-	function characterTagNames(character: any): string[] {
-		return ((character.characterTags ?? []) as any[])
-			.map((ct) => ct?.tag?.name)
-			.filter((name): name is string => !!name)
+	function characterTagNames(row: CharacterRow): string[] {
+		return row.tags.map((t) => t.name)
 	}
 
 	/** "Use as persona" / "Not a persona" — the one flag, flipped. */
-	function handleTogglePersona(character: any) {
-		const next = !character.isPersona
+	function handleTogglePersona(row: CharacterRow) {
+		const next = !row.isPersona
 		socket.emit("characters:update", {
 			character: {
-				id: character.id,
+				id: row.cardId,
 				isPersona: next,
 				// Clearing the flag clears the default with it: a default
 				// persona the user does not play is not a state worth having,
 				// and the handler only acts on an EXPLICIT false.
 				...(next ? {} : { isDefaultPersona: false }),
-				tags: characterTagNames(character)
+				tags: characterTagNames(row)
 			} as unknown as UpdateCharacter
 		})
 	}
@@ -501,16 +674,16 @@
 	}
 
 	/** The character the move dialog is open on, or null. */
-	let characterToMove: any = $state(null)
+	let characterToMove: CharacterRow | null = $state(null)
 
-	function openMoveToFolder(character: any) {
-		characterToMove = character
+	function openMoveToFolder(row: CharacterRow) {
+		characterToMove = row
 	}
 
 	function pickFolderForCharacter(folderId: number | null) {
 		if (characterToMove)
 			socket.emit("characters:setFolder", {
-				characterId: characterToMove.id,
+				characterId: characterToMove.cardId!,
 				folderId
 			})
 		characterToMove = null
@@ -534,15 +707,19 @@
 			label: "Characters",
 			getQuery: () => search,
 			setQuery: (next) => (search = next),
+			// Card rows only: a cast member's row has no card id, and
+			// there is no cast-member jump kind in `JUMP_KINDS`.
 			getHits: () =>
-				filteredCharacters.map((c: any) => ({
-					kind: "character" as const,
-					id: c.id,
-					title: c.name,
-					subtitle: c.description || undefined
-				})),
-			// The whole of `handleCharacterClick`, which is the row's own
-			// onclick: the read-only detail screen, not the edit form.
+				rows
+					.filter((r) => r.cardId != null)
+					.map((r) => ({
+						kind: "character" as const,
+						id: r.cardId!,
+						title: r.shownName,
+						subtitle: r.summary || undefined
+					})),
+			// The row's door for a card: the read-only detail screen, not
+			// the edit form.
 			onPick: (hit) => handleViewClick(Number(hit.id))
 		})
 	)
@@ -781,7 +958,7 @@
 		// The server's own ceiling, said before a byte is uploaded.
 		const upload = await cardFileForUpload(details.files[0])
 		if ("refused" in upload) {
-			toaster.error({ title: upload.refused })
+			notify.error({ title: upload.refused })
 			return
 		}
 		socket.emit("characters:importCard", { file: upload.base64 })
@@ -823,8 +1000,77 @@
 		handleFileImport({ files } as FileAcceptDetails)
 	}
 
-	function handleCharacterClick(character: any) {
-		handleViewClick(character.id)
+	/** A row's click: what `rowDoor` says it opens. */
+	function handleRowClick(row: CharacterRow) {
+		const door = rowDoor(row)
+		if (!door) return
+		if (door.kind === "card") handleViewClick(door.cardId)
+		else
+			openCastMember(panelsCtx, {
+				lorebookId: door.lorebookId,
+				castId: door.castId
+			})
+	}
+
+	function handleExportRow(row: CharacterRow) {
+		handleExportCharacter({
+			id: row.cardId ?? undefined,
+			name: row.shownName,
+			avatar: avatarSrc({ avatarMedia: row.face })
+		})
+	}
+
+	/** True between asking Copy to my characters and its reply. */
+	let copyPending = $state(false)
+
+	function handleCopyRow(row: CharacterRow) {
+		const ask = copyAsk(row)
+		if (!ask || copyPending) return
+		copyPending = true
+		socket.emit("characters:duplicate", ask)
+	}
+
+	// Only the copy THIS view asked for opens; a refusal is said by Layout's
+	// catch-all and only re-arms the verb here.
+	$effect(() =>
+		declareInterest<"characters:duplicate">(
+			"characters:duplicate",
+			(msg) => {
+				if (!copyPending) return
+				copyPending = false
+				if (msg.character?.id) viewingId = msg.character.id
+			}
+		)
+	)
+	$effect(() =>
+		declareInterest<"characters:duplicate:error">(
+			"characters:duplicate:error",
+			() => (copyPending = false)
+		)
+	)
+
+	/** What a row's menu offers: only what that row may do. */
+	function rowActions(row: CharacterRow) {
+		if (row.cardIsMine)
+			return {
+				onclick: handleRowClick,
+				onEdit: handleEditClick,
+				onDelete: handleDeleteClick,
+				onExport: handleExportRow,
+				onTogglePersona: handleTogglePersona,
+				onSetDefaultPersona: handleSetDefaultPersona,
+				onMoveToFolder: openMoveToFolder
+			}
+		if (row.isSharedWithMe)
+			return {
+				onclick: handleRowClick,
+				onExport: handleExportRow,
+				onCopy: handleCopyRow
+			}
+		return {
+			onclick: handleRowClick,
+			...(copyAsk(row) ? { onCopy: handleCopyRow } : {})
+		}
 	}
 
 	function handleSessionFromView() {
@@ -878,10 +1124,12 @@
 		lorebookImportConflict = undefined
 	}
 
-	function handleOverwriteCharacterImportConflict() {
+	function handleAddCharacterImportVersion(label: string | null) {
 		if (!characterImportConflict) return
 		socket.emit("characters:importResolve", {
-			action: "overwrite",
+			action: "addVersion",
+			// Empty: omitted, and the server suggests one.
+			...(label ? { label } : {}),
 			heldImportId: characterImportConflict.heldImportId,
 			existingId: characterImportConflict.existingCharacter.id
 		})
@@ -948,23 +1196,9 @@
 
 	// Declared on the interest registry below, which owns the one listener per
 	// event and releases this sidebar's subscribers when it is destroyed.
-	function handleCharactersList(
-		msg: SocketEventMap["characters:list"]["response"]
-	) {
-		// A shared row carries its OWNER's favourite flag, which means nothing
-		// in this library (PLAN-private-messages §6.7): drop it here so the
-		// star, the favourites-first sort and the Favorites chip never read it.
-		characterList = msg.characterList.map((c) =>
-			c.isSharedWithMe ? { ...c, isFavorite: false } : c
-		)
-		isLoading = false
-	}
-
-	// The generic **:error listener in Layout.svelte already toasts this —
-	// this just stops the spinner from spinning forever if the initial
-	// fetch fails, so it settles into the (accurate enough) empty state.
-	function handleCharactersListError() {
-		isLoading = false
+	// The push carries no rows this view reads: it is the cue to ask again.
+	function handleCharactersList() {
+		scheduleReask()
 	}
 
 	function handleCharacterFoldersList(
@@ -1022,14 +1256,16 @@
 		msg: SocketEventMap["characters:exportCard"]["response"]
 	) {
 		downloadBlob(msg)
-		toaster.success({
+		notify.success({
+			source: "socket:characters:exportCard",
 			title: "Character exported",
 			description: `Character card exported as ${msg.filename}`
 		})
 	}
 
 	function handleCharactersExportCardError(msg: Sockets.ErrorResponse) {
-		toaster.error({
+		notify.error({
+			source: "socket:characters:exportCard:error",
 			title: msg.error || "Failed to export character"
 		})
 	}
@@ -1043,14 +1279,16 @@
 			return
 		}
 		if (msg.status === "unchanged") {
-			toaster.success({
+			notify.success({
+				source: "socket:lorebooks:import",
 				title: "Lorebook already imported",
 				description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
 			})
 			return
 		}
 		const toast = lorebookImportedToast(msg.warnings)
-		toaster[toast.kind]({
+		notify[toast.kind]({
+			source: "socket:lorebooks:import",
 			title: toast.title,
 			description: toast.description
 		})
@@ -1059,7 +1297,7 @@
 	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
 		if (!lorebookImportPending) return
 		lorebookImportPending = false
-		toaster.error({ title: msg.error || "Failed to import lorebook" })
+		notify.error({ title: msg.error || "Failed to import lorebook" })
 	}
 
 	function handleLorebooksImportResolve(
@@ -1068,7 +1306,8 @@
 		if (!lorebookImportPending) return
 		lorebookImportPending = false
 		const toast = lorebookImportedToast(msg.warnings)
-		toaster[toast.kind]({
+		notify[toast.kind]({
+			source: "socket:lorebooks:importResolve",
 			title: toast.title,
 			description: toast.description
 		})
@@ -1077,7 +1316,8 @@
 	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
 		if (!lorebookImportPending) return
 		lorebookImportPending = false
-		toaster.error({
+		notify.error({
+			source: "socket:lorebooks:importResolve:error",
 			title: msg.error || "Failed to resolve lorebook import"
 		})
 	}
@@ -1090,8 +1330,8 @@
 		msg: Sockets.Vectorization.ItemUpdated.Response
 	) {
 		if (msg.type !== "character") return
-		const target = characterList.find((c: any) => c.id === msg.id)
-		if (target) (target as any).embeddingModel = msg.embeddingModel
+		const target = rows.find((r) => r.cardId === msg.id)
+		if (target) target.embeddingModel = msg.embeddingModel
 	}
 
 	/**
@@ -1100,20 +1340,12 @@
 	 * an export is about a card, not a row this view already knows the id of,
 	 * so none of them has an interest scope to narrow to.
 	 *
-	 * `characters:list` is STANDING rather than a one-shot: it is a cascade
-	 * target, re-sent after every create, update, delete and import, and this
-	 * sidebar is what renders it. The request that fills it first is in
-	 * `onMount` below; the typed `emit` puts the sync packet naming these keys
-	 * ahead of it on the same socket.
+	 * `characters:list` is STANDING: it is a cascade target, re-sent after
+	 * every create, update, delete and import. This sidebar does not read
+	 * its rows — they come from `characters:page` — and takes the push only
+	 * as the cue to ask for them again.
 	 */
 	useInterest<"characters:list">("characters:list", handleCharactersList)
-	// The server has no `characters:list:error` emit today — the key is
-	// declared anyway, because the registry is the only listener path and a
-	// key nobody sends costs one string in a sync packet.
-	useInterest<"characters:list:error">(
-		"characters:list:error",
-		handleCharactersListError
-	)
 	/**
 	 * The folders this list groups by, and the two writes whose reply the name
 	 * dialog is waiting on. All BARE — a folder list is this user's whole set,
@@ -1187,7 +1419,6 @@
 	)
 
 	onMount(() => {
-		socket.emit("characters:list", {})
 		socket.emit("characterFolders:list", {})
 		onclose = handleOnClose
 	})
@@ -1197,39 +1428,34 @@
 		// listeners are not here: the interest registry releases this
 		// sidebar's subscribers as its effects are destroyed.
 		onclose = undefined
+		clearTimeout(reaskTimer)
+		releaseLorebooks?.()
+		releaseSessions?.()
 	})
 </script>
 
 <!-- One group's rows, in whichever view mode is on. A snippet and not a
-     repeated block: the ungrouped rows and every folder's rows are the same
-     list, and four copies of it is four places for a row's props to drift.
-     `label` names the group for a screen reader, so several lists on one pane
-     are several NAMED lists rather than several called "Characters list". -->
-{#snippet characterRows(items: any[], label: string, shared = false)}
+     repeated block: the ungrouped rows, every folder's rows and the two
+     card-less groups are the same list, and several copies of it is several
+     places for a row's props to drift. `label` names the group for a screen
+     reader, so several lists on one pane are several NAMED lists rather than
+     several called "Characters list". -->
+{#snippet rowGroup(items: CharacterRow[], label: string)}
 	{#if viewMode.value === "list"}
 		<div class="flex flex-col gap-2" role="list" aria-label={label}>
-			{#each items as c (c.id)}
+			{#each items as row (row.rowKey)}
 				<div
 					animate:flip={{ duration: motionDuration(MOTION.base) }}
 					out:fade={{ duration: motionDuration(MOTION.fast) }}
 					class="rounded-lg"
 				>
-					<CharacterListItem
-						character={c}
-						onclick={handleCharacterClick}
-						onEdit={shared ? undefined : handleEditClick}
-						onDelete={shared ? undefined : handleDeleteClick}
-						onExport={handleExportCharacter}
-						onTogglePersona={shared
-							? undefined
-							: handleTogglePersona}
-						onSetDefaultPersona={shared
-							? undefined
-							: handleSetDefaultPersona}
-						onMoveToFolder={shared ? undefined : openMoveToFolder}
-						contentTitle="Go to character sessions"
+					<CharacterRowItem
+						{row}
+						layout="list"
+						{...rowActions(row)}
 						active={vm.mode === "desk" &&
-							selectedCharacterId === c.id}
+							row.cardId != null &&
+							selectedCharacterId === row.cardId}
 					/>
 				</div>
 			{/each}
@@ -1252,28 +1478,19 @@
 			role="list"
 			aria-label={label}
 		>
-			{#each items as c (c.id)}
+			{#each items as row (row.rowKey)}
 				<div
 					animate:flip={{ duration: motionDuration(MOTION.base) }}
 					out:fade={{ duration: motionDuration(MOTION.fast) }}
 					class="rounded-lg"
 				>
-					<CharacterCardItem
-						character={c}
-						onclick={handleCharacterClick}
-						onEdit={shared ? undefined : handleEditClick}
-						onDelete={shared ? undefined : handleDeleteClick}
-						onExport={handleExportCharacter}
-						onTogglePersona={shared
-							? undefined
-							: handleTogglePersona}
-						onSetDefaultPersona={shared
-							? undefined
-							: handleSetDefaultPersona}
-						onMoveToFolder={shared ? undefined : openMoveToFolder}
-						contentTitle="Go to character sessions"
+					<CharacterRowItem
+						{row}
+						layout="cards"
+						{...rowActions(row)}
 						active={vm.mode === "desk" &&
-							selectedCharacterId === c.id}
+							row.cardId != null &&
+							selectedCharacterId === row.cardId}
 					/>
 				</div>
 			{/each}
@@ -1432,8 +1649,10 @@
 							bind:value={search}
 							placeholder="characters"
 							singular="character"
-							count={characterList.length}
-							aria-label="Filter characters by name, description, or tags"
+							count={nextCursor === null
+								? rows.length
+								: undefined}
+							aria-label="Filter characters by name or tag"
 						/>
 					{/snippet}
 					{#snippet filterActions()}
@@ -1442,11 +1661,18 @@
 						     list, and the list pane has no sideways room. -->
 						<Popover
 							open={filterOpen}
-							onOpenChange={(e) => (filterOpen = e.open)}
+							onOpenChange={(e) => handleFilterOpenChange(e.open)}
 							positioning={{ placement: "bottom-end" }}
 						>
 							<Popover.Trigger
-								class={toolbarButtonClass(activeChip !== "all")}
+								class={toolbarButtonClass(
+									chipFilter !== "all" ||
+										cardPick !== "all" ||
+										wordsPick !== "all" ||
+										!!lorebookPick ||
+										!!storyPick ||
+										inMyStories
+								)}
 								title="Filter characters"
 								aria-label="Filter characters"
 								aria-expanded={filterOpen}
@@ -1463,39 +1689,283 @@
 									>
 										<div
 											class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
-											role="radiogroup"
-											aria-label="Filter characters"
 										>
-											{#each filterOptions as option (option.value)}
-												{@const checked =
-													activeChip === option.value}
+											<div
+												class="flex flex-col gap-0.5"
+												role="radiogroup"
+												aria-label="Filter characters"
+											>
+												{#each filterOptions as option (option.value)}
+													{@const checked =
+														chipFilter ===
+														option.value}
+													<button
+														type="button"
+														role="radio"
+														aria-checked={checked}
+														class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+															? 'sidebar-row-active'
+															: 'hover:bg-surface-200-800'}"
+														onclick={() =>
+															closeAfter(
+																() =>
+																	(chipFilter =
+																		option.value)
+															)}
+													>
+														{#if option.value.startsWith("tag:")}
+															<span
+																class="size-2 shrink-0 rounded-full {tagDotPreset(
+																	option.colorPreset
+																)}"
+																aria-hidden="true"
+															></span>
+														{/if}
+														<span
+															class="min-w-0 truncate"
+														>
+															{option.label}
+														</span>
+													</button>
+												{/each}
+											</div>
+											<div
+												class="border-surface-200-800 my-1 border-t"
+											></div>
+											<div
+												id="character-filter-card"
+												class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs"
+											>
+												Card
+											</div>
+											<div
+												class="flex flex-col gap-0.5"
+												role="radiogroup"
+												aria-labelledby="character-filter-card"
+											>
+												{#each cardOptions as option (option.value)}
+													{@const checked =
+														cardPick ===
+														option.value}
+													<button
+														type="button"
+														role="radio"
+														aria-checked={checked}
+														class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+															? 'sidebar-row-active'
+															: 'hover:bg-surface-200-800'}"
+														onclick={() =>
+															closeAfter(
+																() =>
+																	(cardPick =
+																		option.value)
+															)}
+													>
+														<span
+															class="min-w-0 truncate"
+														>
+															{option.label}
+														</span>
+													</button>
+												{/each}
+											</div>
+											<div
+												class="border-surface-200-800 my-1 border-t"
+											></div>
+											<div
+												id="character-filter-words"
+												class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs"
+											>
+												Words
+											</div>
+											<div
+												class="flex flex-col gap-0.5"
+												role="radiogroup"
+												aria-labelledby="character-filter-words"
+											>
+												{#each wordsOptions as option (option.value)}
+													{@const checked =
+														wordsPick ===
+														option.value}
+													<button
+														type="button"
+														role="radio"
+														aria-checked={checked}
+														class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+															? 'sidebar-row-active'
+															: 'hover:bg-surface-200-800'}"
+														onclick={() =>
+															closeAfter(
+																() =>
+																	(wordsPick =
+																		option.value)
+															)}
+													>
+														<span
+															class="min-w-0 truncate"
+														>
+															{option.label}
+														</span>
+													</button>
+												{/each}
+											</div>
+											<div
+												class="border-surface-200-800 my-1 border-t"
+											></div>
+											<div
+												id="character-filter-lorebook"
+												class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs"
+											>
+												Lorebook
+											</div>
+											<div
+												class="flex flex-col gap-0.5"
+												role="radiogroup"
+												aria-labelledby="character-filter-lorebook"
+											>
 												<button
 													type="button"
 													role="radio"
-													aria-checked={checked}
-													class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+													aria-checked={!lorebookPick}
+													class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {!lorebookPick
 														? 'sidebar-row-active'
 														: 'hover:bg-surface-200-800'}"
 													onclick={() =>
-														pickFilter(
-															option.value
+														closeAfter(
+															() =>
+																(lorebookPick =
+																	null)
 														)}
 												>
-													{#if option.value.startsWith("tag:")}
-														<span
-															class="size-2 shrink-0 rounded-full {tagDotPreset(
-																option.colorPreset
-															)}"
-															aria-hidden="true"
-														></span>
-													{/if}
 													<span
 														class="min-w-0 truncate"
 													>
-														{option.label}
+														All
 													</span>
 												</button>
-											{/each}
+												{#each lorebookOptions as book (book.id)}
+													{@const checked =
+														lorebookPick?.id ===
+														book.id}
+													<button
+														type="button"
+														role="radio"
+														aria-checked={checked}
+														class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+															? 'sidebar-row-active'
+															: 'hover:bg-surface-200-800'}"
+														onclick={() =>
+															closeAfter(
+																() =>
+																	(lorebookPick =
+																		book)
+															)}
+													>
+														<span
+															class="min-w-0 truncate"
+														>
+															{book.name}
+														</span>
+													</button>
+												{/each}
+											</div>
+											{#if inMyStories}
+												<div
+													class="border-surface-200-800 my-1 border-t"
+												></div>
+												<div
+													id="character-filter-story"
+													class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs"
+												>
+													Story
+												</div>
+												<div
+													class="flex flex-col gap-0.5"
+													role="radiogroup"
+													aria-labelledby="character-filter-story"
+												>
+													<button
+														type="button"
+														role="radio"
+														aria-checked={!storyPick}
+														class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {!storyPick
+															? 'sidebar-row-active'
+															: 'hover:bg-surface-200-800'}"
+														onclick={() =>
+															closeAfter(
+																() =>
+																	(storyPick =
+																		null)
+															)}
+													>
+														<span
+															class="min-w-0 truncate"
+														>
+															All
+														</span>
+													</button>
+													{#each sessionOptions as session (session.id)}
+														{@const checked =
+															storyPick?.id ===
+															session.id}
+														<button
+															type="button"
+															role="radio"
+															aria-checked={checked}
+															class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+																? 'sidebar-row-active'
+																: 'hover:bg-surface-200-800'}"
+															onclick={() =>
+																closeAfter(
+																	() =>
+																		(storyPick =
+																			session)
+																)}
+														>
+															<span
+																class="min-w-0 truncate"
+															>
+																{session.name}
+															</span>
+														</button>
+													{/each}
+												</div>
+											{/if}
+											<div
+												class="border-surface-200-800 my-1 border-t"
+											></div>
+											<button
+												type="button"
+												role="switch"
+												aria-checked={inMyStories}
+												class="hover:bg-surface-200-800 flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left"
+												onclick={toggleInMyStories}
+											>
+												<span
+													class="flex w-full items-center justify-between gap-2 text-sm"
+												>
+													In my stories
+													<span
+														class="inline-block h-4 w-7 shrink-0 rounded-full {inMyStories
+															? 'bg-primary-500'
+															: 'bg-surface-300-700'}"
+														aria-hidden="true"
+													>
+														<span
+															class="bg-surface-50 block size-3 translate-y-0.5 rounded-full transition-transform {inMyStories
+																? 'translate-x-3.5'
+																: 'translate-x-0.5'}"
+														></span>
+													</span>
+												</span>
+												<span
+													class="text-surface-600-400 text-xs"
+												>
+													Also list characters kept
+													only in your sessions'
+													notes.
+												</span>
+											</button>
 										</div>
 									</Popover.Content>
 								</Popover.Positioner>
@@ -1504,23 +1974,26 @@
 						<ListCardToggle mode={viewMode} label="Characters" />
 					{/snippet}
 					{#snippet chips()}
-						<!-- The one narrowing in force, said once. -->
-						{#if activeFilterLabel}
-							<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
+						<!-- Every narrowing in force, one chip each. -->
+						{#each activeChips as chip (chip.key)}
+							<Badge
+								size="md"
+								class="text-surface-700-300 flex min-w-0 items-center gap-1"
+							>
 								<span class="min-w-0 truncate">
-									{activeFilterLabel}
+									{chip.label}
 								</span>
 								<button
 									type="button"
 									class="hover:text-surface-950-50 shrink-0"
-									onclick={() => pickFilter("all")}
+									onclick={chip.clear}
 									title="Clear filter"
-									aria-label="Clear filter: {activeFilterLabel}"
+									aria-label="Clear filter: {chip.label}"
 								>
 									<Icons.X size={12} aria-hidden="true" />
 								</button>
 							</Badge>
-						{/if}
+						{/each}
 					{/snippet}
 				</ViewToolbar>
 			</div>
@@ -1538,22 +2011,24 @@
 				ondragleave={handleCardDragLeave}
 				ondrop={handleCardDrop}
 				role="region"
-				aria-label="Characters list and card drop zone"
+				aria-label="Characters list and drop zone"
 			>
 				{#if isLoading}
 					<LoadingState message="Loading characters…" />
-				{:else if filteredCharacters.length === 0}
+				{:else if rows.length === 0}
 					<EmptyState
 						icon={personaEmpty ? Icons.UserRound : Icons.Users}
 						message={search
 							? `No characters found matching "${search}".`
-							: activeChip === "favorite"
-								? "No favorite characters yet."
-								: activeChip === "persona"
-									? "No personas yet. Write one, or choose Use as persona in a character's ⋮ menu."
-									: activeChip !== "all"
-										? "No characters carry this tag."
-										: "No characters yet — create one, or browse ready-made ones from the community."}
+							: otherPickActive
+								? "No characters match these filters."
+								: chipFilter === "favorite"
+									? "No favorite characters yet."
+									: chipFilter === "persona"
+										? "No personas yet. Write one, or choose Use as persona in a character's ⋮ menu."
+										: chipFilter !== "all"
+											? "No characters carry this tag."
+											: "No characters yet — create one, or browse ready-made ones from the community."}
 						ctaLabel={personaEmpty
 							? "Write a persona"
 							: listIsNarrowed
@@ -1576,20 +2051,17 @@
 					     an optional shelf, not a filing system a character
 					     has to be inside to be listed. -->
 					<div class="flex flex-col gap-2">
-						{#if folderGroups.ungrouped.length > 0}
-							{@render characterRows(
-								folderGroups.ungrouped,
-								"Characters"
-							)}
+						{#if groups.ungrouped.length > 0}
+							{@render rowGroup(groups.ungrouped, "Characters")}
 						{/if}
-						{#each folderGroups.groups as group (group.folder.id)}
+						{#each groups.folders as group (group.folder.id)}
 							{@const expanded = !collapsedFolderIds.has(
 								group.folder.id
 							)}
 							<div class="flex min-w-0 flex-col">
 								<CharacterFolderHeader
 									name={group.folder.name}
-									count={group.characters.length}
+									count={group.rows.length}
 									{expanded}
 									onToggle={() =>
 										toggleFolder(group.folder.id)}
@@ -1604,24 +2076,67 @@
 									     the indent is what says these rows
 									     belong to the folder above. -->
 									<div class="min-w-0 pl-4">
-										{@render characterRows(
-											group.characters,
+										{@render rowGroup(
+											group.rows,
 											group.folder.name
 										)}
 									</div>
 								{/if}
 							</div>
 						{/each}
-						{#if folderGroups.shared.length > 0}
+						{#if groups.onlyInLorebooks.length > 0}
+							<!-- Characters with no card of the reader's own,
+							     reached through a lorebook: after the folders. -->
+							<div class="flex min-w-0 flex-col">
+								<ListGroupLabel label="Only in lorebooks" />
+								{@render rowGroup(
+									groups.onlyInLorebooks,
+									"Only in lorebooks"
+								)}
+							</div>
+						{/if}
+						{#if groups.shared.length > 0}
 							<!-- Read and copy only (ruled Q3): last, after
 							     the reader's own rows and folders. -->
 							<div class="flex min-w-0 flex-col">
 								<ListGroupLabel label="Shared with you" />
-								{@render characterRows(
-									folderGroups.shared,
-									"Shared with you",
-									true
+								{@render rowGroup(
+									groups.shared,
+									"Shared with you"
 								)}
+							</div>
+						{/if}
+						{#if nextCursor !== null}
+							<!-- The sentinel is what asks for the next page
+							     as the end scrolls into view; the button is
+							     the same ask. -->
+							<div
+								bind:this={sentinel}
+								class="h-px"
+								aria-hidden="true"
+							></div>
+							<div class="flex justify-center pt-1 pb-2">
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal-primary"
+									onclick={askNextPage}
+									disabled={loadingMore}
+								>
+									{#if loadingMore}
+										<Icons.Loader2
+											size={16}
+											class="animate-spin"
+											aria-hidden="true"
+										/>
+										Loading…
+									{:else}
+										<Icons.ChevronDown
+											size={16}
+											aria-hidden="true"
+										/>
+										Load more
+									{/if}
+								</button>
 							</div>
 						{/if}
 					</div>
@@ -1636,7 +2151,7 @@
 				     still shows them wherever it is scrolled to. -->
 				{#if isCardDragOver}
 					<div
-						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 pointer-events-none absolute inset-0 rounded-container border-2 border-dashed text-sm"
+						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 rounded-container pointer-events-none absolute inset-0 border-2 border-dashed text-sm"
 					>
 						<p
 							class="sticky top-1/2 -translate-y-1/2 py-8 text-center"
@@ -1784,17 +2299,18 @@
 {/if}
 
 {#if characterImportConflict}
-	<ImportConflictModal
+	<CardImportConflictModal
 		open={showCharacterImportConflictModal}
 		onOpenChange={(e) => {
 			showCharacterImportConflictModal = e.open
 			if (!e.open) characterImportConflict = undefined
 		}}
-		entityLabel="Character"
 		existingName={characterImportConflict.existingCharacter.nickname ||
 			characterImportConflict.existingCharacter.name}
-		onOverwrite={handleOverwriteCharacterImportConflict}
-		onImportAsNew={handleImportCharacterAsNewFromConflict}
+		currentVersion={characterImportConflict.currentVersion}
+		suggestedLabel={characterImportConflict.suggestedLabel}
+		onAddVersion={handleAddCharacterImportVersion}
+		onSaveAsNewCard={handleImportCharacterAsNewFromConflict}
 		onCancel={handleCancelCharacterImportConflict}
 	/>
 {/if}
@@ -1850,7 +2366,7 @@
 		onOpenChange={(e) => {
 			if (!e.open) characterToMove = null
 		}}
-		characterName={characterToMove.nickname || characterToMove.name}
+		characterName={characterToMove.shownName}
 		currentFolderId={characterToMove.folderId ?? null}
 		{folders}
 		onPick={pickFolderForCharacter}

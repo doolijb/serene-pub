@@ -61,22 +61,20 @@ describe("servableTransforms", () => {
 
 describe("aggregateCombos — the union is necessary in both directions", () => {
 	test("manifest-only would drop what core demands and no adapter serves", () => {
-		// The real case: `core:oracle/speak@1` requires `text->audio`, no
-		// manifest entry declares it and nothing implements `synthesizeSpeech`,
-		// so a list built from the manifest alone offers no way to register a
-		// default for a capability core will ask for.
-		//
-		// ⚠ `text->embedding` is NOT the second example any more: the three
-		// embedding types declare it and their adapters implement `embedText`,
-		// so it is servable. It is asserted here in the other direction instead
-		// — a capability both demanded AND servable, which is what the two
-		// halves of this aggregation are supposed to agree about.
-		expect(servableTransforms()).not.toContain("text->audio")
+		// The shape of the real case: a node type requires a transform no
+		// manifest entry declares, so a list built from the manifest alone
+		// offers no way to register a default for a capability core will ask
+		// for. `image->image` is the one transform nothing serves today;
+		// `text->audio` played this part until speech landed (2026-10-31) and
+		// `text->embedding` before that — each became servable the day its
+		// action did, which is the other direction, asserted below.
+		expect(servableTransforms()).not.toContain("image->image")
+		expect(servableTransforms()).toContain("text->audio")
 		expect(servableTransforms()).toContain("text->embedding")
 
 		const combos = aggregateCombos([
-			type("core:oracle/speak", {
-				connection: { kind: "connection", requires: ["text->audio"] }
+			type("core:oracle/restyle", {
+				connection: { kind: "connection", requires: ["image->image"] }
 			}),
 			type("core:oracle/embed-text", {
 				connection: {
@@ -85,12 +83,12 @@ describe("aggregateCombos — the union is necessary in both directions", () => 
 				}
 			})
 		])
-		const speech = combos.find((c) => c.id === "text->audio")
-		expect(speech).toBeDefined()
-		expect(speech!.demanded).toBe(true)
-		expect(speech!.servable).toBe(false)
-		expect(speech!.requiredBy).toEqual([
-			{ definitionId: "core:oracle/speak", version: 1, slot: "connection" }
+		const restyle = combos.find((c) => c.id === "image->image")
+		expect(restyle).toBeDefined()
+		expect(restyle!.demanded).toBe(true)
+		expect(restyle!.servable).toBe(false)
+		expect(restyle!.requiredBy).toEqual([
+			{ definitionId: "core:oracle/restyle", version: 1, slot: "connection" }
 		])
 
 		const embed = combos.find((c) => c.id === "text->embedding")

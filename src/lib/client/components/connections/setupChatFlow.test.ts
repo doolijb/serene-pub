@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
+	doneHeading,
 	doneSentence,
 	findKcppTextConnection,
-	firstModelToRegister,
+	registeredChatDefault,
+	replyFilled,
 	runtimeReady,
 	setupChatStep,
 	type SetupChatFacts
@@ -59,58 +61,6 @@ describe("setupChatStep — derived, never stored", () => {
 	})
 })
 
-describe("firstModelToRegister — the flow's one side effect", () => {
-	const withModel = {
-		...kcpp,
-		models: [
-			{ id: 9, name: "Nemo" },
-			{ id: 10, name: "Gemma" }
-		]
-	}
-	test("names the first present model only while nothing is set", () => {
-		expect(firstModelToRegister(facts({ connection: withModel }))).toEqual({
-			connectionId: 3,
-			model: { id: 9, name: "Nemo" }
-		})
-	})
-	test("a pub that already answers with something is never re-pointed", () => {
-		expect(
-			firstModelToRegister(
-				facts({
-					connection: withModel,
-					chatDefault: { connectionId: 1, connectionModelId: 2 }
-				})
-			)
-		).toBeNull()
-	})
-	test("nothing to register before a model lands", () => {
-		expect(firstModelToRegister(facts())).toBeNull()
-	})
-	test("skips a model that cannot chat, or is switched off", () => {
-		const mixed = {
-			...kcpp,
-			models: [
-				{
-					id: 7,
-					name: "sdxl",
-					satisfiableCapabilities: ["text->image"]
-				},
-				{ id: 8, name: "Off", enabled: false },
-				{ id: 9, name: "Nemo", satisfiableCapabilities: ["text->text"] }
-			]
-		}
-		expect(firstModelToRegister(facts({ connection: mixed }))).toEqual({
-			connectionId: 3,
-			model: { id: 9, name: "Nemo" }
-		})
-		expect(
-			firstModelToRegister(
-				facts({ connection: { ...kcpp, models: [mixed.models[0]] } })
-			)
-		).toBeNull()
-	})
-})
-
 test("findKcppTextConnection ignores the image twin and hosts", () => {
 	const rows = [
 		{ id: 1, type: CONNECTION_TYPE.OPENAI },
@@ -121,17 +71,48 @@ test("findKcppTextConnection ignores the image twin and hosts", () => {
 	expect(findKcppTextConnection(rows.slice(0, 2))).toBeNull()
 })
 
-test("doneSentence names what was registered", () => {
-	expect(doneSentence(facts(), "Nemo")).toBe(
-		"Nemo is now in the Reply loadout."
-	)
-	expect(
-		doneSentence(
-			facts({
-				connection: { ...kcpp, models: [{ id: 9, name: "Nemo" }] },
-				chatDefault: { connectionId: 1 }
-			}),
-			null
+describe("doneSentence and doneHeading — read from server state only", () => {
+	const withNemo = { ...kcpp, models: [{ id: 9, name: "Nemo" }] }
+	test("Reply on a listed model names it", () => {
+		const f = facts({
+			connection: withNemo,
+			chatDefault: { connectionId: 3, connectionModelId: 9 }
+		})
+		expect(doneSentence(f)).toBe("Nemo is now in the Reply loadout.")
+		expect(replyFilled(f)).toBe(true)
+		expect(doneHeading(f)).toBe("Chat is set up")
+	})
+	test("Reply set to something not in this list is filled, unnamed", () => {
+		const f = facts({
+			connection: withNemo,
+			chatDefault: { connectionId: 1, connectionModelId: 2 }
+		})
+		expect(doneSentence(f)).toBe(
+			"The Reply loadout is filled — sessions can reply."
 		)
-	).toBe("The Reply loadout is filled — sessions can reply.")
+		expect(doneHeading(f)).toBe("Chat is set up")
+	})
+	test("no Reply pair says so and points at Use in Reply", () => {
+		const f = facts({ connection: withNemo })
+		expect(doneSentence(f)).toBe(
+			"The Reply loadout is still empty. Open KoboldCPP and press Use in Reply on a model."
+		)
+		expect(replyFilled(f)).toBe(false)
+		expect(doneHeading(f)).toBe("KoboldCPP is ready")
+	})
+})
+
+describe("registeredChatDefault — a designated loadout is not a registered model", () => {
+	test("a fresh pub's empty Reply slots count as nothing registered", () => {
+		expect(
+			registeredChatDefault({ connectionId: null, connectionModelId: null })
+		).toBeNull()
+		expect(registeredChatDefault(undefined)).toBeNull()
+		expect(registeredChatDefault(null)).toBeNull()
+	})
+	test("a filled slot is the pair", () => {
+		expect(
+			registeredChatDefault({ connectionId: 1, connectionModelId: 2 })
+		).toEqual({ connectionId: 1, connectionModelId: 2 })
+	})
 })

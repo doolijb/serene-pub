@@ -38,6 +38,7 @@
  * migration, which is the case that was costing one every time.
  */
 
+import { fromHonorMode } from "$lib/server/sessions/honorModeRetired"
 import { eq, and, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { driverReasonOf } from "$lib/server/db/errors"
@@ -54,12 +55,19 @@ import {
 	type RegistryEntry,
 	type Descriptor,
 	type ScriptKindDecl,
-	type TemplateSeed
+	type TemplateSeed,
+	VARIABLE_LAYOUT_SLUG
 } from "@serene-pub/sdk"
 import { poolKeyFor } from "$lib/shared/pipelines/poolKey"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
 import { resolveRenamedCoreId } from "$lib/server/plugins/renamedCoreIds"
-import { objectLayoutSeedsFor } from "$lib/server/pipelines/entities/objectVariableLayouts"
+import {
+	formatLayoutReference,
+	layoutSlugOf,
+	objectLayoutSeedsFor,
+	variableMajorOf
+} from "$lib/server/pipelines/entities/objectVariableLayouts"
+import { stampReferenceIfFree } from "$lib/server/pipelines/boot/seedVariableTemplates"
 
 export interface SyncResult {
 	inserted: string[]
@@ -755,13 +763,14 @@ function presetDefaultsWithRenamedCoreIds(
  * nothing to enable — the pipelines were there and the thing that makes them
  * usable together was not.
  *
- * ## Disabled on arrival
+ * ## Available on enable
  *
- * A preset is what a **non-admin** is offered, and which presets an instance
- * offers is the instance owner's decision. So a projected preset arrives
- * `enabled: false` unless the declaration asks otherwise, and an administrator
- * switches it on — the same shape as a declared permission, announced by the
- * package and granted by the instance.
+ * A preset is what a **non-admin** is offered. Enabling a plugin makes its
+ * presets available (owner ruling 2026-11-04, ★39); an administrator hides one
+ * afterwards if wanted. So a projected preset arrives `enabled: true`.
+ * Presets projected by an earlier build arrived `false` and stay as they are:
+ * a boot pass could not tell "never enabled" from "an administrator disabled
+ * it".
  *
  * `enabled` is never written again after the insert. It is the administrator's
  * column, and an upgrade that reset it would silently re-approve something
@@ -946,9 +955,14 @@ export async function syncPluginPresets(
 			includedActions,
 			defaults: presetDefaultsWithRenamedCoreIds(decl.defaults as Record<string, unknown> | undefined),
 			// The preset layer of the cascade and the card's numbers (2026-10-19).
-			settings: ((decl as any).settings as Record<string, unknown> | undefined) ?? null,
+			// A plugin preset written before 2026-11-05 may still say `honorMode`: mapped at projection
+			// (`fromHonorMode`, plan §25 ★6), so the stored row never carries the retired key.
+			settings: settingsWithoutHonorMode((decl as any).settings as Record<string, unknown> | undefined),
 			callsPerTurn: typeof (decl as any).callsPerTurn === "number" ? ((decl as any).callsPerTurn as number) : null,
 			castFloor: ((decl as any).cast as { characters?: number; personas?: number } | undefined) ?? null,
+			// 🚧 The preset's variable layouts: variable id → layout reference, `{}`
+			// when it states none. Written like `settings`, so a re-projection keeps it in step.
+			variableLayouts: { ...(((decl as any).variableLayouts as Record<string, string> | undefined) ?? {}) },
 			ownerPluginId: ownerId
 		}
 
@@ -973,7 +987,11 @@ export async function syncPluginPresets(
 				seedKey,
 				...projected,
 				isDefault: !hasDefault,
-				enabled: decl.enabled === true,
+				// Enabling the plugin makes its presets available (★39, ruled
+				// 2026-11-04); an administrator hides one afterwards. Insert-only:
+				// the update path below never writes `enabled`, so that hiding
+				// survives every sync.
+				enabled: true,
 				// Shipped, so selectable and copyable but never edited in
 				// place — the posture core's presets and a plugin's shipped
 				// configs take. A person's change goes to a duplicate.
@@ -1012,7 +1030,8 @@ export async function syncPluginPresets(
 					"defaults",
 					"settings",
 					"callsPerTurn",
-					"castFloor"
+					"castFloor",
+					"variableLayouts"
 				] as const
 			).every(
 				(k) =>
@@ -1223,6 +1242,54 @@ function tableFor(kind: PluginTemplateKind) {
 }
 
 /**
+ * 🚧 The **layout reference** a package's variable layout goes by
+ * (`<owner>/<slug>@<major>`), stamped on its row once and never rewritten
+ * (PLAN variable-layouts 2026-11-10, Data item 2): owner and major are the
+ * template id's; the slug is the seed's `slug`, else the id's name segment
+ * (`acme:template/omens-prose@1` → `omens-prose`). An automatic row (derived
+ * from a variable, `objectLayoutSeedsFor`) is `<owner>/json@<variable major>`.
+ * A collision (first by id keeps it) leaves the row without, and warns (`stampReferenceIfFree`).
+ */
+async function stampPluginLayoutReference(
+	db: Db,
+	id: string,
+	seed: TemplateSeed
+): Promise<void> {
+	const [row] = await db
+		.select({
+			id: schema.pipelineVariableTemplates.id,
+			variableId: schema.pipelineVariableTemplates.variableId,
+			name: schema.pipelineVariableTemplates.name,
+			reference: schema.pipelineVariableTemplates.reference
+		})
+		.from(schema.pipelineVariableTemplates)
+		.where(eq(schema.pipelineVariableTemplates.templateId, id))
+		.limit(1)
+	if (!row || row.reference) return
+	const parts = parseTemplateId(id)
+	if (!parts) return
+	const automatic = !!(seed as { automatic?: boolean }).automatic
+	const major = automatic ? variableMajorOf(row.variableId) : parts.major
+	if (major == null) return
+	// The seed's own `slug` first, then the id's name segment. A plugin that
+	// ships `variableLayout(…, { slug: "json" })` for an object variable lands on
+	// the automatic layout's template id: one row, the same `<owner>/json@<major>`
+	// either way, so nothing is stamped twice.
+	const seedSlug = (seed as { slug?: unknown }).slug
+	const slug = automatic
+		? "json"
+		: typeof seedSlug === "string"
+			? seedSlug
+			: layoutSlugOf(parts.name)
+	if (!slug || !VARIABLE_LAYOUT_SLUG.test(slug)) return
+	await stampReferenceIfFree(
+		db,
+		row,
+		formatLayoutReference({ owner: parts.owner, slug, major })
+	)
+}
+
+/**
  * Write one template seed as its package's row: insert it, or refresh and
  * un-withdraw the row this package already owns under that id. A row under the
  * id that another owner holds is refused, never taken. Returns what happened.
@@ -1255,12 +1322,14 @@ async function writeTemplateSeed(
 			await db
 				.insert(table as any)
 				.values({ ...values, templateId: id, isImmutable: true })
+			if (kind === "variables") await stampPluginLayoutReference(db, id, seed)
 			return "projected"
 		}
 		await db
 			.update(table as any)
 			.set({ ...values, withdrawnAt: null, updatedAt: new Date() })
 			.where(eq(table.id, existing.id))
+		if (kind === "variables") await stampPluginLayoutReference(db, id, seed)
 		return existing.withdrawnAt ? "restored" : "present"
 	} catch (e) {
 		// Almost always the pool's unique name index: two packages shipping
@@ -1413,4 +1482,10 @@ export async function syncPluginTemplates(
 	}
 
 	return report
+}
+
+/** A plugin preset's declared settings with a retired `honorMode` mapped (`fromHonorMode`); null when none. */
+function settingsWithoutHonorMode(settings: Record<string, unknown> | undefined): Record<string, unknown> | null {
+	if (!settings) return null
+	return fromHonorMode(settings) ?? settings
 }

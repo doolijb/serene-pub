@@ -125,6 +125,11 @@ export interface ImageDrawingSheetParams {
 	 * `expressions`; the sheet itself is an admin's.
 	 */
 	characterId?: number | null
+	/**
+	 * 🚧 Ask about the pair this cast member's sprites are drawn with: whoever
+	 * can edit the member's lorebook. Only an admin sees the sheet itself.
+	 */
+	castMemberId?: number | null
 }
 
 export interface ImageDrawingSheetResponse {
@@ -136,6 +141,8 @@ export interface ImageDrawingSheetResponse {
 	workflowId?: number
 	/** 🚧 Echoed when the sheet was asked for a card's sprites. */
 	characterId?: number
+	/** 🚧 Echoed when the sheet was asked for a cast member's sprites. */
+	castMemberId?: number
 	/**
 	 * 🚧 The sheet's `expressions` flag — whether **Re-express from
 	 * neutral** can run on this pair. Answered to a member too.

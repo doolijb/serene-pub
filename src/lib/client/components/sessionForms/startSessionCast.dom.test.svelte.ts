@@ -112,6 +112,7 @@ async function render(max = 3, more: Record<string, unknown> = {}) {
 	document.body.append(host)
 	app = mount(StartSessionForm, {
 		target: host,
+		context: new Map([["userSettingsCtx", { settings: { showAdvancedControls: true } }]]),
 		props: { onCreated: () => {}, onCancel: () => {} }
 	})
 	await settle()
@@ -231,15 +232,18 @@ describe("Start a session › Who is in it", () => {
 		// Never required: the session's own book is its world until one is chosen.
 		expect(host.querySelector("#start-session-reason")).toBeNull()
 		expect(buttonByText("Start", host)!.disabled).toBe(false)
-		expect(host.querySelector("#start-lorebook-heading")?.textContent?.trim()).toBe("Lorebook")
+		expect(
+			host.querySelector("#start-lorebook-heading")?.textContent?.trim()
+		).toBe("Lorebook")
 		expect(host.textContent).not.toContain("needs a lorebook")
-		expect(host.textContent).toContain("This genre can start without")
+		expect(host.textContent?.replace(/\s+/g, " ")).toContain(
+			"The session can keep its world in its own notes"
+		)
 
 		buttonByText("Create a lorebook", host)!.click()
 		await settle()
-		const name = dialog().querySelector<HTMLInputElement>(
-			"#new-lorebook-name"
-		)!
+		const name =
+			dialog().querySelector<HTMLInputElement>("#new-lorebook-name")!
 		name.value = "Atlas"
 		name.dispatchEvent(new Event("input", { bubbles: true }))
 		await settle()

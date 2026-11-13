@@ -128,6 +128,8 @@ describe("core's components", () => {
 			expect(c.sourceHash).toMatch(/^[a-f0-9]{64}$/)
 			expect(c.cloneable).toBe(!CORE_VIEW_ONLY_COMPONENTS.includes(c.slug))
 		}
+		const dialogue = list.components.find((c) => c.slug === "dialogue-box")
+		expect(dialogue?.cloneable).toBe(false)
 		const msgs = await call<Sockets.Components.CoreSource.Response>(h.componentsCoreSource, { slug: "messages" })
 		expect(msgs.cloneable).toBe(false)
 		expect(Object.keys(msgs.files).length).toBeGreaterThan(5)

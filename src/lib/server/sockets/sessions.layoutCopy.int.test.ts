@@ -17,6 +17,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
+import { panelsV2Of } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -73,6 +74,9 @@ async function seed(genreId = LAIR) {
 		.where(eq(schema.sessionLayoutPresets.seedKey, layoutPresetSeedKey(genreId)))
 	return row
 }
+
+/** A layout as it is stored now: its old slots stay, `panels` version 2 is added. */
+const asV2 = (layout: any) => ({ ...layout, panels: panelsV2Of(layout).panels })
 
 /** The arrangement half of a layout blob: what a session row holds. */
 function arrangementOf(layout: Record<string, unknown>) {
@@ -217,7 +221,7 @@ describe("the first open copies a starting point into the person's own row", () 
 				presetId: mine.id
 			})
 			const res = await get(s.owner.id, s.session.id)
-			expect(res.layout).toEqual(TWO_COLUMNS)
+			expect(res.layout).toEqual(asV2(TWO_COLUMNS))
 			expect(res.widgetSettings).toEqual({ stats: { density: "compact" } })
 			expect(res.startedFromLayoutPresetId).toBe(mine.id)
 			// It is the owner's alone: the guest still starts from the genre's
@@ -322,7 +326,7 @@ describe("the first open copies a starting point into the person's own row", () 
 			})
 			const guest = await get(s.guest.id, s.session.id)
 			expect(guest.startedFromLayoutPresetId).toBe(theirs.id)
-			expect(guest.layout).toEqual(TWO_COLUMNS)
+			expect(guest.layout).toEqual(asV2(TWO_COLUMNS))
 		},
 		60_000
 	)
@@ -391,6 +395,193 @@ describe("rows are per person per session (LA)", () => {
 })
 
 describe("sessions:panelLayout:startFrom", () => {
+	describe("clearPlacedWidgets (Reset to genre default layout, owner 2026-11-04 item 15)", () => {
+		const settingsOf = async (sessionId: number, userId: number) =>
+			Object.fromEntries(
+				(
+					await testDb
+						.select()
+						.from(schema.widgetSettings)
+						.where(
+							and(
+								eq(schema.widgetSettings.sessionId, sessionId),
+								eq(schema.widgetSettings.userId, userId)
+							)
+						)
+				).map((r) => [r.widgetInstanceId, r.values])
+			)
+		const pinsOf = async (sessionId: number, userId: number) =>
+			((await rowOf(sessionId, userId)).layoutSettings as any)?.widgetStyles ?? {}
+		/** Hold values for `messages` (placed) and `stats#9`, a copy the layout does not place, for both people. */
+		async function hold(s: Awaited<ReturnType<typeof scenario>>) {
+			for (const u of [s.owner, s.guest]) {
+				await get(u.id, s.session.id)
+				for (const [widgetInstanceId, values] of Object.entries({
+					messages: { composer: "minimal" },
+					"stats#9": { density: "compact" }
+				}))
+					await testDb
+						.insert(schema.widgetSettings)
+						.values({
+							sessionId: s.session.id,
+							userId: u.id,
+							widgetInstanceId,
+							values
+						})
+						.onConflictDoUpdate({
+							target: [
+								schema.widgetSettings.userId,
+								schema.widgetSettings.sessionId,
+								schema.widgetSettings.widgetInstanceId
+							],
+							set: { values }
+						})
+				await testDb
+					.update(schema.sessionPanelLayouts)
+					.set({
+						layoutSettings: {
+							widgetStyles: {
+								messages: { id: 7, slug: "mine" },
+								"stats#9": { id: 8, slug: "old" }
+							}
+						}
+					})
+					.where(
+						and(
+							eq(schema.sessionPanelLayouts.sessionId, s.session.id),
+							eq(schema.sessionPanelLayouts.userId, u.id)
+						)
+					)
+			}
+		}
+
+		async function startFromWith(
+			userId: number,
+			sessionId: number,
+			layoutPresetId: number,
+			clearPlacedWidgets?: boolean
+		) {
+			const { sessionsPanelLayoutStartFromHandler } = await handlers()
+			return sessionsPanelLayoutStartFromHandler.handler(
+				fakeSocket(userId),
+				{ sessionId, layoutPresetId, clearPlacedWidgets } as any,
+				noopEmit
+			)
+		}
+
+		test(
+			"the flag on the genre default drops settings and pin of a placed instance, keeps the unplaced, and the layout's own values still win; another person's rows are untouched",
+			async () => {
+				const def = await seed()
+				const { drawnWidgetIds } = await import("@serene-pub/sdk")
+				const placed = drawnWidgetIds(arrangementOf(def.layout as any) as any)
+				expect(placed).toContain("messages")
+				expect(placed).not.toContain("stats#9")
+				const original = def.layout
+				try {
+					await testDb
+						.update(schema.sessionLayoutPresets)
+						.set({
+							layout: {
+								...(def.layout as object),
+								widgetSettings: { messages: { composer: "full" } },
+								widgetStyles: { messages: { slug: "shipped" } }
+							}
+						})
+						.where(eq(schema.sessionLayoutPresets.id, def.id))
+					const s = await scenario()
+					await hold(s)
+					const res = await startFromWith(s.owner.id, s.session.id, def.id, true)
+					expect(res.ok).toBe(true)
+					// Placed + brought: the layout's own value, not the person's.
+					expect(await settingsOf(s.session.id, s.owner.id)).toMatchObject({
+						messages: { composer: "full" },
+						"stats#9": { density: "compact" }
+					})
+					expect((await pinsOf(s.session.id, s.owner.id)).messages).toEqual({
+						slug: "shipped"
+					})
+					expect((await pinsOf(s.session.id, s.owner.id))["stats#9"]).toEqual({
+						id: 8,
+						slug: "old"
+					})
+					// The other person's rows are untouched.
+					expect(await settingsOf(s.session.id, s.guest.id)).toMatchObject({
+						messages: { composer: "minimal" },
+						"stats#9": { density: "compact" }
+					})
+					expect((await pinsOf(s.session.id, s.guest.id)).messages).toEqual({
+						id: 7,
+						slug: "mine"
+					})
+				} finally {
+					await testDb
+						.update(schema.sessionLayoutPresets)
+						.set({ layout: original })
+						.where(eq(schema.sessionLayoutPresets.id, def.id))
+				}
+			},
+			60_000
+		)
+
+		test(
+			"a placed instance the layout brings nothing for goes back to its defaults",
+			async () => {
+				const def = await seed()
+				const s = await scenario()
+				await hold(s)
+				await startFromWith(s.owner.id, s.session.id, def.id, true)
+				// Gone, bar whatever the genre default itself brings (it names no `composer`).
+				expect((await settingsOf(s.session.id, s.owner.id)).messages ?? {}).not.toHaveProperty(
+					"composer"
+				)
+				expect((await pinsOf(s.session.id, s.owner.id)).messages).toBeUndefined()
+				expect((await settingsOf(s.session.id, s.owner.id))["stats#9"]).toEqual({
+					density: "compact"
+				})
+			},
+			60_000
+		)
+
+		test(
+			"the same preset without the flag keeps the merge",
+			async () => {
+				const def = await seed()
+				const s = await scenario()
+				await hold(s)
+				await startFromWith(s.owner.id, s.session.id, def.id)
+				// The merge: only what the layout brings replaces; the pin and the rest stay.
+				expect((await settingsOf(s.session.id, s.owner.id))["stats#9"]).toEqual({
+					density: "compact"
+				})
+				expect((await pinsOf(s.session.id, s.owner.id)).messages).toEqual({
+					id: 7,
+					slug: "mine"
+				})
+			},
+			60_000
+		)
+
+		test(
+			"the flag on a preset that is not the genre default changes nothing beyond the copy",
+			async () => {
+				await seed()
+				const s = await scenario()
+				await hold(s)
+				const other = await namedLayout(s.owner.id, "Other", TWO_COLUMNS)
+				await startFromWith(s.owner.id, s.session.id, other.id, true)
+				expect((await settingsOf(s.session.id, s.owner.id)).messages).toEqual({
+					composer: "minimal"
+				})
+				expect((await pinsOf(s.session.id, s.owner.id)).messages).toEqual({
+					id: 7,
+					slug: "mine"
+				})
+			},
+			60_000
+		)
+	})
+
 	test(
 		"LB: the incoming layout's settings and pins win for each instance it names; the session keeps the rest",
 		async () => {
@@ -422,11 +613,15 @@ describe("sessions:panelLayout:startFrom", () => {
 			expect(res.widgetSettings["scene-portraits"]).toEqual({ source: "scene" })
 			// …and kept for the instance it does not name.
 			expect(res.widgetSettings.stats).toEqual({ density: "compact" })
+			// A pin on the composing `messages` is also copied to its `composer`
+			// and `turn-line` instances (they had none).
 			expect(res.layoutSettings.widgetStyles).toEqual({
 				messages: { id: 7, slug: "mine" },
+				composer: { id: 7, slug: "mine" },
+				"turn-line": { id: 7, slug: "mine" },
 				stats: { slug: "ledger" }
 			})
-			expect(res.layout).toEqual(TWO_COLUMNS)
+			expect(res.layout).toEqual(asV2(TWO_COLUMNS))
 			expect(res.startedFromLayoutPresetId).toBe(incoming.id)
 		},
 		60_000
@@ -586,7 +781,7 @@ describe("sessions:panelLayout:startFrom", () => {
 			const ok = await startFrom(s.owner.id, s.session.id, published.id)
 			expect(ok.ok).toBe(true)
 			expect(ok.startedFromLayoutPresetId).toBe(published.id)
-			expect(ok.layout).toEqual(TWO_COLUMNS)
+			expect(ok.layout).toEqual(asV2(TWO_COLUMNS))
 		},
 		60_000
 	)
@@ -620,7 +815,7 @@ describe("sessions:panelLayout:set under the copy model", () => {
 			})
 			expect(res.ok).toBe(true)
 			const row = await rowOf(s.session.id, s.owner.id)
-			expect(row.layout).toEqual(TWO_COLUMNS)
+			expect(row.layout).toEqual(asV2(TWO_COLUMNS))
 			expect(row.startedFromLayoutPresetId).toBe(def.id)
 		},
 		60_000
@@ -681,9 +876,15 @@ describe("Save as new layout", () => {
 			expect(preset.origin).toBe("user")
 			expect(preset.description).toBe("stats on the left")
 			expect(preset.layout).toEqual({
-				...TWO_COLUMNS,
+				...asV2(TWO_COLUMNS),
 				widgetSettings: { stats: { density: "compact" } },
-				widgetStyles: { messages: { id: 4, slug: "quiet" } }
+				// The pin on the composing `messages` is also packed for its
+				// `composer` and `turn-line` instances.
+				widgetStyles: {
+					messages: { id: 4, slug: "quiet" },
+					composer: { id: 4, slug: "quiet" },
+					"turn-line": { id: 4, slug: "quiet" }
+				}
 			})
 			// The session's layout now started from the row it just wrote.
 			expect(saved.startedFromLayoutPresetId).toBe(preset.id)
@@ -709,7 +910,7 @@ describe("Save as new layout", () => {
 			const copied = await startFrom(s.owner.id, second.id, preset.id)
 			// …the author's other session can, and gets its own copy.
 			expect(copied.ok).toBe(true)
-			expect(copied.layout).toEqual(TWO_COLUMNS)
+			expect(copied.layout).toEqual(asV2(TWO_COLUMNS))
 			expect(copied.widgetSettings.stats).toEqual({ density: "compact" })
 			expect(copied.layoutSettings.widgetStyles).toMatchObject({
 				messages: { id: 4, slug: "quiet" }
@@ -785,15 +986,20 @@ describe("Save as new layout — placed copies of a widget", () => {
 			)
 			expect(saved.ok).toBe(true)
 			expect(saved.preset!.layout).toEqual({
-				...COPIES,
+				...asV2(COPIES),
+				// `messages#2` no longer declares `composer`: it moves to the
+				// `composer#2` instance; the pin is copied to it and `turn-line#2`.
 				widgetSettings: {
 					stats: { title: "Party" },
 					"stats#2": { title: "Foes", compact: true },
-					"messages#2": { channel: "sanctum", composer: "minimal" }
+					"messages#2": { channel: "sanctum" },
+					"composer#2": { composer: "minimal" }
 				},
 				widgetStyles: {
 					"stats#2": { id: 9, slug: "ledger" },
-					"messages#2": { id: 4, slug: "quiet" }
+					"messages#2": { id: 4, slug: "quiet" },
+					"composer#2": { id: 4, slug: "quiet" },
+					"turn-line#2": { id: 4, slug: "quiet" }
 				}
 			})
 
@@ -806,20 +1012,23 @@ describe("Save as new layout — placed copies of a widget", () => {
 			await get(s.owner.id, second.id)
 			const copied = await startFrom(s.owner.id, second.id, saved.preset!.id)
 			expect(copied.ok).toBe(true)
-			expect(copied.layout).toEqual(COPIES)
+			expect(copied.layout).toEqual(asV2(COPIES))
 			expect(copied.widgetSettings).toMatchObject({
 				stats: { title: "Party" },
 				"stats#2": { title: "Foes", compact: true },
-				"messages#2": { channel: "sanctum", composer: "minimal" }
+				"messages#2": { channel: "sanctum" },
+				"composer#2": { composer: "minimal" }
 			})
 			expect(copied.widgetSettings["stats#3"]).toBeUndefined()
 			expect(copied.layoutSettings.widgetStyles).toMatchObject({
 				"stats#2": { id: 9, slug: "ledger" },
-				"messages#2": { id: 4, slug: "quiet" }
+				"messages#2": { id: 4, slug: "quiet" },
+				"composer#2": { id: 4, slug: "quiet" },
+				"turn-line#2": { id: 4, slug: "quiet" }
 			})
 			// …and it is stored so: a fresh read of that session agrees.
 			const again = await get(s.owner.id, second.id)
-			expect(again.layout).toEqual(COPIES)
+			expect(again.layout).toEqual(asV2(COPIES))
 			expect(again.widgetSettings["stats#2"]).toEqual({ title: "Foes", compact: true })
 		},
 		60_000
@@ -1070,7 +1279,7 @@ describe("a plugin genre's own layout", () => {
 			await syncPluginLayouts(testDb as never)
 			const s = await scenario(PLUGIN_GENRE)
 			const res = await get(s.owner.id, s.session.id)
-			expect(res.layout).toEqual(BOARD_LAYOUT)
+			expect(res.layout).toEqual(asV2(BOARD_LAYOUT))
 			const listed = res.presets.find((p) => p.id === res.startedFromLayoutPresetId)!
 			expect(listed.isGenreDefault).toBe(true)
 			expect(listed.origin).toBe("plugin")

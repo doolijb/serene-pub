@@ -5,7 +5,7 @@
 		connectionTimeout,
 		type ConnectionTimeoutService
 	} from "$lib/client/services/connectionTimeout"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { refreshAuthAfterLogin } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
 
@@ -24,7 +24,7 @@
 
 	function onTimedOut() {
 		showModal = true
-		toaster.warning({
+		notify.warning({
 			title: "Connection timed out",
 			description:
 				"The connection closed after a period of inactivity. You can reconnect in 30 seconds."
@@ -32,7 +32,7 @@
 	}
 	function onReconnectAvailable() {
 		canReconnect = true
-		toaster.info({
+		notify.info({
 			title: "Reconnection available",
 			description: "You can now reconnect to the application."
 		})
@@ -85,13 +85,13 @@
 			canReconnect = false
 			reconnectCountdown = 0
 
-			toaster.success({
+			notify.success({
 				title: "Reconnected",
 				description: "Successfully reconnected to the application."
 			})
 		} catch (error) {
 			console.error("Reconnection failed:", error)
-			toaster.error({
+			notify.error({
 				title: "Reconnection Failed",
 				description:
 					"Failed to reconnect. Please refresh the page manually."
@@ -146,7 +146,7 @@
 <!-- Connection Timeout Modal -->
 {#if showModal || isVisible}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/60 backdrop-blur-sm"
+		class="bg-surface-950/60 fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
 	>
 		<div class="card bg-surface-100-900 mx-4 w-full max-w-md p-6 shadow-xl">
 			<div class="text-center">
@@ -162,8 +162,8 @@
 
 				<!-- Description -->
 				<p class="text-surface-600-400 mt-2 text-sm">
-					The connection closed after a period of inactivity. You
-					can reconnect to continue using the application.
+					The connection closed after a period of inactivity. You can
+					reconnect to continue using the application.
 				</p>
 
 				<!-- Countdown or Ready State -->

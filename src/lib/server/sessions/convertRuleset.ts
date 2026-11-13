@@ -8,7 +8,8 @@
  * open anchor (so `retractStateAnchoredTo` takes them back): a renamed slot's
  * value (and configuration) is filed under the new slot and the old slot
  * cleared; a removed slot is cleared; an added slot gets the step's default
- * where the new slot applies. Then `sessions.ruleset_version` is `to`. The
+ * where the new slot applies. A renamed value keeps the time it was written; an
+ * added default has none. Then `sessions.ruleset_version` is `to`. The
  * caller emits `core:event/ruleset-converted@1` after the commit.
  *
  * ★ Held: Back past the anchor takes the re-keys back, not `ruleset_version`.
@@ -19,10 +20,12 @@ import { getAttributeSlot, getRuleset, compareRulesetVersions, i18nText, type I1
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import { rulesetOrigin } from "$lib/server/rulesets/pubRulesets"
-import { StateRefusal, anchorFor, configure, setValue, type WriteContext } from "$lib/server/state/write"
+import { GIVEN_WRITE_STAMP, StateRefusal, anchorFor, configure, setValue, type WriteContext } from "$lib/server/state/write"
 import { sessionLinks } from "$lib/server/state/resolve"
-import { coreAnnexSetSql, lockSessionAnnex, readCoreAnnex } from "$lib/server/sessions/coreAnnex"
-import type { StateOwner } from "$lib/server/state/owners"
+import { fileSessionImprint } from "$lib/server/sessions/sessionImprints"
+import { castOwnerOf, type StateOwner } from "$lib/server/state/owners"
+import { clockOf } from "$lib/server/state/storyTime"
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 type Step = {
 	from: string
@@ -37,7 +40,8 @@ export interface RulesetConversion {
 	slots: { renamed: Record<string, string>; removed: string[]; added: Record<string, unknown> }
 }
 
-const SESSION_LAYER = ["session", "session_cast", "player_seat", "session_location"] as const
+// 🚧 ⏳ `seated_member` rows exist only once the flip is on (`memberForm.ts`); the list only filters rows, so adding it changes nothing while it is off.
+const SESSION_LAYER = ["session", "session_cast", "player_seat", "seated_member", "session_location"] as const
 
 /** The steps from `from` to `to`, followed by their `from`; null when the chain does not get there. */
 function chainFrom(upgrades: readonly Step[], from: string, to: string): Step[] | null {
@@ -182,7 +186,7 @@ export async function convertSessionRuleset(
 					await clear(owner, old)
 					continue
 				}
-				if (held !== null && held !== undefined) await setValue(t, ctx, { owner, slotId: now, value: held as never })
+				if (held !== null && held !== undefined) await setValue(t, ctx, { owner, slotId: now, value: held as never, [GIVEN_WRITE_STAMP]: { clock: clockOf(r), writtenAt: r.createdAt } })
 				await clear(owner, old)
 			}
 		for (const gone of slots.removed)
@@ -221,22 +225,34 @@ export async function convertSessionRuleset(
 			const owners: StateOwner[] = []
 			if (decl.appliesTo.includes("world")) owners.push({ kind: "session", id: args.sessionId })
 			if (decl.appliesTo.includes("cast")) {
-				for (const m of links.cast) owners.push({ kind: "session_cast", id: m.characterId })
+				for (const m of links.cast) owners.push(castOwnerOf(m))
 				for (const s of links.playerSeats ?? []) owners.push({ kind: "player_seat", id: s.playerSeatId })
+				// 🚧 ⏳ Flip on: each card-less character seat is an owner of its own.
+				for (const s of links.seatedMembers ?? [])
+					owners.push({ kind: "seated_member", id: s.seatMemberId })
+				// 🚧 ⏳ Flip on: a carded player seat is in both lists — one owner each.
+				if (memberFormOn()) {
+					const seen = new Set<string>()
+					for (let i = owners.length - 1; i >= 0; i--) {
+						const k = `${owners[i]!.kind}:${owners[i]!.id}`
+						if (seen.has(k)) owners.splice(i, 1)
+						else seen.add(k)
+					}
+				}
 			}
 			if (decl.appliesTo.includes("location")) for (const p of links.locations) owners.push({ kind: "session_location", id: p.entryId })
-			for (const owner of owners) await setValue(t, ctx, { owner, slotId, value: value as never })
+			for (const owner of owners) await setValue(t, ctx, { owner, slotId, value: value as never, [GIVEN_WRITE_STAMP]: null })
 		}
 
-		// Back past the anchor puts the version back: the conversion is kept in the `core` annex (runtime bookkeeping).
-		let annex: ReturnType<typeof coreAnnexSetSql> | undefined
-		if (anchor !== null) {
-			await lockSessionAnnex(t, args.sessionId)
-			const doc = await readCoreAnnex(t, args.sessionId)
-			const list = Array.isArray(doc?.rulesetConversions) ? (doc!.rulesetConversions as unknown[]) : []
-			annex = coreAnnexSetSql("rulesetConversions", sql`${JSON.stringify([...list, { messageId: anchor, rulesetId, from: cur, to: args.to }])}::jsonb`)
-		}
-		await t.update(schema.sessions).set({ rulesetVersion: args.to, ...(annex ? { annex } : {}) }).where(eq(schema.sessions.id, args.sessionId))
+		// Back past the anchor puts the version back: the conversion is a `ruleset-conversion` session imprint (no anchor, none filed).
+		await fileSessionImprint(
+			t,
+			{ sessionId: args.sessionId, messageId: anchor, runId: null },
+			{ kind: "ruleset-conversion", key: rulesetId },
+			cur,
+			args.to
+		)
+		await t.update(schema.sessions).set({ rulesetVersion: args.to }).where(eq(schema.sessions.id, args.sessionId))
 	})
 	return { rulesetId, from: cur, to: args.to, slots }
 }

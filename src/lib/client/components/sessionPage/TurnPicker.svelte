@@ -12,6 +12,15 @@
 	 * theirs to take by writing, not something a click fires for them.
 	 */
 
+	import { getContext } from "svelte"
+	import { declareInterest, requestWithInterest } from "$lib/client/sockets/interest.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import SessionSettingField from "$lib/client/components/sessionForms/SessionSettingField.svelte"
+	import { narratorCadenceField } from "./narratorCadence"
+
+	type Form = Sockets.Sessions.SettingsForm.Response
+	type Field = Sockets.Sessions.SettingsForm.Field
+
 	type Candidate = {
 		ref: string
 		kind: string
@@ -51,6 +60,61 @@
 
 	const speakable = $derived(candidates.filter((c) => c.kind !== "persona"))
 	const label = (c: Candidate) => c.nickname || c.name
+
+	// The narrator's cadence is the session's own setting, drawn from the
+	// server's derived settings form: one source, written the way the edit
+	// form writes it.
+	const socket = useTypedSocket()
+	const openSession = getContext<OpenSessionCtx | undefined>("openSessionCtx")
+	// Read through the context each time: the page is reused across sessions.
+	const sessionId = $derived(openSession?.sessionId ?? null)
+	let form = $state<Form | null>(null)
+	let busy = $state(false)
+	let refusal = $state<string | null>(null)
+	const cadence = $derived(form?.sessionId === sessionId ? narratorCadenceField(form) : null)
+
+	$effect(() => {
+		if (!(open && offerNarrator && sessionId != null)) return
+		return requestWithInterest("sessions:settingsForm", { sessionId }, (res) => {
+			if (res?.sessionId !== sessionId) return
+			form = res
+		})
+	})
+
+	let asked = 0
+	function ask(
+		params: Sockets.Sessions.UpdateSetting.Params
+	): Promise<Sockets.Sessions.UpdateSetting.Response> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				release()
+				reject(new Error("The setting was not saved: the server did not answer."))
+			}, 15_000)
+			const release = declareInterest<"sessions:updateSetting">("sessions:updateSetting", (res) => {
+				if (res?.requestId !== params.requestId) return
+				clearTimeout(timer)
+				release()
+				resolve(res)
+			})
+			socket.emit("sessions:updateSetting", params)
+		})
+	}
+
+	async function write(field: Field, value: unknown | null) {
+		if (sessionId == null) return
+		const requestId = `setting:${++asked}:${Math.random().toString(36).slice(2, 8)}`
+		refusal = null
+		busy = true
+		try {
+			const reply = await ask({ sessionId, address: field.address, value, requestId })
+			if (reply.error) refusal = reply.error
+			else if (reply.form) form = reply.form
+		} catch (e) {
+			refusal = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = false
+		}
+	}
 </script>
 
 <!-- `sp-dialog` (§3.5): the host's modal — focus-trapped, Escape and the
@@ -107,6 +171,17 @@
 					{/if}
 				</button>
 			</li>
+			{#if cadence}
+				<li>
+					<SessionSettingField
+						field={cadence}
+						viewer={form?.viewer ?? "owner"}
+						{busy}
+						{refusal}
+						onwrite={(value) => write(cadence, value)}
+					/>
+				</li>
+			{/if}
 		{/if}
 	</ul>
 	{#if !speakable.length && !offerNarrator}

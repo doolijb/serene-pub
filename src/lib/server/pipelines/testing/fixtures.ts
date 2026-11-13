@@ -31,6 +31,20 @@ import {
 	type NewLorebookEntry
 } from "$lib/server/utils/lorebookEntries"
 import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
+import {
+	ensureCardVersion,
+	insertCard,
+	insertCastMember,
+	insertCharacterVersions,
+	isBaseVersion,
+	nextWriteOrder,
+	updateCastVersion
+} from "$lib/server/characters/versions"
+import {
+	castChangesOfMemberEdit,
+	memberColumnsOfVersion
+} from "$lib/server/lorebooks/retold"
+import { profileOf } from "$lib/shared/characters/profile"
 
 /**
  * A fixture row, stated partially.
@@ -481,16 +495,13 @@ export async function insertCharacterRow(
 	userId: number,
 	overrides: Partial<InsertCharacter> = {}
 ) {
-	const [row] = await db
-		.insert(schema.characters)
-		.values({
-			userId,
-			name: "Character",
-			description: "A character.",
-			...overrides
-		})
-		.returning()
-	return row
+	const { card } = await insertCard(db, {
+		userId,
+		name: "Character",
+		description: "A character.",
+		...overrides
+	})
+	return card
 }
 
 /** A character row flagged as one the user plays — see `persona()` above. */
@@ -499,17 +510,14 @@ export async function insertPersonaRow(
 	userId: number,
 	overrides: Partial<InsertCharacter> = {}
 ) {
-	const [row] = await db
-		.insert(schema.characters)
-		.values({
-			userId,
-			isPersona: true,
-			name: "Persona",
-			description: "A persona.",
-			...overrides
-		})
-		.returning()
-	return row
+	const { card } = await insertCard(db, {
+		userId,
+		isPersona: true,
+		name: "Persona",
+		description: "A persona.",
+		...overrides
+	})
+	return card
 }
 
 export async function insertSessionRow(
@@ -537,16 +545,58 @@ export async function insertLorebookBindingRow(
 		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 	let n = 1
 	while (held.some((r) => r.binding === `{{char:${n}}}`)) n++
-	const [row] = await db
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId,
-			binding: `{{char:${n}}}`,
-			...overrides
-		})
-		.returning()
+	const { member } = await insertCastMember(db, {
+		lorebookId,
+		binding: `{{char:${n}}}`,
+		...overrides
+	})
+	return member
+}
+
+/**
+ * From `year` the member is drawn with `cardId`: a dated copy of its base
+ * version, parented on that card's current card version (what a dated card
+ * is on versions; the frozen `cast_amendments` is not read any more).
+ */
+export async function insertDatedCardVersion(
+	db: TestDb,
+	memberId: number,
+	cardId: number,
+	year: number
+) {
+	const V = schema.characterVersions
+	const base = (await db.select().from(V).where(eq(V.castMemberId, memberId)))
+		.filter(isBaseVersion)[0]
+	if (!base) throw new Error(`Cast member ${memberId} has no base version.`)
+	const { id: _id, ...rest } = base
+	const [row] = await insertCharacterVersions(db, [
+		{
+			...rest,
+			parentVersionId: (await ensureCardVersion(db, cardId))!.id,
+			year,
+			writeOrder: await nextWriteOrder(db)
+		}
+	])
 	return row
 }
+
+/** The member columns that are frozen (their values live on versions). */
+const FROZEN_MEMBER_KEYS = new Set([
+	"description",
+	"personality",
+	"scenario",
+	"firstMessage",
+	"alternateGreetings",
+	"exampleDialogues",
+	"faceMediaId",
+	"retold",
+	"ownName",
+	"ownNickname",
+	"timbre",
+	"spriteSet",
+	"nodeState",
+	"nodeVisibility"
+])
 
 /**
  * Post-merge (see the lorebookBindings/narrativeNodes merge plan), a "node"
@@ -564,27 +614,62 @@ export async function insertNarrativeNodeRow(
 		lorebookBindingId?: number
 	} = {}
 ) {
-	const { lorebookBindingId, ...rest } = overrides
+	const { lorebookBindingId, ...all } = overrides
 	if (lorebookBindingId != null) {
+		// The member's frozen columns are its versions' now: those keys go to
+		// the base version, the live columns to the row.
+		const rest: Record<string, unknown> = {}
+		const frozen: Record<string, unknown> = {}
+		for (const [key, value] of Object.entries(all))
+			(FROZEN_MEMBER_KEYS.has(key) ? frozen : rest)[key] = value
 		const [row] = await db
 			.update(schema.lorebookBindings)
 			.set({ name: "Node", ...rest } as any)
 			.where(eq(schema.lorebookBindings.id, lorebookBindingId))
 			.returning()
+		if (Object.keys(frozen).length) {
+			const V = schema.characterVersions
+			const bases = await db
+				.select()
+				.from(V)
+				.where(eq(V.castMemberId, lorebookBindingId))
+			const base = bases.find(isBaseVersion)
+			if (!base)
+				throw new Error(
+					`Cast member ${lorebookBindingId} has no base version to take ${Object.keys(frozen).join(", ")}.`
+				)
+			const parent = base.parentVersionId
+				? ((
+						await db
+							.select()
+							.from(V)
+							.where(eq(V.id, base.parentVersionId))
+					)[0] ?? null)
+				: null
+			const before = {
+				...memberColumnsOfVersion(base, { carded: parent != null }),
+				characterId: row.characterId
+			}
+			const changes = castChangesOfMemberEdit(
+				before,
+				{ ...before, ...frozen },
+				parent ? profileOf(parent) : null
+			)
+			if (changes)
+				await updateCastVersion(db, base.id, { changes })
+		}
 		return row
 	}
+	const rest = all
 	// No binding supplied — create a standalone unbound row (background/NPC
 	// node with no character/persona attached).
-	const [row] = await db
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId,
-			name: "Node",
-			binding: `{{char:test-${lorebookId}-${Math.random().toString(36).slice(2)}}}`,
-			...rest
-		} as any)
-		.returning()
-	return row
+	const { member } = await insertCastMember(db, {
+		lorebookId,
+		name: "Node",
+		binding: `{{char:test-${lorebookId}-${Math.random().toString(36).slice(2)}}}`,
+		...rest
+	} as any)
+	return member
 }
 
 export async function insertNarrativeRelationshipRow(

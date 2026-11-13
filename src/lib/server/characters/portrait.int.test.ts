@@ -40,8 +40,14 @@ const imageCalls: any[] = []
 let perCall = 1
 class FakeImageAdapter {
 	constructor(public connection: any) {}
-	async generateImage(req: any) {
+	async generateImage(req: any, opts?: any) {
 		imageCalls.push(req)
+		// What a queued backend says of itself (the Horde: a position, a wait).
+		opts?.onProgress?.({
+			stage: "queued",
+			percent: 0,
+			message: "In the Horde's queue at position 3"
+		})
 		const n = Math.max(1, Number(req.batch ?? 1))
 		return {
 			media: Array.from({ length: n }, () => ({
@@ -217,11 +223,15 @@ describe("generating a portrait as a card action", () => {
 		expect(reviewed[0].definitionId).toMatch(/^core:oracle\/generate-image/)
 		expect(reviewed[0].values.prompt).toBe("red hair, green coat")
 
-		// A loop pair: one call per picture, the tags row, upright, one seed.
+		// A loop pair: one call per picture, the tags row, upright — and NO
+		// seed fixed for the run: proofs share a prompt, so one seed drew
+		// `count` identical pictures (2026-11-08). The sampling's random seed
+		// (-1) goes through as set and each backend draws its own per call.
 		expect(imageCalls).toHaveLength(2)
 		expect(imageCalls[0].prompt).toContain("red hair, green coat, portrait, head and shoulders")
 		expect(imageCalls[0].height).toBeGreaterThan(imageCalls[0].width)
-		expect(imageCalls[1].seed).toBe(imageCalls[0].seed)
+		for (const c of imageCalls)
+			expect(typeof c.seed === "number" && c.seed >= 0).toBe(false)
 
 		const after = await gallery()
 		expect(after.length).toBe(before + 2)
@@ -329,5 +339,116 @@ describe("the dialog's preview", () => {
 			isAdmin: false
 		})
 		expect(out.count).toBe(4)
+	})
+
+	test("a backend's own sentence — the Horde's queue position — reaches the gallery's progress line", async () => {
+		// Seen 2026-11-10 on the real Horde: the adapter said "In the Horde's
+		// queue at position N" and the gallery showed "Drawing 2 pictures · 0%"
+		// for a minute, with no sign the wait was a queue.
+		const { runPortrait } = await import("./portrait")
+		const { pendingReviewsFor, resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const reports: any[] = []
+		const running = runPortrait(db, {
+			characterId,
+			count: 1,
+			userId: ownerId,
+			runId: "portrait-queued",
+			report: (p) => reports.push(p)
+		})
+		for (let i = 0; i < 400; i++) {
+			const [card] = pendingReviewsFor(ownerId)
+			if (card) {
+				resolveReview(card.id, ownerId, "approve")
+				break
+			}
+			await new Promise((r) => setTimeout(r, 25))
+		}
+		await running
+		expect(reports.some((r) => r.message === "In the Horde's queue at position 3")).toBe(true)
+		expect(reports.at(-1)).toMatchObject({ phase: "done" })
+	})
+
+	test("a card with no likeness is refused — preview and run — not drawn from the tail alone", async () => {
+		// Owner ruling 2026-11-08: "Add a likeness first". Until then it was
+		// a notice, and the portrait came out as a generic face.
+		const [bare] = await db
+			.insert(schema.characters)
+			.values({ userId: ownerId, name: "Blank", description: "A face with no likeness." } as any)
+			.returning()
+		const { previewPortrait, runPortrait } = await import("./portrait")
+		const out = await previewPortrait(db, { characterId: bare.id, count: 1, userId: ownerId, isAdmin: false })
+		expect(out.refusal).toMatch(/^Add a likeness first/)
+		expect(out.calls).toBeNull()
+
+		const reports: any[] = []
+		const before = imageCalls.length
+		await runPortrait(db, {
+			characterId: bare.id,
+			count: 1,
+			userId: ownerId,
+			runId: "portrait-no-likeness",
+			report: (p) => reports.push(p)
+		})
+		expect(reports.at(-1)).toMatchObject({ phase: "failed" })
+		expect(reports.at(-1).error).toMatch(/^Add a likeness first/)
+		expect(imageCalls.length).toBe(before)
+	})
+})
+
+describe("setting the likeness image (cv-writers)", () => {
+	test("lands on the card's current version, keeping the prompt and negative; the row's extensions stay as they were", async () => {
+		const { offerMediaToGallery } = await import("./portrait")
+		const { createMedia } = await import("$lib/server/media")
+		const { charactersSetLikenessImage } = await import(
+			"$lib/server/sockets/portrait"
+		)
+		const { file } = await createMedia(db, {
+			userId: ownerId,
+			bytes: Buffer.from(picture(), "base64"),
+			filename: "likeness.png"
+		})
+		await offerMediaToGallery(db, {
+			characterId,
+			userId: ownerId,
+			media: [{ uuid: file.uuid, kind: "image" }]
+		})
+		const events: [string, any][] = []
+		const res = await charactersSetLikenessImage.handler(
+			{ user: { id: ownerId } } as any,
+			{ characterId, mediaId: file.id },
+			(event: string, data: any) => events.push([event, data])
+		)
+		expect(res).toEqual({ characterId, imageMediaId: file.id })
+		expect(events.map((e) => e[0])).toEqual(["characters:setLikenessImage"])
+
+		const versions = await db
+			.select()
+			.from(schema.characterVersions)
+			.where(eq(schema.characterVersions.cardId, characterId))
+		expect(versions).toHaveLength(1)
+		expect(versions[0].likeness).toEqual({
+			prompt: "red hair, green coat",
+			negative: "hat",
+			imageMediaId: file.id
+		})
+		const [row] = await db
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, characterId))
+		expect((row.extensions as any).serenepub.likeness).toEqual({
+			prompt: "red hair, green coat",
+			negative: "hat"
+		})
+
+		// another person's card is refused, and writes nothing
+		await expect(
+			charactersSetLikenessImage.handler(
+				{ user: { id: strangerId } } as any,
+				{ characterId, mediaId: file.id },
+				() => {}
+			)
+		).rejects.toThrow(/not found or access denied/)
 	})
 })

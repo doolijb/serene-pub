@@ -18,7 +18,7 @@
 	import * as Icons from "@lucide/svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import SettingSwitch from "$lib/client/components/admin/pub/SettingSwitch.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import {
@@ -119,7 +119,8 @@
 				autoStart: false,
 				credential: ""
 			}
-		const m = t.provider === TunnelProviders.CLOUDFLARE_QUICK ? "easy" : "custom"
+		const m =
+			t.provider === TunnelProviders.CLOUDFLARE_QUICK ? "easy" : "custom"
 		return {
 			mode: m,
 			hostname: m === "custom" ? (t.hostname ?? "") : "",
@@ -159,7 +160,10 @@
 		busy = false
 		starting = false
 		stopPolling()
-		toaster.error({ title: res.error })
+		notify.error({
+			source: "admin:network:refusal",
+			title: res.error
+		})
 	}
 
 	// One error event per operation, not a wildcard: the socket layer emits
@@ -234,9 +238,14 @@
 	// the Start button explains itself in one line, with a link to the fix
 	// where the fix is somewhere else, instead of failing on click.
 	const enableBlocked = $derived.by(
-		(): { reason: string; fix?: { href: string; label: string } } | null => {
+		(): {
+			reason: string
+			fix?: { href: string; label: string }
+		} | null => {
 			if (!available)
-				return { reason: unavailableReason ?? "Tunnels are unavailable here." }
+				return {
+					reason: unavailableReason ?? "Tunnels are unavailable here."
+				}
 			if (!accountsEnabled)
 				return {
 					reason: "A public address needs user accounts.",
@@ -258,7 +267,10 @@
 			return { dot: "bg-success-500", words: "Running" }
 		if (tunnel?.status === "error")
 			return { dot: "bg-error-500", words: "Failed" }
-		return { dot: "bg-surface-500", words: tunnel ? "Stopped" : "Not set up" }
+		return {
+			dot: "bg-surface-500",
+			words: tunnel ? "Stopped" : "Not set up"
+		}
 	})
 
 	function saveConfig() {
@@ -301,7 +313,7 @@
 	async function copyLink() {
 		if (!publicUrl) return
 		await navigator.clipboard.writeText(publicUrl)
-		toaster.success({ title: "Link copied" })
+		notify.success({ title: "Link copied" })
 	}
 </script>
 
@@ -332,12 +344,12 @@
 					</p>
 					<p class="text-surface-600-400">
 						<code>ALLOWED_ORIGINS=*</code>
-						is set in this pub's environment, so every origin is
-						accepted and the hosts listed below have no effect. This is
-						a legitimate choice when a reverse proxy or Docker port
-						mapping already decides what can reach this pub — but
-						it is not the app's default, and nothing here will narrow it
-						until that variable changes.
+						is set in this pub's environment, so every origin is accepted
+						and the hosts listed below have no effect. This is a legitimate
+						choice when a reverse proxy or Docker port mapping already
+						decides what can reach this pub — but it is not the app's
+						default, and nothing here will narrow it until that variable
+						changes.
 					</p>
 				</div>
 			</div>
@@ -346,14 +358,22 @@
 		{#if loading}
 			<p class="text-surface-600-400 text-sm">Loading…</p>
 		{:else if !available}
-			<section class="panel-card flex flex-col gap-2" aria-labelledby="tunnel-heading">
+			<section
+				class="panel-card flex flex-col gap-2"
+				aria-labelledby="tunnel-heading"
+			>
 				<h2 id="tunnel-heading" class="text-sm font-medium">Tunnel</h2>
 				<p class="text-surface-600-400 text-sm">{unavailableReason}</p>
 			</section>
 		{:else}
-			<section class="panel-card flex flex-col gap-4" aria-labelledby="tunnel-heading">
+			<section
+				class="panel-card flex flex-col gap-4"
+				aria-labelledby="tunnel-heading"
+			>
 				<div class="flex flex-col gap-1">
-					<h2 id="tunnel-heading" class="text-sm font-medium">Tunnel</h2>
+					<h2 id="tunnel-heading" class="text-sm font-medium">
+						Tunnel
+					</h2>
 					<FieldHelp>
 						Make this pub reachable from outside your network,
 						without port forwarding.
@@ -361,8 +381,14 @@
 				</div>
 
 				<!-- Status line -->
-				<div class="flex flex-wrap items-center gap-2 text-sm" aria-live="polite">
-					<span class="size-2 shrink-0 rounded-full {statusLine.dot}" aria-hidden="true"></span>
+				<div
+					class="flex flex-wrap items-center gap-2 text-sm"
+					aria-live="polite"
+				>
+					<span
+						class="size-2 shrink-0 rounded-full {statusLine.dot}"
+						aria-hidden="true"
+					></span>
 					<span class="font-medium">{statusLine.words}</span>
 					{#if publicUrl && tunnel?.status === "running"}
 						<span class="text-surface-600-400">at</span>
@@ -390,8 +416,17 @@
 				<!-- Mode. Switching while something is running would orphan
 				     the live process, so it is locked until the tunnel stops. -->
 				<div class="flex flex-col gap-2">
-					<span id="tunnel-mode-label" class="text-surface-600-400 text-xs">Mode</span>
-					<div class="flex flex-wrap gap-2" role="radiogroup" aria-labelledby="tunnel-mode-label">
+					<span
+						id="tunnel-mode-label"
+						class="text-surface-600-400 text-xs"
+					>
+						Mode
+					</span>
+					<div
+						class="flex flex-wrap gap-2"
+						role="radiogroup"
+						aria-labelledby="tunnel-mode-label"
+					>
 						{#each [{ id: "easy", label: "Easy" }, { id: "custom", label: "Custom domain" }] as opt (opt.id)}
 							<button
 								type="button"
@@ -401,7 +436,8 @@
 								class="btn btn-sm {mode === opt.id
 									? 'preset-pressed'
 									: 'preset-tonal-surface'}"
-								onclick={() => (mode = opt.id as "easy" | "custom")}
+								onclick={() =>
+									(mode = opt.id as "easy" | "custom")}
 							>
 								{opt.label}
 							</button>
@@ -409,22 +445,24 @@
 					</div>
 					{#if mode === "easy"}
 						<FieldHelp>
-							A free Cloudflare quick tunnel. No account, no domain —
-							but the address is random and <strong>
+							A free Cloudflare quick tunnel. No account, no
+							domain — but the address is random and <strong>
 								changes every time the tunnel restarts
 							</strong>
 							, so the link you share is good for this session only.
 						</FieldHelp>
 					{:else}
 						<FieldHelp>
-							Your own domain on a free Cloudflare account. The address
-							is stable across restarts. In the Cloudflare dashboard,
-							point the tunnel's public hostname at
+							Your own domain on a free Cloudflare account. The
+							address is stable across restarts. In the Cloudflare
+							dashboard, point the tunnel's public hostname at
 							<code>http://localhost:{"{PORT}"}</code>
 							— the same port this page is served on.
 						</FieldHelp>
 						<label class="label">
-							<span class="label-text text-surface-600-400 text-xs">
+							<span
+								class="label-text text-surface-600-400 text-xs"
+							>
 								Public hostname
 							</span>
 							<input
@@ -436,7 +474,9 @@
 							/>
 						</label>
 						<label class="label">
-							<span class="label-text text-surface-600-400 text-xs">
+							<span
+								class="label-text text-surface-600-400 text-xs"
+							>
 								Connector token
 								{#if tunnel?.credentialSet}
 									— saved; leave blank to keep it
@@ -457,16 +497,24 @@
 
 				<!-- Stop after: preset chips, Never, or any hours in range. -->
 				<div class="flex flex-col gap-2">
-					<span id="tunnel-ttl-label" class="text-surface-600-400 text-xs">
+					<span
+						id="tunnel-ttl-label"
+						class="text-surface-600-400 text-xs"
+					>
 						Stop automatically after
 					</span>
-					<div class="flex flex-wrap items-center gap-2" role="group" aria-labelledby="tunnel-ttl-label">
+					<div
+						class="flex flex-wrap items-center gap-2"
+						role="group"
+						aria-labelledby="tunnel-ttl-label"
+					>
 						{#each TUNNEL_TTL_PRESET_HOURS as preset (preset)}
 							<button
 								type="button"
 								disabled={isRunning}
 								aria-pressed={ttlEnabled && ttlHours === preset}
-								class="btn btn-sm {ttlEnabled && ttlHours === preset
+								class="btn btn-sm {ttlEnabled &&
+								ttlHours === preset
 									? 'preset-pressed'
 									: 'preset-tonal-surface'}"
 								onclick={() => {
@@ -506,9 +554,10 @@
 					</div>
 					{#if ttlEnabled && ttlOutOfRange}
 						<p class="text-error-600-400 text-sm">
-							Choose between {MIN_TUNNEL_TTL_SECONDS / 60} minutes and
-							{MAX_TUNNEL_TTL_SECONDS / 86400} days — or choose Never for
-							a tunnel that should stay up.
+							Choose between {MIN_TUNNEL_TTL_SECONDS / 60} minutes
+							and
+							{MAX_TUNNEL_TTL_SECONDS / 86400} days — or choose Never
+							for a tunnel that should stay up.
 						</p>
 					{/if}
 					{#if ttlEnabled && expiresAtLabel}
@@ -590,9 +639,14 @@
 				{/if}
 			</section>
 
-			<section class="panel-card flex flex-col gap-3" aria-labelledby="hosts-heading">
+			<section
+				class="panel-card flex flex-col gap-3"
+				aria-labelledby="hosts-heading"
+			>
 				<div class="flex flex-col gap-1">
-					<h2 id="hosts-heading" class="text-sm font-medium">Allowed hosts</h2>
+					<h2 id="hosts-heading" class="text-sm font-medium">
+						Allowed hosts
+					</h2>
 					<FieldHelp>
 						Which origins may open a realtime connection to this
 						pub, and where each one comes from.
@@ -607,21 +661,28 @@
 					<p class="font-medium">Any host you reach this app on</p>
 					<p class="text-surface-600-400">
 						A page and its realtime connection are served from the
-						same address, so a browser tab is always allowed to connect
-						back to wherever it loaded from — your LAN IP, a custom
-						domain, a tunnel. This needs no configuration and covers
-						almost every setup; the entries below are the additions on
-						top.
+						same address, so a browser tab is always allowed to
+						connect back to wherever it loaded from — your LAN IP, a
+						custom domain, a tunnel. This needs no configuration and
+						covers almost every setup; the entries below are the
+						additions on top.
 					</p>
 				</div>
 
 				<ul class="flex flex-col gap-2">
 					{#each allowedHosts as host (host.hostname)}
 						<li
-							class="bg-surface-50-950 flex items-center justify-between gap-3 rounded-base px-3 py-2"
+							class="bg-surface-50-950 rounded-base flex items-center justify-between gap-3 px-3 py-2"
 						>
-							<code class="min-w-0 truncate text-sm" title={host.hostname}>{host.hostname}</code>
-							<span class="badge preset-tonal-surface shrink-0 text-xs">
+							<code
+								class="min-w-0 truncate text-sm"
+								title={host.hostname}
+							>
+								{host.hostname}
+							</code>
+							<span
+								class="badge preset-tonal-surface shrink-0 text-xs"
+							>
 								{SOURCE_LABELS[host.source] ?? host.source}
 							</span>
 						</li>
@@ -630,9 +691,9 @@
 
 				<FieldHelp>
 					This list is read-only. Every entry is configured somewhere
-					with more authority than this page — the process environment,
-					or the tunnel that is currently running — so editing it here
-					would only last until the next restart.
+					with more authority than this page — the process
+					environment, or the tunnel that is currently running — so
+					editing it here would only last until the next restart.
 				</FieldHelp>
 			</section>
 		{/if}

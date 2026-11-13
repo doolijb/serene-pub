@@ -93,7 +93,7 @@ describe("LensTrack — drawn from the registry", () => {
 		const onselect = vi.fn()
 		app = mount(LensTrack, {
 			target: target(),
-			props: { value: "graph", onselect }
+			props: { value: "graph", advancedControls: true, onselect }
 		})
 		await settle()
 		const buttons = [
@@ -119,7 +119,7 @@ describe("LensTrack — drawn from the registry", () => {
 		const onselect = vi.fn()
 		app = mount(LensTrack, {
 			target: target(),
-			props: { value: "cards", onselect, compact: true }
+			props: { value: "cards", advancedControls: true, onselect, compact: true }
 		})
 		await settle()
 		const trigger = document.querySelectorAll<HTMLElement>(

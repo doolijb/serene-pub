@@ -37,6 +37,7 @@ import {
 } from "@serene-pub/sdk"
 import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 import { resolveSeedLine } from "$lib/server/pipelines/prompt/seedLine"
+import { inPlay } from "$lib/shared/sessions/inPlay"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import { likenessOf } from "$lib/server/characters/likeness"
 import type { ChannelVoice } from "$lib/server/messages/channels"
@@ -70,6 +71,11 @@ export function characterDetailOf(value: unknown): CharacterDetail {
 export interface SessionCharacterRow {
 	/** The seat is switched on in the cast list. Absent reads as on. */
 	enabled?: boolean | null
+	/** 🚧 The seat's table-row bench (`is_active`) and removal; `inPlay` reads them with `enabled`. */
+	isActive?: boolean | null
+	removedAt?: unknown
+	/** 🚧 The member the seat seats; a card-less seat (a `character` with no `id`) is the speaker when this is `currentCastMemberId`. */
+	castMemberId?: number | null
 	character: F.CharacterFields & { id?: number }
 }
 
@@ -83,15 +89,25 @@ export interface SessionPersonaRow {
 	seatName?: string | null
 	/** 🚧 Whose seat this is (`session_personas.user_id`), when the read knows. */
 	seatUserId?: number | null
+	/**
+	 * 🚧 A card-less player seat's description: its seated cast member's, as read
+	 * (host-filled; "Everything in session is cast -> active card"). Read only
+	 * when there is no `persona`.
+	 */
+	memberDescription?: string | null
+	/** 🚧 In play (`inPlay`): `enabled` false or `isActive` false is benched, `removedAt` set is removed. */
+	enabled?: boolean | null
+	isActive?: boolean | null
+	removedAt?: unknown
 }
 
 /** 🚧 A seat's name in the prompt: its card's, else (card-less) its seat name. */
 const seatPersonaName = (cp: SessionPersonaRow): string =>
 	cp.persona ? F.personaName(cp.persona) : (cp.seatName ?? "")
 
-/** 🚧 A seat's description: the card's; a card-less player seat has none. */
+/** 🚧 A seat's description: the card's; a card-less player seat's is its member's as read. */
 const seatPersonaDescription = (cp: SessionPersonaRow): string =>
-	cp.persona ? F.personaDescription(cp.persona) : ""
+	cp.persona ? F.personaDescription(cp.persona) : (cp.memberDescription ?? "")
 
 export interface ResolveInput {
 	sessionCharacters?: readonly SessionCharacterRow[]
@@ -99,6 +115,8 @@ export interface ResolveInput {
 	promptConfig: F.PromptConfigFields
 	/** Null in no-perspective (narrator) mode. */
 	currentCharacterId?: number | null
+	/** 🚧 The speaker of a card-less seat (its `castMemberId`); read only when `currentCharacterId` is null. */
+	currentCastMemberId?: number | null
 	/** The session's own scenario, which wins over the character's when set. */
 	sessionScenario?: string | null
 	isGroup?: boolean
@@ -357,23 +375,35 @@ function viewerSeatName(
 export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 	const sessionCharacters = input.sessionCharacters ?? []
 	// A row with neither a card nor a seat name is nobody (a departed
-	// card's leftover seat).
+	// card's leftover seat). 🚧 A benched player seat is not in play (owner
+	// 2026-11-10): it leaves the names list, the likenesses and the persona block.
 	const sessionPersonas = (input.sessionPersonas ?? []).filter(
-		(cp) => cp.persona || cp.seatName
+		(cp) => (cp.persona || cp.seatName) && inPlay(cp)
 	)
 	const currentId = input.currentCharacterId ?? null
-	const current =
-		sessionCharacters.find((cc) => cc.character.id === currentId)
-			?.character ?? null
+	const currentMemberId =
+		currentId == null ? (input.currentCastMemberId ?? null) : null
+	// The speaker: the seat holding the card `currentId` names, else (no
+	// card named) the card-less seat of member `currentMemberId` — a member id
+	// is never compared with a card id.
+	const isSpeaker = (cc: SessionCharacterRow): boolean =>
+		currentId != null
+			? cc.character.id === currentId
+			: currentMemberId != null &&
+				cc.character.id == null &&
+				cc.castMemberId === currentMemberId
+	const current = sessionCharacters.find(isSpeaker)?.character ?? null
 
 	const detail = characterDetailOf(input.characterDetail)
 
-	// Cards: the speaker is always present and always in full.
+	// Cards: the speaker is always present and always in full; 🚧 benched and
+	// fallen characters leave the block, except the speaker (owner 2026-11-10).
 	const characters = sessionCharacters
+		.filter((cc) => isSpeaker(cc) || inPlay(cc))
 		.map((cc) =>
 			compileCharacter(
 				cc.character,
-				cc.character.id === currentId ? CHARACTER_DETAIL.FULL : detail
+				isSpeaker(cc) ? CHARACTER_DETAIL.FULL : detail
 			)
 		)
 		.filter(Boolean) as Record<string, unknown>[]
@@ -394,7 +424,7 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		detail === CHARACTER_DETAIL.SPEAKER_ONLY
 			? []
 			: sessionCharacters
-					.filter((cc) => cc.enabled !== false)
+					.filter((cc) => inPlay(cc))
 					.map((cc) => resolveCharacterName(cc.character as any))
 
 	const personaNames = sessionPersonas.map(seatPersonaName)
@@ -410,7 +440,7 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 	const speakerLikeness = speakerRow ? likenessOf(speakerRow) : null
 	const likenesses = [
 		...sessionCharacters
-			.filter((cc) => cc.enabled !== false)
+			.filter((cc) => inPlay(cc))
 			.map((cc) => ({
 				name: resolveCharacterName(cc.character as any),
 				prompt: likenessOf(cc.character as any).prompt

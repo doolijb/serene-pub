@@ -205,6 +205,36 @@ describe("a process-transport node runs through the executor", () => {
  * thing under test is the translation, and a fake is the only way to post a
  * `halt` or a `cancelled` at it deliberately.
  */
+describe("a run's frame-origin cause rides each hook call beside the user", () => {
+	const calls = async (opts: Record<string, unknown>) => {
+		const seen: any[] = []
+		const fake = {
+			callHook: async (_p: string, _h: string, _i: unknown, o: unknown) => {
+				seen.push(o)
+				return { ok: true, value: ok({ main: 1 }), logs: [], durationMs: 0, backend: "quickjs" }
+			}
+		}
+		const bindings = await pluginNodeBindings(db, fake as any, {
+			specOwner: "acme/tools",
+			seed: "seed:frame",
+			nowMs: 1_000_000,
+			user: "7",
+			...opts
+		})
+		await (bindings["acme.tools:task/lookup@1"] as any)({ q: "x" }, {})
+		return seen[0]
+	}
+
+	it("a frame-started run passes the cause; any other run passes none", async () => {
+		expect((await calls({ frameCause: { pluginId: "acme.tools" } })).frameCause).toEqual({
+			pluginId: "acme.tools"
+		})
+		const bare = await calls({})
+		expect(bare.user).toBe("7")
+		expect(bare.frameCause).toBeUndefined()
+	})
+})
+
 describe("a hook's Result is unwrapped, never read as ports", () => {
 	const call = async (value: unknown) => {
 		const fake = {

@@ -762,6 +762,20 @@ export async function installPluginPackage(
 			throw new Error(`'${pluginId}' cannot install: ${problems.join("; ")}`)
 	}
 
+	// 🚧 A preset's variable layouts (`PresetDecl.variableLayouts`): an unknown
+	// variable id or a malformed layout reference is refused here, in the SDK's
+	// sentence, like the preset's other keys. A well-formed reference to a layout
+	// that is not installed is accepted — the run skips it and the preset shows a
+	// notice (`danglingPresetLayouts`).
+	{
+		const { presetVariableLayoutFindings } = await import("@serene-pub/sdk")
+		const problems = (((pkg.manifest as any)?.presets ?? []) as any[]).flatMap(
+			(p) => presetVariableLayoutFindings(p)
+		)
+		if (problems.length)
+			throw new Error(`'${pluginId}' cannot install: ${problems.join("; ")}`)
+	}
+
 	// Swap contributions (R29): the target node and the fit are this
 	// instance's to check, before anything is written.
 	{

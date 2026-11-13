@@ -10,6 +10,12 @@ import {
 	withLikeness,
 	type CharacterLikeness
 } from "$lib/server/characters/likeness"
+import {
+	ensureCardVersion,
+	insertCard,
+	newCardVersion
+} from "$lib/server/characters/versions"
+import { profileOf } from "$lib/shared/characters/profile"
 
 /**
  * The PERSONA CARD — a wire format, not a table.
@@ -227,20 +233,25 @@ export async function createPersonaFromParsedData(
 		userId,
 		dbOrTx
 	)
-	const [persona] = await dbOrTx
-		.insert(schema.characters)
-		.values({
-			...personaFieldsFromParsedData(data),
-			...(likeness ? { extensions: withLikeness({}, likeness) as any } : {}),
-			...(uuidToStamp ? { uuid: uuidToStamp } : {}),
-			userId
-		})
-		.returning()
+	// The row and its first card version, together (the likeness becomes v1's).
+	const { card: persona } = await insertCard(dbOrTx, {
+		...personaFieldsFromParsedData(data),
+		...(likeness ? { extensions: withLikeness({}, likeness) as any } : {}),
+		...(uuidToStamp ? { uuid: uuidToStamp } : {}),
+		userId
+	})
 	const applied = await applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
 	warnings?.push(...applied.warnings)
 	return applied.persona
 }
 
+/**
+ * An import never overwrites in place (owner, card import: "overwrite in
+ * place goes"): the persona card's fields are laid over the current card
+ * version's profile and written as a NEW card version, the earlier ones
+ * untouched. `creator` and `category` are library facts, on the row.
+ * A card that carries no likeness leaves the version's alone.
+ */
 export async function overwritePersonaFromParsedData(
 	existingId: number,
 	data: any,
@@ -248,25 +259,32 @@ export async function overwritePersonaFromParsedData(
 	dbOrTx: Db = db,
 	warnings?: ImportWarning[]
 ) {
-	// The likeness merges into the row's extensions (every other key kept);
-	// a card that carries none leaves the stored one alone.
+	const row = await dbOrTx.query.characters.findFirst({
+		where: eq(schema.characters.id, existingId),
+		columns: { userId: true }
+	})
+	if (!row) throw new Error("Persona not found.")
+	const current = await ensureCardVersion(dbOrTx, existingId)
+	if (!current) throw new Error("Persona not found.")
+	const fields = personaFieldsFromParsedData(data)
 	const incoming = personaLikenessFromParsedData(data)
-	let extensions: Record<string, unknown> | undefined
-	if (incoming) {
-		const row = await dbOrTx.query.characters.findFirst({
-			where: eq(schema.characters.id, existingId),
-			columns: { extensions: true, userId: true }
-		})
-		const likeness = row
-			? await likenessOwnedBy(incoming, row.userId, dbOrTx)
-			: null
-		if (likeness) extensions = withLikeness(row?.extensions, likeness)
-	}
+	const likeness = incoming
+		? await likenessOwnedBy(incoming, row.userId, dbOrTx)
+		: null
+	await newCardVersion(dbOrTx, existingId, {
+		...profileOf(current),
+		name: fields.name,
+		description: fields.description ?? "",
+		aliases: fields.aliases ?? [],
+		summary: fields.summary ?? null,
+		...(likeness ? { likeness } : {})
+	})
 	await dbOrTx
 		.update(schema.characters)
 		.set({
-			...personaFieldsFromParsedData(data),
-			...(extensions ? { extensions: extensions as any } : {})
+			creator: fields.creator,
+			category: fields.category,
+			isPersona: true
 		})
 		.where(eq(schema.characters.id, existingId))
 	const persona = await dbOrTx.query.characters.findFirst({

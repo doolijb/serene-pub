@@ -41,11 +41,12 @@
  *
  * ## What can never be derived, stated rather than discovered
  *
- * `loadVocabulary` contributes a gazetteer name only for a binding that names a
- * **character or a persona** — an unbound "background" binding the graph minted
- * has no row to resolve *to*, so its name stays an open-tier string and it can
- * never appear here. That is a recall limit of the vocabulary, not of this file,
- * and it narrows as the recognition-vocabulary lane widens what resolves.
+ * A card-less ("background") member with a name resolves to a
+ * `cast_member:<id>` key, which this file maps straight to that member; a
+ * carded one resolves to `character:<card>` and goes through its card. Only a
+ * member with no name stays unseen — there is no string to match. A
+ * `cast_member:` key whose member is gone, or belongs to another book, is
+ * skipped silently (readers filter, nothing stores the member).
  */
 
 import { and, eq, inArray } from "drizzle-orm"
@@ -55,7 +56,10 @@ import {
 	loadVocabulary,
 	type AnnotationVocabulary
 } from "$lib/server/annotations"
-import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
+import {
+	EXTRACTOR_VERSION,
+	parseEntityKey
+} from "$lib/server/pipelines/ranking/entities"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
 
 // db is the global Db — see db/types.d.ts
@@ -178,7 +182,6 @@ export async function deriveSceneMentions(
 		.select({
 			messageId: schema.messageAnnotations.messageId,
 			entityKey: schema.messageAnnotations.entityKey,
-			characterId: schema.messageAnnotations.characterId,
 			extractorVersion: schema.messageAnnotations.extractorVersion,
 			sourceHash: schema.messageAnnotations.sourceHash,
 			gazetteerHash: schema.messageAnnotations.gazetteerHash,
@@ -197,8 +200,11 @@ export async function deriveSceneMentions(
 
 	/** Messages whose annotation is fresh — examined, whatever it found. */
 	const freshMessages = new Set<number>()
-	/** `messageId -> the character ids its text names.` */
-	const namedBy = new Map<number, { characters: Set<number> }>()
+	/** `messageId -> the cards and cast members its text names.` */
+	const namedBy = new Map<
+		number,
+		{ characters: Set<number>; members: Set<number> }
+	>()
 	for (const row of annotationRows) {
 		if (row.extractorVersion !== EXTRACTOR_VERSION) continue
 		if (row.gazetteerHash !== vocabulary.hash) continue
@@ -206,14 +212,47 @@ export async function deriveSceneMentions(
 		// Counted before anything is read off the row: the empty-extraction
 		// sentinel means "examined, named nobody", which is coverage, not a hit.
 		freshMessages.add(row.messageId)
-		if (row.characterId == null) continue
+		const ref = parseEntityKey(row.entityKey)
+		if (!ref || (ref.kind !== "character" && ref.kind !== "cast_member"))
+			continue
 		let named = namedBy.get(row.messageId)
 		if (!named) {
-			named = { characters: new Set() }
+			named = { characters: new Set(), members: new Set() }
 			namedBy.set(row.messageId, named)
 		}
-		named.characters.add(row.characterId)
+		;(ref.kind === "character" ? named.characters : named.members).add(
+			ref.id
+		)
 	}
+
+	/**
+	 * `cast_member:<id>` keys that name a member of THIS lorebook — one batched
+	 * query. A member that is gone, or a copied book's stale key for
+	 * another book's member, is simply absent here.
+	 */
+	const keyedMembers = new Set<number>()
+	for (const named of namedBy.values())
+		for (const id of named.members) keyedMembers.add(id)
+	const liveMembers = new Set<number>(
+		keyedMembers.size
+			? (
+					await db
+						.select({ id: schema.lorebookBindings.id })
+						.from(schema.lorebookBindings)
+						.where(
+							and(
+								eq(
+									schema.lorebookBindings.lorebookId,
+									lorebookId
+								),
+								inArray(schema.lorebookBindings.id, [
+									...keyedMembers
+								])
+							)
+						)
+				).map((r) => r.id)
+			: []
+	)
 
 	/**
 	 * character → the binding that IS them in this lorebook, by any card of
@@ -261,6 +300,10 @@ export async function deriveSceneMentions(
 				const bindingId = bindingByCharacter.get(characterId)
 				if (bindingId != null && !present?.has(bindingId))
 					ids.add(bindingId)
+			}
+			for (const memberId of named.members) {
+				if (liveMembers.has(memberId) && !present?.has(memberId))
+					ids.add(memberId)
 			}
 		}
 		// Ascending rather than insertion order: nothing stores this, so the

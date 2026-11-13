@@ -236,7 +236,9 @@ describe("entries:iterateNext — the next date stays on its line", () => {
 		const { iterateNextEntryHandler } = await import("./entries")
 		const user = await makeUser("iterate-lines")
 		const book = await makeBook(user.id)
-		const a = await fork(book.id, "a")
+		// Dated at Year 1: a fork owns dated history only after its fork date
+		// (rule C), so the days stepped to below are a's own.
+		const a = await fork(book.id, "a", { forkYear: 1 })
 		const own = await history(user.id, book.id, 3, { branchId: a.id })
 		const shared = await history(user.id, book.id, 1)
 		const next = (id: number, branchId?: number | null) =>

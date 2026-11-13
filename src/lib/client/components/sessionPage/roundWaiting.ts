@@ -1,3 +1,5 @@
+import { seatRefOf } from "./projections/seatIdentity"
+
 /**
  * 🚧 **Who the round waits on** (PLAN-dc-after-walk2 Q3-3, the walk's #38: a
  * guest declared, and nothing said the round waited for the host). Read off
@@ -13,10 +15,13 @@
  * Their names, in seat order; empty when the viewer waits on nobody. What
  * the turn line says: "Waiting for Maren Holt".
  */
-
 export interface RoundSeat {
 	id?: number | null
 	personaId?: number | null
+	/** The seat's cast member (s27 S1). */
+	castMemberId?: number | null
+	/** 🚧 The seat's participant ref, when the host fills it (s27 S3). */
+	ref?: string | null
 	persona?: { name?: string | null } | null
 	seatName?: string | null
 	userId?: number | null
@@ -29,19 +34,36 @@ export interface RoundRow {
 	channel?: string | null
 	userId?: number | null
 	personaId?: number | null
+	/** The speaker's seat member, stamped at write (s27 S1). */
+	castMemberId?: number | null
 	isHidden?: boolean | null
 	isNarratorResponse?: boolean | null
 	metadata?: unknown
 }
 
-/** A seat's reference: its card's (`character:<id>`), else its own (`player-seat:<id>`). */
-const refOf = (s: RoundSeat): string | null =>
-	s.personaId != null ? `character:${s.personaId}` : s.id != null ? `player-seat:${s.id}` : null
+/** A seat's reference: the host's, else ⏳ its card's (`character:<id>`), else its own (`player-seat:<id>`). */
+const refOf = (s: RoundSeat): string | null => seatRefOf(s, "player")
 
-/** A row's speaker as the turn order reads it. */
-const speakerOf = (m: RoundRow): string | null => {
+/**
+ * A row's speaker as the turn order reads it: the stamped ref, else the ref
+ * of the seat holding the row's cast member, else the seat on its card, else
+ * ⏳ its card's own form.
+ */
+const speakerOf = (m: RoundRow, seats: readonly RoundSeat[]): string | null => {
 	const said = (m.metadata as { speaker?: unknown } | null | undefined)?.speaker
 	if (typeof said === "string" && said) return said
+	const held =
+		m.castMemberId != null ? seats.find((s) => s.castMemberId === m.castMemberId) : undefined
+	const heldRef = held ? refOf(held) : null
+	if (heldRef) return heldRef
+	// An unstamped old row: the seat on its card, by that seat's own ref.
+	const onCard =
+		m.personaId != null
+			? seats.find((s) => s.personaId === m.personaId)
+			: undefined
+	const cardRef = onCard ? refOf(onCard) : null
+	if (cardRef) return cardRef
+	// ⏳ Its card's form, for a card-form payload with no seat (until S5).
 	return m.personaId != null ? `character:${m.personaId}` : null
 }
 
@@ -67,7 +89,9 @@ export function roundWaitingFor(opts: {
 		since.push(m)
 	}
 	if (!since.some((m) => m.userId === opts.viewerUserId)) return []
-	const declared = new Set(since.map(speakerOf).filter((r): r is string => !!r))
+	const declared = new Set(
+		since.map((m) => speakerOf(m, opts.seats ?? [])).filter((r): r is string => !!r)
+	)
 	const live = (opts.seats ?? [])
 		.filter((s) => !s.removedAt && (s.seatName?.trim() || s.persona?.name?.trim()))
 		.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))

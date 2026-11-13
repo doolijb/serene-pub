@@ -12,8 +12,9 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { getContext, onDestroy } from "svelte"
 	import { goto } from "$app/navigation"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { showsAdvancedControls } from "$lib/client/advancedControls"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import {
@@ -75,29 +76,18 @@
 	// per key and releases only this tab's. The hazard that replaces is a bare
 	// `socket.off(event)`, which removes EVERY listener for that event across
 	// the app, not just this tab's.
-	function handleUserSettingsUpdateShowAllCharacterFields(
-		message: SocketEventMap["userSettings:updateShowAllCharacterFields"]["response"]
-	) {
-		if (message.success) {
-			toaster.success({
-				title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update character fields setting"
-			})
-		}
-	}
-
 	function handleUserSettingsUpdateEasyCharacterCreation(
 		message: SocketEventMap["userSettings:updateEasyCharacterCreation"]["response"]
 	) {
 		if (message.success) {
-			toaster.success({
+			notify.success({
+				source: "socket:userSettings:updateEasyCharacterCreation",
+				silent: true,
 				title: `Easy character creation ${message.enabled ? "enabled" : "disabled"}`
 			})
 		} else {
-			toaster.error({
+			notify.error({
+				source: "socket:userSettings:updateEasyCharacterCreation",
 				title: "Failed to update easy character creation setting"
 			})
 		}
@@ -109,7 +99,9 @@
 		if (message.success) {
 			// Names the language that will actually be used, which for the
 			// inherit option is the server's, not "default".
-			toaster.success({
+			notify.success({
+				source: "socket:userSettings:updateLanguage",
+				silent: true,
 				title: `Language set to ${languageDefinition(message.effectiveLanguage).name}`
 			})
 		}
@@ -123,14 +115,21 @@
 		if (!timeZoneRequested) return
 		timeZoneRequested = false
 		if (message.success)
-			toaster.success({ title: `${t("Time zone set to")} ${message.timeZone}` })
+			notify.success({
+				source: "socket:users:current:setTimeZone",
+				silent: true,
+				title: `${t("Time zone set to")} ${message.timeZone}`
+			})
 	}
 
 	function handleUsersCurrentSetTimeZoneError(
 		message: SocketEventMap["users:current:setTimeZone:error"]["response"]
 	) {
 		timeZoneRequested = false
-		toaster.error({ title: message.error || t("Failed to set time zone") })
+		notify.error({
+			source: "socket:users:current:setTimeZone:error",
+			title: message.error || t("Failed to set time zone")
+		})
 	}
 
 	function handleUsersCurrentUpdateDisplayName(
@@ -138,7 +137,8 @@
 	) {
 		isUpdatingDisplayName = false
 		if (message.success) {
-			toaster.success({
+			notify.success({
+				source: "socket:users:current:updateDisplayName",
 				title: message.displayName
 					? "Display name updated"
 					: "Display name cleared",
@@ -148,7 +148,10 @@
 			})
 			displayNameError = ""
 		} else {
-			toaster.error({ title: "Failed to update display name" })
+			notify.error({
+				source: "socket:users:current:updateDisplayName",
+				title: "Failed to update display name"
+			})
 		}
 	}
 
@@ -168,7 +171,8 @@
 				avatarMediaId: message.avatarMediaId,
 				avatarMedia: message.avatarMedia
 			}
-		toaster.success({
+		notify.success({
+			source: "socket:users:current:updateAvatar",
 			title: message.avatarMediaId ? "Avatar updated" : "Avatar removed"
 		})
 	}
@@ -179,7 +183,8 @@
 		if (!isUpdatingAvatar) return
 		isUpdatingAvatar = false
 		avatarPicker?.clear()
-		toaster.error({
+		notify.error({
+			source: "socket:users:current:updateAvatar:error",
 			title: "Avatar error",
 			description: message.error || "The avatar could not be saved."
 		})
@@ -190,14 +195,18 @@
 	) {
 		isChangingPassword = false
 		if (message.success) {
-			toaster.success({
+			notify.success({
+				source: "socket:users:current:changePassphrase",
 				title: "Passphrase changed successfully",
 				description:
 					message.message || "Your passphrase has been updated"
 			})
 			closeChangePasswordModal()
 		} else {
-			toaster.error({ title: "Failed to change passphrase" })
+			notify.error({
+				source: "socket:users:current:changePassphrase",
+				title: "Failed to change passphrase"
+			})
 		}
 	}
 
@@ -205,12 +214,16 @@
 		message: SocketEventMap["users:current:logout"]["response"]
 	) {
 		if (message.success) {
-			toaster.success({
+			notify.success({
+				source: "socket:users:current:logout",
 				title: "Logged out successfully"
 			})
 		} else {
 			isLoggingOut = false
-			toaster.error({ title: "Logout failed" })
+			notify.error({
+				source: "socket:users:current:logout",
+				title: "Logout failed"
+			})
 		}
 	}
 
@@ -219,7 +232,8 @@
 	) {
 		isUpdatingDisplayName = false
 		displayNameError = message.error || "Failed to update display name"
-		toaster.error({
+		notify.error({
+			source: "socket:users:current:updateDisplayName:error",
 			title: "Display name error",
 			description: message.error || "Failed to update display name"
 		})
@@ -230,7 +244,8 @@
 	) {
 		isChangingPassword = false
 		passwordError = message.error || "Failed to change passphrase"
-		toaster.error({
+		notify.error({
+			source: "socket:users:current:changePassphrase:error",
 			title: "Passphrase error",
 			description: message.error || "Failed to change passphrase"
 		})
@@ -240,7 +255,8 @@
 		message: SocketEventMap["users:current:logout:error"]["response"]
 	) {
 		isLoggingOut = false
-		toaster.error({
+		notify.error({
+			source: "socket:users:current:logout:error",
 			title: "Logout error",
 			description: message.error || "Failed to logout"
 		})
@@ -255,10 +271,6 @@
 	 * stays open, and because the two `userSettings:` cascades that follow a
 	 * write are what keep the switches honest.
 	 */
-	useInterest<"userSettings:updateShowAllCharacterFields">(
-		"userSettings:updateShowAllCharacterFields",
-		handleUserSettingsUpdateShowAllCharacterFields
-	)
 	useInterest<"userSettings:updateEasyCharacterCreation">(
 		"userSettings:updateEasyCharacterCreation",
 		handleUserSettingsUpdateEasyCharacterCreation
@@ -367,9 +379,11 @@
 	}
 
 	// ── Library write mode (M2c) ─────────────────────────────────────────────
-	// Stored as NULL until chosen; NULL reads Review, which the picker shows.
+	// Stored as NULL until chosen; NULL reads Full, which the picker shows.
 	function onLibraryWriteModeChange(mode: LoreWriteMode | null) {
-		socket.emit("userSettings:updateLoreWriteMode", { libraryWriteMode: mode })
+		socket.emit("userSettings:updateLoreWriteMode", {
+			libraryWriteMode: mode
+		})
 	}
 
 	// Profile modal state
@@ -424,8 +438,8 @@
 		hasUnsavedChanges = displayNameChanged
 	})
 
-	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
-		socket?.emit("userSettings:updateShowAllCharacterFields", {
+	function onShowAdvancedControlsClick(event: { checked: boolean }) {
+		socket?.emit("userSettings:updateShowAdvancedControls", {
 			enabled: event.checked
 		})
 	}
@@ -546,14 +560,14 @@
 				// Redirect to home page
 				window.location.href = "/"
 			} else {
-				toaster.error({
+				notify.error({
 					title: "Logout failed",
 					description: "Please try again"
 				})
 			}
 		} catch (error) {
 			console.error("Logout error:", error)
-			toaster.error({
+			notify.error({
 				title: "Logout failed",
 				description: "Please try again"
 			})
@@ -567,6 +581,27 @@
      setting's name and its control's label, one sentence of help, the
      control beside the words once the view is wide enough. -->
 <div class="flex max-w-[760px] flex-col gap-3">
+	<SettingCard
+		title="Show advanced controls"
+		titleId="user-show-advanced-controls-heading"
+		help="More choices on sessions, lorebooks and characters. Off keeps the everyday ones."
+		layout="switch"
+	>
+		<Switch
+			name="show-advanced-controls"
+			checked={showsAdvancedControls(userSettingsCtx.settings)}
+			onCheckedChange={onShowAdvancedControlsClick}
+		>
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+			>
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+			<Switch.Label class="sr-only">Show advanced controls</Switch.Label>
+		</Switch>
+	</SettingCard>
+
 	<SettingCard
 		title={t("Language")}
 		titleId="user-language-heading"
@@ -597,7 +632,9 @@
 	<SettingCard
 		title={t("Time zone")}
 		titleId="user-time-zone-heading"
-		help={t("Real-world dates and times are shown in it; story time keeps its own.")}
+		help={t(
+			"Real-world dates and times are shown in it; story time keeps its own."
+		)}
 	>
 		<TimeZonePicker
 			label={t("Time zone")}
@@ -607,7 +644,10 @@
 			onValueChange={onTimeZoneChange}
 		/>
 		<p id="user-time-zone-note" class="text-surface-600-400 text-xs">
-			{t("Now")}: {realDateTime(new Date(), { dateStyle: "medium", timeStyle: "short" })}
+			{t("Now")}: {realDateTime(new Date(), {
+				dateStyle: "medium",
+				timeStyle: "short"
+			})}
 			({displayTimeZone()})
 		</p>
 	</SettingCard>
@@ -642,7 +682,9 @@
 		<LoreWriteModePicker
 			legend={LIBRARY_WRITE_MODE_TITLE}
 			name="user-library-write-mode"
-			value={effectiveLibraryWriteMode(userSettingsCtx.settings?.libraryWriteMode)}
+			value={effectiveLibraryWriteMode(
+				userSettingsCtx.settings?.libraryWriteMode
+			)}
 			wording={LIBRARY_WRITE_MODE_CHOICES}
 			describedBy="user-library-write-mode-note"
 			onValueChange={onLibraryWriteModeChange}
@@ -654,10 +696,13 @@
 	<SettingCard
 		title="Spoken lines"
 		titleId="user-spoken-playback-heading"
-		help="When a session reads aloud, how its spoken lines play for you."
+		help="What you allow by default when a session reads aloud: how its spoken lines play for you. Whether a session reads aloud depends on its genre and preset."
 		layout="stack"
 	>
-		<fieldset class="flex flex-col gap-1" aria-labelledby="user-spoken-playback-heading">
+		<fieldset
+			class="flex flex-col gap-1"
+			aria-labelledby="user-spoken-playback-heading"
+		>
 			{#each SPOKEN_PLAYBACK_MODES as mode (mode)}
 				<label
 					class="hover:preset-tonal-surface flex min-h-11 cursor-pointer items-start gap-3 rounded-md px-2 py-2"
@@ -667,12 +712,17 @@
 						class="radio mt-0.5 shrink-0"
 						name="user-spoken-playback"
 						value={mode}
-						checked={(userSettingsCtx.settings?.spokenPlayback ?? "auto") === mode}
+						checked={(userSettingsCtx.settings?.spokenPlayback ??
+							"auto") === mode}
 						onchange={() => onSpokenPlaybackChange(mode)}
 					/>
 					<span class="flex flex-col">
-						<span class="text-sm">{SPOKEN_PLAYBACK_CHOICES[mode].label}</span>
-						<span class="text-xs text-muted">{SPOKEN_PLAYBACK_CHOICES[mode].description}</span>
+						<span class="text-sm">
+							{SPOKEN_PLAYBACK_CHOICES[mode].label}
+						</span>
+						<span class="text-muted text-xs">
+							{SPOKEN_PLAYBACK_CHOICES[mode].description}
+						</span>
 					</span>
 				</label>
 			{/each}
@@ -682,27 +732,6 @@
 	<!-- 🚧 Background routines (R11; lane 7): this person's own caps on
 	     their sessions' real-time routines, under the pub's. -->
 	<RoutineCapsCard scope="user" />
-
-	<SettingCard
-		title="Show all character fields"
-		titleId="user-show-all-fields-heading"
-		help="Every field on the character form, not just the common ones."
-		layout="switch"
-	>
-		<Switch
-			name="show-all-character-fields"
-			checked={userSettingsCtx.settings?.showAllCharacterFields ?? false}
-			onCheckedChange={onShowAllCharacterFieldsClick}
-		>
-			<Switch.Control
-				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-			>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-			<Switch.Label class="sr-only">Show all character fields</Switch.Label>
-		</Switch>
-	</SettingCard>
 
 	<SettingCard
 		title="Easy character creation"
@@ -748,9 +777,7 @@
 				<Icons.X size={16} aria-hidden="true" />
 				Exit Document View
 			</button>
-			<FieldHelp>
-				This browser opens Document View by default.
-			</FieldHelp>
+			<FieldHelp>This browser opens Document View by default.</FieldHelp>
 		{/if}
 	</SettingCard>
 
@@ -849,9 +876,12 @@
 						{/if}
 					</button>
 				</div>
-				<p id="display-name-help" class="text-surface-600-400 text-chip">
-					What the app and the characters call you; leave it empty to go
-					by your username.
+				<p
+					id="display-name-help"
+					class="text-surface-600-400 text-chip"
+				>
+					What the app and the characters call you; leave it empty to
+					go by your username.
 				</p>
 				{#if displayNameError}
 					<InlineError>{displayNameError}</InlineError>

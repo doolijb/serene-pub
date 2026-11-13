@@ -18,7 +18,7 @@
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	// The incremental UI-translation seam (R5) — see `src/routes/+page.svelte`.
 	// Wrapped here for the Portrayed-by line's words; a member's name is
 	// never passed through it.
@@ -168,9 +168,9 @@
 			await navigator.clipboard.writeText(
 				JSON.stringify(selected?.raw?.output ?? null, null, 2)
 			)
-			toaster.success({ title: "Copied to the clipboard" })
+			notify.success({ title: "Copied to the clipboard" })
 		} catch {
-			toaster.error({
+			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})
 		}
@@ -180,9 +180,9 @@
 	async function copy(text: string) {
 		try {
 			await navigator.clipboard.writeText(text)
-			toaster.success({ title: "Copied to the clipboard" })
+			notify.success({ title: "Copied to the clipboard" })
 		} catch {
-			toaster.error({
+			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})
 		}
@@ -231,7 +231,11 @@
 			| { parentRunId?: string; rootRunId?: string; depth?: number }
 			| undefined
 		return r?.parentRunId
-			? { parent: r.parentRunId, root: r.rootRunId ?? r.parentRunId, depth: r.depth ?? 1 }
+			? {
+					parent: r.parentRunId,
+					root: r.rootRunId ?? r.parentRunId,
+					depth: r.depth ?? 1
+				}
 			: null
 	})
 	/** Who portrayed whom this run — pinned at run start (R-21 (4)). */
@@ -300,8 +304,13 @@
 					<span data-run-started-by>started by {triggerSource}</span>
 				{/if}
 				{#if routineLine && routineLine.kind !== "ran"}
-					<span class="chip preset-tonal-surface rounded-full px-2 py-0.5" data-run-routine-line>
-						{routineLine.kind === "skipped" ? "routine skipped" : "routine paused"}
+					<span
+						class="chip preset-tonal-surface rounded-full px-2 py-0.5"
+						data-run-routine-line
+					>
+						{routineLine.kind === "skipped"
+							? "routine skipped"
+							: "routine paused"}
 					</span>
 				{/if}
 				{#if run.isPreview}
@@ -345,7 +354,9 @@
 				>
 					<span>{t("Portrayed by")}</span>
 					{#each portrayals as chip (chip.ref)}
-						<span class="chip preset-tonal-surface rounded-full px-2 py-0.5">
+						<span
+							class="chip preset-tonal-surface rounded-full px-2 py-0.5"
+						>
 							{chip.name} · {chip.by === "person" && !chip.you
 								? chip.portrayedBy
 								: t(chip.portrayedBy)}
@@ -359,7 +370,9 @@
 					data-run-timeouts
 				>
 					{timeoutNote}
-					{t("Open a step to see what it was doing. If this keeps happening, see Troubleshooting.")}
+					{t(
+						"Open a step to see what it was doing. If this keeps happening, see Troubleshooting."
+					)}
 				</p>
 			{/if}
 			{#if runNotes.length}
@@ -415,8 +428,9 @@
 										     stays ok; this says so in words, not
 										     only in the warning tone. -->
 										<span
-											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-meta"
-											data-run-refused={row.refused.length}
+											class="chip preset-tonal-warning text-meta shrink-0 rounded-full px-1.5 py-0"
+											data-run-refused={row.refused
+												.length}
 											title="This step finished but turned some of its input down. Open it to read why."
 										>
 											{row.refused.length} refused
@@ -424,7 +438,7 @@
 									{/if}
 									{#if row.timedOut}
 										<span
-											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-meta"
+											class="chip preset-tonal-warning text-meta shrink-0 rounded-full px-1.5 py-0"
 											data-run-timed-out
 											title="This step ran out of time. Open it for the limit it had."
 										>
@@ -433,17 +447,20 @@
 									{/if}
 									{#if row.scripts.length}
 										<span
-											class="chip preset-tonal-surface shrink-0 rounded-full px-1.5 py-0 text-meta"
-											data-run-script-count={row.scripts.length}
+											class="chip preset-tonal-surface text-meta shrink-0 rounded-full px-1.5 py-0"
+											data-run-script-count={row.scripts
+												.length}
 											title="Scripts ran at this step. Open it to see which."
 										>
 											{row.scripts.length}
-											{row.scripts.length === 1 ? "script" : "scripts"}
+											{row.scripts.length === 1
+												? "script"
+												: "scripts"}
 										</span>
 									{/if}
 								</span>
 								<span
-									class="text-surface-600-400 flex items-center gap-2 pl-7 text-meta"
+									class="text-surface-600-400 text-meta flex items-center gap-2 pl-7"
 								>
 									<span class="min-w-0 truncate">
 										{row.definitionId}
@@ -497,7 +514,9 @@
 									data-run-swap={selected.swap.by}
 								>
 									swapped in by: {selected.swap.by} · replaces
-									<span class="font-mono">{selected.swap.pin}</span>
+									<span class="font-mono">
+										{selected.swap.pin}
+									</span>
 								</span>
 							{:else if selected.pinned}
 								<span class="text-surface-600-400 text-xs">
@@ -558,7 +577,9 @@
 									{#each selected.layers as l (`${l.slot}\u0000${l.path}`)}
 										<li class="flex flex-wrap gap-x-2">
 											<span class="font-mono">
-												{l.slot}{l.path ? `.${l.path}` : ""}
+												{l.slot}{l.path
+													? `.${l.path}`
+													: ""}
 											</span>
 											<span class="text-surface-600-400">
 												from: {l.label}
@@ -578,36 +599,50 @@
 								<ul class="mt-1 space-y-0.5 pl-4">
 									{#each selected.scripts as script, i (i)}
 										<li class="flex flex-wrap gap-x-2">
-											<span class="font-medium">{script.name}</span>
+											<span class="font-medium">
+												{script.name}
+											</span>
 											<span class="text-surface-600-400">
 												{script.kindLabel}
 											</span>
-											<span class="font-mono">{script.at}</span>
+											<span class="font-mono">
+												{script.at}
+											</span>
 											<span class="text-surface-600-400">
 												from: {script.via}
 											</span>
 											<span
 												class={badgeClass[
-													script.result === "err" ? "error" : script.result
+													script.result === "err"
+														? "error"
+														: script.result
 												]}
 											>
 												{script.result}
 											</span>
 											{#if script.reason}
-												<span class="text-surface-600-400">
+												<span
+													class="text-surface-600-400"
+												>
 													{script.reason}
 												</span>
 											{/if}
 											{#if script.won}
-												<span>stopped the text here</span>
+												<span>
+													stopped the text here
+												</span>
 											{/if}
 											{#if script.changed}
-												<span class="text-surface-600-400">
+												<span
+													class="text-surface-600-400"
+												>
 													changed the value
 												</span>
 											{/if}
 											{#if script.durationMs != null}
-												<span class="text-surface-600-400">
+												<span
+													class="text-surface-600-400"
+												>
 													{ms(script.durationMs)}
 												</span>
 											{/if}
@@ -680,7 +715,9 @@
 									{#if authorsNote}
 										<!-- Muted either way: a note skipped on its interval
 										     is the setting working, not a warning. -->
-										<p class="text-surface-600-400 mb-2 text-xs">
+										<p
+											class="text-surface-600-400 mb-2 text-xs"
+										>
 											{authorsNote.line}
 										</p>
 									{/if}
@@ -697,19 +734,41 @@
 										</p>
 									{/if}
 									{#if layoutLines.length}
-										<details class="mb-2 text-xs" data-run-layouts>
-											<summary class="text-surface-600-400 cursor-pointer">
+										<details
+											class="mb-2 text-xs"
+											data-run-layouts
+										>
+											<summary
+												class="text-surface-600-400 cursor-pointer"
+											>
 												Variable layouts ({layoutLines.length})
 											</summary>
 											<ul class="mt-1 space-y-0.5 pl-4">
-												{#each layoutLines as l (l.key)}
-													<li class="flex flex-wrap gap-x-2">
-														<span class="font-mono">{l.key}</span>
-														<span class={l.floor ? "text-surface-600-400" : ""}>
+												{#each layoutLines as l, i (i)}
+													<li
+														class="flex flex-wrap gap-x-2"
+													>
+														<span class="font-mono">
+															{l.key}
+														</span>
+														<span
+															class={l.floor
+																? "text-surface-600-400"
+																: ""}
+														>
 															{l.line}
 														</span>
+														{#if l.why}
+															<span
+																class="text-surface-600-400"
+															>
+																· {l.why}
+															</span>
+														{/if}
 														{#if l.variableId}
-															<span class="text-surface-600-400 font-mono">
+															<span
+																class="text-surface-600-400 font-mono"
+															>
 																{l.variableId}
 															</span>
 														{/if}
@@ -806,7 +865,7 @@
 														{message.role}
 													</p>
 													<pre
-														class="max-h-72 overflow-auto p-2 text-meta whitespace-pre-wrap">{message.content}</pre>
+														class="text-meta max-h-72 overflow-auto p-2 whitespace-pre-wrap">{message.content}</pre>
 												</div>
 											{/each}
 										</div>
@@ -837,19 +896,19 @@
 												class="border-surface-200-800 rounded-lg border"
 											>
 												<p
-													class="text-surface-600-400 border-surface-200-800 border-b px-2 py-1 font-mono text-meta"
+													class="text-surface-600-400 border-surface-200-800 text-meta border-b px-2 py-1 font-mono"
 												>
 													{text.key}
 												</p>
 												{#if text.note}
 													<p
-														class="text-surface-600-400 border-surface-200-800 border-b px-2 py-1 text-meta"
+														class="text-surface-600-400 border-surface-200-800 text-meta border-b px-2 py-1"
 													>
 														{text.note}
 													</p>
 												{/if}
 												<pre
-													class="max-h-72 overflow-auto p-2 text-meta whitespace-pre-wrap">{text.value}</pre>
+													class="text-meta max-h-72 overflow-auto p-2 whitespace-pre-wrap">{text.value}</pre>
 											</div>
 										{/each}
 										{#if output.rest != null}
@@ -860,7 +919,7 @@
 													The rest, as JSON
 												</summary>
 												<pre
-													class="bg-surface-200-800 mt-2 max-h-72 overflow-auto rounded p-2 font-mono text-meta">{JSON.stringify(
+													class="bg-surface-200-800 text-meta mt-2 max-h-72 overflow-auto rounded p-2 font-mono">{JSON.stringify(
 														output.rest,
 														null,
 														2
@@ -921,7 +980,7 @@
 											class="border-surface-200-800 mb-3 rounded-lg border"
 										>
 											<div
-												class="border-surface-200-800 text-surface-600-400 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b px-2 py-1 text-meta"
+												class="border-surface-200-800 text-surface-600-400 text-meta flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b px-2 py-1"
 											>
 												<span
 													class="font-mono uppercase"
@@ -963,7 +1022,7 @@
 														Request
 													</p>
 													<pre
-														class="bg-surface-200-800 max-h-72 overflow-auto rounded p-2 font-mono text-meta">{call.body}</pre>
+														class="bg-surface-200-800 text-meta max-h-72 overflow-auto rounded p-2 font-mono">{call.body}</pre>
 													<div>
 														<button
 															type="button"
@@ -989,7 +1048,7 @@
 													</p>
 													{#if call.raw}
 														<pre
-															class="bg-surface-200-800 max-h-72 overflow-auto rounded p-2 font-mono text-meta whitespace-pre-wrap">{call.raw}</pre>
+															class="bg-surface-200-800 text-meta max-h-72 overflow-auto rounded p-2 font-mono whitespace-pre-wrap">{call.raw}</pre>
 													{:else}
 														<p
 															class="text-surface-600-400 text-xs"

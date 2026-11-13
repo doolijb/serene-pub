@@ -19,7 +19,7 @@ type Result = WidgetRequests["set-tie-shown"]["result"]
 /** The page's write: sends `state:showTieSide` and settles on its reply. */
 export type TieShownWrite = (ask: {
 	sessionId: number
-	owner: { kind: "session_cast" | "player_seat"; id: number }
+	owner: { kind: "session_cast" | "seated_member" | "player_seat"; id: number }
 	entryType: string
 	towards: string
 	shown: boolean
@@ -38,7 +38,7 @@ export async function answerSetTieShown(
 		)
 	const p = (params ?? {}) as { owner?: { kind?: unknown; id?: unknown }; entryType?: unknown; towards?: unknown; shown?: unknown }
 	const kind = p.owner?.kind
-	if ((kind !== "session_cast" && kind !== "player_seat") || typeof p.owner?.id !== "number" || !Number.isInteger(p.owner.id))
+	if ((kind !== "session_cast" && kind !== "seated_member" && kind !== "player_seat") || typeof p.owner?.id !== "number" || !Number.isInteger(p.owner.id))
 		throw new Error("set-tie-shown needs whose side: a cast member or a player's seat")
 	if (typeof p.entryType !== "string" || !p.entryType || typeof p.towards !== "string" || !p.towards)
 		throw new Error("set-tie-shown needs the tie: its kind and whom it is towards")

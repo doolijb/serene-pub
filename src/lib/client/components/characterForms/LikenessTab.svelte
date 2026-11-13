@@ -31,6 +31,8 @@
 	interface Props {
 		/** Absent while the character is being created. */
 		characterId?: number
+		/** 🚧 Whose pictures these are when not the card's own: a cast member (`castMemberId`) reads its own gallery and sprites, and has no *Describe from image*; wins over `characterId`. */
+		owner?: { characterId: number } | { castMemberId: number }
 		/** Whether the tab is on show — the lists are read only then. */
 		active: boolean
 		/** The avatar as the form shows it, for the *Avatar* choice. */
@@ -40,12 +42,24 @@
 
 	let {
 		characterId,
+		owner,
 		active,
 		avatarUrl,
 		likeness = $bindable()
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+
+	/** The member whose own pictures are read, or null for a card's. */
+	let memberId = $derived(
+		owner && "castMemberId" in owner ? owner.castMemberId : null
+	)
+	/** The card whose pictures are read (the `characterId` prop unless `owner` names one). */
+	let cardId = $derived(
+		owner && "characterId" in owner ? owner.characterId : characterId
+	)
+	/** Whether there is anything saved to read pictures from yet. */
+	let hasOwner = $derived(memberId !== null || cardId !== undefined)
 
 	type Source = "avatar" | "gallery" | "sprite"
 	interface Tile {
@@ -89,7 +103,9 @@
 	}
 
 	function handleGallery(msg: Sockets.Characters.ListGallery.Response) {
-		if (msg.characterId !== characterId) return
+		if (memberId !== null) {
+			if (msg.castMemberId !== memberId) return
+		} else if (msg.characterId !== cardId) return
 		galleryLoaded = true
 		galleryTiles = (msg.images ?? []).map((m) => ({
 			id: m.id,
@@ -99,7 +115,9 @@
 	}
 
 	function handleSprites(msg: Sockets.Characters.ListSprites.Response) {
-		if (msg.characterId !== characterId) return
+		if (memberId !== null) {
+			if (msg.castMemberId !== memberId) return
+		} else if (msg.characterId !== cardId) return
 		spritesLoaded = true
 		spriteTiles = spriteTilesOf(msg.sets ?? [])
 	}
@@ -126,20 +144,24 @@
 	}
 
 	$effect(() => {
-		const id = characterId
-		if (!active || id === undefined) return
+		const member = memberId
+		const id = cardId
+		if (!active || (member === null && id === undefined)) return
+		const scope = member !== null ? `member:${member}` : id!
+		const ask =
+			member !== null ? { castMemberId: member } : { characterId: id! }
 		const releases = [
 			declareInterest<any>(
-				interestKey("characters:listGallery", id),
+				interestKey("characters:listGallery", scope),
 				handleGallery
 			),
 			declareInterest<any>(
-				interestKey("characters:listSprites", id),
+				interestKey("characters:listSprites", scope),
 				handleSprites
 			)
 		]
-		socket.emit("characters:listGallery", { characterId: id })
-		socket.emit("characters:listSprites", { characterId: id })
+		socket.emit("characters:listGallery", ask)
+		socket.emit("characters:listSprites", ask)
 		return () => {
 			for (const release of releases) release()
 		}
@@ -163,7 +185,7 @@
 	let describeError = $state<string | null>(null)
 
 	function handleDescribe(msg: Sockets.Characters.DescribeLikeness.Response) {
-		if (msg.characterId !== characterId) return
+		if (msg.characterId !== cardId) return
 		describeAvailable = !!msg.available
 		// Only the press made here fills the field, not another tab's.
 		if (typeof msg.prompt === "string" && describing) {
@@ -174,14 +196,14 @@
 	}
 
 	function handleDescribeError(msg: Sockets.ErrorResponse & { characterId?: number }) {
-		if (msg.characterId !== characterId || !describing) return
+		if (msg.characterId !== cardId || !describing) return
 		describing = false
 		describeError = msg.error ?? "Could not describe the picture."
 	}
 
 	$effect(() => {
-		const id = characterId
-		if (!active || id === undefined) return
+		const id = cardId
+		if (!active || id === undefined || memberId !== null) return
 		const releases = [
 			declareInterest<any>(
 				interestKey("characters:describeLikeness", id),
@@ -196,11 +218,11 @@
 	})
 
 	function describeFromImage() {
-		if (characterId === undefined || describing) return
+		if (cardId === undefined || memberId !== null || describing) return
 		describing = true
 		describeError = null
 		socket.emit("characters:describeLikeness", {
-			characterId,
+			characterId: cardId,
 			// The picture the form shows: a pick, or the avatar (`null`).
 			imageMediaId: likeness.imageMediaId ?? null
 		})
@@ -252,7 +274,7 @@
 					{#each ["avatar", "gallery", "sprite"] as const as option (option)}
 						<SegmentedControl.Item
 							value={option}
-							disabled={option !== "avatar" && characterId === undefined}
+							disabled={option !== "avatar" && !hasOwner}
 						>
 							<SegmentedControl.ItemText>
 								{SOURCE_LABELS[option]}
@@ -264,7 +286,7 @@
 			</SegmentedControl>
 			{#if source === "avatar"}
 				<p class="text-surface-600-400 text-xs">
-					{#if characterId === undefined}
+					{#if !hasOwner}
 						Uses the avatar. Save the character to pick from its
 						gallery or sprites instead.
 					{:else}
@@ -335,7 +357,7 @@
 				A short list of what can be seen, separated by commas. This line
 				does most of the work in every picture of them.
 			</p>
-			{#if describeAvailable && characterId !== undefined}
+			{#if describeAvailable && cardId !== undefined && memberId === null}
 				<div class="mt-2 flex flex-wrap items-center gap-2">
 					<button
 						type="button"

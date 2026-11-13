@@ -74,6 +74,7 @@ const seam = vi.hoisted(() => {
 				return self
 			},
 			innerJoin: () => self,
+			leftJoin: () => self,
 			where: () => self,
 			limit: () => self,
 			orderBy: () => self,
@@ -445,7 +446,11 @@ describe("lorebooks:createBinding — the cast cascade", () => {
 		expect(events(h)).toEqual(["lorebooks:createBinding"])
 		// The ownership read still ran; the three-way join behind the cast
 		// did not.
-		expect(count("select(lorebooks)")).toBe(1)
+		// Two reads of the book, not one, since M2e: the ownership check and the
+		// primer-row read-only check (`primerRowEditProblem`); still no cast read.
+		// A third since cv-member2: the reply's own row is read at the book's
+		// present (`bookPresentOf` reads the story clock) — one member, not the cast.
+		expect(count("select(lorebooks)")).toBe(3)
 		expect(count("lorebooks.findFirst(bindings)")).toBe(0)
 	})
 

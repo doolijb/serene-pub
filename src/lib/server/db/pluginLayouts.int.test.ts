@@ -650,4 +650,34 @@ describe("writing only what changed", () => {
 		},
 		60_000
 	)
+	test(
+		"a layout in panels version 1 is projected verbatim and reported with the panels-v1 warning, not refused",
+		async () => {
+			const pluginId = "acme/old-shape"
+			const preset = {
+				panels: {
+					version: 1,
+					left: [],
+					middle: {
+						above: [],
+						primary: { key: "p1", tabs: ["messages"] },
+						below: []
+					},
+					right: [{ key: "p2", tabs: ["stats"], pinned: false }]
+				},
+				widgetSettings: { messages: { composer: "quill", nextUp: "list" } }
+			}
+			await installPlugin(pluginId, [
+				{ genreId: "core:genre/story", slug: "old", name: "Old", preset }
+			])
+			const report = await sync()
+			const key = `layout:core:genre/story:${pluginId}/old`
+			expect(report.projected).toContain(key)
+			expect((await rowByKey(key)).layout).toEqual(preset)
+			const mine = report.warnings.filter((w) => w.key === key)
+			expect(mine.length).toBeGreaterThan(0)
+			expect(mine[0].warning.startsWith("panels-v1:")).toBe(true)
+		},
+		60_000
+	)
 })

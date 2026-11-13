@@ -11,6 +11,8 @@
  *    (A5), for a genre.
  *  · `pipelines:registeredIn` — where a pipeline runs: the genres whose
  *    defaults register it, the presets that add, drop or change it.
+ *  · `pipelines:presetVariableLayouts` / `pipelines:setPresetVariableLayout` —
+ *    a preset's variable layouts, read and written (W6, variable layouts).
  *
  * Administrators only; anyone else is answered with the refusal on the
  * reply (no `:error` event, so no toast: the editor says it where it asked).
@@ -115,6 +117,73 @@ export const pipelinesRegisteredInHandler: Handler<
 	}
 }
 
+/** The refusals a preset's variable layouts answer in words. */
+async function variableLayoutsError(err: unknown): Promise<string> {
+	const { PresetVariableLayoutRefusal } = await import("$lib/server/sessions/presetEditor")
+	if (err instanceof PresetVariableLayoutRefusal) return err.message
+	console.warn("[presetEditor] a preset's variable layouts could not be changed:", err)
+	return "That change could not be saved. The server log has the details."
+}
+
+export const pipelinesPresetVariableLayoutsHandler: Handler<
+	Sockets.Pipelines.PresetVariableLayouts.Params,
+	Sockets.Pipelines.PresetVariableLayouts.Response
+> = {
+	event: "pipelines:presetVariableLayouts",
+	handler: async (socket, params, emitToUser) => {
+		const presetId = Number(params?.presetId)
+		if (!socket.user?.isAdmin) {
+			const res = { error: ADMINS_ONLY }
+			emitToUser("pipelines:presetVariableLayouts:error", res)
+			return res
+		}
+		try {
+			const { presetVariableLayoutsView } = await import("$lib/server/sessions/presetEditor")
+			const view = await presetVariableLayoutsView(db as unknown as Db, presetId)
+			if (!view) throw new (await import("$lib/server/sessions/presetEditor")).PresetVariableLayoutRefusal("There is no such preset.")
+			emitToUser("pipelines:presetVariableLayouts", view)
+			return view
+		} catch (err) {
+			const res = { error: await variableLayoutsError(err) }
+			emitToUser("pipelines:presetVariableLayouts:error", res)
+			return res
+		}
+	}
+}
+
+export const pipelinesSetPresetVariableLayoutHandler: Handler<
+	Sockets.Pipelines.SetPresetVariableLayout.Params,
+	Sockets.Pipelines.SetPresetVariableLayout.Response
+> = {
+	event: "pipelines:setPresetVariableLayout",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user?.isAdmin) {
+			const res = { error: ADMINS_ONLY }
+			emitToUser("pipelines:setPresetVariableLayout:error", res)
+			return res
+		}
+		try {
+			const presetId = Number(params?.presetId)
+			const { setPresetVariableLayout, presetVariableLayoutsView } = await import("$lib/server/sessions/presetEditor")
+			await setPresetVariableLayout(db as unknown as Db, {
+				presetId,
+				variableId: String(params?.variableId ?? ""),
+				reference: params?.reference == null ? null : String(params.reference)
+			})
+			const view = (await presetVariableLayoutsView(db as unknown as Db, presetId))!
+			emitToUser("pipelines:setPresetVariableLayout", view)
+			// The preset list carries the dangling notice: tell every open one.
+			const { pushSessionPresetsAfter } = await import("$lib/server/sockets/sessionAdmin")
+			await pushSessionPresetsAfter(socket)
+			return view
+		} catch (err) {
+			const res = { error: await variableLayoutsError(err) }
+			emitToUser("pipelines:setPresetVariableLayout:error", res)
+			return res
+		}
+	}
+}
+
 export function registerPresetEditorHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -124,4 +193,6 @@ export function registerPresetEditorHandlers(
 	register(socket, sessionPresetsCandidatesHandler, emitToUser)
 	register(socket, sessionsConditionPropsHandler, emitToUser)
 	register(socket, pipelinesRegisteredInHandler, emitToUser)
+	register(socket, pipelinesPresetVariableLayoutsHandler, emitToUser)
+	register(socket, pipelinesSetPresetVariableLayoutHandler, emitToUser)
 }

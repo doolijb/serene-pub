@@ -1,0 +1,30 @@
+# BRIEF s22-V — fit words in the Rulesets and Lorebooks views (owner GO 2026-11-05 + ruling ★§22-3)
+
+You are a `lane-supervisor` (fresh). Read `.claude/guides/multi-agent.md` first, then this brief, then plan `plans/PLAN-sdk-creation-seams-2026-10-30.md` **§22** whole (the direction, the challenger round's objection 5 and the owner's ruling ★§22-3 at its tail), then `docs/sessions.md` ~24–25 (how the start form's Rules card words fit today), `docs/lorebooks.md`, the admin rulesets doc if one exists (`grep -ril ruleset docs/`), and NOMENCLATURE §1, §24 and the rulesets group section. Lane id **s22-V**. Two workers at most. Work from `/home/jody/github/serene-pub`. Other programmes edit this tree (lane m3b-F finished in `sockets/lorebooks.ts` and `LorebooksWorkspace.svelte` — read its report `plans/REPORT-m3b-F-2026-11-05.md` first; lane s22-C works in `sessionForms/**`): re-read a shared file immediately before every edit; additive hunks; never reformat a file dirty at HEAD.
+
+## Rulings that bind
+- **★§22-3 (owner 2026-11-05):** a ruleset row shows its fit **per enabled genre that declares `uses`** — "Story: Great · Lair: Good · Dungeon Crawler: Poor" — from today's `rulesetFit(genre, ruleset)` (`src/lib/server/rulesets/genreOffer.ts` ~27–55); a lorebook row shows the same for **its** ruleset (a Freeform book: *Freeform — the session chooses the rules*); a **preset** says only *Set by preset ‹name›* where it locks the ruleset (a preset pins/locks, it does not rate — find how the lock is known: `sessions.ts` ~1186, `createSession.svelte.ts` `rulesFixed`/`presetRigour`). **No new calculation, no per-preset fit.**
+- **★§22-2:** `rulesets: { only }` stays a lock: a genre with `only` shows *‹genre›: plays only ‹rulesets›* (or the fit words for those and *not offered* for the rest) — pick one wording and say why (★ copy).
+- "Pickers explain why" (owner 10-23): every rating carries its one-line "why" (`fit.inWords`) on hover/expand, as the start form's Rules card does.
+- Members never touch model plumbing; the Rulesets view is admin-only today — the fit words there are for the admin; the Lorebooks view is everyone's.
+
+## Items
+1. **Where the fit is computed (★ propose, build the recommendation):** `rulesetFit` lives server-side with the genre registry. Recommended: the server adds **`fitByGenre`** 🚧 (name per §24) to the ruleset list rows (`rulesets:list` or whatever the admin Rulesets page reads — `src/lib/client/admin/sections/rulesets/Page.svelte`, `RulesetCatalogue.svelte`; server `src/lib/server/sockets/rulesets.ts`) and to the lorebook list rows for their `primaryRuleset` (`sockets/lorebooks.ts` `buildLorebooksList` — additive, m3b-F just added `provided.pluginName` there) — one computation over the enabled genres that declare `uses`, cached per request, never per row queries. Alternative to weigh: a shared pure function the client runs (only if `rulesetFit`'s inputs are already on the client).
+2. **Rulesets view**: each row shows the fit words line (genre name: rating, joined by " · "), with the "why" per genre on expand/hover; a ruleset no genre rates shows nothing (not "—"). The ruleset's own page (`IdPage.svelte`) shows the same line under its name.
+3. **Lorebooks view** (`src/lib/client/lorebooks/LorebooksWorkspace.svelte` list rows and Book settings): a book row shows its ruleset's fit line; Freeform the sentence above. **Presets**: where the Lorebooks/Rulesets views list or link presets (if at all) — *Set by preset ‹name›*; if presets appear nowhere in these views, say so in the report and leave it (do not add a presets section).
+4. **Docs**: `docs/lorebooks.md` (a sentence on the fit line), the rulesets doc (same); NOMENCLATURE §25 rows (the field name 🚧, the words). STYLE-GUIDE only if a badge pattern moves.
+5. **Tests**: server — the rows carry `fitByGenre` for Story/Lair/Crawler and nothing for a genre without `uses` (int test next to the sockets' existing ones, 60 s timeouts); client — dom tests for a ruleset row's line, a Freeform book's sentence, a book on a rated ruleset.
+
+## Files owned
+`src/lib/server/rulesets/**`, `src/lib/server/sockets/rulesets.ts`, `src/lib/server/sockets/lorebooks.ts` (additive), `src/lib/shared/sockets/types.ts` (additive), `src/lib/client/admin/sections/rulesets/**`, `src/lib/client/lorebooks/**`, `docs/lorebooks.md`, `docs/rulesets*.md`, `NOMENCLATURE.md` (§25 rows). Shared with other programmes: `sockets/lorebooks.ts`, `LorebooksWorkspace.svelte`, `types.ts` — re-read before each edit.
+## Out of scope
+No change to the start form (lane s22-C); no per-preset fit; no SDK edit; no change to `only`'s refusal; no new setting; no new event family if an existing list event can carry the field.
+## Rules (quote into the worker brief)
+CLAUDE.md Principles/Decisions/Hard rules; NOMENCLATURE R1–R6, §24; STYLE-GUIDE §6.3/§6.4/§10; sockets: one domain context toasts, views never call `toaster`; `SCOPED_EVENTS` carry their scope key; `tx` only inside `db.transaction`; `SvelteSet`/`SvelteMap`; targeted tests only; never pipe vitest into `head`; 60 s int timeouts; delete only your own `/tmp/serene-pub-vitest-*` dirs by name.
+Every implementation brief adds, verbatim:
+- *"This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work."*
+- *"Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`."*
+- *"Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`."*
+- *"Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'."*
+## Done means
+The tests above green; `npx tsc --noEmit -p .` clean on lane files; `npx prettier --check` on new files. Report `plans/REPORT-s22-V-2026-11-05.md`: the computation ★ and where it landed, changed files, §25 rows, copy ★ (the `only` wording, the Freeform sentence), tests, Noticed, not done.

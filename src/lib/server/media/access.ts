@@ -25,9 +25,26 @@ import {
 } from "$lib/server/utils/sessionAccess"
 import { MediaVisibility } from "$lib/shared/constants/MediaVisibility"
 import { canViewLorebook } from "$lib/server/utils/ownedBook"
-import { eq, inArray } from "drizzle-orm"
+import { canReadCastMember } from "$lib/server/cast/memberAccess"
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { alias } from "drizzle-orm/pg-core"
 
 type FileRow = typeof schema.files.$inferSelect
+
+/**
+ * ⏳ A cast member's face is its **versions'** (`character_versions.face_media_id`
+ * on a row with a `cast_member_id`); the member's own column is frozen. The
+ * face counts when it is the version's OWN — a followed face is the card's, and
+ * the card branch above answers for it. Retired rows count: an older branch
+ * may still read the face they wore, and a read permission over a file the
+ * book's or session's people already drew gains nothing from forgetting it.
+ */
+const wornByVersion = (fileId: number) =>
+	and(
+		isNotNull(schema.characterVersions.castMemberId),
+		eq(schema.characterVersions.faceMediaId, fileId),
+		sql`NOT ('faceMediaId' = ANY(${schema.characterVersions.follows}))`
+	)
 
 export async function canViewMedia(
 	file: FileRow,
@@ -72,17 +89,55 @@ export async function canViewMedia(
 	// counts, for a book's own upload no member wears yet.
 	// A book's **cover image** is judged the same way, by the books that wear
 	// it as their cover.
-	const [wornIn, coverOf] = await Promise.all([
+	// A cast member's **own art** — a sprite in a set of its own, or a picture
+	// in its gallery (`cast_member_files`) — is judged as a face is: by the
+	// books of the members that hold it. A card's sprite sets are the card's,
+	// and the card branch above answers for them; they are not the book's.
+	const [wornIn, coverOf, spriteHolders, galleryHolders] = await Promise.all([
 		db
-			.selectDistinct({ lorebookId: schema.lorebookBindings.lorebookId })
-			.from(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.faceMediaId, file.id)),
+			.selectDistinct({ lorebookId: schema.characterVersions.lorebookId })
+			.from(schema.characterVersions)
+			.where(wornByVersion(file.id)),
 		db
 			.select({ lorebookId: schema.lorebooks.id })
 			.from(schema.lorebooks)
-			.where(eq(schema.lorebooks.coverMediaId, file.id))
+			.where(eq(schema.lorebooks.coverMediaId, file.id)),
+		db
+			.selectDistinct({
+				memberId: schema.lorebookBindings.id,
+				lorebookId: schema.lorebookBindings.lorebookId
+			})
+			.from(schema.sprites)
+			.innerJoin(
+				schema.spriteSets,
+				eq(schema.spriteSets.id, schema.sprites.spriteSetId)
+			)
+			.innerJoin(
+				schema.lorebookBindings,
+				eq(schema.lorebookBindings.id, schema.spriteSets.castMemberId)
+			)
+			.where(eq(schema.sprites.fileId, file.id)),
+		db
+			.selectDistinct({
+				memberId: schema.lorebookBindings.id,
+				lorebookId: schema.lorebookBindings.lorebookId
+			})
+			.from(schema.castMemberFiles)
+			.innerJoin(
+				schema.lorebookBindings,
+				eq(
+					schema.lorebookBindings.id,
+					schema.castMemberFiles.castMemberId
+				)
+			)
+			.where(eq(schema.castMemberFiles.fileId, file.id))
 	])
-	const books = new Set([...wornIn, ...coverOf].map((r) => r.lorebookId))
+	const artHolders = [...spriteHolders, ...galleryHolders]
+	const books = new Set(
+		[...wornIn, ...coverOf, ...artHolders]
+			.map((r) => r.lorebookId)
+			.filter((id): id is number => id != null)
+	)
 	if (file.lorebookId) books.add(file.lorebookId)
 	if (books.size) {
 		for (const bookId of books)
@@ -94,6 +149,183 @@ export async function canViewMedia(
 		for (const s of sessions)
 			if ((await checkSessionAccess(s.id, userId)).hasAccess) return true
 	}
+
+	// A seated member's own face: a session's people see the face of a member
+	// the session seats, as they see the avatar of the card it seats, wherever
+	// that member lives (an attached book, or the session's own book). The
+	// member's own sprites and gallery follow the same rule.
+	const artMemberIds = [...new Set(artHolders.map((r) => r.memberId))]
+	const [seatedCast, seatedVoice, seatedArtCast, seatedArtVoice] =
+		await Promise.all([
+			db
+				.selectDistinct({
+					sessionId: schema.sessionCharacters.sessionId
+				})
+				.from(schema.sessionCharacters)
+				.innerJoin(
+					schema.characterVersions,
+					eq(
+						schema.characterVersions.castMemberId,
+						schema.sessionCharacters.castMemberId
+					)
+				)
+				.where(wornByVersion(file.id)),
+			db
+				.selectDistinct({ sessionId: schema.sessionPersonas.sessionId })
+				.from(schema.sessionPersonas)
+				.innerJoin(
+					schema.characterVersions,
+					eq(
+						schema.characterVersions.castMemberId,
+						schema.sessionPersonas.castMemberId
+					)
+				)
+				.where(wornByVersion(file.id)),
+			artMemberIds.length
+				? db
+						.selectDistinct({
+							sessionId: schema.sessionCharacters.sessionId
+						})
+						.from(schema.sessionCharacters)
+						.where(
+							inArray(
+								schema.sessionCharacters.castMemberId,
+								artMemberIds
+							)
+						)
+				: [],
+			artMemberIds.length
+				? db
+						.selectDistinct({
+							sessionId: schema.sessionPersonas.sessionId
+						})
+						.from(schema.sessionPersonas)
+						.where(
+							inArray(
+								schema.sessionPersonas.castMemberId,
+								artMemberIds
+							)
+						)
+				: []
+		])
+	const seatingSessions = new Set(
+		[
+			...seatedCast,
+			...seatedVoice,
+			...seatedArtCast,
+			...seatedArtVoice
+		].map((r) => r.sessionId)
+	)
+	for (const sessionId of seatingSessions)
+		if ((await checkSessionAccess(sessionId, userId, db)).hasAccess)
+			return true
+
+	// A card's file a cast member DRAWS from its card (★s4-fb-4, owner
+	// 2026-11-10: "Permissions cascade through the cast member if the lorebook
+	// is shared, or user is a guest."): whoever may read a member —
+	// `canReadCastMember`, its book readable or a seat's session — sees the
+	// card's sprite files (while the member draws no sprites of its own), the
+	// card face it follows and the likeness image it follows, since those are
+	// what its panels draw. Retired versions count, as for `wornByVersion`.
+	// Stays out: a card's gallery pictures, every other file of the card, and
+	// a face or sprite the member owns (the branches above answer for those).
+	// Skipped when no member draws the file.
+	const parentVersion = alias(schema.characterVersions, "card_parent_version")
+	const [spriteCards, followedFace, followedLikeness] = await Promise.all([
+		db
+			.selectDistinct({ cardId: schema.spriteSets.characterId })
+			.from(schema.sprites)
+			.innerJoin(
+				schema.spriteSets,
+				eq(schema.spriteSets.id, schema.sprites.spriteSetId)
+			)
+			.where(
+				and(
+					eq(schema.sprites.fileId, file.id),
+					isNotNull(schema.spriteSets.characterId)
+				)
+			),
+		db
+			.selectDistinct({ memberId: schema.characterVersions.castMemberId })
+			.from(schema.characterVersions)
+			.innerJoin(
+				parentVersion,
+				eq(parentVersion.id, schema.characterVersions.parentVersionId)
+			)
+			.where(
+				and(
+					isNotNull(schema.characterVersions.castMemberId),
+					sql`'faceMediaId' = ANY(${schema.characterVersions.follows})`,
+					eq(parentVersion.faceMediaId, file.id)
+				)
+			),
+		db
+			.selectDistinct({ memberId: schema.characterVersions.castMemberId })
+			.from(schema.characterVersions)
+			.innerJoin(
+				parentVersion,
+				eq(parentVersion.id, schema.characterVersions.parentVersionId)
+			)
+			.where(
+				and(
+					isNotNull(schema.characterVersions.castMemberId),
+					sql`'likeness' = ANY(${schema.characterVersions.follows})`,
+					sql`(${parentVersion.likeness}->>'imageMediaId')::int = ${file.id}`
+				)
+			)
+	])
+	const drawers = new Set<number>()
+	for (const r of [...followedFace, ...followedLikeness])
+		if (r.memberId != null) drawers.add(r.memberId)
+	const cardIds = spriteCards
+		.map((r) => r.cardId)
+		.filter((id): id is number => id != null)
+	if (cardIds.length) {
+		const [linked, versioned] = await Promise.all([
+			db
+				.selectDistinct({ memberId: schema.lorebookBindings.id })
+				.from(schema.lorebookBindings)
+				.where(inArray(schema.lorebookBindings.characterId, cardIds)),
+			db
+				.selectDistinct({
+					memberId: schema.characterVersions.castMemberId
+				})
+				.from(schema.characterVersions)
+				.innerJoin(
+					parentVersion,
+					eq(
+						parentVersion.id,
+						schema.characterVersions.parentVersionId
+					)
+				)
+				.where(
+					and(
+						isNotNull(schema.characterVersions.castMemberId),
+						inArray(parentVersion.cardId, cardIds)
+					)
+				)
+		])
+		const spriteMembers = [
+			...new Set(
+				[...linked, ...versioned]
+					.map((r) => r.memberId)
+					.filter((id): id is number => id != null)
+			)
+		]
+		if (spriteMembers.length) {
+			const { spriteLabelsForMembers } = await import(
+				"$lib/server/sprites"
+			)
+			const own = await spriteLabelsForMembers(db, spriteMembers)
+			for (const id of spriteMembers)
+				if (!((own.get(id)?.sets.size ?? 0) > 0)) drawers.add(id)
+		}
+	}
+	// No administrator exception: the owner named two paths (a shared
+	// book — a live provided book counts as shared — or a seat's session).
+	for (const memberId of drawers)
+		if (await canReadCastMember(db, memberId, userId, { isAdmin: false }))
+			return true
 
 	// An account's avatar is drawn wherever the account is — the roster,
 	// sharing, conversations, the Users view — so, like the account's name,

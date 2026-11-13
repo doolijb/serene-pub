@@ -5,7 +5,7 @@
  * `grants`). The document itself is stood in for: the test takes the port the
  * frame's load hands over and speaks for the frame on it.
  */
-import { describe, expect, test } from "vitest"
+import { describe, expect, test, vi } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
 import PluginFrame from "./PluginFrame.svelte"
 
@@ -45,6 +45,10 @@ async function open(props: Record<string, unknown>) {
 	await settle()
 	return {
 		got,
+		say: async (m: Record<string, unknown>) => {
+			handed!.postMessage(m)
+			await settle()
+		},
 		close: () => {
 			handed?.close()
 			unmount(app)
@@ -61,5 +65,36 @@ describe("what a plugin frame is posted", () => {
 		for (const widgetOnly of ["settings", "style", "layout", "scoped", "grants"])
 			expect(kinds).not.toContain(widgetOnly)
 		f.close()
+	})
+})
+
+describe("what a plugin frame reports to its host (M2d)", () => {
+	test("onready is called once, after the frame's ready", async () => {
+		const onready = vi.fn()
+		const f = await open({ onready })
+		expect(onready).toHaveBeenCalledTimes(1)
+		f.close()
+	})
+
+	test("onfatal is called, with no text, on a fatal error", async () => {
+		const onfatal = vi.fn()
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const f = await open({ onfatal })
+		expect(onfatal).not.toHaveBeenCalled()
+		await f.say({ t: "error", fatal: true, message: "boom" })
+		expect(onfatal).toHaveBeenCalledTimes(1)
+		expect(onfatal).toHaveBeenCalledWith()
+		f.close()
+		warn.mockRestore()
+	})
+
+	test("onfatal is not called on a non-fatal error", async () => {
+		const onfatal = vi.fn()
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const f = await open({ onfatal })
+		await f.say({ t: "error", message: "just a warning" })
+		expect(onfatal).not.toHaveBeenCalled()
+		f.close()
+		warn.mockRestore()
 	})
 })

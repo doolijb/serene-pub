@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest"
-import { LORE_SCOPES, SCOPE_LABELS, type CoreLoreScope } from "$lib/shared/lorebooks/loreRoute"
+import { LORE_SCOPES, SCOPE_LABELS, listScope, type CoreLoreScope } from "$lib/shared/lorebooks/loreRoute"
 import { comparePoolBy, type PoolItem } from "./poolFilter"
 import { containedBy } from "./editor/partOf"
 import { POOL_KINDS } from "./scopes"
 import { kindLabel } from "./sections/kinds"
+import {
+	forgetOtherRules,
+	rememberOtherRules,
+	rememberRulesLists
+} from "./sections/derivedPiece"
 import {
 	SECTION_DESCRIPTORS,
 	bookPoolItems,
@@ -13,7 +18,8 @@ import {
 	draftStale,
 	editorPlaceholder,
 	isScopeDoor,
-	poolKindsOf
+	poolKindsOf,
+	rulesListDoor
 } from "./sections"
 
 /**
@@ -406,5 +412,50 @@ describe("Story order sorts by the calendar", () => {
 		expect(
 			[...pool].sort(comparePoolBy("entry-date-asc")).map((i) => i.id)
 		).toEqual([4, 3, 2, 1])
+	})
+})
+
+describe("🚧 ★50 a list of other rules is listed, never added to", () => {
+	const WEAPONS = {
+		typeId: "core:entry/vis-itineris.weapons",
+		label: "Weapons",
+		repertoireId: "weapons",
+		piece: { type: "object" as const, fields: {} },
+		libraryRows: 0
+	}
+
+	it("its rows join the pool through its door", () => {
+		rememberOtherRules(1, [{ rulesName: "Vis Itineris", types: [WEAPONS] }])
+		const door = rulesListDoor(WEAPONS, 1)
+		const pool = bookPoolItems(
+			{ [WEAPONS.typeId]: [{ id: 3, name: "Rusty sword", typeId: WEAPONS.typeId } as any] },
+			[],
+			[door]
+		)
+		expect(pool.map((item) => item.key)).toContain("entry#3")
+	})
+
+	it("its door offers no Add, and says where it comes from", () => {
+		rememberOtherRules(1, [{ rulesName: "Vis Itineris", types: [WEAPONS] }])
+		const door = rulesListDoor(WEAPONS, 1)
+		expect(door.creatable).toBe(false)
+		expect(door.emptyCopy.body).toContain("comes from Vis Itineris")
+	})
+
+	it("the same list is creatable once the book is told by its rules", () => {
+		rememberOtherRules(1, [])
+		expect(rulesListDoor(WEAPONS, 1).creatable).toBe(true)
+	})
+
+	it("the marks are kept per book, and forgotten per book", () => {
+		rememberRulesLists([WEAPONS])
+		rememberOtherRules(1, [{ rulesName: "Vis Itineris", types: [WEAPONS] }])
+		rememberOtherRules(2, [])
+		expect(rulesListDoor(WEAPONS, 1).creatable).toBe(false)
+		expect(rulesListDoor(WEAPONS, 2).creatable).toBe(true)
+		expect(descriptorFor(listScope(WEAPONS.typeId), 1)?.creatable).toBe(false)
+		expect(descriptorFor(listScope(WEAPONS.typeId), 2)?.creatable).toBe(true)
+		forgetOtherRules(1)
+		expect(rulesListDoor(WEAPONS, 1).creatable).toBe(true)
 	})
 })

@@ -62,6 +62,7 @@ describe("genre field defaults (B16x)", () => {
 		// on, the GM asked before rolling, dice shown (rewrite, 2026-10-21).
 		const expected = {
 			tone: "grounded",
+			roundWorth: 5,
 			roomsLayer: true,
 			sanctumSteers: true,
 			askBeforeRolling: true,
@@ -82,6 +83,7 @@ describe("genre field defaults (B16x)", () => {
 		})
 		expect(await genreFieldsFor(db, session.id)).toEqual({
 			tone: "grim",
+			roundWorth: 5,
 			roomsLayer: true,
 			sanctumSteers: true,
 			askBeforeRolling: true,
@@ -102,9 +104,14 @@ describe("genre field defaults (B16x)", () => {
 	it("a stored value under a retired key is inert (R12: the Lair's turnStyle; the rewrite's partySpeech, trustNarrator)", async () => {
 		// The owner ruled no back-compat: the JSON keeps the key, and no read
 		// passes it on — not the run's fields, not the settings document.
-		const session = await lairSession({ turnStyle: "narrator", partySpeech: "castellan", trustNarrator: true })
+		const session = await lairSession({
+			turnStyle: "narrator",
+			partySpeech: "castellan",
+			trustNarrator: true
+		})
 		const expected = {
 			tone: "grounded",
+			roundWorth: 5,
 			roomsLayer: true,
 			sanctumSteers: true,
 			askBeforeRolling: true,

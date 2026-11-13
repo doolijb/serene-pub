@@ -529,3 +529,154 @@ describe("publish (law T1)", () => {
 		await expect(saveDocument(db, stored)).resolves.toBeDefined()
 	})
 })
+
+describe("explicit layout references (law T1)", () => {
+	let referenceId: string
+
+	beforeAll(async () => {
+		const { createVariableTemplate } = await import(
+			"$lib/server/pipelines/entities/variableTemplates"
+		)
+		const { variableOfKey } = await import(
+			"$lib/server/pipelines/entities/variableLayouts"
+		)
+		const variableId = variableOfKey(undefined, "worldLore")!
+		const made = await createVariableTemplate(db, {
+			variableId,
+			name: "Fit test prose",
+			source: "{{{json worldLore 0}}}",
+			reference: { ownerSlug: "acme", slug: "fit-prose" }
+		})
+		referenceId = made.reference!
+		expect(referenceId).toBe("acme/fit-prose@1")
+	}, 60_000)
+
+	it("a valid reference fits, and can be selected", async () => {
+		const option = await templateOption(STORY_RESPOND_SPEC_ID)
+		const row = await createContextTemplate(db, {
+			nodeDefinitionId: ASSEMBLE_POOL,
+			name: unique("Names a layout"),
+			source: `{{{layout worldLore "${referenceId}"}}}`
+		})
+		const fit = await contextTemplateFitAt(
+			db,
+			{
+				specVersionId: (await specRow(STORY_RESPOND_SPEC_ID)).activeVersionId!,
+				nodeKey: option.nodeKey,
+				slot: option.slot
+			},
+			{ engine: row.engine, source: row.source }
+		)
+		expect(fit?.refusals).toEqual([])
+		await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), option.id, row.id)
+		expect((await templateOption(STORY_RESPOND_SPEC_ID)).value).toBe(row.id)
+	}, 60_000)
+
+	it("select refuses an unknown reference, naming it and the near-miss", async () => {
+		const option = await templateOption(STORY_RESPOND_SPEC_ID)
+		const row = await createContextTemplate(db, {
+			nodeDefinitionId: ASSEMBLE_POOL,
+			name: "Names a missing layout",
+			source: '{{{layout worldLore "acme/fit-pros@1"}}}'
+		})
+		await expect(
+			writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), option.id, row.id)
+		).rejects.toThrow(/'Names a missing layout': it names the layout "acme\/fit-pros@1"/)
+		await expect(
+			writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), option.id, row.id)
+		).rejects.toThrow(/acme\/fit-prose@1/)
+		expect((await templateOption(STORY_RESPOND_SPEC_ID)).value).not.toBe(row.id)
+	}, 60_000)
+
+	it("a reference that is not a literal is refused in words", async () => {
+		const option = await templateOption(STORY_RESPOND_SPEC_ID)
+		const row = await createContextTemplate(db, {
+			nodeDefinitionId: ASSEMBLE_POOL,
+			name: "Computes a layout",
+			source: "{{{layout worldLore someRef}}}"
+		})
+		await expect(
+			writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), option.id, row.id)
+		).rejects.toThrow(/a `layout` call there doesn't name a variable with layouts and a quoted layout reference/)
+	}, 60_000)
+
+	it("a stored template naming an unknown reference gets the misfit notice, naming it", async () => {
+		const option = await templateOption(STORY_RESPOND_SPEC_ID)
+		const row = await createContextTemplate(db, {
+			nodeDefinitionId: ASSEMBLE_POOL,
+			name: unique("Stored with a stale reference"),
+			source: '{{{layout worldLore "acme/gone@1"}}}'
+		})
+		const { resolveSelectedConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const s = await specRow(STORY_RESPOND_SPEC_ID)
+		const selected = await resolveSelectedConfig(db, s.id, STORY_RESPOND_SPEC_ID, {})
+		await db
+			.insert(schema.pipelineConfigValues)
+			.values({
+				configId: selected!.configId,
+				nodeKey: option.nodeKey,
+				slot: option.slot,
+				path: "",
+				value: row.id
+			})
+			.onConflictDoUpdate({
+				target: [
+					schema.pipelineConfigValues.configId,
+					schema.pipelineConfigValues.nodeKey,
+					schema.pipelineConfigValues.slot,
+					schema.pipelineConfigValues.path
+				],
+				set: { value: row.id }
+			})
+		const report = await scanContextTemplateFits(db)
+		const hit = report.misfits.find((m) => m.templateId === row.id)
+		expect(hit?.message).toMatch(/it names the layout "acme\/gone@1"/)
+		const notices = await db
+			.select()
+			.from(schema.pipelineConfigNotices)
+			.where(eq(schema.pipelineConfigNotices.kind, "misfit"))
+		expect(
+			notices.some(
+				(n) =>
+					n.configId === selected!.configId &&
+					/acme\/gone@1/.test(n.label ?? "")
+			)
+		).toBe(true)
+	}, 60_000)
+
+	it("the library save warns about an unknown reference, naming the pipeline", async () => {
+		const warnings = await sharedContextTemplateWarnings(db, ASSEMBLE_POOL, {
+			engine: handlebars.id,
+			source: '{{{layout worldLore "acme/gone@1"}}}'
+		})
+		expect(warnings?.some((w) => /acme\/gone@1/.test(w.message))).toBe(true)
+		const fine = await sharedContextTemplateWarnings(db, ASSEMBLE_POOL, {
+			engine: handlebars.id,
+			source: `{{{layout worldLore "${referenceId}"}}}`
+		})
+		expect(fine?.filter((w) => /layout/.test(w.message))).toEqual([])
+	}, 60_000)
+
+	it("publish does not refuse a valid layout call in a spec's own template", async () => {
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const doc = compile(
+			spec("fittest:spec/layoutcall", { version: "1.0.0" })
+				.inlet("input", C.userMessage.v1())
+				.query("cast", ($) => C.sessionCast.v1({ scope: $.input.sessionScope }))
+				.task("context", ($) => C.buildTemplateContext.v1({ cast: $.cast.cast }))
+				.task("prompt", ($) =>
+					C.assemble.v2({ templateContext: $.context.templateContext })
+				)
+				.preset("layoutcall", { label: "Layout call", default: true }, (p) =>
+					p.template("prompt", {
+						engine: handlebars.id,
+						source: `{{{layout worldLore "${referenceId}"}}}`
+					})
+				)
+				.build()
+		)
+		await expect(saveDocument(db, doc, { publish: true })).resolves.toBeDefined()
+	}, 60_000)
+})

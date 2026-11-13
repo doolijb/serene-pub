@@ -50,6 +50,9 @@ import {
 	asksToJoin,
 	offersSeat,
 	isLivePlayerSeat,
+	benchedOnly,
+	BENCHED_ONLY_GUEST,
+	BENCHED_ONLY_OWNER,
 	ownCardlessPlayerSeats
 } from "$lib/shared/sessions/playerSeat"
 import {
@@ -490,10 +493,23 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			null
 	)
 
+	/**
+	 * 🚧 The viewer's only seat(s) are benched (`benchedOnly`): no Join, Take a
+	 * seat or persona offer; the composer and turn controls close with
+	 * `benchedOnlyReason` (owner 2026-11-11).
+	 */
+	let isBenchedOnly: boolean = $derived(
+		benchedOnly({ seats: session?.sessionPersonas, userId: userCtx.user?.id })
+	)
+	let benchedOnlyReason: string | null = $derived(
+		isBenchedOnly ? (isGuest ? BENCHED_ONLY_GUEST : BENCHED_ONLY_OWNER) : null
+	)
+
 	// Whether to show the add persona CTA: a guest with no voice here — no
 	// card and no named card-less seat (`asksToJoin`, the one rule). A mode
 	// with no persona system has nothing to add.
 	let showAddPersonaCTA: boolean = $derived(
+		!isBenchedOnly &&
 		asksToJoin({
 			isGuest,
 			personasInMode,
@@ -513,6 +529,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 * voice here yet. The other half of `asksToJoin`'s rule.
 	 */
 	let showTakeSeatCTA: boolean = $derived(
+		!isBenchedOnly &&
 		offersSeat({
 			isGuest,
 			personasInMode,
@@ -1126,10 +1143,6 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		storyCalendar = { sessionId: forSessionId, calendar: next }
 	}
 
-	function setLorebook(newLorebookId: number) {
-		if (session) sessionStore.patchSession(sessionId, { lorebookId: newLorebookId })
-	}
-
 	d.inbox.on("sessions:get", handleSessionsGet)
 	d.inbox.on("sessions:refresh", handleSessionsRefresh)
 	d.inbox.on("sessionMessage", handleSessionMessage)
@@ -1205,6 +1218,10 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		},
 		get sessionViewFrame() {
 			return sessionViewFrame
+		},
+		/** 🚧 M2d: the genre's shape (existing derived value), read for `applet` by the session view's loading screen. */
+		get modeShape() {
+			return modeShape
 		},
 		/** 🚧 The genre proposes full screen (SHAPES L1) and its session view is drawn. */
 		get proposesFullscreen() {
@@ -1306,6 +1323,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		get ownCardlessSeat() {
 			return ownCardlessSeat
 		},
+		get benchedOnlyReason() {
+			return benchedOnlyReason
+		},
 		get showAddPersonaCTA() {
 			return showAddPersonaCTA
 		},
@@ -1338,7 +1358,6 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		channelLanes,
 		laneRead,
 		loadOlderMessages,
-		setLorebook,
 		setStoryClock,
 		setStoryCalendar,
 		/** 🚧 The session's book's calendar (§15 G9); null when free-form or not read yet. */
@@ -1350,6 +1369,16 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			sessionNotFound = true
 		},
 		/** Another session opened in the page: what the last one loaded goes. */
+		/**
+		 * The Back/Forward strip's state a `sessions:actions` push carried (★H1,
+		 * 2026-11-04): folded into the ONE rewind state the strip reads, through
+		 * the same defensive reader the session record goes through.
+		 */
+		adoptRewind(rewind: unknown) {
+			if (!session) return
+			const next = rewindStateOf({ rewind })
+			if (next) sessionStore.patchSession(sessionId, { rewind: next })
+		},
 		reset() {
 			// The store drops every record of the last session (the genre row, the
 			// rows, the cast, the runs) and opens this one.

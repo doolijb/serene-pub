@@ -13,7 +13,7 @@
  *    the seat that tried it, and the Narrator hears what it did (★2);
  */
 
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -349,7 +349,10 @@ async function seatOf(sessionId: number, userId: number) {
 
 async function value(sessionId: number, owner: { kind: string; id: number }, slotId: string) {
 	const { valueOf } = await import("$lib/server/state/resolve")
-	return valueOf(db as any, { sessionId, owner: owner as any, slotId } as any)
+	// ⏳ The owner as it is stored: member form with the switch on (the card's `session_cast` off).
+	const { storedSeatOwner } = await import("$lib/server/state/seatRefs")
+	const stored = (await storedSeatOwner(db as any, sessionId, owner)) ?? owner
+	return valueOf(db as any, { sessionId, owner: stored as any, slotId } as any)
 }
 
 const RESPOND = "core:spec/dungeon-crawler-respond"
@@ -567,7 +570,9 @@ describe("R0-2: an answer pressed while the world is built keeps its write", () 
 		await settle()
 		expect(res?.error, res?.error).toBeUndefined()
 		const books = String(lastTurnOf(promptsWith(BOOKS, from)[0])?.content)
-		expect(books).toMatch(/Maren Holt \(character:\d+[^\n]*did not declare; standing order: follow\./)
+		expect(books).toMatch(memberFormOn()
+			? /Maren Holt \(player-seat:\d+[^\n]*did not declare; standing order: follow\./
+			: /Maren Holt \(character:\d+[^\n]*did not declare; standing order: follow\./)
 		expect(rook.seat.id).toBeTruthy()
 	})
 })
@@ -579,8 +584,8 @@ describe("R1-3: no Continue bar after a solo round", () => {
 		await settle()
 		const narrated = (await rowsOf(sessionId)).filter((r) => r.channel === "main" && r.role === "assistant").at(-1)!
 		expect(narrated.content).toBe(NARRATION)
-		const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
-		expect((coreAnnexIn(row!.annex) as any)?.turnOrder?.order ?? []).toEqual([])
+		const [row] = await db.select({ turnOrder: schema.sessions.turnOrder }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+		expect((row!.turnOrder as any)?.order ?? []).toEqual([])
 		const heard = pushes.filter((p) => p.sessionId === sessionId && p.event === "sessions:turnOrder")
 		expect(heard.length).toBeGreaterThan(0)
 		expect(heard.at(-1)!.payload.turnOrder?.order ?? []).toEqual([])

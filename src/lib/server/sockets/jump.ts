@@ -26,16 +26,22 @@
  * shows the answer to a question the person has already moved past.
  */
 
+import {
+	genuineProvidedMarkSql,
+	shownLorebook
+} from "$lib/server/plugins/providedMarks"
 import { db } from "$lib/server/db"
 import {
 	and,
 	asc,
+	desc,
 	eq,
 	exists,
 	ilike,
 	inArray,
 	or,
 	sql,
+	type AnyColumn,
 	type SQL
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -128,6 +134,20 @@ function snippet(text: string | null | undefined): string | undefined {
  * ------------------------------------------------------------------ */
 
 /**
+ * 🚧 The join condition to the **current card version** (the highest `number`)
+ * of the card in `cardId` — a seat's held card read as the card has it now,
+ * never from the ⏳ copy columns.
+ */
+const currentCardVersionOf = (cardId: AnyColumn): SQL =>
+	and(
+		eq(schema.characterVersions.cardId, cardId),
+		eq(
+			schema.characterVersions.number,
+			sql`(select max(cv_max.number) from character_versions cv_max where cv_max.card_id = ${cardId})`
+		)
+	)!
+
+/**
  * Sessions the requester owns or is a guest of.
  *
  * Visibility borrowed from `buildSessionsListFor` (`sockets/sessions.ts:290`
@@ -169,11 +189,8 @@ async function searchSessions(
 					.select({ one: sql`1` })
 					.from(schema.sessionCharacters)
 					.innerJoin(
-						schema.characters,
-						eq(
-							schema.characters.id,
-							schema.sessionCharacters.characterId
-						)
+						schema.characterVersions,
+						currentCardVersionOf(schema.sessionCharacters.characterId)
 					)
 					.where(
 						and(
@@ -181,7 +198,7 @@ async function searchSessions(
 								schema.sessionCharacters.sessionId,
 								schema.sessions.id
 							),
-							ilike(schema.characters.name, pattern)
+							ilike(schema.characterVersions.name, pattern)
 						)
 					)
 			),
@@ -190,10 +207,69 @@ async function searchSessions(
 					.select({ one: sql`1` })
 					.from(schema.sessionPersonas)
 					.innerJoin(
-						schema.characters,
+						schema.characterVersions,
+						currentCardVersionOf(schema.sessionPersonas.personaId)
+					)
+					.where(
+						and(
+							eq(
+								schema.sessionPersonas.sessionId,
+								schema.sessions.id
+							),
+							ilike(schema.characterVersions.name, pattern)
+						)
+					)
+			),
+			// The shown name (★client-2, owner ruling 2026-11-05): a seat's
+			// cast member's own name or nickname, for either seat table. Read
+			// from the member's versions (the member's columns are frozen): any
+			// version whose own name matches, so a name the story gave later
+			// finds the session too.
+			exists(
+				db
+					.select({ one: sql`1` })
+					.from(schema.sessionCharacters)
+					.innerJoin(
+						schema.characterVersions,
 						eq(
-							schema.characters.id,
-							schema.sessionPersonas.personaId
+							schema.characterVersions.castMemberId,
+							schema.sessionCharacters.castMemberId
+						)
+					)
+					.where(
+						and(
+							eq(
+								schema.sessionCharacters.sessionId,
+								schema.sessions.id
+							),
+							or(
+								and(
+									ilike(
+										schema.characterVersions.name,
+										pattern
+									),
+									sql`NOT ('name' = ANY(${schema.characterVersions.follows}))`
+								),
+								and(
+									ilike(
+										schema.characterVersions.nickname,
+										pattern
+									),
+									sql`NOT ('nickname' = ANY(${schema.characterVersions.follows}))`
+								)
+							)
+						)
+					)
+			),
+			exists(
+				db
+					.select({ one: sql`1` })
+					.from(schema.sessionPersonas)
+					.innerJoin(
+						schema.characterVersions,
+						eq(
+							schema.characterVersions.castMemberId,
+							schema.sessionPersonas.castMemberId
 						)
 					)
 					.where(
@@ -202,7 +278,22 @@ async function searchSessions(
 								schema.sessionPersonas.sessionId,
 								schema.sessions.id
 							),
-							ilike(schema.characters.name, pattern)
+							or(
+								and(
+									ilike(
+										schema.characterVersions.name,
+										pattern
+									),
+									sql`NOT ('name' = ANY(${schema.characterVersions.follows}))`
+								),
+								and(
+									ilike(
+										schema.characterVersions.nickname,
+										pattern
+									),
+									sql`NOT ('nickname' = ANY(${schema.characterVersions.follows}))`
+								)
+							)
 						)
 					)
 			)
@@ -247,14 +338,27 @@ async function searchCharacters(
 	patterns: string[],
 	limit: number
 ): Promise<JumpHit[]> {
+	// 🚧 Each card as its current card version has it (the highest `number`).
+	const cv = schema.characterVersions
+	const current = db
+		.selectDistinctOn([cv.cardId], {
+			cardId: cv.cardId,
+			name: cv.name,
+			description: cv.description
+		})
+		.from(cv)
+		.where(sql`${cv.cardId} is not null`)
+		.orderBy(asc(cv.cardId), desc(cv.number))
+		.as("current_card_version")
 	const rows = await db
 		.select({
 			id: schema.characters.id,
-			name: schema.characters.name,
-			description: schema.characters.description,
+			name: current.name,
+			description: current.description,
 			isPersona: schema.characters.isPersona
 		})
 		.from(schema.characters)
+		.innerJoin(current, eq(current.cardId, schema.characters.id))
 		.where(
 			and(
 				// Owned, or **shared** with the asker (PLAN-private-messages §4).
@@ -269,19 +373,20 @@ async function searchCharacters(
 					)
 				),
 				eq(schema.characters.isDeleted, false),
+				sql`NOT ${genuineProvidedMarkSql()}`,
 				everyTermMatches(patterns, (pattern) => [
-					ilike(schema.characters.name, pattern),
-					ilike(schema.characters.description, pattern)
+					ilike(current.name, pattern),
+					ilike(current.description, pattern)
 				])
 			)
 		)
-		.orderBy(asc(schema.characters.name), asc(schema.characters.id))
+		.orderBy(asc(current.name), asc(schema.characters.id))
 		.limit(limit)
 
 	return rows.map((row) => ({
 		kind: "character" as const,
 		id: row.id,
-		title: row.name,
+		title: row.name ?? "",
 		subtitle: snippet(row.description),
 		// The one thing retiring the `persona` jump kind would otherwise have
 		// cost: a person searching for the character they PLAY can still tell
@@ -327,6 +432,7 @@ async function searchLorebooks(
 				sql`${schema.lorebooks.sessionId} IS NULL`,
 				// 🚧 A starter lorebook is a template, not a lorebook to jump into.
 				eq(schema.lorebooks.kind, "book"),
+				shownLorebook(), // 🚧 (M2e) a disabled provided book is hidden everywhere
 				everyTermMatches(patterns, (pattern) => [
 					ilike(schema.lorebooks.name, pattern)
 				])

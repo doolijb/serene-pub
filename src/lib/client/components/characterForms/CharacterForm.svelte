@@ -2,7 +2,12 @@
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
-	import { Switch, Popover, Portal, Dialog } from "@skeletonlabs/skeleton-svelte"
+	import {
+		Switch,
+		Popover,
+		Portal,
+		Dialog
+	} from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
@@ -11,16 +16,24 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { onMount, onDestroy, getContext, type Component } from "svelte"
+	import { onMount, onDestroy, getContext } from "svelte"
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import AvatarPicker from "../media/AvatarPicker.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 	import { validateStrokes, type Stroke } from "@serene-pub/sdk"
 	import StrokeField from "./StrokeField.svelte"
+	import { FIELD_CLASS } from "./fieldClass"
+	import { FORM_TABS, type FormTab } from "./formTabs"
+	import PromptBadge from "./PromptBadge.svelte"
+	import RemoveRowButton from "./RemoveRowButton.svelte"
+	import AddRowButton from "./AddRowButton.svelte"
+	import ProseField from "./ProseField.svelte"
+	import GreetingsList from "./GreetingsList.svelte"
+	import CreatorNotesFields from "./CreatorNotesFields.svelte"
 	import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 	import CardStatsTab from "./CardStatsTab.svelte"
 	import LikenessTab, { type LikenessDraft } from "./LikenessTab.svelte"
@@ -35,12 +48,34 @@
 	import { canPickVoice } from "$lib/shared/characters/timbre"
 	import { openInLoadouts } from "$lib/client/admin/railDoors"
 	import { socketCardStatsApi } from "./cardStatsApi"
+	import { castEditParts, type CastBannerMember } from "./castBannerWords"
+	import { openCastMember } from "./openCastMember"
+	import CastLine from "./CastLine.svelte"
+	import AdvancedHiddenLine from "$lib/client/components/AdvancedHiddenLine.svelte"
+	import { showsAdvancedControls } from "$lib/client/advancedControls"
 	import {
-		CAST_LINE_NOTE,
-		castBannerWords,
-		retoldFieldList,
-		type CastBannerMember
-	} from "./castBannerWords"
+		greetingColumnsOf,
+		greetingsOfColumns,
+		noteLanguageProblem,
+		notesColumnsOf,
+		notesDraftOf,
+		openerIndex,
+		withOpenerText,
+		type NoteLanguageRow
+	} from "./cardDraft"
+	import {
+		highestVersion,
+		inPlaceNote,
+		stayingGroups,
+		versionLabelText,
+		versionOptionText,
+		type CardVersionOption,
+		type StayingCastMember
+	} from "./cardVersionWords"
+	import {
+		nextVersionLabel,
+		type CharacterGreeting
+	} from "$lib/shared/characters/profile"
 	import {
 		backToOneText,
 		findingsByStroke,
@@ -59,12 +94,17 @@
 		description: string
 		personality: string
 		scenario: string
-		firstMessage: string
-		alternateGreetings: string[]
+		/**
+		 * The one greetings list (the opener first, then the alternates, the
+		 * group-only ones marked). The wire still speaks three columns:
+		 * `cardDraft.ts` converts on load and save.
+		 */
+		greetings: CharacterGreeting[]
 		exampleDialogues: string[]
+		/** The creator notes' main text, its language, and the other languages (`cardDraft.ts`). */
 		creatorNotes: string
-		creatorNotesMultilingual: Record<string, string>
-		groupOnlyGreetings: string[]
+		creatorNotesLang: string
+		creatorNotesVariants: NoteLanguageRow[]
 		postHistoryInstructions: string
 		isFavorite: boolean
 		/** "A character you play" — `characters.is_persona`. */
@@ -96,38 +136,59 @@
 	}
 
 	// Zod validation schema
-	const characterSchema = z.object({
-		name: z.string().min(1, "Name is required").trim(),
-		nickname: z.string().optional(),
-		description: z.string().trim(),
-		personality: z.string().optional(),
-		scenario: z.string().optional(),
-		firstMessage: z.string().optional(),
-		alternateGreetings: z.array(z.string()).optional(),
-		exampleDialogues: z.array(z.string()).optional(),
-		creatorNotes: z.string().optional(),
-		creatorNotesMultilingual: z.record(z.string()).optional(),
-		groupOnlyGreetings: z.array(z.string()).optional(),
-		postHistoryInstructions: z.string().optional(),
-		characterVersion: z.string().optional(),
-		creator: z.string().optional(),
-		category: z.string().optional(),
-		isFavorite: z.boolean().optional(),
-		isPersona: z.boolean().optional(),
-		isDefaultPersona: z.boolean().optional(),
-		lorebookId: z.number().nullable().optional(),
-		tags: z.array(z.string()).optional(),
-		strokes: z.array(z.any()).optional()
-	}).superRefine((v, ctx) => {
-		// With strokes, the description is compiled from them: required
-		// only while the card is one text.
-		if (!v.strokes?.length && !v.description)
-			ctx.addIssue({
-				code: "custom",
-				path: ["description"],
-				message: "Description is required"
+	const characterSchema = z
+		.object({
+			name: z.string().min(1, "Name is required").trim(),
+			nickname: z.string().optional(),
+			description: z.string().trim(),
+			personality: z.string().optional(),
+			scenario: z.string().optional(),
+			greetings: z
+				.array(
+					z.object({
+						text: z.string(),
+						groupOnly: z.boolean().optional()
+					})
+				)
+				.optional(),
+			exampleDialogues: z.array(z.string()).optional(),
+			creatorNotes: z.string().optional(),
+			creatorNotesLang: z.string().optional(),
+			creatorNotesVariants: z
+				.array(z.object({ lang: z.string(), text: z.string() }))
+				.optional(),
+			postHistoryInstructions: z.string().optional(),
+			characterVersion: z.string().optional(),
+			creator: z.string().optional(),
+			category: z.string().optional(),
+			isFavorite: z.boolean().optional(),
+			isPersona: z.boolean().optional(),
+			isDefaultPersona: z.boolean().optional(),
+			lorebookId: z.number().nullable().optional(),
+			tags: z.array(z.string()).optional(),
+			strokes: z.array(z.any()).optional()
+		})
+		.superRefine((v, ctx) => {
+			// With strokes, the description is compiled from them: required
+			// only while the card is one text.
+			if (!v.strokes?.length && !v.description)
+				ctx.addIssue({
+					code: "custom",
+					path: ["description"],
+					message: "Description is required"
+				})
+			const languages = noteLanguageProblem({
+				creatorNotes: v.creatorNotes ?? "",
+				creatorNotesLang: v.creatorNotesLang ?? "",
+				creatorNotesVariants: v.creatorNotesVariants ?? []
 			})
-	})
+			if (languages)
+				ctx.addIssue({
+					code: "custom",
+					path: ["creatorNotesLanguages"],
+					message: languages
+				})
+		})
 
 	type ValidationErrors = Record<string, string>
 
@@ -173,16 +234,14 @@
 		getContext("systemSettingsCtx")
 	)
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
+	const advanced = $derived(showsAdvancedControls(userSettingsCtx?.settings))
 
 	/**
-	 * The cast banner (plans/PLAN-cast-retold-fields-2026-10-13.md): which
-	 * cast members this card represents, and which of them retell parts of
-	 * it. Absent outside the shell (no panels to open), and then the banner
-	 * is plain text.
+	 * The cast line (plans/PLAN-cast-retold-fields-2026-10-13.md): which cast
+	 * members this card represents, and which of them retell parts of it.
 	 */
 	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
 	let castMembers: CastBannerMember[] = $state([])
-	const castBanner = $derived(castBannerWords(castMembers))
 
 	function handleCastBindings(
 		message: Sockets.Lorebooks.BindingsForCharacter.Response
@@ -200,26 +259,21 @@
 	 * filter (as in CharacterExportModal). Errors are not watched: the banner
 	 * is a note, and a failed ask just leaves it out.
 	 */
+	let castAsk = $state(0)
+	let castAskedFor: number | null = null
 	$effect(() => {
-		castMembers = []
-		if (mode !== "edit" || !characterId) return
+		void castAsk
+		const askFor = mode === "edit" && characterId ? characterId : null
+		// A re-ask for the same card keeps the line until the reply lands.
+		if (castAskedFor !== askFor) castMembers = []
+		castAskedFor = askFor
+		if (!askFor) return
 		return requestWithInterest(
 			"lorebooks:bindingsForCharacter",
-			{ characterId },
+			{ characterId: askFor },
 			handleCastBindings
 		)
 	})
-
-	/** Address first, then open (shell/openJumpHit.ts). */
-	function openCastMember(member: CastBannerMember) {
-		if (!panelsCtx) return
-		panelsCtx.digest.lore = {
-			lorebookId: member.lorebookId,
-			scope: "cast",
-			castId: member.castId
-		}
-		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-	}
 
 	let isInitialized = $state(false)
 
@@ -233,12 +287,11 @@
 		description: "",
 		personality: "",
 		scenario: "",
-		firstMessage: "",
-		alternateGreetings: [],
+		greetings: [],
 		exampleDialogues: [],
 		creatorNotes: "",
-		creatorNotesMultilingual: {},
-		groupOnlyGreetings: [],
+		creatorNotesLang: "",
+		creatorNotesVariants: [],
 		postHistoryInstructions: "",
 		isFavorite: false,
 		isPersona: false,
@@ -264,12 +317,11 @@
 		description: "",
 		personality: "",
 		scenario: "",
-		firstMessage: "",
-		alternateGreetings: [],
+		greetings: [],
 		exampleDialogues: [],
 		creatorNotes: "",
-		creatorNotesMultilingual: {},
-		groupOnlyGreetings: [],
+		creatorNotesLang: "",
+		creatorNotesVariants: [],
 		postHistoryInstructions: "",
 		isFavorite: false,
 		isPersona: false,
@@ -285,24 +337,6 @@
 		likeness: { prompt: "", negative: "" },
 		timbre: { ...EMPTY_TIMBRE_DRAFT, settings: {} }
 	})
-	/**
-	 * The three groups this form's fields belong to. A field is always open
-	 * inside its group: folding one away hides whether it is filled, which is
-	 * the question a character sheet answers at a glance.
-	 */
-	type FormTab = "profile" | "voice" | "speech" | "notes" | "likeness" | "stats"
-	const FORM_TABS: Array<{
-		value: FormTab
-		label: string
-		icon: Component<any>
-	}> = [
-		{ value: "profile", label: "Profile", icon: Icons.UserRound },
-		{ value: "voice", label: "Voice", icon: Icons.MessageSquareQuote },
-		{ value: "notes", label: "Notes", icon: Icons.NotebookPen },
-		{ value: "likeness", label: "Likeness", icon: Icons.ScanFace },
-		{ value: "speech", label: "Speech", icon: Icons.Volume2 },
-		{ value: "stats", label: "Stats", icon: Icons.HeartPulse }
-	]
 	let activeFormTab: FormTab = $state("profile")
 
 	/**
@@ -326,15 +360,13 @@
 		],
 		voice: [
 			"personality",
-			"firstMessage",
+			"greetings",
 			"scenario",
-			"alternateGreetings",
 			"exampleDialogues",
-			"groupOnlyGreetings",
 			"postHistoryInstructions",
 			"strokesPersonality"
 		],
-		notes: ["creatorNotes", "creatorNotesMultilingual"],
+		notes: ["creatorNotes", "creatorNotesLang", "creatorNotesLanguages"],
 		likeness: [],
 		speech: [],
 		stats: []
@@ -349,17 +381,9 @@
 		FORM_TABS.map((tab) => ({ ...tab, hasError: tabHasError(tab.value) }))
 	)
 
-	/**
-	 * The one input/textarea chrome this form uses: Skeleton's field preset —
-	 * theme-aware background and a focus ring that is already primary — with
-	 * this view's corner radius.
-	 */
-	const FIELD_CLASS = "input rounded-base"
 	/** Field hints, now the fields' titles (polish parity L5, STYLE-GUIDE §6.4). */
 	const ALIASES_HINT =
 		"Other names they go by; when lore is looked up, a mention of one counts as a mention of them."
-	const SHOW_ALL_FIELDS_HINT =
-		"Adds every field a character card can carry: scenario, extra greetings, example dialogues and the creator's own metadata."
 	/** The Summary's limit; its counter shows only past 80% of it (§6.4). */
 	const SUMMARY_MAX = 200
 	const summaryNearLimit = $derived(
@@ -373,9 +397,31 @@
 	)
 	let showCancelModal = $state(false)
 	let isSaving = $state(false)
+	/** The save in flight is a Save as new version. */
+	let savingAsNewVersion = false
+
+	// ── Card versions ────────────────────────────────────────────────────
+	/** Every card version of this card, by number ascending (edit mode). */
+	let cardVersions: CardVersionOption[] = $state([])
+	/** The card version the form shows and a save writes. */
+	let shownCardVersionId: number | undefined = $state(undefined)
+	// Who editing the shown version changes: only members on that version.
+	const castEdit = $derived(castEditParts(castMembers, shownCardVersionId))
+	let currentCardVersionId: number | undefined = $state(undefined)
+	/** Cast members that stay on an older card version after the last Save as new version. */
+	let stayingMembers: StayingCastMember[] = $state([])
+	const shownVersion = $derived(
+		cardVersions.find((v) => v.id === shownCardVersionId)
+	)
+	const currentVersion = $derived(
+		cardVersions.find((v) => v.id === currentCardVersionId)
+	)
+	const stayingLines = $derived(stayingGroups(stayingMembers, cardVersions))
+	let showVersionSwitchModal = $state(false)
+	let pendingCardVersionId: number | undefined = $state(undefined)
+	let showNewVersionDialog = $state(false)
+	let newVersionLabel = $state("")
 	let validationErrors: ValidationErrors = $state({})
-	let newLangKey = $state("")
-	let newLangNote = $state("")
 	let lorebookList: Sockets.Lorebooks.List.Response["lorebookList"] = $state(
 		[]
 	)
@@ -415,10 +461,7 @@
 	// Helper function to get tag color preset
 	function getTagColorPreset(tagName: string): string {
 		const existingTag = availableTags.find((tag) => tag.name === tagName)
-		return (
-			existingTag?.colorPreset ||
-			"bg-primary-500/20 text-primary-ink"
-		)
+		return existingTag?.colorPreset || "bg-primary-500/20 text-primary-ink"
 	}
 
 	// Add tag function
@@ -518,10 +561,13 @@
 
 	/** The strokes this save sends: the draft's, with a never-split field folded in. */
 	function savedStrokes(): Stroke[] {
-		return strokesForSave($state.snapshot(editCharacterData.strokes) as Stroke[], {
-			description: editCharacterData.description,
-			personality: editCharacterData.personality
-		})
+		return strokesForSave(
+			$state.snapshot(editCharacterData.strokes) as Stroke[],
+			{
+				description: editCharacterData.description,
+				personality: editCharacterData.personality
+			}
+		)
 	}
 
 	/**
@@ -537,7 +583,10 @@
 		delete errors.strokesPersonality
 		for (const [index, list] of findings) {
 			const kind = editCharacterData.strokes[index]?.kind ?? "description"
-			const key = kind === "personality" ? "strokesPersonality" : "strokesDescription"
+			const key =
+				kind === "personality"
+					? "strokesPersonality"
+					: "strokesDescription"
 			errors[key] ??= list[0].message
 		}
 		validationErrors = errors
@@ -549,16 +598,26 @@
 
 	/** The draft as a save sends it — no `strokes` while strokes are paused. */
 	function savedCharacter() {
+		const { greetings, creatorNotesLang, creatorNotesVariants, ...draft } =
+			$state.snapshot(editCharacterData)
 		return characterForSave({
-			...editCharacterData,
-			strokes: $state.snapshot(editCharacterData.strokes) as Stroke[]
+			...draft,
+			// The wire still speaks the columns (cardDraft.ts).
+			...greetingColumnsOf(greetings),
+			...notesColumnsOf({
+				creatorNotes: draft.creatorNotes,
+				creatorNotesLang,
+				creatorNotesVariants
+			}),
+			strokes: draft.strokes as Stroke[]
 		})
 	}
 
 	/** The card's stored extensions, for the timbre write (kept whole). */
 	let storedExtensions: unknown = $state(undefined)
-	const userCtxForVoice: { user?: { isAdmin?: boolean | null } | null } | undefined =
-		getContext("userCtx")
+	const userCtxForVoice:
+		| { user?: { isAdmin?: boolean | null } | null }
+		| undefined = getContext("userCtx")
 	const mayPickVoice = $derived(canPickVoice(userCtxForVoice?.user))
 
 	/** `extensions` for a save: only when the timbre moved. */
@@ -584,7 +643,11 @@
 	}
 
 	function handleCreate() {
-		const { likeness: _likeness, timbre: _timbre, ...newCharacter } = savedCharacter()
+		const {
+			likeness: _likeness,
+			timbre: _timbre,
+			...newCharacter
+		} = savedCharacter()
 		const extensions = savedExtensions()
 		if (extensions) (newCharacter as any).extensions = extensions
 		const avatarFile = newCharacter._avatarFile
@@ -600,11 +663,16 @@
 		})
 	}
 
-	function handleUpdate() {
-		const { likeness: _likeness, timbre: _timbre, ...updatedCharacter } = savedCharacter()
+	function handleUpdate(newVersion?: { label: string | null }) {
+		const {
+			likeness: _likeness,
+			timbre: _timbre,
+			...updatedCharacter
+		} = savedCharacter()
 		const extensions = savedExtensions()
 		if (extensions) (updatedCharacter as any).extensions = extensions
 		if (!updatedCharacter.id) return
+		savingAsNewVersion = !!newVersion
 		const avatarFile = updatedCharacter._avatarFile
 		delete updatedCharacter._avatarFile
 		isSaving = true
@@ -612,7 +680,13 @@
 			likeness: savedLikeness(),
 			character: { ...updatedCharacter, id: updatedCharacter.id },
 			// See handleCreate() above re: File → Buffer wire conversion.
-			avatarFile: avatarFile as unknown as Buffer | undefined
+			avatarFile: avatarFile as unknown as Buffer | undefined,
+			// The card version shown is the one written; an in-place save with
+			// a changed version label renames it (the server ignores empty).
+			...(shownCardVersionId !== undefined
+				? { cardVersionId: shownCardVersionId }
+				: {}),
+			...(newVersion ? { saveAsNewVersion: newVersion } : {})
 		})
 	}
 
@@ -639,10 +713,61 @@
 		showCancelModal = false
 	}
 
-	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
-		socket?.emit("userSettings:updateShowAllCharacterFields", {
-			enabled: event.checked
-		})
+	/**
+	 * The picker: another card version loads into the form. Unsaved changes ask
+	 * first (STYLE-GUIDE §6.14: ask first, then discard).
+	 */
+	function onPickCardVersion(
+		event: Event & { currentTarget: HTMLSelectElement }
+	) {
+		const picked = Number(event.currentTarget.value)
+		if (
+			!Number.isFinite(picked) ||
+			picked === shownCardVersionId ||
+			!characterId
+		)
+			return
+		if (hasChanges) {
+			// The select shows the version still on screen until the answer.
+			event.currentTarget.value = String(shownCardVersionId)
+			pendingCardVersionId = picked
+			showVersionSwitchModal = true
+			return
+		}
+		loadCardVersion(picked)
+	}
+
+	function loadCardVersion(cardVersionId: number) {
+		if (!characterId) return
+		stayingMembers = []
+		askCharacter(characterId, cardVersionId)
+	}
+
+	function confirmVersionSwitch() {
+		showVersionSwitchModal = false
+		if (pendingCardVersionId !== undefined)
+			loadCardVersion(pendingCardVersionId)
+		pendingCardVersionId = undefined
+	}
+
+	function cancelVersionSwitch() {
+		showVersionSwitchModal = false
+		pendingCardVersionId = undefined
+	}
+
+	/** Save as new version: validate as a save does, then ask for the label. */
+	function openNewVersionDialog() {
+		if (isSaving || mode !== "edit" || !character) return
+		if (!validateForm()) return
+		if (!strokesValid()) return
+		const top = highestVersion(cardVersions)
+		newVersionLabel = nextVersionLabel(top?.label) ?? ""
+		showNewVersionDialog = true
+	}
+
+	function confirmNewVersion() {
+		if (isSaving) return
+		handleUpdate({ label: newVersionLabel.trim() || null })
 	}
 
 	// Helper for editing arrays
@@ -651,17 +776,6 @@
 	}
 	function removeFromArray(arr: string[], idx: number) {
 		arr.splice(idx, 1)
-	}
-	// Helper for editing object
-	function setObjectKey(
-		obj: Record<string, string>,
-		key: string,
-		value: string
-	) {
-		obj[key] = value
-	}
-	function removeObjectKey(obj: Record<string, string>, key: string) {
-		delete obj[key]
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -707,7 +821,8 @@
 			if (mine)
 				avatarPicker?.commitPendingFrame(res.character.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
-			toaster.success({
+			notify.success({
+				source: "socket:characters:create",
 				title: "Character created",
 				description: `Character "${res.character.name}" created successfully.`
 			})
@@ -725,11 +840,20 @@
 		// another tab (for a different character) silently closes this
 		// form and discards whatever is being edited here.
 		if (res.character?.id !== characterId) return
+		// Only the save THIS form sent may keep it open or move its card
+		// version; the same card saved in another tab closes it as before.
+		const mine = isSaving
+		const asNewVersion = savingAsNewVersion
 		isSaving = false
+		savingAsNewVersion = false
 		if (res.character) {
+			// This form's own save moved a card version: ask the cast line
+			// again so a member now behind the card shows its update offer.
+			if (mine) castAsk++
 			avatarPicker?.commitPendingFrame(res.character.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
-			toaster.success({
+			notify.success({
+				source: "socket:characters:update",
 				title: "Character updated",
 				description: `Character "${res.character.name}" updated successfully.`
 			})
@@ -737,13 +861,27 @@
 			originalCharacterData = $state.snapshot(editCharacterData)
 			// Directly set hasChanges to false to prevent race condition
 			hasChanges = false
+			const staying: StayingCastMember[] =
+				mine && asNewVersion ? (res.staying ?? []) : []
+			if (staying.length && res.cardVersionId !== undefined) {
+				// Cast members stay on the older card version: the form stays
+				// open on the new one, and the line says who stays.
+				showNewVersionDialog = false
+				cardVersions = res.cardVersions ?? cardVersions
+				currentCardVersionId = res.currentCardVersionId
+				shownCardVersionId = res.cardVersionId
+				stayingMembers = staying
+				askCharacter(res.character.id, res.cardVersionId)
+				return
+			}
 			closeForm()
 		}
 	}
 
 	function handleCharactersCreateError(msg: Sockets.ErrorResponse) {
 		isSaving = false
-		toaster.error({
+		notify.error({
+			source: "socket:characters:create:error",
 			title: "Failed to create character",
 			description: msg.error
 		})
@@ -751,7 +889,8 @@
 
 	function handleCharactersUpdateError(msg: Sockets.ErrorResponse) {
 		isSaving = false
-		toaster.error({
+		notify.error({
+			source: "socket:characters:update:error",
 			title: "Failed to update character",
 			description: msg.error
 		})
@@ -760,6 +899,9 @@
 	function handleCharactersGet(message: Sockets.Characters.Get.Response) {
 		character = message.character
 		if (!message.character) return
+		cardVersions = message.cardVersions ?? []
+		shownCardVersionId = message.cardVersionId
+		currentCardVersionId = message.currentCardVersionId
 		const characterData = { ...message.character }
 
 		// Handle migration from old string format to new array format
@@ -787,17 +929,9 @@
 			description: characterData.description ?? "",
 			personality: characterData.personality ?? "",
 			scenario: characterData.scenario ?? "",
-			firstMessage: characterData.firstMessage ?? "",
-			alternateGreetings: Array.isArray(characterData.alternateGreetings)
-				? characterData.alternateGreetings
-				: [],
+			greetings: greetingsOfColumns(characterData),
 			exampleDialogues: characterData.exampleDialogues,
-			creatorNotes: characterData.creatorNotes ?? "",
-			creatorNotesMultilingual:
-				characterData.creatorNotesMultilingual ?? {},
-			groupOnlyGreetings: Array.isArray(characterData.groupOnlyGreetings)
-				? characterData.groupOnlyGreetings
-				: [],
+			...notesDraftOf(characterData),
 			postHistoryInstructions:
 				characterData.postHistoryInstructions ?? "",
 			isFavorite: characterData.isFavorite ?? false,
@@ -842,18 +976,6 @@
 
 	function handleTagsList(message: any) {
 		availableTags = message.tagsList || []
-	}
-
-	function handleUpdateShowAllCharacterFields(message: any) {
-		if (message.success) {
-			toaster.success({
-				title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update character fields setting"
-			})
-		}
 	}
 
 	/**
@@ -940,7 +1062,8 @@
 	useInterest<"characters:countStrokeTokens:error">(
 		"characters:countStrokeTokens:error",
 		(res) => {
-			const id = (res as { requestId?: string }).requestId ?? tokenInFlight
+			const id =
+				(res as { requestId?: string }).requestId ?? tokenInFlight
 			if (id) settleStrokeTokens(id)
 		}
 	)
@@ -996,16 +1119,6 @@
 	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
 
 	/**
-	 * The "show every field" toggle's confirmation — BARE and standing. The
-	 * setting is per user with nothing to scope on, and the reply is what
-	 * actually flips the sections open, so the key has to outlive each press.
-	 */
-	useInterest<"userSettings:updateShowAllCharacterFields">(
-		"userSettings:updateShowAllCharacterFields",
-		handleUpdateShowAllCharacterFields
-	)
-
-	/**
 	 * Edit mode only: this character's row, as a SCOPED interest
 	 * (`characters:get#<id>`; the payload carries the id on `character.id`,
 	 * see `SCOPED_EVENTS`), declared and asked for in one effect so a form
@@ -1021,20 +1134,30 @@
 	 * elsewhere, and a standing key here would refill the fields under
 	 * whatever is being typed.
 	 */
-	$effect(() => {
-		if (initialData || !characterId) return
-		const id = characterId
-		let release: (() => void) | undefined
-		release = declareInterest<"characters:get">(
+	let releaseGet: (() => void) | undefined
+	/** One `characters:get`, as a one-shot interest; `cardVersionId` asks for another card version than the current one. */
+	function askCharacter(id: number, cardVersionId?: number) {
+		releaseGet?.()
+		const release = declareInterest<"characters:get">(
 			interestKey("characters:get", id),
 			(msg: Sockets.Characters.Get.Response) => {
 				handleCharactersGet(msg)
-				release?.()
+				release()
+				if (releaseGet === release) releaseGet = undefined
 			}
 		)
-		socket.emit("characters:get", { id })
+		releaseGet = release
+		socket.emit(
+			"characters:get",
+			cardVersionId === undefined ? { id } : { id, cardVersionId }
+		)
+	}
+
+	$effect(() => {
+		if (initialData || !characterId) return
+		askCharacter(characterId)
 		// Idempotent, so releasing an already-released key is a no-op.
-		return () => release?.()
+		return () => releaseGet?.()
 	})
 
 	onMount(() => {
@@ -1096,63 +1219,57 @@
 <!-- The prompt-visibility badge, beside the label of every field whose text
      reaches the model. -->
 {#snippet promptBadge(hint: string)}
-	<span
-		class="flex items-center opacity-50 transition-opacity duration-fast hover:opacity-100"
-		title={hint}
-		aria-label={hint}
-	>
-		<Icons.ScanEye
-			size={14}
-			class="relative top-[1px] inline"
-			aria-hidden="true"
-		/>
-	</span>
+	<PromptBadge {hint} />
 {/snippet}
 
 <!-- The delete on one row of an array editor: an icon at the row's top-right,
      so a list of textareas stays a list rather than alternating field, button,
      field, button. -->
 {#snippet removeRowButton(label: string, onRemove: () => void)}
-	<button
-		type="button"
-		class="text-surface-600-400 hover:bg-surface-200-800 hover:text-error-600-400 grid size-8 shrink-0 place-items-center rounded-lg"
-		onclick={onRemove}
-		aria-label={label}
-		title={label}
-	>
-		<Icons.X size={14} aria-hidden="true" />
-	</button>
+	<RemoveRowButton {label} {onRemove} />
 {/snippet}
 
 {#snippet addRowButton(label: string, onAdd: () => void)}
-	<button
-		type="button"
-		class="text-surface-600-400 hover:text-foreground self-start text-xs"
-		onclick={onAdd}
-	>
-		+ {label}
-	</button>
+	<AddRowButton {label} {onAdd} />
 {/snippet}
 
 <!-- Save, labelled. Filled primary only while there is something to save: a
      permanently lit call to action stops being one. -->
 {#snippet saveButton()}
-	<button
-		type="button"
-		class="btn btn-sm shrink-0"
-		class:preset-filled-primary-500={hasChanges}
-		class:preset-tonal-surface={!hasChanges}
-		onclick={onSave}
-		disabled={isSaving}
-		aria-label={`Save character${hasChanges ? " (has unsaved changes)" : ""}`}
-	>
-		{#if isSaving}
-			<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
-		{:else}
-			<Icons.Save size={16} aria-hidden="true" />
+	<div class="flex shrink-0 items-center gap-2">
+		{#if mode === "edit"}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface shrink-0"
+				onclick={openNewVersionDialog}
+				disabled={isSaving}
+				data-save-as-new-version
+			>
+				<Icons.CopyPlus size={16} aria-hidden="true" />
+				Save as new version
+			</button>
 		{/if}
-		Save
-	</button>
+		<button
+			type="button"
+			class="btn btn-sm shrink-0"
+			class:preset-filled-primary-500={hasChanges}
+			class:preset-tonal-surface={!hasChanges}
+			onclick={onSave}
+			disabled={isSaving}
+			aria-label={`Save character${hasChanges ? " (has unsaved changes)" : ""}`}
+		>
+			{#if isSaving}
+				<Icons.Loader2
+					size={16}
+					class="animate-spin"
+					aria-hidden="true"
+				/>
+			{:else}
+				<Icons.Save size={16} aria-hidden="true" />
+			{/if}
+			Save
+		</button>
+	</div>
 {/snippet}
 
 {#snippet unsavedLine()}
@@ -1210,7 +1327,9 @@
 					mediaId={character?.avatarMediaId}
 					media={character?.avatarMedia}
 					subject={`${
-						editCharacterData.nickname || editCharacterData.name || "this"
+						editCharacterData.nickname ||
+						editCharacterData.name ||
+						"this"
 					}'s avatar`}
 					onStoredFrame={(frame) => {
 						if (character?.avatarMedia)
@@ -1223,6 +1342,7 @@
 						{@render nicknameField()}
 					</div>
 					{@render castLine()}
+					{@render versionLine()}
 				</div>
 			</fieldset>
 		{:else}
@@ -1232,6 +1352,7 @@
 					{@render nicknameField()}
 				</div>
 				{@render castLine()}
+				{@render versionLine()}
 			</div>
 		{/if}
 
@@ -1301,52 +1422,46 @@
 							)}
 						{/snippet}
 						{#snippet textarea()}
-						<label
-							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
-							for="charDescription"
-						>
-							Description*
-							{@render promptBadge(
-								"This field will be visible in prompts"
-							)}
-						</label>
-						<textarea
-							id="charDescription"
-							rows="8"
-							bind:value={editCharacterData.description}
-							class="{FIELD_CLASS} {validationErrors.description
-								? 'border-error-500 focus:border-error-500'
-								: ''}"
-							placeholder="Description..."
-							aria-required="true"
-							aria-invalid={validationErrors.description
-								? "true"
-								: "false"}
-							aria-describedby={validationErrors.description
-								? "description-error"
-								: undefined}
-							oninput={() => {
-								// Clear validation error when user starts typing
-								if (validationErrors.description) {
-									const { description, ...rest } =
-										validationErrors
-									validationErrors = rest
-								}
-							}}
-						></textarea>
-						{#if validationErrors.description}
-							<p
-								class="text-error-600-400 mt-1 text-sm"
-								id="description-error"
-								role="alert"
-							>
-								{validationErrors.description}
-							</p>
-						{/if}
+							<ProseField
+								id="charDescription"
+								label="Description"
+								required
+								hint="This field will be visible in prompts"
+								rows={8}
+								bind:value={editCharacterData.description}
+								class={validationErrors.description
+									? "border-error-500 focus:border-error-500"
+									: ""}
+								placeholder="Description..."
+								invalid={!!validationErrors.description}
+								describedBy={validationErrors.description
+									? "description-error"
+									: undefined}
+								oninput={() => {
+									// Clear validation error when user starts typing
+									if (validationErrors.description) {
+										const { description, ...rest } =
+											validationErrors
+										validationErrors = rest
+									}
+								}}
+							/>
+							{#if validationErrors.description}
+								<p
+									class="text-error-600-400 mt-1 text-sm"
+									id="description-error"
+									role="alert"
+								>
+									{validationErrors.description}
+								</p>
+							{/if}
 						{/snippet}
 					</StrokeField>
 					{#if validationErrors.strokesDescription && editCharacterData.strokes.length}
-						<p class="text-error-600-400 -mt-2 text-sm" role="alert">
+						<p
+							class="text-error-600-400 -mt-2 text-sm"
+							role="alert"
+						>
 							{validationErrors.strokesDescription}
 						</p>
 					{/if}
@@ -1621,7 +1736,7 @@
 					</div>
 				</section>
 			{/if}
-			{#if userSettingsCtx.settings?.showAllCharacterFields}
+			{#if advanced}
 				<section class="panel-card">
 					<h2 class="mb-3 text-sm font-medium">Card metadata</h2>
 					<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-3">
@@ -1630,7 +1745,7 @@
 								class="text-surface-600-400 mb-1.5 text-xs"
 								for="charVersion"
 							>
-								Version
+								Version label
 							</label>
 							<input
 								id="charVersion"
@@ -1700,144 +1815,91 @@
 							)}
 						{/snippet}
 						{#snippet textarea()}
-							<label
-								class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
-								for="charPersonality"
-							>
-								Personality
-								{@render promptBadge(
-									"This field will be visible in prompts"
-								)}
-							</label>
-							<textarea
+							<ProseField
 								id="charPersonality"
-								rows="8"
+								label="Personality"
+								hint="This field will be visible in prompts"
+								rows={8}
 								bind:value={editCharacterData.personality}
-								class={FIELD_CLASS}
 								placeholder="Personality..."
-							></textarea>
+							/>
 						{/snippet}
 					</StrokeField>
 					{#if validationErrors.strokesPersonality && editCharacterData.strokes.length}
-						<p class="text-error-600-400 -mt-2 text-sm" role="alert">
+						<p
+							class="text-error-600-400 -mt-2 text-sm"
+							role="alert"
+						>
 							{validationErrors.strokesPersonality}
 						</p>
 					{/if}
-					{#if userSettingsCtx.settings?.showAllCharacterFields}
+					{#if advanced}
 						<div class="flex flex-col">
-							<label
-								class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
-								for="charScenario"
-							>
-								Scenario
-								{@render promptBadge(
-									"This field will be visible in prompts (excluded from group sessions)"
-								)}
-							</label>
-							<textarea
+							<ProseField
 								id="charScenario"
-								rows="8"
+								label="Scenario"
+								hint="This field will be visible in prompts (excluded from group sessions)"
+								rows={8}
 								bind:value={editCharacterData.scenario}
-								class={FIELD_CLASS}
 								placeholder="Scenario..."
-							></textarea>
+							/>
 						</div>
 					{/if}
 				</div>
 			</section>
 			<section class="panel-card">
 				<h2 class="mb-3 text-sm font-medium">Greetings</h2>
-				<div class="flex flex-col gap-4">
-					<div class="flex flex-col">
-						<label
-							class="text-surface-600-400 mb-1.5 text-xs"
-							for="charFirstMessage"
-						>
-							First message
-						</label>
-						<textarea
-							id="charFirstMessage"
-							rows="8"
-							bind:value={editCharacterData.firstMessage}
-							class={FIELD_CLASS}
-							placeholder="First message..."
-						></textarea>
-					</div>
-					{#if userSettingsCtx.settings?.showAllCharacterFields}
+				<div class="flex flex-col gap-3">
+					{#if advanced}
+						<p class="text-surface-600-400 text-xs">
+							A new session opens with the first greeting and
+							offers the others as swipes; a group session uses
+							the ones marked for it, when there are any.
+						</p>
+						<GreetingsList
+							greetings={editCharacterData.greetings}
+							onText={(i, text) =>
+								(editCharacterData.greetings[i].text = text)}
+							onGroupOnly={(i, groupOnly) => {
+								// Absent, not false, when unmarked: changing and changing back stays clean.
+								const text = editCharacterData.greetings[i].text
+								editCharacterData.greetings[i] = groupOnly
+									? { text, groupOnly: true }
+									: { text }
+							}}
+							onRemove={(i) =>
+								editCharacterData.greetings.splice(i, 1)}
+							onAdd={() =>
+								editCharacterData.greetings.push({ text: "" })}
+						/>
+					{:else}
 						<div class="flex flex-col">
-							<span class="text-surface-600-400 mb-1.5 text-xs">
-								Alternate greetings
-							</span>
-							<div class="flex flex-col gap-2">
-								{#each editCharacterData.alternateGreetings as _greeting, idx (idx)}
-									<div class="flex items-start gap-2">
-										<textarea
-											rows="2"
-											bind:value={
-												editCharacterData
-													.alternateGreetings[idx]
-											}
-											class="{FIELD_CLASS} flex-1 resize-y"
-											placeholder="Greeting..."
-											aria-label={`Alternate greeting ${idx + 1}`}
-										></textarea>
-										{@render removeRowButton(
-											`Delete alternate greeting ${idx + 1}`,
-											() =>
-												removeFromArray(
-													editCharacterData.alternateGreetings,
-													idx
-												)
-										)}
-									</div>
-								{/each}
-								{@render addRowButton("Add greeting", () =>
-									addToArray(
-										editCharacterData.alternateGreetings
-									)
-								)}
-							</div>
-						</div>
-						<div class="flex flex-col">
-							<span class="text-surface-600-400 mb-1.5 text-xs">
-								Group-only greetings
-							</span>
-							<div class="flex flex-col gap-2">
-								{#each editCharacterData.groupOnlyGreetings as _greeting, idx (idx)}
-									<div class="flex items-start gap-2">
-										<textarea
-											rows="2"
-											bind:value={
-												editCharacterData
-													.groupOnlyGreetings[idx]
-											}
-											class="{FIELD_CLASS} flex-1 resize-y"
-											placeholder="Group greeting..."
-											aria-label={`Group-only greeting ${idx + 1}`}
-										></textarea>
-										{@render removeRowButton(
-											`Delete group-only greeting ${idx + 1}`,
-											() =>
-												removeFromArray(
-													editCharacterData.groupOnlyGreetings,
-													idx
-												)
-										)}
-									</div>
-								{/each}
-								{@render addRowButton(
-									"Add group greeting",
-									() =>
-										addToArray(
-											editCharacterData.groupOnlyGreetings
-										)
-								)}
-							</div>
+							<label
+								class="text-surface-600-400 mb-1.5 text-xs"
+								for="charFirstMessage"
+							>
+								First greeting
+							</label>
+							<textarea
+								id="charFirstMessage"
+								rows="8"
+								value={editCharacterData.greetings[
+									openerIndex(editCharacterData.greetings)
+								]?.text ?? ""}
+								oninput={(e) =>
+									(editCharacterData.greetings =
+										withOpenerText(
+											editCharacterData.greetings,
+											e.currentTarget.value
+										))}
+								class={FIELD_CLASS}
+								placeholder="First greeting..."
+							></textarea>
 						</div>
 					{/if}
 				</div>
 			</section>
-			{#if userSettingsCtx.settings?.showAllCharacterFields}
+			{#if advanced}
 				<section class="panel-card">
 					<h2 class="mb-3 text-sm font-medium">Examples</h2>
 					<div class="flex flex-col">
@@ -1889,25 +1951,17 @@
 				<section class="panel-card">
 					<h2 class="mb-3 text-sm font-medium">Instructions</h2>
 					<div class="flex flex-col">
-						<label
-							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
-							for="charPostHistory"
-						>
-							Post-history instructions
-							{@render promptBadge(
-								"This field will be visible in prompts"
-							)}
-						</label>
-						<textarea
+						<ProseField
 							id="charPostHistory"
-							rows="4"
+							label="Post-history instructions"
+							hint="This field will be visible in prompts"
+							rows={4}
 							bind:value={
 								editCharacterData.postHistoryInstructions
 							}
-							class={FIELD_CLASS}
 							placeholder="Stay in character and keep replies short…"
 							title="Placed after the conversation, just before the reply; good for style reminders."
-						></textarea>
+						/>
 					</div>
 				</section>
 			{/if}
@@ -1922,101 +1976,15 @@
 		>
 			<section class="panel-card">
 				<h2 class="mb-3 text-sm font-medium">Creator notes</h2>
-				<div class="flex flex-col gap-4">
-					<div class="flex flex-col">
-						<label
-							class="text-surface-600-400 mb-1.5 text-xs"
-							for="charCreatorNotes"
-						>
-							Creator notes
-						</label>
-						<textarea
-							id="charCreatorNotes"
-							rows="4"
-							bind:value={editCharacterData.creatorNotes}
-							class={FIELD_CLASS}
-							placeholder="Notes from the character creator..."
-						></textarea>
-					</div>
-					{#if userSettingsCtx.settings?.showAllCharacterFields}
-						<div class="flex flex-col">
-							<span class="text-surface-600-400 mb-1.5 text-xs">
-								Creator notes (multilingual)
-							</span>
-							<div class="flex flex-col gap-2">
-								{#each Object.entries(editCharacterData.creatorNotesMultilingual) as [lang, _note], idx (lang)}
-									<div class="flex items-start gap-2">
-										<input
-											type="text"
-											value={lang}
-											class="{FIELD_CLASS} w-16 shrink-0"
-											aria-label={`Language ${idx + 1}`}
-											readonly
-										/>
-										<input
-											type="text"
-											bind:value={
-												editCharacterData
-													.creatorNotesMultilingual[
-													lang
-												]
-											}
-											class="{FIELD_CLASS} flex-1"
-											placeholder="Note..."
-											aria-label={`Note in ${lang}`}
-										/>
-										{@render removeRowButton(
-											`Delete the ${lang} note`,
-											() =>
-												removeObjectKey(
-													editCharacterData.creatorNotesMultilingual,
-													lang
-												)
-										)}
-									</div>
-								{/each}
-								<div class="flex items-start gap-2">
-									<input
-										type="text"
-										class="{FIELD_CLASS} w-16 shrink-0"
-										bind:value={newLangKey}
-										placeholder="Lang"
-										aria-label="New note language"
-									/>
-									<input
-										type="text"
-										class="{FIELD_CLASS} flex-1"
-										bind:value={newLangNote}
-										placeholder="Note..."
-										aria-label="New note text"
-									/>
-									<button
-										type="button"
-										class="text-surface-600-400 hover:bg-surface-200-800 hover:text-foreground grid size-8 shrink-0 place-items-center rounded-lg"
-										onclick={() => {
-											if (newLangKey) {
-												setObjectKey(
-													editCharacterData.creatorNotesMultilingual,
-													newLangKey,
-													newLangNote
-												)
-												newLangKey = ""
-												newLangNote = ""
-											}
-										}}
-										aria-label="Add multilingual note"
-										title="Add multilingual note"
-									>
-										<Icons.Plus
-											size={14}
-											aria-hidden="true"
-										/>
-									</button>
-								</div>
-							</div>
-						</div>
-					{/if}
-				</div>
+				<CreatorNotesFields
+					textId="charCreatorNotes"
+					langId="charCreatorNotesLang"
+					bind:text={editCharacterData.creatorNotes}
+					bind:lang={editCharacterData.creatorNotesLang}
+					bind:variants={editCharacterData.creatorNotesVariants}
+					languages={advanced}
+					error={validationErrors.creatorNotesLanguages}
+				/>
 			</section>
 		</div>
 
@@ -2066,35 +2034,18 @@
 			/>
 		</div>
 
-		<!-- Its own quiet row, outside the cards: this switch changes what the
-		     cards contain, so it is not one of the things they hold. What it
-		     adds is its title (polish parity L5), not a sentence under it. -->
-		<div
-			class="flex flex-col gap-1 pt-2"
-			hidden={activeFormTab === "stats" ||
-				activeFormTab === "likeness" ||
-				activeFormTab === "speech"}
-			title={SHOW_ALL_FIELDS_HINT}
-		>
-			<Switch
-				name="show-all-character-fields"
-				checked={userSettingsCtx.settings?.showAllCharacterFields ??
-					false}
-				onCheckedChange={onShowAllCharacterFieldsClick}
-				aria-describedby="show-all-fields-description"
+		<!-- The "Some controls are hidden" line, shown only while advanced
+		     controls are off; it turns them on in place. -->
+		{#if !advanced}
+			<div
+				class="pt-2"
+				hidden={activeFormTab === "stats" ||
+					activeFormTab === "likeness" ||
+					activeFormTab === "speech"}
 			>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-				<Switch.Label class="text-sm">Show all fields</Switch.Label>
-			</Switch>
-			<span id="show-all-fields-description" class="sr-only">
-				{SHOW_ALL_FIELDS_HINT}
-			</span>
-		</div>
+				<AdvancedHiddenLine />
+			</div>
+		{/if}
 	</div>
 </div>
 
@@ -2103,27 +2054,67 @@
      many members, which retell parts of the card, and what a card is ride its
      title. Absent outside the shell, the names are plain text. -->
 {#snippet castLine()}
-	{#if castBanner}
-		<p
-			class="text-surface-600-400 text-xs"
-			title="{castBanner.represents}{castBanner.retells
-				? ` ${castBanner.retells}`
-				: ''} {CAST_LINE_NOTE}"
-			data-cast-line
-		>
-			{castBanner.lead}
-			{#each castMembers as member, i (member.castId)}
-				{@const retold = retoldFieldList(member.retold)}
-				{#if i > 0},{" "}{/if}{#if panelsCtx}<button
+	<CastLine members={castMembers} onChanged={() => castAsk++} />
+	{#if castEdit}
+		<p class="text-surface-600-400 text-xs" data-cast-edit-note>
+			{#each castEdit as part, i (i)}{#if typeof part === "string"}{part}{:else if panelsCtx}<button
 						type="button"
 						class="text-primary-ink underline-offset-2 hover:underline"
-						aria-label="Open this card's cast member in {member.lorebookName}"
-						onclick={() => openCastMember(member)}
+						aria-label="Open this card's cast member in {part.lorebookName}"
+						onclick={() => openCastMember(panelsCtx, part)}
 					>
-						{member.lorebookName}
-					</button>{:else}<span>{member.lorebookName}</span>{/if}{#if retold}{" "}(retells {retold}){/if}
+						{part.lorebookName}
+					</button>{:else}{part.lorebookName}{/if}{/each}
+		</p>
+	{/if}
+	{#if stayingLines.length}
+		<!-- After a Save as new version: who stays on the older card version,
+		     each name a link to that member (as the cast line does). -->
+		<p class="text-surface-600-400 text-xs" data-staying-line>
+			{#each stayingLines as group, g (g)}
+				{group.lead}{" "}{#each group.members as member, i (member.castMemberId)}{#if i > 0},{" "}{/if}{#if panelsCtx}<button
+							type="button"
+							class="text-primary-ink underline-offset-2 hover:underline"
+							onclick={() =>
+								openCastMember(panelsCtx, {
+									lorebookId: member.lorebookId,
+									castId: member.castMemberId
+								})}
+						>
+							{member.name}
+						</button>{:else}{member.name}{/if}{/each}{g <
+				stayingLines.length - 1
+					? "; "
+					: "."}
 			{/each}
 		</p>
+	{/if}
+{/snippet}
+
+<!-- The card version picker (edit mode, more than one card version). In the
+     hero rather than beside the Version label field, which sits under
+     advanced controls: reaching an older card version must not depend on it. -->
+{#snippet versionLine()}
+	{#if mode === "edit" && cardVersions.length > 1}
+		<div class="flex flex-col gap-1" data-card-version-picker>
+			<select
+				class="select w-auto max-w-full self-start text-sm"
+				aria-label="Card version"
+				value={shownCardVersionId}
+				onchange={onPickCardVersion}
+			>
+				{#each cardVersions as version (version.id)}
+					<option value={version.id}>
+						{versionOptionText(version, currentCardVersionId)}
+					</option>
+				{/each}
+			</select>
+			{#if shownVersion && currentVersion && shownVersion.id !== currentVersion.id}
+				<p class="text-surface-600-400 text-xs" data-card-version-note>
+					{inPlaceNote(shownVersion, currentVersion)}
+				</p>
+			{/if}
+		</div>
 	{/if}
 {/snippet}
 
@@ -2155,7 +2146,11 @@
 			aria-describedby={validationErrors.name ? "name-error" : undefined}
 		/>
 		{#if validationErrors.name}
-			<p class="text-error-600-400 mt-1 text-sm" id="name-error" role="alert">
+			<p
+				class="text-error-600-400 mt-1 text-sm"
+				id="name-error"
+				role="alert"
+			>
 				{validationErrors.name}
 			</p>
 		{/if}
@@ -2188,6 +2183,78 @@
 	onCancel={handleCancelModalCancel}
 />
 
+<CharacterUnsavedChangesModal
+	open={showVersionSwitchModal}
+	onOpenChange={(e) => {
+		if (!e.open) cancelVersionSwitch()
+	}}
+	onConfirm={confirmVersionSwitch}
+	onCancel={cancelVersionSwitch}
+/>
+
+<Dialog
+	open={showNewVersionDialog}
+	onOpenChange={(e) => (showNewVersionDialog = e.open)}
+>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl"
+				data-new-version-dialog
+			>
+				<Dialog.Title class="text-lg font-semibold">
+					Save as new version
+				</Dialog.Title>
+				<form
+					class="space-y-4"
+					onsubmit={(e) => {
+						e.preventDefault()
+						confirmNewVersion()
+					}}
+				>
+					<div class="flex flex-col">
+						<label
+							class="text-surface-600-400 mb-1.5 text-xs"
+							for="newVersionLabel"
+						>
+							Version label
+						</label>
+						<input
+							id="newVersionLabel"
+							type="text"
+							bind:value={newVersionLabel}
+							class={FIELD_CLASS}
+							placeholder="1.1"
+						/>
+					</div>
+					<footer class="flex justify-end gap-2">
+						<button
+							type="button"
+							class="btn preset-tonal"
+							onclick={() => (showNewVersionDialog = false)}
+						>
+							Cancel
+						</button>
+						<button
+							type="submit"
+							class="btn preset-filled-primary-500"
+							disabled={isSaving}
+							data-new-version-confirm
+						>
+							Save as new version
+						</button>
+					</footer>
+				</form>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+
 <Dialog
 	open={backToOneOpen}
 	role="alertdialog"
@@ -2218,8 +2285,8 @@
 					{#if offStrokes}
 						<p class="text-surface-600-400">
 							{offStrokes}
-							{offStrokes === 1 ? "stroke is" : "strokes are"} off and
-							will not be kept.
+							{offStrokes === 1 ? "stroke is" : "strokes are"} off
+							and will not be kept.
 						</p>
 					{/if}
 					<p class="text-surface-600-400">

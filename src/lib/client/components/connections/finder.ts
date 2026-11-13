@@ -35,9 +35,11 @@ import {
 	fitFor,
 	fitSentence,
 	matchesTier,
+	tierBudget,
 	type Fit,
 	type MemoryTier
 } from "./memoryTier"
+import { realDate } from "$lib/client/utils/realTime.svelte"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { ONNX_DTYPES } from "$lib/shared/constants/onnxDtypes"
 import {
@@ -443,6 +445,16 @@ export interface FinderRow {
 	quantsNote?: string | null
 	/** What `models:presence` is asked about this row. Keyed by `key`. */
 	presenceQuery?: PresenceQuery
+	/**
+	 * The recommended list's own facts for the finder model page's strip,
+	 * where the list carries them (the ONNX lists do; no Hub card is asked
+	 * for those rows). `languages` is the list's sentence as written.
+	 */
+	listFacts?: {
+		license?: string | null
+		languages?: string | null
+		parameters?: string | null
+	}
 }
 
 /**
@@ -582,12 +594,55 @@ export interface RowContext {
 	kcppKind?: "text" | "image"
 }
 
+/**
+ * The order image models are offered in: the list's catalogue (the Hub's
+ * file order) says nothing about the person's card, so the rows are put in
+ * fit order against their memory tier.
+ *
+ *  - Models whose drawing figure fits the tier come first, the most capable
+ *    the card can take leading — on an 8 GB tier that is SDXL before SD 1.5,
+ *    on a 4 GB tier SD 1.5 before the distilled 512² model — so the one gold
+ *    Get lands on the best picture that card draws, never on a model it
+ *    merely downloads.
+ *  - The rest follow lightest first, so a person who gave no tier (or a
+ *    small one) still reads the models most likely to run before the ones
+ *    that need a newer card. A model with no figure at all — an incomplete
+ *    bundle the one file cannot run — comes last.
+ *
+ * Text rows keep the list's order: that list is already written by hand in
+ * the order it means.
+ */
+export function orderImageRowsByFit(
+	models: readonly KcppRecommended[],
+	tier: MemoryTier
+): KcppRecommended[] {
+	const vram = (m: KcppRecommended) =>
+		m.recommendedVram && Number.isFinite(m.recommendedVram)
+			? m.recommendedVram
+			: Number.POSITIVE_INFINITY
+	const fits = (m: KcppRecommended) => matchesTier(m.recommendedVram, tier)
+	return models
+		.map((m, i) => ({ m, i }))
+		.sort((a, b) => {
+			const af = fits(a.m)
+			const bf = fits(b.m)
+			if (af !== bf) return af ? -1 : 1
+			const av = vram(a.m)
+			const bv = vram(b.m)
+			if (av !== bv) return af ? bv - av : av - bv
+			return a.i - b.i
+		})
+		.map(({ m }) => m)
+}
+
 /** The recommended GGUF rows a KoboldCPP destination offers. */
 export function kcppRecommendedRows(
 	models: readonly KcppRecommended[],
 	ctx: RowContext
 ): FinderRow[] {
-	return models
+	const ordered =
+		ctx.kcppKind === "image" ? orderImageRowsByFit(models, ctx.tier) : models
+	return ordered
 		.filter((m) => matchesQuery(ctx.query, m.name, m.description))
 		.map((m) => {
 			// The Hub's sibling list rarely quotes sizes; the list's own figure
@@ -616,12 +671,32 @@ export function kcppRecommendedRows(
 						}
 					: null,
 				bytes,
-				fit: fitFor(bytes, ctx.tier),
+				fit:
+					ctx.kcppKind === "image"
+						? imageFit(m.recommendedVram, ctx.tier)
+						: fitFor(bytes, ctx.tier),
 				presence: onDisk ? ("on_disk" as const) : null,
 				percent: null,
 				downloading: false
 			}
 		})
+}
+
+/**
+ * An image model's fit is the memory it needs to DRAW, not its file size: a
+ * 2.8 GB SDXL file wants 8 GB to run. So the gold Get (`primaryRowIndex`,
+ * first row that outright fits) is judged by the list's `recommended_vram`,
+ * and a row with no figure — a multi-file model the server withholds it for —
+ * is "unknown", never gold (review 2026-11-10).
+ */
+export function imageFit(
+	recommendedVramGb: number | null | undefined,
+	tier: MemoryTier
+): Fit {
+	if (tierBudget(tier) == null) return "unknown"
+	if (recommendedVramGb == null || !Number.isFinite(recommendedVramGb))
+		return "unknown"
+	return matchesTier(recommendedVramGb, tier) ? "fits" : "too_big"
 }
 
 /** The recommended rows an Ollama destination offers. */
@@ -732,7 +807,12 @@ export function onnxRecommendedRows(
 				fit: fitFor(bytes, ctx.tier),
 				presence: state === "on_disk" ? ("on_disk" as const) : null,
 				percent: m.local?.percent ?? null,
-				downloading: state === "downloading"
+				downloading: state === "downloading",
+				listFacts: {
+					license: catalog?.license ?? null,
+					languages: catalog?.languages ?? null,
+					parameters: catalog?.parameterSize ?? null
+				}
 			}
 		})
 }
@@ -1431,4 +1511,158 @@ export class SerialAsk {
 		this.inFlight = false
 		this.queued = null
 	}
+}
+
+// ── The finder model page ───────────────────────────────────────────────────
+
+const HUB_REPO = /^[A-Za-z0-9][\w.-]*\/[\w.-]+$/
+
+function guardedRepo(repo: string): string | null {
+	return HUB_REPO.test(repo) && !repo.includes("..") ? repo : null
+}
+
+/** `hf.co/<owner>/<repo>[:tag]` → `<owner>/<repo>`; anything else → null. */
+function repoFromHfPath(path: string): string | null {
+	const m = /^(?:hf\.co|huggingface\.co)\/([^:]+)(?::.*)?$/.exec(path)
+	return m ? m[1] : null
+}
+
+/**
+ * The Hugging Face repo a result row names, or null. Hub and KoboldCPP rows
+ * name one directly, an Ollama row names one only when it pulls `hf.co/…`
+ * (a library name has no repo), ONNX and audio rows never do. The shape guard
+ * is the one the server applies.
+ */
+export function hubRepoOf(row: { key: string; name: string }): string | null {
+	const { key, name } = row
+	if (key.startsWith("hub:")) {
+		const bare = name.replace(/^(?:hf\.co|huggingface\.co)\//, "")
+		return guardedRepo(bare.replace(/:[^/]*$/, ""))
+	}
+	if (key.startsWith("kcpp:")) return guardedRepo(name)
+	if (key.startsWith("ollama:")) {
+		const repo = repoFromHfPath(key.slice("ollama:".length))
+		return repo ? guardedRepo(repo) : null
+	}
+	return null
+}
+
+/** A GGUF file's quant label: last hyphen segment of the stem, `UD-` kept. */
+function ggufQuantLabel(rfilename: string): string | null {
+	const base = rfilename.split("/").pop() ?? rfilename
+	if (!/\.gguf$/i.test(base)) return null
+	const parts = base.replace(/\.gguf$/i, "").split("-")
+	const last = parts[parts.length - 1]
+	if (!last) return null
+	return parts.length > 1 && parts[parts.length - 2] === "UD"
+		? `UD-${last}`
+		: last
+}
+
+/**
+ * Fills each quant's MISSING `bytes` from the Hub's file list; a known size is
+ * never overwritten. A quant matches its file by exact filename, else by quant
+ * label when exactly one non-`mmproj`, non-`MTP` file carries it — a split
+ * model's parts never get a guessed size.
+ */
+export function withHubFileSizes(
+	quants: readonly QuantFile[],
+	files: readonly Sockets.Models.HubCard.File[] | null | undefined
+): QuantFile[] {
+	if (!files || files.length === 0) return [...quants]
+	const labelled = files
+		.filter((f) => !/mmproj/i.test(f.rfilename) && !/MTP/.test(f.rfilename))
+		.map((f) => ({ label: ggufQuantLabel(f.rfilename), size: f.size }))
+	return quants.map((q) => {
+		if (q.bytes != null) return q
+		const exact = q.filename
+			? files.find((f) => f.rfilename === q.filename)
+			: undefined
+		let size = exact?.size
+		if (!exact) {
+			const want = q.name.toLowerCase()
+			const hits = labelled.filter((f) => f.label?.toLowerCase() === want)
+			if (hits.length === 1) size = hits[0].size
+		}
+		return size != null ? { ...q, bytes: size } : q
+	})
+}
+
+/**
+ * How much of the memory tier a file takes: a 1–100 share and the fit tone.
+ * Null whenever `quantFit` is (Not sure, or no size).
+ */
+export function fitBar(
+	quant: QuantFile,
+	tier: MemoryTier
+): { percent: number; tone: QuantFitTone } | null {
+	const note = quantFit(quant, tier)
+	const budget = tierBudget(tier)
+	if (!note || !budget || quant.bytes == null) return null
+	const percent = Math.min(
+		100,
+		Math.max(1, Math.round((quant.bytes / budget) * 100))
+	)
+	return { percent, tone: note.tone }
+}
+
+/**
+ * The model page's facts strip: Parameters, Context, Licence, Languages,
+ * Downloads, Updated — only the ones known, in that order. An absent fact is
+ * dropped, never rendered as "unknown".
+ */
+export function modelPageFacts(
+	input: {
+		parameters?: string | null
+		card?: Sockets.Models.HubCard.Card | null
+		tags?: readonly string[] | null
+		downloads?: number | null
+		/** The recommended list's own facts (`FinderRow.listFacts`); the card wins. */
+		listFacts?: FinderRow["listFacts"] | null
+	},
+	formatDate: (iso: string) => string = (iso) =>
+		realDate(iso, { day: "numeric", month: "short", year: "numeric" })
+): { label: string; value: string }[] {
+	const out: { label: string; value: string }[] = []
+	const card = input.card
+	const list = input.listFacts
+	const parameters = input.parameters || list?.parameters
+	if (parameters) out.push({ label: "Parameters", value: parameters })
+	// Owner ★B-2 (2026-11-08): shown when the Hub card names one.
+	if (card?.baseModel)
+		out.push({ label: "Base model", value: card.baseModel })
+	const ctxLen = card?.contextLength
+	if (ctxLen != null && Number.isFinite(ctxLen) && ctxLen > 0) {
+		out.push({
+			label: "Context",
+			value:
+				ctxLen % 1024 === 0
+					? `${ctxLen / 1024}k tokens`
+					: `${ctxLen.toLocaleString("en-US")} tokens`
+		})
+	}
+	const licence =
+		card?.license || list?.license || licenseFromTags(input.tags)
+	if (licence) out.push({ label: "Licence", value: licence })
+	const langs = card?.languages ?? []
+	if (langs.length > 0) {
+		const more = langs.length - 3
+		out.push({
+			label: "Languages",
+			value:
+				langs.slice(0, 3).join(", ") +
+				(more > 0 ? ` +${more} more` : "")
+		})
+	} else if (list?.languages) {
+		out.push({ label: "Languages", value: list.languages })
+	}
+	const downloads = formatCount(card?.downloads ?? input.downloads)
+	if (downloads) out.push({ label: "Downloads", value: downloads })
+	if (card?.lastModified) {
+		const date = formatDate(card.lastModified)
+		if (date && !date.includes("Invalid")) {
+			out.push({ label: "Updated", value: date })
+		}
+	}
+	return out
 }

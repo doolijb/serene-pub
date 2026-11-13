@@ -1,0 +1,41 @@
+# BRIEF playtest2-S3 — compile keeps its meaning: filing at Apply, Compile for a day with unfiled scenes, the review's name (lane S2 follow-on)
+
+Lane id `playtest2-S3` · wave 3b · report `plans/REPORT-playtest2-S3-2026-11-04.md` · you are a `lane-supervisor`: read `.claude/guides/multi-agent.md` first, then `review.md` §2.
+
+## Goal
+Read `plans/REPORT-playtest2-S2-2026-11-04.md` in full, especially its Decisions and the lead's scope-review answers (findings 1–3 are yours). Build:
+1. **The review's name.** `src/lib/server/sockets/scenes.ts` ~1853: `name: result.name ?? scene.name` falls back to the STORED name, which `ProcessSceneModal.svelte` (:78, :149, :330, :375) sends back at Apply (:234), so a renumbered default name (stored *Scene 3*, shown *Scene 2*) turns custom and jumps back. Fix: fall back to `sceneDisplayNames(db, [scene]).get(scene.id)` (the same reader :1490 uses); also treat `name === existing.name && existing.nameIsDefault` as "keep default" in the `scenes:update` rule. Int case: delete scene 1, summarize the shifted scene, Apply → `nameIsDefault` stays true and the shown number stays.
+2. **Filing at Apply, not at the press.** S2 filed the day's unfiled scenes in their own transaction before the model ran (`scenes.ts` ~1145–1185) and kept them filed on discard, which contradicts the canon meaning of *not yet compiled* (`history_entry_id` null). Move the filing into the compile's **Apply** transaction (the review's save), feeding the model the scene ids in memory for the draft; a discarded review leaves them unfiled; `tx` only. Update the sentence in `docs/lorebook-time.md` (they are filed when you apply; discard leaves them not yet compiled).
+3. **Compile for a day that has unfiled scenes.** Every Compile is gated on scenes already filed under the entry (`client/lorebooks/sections/HistoryRowMenu.svelte:28-31` "Capture scenes first", `sections/HistorySceneList.svelte:71`, `time/DatedEntryPanel.svelte:200`), so an entry a person adds for a new day can never be compiled — the documented path fails. Fix: the history entry row carries the count of the line's **not-yet-compiled scenes of its date** (the server computes it with `historyEntryOfDate`'s date rule, one query per list; one additive optional field on the entry row type in `shared/sockets/types.ts` — claim it, name it in the report), the three gates enable Compile when that count > 0, and the compile request reads those scenes. The *Not yet compiled* group itself and compile-by-date are **S-B2, not yours**.
+Docs: `docs/lorebook-time.md` (the two sentences), `docs/sessions.md` only if it repeats them.
+
+## Files owned (by name; re-read each immediately before editing)
+`src/lib/server/sockets/scenes.ts` (the review save, the compile handler, `scenes:update`'s rule), `src/lib/server/scenes/liveScenes.ts` (only if the display-name read needs a helper signature), the history-entry list reader that builds entry rows (name it; the count), `src/lib/shared/sockets/types.ts` (ONE optional field on the entry row), `src/lib/client/lorebooks/sections/HistoryRowMenu.svelte`, `sections/HistorySceneList.svelte`, `time/DatedEntryPanel.svelte`, `src/lib/client/components/modals/ProcessSceneModal.svelte` (only if Apply must send something else), `docs/lorebook-time.md`, tests beside each (`scenes.compileLine.int`, `scenes.summaryReview.int`, `scenes.displayNames.int`, the three components' DOM tests).
+NOT yours: the migration/schema (done), `NOMENCLATURE.md` (lead), `boundaryWatcher.ts`, anything on the M2e stay-out list, the Chronicle (`requests/historyEntries.ts`) beyond reading the count.
+
+## Files readable
+Everything. NOMENCLATURE §9 scene / history entry rows and today's §25 rows (tail); `docs/lorebook-time.md`.
+
+## Out of scope — never built
+S-B2 (the *Not yet compiled* group, compile-by-date, `Sockets.Scenes.Compile.Params` change); creating entries from compile; any setting.
+
+## Stop and ask when
+Filing at Apply cannot be done without changing the review's socket shape beyond one optional field; the count needs a new event; a name beyond the count field is new; CLAUDE.md §Decisions applies.
+
+## Done means
+Green: `scenes.compileLine.int.test.ts`, `scenes.summaryReview.int.test.ts`, `scenes.displayNames.int.test.ts`, `scenes.live.int.test.ts`, the three components' DOM tests, `historyEntries` request tests; new cases: Apply keeps a renumbered default name default; a discarded compile leaves the scenes unfiled, an applied one files them; an entry whose day has unfiled scenes offers Compile and the compile reads them; an entry whose day has none keeps "Capture scenes first".
+## Standing rules for every playtest2 lane (verbatim from the lead)
+- **Scope is the ruled set in § Rulings.** Every ruling there is final; nothing else is in scope. The M2e programme (`plans/PLAN-sdk-creation-seams-2026-10-30.md` §19) builds in the same trees right now: claim files by name, re-read before every edit, and never edit the stay-out list in § Build plan 2.
+- **Names.** Before any new identifier, field, event key, label or error string: NOMENCLATURE §1 and §24, then your area's group section. No lane edits `NOMENCLATURE.md`: list every new or changed term in your report under **Canon rows needed** with the row text.
+- **Stored data.** 0.6 is in users' hands: an additive field is fine only if every reader still works on rows that lack it (test that); anything else is a migration (`db:generate`, index above the highest applied) and a second-boot-changes-nothing test.
+- **P1.** A new automatic behaviour is off in core until a genre opts in; every automatic action shows its cause on the line and how to switch it off.
+- **Sockets.** One domain context per event family is the only listener and the only place that toasts. A `SCOPED_EVENTS` event carries its scope key in the payload. `socket.off(event, handler)` always with the handler.
+- **DB.** Inside `db.transaction(async (tx) => …)` use only `tx`. Never seed a fixed id. No top-level await in `src/lib/server/db/index.ts`.
+- **Workers.** `lane-worker` agents, at most 2 at once, briefs at `plans/briefs/BRIEF-playtest2-S3-w<n>.md`, each carrying the rules it needs inline plus the verbatim lines below. Check each worker's diff against its brief before accepting.
+- **Tests.** Only the targeted test files under **Done means** (plus any you add). Never a full `npm test`, `npm run check`, `tsc` over the project, or `npm run sdk:test` whole. Run vitest as: `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 --quiet bash -c 'cd /home/jody/github/serene-pub && NODE_OPTIONS=--max-old-space-size=4096 npx vitest run <files> > /tmp/claude-1000/-home-jody-github-serene-pub/c41f3a32-b4a2-4ba6-ada8-2d81ff90e6ed/scratchpad/playtest2-S3-<n>.log 2>&1; echo exit=$?'` then read the log. Never pipe vitest into `head`. An int test that opens a DB inside an `it` gets a 60 s timeout.
+- **SDK edits** happen in `/home/jody/github/serene-pub-sdk`. If an app test needs the rebuilt dist: first `pgrep -af "vite dev"`; if none, `flock /tmp/claude-1000/-home-jody-github-serene-pub/c41f3a32-b4a2-4ba6-ada8-2d81ff90e6ed/scratchpad/sdk-build.lock npm run sdk:build` from the app root.
+- *"This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work."*
+- *"Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`."* Also never `git checkout`, `git restore` or `git clean` in either repo.
+- *"Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`."*
+- *"Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'."*
+- **Report** at the path above: Changed files (both repos) · Tests run, exact command, pass/fail counts · Stopped, needs owner · Canon rows needed · Queued for other lanes (file:line + exact text) · Noticed, not done. The harness may refuse the report write from a subagent; if so, put the full report text in your final hand-back and the lead saves it.

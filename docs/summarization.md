@@ -15,7 +15,7 @@ Session to lore is up to four steps. Each one stops for your review before anyth
 1. **Summarize to Lorebook**: pick messages in a session and save them as a scene, a world lore entry, or a character lore entry.
 2. **Process a scene**: write (or rewrite) a scene's summary and its list of who was there.
 3. **Compile to Entry**: merge a history entry's scenes into the entry's own text.
-4. **Build the graph**: have the model read your scenes and history and propose cast members and relationships. See [Building the graph from your scenes](./lorebook-cast.md#building-the-graph-from-your-scenes).
+4. **Build the graph** (with [advanced controls](./themes-and-settings.md#show-advanced-controls) on): have the model read your scenes and history and propose cast members and relationships. See [Building the graph from your scenes](./lorebook-cast.md#building-the-graph-from-your-scenes).
 
 ## Summarize to Lorebook
 
@@ -29,7 +29,7 @@ The details depend on the kind:
 
 - **World lore** takes an optional **Focus topic**, such as *the smugglers' code*, to steer what the summary is about.
 - **Character lore** needs a **Focus topic**, such as *her debts* or *relationship with Kira*, and can be **bound to a character** (your personas included) so the lore is private to them. Binding adds that character to the book's cast when you save.
-- **Scene** needs a **History entry** to file the scene under. Pick one, or press **New** to make a blank one dated where the session's story stands. The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again, including every line of a scene started in the conversation (the open one's too). After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
+- **Scene** needs a **History entry** to file the scene under. Pick one, or press **New**, which uses the history entry of the day where the session's story stands, making a blank one only when that day has none (see [History entries and scenes](./lorebook-time.md#history-entries-and-scenes)). The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again, including every line of a scene started in the conversation (the open one's too). After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
 
 The window says where it saves: **Saving to:** the lorebook the session reads, or *Session notes*.
 
@@ -39,7 +39,7 @@ A session on a [branch](./lorebook-time.md#branches) saves to that branch, and t
 
 ## Processing a scene
 
-**Process** on a scene, in the lorebook's History or Scenes, has the model write the scene's summary from its messages (their images and files read as names, as above) and lists who was there: **Participants** (who spoke) and **Mentioned** (who was talked about). Once a scene has a summary the action reads **Reprocess**, which writes it again from scratch; useful when the messages changed or the first summary came out wrong. Review the result in the **Scene summary** window and press **Apply**.
+**Process** on a scene, in the lorebook's History or Scenes, has the model write the scene's summary from its messages (their images and files read as names, as above) and lists who was there: **Participants** (who spoke) and **Mentioned** (who was talked about). Notes a pipeline added to the scene are read with it, under *Noted in this scene:* (see [Summaries and the lorebook](./pipelines.md#summaries-and-the-lorebook)). The prompts ask for the scene's key beats, deaths, departures and arrivals among them. Once a scene has a summary the action reads **Reprocess**, which writes it again from scratch; useful when the messages changed or the first summary came out wrong. Review the result in the **Scene summary** window and press **Apply**.
 
 The model is told the scene's name, the day it began and who was present, and, in a genre that keeps a place (Story and the Lair keep the party's **Location**), where the scene began, even after the scene has been renamed.
 
@@ -53,7 +53,7 @@ When a scene's boundaries move afterwards (its start nudged or dragged, its end 
 
 ## Which summarizer runs
 
-World and character summaries run the pipeline that the session's genre (or preset) registers on the summarize action. A genre that registers its own replacement runs its own. The summary is written into the lorebook the session reads or, when it reads none, into the session's **Session notes** (see [Your session's own notes](./lorebooks.md#your-sessions-own-notes)).
+World and character summaries run the pipeline that the session's genre (or preset) registers on the summarize action. A genre that registers its own replacement runs its own. The summary is written into the lorebook the session reads or, when it reads none or its scenes end by themselves, into the session's **Session notes** (see [Your session's own notes](./lorebooks.md#your-sessions-own-notes)).
 
 A routine that summarizes (see [Routines](./pipelines.md#routines)) reads only lines at least 20 messages old, so the newest lines are left to the story. Summaries you ask for yourself, from an action or an event, have no such minimum, and neither does a closed scene or [Close out](#close-out-and-the-catch-up-offer). See [Summaries and the lorebook](./pipelines.md#summaries-and-the-lorebook) for how a registration sets it.
 
@@ -69,7 +69,7 @@ When you start a session on the same lorebook line as an older session of yours 
 
 ## Compiling scenes into a history entry
 
-A history entry can hold several scenes. **Compile to Entry**, in the entry's menu or under its scene list, has the model merge their summaries into the entry's own content. The review shows a word-by-word **Changes** view against what the entry said before; edit it and press **Save to Entry**. It's offered once the entry has scenes.
+A history entry can hold several scenes. **Compile to Entry**, in the entry's menu or under its scene list, has the model merge their summaries into the entry's own content. It always goes through the model, even for a day with one scene: a scene's notes become prose, never pasted. Each scene's notes are read after its summary; a scene with no summary isn't compiled. Compiling stays a person's press: no pipeline compiles. It files under the day's one history entry (see [History entries and scenes](./lorebook-time.md#history-entries-and-scenes)), and first forks any branch session still riding the line, so its scenes are compiled on its own line (see [Which line a session reads](./lorebook-time.md#which-line-a-session-reads)). The review shows a word-by-word **Changes** view against what the entry said before; edit it and press **Save to Entry**. It's offered once the entry has scenes.
 
 It compiles the scenes of the line you're reading, in the order they were played. Saving writes only what changed:
 

@@ -71,7 +71,9 @@ describe("readPluginPackage", () => {
 	it("refuses a folder that was never built", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "sp-pkg-"))
 		try {
-			expect((await findingsOf(dir))[0]).toMatch(/dist\/plugin\/manifest\.json/)
+			expect((await findingsOf(dir))[0]).toMatch(
+				/dist\/plugin\/manifest\.json/
+			)
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}
@@ -81,13 +83,17 @@ describe("readPluginPackage", () => {
 		for (const slug of ["Acme.Hello", "acme/hello", "acme..hello", ""]) {
 			const { dir, cleanup } = await broken(async (d) => {
 				const p = join(d, "dist/plugin/manifest.json")
-				const m = JSON.parse(await (await import("node:fs/promises")).readFile(p, "utf8"))
+				const m = JSON.parse(
+					await (await import("node:fs/promises")).readFile(p, "utf8")
+				)
 				m.slug = slug
 				await writeFile(p, JSON.stringify(m))
 			})
 			try {
 				expect(
-					(await findingsOf(dir)).some((f) => f.includes("manifest.slug"))
+					(await findingsOf(dir)).some((f) =>
+						f.includes("manifest.slug")
+					)
 				).toBe(true)
 			} finally {
 				await cleanup()
@@ -98,7 +104,9 @@ describe("readPluginPackage", () => {
 	it("refuses a schemaVersion this release does not read", async () => {
 		const { dir, cleanup } = await broken(async (d) => {
 			const p = join(d, "dist/plugin/manifest.json")
-			const m = JSON.parse(await (await import("node:fs/promises")).readFile(p, "utf8"))
+			const m = JSON.parse(
+				await (await import("node:fs/promises")).readFile(p, "utf8")
+			)
 			m.schemaVersion = 2
 			await writeFile(p, JSON.stringify(m))
 		})
@@ -123,9 +131,9 @@ describe("readPluginPackage", () => {
 		})
 		try {
 			const findings = await findingsOf(dir)
-			expect(findings.some((f) => f.includes("demo.unified:spec/respond"))).toBe(
-				true
-			)
+			expect(
+				findings.some((f) => f.includes("demo.unified:spec/respond"))
+			).toBe(true)
 		} finally {
 			await cleanup()
 		}
@@ -141,7 +149,11 @@ describe("readPluginPackage", () => {
 			await writeFile(p, JSON.stringify(m))
 			await mkdir(join(d, "dist/plugin/pipelines"), { recursive: true })
 			await writeFile(
-				join(d, "dist/plugin/pipelines", documentFileName("core:spec/story-respond")),
+				join(
+					d,
+					"dist/plugin/pipelines",
+					documentFileName("core:spec/story-respond")
+				),
 				JSON.stringify({
 					schemaVersion: 1,
 					id: "core:spec/story-respond",
@@ -156,7 +168,9 @@ describe("readPluginPackage", () => {
 		})
 		try {
 			expect(
-				(await findingsOf(dir)).some((f) => f.includes("namespace 'core'"))
+				(await findingsOf(dir)).some((f) =>
+					f.includes("namespace 'core'")
+				)
 			).toBe(true)
 		} finally {
 			await cleanup()
@@ -169,7 +183,8 @@ describe("readPluginPackage", () => {
 			const p = join(d, "dist/plugin/manifest.json")
 			const m = JSON.parse(await fs.readFile(p, "utf8"))
 			m.pipelines = m.pipelines.filter(
-				(x: { id: string }) => x.id !== "demo.unified:spec/create-session"
+				(x: { id: string }) =>
+					x.id !== "demo.unified:spec/create-session"
 			)
 			await writeFile(p, JSON.stringify(m))
 		})
@@ -185,7 +200,11 @@ describe("readPluginPackage", () => {
 	})
 
 	it("refuses a component entry that escapes the package, is not a built module, or does not exist", async () => {
-		for (const entry of ["../../../etc/passwd", "ui/missing.html", "dist/plugin/components/missing.js"]) {
+		for (const entry of [
+			"../../../etc/passwd",
+			"ui/missing.html",
+			"dist/plugin/components/missing.js"
+		]) {
 			const { dir, cleanup } = await broken(async (d) => {
 				const fs = await import("node:fs/promises")
 				const p = join(d, "dist/plugin/manifest.json")
@@ -204,6 +223,113 @@ describe("readPluginPackage", () => {
 	})
 })
 
+describe("the applet card (M2d)", () => {
+	/** The fixture with an applet card declared (and, by default, an applet genre plus the poster file). */
+	const withCard = async (
+		card: Record<string, unknown>,
+		opts: { assets?: boolean; applet?: boolean; poster?: boolean } = {}
+	) => {
+		const { assets = true, applet = true, poster = true } = opts
+		const { dir, cleanup } = await broken(async (d) => {
+			const fs = await import("node:fs/promises")
+			const p = join(d, "dist/plugin/manifest.json")
+			const m = JSON.parse(await fs.readFile(p, "utf8"))
+			if (assets) m.assets = { dir: "assets" }
+			if (applet) m.genres[0].shape.applet = true
+			m.appletCard = card
+			await writeFile(p, JSON.stringify(m))
+			if (poster) {
+				await mkdir(join(d, "assets/card"), { recursive: true })
+				await writeFile(join(d, "assets/card/poster.png"), "png")
+			}
+		})
+		return { findings: await findingsOf(dir), cleanup }
+	}
+	const has = (findings: string[], code: RegExp) =>
+		findings.some((f) => code.test(f))
+
+	it("takes a good card", async () => {
+		const { findings, cleanup } = await withCard({
+			poster: "assets/card/poster.png",
+			blurb: { en: "Count." }
+		})
+		try {
+			expect(findings.filter((f) => f.includes("appletCard"))).toEqual([])
+		} finally {
+			await cleanup()
+		}
+	})
+
+	it("refuses a picture outside the assets folder, or with none declared", async () => {
+		for (const opts of [{}, { assets: false }]) {
+			const { findings, cleanup } = await withCard(
+				{
+					poster:
+						opts.assets === false
+							? "assets/card/poster.png"
+							: "card/poster.png"
+				},
+				opts
+			)
+			try {
+				expect(
+					has(
+						findings,
+						/appletCard\.poster .* not a file under the package's assets folder/
+					)
+				).toBe(true)
+			} finally {
+				await cleanup()
+			}
+		}
+	})
+
+	it("refuses a picture the package does not hold", async () => {
+		const { findings, cleanup } = await withCard(
+			{ poster: "assets/card/poster.png" },
+			{ poster: false }
+		)
+		try {
+			expect(
+				has(
+					findings,
+					/appletCard\.poster names 'assets\/card\/poster\.png', and the package has no such file/
+				)
+			).toBe(true)
+		} finally {
+			await cleanup()
+		}
+	})
+
+	it("refuses a blurb over 160 characters", async () => {
+		const { findings, cleanup } = await withCard({ blurb: "x".repeat(161) })
+		try {
+			expect(has(findings, /appletCard\.blurb is 161 characters/)).toBe(
+				true
+			)
+		} finally {
+			await cleanup()
+		}
+	})
+
+	it("refuses a card on a package with no applet genre", async () => {
+		const { findings, cleanup } = await withCard(
+			{ blurb: "ok" },
+			{ applet: false }
+		)
+		try {
+			expect(
+				has(
+					findings,
+					/appletCard is declared, and no genre of this package presents as an applet/
+				)
+			).toBe(true)
+		} finally {
+			await cleanup()
+		}
+	})
+})
+
 describe("built components (C3)", () => {
 	it("stores a component's built module, and refuses one the package does not ship", async () => {
 		const withComponent = (write: boolean) =>
@@ -212,24 +338,41 @@ describe("built components (C3)", () => {
 				const p = join(d, "dist/plugin/manifest.json")
 				const m = JSON.parse(await fs.readFile(p, "utf8"))
 				m.components = [
-					{ slug: "who", label: "Who", framework: "vanilla", entry: "dist/plugin/components/who.js", source: "src/who.ts" }
+					{
+						slug: "who",
+						label: "Who",
+						framework: "vanilla",
+						entry: "dist/plugin/components/who.js",
+						source: "src/who.ts"
+					}
 				]
 				await writeFile(p, JSON.stringify(m))
 				if (write) {
-					await mkdir(join(d, "dist/plugin/components"), { recursive: true })
-					await writeFile(join(d, "dist/plugin/components/who.js"), "export default () => {}\n")
+					await mkdir(join(d, "dist/plugin/components"), {
+						recursive: true
+					})
+					await writeFile(
+						join(d, "dist/plugin/components/who.js"),
+						"export default () => {}\n"
+					)
 				}
 			})
 		const shipped = await withComponent(true)
 		try {
 			const pkg = await readPluginPackage(shipped.dir)
-			expect(pkg.files.map((f) => f.path)).toContain("dist/plugin/components/who.js")
+			expect(pkg.files.map((f) => f.path)).toContain(
+				"dist/plugin/components/who.js"
+			)
 		} finally {
 			await shipped.cleanup()
 		}
 		const missing = await withComponent(false)
 		try {
-			expect((await findingsOf(missing.dir)).some((f) => f.includes("dist/plugin/components/who.js"))).toBe(true)
+			expect(
+				(await findingsOf(missing.dir)).some((f) =>
+					f.includes("dist/plugin/components/who.js")
+				)
+			).toBe(true)
 		} finally {
 			await missing.cleanup()
 		}
@@ -240,13 +383,24 @@ describe("built components (C3)", () => {
 			const fs = await import("node:fs/promises")
 			const p = join(d, "dist/plugin/manifest.json")
 			const m = JSON.parse(await fs.readFile(p, "utf8"))
-			m.components = [{ slug: "who", label: "Who", framework: "svelte", entry: "src/Who.svelte" }]
+			m.components = [
+				{
+					slug: "who",
+					label: "Who",
+					framework: "svelte",
+					entry: "src/Who.svelte"
+				}
+			]
 			await writeFile(p, JSON.stringify(m))
 			await mkdir(join(d, "src"), { recursive: true })
 			await writeFile(join(d, "src/Who.svelte"), "<p>who</p>\n")
 		})
 		try {
-			expect((await findingsOf(unbuilt.dir)).some((f) => f.includes("is not a built module"))).toBe(true)
+			expect(
+				(await findingsOf(unbuilt.dir)).some((f) =>
+					f.includes("is not a built module")
+				)
+			).toBe(true)
 		} finally {
 			await unbuilt.cleanup()
 		}
@@ -263,7 +417,11 @@ describe("the reserved slug", () => {
 			await writeFile(p, JSON.stringify(m))
 		})
 		try {
-			expect((await findingsOf(fake.dir)).some((f) => f.includes("'core' is the app's own"))).toBe(true)
+			expect(
+				(await findingsOf(fake.dir)).some((f) =>
+					f.includes("'core' is the app's own")
+				)
+			).toBe(true)
 		} finally {
 			await fake.cleanup()
 		}
@@ -285,7 +443,11 @@ describe("package helpers", () => {
 					page: { entry: "ui/page.html" }
 				},
 				// A widget is never a frame, whatever a stale manifest spells.
-				widgets: [{ id: "a", surface: { kind: "frame", entry: "ui/a.html" } }, null, { id: "c", component: "c" }]
+				widgets: [
+					{ id: "a", surface: { kind: "frame", entry: "ui/a.html" } },
+					null,
+					{ id: "c", component: "c" }
+				]
 			})
 		).toEqual(["ui/view.html", "ui/page.html"])
 		expect(declaredSurfaceEntries(null)).toEqual([])

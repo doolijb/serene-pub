@@ -17,7 +17,7 @@
  */
 
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray, sql, type SQL } from "drizzle-orm"
+import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
 import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
 import { checkPiece, type SlotPiece } from "@serene-pub/sdk"
 import {
@@ -637,7 +637,8 @@ export async function amendmentPatternLayers(
 			fields: schema.entryAmendments.fields
 		})
 		.from(schema.entryAmendments)
-		.where(eq(schema.entryAmendments.entryId, entryId))
+		// A held amendment is one session's own change, never a layer of the entry's dated line.
+		.where(and(eq(schema.entryAmendments.entryId, entryId), isNull(schema.entryAmendments.base)))
 	const out = new Map<number, PatternColumns>()
 	for (const row of rows) {
 		const fields = (row.fields ?? {}) as Record<string, unknown>

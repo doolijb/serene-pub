@@ -26,6 +26,10 @@ describe("guardWidgetRequests", () => {
 		await expect(
 			ask("switch-persona", { personaId: 2 }, { widgetId: "acme:x", owner: "acme", grants: ["session:state:write"] })
 		).rejects.toThrow(/only core's own widgets/)
+		for (const kind of ["show-channel", "session-scenario", "set-session-scenario"])
+			await expect(ask(kind as never, {} as never, { widgetId: "acme:x", owner: "acme", grants: [] })).rejects.toThrow(
+				/only core's own widgets/
+			)
 		expect(asked).toEqual([])
 	})
 

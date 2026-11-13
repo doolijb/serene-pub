@@ -175,6 +175,13 @@
 	// The inset is a MARGIN on the content wrapper inside it instead, so the
 	// scrollable overflow includes it on every side.
 	const paneClass = "flex min-h-0 flex-col overflow-y-auto"
+	// A detail's wrapper may be shorter than what it holds (`min-h-0`, so a
+	// detail with its own scroller is bounded). A bottom MARGIN on it then sits
+	// at the pane's edge, not after the content, and a long detail ended flush
+	// against the end of the scroll. The end inset is a spacer INSIDE the
+	// wrapper instead: it follows the content however long that is.
+	const detailEndSpace =
+		"after:block after:h-4 after:shrink-0 after:content-['']"
 	// With a pinned toolbar the pane stays a column (the rare toolbar taller
 	// than the pane still scrolls) and the list below it is the scroller.
 	const listPaneClass = paneClass
@@ -253,7 +260,7 @@
 					     all of it is one unreadable line with its tabs a screen
 					     apart. The same 1120px the app's other reading columns use. -->
 					<div
-						class="m-4 flex min-h-0 w-[calc(100%-2rem)] max-w-[1120px] flex-1 flex-col self-center"
+						class="mx-4 mt-4 flex min-h-0 w-[calc(100%-2rem)] max-w-[1120px] flex-1 flex-col self-center {detailEndSpace}"
 					>
 						{@render detail()}
 					</div>
@@ -271,7 +278,7 @@
 	</div>
 {:else if hasDetail}
 	<div class="{paneClass} @container/detail flex-1">
-		<div class="m-4 flex min-h-0 flex-1 flex-col">
+		<div class="mx-4 mt-4 flex min-h-0 flex-1 flex-col {detailEndSpace}">
 			{@render detail()}
 		</div>
 	</div>

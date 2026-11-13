@@ -597,6 +597,9 @@ describe("cancellation", () => {
 			"run-9"
 		])
 		expect(calls.every((c) => c.opts.user === "42")).toBe(true)
+		// A person's name rides with the event; a frame's cause never does — an
+		// event hook is refused the applet-group reach (C5, 2026-11-04).
+		expect(calls.every((c) => c.opts.frameCause === undefined)).toBe(true)
 	})
 
 	it("dispatches nothing once the emitter's signal has fired", async () => {

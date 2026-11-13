@@ -125,10 +125,11 @@ describe("Time passes… in Chat", () => {
 		expect(await clockOf(w.session.id)).toEqual({ year: 5, month: 1, day: 3 })
 	}, 60_000)
 
-	test("🚧 a story with no clock: the press finishes, nothing moves, and the ledger head says why (§15 G12, G13)", async () => {
+	test("🚧 a story with no clock: the press starts it on the first day and moves it, and the ledger head reads as any move (§15 G13)", async () => {
 		const { sessionsFireActionHandler } = await import("./sessions")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
-		const { NO_STORY_CLOCK_YET } = await import("$lib/server/state/clockMoves")
+		const { clockLedgerRows } = await import("$lib/server/state/clockMoves")
+		const { ledgerHeadLines, ledgerLines } = await import("$lib/shared/state/ledgerLines")
 		const user = await createTestUser(testDb, `time-passes-${++seq}`)
 		// A book with nothing dated and no clock set: no present to start from.
 		const [lorebook] = await testDb
@@ -146,8 +147,19 @@ describe("Time passes… in Chat", () => {
 		)
 		expect(res.error).toBeUndefined()
 		expect(res.success).toBe(true)
-		expect(await clockOf(session!.id)).toEqual({ year: null, month: null, day: null })
-		// Skipped, in the ledger: before any line, so at its head.
+		// The story's first day (Year 1, month 1, day 1, 00:00), two hours on.
+		const [clock] = await testDb
+			.select({
+				year: schema.sessions.storyClockYear,
+				month: schema.sessions.storyClockMonth,
+				day: schema.sessions.storyClockDay,
+				hour: schema.sessions.storyClockHour,
+				minute: schema.sessions.storyClockMinute
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, session!.id))
+		expect(clock).toEqual({ year: 1, month: 1, day: 1, hour: 2, minute: 0 })
+		// Applied, in the ledger, from 00:00: before any line, so at its head.
 		const rows = await testDb
 			.select()
 			.from(schema.stateProposals)
@@ -155,14 +167,33 @@ describe("Time passes… in Chat", () => {
 		expect(rows).toMatchObject([
 			{
 				kind: "clock",
-				status: "skipped",
+				status: "applied",
 				messageId: null,
-				payload: { by: 2, unit: "hours", cause: "action", skipped: NO_STORY_CLOCK_YET }
+				payload: {
+					by: 2,
+					unit: "hours",
+					cause: "action",
+					from: { year: 1, month: 1, day: 1, hour: 0, minute: 0 },
+					to: { year: 1, month: 1, day: 1, hour: 2, minute: 0 }
+				}
 			}
 		])
-		// Not a time action: nothing moved, so no cue.
-		const cues = await testDb.select().from(schema.sceneCues).where(eq(schema.sceneCues.sessionId, session!.id))
-		expect(cues).toEqual([])
+		expect((rows[0]!.payload as Record<string, unknown>).skipped).toBeUndefined()
+		const lines = ledgerLines(
+			(await clockLedgerRows(testDb as unknown as Db, session!.id, lorebook!.id)).map((m) => ({
+				id: m.id,
+				kind: "clock" as const,
+				messageId: m.messageId,
+				ownerKey: "world",
+				ownerLabel: "World",
+				updatedBy: m.updatedBy,
+				clock: m
+			}))
+		)
+		const head = ledgerHeadLines(lines).map((l) => l.text)
+		expect(head).toHaveLength(1)
+		expect(head[0]).toMatch(/^Time passes: 2 hours \(.+ → .+\)$/)
+		expect(head[0]).not.toMatch(/not on the clock|not moved/)
 	}, 60_000)
 
 	test("a step the host cannot take is refused before any run, in words", async () => {

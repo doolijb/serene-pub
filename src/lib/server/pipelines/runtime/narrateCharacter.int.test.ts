@@ -324,9 +324,10 @@ describe("a side-character turn speaks as that character", () => {
 		 *
 		 * The **name and the card** are the port's: it is what the `speaker`
 		 * in-port exists for, and a turn spoken by a free-form name has nowhere
-		 * else to get them. This run gives the port a speaker and the scope
-		 * nobody, which is the only arrangement in which that is load-bearing —
-		 * on every shipped path `generateResponse` sets both from one fact.
+		 * else to get them. This run gives the port one speaker (Vell) and the
+		 * scope another, seated character (Alice), which is the arrangement in
+		 * which that is load-bearing — on every shipped path `generateResponse`
+		 * sets both from one fact.
 		 *
 		 * **Retrieval follows the scope, not the port**, and the second
 		 * assertion is the one that says so. It is a property of the host read
@@ -342,14 +343,17 @@ describe("a side-character turn speaks as that character", () => {
 				characterId: null,
 				sideCharacter: vellSpeaker(),
 				speaker: null,
-				sessionScope: { sessionId, currentCharacterId: null }
+				// The scope names seated Alice, not the narrator: since ★4
+				// (2026-11-08) an unseated member like Vell is background, and
+				// the narrator would read his lore.
+				sessionScope: { sessionId, currentCharacterId: aliceId }
 			},
 			seed: "seed:narrate-character-port",
 			bindings: coreBindings(),
 			host: createHost(db, {
 				sessionId,
 				userId,
-				currentCharacterId: null
+				currentCharacterId: aliceId
 			}),
 			preview: true
 		} as any)
@@ -360,9 +364,8 @@ describe("a side-character turn speaks as that character", () => {
 			"Captain Vell"
 		)
 
-		// …and the retrieval stayed narrator-shaped, because the scope did.
-		// Vell's private lore is out; the entry bound to nobody in particular
-		// would have been in, which is what "the narrator is omniscient" means.
+		// …and the retrieval stayed Alice's, because the scope did: her
+		// private lore is in, Vell's is out.
 		const names = ((nodeOf(receipt, "rank")!.output as any).candidates ?? [])
 			.map((c: any) => c.payload?.name)
 		expect(
@@ -370,6 +373,7 @@ describe("a side-character turn speaks as that character", () => {
 			"the prompt adopted the port's speaker and the lore did not — the " +
 				"turn would sound like Vell over somebody else's knowledge"
 		).not.toContain("Vell's ledger")
+		expect(names).toContain("Alice's oath")
 	}, 30_000)
 
 	it("stops at the ranker, and that boundary is deliberate", async () => {

@@ -46,9 +46,11 @@
 	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import AdminList, { type AdminColumn } from "$lib/client/components/admin/AdminList.svelte"
+	import AdminList, {
+		type AdminColumn
+	} from "$lib/client/components/admin/AdminList.svelte"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
@@ -113,7 +115,8 @@
 		bindings: PresetBindings
 	}
 
-	const swapKeyOf = (r: SwapRow) => `${r.pluginId}|${r.spec}|${r.node}|${r.definition}`
+	const swapKeyOf = (r: SwapRow) =>
+		`${r.pluginId}|${r.spec}|${r.node}|${r.definition}`
 	const presetKey = (id: number) => `id-${id}`
 
 	function draftOf(live: Detail): Draft {
@@ -121,9 +124,16 @@
 		const def = d.presets.find((p) => p.id === d.genre?.defaultPresetId)
 		return {
 			enabled: !!d.genre?.enabled,
-			defaultKey: d.genre?.defaultPresetId != null ? presetKey(d.genre.defaultPresetId) : "",
-			presets: d.presets.map((p) => savedInlineRow(p.id, { name: p.name, enabled: p.enabled })),
-			swaps: Object.fromEntries((d.swaps ?? []).map((r) => [swapKeyOf(r), r.enabled])),
+			defaultKey:
+				d.genre?.defaultPresetId != null
+					? presetKey(d.genre.defaultPresetId)
+					: "",
+			presets: d.presets.map((p) =>
+				savedInlineRow(p.id, { name: p.name, enabled: p.enabled })
+			),
+			swaps: Object.fromEntries(
+				(d.swaps ?? []).map((r) => [swapKeyOf(r), r.enabled])
+			),
 			about: {
 				name: d.genre?.name ?? "",
 				description: d.genre?.description ?? "",
@@ -167,7 +177,9 @@
 		loading = false
 		if (!res.genre) return
 		const next = draftOf(res)
-		untrack(() => edits.adoptSaved(next, (d) => (draft = structuredClone(d))))
+		untrack(() =>
+			edits.adoptSaved(next, (d) => (draft = structuredClone(d)))
+		)
 	}
 
 	onMount(() => {
@@ -203,11 +215,17 @@
 	/** The SAVED default preset — the one the Events card binds. */
 	const defaultPreset = $derived(
 		detail?.genre?.defaultPresetId != null
-			? detail.presets.find((p) => p.id === detail!.genre!.defaultPresetId)
+			? detail.presets.find(
+					(p) => p.id === detail!.genre!.defaultPresetId
+				)
 			: undefined
 	)
-	const eventsEditable = $derived(editable && !!defaultPreset && !defaultPreset.isImmutable)
-	const readiness = $derived(detail?.genre && editable ? genreReadiness(detail) : null)
+	const eventsEditable = $derived(
+		editable && !!defaultPreset && !defaultPreset.isImmutable
+	)
+	const readiness = $derived(
+		detail?.genre && editable ? genreReadiness(detail) : null
+	)
 	const fieldProblems = $derived(rowProblems(draft.fields))
 
 	/** Scroll to one of this form's cards and put focus in it. */
@@ -217,7 +235,9 @@
 		if (!el) return
 		if (el instanceof HTMLDetailsElement) el.open = true
 		el.scrollIntoView({ behavior: "smooth", block: "start" })
-		el.querySelector<HTMLElement>("input:not([disabled]), textarea, button:not([disabled])")?.focus({
+		el.querySelector<HTMLElement>(
+			"input:not([disabled]), textarea, button:not([disabled])"
+		)?.focus({
 			preventScroll: true
 		})
 	}
@@ -236,7 +256,9 @@
 	let exportSource = $state(false)
 	let exporting = $state(false)
 	let exportError = $state<string | null>(null)
-	const canExport = $derived(editable && detail?.genre?.pluginsEnabled === true)
+	const canExport = $derived(
+		editable && detail?.genre?.pluginsEnabled === true
+	)
 
 	function openExport() {
 		exportError = null
@@ -260,12 +282,15 @@
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			interest.declareInterest<"plugins:exportPackage">("plugins:exportPackage", (res) => {
-				if (!untrack(() => exporting)) return
-				exporting = false
-				exportOpen = false
-				downloadBlob(res)
-			}),
+			interest.declareInterest<"plugins:exportPackage">(
+				"plugins:exportPackage",
+				(res) => {
+					if (!untrack(() => exporting)) return
+					exporting = false
+					exportOpen = false
+					downloadBlob(res)
+				}
+			),
 			interest.declareInterest<"plugins:exportPackage:error">(
 				"plugins:exportPackage:error",
 				(res) => {
@@ -283,7 +308,9 @@
 	/* ── editing the rows ───────────────────────────────────────────── */
 
 	const savedPreset = (row: InlineRow<PresetValues>): Preset | undefined =>
-		row.id == null ? undefined : detail?.presets.find((p) => p.id === row.id)
+		row.id == null
+			? undefined
+			: detail?.presets.find((p) => p.id === row.id)
 
 	function addPreset() {
 		draft.presets.push({
@@ -314,7 +341,9 @@
 			.filter((r) => !r.delete)
 			.map((r) => ({
 				value: r.key,
-				label: (r.values.name.trim() || "Unnamed preset") + (r.id == null ? " (new)" : "")
+				label:
+					(r.values.name.trim() || "Unnamed preset") +
+					(r.id == null ? " (new)" : "")
 			}))
 	])
 
@@ -331,7 +360,9 @@
 		if (!detail?.genre || saving) return
 		formErrors = []
 		if (!dirty) return land(intent)
-		const unnamed = draft.presets.filter((r) => !r.delete && !r.values.name.trim())
+		const unnamed = draft.presets.filter(
+			(r) => !r.delete && !r.values.name.trim()
+		)
 		if (unnamed.length) {
 			formErrors = [
 				unnamed.length === 1
@@ -346,7 +377,9 @@
 			return
 		}
 		if (editable && fieldProblems.size) {
-			formErrors = ["A session field needs fixing before it can be saved — see Session fields."]
+			formErrors = [
+				"A session field needs fixing before it can be saved — see Session fields."
+			]
 			return
 		}
 
@@ -360,13 +393,17 @@
 		const nameOf = (row: InlineRow<PresetValues>) => row.values.name.trim()
 		/** Row key → the id it is saved under, including rows this Save creates. */
 		const idOf = new Map<string, number>(
-			work.presets.filter((r) => r.id != null).map((r) => [r.key, Number(r.id)])
+			work.presets
+				.filter((r) => r.id != null)
+				.map((r) => [r.key, Number(r.id)])
 		)
 		const steps: SaveStep[] = []
 
 		if (work.enabled !== saved.enabled)
 			steps.push({
-				label: work.enabled ? "Offer the genre" : "Stop offering the genre",
+				label: work.enabled
+					? "Offer the genre"
+					: "Stop offering the genre",
 				run: () =>
 					awaitReply({
 						socket,
@@ -392,7 +429,9 @@
 				about.family !== saved.about.family
 			if (aboutChanged) Object.assign(params, about)
 			const fields = rowsToSchema(work.fields)
-			const fieldsChanged = JSON.stringify(fields) !== JSON.stringify(rowsToSchema(saved.fields))
+			const fieldsChanged =
+				JSON.stringify(fields) !==
+				JSON.stringify(rowsToSchema(saved.fields))
 			if (fieldsChanged) params.fields = fields
 			if (aboutChanged || fieldsChanged)
 				steps.push({
@@ -414,7 +453,11 @@
 		}
 
 		// The Events card: the saved default preset's bindings (ruling 5).
-		if (eventsEditable && defaultPreset && !sameBindings(work.bindings, saved.bindings)) {
+		if (
+			eventsEditable &&
+			defaultPreset &&
+			!sameBindings(work.bindings, saved.bindings)
+		) {
 			const id = defaultPreset.id
 			const bindings = work.bindings
 			steps.push({
@@ -445,7 +488,9 @@
 					}).then(() => {
 						// Gone from the server, so gone from the form: a row the
 						// push does not carry would otherwise stay "unsaved".
-						draft.presets = draft.presets.filter((r) => r.key !== row.key)
+						draft.presets = draft.presets.filter(
+							(r) => r.key !== row.key
+						)
 					})
 			})
 		}
@@ -460,7 +505,9 @@
 						event: "sessionPresets:create",
 						errorEvent: "sessionPresets:create:error",
 						params: { name, genreId: slug },
-						match: (r) => r.preset?.genreId === slug && r.preset?.name === name
+						match: (r) =>
+							r.preset?.genreId === slug &&
+							r.preset?.name === name
 					})
 					const id = res.preset!.id
 					idOf.set(row.key, id)
@@ -507,7 +554,10 @@
 					after: isNew && row ? [`Add ${nameOf(row)}`] : undefined,
 					run: () => {
 						const id = idOf.get(work.defaultKey)
-						if (id == null) return Promise.reject(new Error("That preset was not saved."))
+						if (id == null)
+							return Promise.reject(
+								new Error("That preset was not saved.")
+							)
 						return awaitReply({
 							socket,
 							event: "sessionPresets:update",
@@ -519,7 +569,9 @@
 				})
 			} else {
 				const was = idOf.get(saved.defaultKey)
-				const going = changes.deleted.some((r) => r.key === saved.defaultKey)
+				const going = changes.deleted.some(
+					(r) => r.key === saved.defaultKey
+				)
 				if (was != null && !going)
 					steps.push({
 						label: "Default preset: none",
@@ -567,10 +619,10 @@
 		const name = detail?.genre?.name ?? slug
 		if (outcome.refused.length || outcome.skipped.length) {
 			formErrors = saveErrors(outcome)
-			toaster.warning({ title: saveSummary(outcome, name) })
+			notify.warning({ title: saveSummary(outcome, name) })
 			return
 		}
-		toaster.success({ title: saveSummary(outcome, name) })
+		notify.success({ title: saveSummary(outcome, name) })
 		land(intent)
 	}
 
@@ -587,7 +639,13 @@
 	/* ── the inline's columns ───────────────────────────────────────── */
 
 	const presetColumns: AdminChangelistColumn<InlineRow<PresetValues>>[] = [
-		{ key: "name", label: "Preset", primary: true, custom: true, text: (r) => r.values.name },
+		{
+			key: "name",
+			label: "Preset",
+			primary: true,
+			custom: true,
+			text: (r) => r.values.name
+		},
 		{ key: "enabled", label: "Offered", custom: true },
 		{ key: "bindings", label: "Bindings", custom: true }
 	]
@@ -633,8 +691,12 @@
 	function boundCount(p: Preset | undefined): string {
 		if (!p) return "Filled from the event locks when saved"
 		const bindable = matrixSlots.length
-		const bound = matrixSlots.filter((s) => p.bindings[s.event]?.spec).length
-		const missing = matrixSlots.filter((s) => s.required && !p.bindings[s.event]?.spec).length
+		const bound = matrixSlots.filter(
+			(s) => p.bindings[s.event]?.spec
+		).length
+		const missing = matrixSlots.filter(
+			(s) => s.required && !p.bindings[s.event]?.spec
+		).length
 		return `${bound} of ${bindable}${missing ? ` · ${missing} required unbound` : ""}`
 	}
 
@@ -647,7 +709,12 @@
 		>()
 		for (const r of detail?.swaps ?? []) {
 			const k = `${r.spec}#${r.node}`
-			const g = groups.get(k) ?? { specName: r.specName, spec: r.spec, node: r.node, rows: [] }
+			const g = groups.get(k) ?? {
+				specName: r.specName,
+				spec: r.spec,
+				node: r.node,
+				rows: []
+			}
 			g.rows.push(r)
 			groups.set(k, g)
 		}
@@ -661,30 +728,41 @@
 	<title>{detail?.genre?.name ?? "Genre"} · Admin · Serene Pub</title>
 </svelte:head>
 
-	{#snippet coverageCell(c: Cell)}
-		{#if c.kind === "bound"}
-			<a class="anchor" href="/admin/pipelines/{encodeURIComponent(c.spec)}" title={c.spec}>
-				{specName(c.spec)}
-			</a>
-			{#if c.stale}
-				<span class="text-warning-600-400">· not installed</span>
-			{/if}
-		{:else if c.kind === "missing"}
-			<span class="text-error-600-400">required, unbound</span>
-		{:else}
-			<span class="text-surface-600-400">—</span>
+{#snippet coverageCell(c: Cell)}
+	{#if c.kind === "bound"}
+		<a
+			class="anchor"
+			href="/admin/pipelines/{encodeURIComponent(c.spec)}"
+			title={c.spec}
+		>
+			{specName(c.spec)}
+		</a>
+		{#if c.stale}
+			<span class="text-warning-600-400">· not installed</span>
 		{/if}
-	{/snippet}
+	{:else if c.kind === "missing"}
+		<span class="text-error-600-400">required, unbound</span>
+	{:else}
+		<span class="text-surface-600-400">—</span>
+	{/if}
+{/snippet}
 
 {#if loading}
-	<div class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm" role="status">
+	<div
+		class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm"
+		role="status"
+	>
 		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
 		Loading genre…
 	</div>
 {:else if !detail?.genre}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
-		<p class="text-surface-600-400 text-sm">{detail?.error ?? "This genre no longer exists."}</p>
-		<a href="/admin/session-genres" class="btn btn-sm preset-tonal-surface">All genres</a>
+		<p class="text-surface-600-400 text-sm">
+			{detail?.error ?? "This genre no longer exists."}
+		</p>
+		<a href="/admin/session-genres" class="btn btn-sm preset-tonal-surface">
+			All genres
+		</a>
 	</div>
 {:else}
 	{@const genre = detail.genre}
@@ -707,14 +785,18 @@
 			</a>
 			<a
 				class="btn btn-sm preset-tonal-surface"
-				href="/admin/pipelines/events?genre={encodeURIComponent(genreId)}"
+				href="/admin/pipelines/events?genre={encodeURIComponent(
+					genreId
+				)}"
 			>
 				<Icons.Zap size={14} aria-hidden="true" /> Events
 			</a>
 			{#if genre.createSpecSlug}
 				<a
 					class="btn btn-sm preset-tonal-surface"
-					href="/admin/pipelines/{encodeURIComponent(genre.createSpecSlug)}"
+					href="/admin/pipelines/{encodeURIComponent(
+						genre.createSpecSlug
+					)}"
 				>
 					<Icons.Workflow size={14} aria-hidden="true" /> Create pipeline
 				</a>
@@ -723,15 +805,22 @@
 				<Icons.Puzzle size={14} aria-hidden="true" /> Plugins
 			</a>
 			{#if canExport}
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openExport}>
-					<Icons.PackageOpen size={14} aria-hidden="true" /> Export as plugin…
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={openExport}
+				>
+					<Icons.PackageOpen size={14} aria-hidden="true" /> Export as
+					plugin…
 				</button>
 			{/if}
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
 				{#if genre.family}
-					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span
+						class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+					>
 						{genre.family}
 					</span>
 				{/if}
@@ -740,16 +829,30 @@
 		{/snippet}
 
 		{#if readiness}
-			<section class="panel-card flex flex-col gap-3" aria-labelledby="genre-readiness-heading" id="readiness">
+			<section
+				class="panel-card flex flex-col gap-3"
+				aria-labelledby="genre-readiness-heading"
+				id="readiness"
+			>
 				<div class="flex items-center gap-2">
-					<h2 id="genre-readiness-heading" class="text-sm font-medium">Readiness</h2>
+					<h2
+						id="genre-readiness-heading"
+						class="text-sm font-medium"
+					>
+						Readiness
+					</h2>
 					<span class="text-surface-600-400 text-meta">
-						{readiness.lines.filter((l) => l.done).length} of {readiness.lines.length}
+						{readiness.lines.filter((l) => l.done).length} of {readiness
+							.lines.length}
 					</span>
 				</div>
 				<ul class="flex flex-col gap-3">
 					{#each readiness.lines as line (line.id)}
-						<li class="flex flex-wrap items-start gap-3" data-readiness={line.id} data-done={line.done}>
+						<li
+							class="flex flex-wrap items-start gap-3"
+							data-readiness={line.id}
+							data-done={line.done}
+						>
 							<span
 								class="mt-1.5 size-2 shrink-0 rounded-full {line.done
 									? 'bg-success-500'
@@ -758,13 +861,21 @@
 							></span>
 							<div class="min-w-0 flex-1">
 								<p class="text-sm font-medium">
-									<span class="sr-only">{line.done ? "Done:" : "To do:"}</span>
+									<span class="sr-only">
+										{line.done ? "Done:" : "To do:"}
+									</span>
 									{line.label}
 									{#if line.optional}
-										<span class="text-surface-600-400 text-xs font-normal">· optional</span>
+										<span
+											class="text-surface-600-400 text-xs font-normal"
+										>
+											· optional
+										</span>
 									{/if}
 								</p>
-								<p class="text-surface-600-400 text-xs">{line.detail}</p>
+								<p class="text-surface-600-400 text-xs">
+									{line.detail}
+								</p>
 							</div>
 							{#if line.action}
 								<button
@@ -796,7 +907,11 @@
 							bind:value={draft.about.name}
 						/>
 					</AdminField>
-					<AdminField id="genre-about-family" label="Family" help="Groups genres in the picker.">
+					<AdminField
+						id="genre-about-family"
+						label="Family"
+						help="Groups genres in the picker."
+					>
 						<input
 							id="genre-about-family"
 							class="input"
@@ -825,13 +940,20 @@
 				title="Session fields"
 				description="What the new-session form asks for. Each answer is stored with the session, where its pipelines read it."
 			>
-				<SettingsSchemaEditor bind:rows={draft.fields} idPrefix="genre-field" />
+				<SettingsSchemaEditor
+					bind:rows={draft.fields}
+					idPrefix="genre-field"
+				/>
 			</AdminFieldset>
 		{/if}
 
 		<AdminFieldset id="availability" title="Availability">
 			<label class="flex min-h-10 items-center gap-2 text-sm">
-				<input type="checkbox" class="checkbox" bind:checked={draft.enabled} />
+				<input
+					type="checkbox"
+					class="checkbox"
+					bind:checked={draft.enabled}
+				/>
 				People can start {genre.name} sessions
 			</label>
 			<p class="text-surface-600-400 -mt-2 text-xs">
@@ -875,7 +997,8 @@
 			onDeleteChange={tickDelete}
 			onRemove={removeNew}
 			canDelete={(r) => (savedPreset(r)?.isImmutable ? "Built-in" : true)}
-			changeHref={(r) => (r.id != null ? `/admin/session-presets/${r.id}` : undefined)}
+			changeHref={(r) =>
+				r.id != null ? `/admin/session-presets/${r.id}` : undefined}
 		>
 			{#snippet actions()}
 				<button
@@ -900,7 +1023,9 @@
 				{#if col.key === "name"}
 					{#if saved?.isImmutable}
 						<span class="flex min-w-0 items-center gap-1.5">
-							<span class="truncate font-medium">{row.values.name}</span>
+							<span class="truncate font-medium">
+								{row.values.name}
+							</span>
 							<Badge size="sm" class="shrink-0">built-in</Badge>
 						</span>
 					{:else}
@@ -914,7 +1039,9 @@
 						/>
 					{/if}
 				{:else if col.key === "enabled"}
-					<label class="inline-flex min-h-8 items-center gap-2 text-xs">
+					<label
+						class="inline-flex min-h-8 items-center gap-2 text-xs"
+					>
 						<input
 							type="checkbox"
 							class="checkbox"
@@ -922,10 +1049,14 @@
 							bind:checked={row.values.enabled}
 						/>
 						{row.values.enabled ? "offered" : "hidden"}
-						<span class="sr-only">— {row.values.name || "new preset"}</span>
+						<span class="sr-only">
+							— {row.values.name || "new preset"}
+						</span>
 					</label>
 				{:else if col.key === "bindings"}
-					<span class="text-surface-600-400 text-xs">{boundCount(saved)}</span>
+					<span class="text-surface-600-400 text-xs">
+						{boundCount(saved)}
+					</span>
 				{/if}
 			{/snippet}
 		</AdminInline>
@@ -943,53 +1074,64 @@
 				/>
 			</AdminFieldset>
 		{:else}
-		<AdminFieldset
-			id="events"
-			title="Event surface"
-			description="What this genre declares, and which published pipelines answer each event. A preset binds the events that are not open; required ones must be bound for a preset to be offered."
-		>
-			<AdminList
-				rows={detail.slots}
-				columns={slotColumns}
-				searchText={(s) => s.event}
-				searchPlaceholder="Search events…"
-				defaultSort="standing"
-				storageKey="serene-pub:adminView:genreSlots"
-				emptyMessage="This genre declares no events — its declaration predates the event surface."
+			<AdminFieldset
+				id="events"
+				title="Event surface"
+				description="What this genre declares, and which published pipelines answer each event. A preset binds the events that are not open; required ones must be bound for a preset to be offered."
 			>
-				{#snippet cell(slot, col)}
-					{#if col.key === "event"}
-						<a class="anchor font-mono text-xs font-semibold" href={eventHref(slot.event)}>
-							{slot.event}
-						</a>
-					{:else if col.key === "standing"}
-						{#if slot.required}
-							<Badge tone="primary" size="md">required</Badge>
-						{:else if slot.open}
-							<span class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs">open</span>
-						{:else}
-							<Badge size="md">optional</Badge>
+				<AdminList
+					rows={detail.slots}
+					columns={slotColumns}
+					searchText={(s) => s.event}
+					searchPlaceholder="Search events…"
+					defaultSort="standing"
+					storageKey="serene-pub:adminView:genreSlots"
+					emptyMessage="This genre declares no events — its declaration predates the event surface."
+				>
+					{#snippet cell(slot, col)}
+						{#if col.key === "event"}
+							<a
+								class="anchor font-mono text-xs font-semibold"
+								href={eventHref(slot.event)}
+							>
+								{slot.event}
+							</a>
+						{:else if col.key === "standing"}
+							{#if slot.required}
+								<Badge tone="primary" size="md">required</Badge>
+							{:else if slot.open}
+								<span
+									class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs"
+								>
+									open
+								</span>
+							{:else}
+								<Badge size="md">optional</Badge>
+							{/if}
+						{:else if col.key === "candidates"}
+							{#if slot.candidates.length}
+								<span class="flex flex-wrap gap-1.5">
+									{#each slot.candidates as c (c.slug)}
+										<a
+											class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs hover:underline"
+											href="/admin/pipelines/{encodeURIComponent(
+												c.slug
+											)}"
+											title={c.slug}
+										>
+											{c.name}
+										</a>
+									{/each}
+								</span>
+							{:else}
+								<span class="text-surface-600-400 text-xs">
+									nothing serves this yet
+								</span>
+							{/if}
 						{/if}
-					{:else if col.key === "candidates"}
-						{#if slot.candidates.length}
-							<span class="flex flex-wrap gap-1.5">
-								{#each slot.candidates as c (c.slug)}
-									<a
-										class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs hover:underline"
-										href="/admin/pipelines/{encodeURIComponent(c.slug)}"
-										title={c.slug}
-									>
-										{c.name}
-									</a>
-								{/each}
-							</span>
-						{:else}
-							<span class="text-surface-600-400 text-xs">nothing serves this yet</span>
-						{/if}
-					{/if}
-				{/snippet}
-			</AdminList>
-		</AdminFieldset>
+					{/snippet}
+				</AdminList>
+			</AdminFieldset>
 		{/if}
 
 		{#if matrixSlots.length && detail.presets.length}
@@ -1003,12 +1145,26 @@
 					<table class="w-full text-left text-sm">
 						<thead>
 							<tr class="border-surface-200-800 border-b">
-								<th scope="col" class="px-3 py-2 {LEGEND}">Event</th>
+								<th scope="col" class="px-3 py-2 {LEGEND}">
+									Event
+								</th>
 								{#each detail.presets as p (p.id)}
-									<th scope="col" class="px-3 py-2 {LEGEND} whitespace-nowrap">
-										<a class="anchor" href="/admin/session-presets/{p.id}">{p.name}</a>
+									<th
+										scope="col"
+										class="px-3 py-2 {LEGEND} whitespace-nowrap"
+									>
+										<a
+											class="anchor"
+											href="/admin/session-presets/{p.id}"
+										>
+											{p.name}
+										</a>
 										{#if !p.enabled}
-											<span class="text-surface-600-400 font-normal">(hidden)</span>
+											<span
+												class="text-surface-600-400 font-normal"
+											>
+												(hidden)
+											</span>
 										{/if}
 									</th>
 								{/each}
@@ -1016,12 +1172,24 @@
 						</thead>
 						<tbody>
 							{#each matrixSlots as s (s.event)}
-								<tr class="border-surface-200-800 border-b last:border-0">
-									<th scope="row" class="px-3 py-2 font-mono text-xs font-medium">
-										<a class="anchor" href={eventHref(s.event)}>{s.event}</a>
+								<tr
+									class="border-surface-200-800 border-b last:border-0"
+								>
+									<th
+										scope="row"
+										class="px-3 py-2 font-mono text-xs font-medium"
+									>
+										<a
+											class="anchor"
+											href={eventHref(s.event)}
+										>
+											{s.event}
+										</a>
 									</th>
 									{#each detail.presets as p (p.id)}
-										<td class="px-3 py-2 text-xs whitespace-nowrap">
+										<td
+											class="px-3 py-2 text-xs whitespace-nowrap"
+										>
 											{@render coverageCell(cellOf(p, s))}
 										</td>
 									{/each}
@@ -1033,15 +1201,27 @@
 				<ul class="flex flex-col gap-3 @min-[700px]/content:hidden">
 					{#each matrixSlots as s (s.event)}
 						<li class="flex flex-col gap-2">
-							<a class="anchor font-mono text-xs font-medium break-all" href={eventHref(s.event)}>
+							<a
+								class="anchor font-mono text-xs font-medium break-all"
+								href={eventHref(s.event)}
+							>
 								{s.event}
 							</a>
 							<dl class="flex flex-col gap-1.5">
 								{#each detail.presets as p (p.id)}
 									<div class="flex flex-col">
 										<dt class={LEGEND}>
-											<a class="anchor" href="/admin/session-presets/{p.id}">{p.name}</a
-											>{#if !p.enabled}<span class="font-normal"> (hidden)</span>{/if}
+											<a
+												class="anchor"
+												href="/admin/session-presets/{p.id}"
+											>
+												{p.name}
+											</a>
+											{#if !p.enabled}<span
+													class="font-normal"
+												>
+													(hidden)
+												</span>{/if}
 										</dt>
 										<dd class="min-w-0 text-xs break-words">
 											{@render coverageCell(cellOf(p, s))}
@@ -1064,7 +1244,12 @@
 				{#each swapGroups as g (`${g.spec}#${g.node}`)}
 					<div class="flex flex-col gap-1.5">
 						<p class="text-sm">
-							<a class="anchor font-medium" href="/admin/pipelines/{encodeURIComponent(g.spec)}">
+							<a
+								class="anchor font-medium"
+								href="/admin/pipelines/{encodeURIComponent(
+									g.spec
+								)}"
+							>
 								{g.specName}
 							</a>
 							<span class="text-surface-600-400">· step</span>
@@ -1073,15 +1258,23 @@
 						<ul class="flex flex-col gap-1">
 							{#each g.rows as r (swapKeyOf(r))}
 								<li>
-									<label class="flex min-h-10 items-start gap-2 text-sm">
+									<label
+										class="flex min-h-10 items-start gap-2 text-sm"
+									>
 										<input
 											type="checkbox"
 											class="checkbox mt-0.5"
-											bind:checked={draft.swaps[swapKeyOf(r)]}
+											bind:checked={
+												draft.swaps[swapKeyOf(r)]
+											}
 										/>
 										<span class="min-w-0">
 											{r.name}
-											<span class="text-surface-600-400 block text-xs">from {r.pluginName}</span>
+											<span
+												class="text-surface-600-400 block text-xs"
+											>
+												from {r.pluginName}
+											</span>
 										</span>
 									</label>
 								</li>
@@ -1091,15 +1284,20 @@
 				{/each}
 			{:else}
 				<p class="text-surface-600-400 text-sm">
-					No installed plugin offers a swap for this genre's pipelines.
+					No installed plugin offers a swap for this genre's
+					pipelines.
 				</p>
 			{/if}
 		</AdminFieldset>
 
 		{#if !editable}
-			<AdminFieldset title="Shape" description="The genre's declared shape, as the server reads it." collapsible>
+			<AdminFieldset
+				title="Shape"
+				description="The genre's declared shape, as the server reads it."
+				collapsible
+			>
 				<pre
-					class="bg-surface-50-950 overflow-x-auto rounded-base p-2 font-mono text-meta">{JSON.stringify(
+					class="bg-surface-50-950 rounded-base text-meta overflow-x-auto p-2 font-mono">{JSON.stringify(
 						genre.shape,
 						null,
 						2
@@ -1112,13 +1310,19 @@
 	<Dialog open={exportOpen} onOpenChange={(e) => (exportOpen = e.open)}>
 		<Portal>
 			<Dialog.Backdrop class="bg-surface-950/60 fixed inset-0 z-50" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
 				<Dialog.Content
-					class="bg-surface-100-900 border-surface-200-800 flex w-[30rem] max-w-full flex-col gap-3 rounded-container border p-4"
+					class="bg-surface-100-900 border-surface-200-800 rounded-container flex w-[30rem] max-w-full flex-col gap-3 border p-4"
 				>
-					<Dialog.Title class="text-base font-semibold">Export {genre.name} as a plugin</Dialog.Title>
+					<Dialog.Title class="text-base font-semibold">
+						Export {genre.name} as a plugin
+					</Dialog.Title>
 					<Dialog.Description class="text-surface-600-400 text-sm">
-						A zip of its pipelines, preset, configurations and layout, under its owner slug — installable on another pub from Admin › Plugins.
+						A zip of its pipelines, preset, configurations and
+						layout, under its owner slug — installable on another
+						pub from Admin › Plugins.
 					</Dialog.Description>
 					<label class="flex flex-col gap-1 text-sm">
 						<span class="font-medium">Version</span>
@@ -1127,10 +1331,15 @@
 							placeholder="1.0.0"
 							bind:value={exportVersion}
 							aria-describedby="genre-export-hint"
-							onkeydown={(e) => e.key === "Enter" && confirmExport()}
+							onkeydown={(e) =>
+								e.key === "Enter" && confirmExport()}
 						/>
-						<span id="genre-export-hint" class="text-surface-600-400 text-xs">
-							Three numbers with dots. Raise it each time you share a changed copy.
+						<span
+							id="genre-export-hint"
+							class="text-surface-600-400 text-xs"
+						>
+							Three numbers with dots. Raise it each time you
+							share a changed copy.
 						</span>
 					</label>
 					<label class="flex min-h-10 items-center gap-2 text-sm">
@@ -1142,10 +1351,17 @@
 						/>
 						Include the source
 					</label>
-					<p id="genre-export-source-hint" class="text-surface-600-400 -mt-2 text-xs">
-						Adds the files a developer edits and rebuilds it from with the Serene Pub SDK. Its README lists what is left to write.
+					<p
+						id="genre-export-source-hint"
+						class="text-surface-600-400 -mt-2 text-xs"
+					>
+						Adds the files a developer edits and rebuilds it from
+						with the Serene Pub SDK. Its README lists what is left
+						to write.
 					</p>
-					{#if exportError}<InlineError>{exportError}</InlineError>{/if}
+					{#if exportError}<InlineError>
+							{exportError}
+						</InlineError>{/if}
 					<button
 						type="button"
 						class="btn btn-sm preset-filled-primary-500"
@@ -1155,7 +1371,11 @@
 						<Icons.Download size={14} aria-hidden="true" />
 						{exporting ? "Exporting…" : "Export"}
 					</button>
-					<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (exportOpen = false)}>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface"
+						onclick={() => (exportOpen = false)}
+					>
 						Cancel
 					</button>
 				</Dialog.Content>

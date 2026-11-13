@@ -27,6 +27,12 @@ const prepareImageMock = vi.fn(async (...args: any[]) => ({
 	b64: args[1]
 }))
 const completeMock = vi.fn(async (..._args: any[]) => ({ content: "hi" }))
+// Records the load options, which carry the context window.
+const llmModelMock = vi.fn(async (..._args: any[]) => ({
+	getContextLength: vi.fn(async () => 4096),
+	respond: (...args: any[]) => respondMock(...args),
+	complete: (...args: any[]) => completeMock(...args)
+}))
 vi.mock("@lmstudio/sdk", () => ({
 	LMStudioClient: class {
 		system = {
@@ -36,11 +42,7 @@ vi.mock("@lmstudio/sdk", () => ({
 				getLMStudioVersionMock(...args)
 		}
 		llm = {
-			model: vi.fn(async () => ({
-				getContextLength: vi.fn(async () => 4096),
-				respond: (...args: any[]) => respondMock(...args),
-				complete: (...args: any[]) => completeMock(...args)
-			}))
+			model: (...args: any[]) => llmModelMock(...args)
 		}
 		files = {
 			prepareImageBase64: (...args: any[]) => prepareImageMock(...args)
@@ -647,5 +649,51 @@ describe("LMStudioAdapter — images on the chat wire", () => {
 			images: [{ handle: "h:tree.png", b64: png.toString("base64") }]
 		})
 		expect(messages[1]).toEqual({ role: "assistant", content: "Mara:" })
+	})
+})
+
+describe("LMStudioAdapter — the context window on model load", () => {
+	// A dispatch injects its prompt, so `compilePrompt` returns before it
+	// fills `tokenLimit` in. The constructor used to drop the caller's window
+	// and pass 0, and LM Studio's SDK rejects `contextLength: 0` outright:
+	// "opts.config.contextLength: Number must be greater than or equal to 1".
+	async function loadOptsFor(
+		tokenLimit: number | undefined,
+		sampling: Record<string, unknown> = {}
+	) {
+		llmModelMock.mockClear()
+		listDownloadedModelsMock.mockResolvedValue([{ modelKey: "some-model" }])
+		const adapter = new exportsDefault.Adapter({
+			connection: makeConnection({ extraJson: { ttl: 60, stream: false } }),
+			sampling: sampling as any,
+			systemPrompt: "Test system prompt.",
+			session: makeSession(),
+			currentCharacterId: null,
+			tokenCounter: { countTokens: async () => 1 } as any,
+			tokenLimit,
+			contextThresholdPercent: 0.9
+		} as any) as any
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		return llmModelMock.mock.calls[0]?.[1] as any
+	}
+
+	test("loads the model at the window the dispatch sized to", async () => {
+		const opts = await loadOptsFor(12288, { contextTokens: 16384 })
+		expect(opts.config.contextLength).toBe(12288)
+	})
+
+	test("without a supplied window, loads at the config's, never 0", async () => {
+		const opts = await loadOptsFor(undefined, { contextTokens: 8192 })
+		expect(opts.config.contextLength).toBe(8192)
+	})
+
+	test("with neither, loads at the default window", async () => {
+		const opts = await loadOptsFor(undefined)
+		expect(opts.config.contextLength).toBe(4096)
 	})
 })

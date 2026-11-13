@@ -99,18 +99,16 @@ beforeAll(async () => {
 				.values({ userId, name, description: "" })
 				.returning()
 		)[0]
+	const { insertCastMember } = await import("$lib/server/characters/versions")
 	const binding = async (name: string, characterId: number) =>
 		(
-			await db
-				.insert(schema.lorebookBindings)
-				.values({
-					lorebookId: lorebook.id,
-					name,
-					binding: `{{char:${characterId}}}`,
-					characterId
-				})
-				.returning()
-		)[0]
+			await insertCastMember(db as any, {
+				lorebookId: lorebook.id,
+				name,
+				binding: `{{char:${characterId}}}`,
+				characterId
+			})
+		).member
 
 	const speaker = await character("Amara")
 	speakerCharacterId = speaker.id

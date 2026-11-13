@@ -32,6 +32,8 @@ import {
 	rankRelationships
 } from "$lib/server/pipelines/ranking/relationshipRanking"
 import { keywordQuery } from "$lib/server/pipelines/ranking/keywordQuery"
+import { storedSeatRefInCast } from "$lib/server/pipelines/prompt/seatCards"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import {
 	DEFAULT_GROUPS,
 	withDefaults
@@ -389,9 +391,23 @@ export function relationshipSearchBindings(): Bindings {
 
 				const ranked = rankRelationships(rows ?? [])
 				/** The scope's speaker, as a participant reference — a secret's holder. */
+				const speakerCard = input?.scope?.currentCharacterId
+				/**
+				 * ⏳ The speaker's seat, as the cast names it (member form once
+				 * `state/memberForm.ts` is on — the seat's `storedSeatRefInCast`);
+				 * the card form off, or for a card no seat holds. The cast is read
+				 * only when the flip is on.
+				 */
 				const holder =
-					typeof input?.scope?.currentCharacterId === "number"
-						? `character:${input.scope.currentCharacterId}`
+					typeof speakerCard === "number"
+						? ((memberFormOn()
+								? storedSeatRefInCast(
+										await ctx.read("session_cast", {
+											sessionId: input?.scope?.sessionId
+										}),
+										`character:${speakerCard}`
+									)
+								: null) ?? `character:${speakerCard}`)
 						: null
 
 				/**

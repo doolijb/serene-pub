@@ -92,7 +92,6 @@ function open(props: Record<string, unknown>) {
 			lorebookId: BOOK,
 			selectedMessageIds: [1, 2],
 			onSaved: () => {},
-			onLorebookSet: () => {},
 			...props
 		} as any
 	})

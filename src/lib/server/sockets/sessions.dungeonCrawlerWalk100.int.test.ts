@@ -420,6 +420,13 @@ async function fireContinue(sessionId: number) {
 	return res
 }
 
+/** The session's story clock (`sessions.story_clock_*`), as "day hour:minute" — null when it has none. */
+async function storyClockOf(sessionId: number) {
+	const [row] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+	if (row!.storyClockHour == null) return null
+	return { day: row!.storyClockDay, hour: row!.storyClockHour, minute: row!.storyClockMinute ?? 0 }
+}
+
 describe("P0-1: every Dungeon Crawler call ends on a user turn (chat wire)", () => {
 	it("the Narrator's outcomes and reminder are the last user turn; a round nobody spoke in says so, last", async () => {
 		const { sessionId, ref } = await madeTable("walk100-user-turn")
@@ -574,7 +581,8 @@ describe("P1-5: an empty plan", () => {
 describe("P1-6 / P1-7: a failed reply and a stopped one", () => {
 	it("a failed reply takes back the clock it moved; an empty stopped reply reaches no prompt", async () => {
 		const { sessionId, ref } = await madeTable("walk100-failed")
-		const clock = await value(sessionId, { kind: "session", id: sessionId } as any, "core:slot/crawl-time@1")
+		// Moved 2026-11-10 (hist-D1/D2): the clock is the session's story clock now, not a crawl-time slot.
+		const clock = await storyClockOf(sessionId)
 		narratorSays = ""
 		try {
 			await db.insert(schema.sessionMessages).values({ sessionId, userId: ownerId, role: "user", content: "I climb.", channel: "main", metadata: { speaker: ref } } as any)
@@ -587,7 +595,7 @@ describe("P1-6 / P1-7: a failed reply and a stopped one", () => {
 		}
 		const failed = (await rowsOf(sessionId)).filter((r) => r.channel === "main").at(-1)!
 		expect(failed.error).not.toBeNull()
-		expect(await value(sessionId, { kind: "session", id: sessionId } as any, "core:slot/crawl-time@1")).toBe(clock)
+		expect(await storyClockOf(sessionId)).toEqual(clock)
 		// A reply stopped before a word: on the Story, but in no prompt.
 		await db.insert(schema.sessionMessages).values({
 			sessionId, role: "assistant", content: "", channel: "main", isNarratorResponse: true, generationOutcome: "stopped", metadata: { speaker: "envoy:narrator" }
@@ -615,7 +623,8 @@ describe("P3-1: a new character after a death", () => {
 		const seats = await db.select().from(schema.sessionPersonas).where(eq(schema.sessionPersonas.sessionId, sessionId))
 		const old = seats.find((s) => s.id === seat.id)!
 		const fresh = seats.find((s) => s.seatName === "Tobin")!
-		expect(old.removedAt).not.toBeNull()
+		// Benched, not removed (owner 2026-11-10, benched seats): a retire benches the old seat.
+		expect(old).toMatchObject({ removedAt: null, isActive: false })
 		expect(old.seatName).toBe("Ann the Bold")
 		expect(fresh.id).not.toBe(seat.id)
 		expect(fresh.removedAt).toBeNull()
@@ -825,13 +834,14 @@ describe("🚧 S4 (lane G3, 2026-10-23): a crawl under Wherewithal plays by Wher
 		const ids = [...venues.composer.primary, ...venues.composer.overflow].map((a: any) => `${a.specSlug}#${a.key}`)
 		expect(ids).toContain("core:spec/dungeon-crawler-rest#rest")
 		expect(ids.filter((i: string) => i.startsWith("core:spec/rules-action#"))).toEqual([])
-		const clock = await value(sessionId, { kind: "session", id: sessionId } as any, "core:slot/crawl-time@1")
+		// Moved 2026-11-10 (hist-D1/D2): the clock is the session's story clock now, not a crawl-time slot.
+		const clock = await storyClockOf(sessionId)
 		const rested = await fire(ownerId, sessionId, "core:spec/dungeon-crawler-rest#rest", undefined, undefined, {})
 		expect(rested?.error, rested?.error).toBeUndefined()
 		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("alive")
 		// Its rests take no set time: the night is told without one, and the clock stays. 🚧 RF fix 8:
 		// with no health in Wherewithal's keeping, nobody is said to recover — the rest is told alone.
 		expect((await tableRows(sessionId)).at(-1)).toMatch(/^The party rests\.$/)
-		expect(await value(sessionId, { kind: "session", id: sessionId } as any, "core:slot/crawl-time@1")).toEqual(clock)
+		expect(await storyClockOf(sessionId)).toEqual(clock)
 	}, 600_000)
 })

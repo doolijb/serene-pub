@@ -22,7 +22,7 @@
  *     still selects for its session;
  *   · `ragIgnored` switched retrieval off for its chat.
  */
-import { beforeAll, describe, expect, test } from "vitest"
+import { beforeAll, describe, expect, test, vi } from "vitest"
 import {
 	bootFixture,
 	configurationState,
@@ -33,6 +33,13 @@ import {
 	type PreviewOutcome
 } from "./testFixture"
 import { ATTIC_SCHEMA, atticExists } from "./index"
+
+// The boot AFTER an upgrade makes the two local ONNX connection rows
+// (`ensureLocalOnnxConnections`); this file's second boot compares the
+// upgrade's own state, so the runtime is reported absent here.
+vi.mock("$lib/server/localModels/onnxRuntime", () => ({
+	localOnnxAvailability: async () => ({ available: false, reason: "test" })
+}))
 
 const manifest = fixtureManifest("big")
 const ids = manifest.ids

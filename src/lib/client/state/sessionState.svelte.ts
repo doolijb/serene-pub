@@ -34,7 +34,7 @@
  * requests are not scoped, and a check that costs a comparison is worth keeping
  * in front of a cache that answers for one session.
  */
-import { SvelteMap } from "svelte/reactivity"
+import { SvelteMap, SvelteSet } from "svelte/reactivity"
 import {
 	declareInterest,
 	requestWithInterest
@@ -71,6 +71,12 @@ let readError = $state<string | null>(null)
 let wordsOnly = $state(false)
 /** 🚧 The people the session's story has met (Q3-5): Scene Portraits' faces. */
 let metPeople = $state<{ entryId: number; name: string }[]>([])
+/**
+ * 🚧 The AI character seats (`seated-member:<id>`) the viewer asked to read the
+ * holder-only values of (*Show hidden stats*). This visit's only: cleared when the
+ * store points at another session, never saved.
+ */
+const hiddenStatsShown = new SvelteSet<string>()
 /** 🚧 The session's story clock in words (RF fix 8): the world's _when_. */
 let storyTime = $state<string | null>(null)
 
@@ -396,13 +402,28 @@ function refresh(): void {
 	// (the handlers are the same references `start` declared) — what they add
 	// is the interest sync ahead of the request, which is what makes a gated
 	// reply reachable at all.
-	requestWithInterest("state:get", { sessionId: openSessionId }, onGet)
+	requestWithInterest(
+		"state:get",
+		{ sessionId: openSessionId, showHiddenStats: [...hiddenStatsShown] },
+		onGet
+	)
 	requestWithInterest(
 		"state:proposals",
 		{ sessionId: openSessionId },
 		onProposals
 	)
 	requestWithInterest("state:ledger", { sessionId: openSessionId }, onLedger)
+}
+
+/**
+ * 🚧 Show hidden stats: read (or stop reading) the holder-only values of the AI
+ * seat `ref` (`seated-member:<id>`) the viewer seated, then re-read. The host
+ * drops a ref the viewer did not seat.
+ */
+export function setShowingHiddenStats(ref: string, on: boolean): void {
+	if (on) hiddenStatsShown.add(ref)
+	else hiddenStatsShown.delete(ref)
+	refresh()
 }
 
 /**
@@ -422,6 +443,7 @@ export function openSessionState(sessionId: number | null): void {
 	declareChanged()
 	askedFor = null
 	reading = false
+	hiddenStatsShown.clear()
 	abandonPendingSets("the session changed before that write was answered")
 	state = EMPTY
 	loaded = false

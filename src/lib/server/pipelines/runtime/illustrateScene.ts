@@ -2,10 +2,11 @@
  * 🚧 The Scene action's bindings (DESIGN-image-generation §6.4; I9) —
  * `core:spec/story-illustrate-scene`:
  *
- *  - `core:query/likeness-images@1` — everyone on stage's likeness image
- *    (else avatar), in stage order: the switched-on cast by seat, then the
- *    personas. The read is `likeness_images` in `host.ts`, answered by
- *    `likenessImagesFor` below. Not capped: the picture step's host caps
+ *  - `core:query/likeness-images@1` — everyone on stage's picture, in stage
+ *    order: the switched-on cast by seat, then the player seats. Each seat's
+ *    member over its active card: the card's likeness image, else the
+ *    member's own face, else the card's avatar (★pT-2). The read is
+ *    `likeness_images` in `host.ts`, answered by `likenessImagesFor` below. Not capped: the picture step's host caps
  *    references at the drawing sheet's maximum and says so.
  *  - `core:task/clean-image-prompt@1` — a text model's reply as one prompt
  *    line (`cleanImagePrompt`). Pure.
@@ -15,9 +16,11 @@
 import type { Bindings, MediaRef } from "@serene-pub/sdk"
 import { halt, ok, reads } from "@serene-pub/sdk"
 import type * as C from "@serene-pub/contracts"
-import { and, asc, eq, isNull } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { likenessOf } from "$lib/server/characters/likeness"
+import { ensureCardVersion } from "$lib/server/characters/versions"
+import { profileOf } from "$lib/shared/characters/profile"
 import { getMedia } from "$lib/server/media"
 import type { CoreQueryCtx, NodeInput } from "./bindingTypes"
 
@@ -71,7 +74,12 @@ export function cleanImagePrompt(raw: unknown): string {
 		.filter(Boolean)
 	// A line that ends a sentence runs on with a space; any other line is a tag.
 	s = parts.reduce(
-		(acc, part) => (!acc ? part : /[.!?]$/.test(acc) ? `${acc} ${part}` : `${acc}, ${part}`),
+		(acc, part) =>
+			!acc
+				? part
+				: /[.!?]$/.test(acc)
+					? `${acc} ${part}`
+					: `${acc}, ${part}`,
 		""
 	)
 	return s
@@ -137,56 +145,136 @@ function mediaRefOf(file: {
 }
 
 /**
- * Everyone on stage's likeness image, in stage order — the order
+ * Everyone on stage's picture, in stage order — the order
  * `core:var/likenesses@1` lays the tag lines out in (`promptFields.ts`):
- * the switched-on, seated cast by position, then the personas by
- * position. A likeness image, else the avatar; someone with neither, or
- * whose file is gone or is not an image, is skipped. One picture per
- * file: the same image twice is sent once.
+ * the switched-on, seated cast by position, then the player seats by
+ * position.
+ *
+ * Each seat reads its cast member over the member's ACTIVE card on the
+ * session's reading (owner ruling 2026-11-05: "Everything in session is cast
+ * -> active card"; ★pT-1: a persona seat reads its member like every seat).
+ * The picture is (★pT-2): the active card's likeness image — only a likeness
+ * image proper, not the avatar standing in for one — else the member's own
+ * face, else the active card's avatar. A seat with no member reads its own
+ * card as before (likeness image, else avatar); a member with no active card
+ * offers only its own face, and so does a card-less player seat's member.
+ * Someone with no picture, or whose file is gone or is not an image, is
+ * skipped. One picture per file: the same image twice is sent once.
  */
 export async function likenessImagesFor(
 	db: Db,
 	sessionId: number
 ): Promise<MediaRef[]> {
+	const cs = schema.sessionCharacters
+	const ps = schema.sessionPersonas
+	const K = schema.characters
+	const cardColumns = { id: K.id }
 	const cast = await db
-		.select({
-			extensions: schema.characters.extensions,
-			avatarMediaId: schema.characters.avatarMediaId
-		})
-		.from(schema.sessionCharacters)
-		.innerJoin(
-			schema.characters,
-			eq(schema.characters.id, schema.sessionCharacters.characterId)
-		)
+		.select({ castMemberId: cs.castMemberId, character: cardColumns })
+		.from(cs)
+		.leftJoin(K, eq(K.id, cs.characterId))
 		.where(
 			and(
-				eq(schema.sessionCharacters.sessionId, sessionId),
-				eq(schema.sessionCharacters.isActive, true),
-				isNull(schema.sessionCharacters.removedAt)
+				eq(cs.sessionId, sessionId),
+				eq(cs.isActive, true),
+				isNull(cs.removedAt),
+				isNull(cs.envoySlug),
+				or(isNotNull(cs.characterId), isNotNull(cs.castMemberId))
 			)
 		)
-		.orderBy(asc(schema.sessionCharacters.position))
-	const personas = await db
-		.select({
-			extensions: schema.characters.extensions,
-			avatarMediaId: schema.characters.avatarMediaId
+		.orderBy(asc(cs.position))
+	const players = await db
+		.select({ castMemberId: ps.castMemberId, character: cardColumns })
+		.from(ps)
+		.leftJoin(K, eq(K.id, ps.personaId))
+		.where(and(eq(ps.sessionId, sessionId), isNull(ps.removedAt)))
+		.orderBy(asc(ps.position))
+	type CardRow = { id: number }
+	const seats = [...cast, ...players].map((s) => ({
+		castMemberId: s.castMemberId,
+		// A card-less player seat's left join comes back all null.
+		character: s.character?.id != null ? (s.character as CardRow) : null
+	}))
+	const { seatMembersAsRead } = await import(
+		"$lib/server/pipelines/prompt/seatCards"
+	)
+	const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+	const read = await seatMembersAsRead(db, sessionId, seats)
+	// A seat with no card reads its member directly.
+	const cardlessMembers = await membersAsRead(
+		db,
+		seats.flatMap((s) =>
+			s.character == null && s.castMemberId != null
+				? [s.castMemberId]
+				: []
+		),
+		{ sessionId }
+	)
+	// The active cards that are not the seat's own card.
+	const held = new Map(
+		seats.flatMap((s) =>
+			s.character ? [[s.character.id, s.character] as const] : []
+		)
+	)
+	const wanted = read.flatMap((m) =>
+		m?.activeCardId != null && !held.has(m.activeCardId)
+			? [m.activeCardId]
+			: []
+	)
+	const loaded = wanted.length
+		? await db
+				.select(cardColumns)
+				.from(K)
+				.where(inArray(K.id, [...new Set(wanted)]))
+		: []
+	// Each distinct card's picture reads its current card version (the row's
+	// columns are frozen): `ensureCardVersion` per distinct card.
+	const cards = new Map<number, Parameters<typeof likenessOf>[0]>()
+	for (const id of new Set([...held.keys(), ...loaded.map((c) => c.id)])) {
+		const profile = profileOf((await ensureCardVersion(db, id)) ?? {})
+		cards.set(id, {
+			extensions: { serenepub: { likeness: profile.likeness } },
+			avatarMediaId: profile.faceMediaId
 		})
-		.from(schema.sessionPersonas)
-		.innerJoin(
-			schema.characters,
-			eq(schema.characters.id, schema.sessionPersonas.personaId)
-		)
-		.where(
-			and(
-				eq(schema.sessionPersonas.sessionId, sessionId),
-				isNull(schema.sessionPersonas.removedAt)
-			)
-		)
-		.orderBy(asc(schema.sessionPersonas.position))
+	}
+
 	const out: MediaRef[] = []
 	const seen = new Set<number>()
-	for (const row of [...cast, ...personas]) {
-		const id = likenessOf(row).imageMediaId
+	for (const [i, seat] of seats.entries()) {
+		const member =
+			read[i] ??
+			(seat.character == null && seat.castMemberId != null
+				? (cardlessMembers.get(seat.castMemberId) ?? null)
+				: null)
+		let id: number | null
+		if (!member) {
+			id = seat.character ? likenessOf(cards.get(seat.character.id) ?? {}).imageMediaId : null
+		} else {
+			// The member's likeness as read (its own, or the active card's
+			// version's when it follows) — a likeness image proper.
+			const own = member.likeness
+				? likenessOf({
+						extensions: { serenepub: { likeness: member.likeness } }
+					})
+				: null
+			const active =
+				member.activeCardId != null
+					? (cards.get(member.activeCardId) ?? null)
+					: null
+			const likeness = active ? likenessOf(active) : null
+			const ownFace =
+				member.cardless || !member.followsCard.includes("face")
+					? member.faceMediaId
+					: null
+			id =
+				own?.imageMediaId ??
+				(likeness && !likeness.imageIsAvatar
+					? likeness.imageMediaId
+					: null) ??
+				ownFace ??
+				likeness?.imageMediaId ??
+				null
+		}
 		if (id == null || seen.has(id)) continue
 		seen.add(id)
 		const file = await getMedia(db, id)

@@ -4,7 +4,7 @@
 	 * Connections split): "make my sessions work".
 	 *
 	 * The list column is `ModelsListView` — every model of every connection
-	 * flat, the background remover, the downloads tray — and the
+	 * grouped, the background remover, the downloads tray — and the
 	 * detail is one model's own view (`ModelDetailView`, or `OnnxModelView`
 	 * for a local ONNX file). `PanelSplit` lays them out: at desk with
 	 * nothing open the list takes the whole view (`listFills`), centred at
@@ -19,23 +19,24 @@
 	 * the default goes through `chooseJobModel` (its costed confirmation),
 	 * any other loadout is filled with `loadouts:update`.
 	 *
-	 * Mounted here, never places: Get a model (`ModelFinderView` in a
-	 * dialog), Set up chat (`SetupChatFlow`) and Add a model by name. Where a connection itself is the subject — a
-	 * runtime to manage, a connection to add — the press opens the
-	 * Connections view (`digest.connectionId`), which owns connections.
+	 * The detail pane holds a model's view, Get a model (the finder,
+	 * `ModelFinderView`, which every finder door opens) or Add a model by
+	 * name (`AddModelByNameView`). Only Set up chat (`SetupChatFlow`) is
+	 * still a dialog mounted here. Where a connection itself is the subject — a runtime to manage,
+	 * a connection to add — the press opens the Connections view
+	 * (`digest.connectionId`), which owns connections.
 	 *
 	 * The list, model sync and the one way to choose live in the connections
 	 * context (`contexts/connections.svelte.ts`), held while this view is
 	 * mounted. No draft is ever held here, so no close gate is registered.
 	 */
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
-	import * as Icons from "@lucide/svelte"
-	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useConnections } from "$lib/client/contexts/connections.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
 	import ModelsListView from "$lib/client/components/connections/ModelsListView.svelte"
+	import { loadoutModelKeys } from "$lib/client/components/connections/modelsList"
 	import ModelDetailView from "$lib/client/components/connections/ModelDetailView.svelte"
 	import OnnxModelView from "$lib/client/components/connections/OnnxModelView.svelte"
 	import UseInMenu from "$lib/client/components/connections/UseInMenu.svelte"
@@ -49,7 +50,7 @@
 	import type { ConnectionModelRow } from "$lib/client/components/connections/useConnectionModels.svelte"
 	import ModelFinderView from "$lib/client/components/connections/ModelFinderView.svelte"
 	import SetupChatFlow from "$lib/client/components/connections/SetupChatFlow.svelte"
-	import AddModelByNameDialog from "$lib/client/components/connections/AddModelByNameDialog.svelte"
+	import AddModelByNameView from "$lib/client/components/connections/AddModelByNameView.svelte"
 	import {
 		isLocalOnnxType,
 		manualAddAllowed,
@@ -80,26 +81,49 @@
 	const vm = new ViewModeTracker()
 
 	// ── The selection (the detail pane) ─────────────────────────────────────
-	let selected = $state<{ connectionId: number; modelId: number } | null>(
-		null
+	/**
+	 * What the detail pane holds: one model's view, Get a model (the finder,
+	 * scoped by the door that opened it; `key` counts the openings so a door
+	 * pressed while it is open remounts it), Add a model by name, or nothing.
+	 */
+	type Pane =
+		| { kind: "model"; connectionId: number; modelId: number }
+		| {
+				kind: "finder"
+				scope: { capability?: string; connectionId?: number }
+				key: number
+		  }
+		| { kind: "add-by-name"; key: number }
+		| null
+	let pane = $state<Pane>(null)
+	let finderKey = 0
+	const selected = $derived(
+		pane?.kind === "model"
+			? { connectionId: pane.connectionId, modelId: pane.modelId }
+			: null
 	)
 	const selectedRow = $derived(
 		selected
-			? (conns.list.find((c) => c.id === selected!.connectionId) ?? null)
+			? (conns.list.find((c) => c.id === selected.connectionId) ?? null)
 			: null
 	)
 	function openModel(connectionId: number, modelId: number) {
-		selected = { connectionId, modelId }
+		pane = { kind: "model", connectionId, modelId }
 		conns.requestSync(connectionId)
 		announce("Model details opened")
 	}
-	function closeModel() {
-		selected = null
+	function closePane() {
+		pane = null
 	}
 
 	// ── Use in… (the loadouts a model can be put in) ────────────────────────
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 	let loadoutsList = $state<Sockets.Loadouts.List.Response | null>(null)
+	// The pairs a loadout's current pair names; null until `loadouts:list`
+	// answers, so the list folds services without exemptions.
+	const inLoadout = $derived(
+		loadoutsList ? loadoutModelKeys(loadoutsList.loadouts) : null
+	)
 	/** The `loadouts:update` this tab sent, and what to say when it lands. */
 	let pendingUseIn: { id: number; sentence: string } | null = null
 
@@ -137,7 +161,10 @@
 	/** A model's *Use in…* groups, or null before the list arrives. */
 	function groupsOf(
 		connectionId: number,
-		model: { id: number; satisfiableCapabilities?: readonly string[] | null }
+		model: {
+			id: number
+			satisfiableCapabilities?: readonly string[] | null
+		}
 	) {
 		if (!loadoutsList) return null
 		return useInGroups(
@@ -181,27 +208,22 @@
 		openInLoadouts(panelsCtx, loadoutId != null ? { loadoutId } : {})
 	}
 
-	// ── The dialogs (never places) ──────────────────────────────────────────
-	/** The Get a model dialog, and what it is scoped to. */
-	let finderOpen = $state(false)
-	let finderScope = $state<{ capability?: string; connectionId?: number }>({})
+	// ── Set up chat, and the targets of Add by name ─────────────────────────────────────────────────────────
 	/** The Set up chat stepper. */
 	let setupChatOpen = $state(false)
-	let addByNameOpen = $state(false)
 	const addByNameTargets = $derived(
 		conns.listed.filter((c) => manualAddAllowed(c.type))
 	)
 
-	/** The Get a model dialog, optionally scoped to a job. */
+	/** Get a model in the detail pane, optionally scoped to a job. */
 	function openFinder(
 		opts: { capability?: string; connectionId?: number } = {}
 	) {
-		finderScope = { ...opts }
-		finderOpen = true
+		pane = { kind: "finder", scope: { ...opts }, key: ++finderKey }
 	}
 	/** The Set up chat stepper (U5); its step is derived from the facts. */
 	function openSetupChat() {
-		finderOpen = false
+		if (pane?.kind === "finder") pane = null
 		setupChatOpen = true
 	}
 
@@ -314,15 +336,15 @@
 	<ModelsListView
 		frame={listFrame}
 		{selected}
+		{inLoadout}
 		onOpenModel={openModel}
 		onSetUpChat={openSetupChat}
 		onGetModel={(opts) => openFinder(opts ?? {})}
-		onAddByName={() => (addByNameOpen = true)}
+		onAddByName={() => (pane = { kind: "add-by-name", key: ++finderKey })}
 		onOpenConnections={() => openConnections()}
 		onOpenLoadouts={isAdmin ? openLoadouts : undefined}
 		useInGroupsOf={(entry) => groupsOf(entry.connectionId, entry.model)}
-		onUseIn={(entry, item) =>
-			useIn(entry.connectionId, entry.model, item)}
+		onUseIn={(entry, item) => useIn(entry.connectionId, entry.model, item)}
 	/>
 </div>
 
@@ -332,7 +354,7 @@
 {#snippet listFrame(toolbar: Snippet, list: Snippet)}
 	<PanelSplit
 		mode={vm.mode}
-		hasDetail={selected != null}
+		hasDetail={pane != null}
 		listFills
 		fillWidth="list"
 		listWidth="340px"
@@ -343,7 +365,24 @@
 {/snippet}
 
 {#snippet detailPane()}
-	{#if selected}
+	{#if pane?.kind === "finder"}
+		{#key pane.key}
+			<ModelFinderView
+				capability={pane.scope.capability}
+				connectionId={pane.scope.connectionId}
+				onBack={closePane}
+				onOpenConnection={(id) => openConnections(id)}
+			/>
+		{/key}
+	{:else if pane?.kind === "add-by-name"}
+		{#key pane.key}
+			<AddModelByNameView
+				targets={addByNameTargets}
+				onAdd={addModelByName}
+				onBack={closePane}
+			/>
+		{/key}
+	{:else if selected}
 		{@const connectionId = selected.connectionId}
 		{@const onnxModel = selectedRow?.models.find(
 			(m) => m.id === selected!.modelId
@@ -357,7 +396,7 @@
 				{capabilityDefaults}
 				mode={vm.mode}
 				isAdmin={userCtx?.user?.isAdmin ?? false}
-				onBack={closeModel}
+				onBack={closePane}
 				onSelectDefault={(model, selection) =>
 					conns.chooseJobModel(conns.jobsOf(selection), {
 						connectionId,
@@ -373,7 +412,7 @@
 					{capabilityDefaults}
 					syncing={conns.syncingAll ||
 						conns.syncingIds.has(connectionId)}
-					onBack={closeModel}
+					onBack={closePane}
 					onSelectDefault={(model, selection) =>
 						conns.chooseJobModel(conns.jobsOf(selection), {
 							connectionId,
@@ -383,7 +422,7 @@
 					onOpenManager={openManager}
 					onRemoved={() => {
 						announce("Model removed")
-						closeModel()
+						closePane()
 					}}
 					useIn={loadoutsList ? detailUseIn : undefined}
 				/>
@@ -411,47 +450,6 @@
 	/>
 {/snippet}
 
-<!-- Get a model: the one finder (R3), as a dialog from the toolbar. Getting a model closes nothing; the tray shows it. -->
-<Dialog open={finderOpen} onOpenChange={(e) => (finderOpen = e.open)}>
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 flex h-[min(90vh,760px)] w-full max-w-2xl flex-col gap-3 p-6 shadow-xl"
-			>
-				{#if finderOpen}
-					<header class="flex shrink-0 items-center gap-2">
-						<Dialog.Title
-							class="min-w-0 flex-1 [font-family:var(--typo-heading--font-family)] text-lg font-semibold"
-						>
-							Get a model
-						</Dialog.Title>
-						<Dialog.CloseTrigger
-							class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
-							aria-label="Close"
-						>
-							<Icons.X size={16} aria-hidden="true" />
-						</Dialog.CloseTrigger>
-					</header>
-					<div class="flex min-h-0 flex-1 flex-col">
-						<ModelFinderView
-							capability={finderScope.capability}
-							connectionId={finderScope.connectionId}
-							onOpenConnection={(id) => {
-								finderOpen = false
-								openConnections(id)
-							}}
-						/>
-					</div>
-				{/if}
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
 <!-- Set up chat: Runtime → Model → Done, as a stepper over the list. It
      waits for the list, so its Runtime step never creates a KoboldCPP the
      list was about to name. -->
@@ -461,7 +459,6 @@
 	onEnsureRuntime={() => {
 		conns.enableManagerHere("koboldcpp")
 	}}
-	onChooseJobModel={conns.chooseJobModel}
 	onOpenConnection={(id) => {
 		setupChatOpen = false
 		openConnections(id)
@@ -471,9 +468,4 @@
 		setupChatOpen = false
 		openSessions()
 	}}
-/>
-<AddModelByNameDialog
-	bind:open={addByNameOpen}
-	targets={addByNameTargets}
-	onAdd={addModelByName}
 />

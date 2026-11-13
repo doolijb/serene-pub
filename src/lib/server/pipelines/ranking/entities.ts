@@ -139,9 +139,16 @@ export const EXTRACTOR_VERSION = "core:extract/entities-heuristic@2"
  * ⚠ There is no `persona` kind, and adding one would be a second key for a row
  * `character` already names: a persona IS a character, and one row with two
  * keys is one entity the matcher counts twice.
+ *
+ * 🚧 `cast_member` (owner ruling 2026-11-06, ★9 2026-11-08) is a cast member
+ * with **no live card** — card-less, or its card soft-deleted — by
+ * `lorebook_bindings.id`. A member with a live card is still `character:<card>`,
+ * so one member has one key at a time; linking or unlinking a card moves the
+ * key, and the vocabulary hash with it. Stored as the entity key alone (no
+ * foreign key): a reader filters out a member that is gone.
  */
 export interface EntityRef {
-	kind: "character" | "entry"
+	kind: "character" | "cast_member" | "entry"
 	/**
 	 * The row id. Entry ids are unique because `lorebook_entries` is one table
 	 * now — the three legacy tables had independent sequences, which is why
@@ -596,6 +603,20 @@ function runMatcher(
 // ── The gazetteer ───────────────────────────────────────────────────────────
 
 export const entityKey = (ref: EntityRef): string => `${ref.kind}:${ref.id}`
+
+/**
+ * The resolved row a stored entity key names — `entityKey`'s inverse. Null for
+ * an `open:` key, the empty sentinel, or anything else, so a reader never
+ * slices a key prefix by hand.
+ */
+export function parseEntityKey(key: string): EntityRef | null {
+	const m = /^(character|cast_member|entry):(\d+)$/.exec(key)
+	if (!m) return null
+	const id = Number(m[2])
+	return Number.isSafeInteger(id) && id > 0
+		? { kind: m[1] as EntityRef["kind"], id }
+		: null
+}
 
 /**
  * The words of a multi-word name that are worth matching on their own.

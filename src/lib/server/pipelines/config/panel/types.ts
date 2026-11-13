@@ -166,22 +166,6 @@ export interface ConfigOption {
 		origin?: string
 	}
 	/**
-	 * For a `variable-template-ref` option: the selected layout, in full, for
-	 * the same reason `prompt` travels — a picker of names cannot answer "what
-	 * does this actually produce", and the answer is the thing being chosen.
-	 *
-	 * The variable id is deliberately **not** here. It is a node-shaped string
-	 * (`core:var/history@1`), and the payload is scanned for node keys; sending
-	 * it would leak topology through a field nobody reads. The client never
-	 * needs it — every write is addressed by the option's own handle.
-	 */
-	variableTemplate?: {
-		id: number
-		name: string
-		source: string
-		readOnly: boolean
-	}
-	/**
 	 * For a `context-template-ref` option: the selected story string, in full.
 	 *
 	 * Same ride-along as `prompt` and `variableTemplate`, and here it matters
@@ -678,22 +662,6 @@ export interface Decl {
 	 */
 	promptFields?: string[]
 	/**
-	 * For a variables slot: which registered context variable this key renders.
-	 *
-	 * The whole selection rule for a variable template, and the reason a layout
-	 * crosses pipeline boundaries: candidates are narrowed by this and by
-	 * nothing else. Server-side only — see `ConfigOption.variableTemplate`.
-	 */
-	variableId?: string
-	/**
-	 * For a variables slot: this key is a **band** declared upstream of the
-	 * node (typed templates P2, `SlotDecl.rendersBands`) rather than one of the
-	 * node's own `renders`. `world.ts` resolves every band key even with no
-	 * layout selected, because the resolved keys are how Assemble learns which
-	 * bands to render at the top level. Server-side only.
-	 */
-	band?: true
-	/**
 	 * For a `context-template-ref`: the template's typed scope at this node
 	 * (typed templates P3). Surfaced on the option as `scope`.
 	 */
@@ -742,4 +710,29 @@ export interface Decl {
 	 * numbered.
 	 */
 	stepHeading?: string
+}
+
+/**
+ * One key a `variables` slot renders, and the variable it renders it for —
+ * what the run reads to know which variable a key is laid out by. Not a
+ * `Decl`: nothing here is a setting, so the panel never lists it and the
+ * reconcile never back-fills it. Server-side only.
+ */
+export interface VariableKey {
+	nodeKey: string
+	slot: string
+	/** The key the slot renders (`characters`), the address's path. */
+	path: string
+	/** The registered context variable this key renders. */
+	variableId: string
+	/**
+	 * A **band** declared upstream of the node (typed templates P2,
+	 * `SlotDecl.rendersBands`) rather than one of the node's own `renders`.
+	 * Every band key resolves even with no layout stored, because the
+	 * resolved keys are how Assemble learns which bands to render at the
+	 * top level.
+	 */
+	band?: true
+	/** The languages the slot accepts (core's when it says none) — the library's pool headings. */
+	engines: string[]
 }

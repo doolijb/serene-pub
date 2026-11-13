@@ -33,6 +33,8 @@ import { pieceFacts } from "@serene-pub/core-catalog/session-state"
 import * as schema from "$lib/server/db/schema"
 import { stateFor, type ResolvedState, type TrackedSlot } from "$lib/server/state/resolve"
 import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { carryKeyOf } from "$lib/server/state/carries"
 import { bookCalendarOf, clockOf, clockOfNow, sessionStoryNowOf } from "$lib/server/state/storyTime"
 import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 import { storedRulesetSettings, type StoredRulesetSettings } from "./settings"
@@ -100,6 +102,8 @@ export interface OwnerRef {
  * Read one owner reference: `world`, `session:<id>` (the world), the
  * participant references `character:<id>` / `player-seat:<id>`,
  * `location:<entryId>`, or a state owner `{ kind, id }` of one of those.
+ * 🚧 ⏳ Once the flip is on (`memberForm.ts`) also `seated-member:<id>` /
+ * `{ kind: "seated_member", id }` (a seat's member); until then refused.
  * Null for anything else.
  */
 export function ownerRefOf(raw: unknown, sessionId: number | null): OwnerRef | null {
@@ -111,9 +115,15 @@ export function ownerRefOf(raw: unknown, sessionId: number | null): OwnerRef | n
 			if (sessionId === null) return null
 			return { key: "world", owner: { kind: "session", id: sessionId }, facet: "world" }
 		}
-		const m = /^(session|character|player-seat|location):(\d+)$/.exec(s)
-		if (!m) return null
-		kind = { session: "session", character: "session_cast", "player-seat": "player_seat", location: "session_location" }[m[1]!]
+		const m = /^(session|character|player-seat|seated-member|location):(\d+)$/.exec(s)
+		if (!m || (m[1] === "seated-member" && !memberFormOn())) return null
+		kind = {
+			session: "session",
+			character: "session_cast",
+			"player-seat": "player_seat",
+			"seated-member": "seated_member",
+			location: "session_location"
+		}[m[1]!]
 		id = Number(m[2])
 	} else if (raw && typeof raw === "object") {
 		kind = String((raw as { kind?: unknown }).kind ?? "")
@@ -128,6 +138,9 @@ export function ownerRefOf(raw: unknown, sessionId: number | null): OwnerRef | n
 			return { key: `character:${id}`, owner: { kind: "session_cast", id: id! }, facet: "cast" }
 		case "player_seat":
 			return { key: `player-seat:${id}`, owner: { kind: "player_seat", id: id! }, facet: "cast" }
+		case "seated_member":
+			if (!memberFormOn()) return null
+			return { key: `seated-member:${id}`, owner: { kind: "seated_member", id: id! }, facet: "cast" }
 		case "session_location":
 			return { key: `location:${id}`, owner: { kind: "session_location", id: id! }, facet: "location" }
 		default:
@@ -372,7 +385,12 @@ function bagOf(state: ResolvedState, ref: OwnerRef): { bag: Record<string, SlotV
 		const entry = state.locations?.byId?.[String(ref.owner.id)]
 		return entry ? { bag: entry as Record<string, SlotValue>, name: entry.name, configKey: `location:${ref.owner.id}` } : null
 	}
-	const key = ref.owner.kind === "player_seat" ? `player_seat:${ref.owner.id}` : String(ref.owner.id)
+	const key =
+		ref.owner.kind === "player_seat"
+			? `player_seat:${ref.owner.id}`
+			: ref.owner.kind === "seated_member"
+				? carryKeyOf(ref.owner)
+				: String(ref.owner.id)
 	const entry = state.cast?.byId?.[key]
 	return entry ? { bag: entry as Record<string, SlotValue>, name: entry.name, configKey: key } : null
 }
@@ -510,6 +528,8 @@ export async function tiesBetween(db: Db, session: RulesetSession, views: readon
 	const entryKey = new Map<number, string>(
 		views.filter((v) => v.owner.kind === "session_location").map((v) => [v.owner.id, v.key])
 	)
+	// 🚧 ⏳ A seat's member (flip on) *is* the binding: keyed by the view's own key.
+	for (const v of views) if (v.owner.kind === "seated_member") bindingKey.set(v.owner.id, v.key)
 	if (!bindingKey.size && !entryKey.size) return []
 	const r = schema.narrativeRelationships
 	const rows = await db

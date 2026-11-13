@@ -111,6 +111,15 @@ describe("turn and round moments", () => {
 		expect(simulateCadence(everyNTurns({ n: 2 }), turnMoments(1, 6)).fired).toEqual([1, 3, 5])
 	})
 
+	it("turn-ended's turnSeatChanges ride the cause when the payload has them, and are absent when it has none", async () => {
+		const { causeOf } = await import("./evaluate")
+		const moment = turnMoments(1, 1)[0]!
+		const list = [{ ref: "seated-member:4", seatKind: "character", castMemberId: 4, change: "added" }]
+		expect(causeOf(moment, { at: 1, payload: { messageId: 5, turn: 1, turnSeatChanges: list } })).toMatchObject({ turnSeatChanges: list })
+		expect(causeOf(moment, { at: 1, payload: { messageId: 5, turn: 1, turnSeatChanges: [] } })).toMatchObject({ turnSeatChanges: [] })
+		expect("turnSeatChanges" in causeOf(moment, { at: 1, payload: { messageId: 5, turn: 1 } })).toBe(false)
+	})
+
 	it("a routine that is Off is never asked (R37)", async () => {
 		const off = routine(afterEachRound(), "core:spec/story-reckoning", { mode: "off" })
 		await evaluateMoments(fakeDb, SESSION, [{ moment: { kind: "round-ended", round: 1 } }], { at: 1 }, resolvedOf(off))

@@ -1,4 +1,4 @@
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 
 /**
  * The scenes whose summarize run a Process scene window in this tab is
@@ -43,7 +43,7 @@ export function sayUnshownSceneRunFailure(msg: {
 	error?: string
 }): void {
 	if (typeof msg?.sceneId === "number" && shown.has(msg.sceneId)) return
-	toaster.error({
+	notify.error({
 		title: "The scene was not summarized",
 		description: msg?.error
 	})

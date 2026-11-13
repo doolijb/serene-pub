@@ -26,7 +26,7 @@ import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 import { declareInterest } from "$lib/client/sockets/interest.svelte"
 import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 
 export interface StarMove {
 	capability: string
@@ -156,7 +156,7 @@ export function useStarConfirm(opts: StarConfirmOptions) {
 				// A refusal is already on screen (Layout toasts every `:error`);
 				// silence is said here, because nothing else will.
 				if (isReplyTimeout(err))
-					toaster.error({
+					notify.error({
 						title: "Not switched",
 						description:
 							"The server didn't say what switching would re-embed. Try again."

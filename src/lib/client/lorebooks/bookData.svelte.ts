@@ -45,6 +45,10 @@ export interface BookData {
 	readonly bookAccess: BookAccess
 	/** `bookAccess !== "owner"`: hide or disable every write verb. */
 	readonly readOnly: boolean
+	/** The open book's name, or null when it is not known. */
+	readonly bookName: string | null
+	/** Whose book it is, by name — null when it is the reader's own or not known. */
+	readonly ownerName: string | null
 	/**
 	 * The book's entries by entry type, on the line being read and as of the
 	 * moment — the shell's one resolver's rows (amended names, dated
@@ -155,6 +159,8 @@ export function staticBookData(
 		drawnRulesLists: Sockets.Entries.Types.Response["types"][number][]
 		library: BookLibrary | null
 		bookAccess: BookAccess
+		bookName: string | null
+		ownerName: string | null
 	}>,
 	verbs: Partial<Pick<BookData, "refreshScenes" | "refreshCast" | "refreshRows">> = {}
 ): BookData {
@@ -167,6 +173,12 @@ export function staticBookData(
 		},
 		get readOnly() {
 			return (values().bookAccess ?? "owner") !== "owner"
+		},
+		get bookName() {
+			return values().bookName ?? null
+		},
+		get ownerName() {
+			return values().ownerName ?? null
 		},
 		get rows() {
 			return values().rows ?? values().rawRows ?? {}

@@ -40,6 +40,8 @@ export interface LegacyMessageRow {
 	userId?: number | null
 	characterId?: number | null
 	personaId?: number | null
+	/** 🚧 The speaker's cast member (★27-7); mirrored when the row carries it. */
+	castMemberId?: number | null
 	role: string
 	/** The lane this message is on (20 §7). Absent means `main`. */
 	channel?: string | null
@@ -202,6 +204,9 @@ export function projectLegacy(row: LegacyMessageRow): {
 			userId: row.userId ?? null,
 			characterId: row.characterId ?? null,
 			personaId: row.personaId ?? null,
+			...(row.castMemberId !== undefined
+				? { castMemberId: row.castMemberId }
+				: {}),
 			speakerLabel: meta.narratorName ?? null,
 			role: row.role,
 			status,

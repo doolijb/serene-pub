@@ -69,15 +69,15 @@ describe("widgetSettingsSchema — core keys plus what the widget declares", () 
 describe("settingsSections — core's, the widget's own, then one section per group", () => {
 	it("shows only the core fields for a widget that declares none", () => {
 		const s = settingsSections(plain)
-		expect(s.basic.map((f) => f.key)).toEqual(["title", "hostCard"])
+		expect(s.basic.map((f) => f.key)).toEqual(["title"])
 		expect(s.declared).toEqual([])
 		expect(s.groups).toEqual([])
 	})
 
 	it("puts ungrouped fields under no heading and a grouped one under its group", () => {
 		const s = settingsSections(phone)
-		expect(s.basic.map((f) => f.key)).toEqual(["title", "lane", "hostCard"])
-		expect(CORE_SETTING_KEYS).toContain("backingMode")
+		expect(s.basic.map((f) => f.key)).toEqual(["title", "lane"])
+		expect([...CORE_SETTING_KEYS]).toEqual(["title", "lane"])
 		expect(s.declared.map((f) => f.key)).toEqual(["density"])
 		expect(s.groups.map((g) => [g.heading, g.fields.map((f) => f.key)])).toEqual([
 			["Behaviour", ["autoscroll"]]
@@ -173,7 +173,6 @@ describe("effectiveWidgetSettings — the one reader of every store", () => {
 	const defaults = {
 		title: "Cell Phone",
 		lane: 1,
-		hostCard: false,
 		density: "cosy",
 		autoscroll: true
 	}
@@ -214,7 +213,7 @@ describe("effectiveWidgetSettings — the one reader of every store", () => {
 		).toEqual(defaults)
 		expect(
 			effectiveWidgetSettings({ decl: plain, stored: { gone: 1 } })
-		).toEqual({ title: "Notes", hostCard: false })
+		).toEqual({ title: "Notes" })
 	})
 
 	it("reads a non-object layer as nothing", () => {
@@ -283,7 +282,6 @@ describe("resolveWidgetInstance — the one triple a host threads", () => {
 			settings: {
 				title: "Cell Phone",
 				lane: 1,
-				hostCard: false,
 				density: "cosy",
 				autoscroll: true
 			}
@@ -305,7 +303,7 @@ describe("resolveWidgetInstance — the one triple a host threads", () => {
 	it("ignores a lane stored against a widget that declares no channels", () => {
 		const r = resolveWidgetInstance(plain, { lane: 4 })
 		expect(r.channels).toEqual([])
-		expect(r.settings).toEqual({ title: "Notes", hostCard: false })
+		expect(r.settings).toEqual({ title: "Notes" })
 	})
 })
 
@@ -495,5 +493,27 @@ describe("⏳ Scene Portraits' settings before its uplift (W6)", async () => {
 		const back = pruneWidgetSettings(schema, { ...moved, who: "scene" }).values
 		expect(back).toEqual({ face: "chosen", arrangement: "stage" })
 		expect(effectiveWidgetSettings({ decl, stored: back }).who).toBe("scene")
+	})
+})
+
+// Owner ruling 2026-11-04 §0-G: the Messages widget's Line width is Full unless
+// a session stored another.
+describe("the Messages widget's Line width default", async () => {
+	const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+	const messages = CORE_WIDGETS.find((w) => w.id === "messages")!
+	const decl: WidgetSettingsDecl = {
+		id: "messages",
+		title: messages.title,
+		settings: messages.settings
+	}
+
+	it("is Full with nothing stored", () => {
+		expect(effectiveWidgetSettings({ decl }).lineWidth).toBe("full")
+	})
+	it("keeps a stored Column", () => {
+		expect(
+			effectiveWidgetSettings({ decl, stored: { lineWidth: "column" } })
+				.lineWidth
+		).toBe("column")
 	})
 })

@@ -50,6 +50,8 @@ declare global {
 		interface PageState {
 			focus?: string
 			from?: "dock" | "half"
+			/** 🚧 M2e: where an applet's launcher was opened from, so Leave returns there (`leaveDestination.ts`). */
+			appletFrom?: "apps" | "home"
 			/**
 			 * How many history entries deep in Focus this entry is: 1 for the
 			 * entry that entered Focus, +1 for each page a focused view pushes
@@ -242,6 +244,8 @@ declare global {
 				lorebookId?: number
 				/** 🚧 M2c: the plugin whose applet asked (its id), so the form can say so and collapse to a confirm. */
 				fromApplet?: string
+				/** 🚧 M3b: the player an applet offers as a new persona (a persona draft); made only on the person's Start. */
+				persona?: { name: string; description?: string }
 			}
 			/**
 			 * 🚧 M2c: an applet's `open-sessions` — open the Sessions view filtered to these genres (the plugin's own);
@@ -500,7 +504,7 @@ declare global {
 	/** 🚧 The header's Back · Forward (`OpenSessionCtx.rewind`). */
 	interface SessionHeaderRewind {
 		/** Greyed (`aria-disabled`, the press guarded), with why. */
-		back: { disabled: boolean; reason?: string }
+		back: { disabled: boolean; reason?: string; takes?: string }
 		forward: { disabled: boolean; reason?: string }
 		/** How many turns are ahead, and the words for it ("2 turns ahead"; empty with none). */
 		ahead: number
@@ -661,6 +665,11 @@ declare global {
 		branchId: number | null
 		/** The moment it was asked at and its review saves at; null is now. */
 		moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
+		/** 🚧 ★S7-2: the by-date ask this compile answers (`date` null = Undated) and its ask's `requestId`; absent for an entry compile. */
+		byDate?: {
+			date: import("$lib/shared/lorebooks/storyDate").StoryDate | null
+			requestId?: string
+		}
 		status: "running" | "review" | "error"
 		phase?: "drafting" | "synthesizing"
 		batch?: number

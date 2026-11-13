@@ -86,6 +86,8 @@
 		newControl?: Snippet
 		/** A door's own list action, beside the sort. */
 		toolbarExtra?: Snippet
+		/** A door's own head of the list, above the rows and the empty state (the History door's *Not yet compiled* group). */
+		listHead?: Snippet
 		onSelect: (item: PoolItem) => void
 		onDelete: (item: PoolItem) => void
 		/** Starts the door's default create, for the empty state's one button. */
@@ -116,6 +118,7 @@
 		onMarker,
 		newControl,
 		toolbarExtra,
+		listHead,
 		onSelect,
 		onDelete,
 		onNew,
@@ -617,6 +620,7 @@
 	</div>
 
 	<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+		{#if !loading && !isReordering}{@render listHead?.()}{/if}
 		{#if loading}
 			<div class="flex items-center justify-center py-8">
 				<Icons.Loader2

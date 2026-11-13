@@ -1,6 +1,6 @@
 /**
  * 🚧 Live scenes, lane D (PROPOSAL-live-scenes §4–§7): the socket doors over
- * the boundary watcher and the summary modes — `scenes:cues`,
+ * the scene cues (left by the scenes routine) and the summary modes — `scenes:cues`,
  * `scenes:decideCue`, `scenes:processAll`, `scenes:openScenes` — and the
  * session's scene settings saved through `sessions:update`.
  */
@@ -80,15 +80,32 @@ async function say(sessionId: number, content: string, extra: Record<string, unk
 	return insertLegacy(testDb as any, { sessionId, role: "user", content, ...extra } as any)
 }
 
+/**
+ * A day-crossing line and the cue the scenes routine leaves at it: the lines
+ * land (the per-line hook fires nothing), one more round passes so the line is
+ * two rounds old, then the routine's walk and outlet run as it runs them.
+ */
 async function nextDayCue(w: Awaited<ReturnType<typeof makeWorld>>) {
-	const { watchSceneBoundaries } = await import("$lib/server/scenes/boundaryWatcher")
+	const { watchSceneBoundaries, sceneBoundariesOf, proposeJudgedSceneCue } = await import(
+		"$lib/server/scenes/boundaryWatcher"
+	)
 	await say(w.session.id, "Before.")
 	await testDb
 		.update(schema.sessions)
 		.set({ storyClockDay: 3 })
 		.where(eq(schema.sessions.id, w.session.id))
 	const line = await say(w.session.id, "After.")
-	await watchSceneBoundaries(testDb as any, { sessionId: w.session.id, messageId: line.id })
+	expect(await watchSceneBoundaries(testDb as any, { sessionId: w.session.id, messageId: line.id })).toBeNull()
+	await say(w.session.id, "Later.")
+	const { boundaries } = await sceneBoundariesOf(testDb as any, w.session.id, { depth: 2, every: 10 })
+	for (const b of boundaries)
+		await proposeJudgedSceneCue(testDb as any, {
+			sessionId: w.session.id,
+			channel: "main",
+			atMessageId: b.at,
+			reason: b.reason,
+			trigger: b.trigger
+		})
 	return line
 }
 
@@ -260,6 +277,8 @@ describe("scenes:openScenes — Chronicle's Open scene card", () => {
 		})
 		expect(card.since).toMatch(/5/)
 		expect(card.cast.some((c: any) => c.name === "Vell" && typeof c.evidence === "string")).toBe(true)
+		// Words for the tooltip, never the review screen's `sender@1,3 + roster`.
+		expect(card.cast.every((c: any) => !/@|sender|roster\b/.test(c.evidence))).toBe(true)
 		expect(emits.map((e) => e.event)).toEqual(["scenes:openScenes"])
 	}, 60_000)
 })

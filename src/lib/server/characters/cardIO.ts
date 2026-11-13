@@ -42,6 +42,16 @@ import {
 	timbreForExport,
 	timbreFromImport
 } from "$lib/server/characters/timbre"
+import { cardProfileOf } from "$lib/server/characters/versions"
+import {
+	creatorNotesOf,
+	legacyGreetingsOf,
+	profileOf,
+	type CharacterCreatorNotes,
+	type CharacterGreeting,
+	type CharacterProfileField,
+	type CharacterProfileV1
+} from "$lib/shared/characters/profile"
 
 /** The ceiling on a card's foreign extension JSON kept on the row. */
 export const CARD_EXTENSIONS_MAX_BYTES = 256 * 1024
@@ -405,7 +415,9 @@ export function planCardImport(data: any, book?: unknown): CardImportPlan {
 			)
 	}
 
-	const { serenepub: _sp, ...foreign } = ext
+	// `group_only_greetings` is read into the profile's greetings and the export
+	// rebuilds the key, so the kept extensions never hold a second copy.
+	const { serenepub: _sp, group_only_greetings: _go, ...foreign } = ext
 	let extensions: Record<string, unknown> = foreign
 	const bytes = Buffer.byteLength(JSON.stringify(foreign))
 	if (bytes > CARD_EXTENSIONS_MAX_BYTES) {
@@ -433,4 +445,197 @@ export function planCardImport(data: any, book?: unknown): CardImportPlan {
 			: {}),
 		summary
 	}
+}
+
+// ── The character profile ⇄ the card's columns (cv-writers) ────────────────
+//
+// A card's content lives on its card versions (🚧 `character_versions`, one
+// 🚧 **character profile** each; plan §32 §2, §33.1). The `characters` row's
+// content columns are frozen ⏳ (only the versions module writes the four
+// copies), but the wire, the card file and the editor still speak in those
+// column names until wave 3. These two pure functions are the one place the
+// two shapes meet in this lane: a version is shown as columns
+// (`cardColumnsOfProfile`, `cardAsOfVersion`), and columns — a save, a file —
+// are read as a profile (`profileOfCardColumns`).
+
+/** The `characters` content columns: what a card profile is shown as, and read from. */
+export const CARD_CONTENT_COLUMNS = [
+	"name",
+	"nickname",
+	"aliases",
+	"summary",
+	"description",
+	"personality",
+	"scenario",
+	"firstMessage",
+	"alternateGreetings",
+	"groupOnlyGreetings",
+	"exampleDialogues",
+	"postHistoryInstructions",
+	"creatorNotes",
+	"creatorNotesMultilingual",
+	"strokes",
+	"avatarMediaId",
+	"extensions"
+] as const
+
+export type CardContentColumn = (typeof CARD_CONTENT_COLUMNS)[number]
+
+/** The content columns, as `cardColumnsOfProfile` writes them. */
+export interface CardContentColumns {
+	name: string
+	nickname: string | null
+	aliases: string[]
+	summary: string | null
+	description: string
+	personality: string | null
+	scenario: string | null
+	firstMessage: string | null
+	alternateGreetings: string[]
+	groupOnlyGreetings: string[] | null
+	exampleDialogues: string[]
+	postHistoryInstructions: string | null
+	creatorNotes: string | null
+	creatorNotesMultilingual: Record<string, string> | null
+	strokes: Stroke[]
+	avatarMediaId: number | null
+	extensions: Record<string, unknown>
+}
+
+/** The notes as the two columns: the main text, and every language's text (the main one under its `lang`). */
+export function cardNotesColumns(notes: CharacterCreatorNotes | null): {
+	creatorNotes: string | null
+	creatorNotesMultilingual: Record<string, string> | null
+} {
+	if (!notes) return { creatorNotes: null, creatorNotesMultilingual: null }
+	const multilingual: Record<string, string> = {
+		...(notes.lang ? { [notes.lang]: notes.text } : {}),
+		...notes.variants
+	}
+	return {
+		creatorNotes: notes.text || null,
+		creatorNotesMultilingual: Object.keys(multilingual).length
+			? multilingual
+			: null
+	}
+}
+
+/**
+ * A card profile as the `characters` content columns — the inverse of
+ * `cardProfileOf` (versions.ts): the greetings split into the opener, the
+ * alternates and the group-only ones (`legacyGreetingsOf`), the notes into the
+ * text and the multilingual map, the likeness and timbre laid back under
+ * `extensions.serenepub`, the face as `avatarMediaId`. The sprite set has no
+ * card column and is left out.
+ */
+export function cardColumnsOfProfile(
+	profile: CharacterProfileV1
+): CardContentColumns {
+	const greetings = legacyGreetingsOf(profile.greetings)
+	const extensions = applyTimbreToExtensions(
+		withLikeness(profile.extensions, profile.likeness ?? null),
+		profile.timbre ?? null
+	)
+	return {
+		name: profile.name ?? "",
+		nickname: profile.nickname,
+		aliases: [...profile.aliases],
+		summary: profile.summary,
+		description: profile.description ?? "",
+		personality: profile.personality,
+		scenario: profile.scenario,
+		firstMessage: greetings.firstMessage,
+		alternateGreetings: greetings.alternateGreetings,
+		groupOnlyGreetings: greetings.groupOnlyGreetings.length
+			? greetings.groupOnlyGreetings
+			: null,
+		exampleDialogues: [...profile.exampleDialogues],
+		postHistoryInstructions: profile.postHistoryInstructions,
+		...cardNotesColumns(profile.creatorNotes),
+		strokes: [...profile.strokes],
+		avatarMediaId: profile.faceMediaId,
+		extensions
+	}
+}
+
+/**
+ * A card row shown as one of its card versions: the row's library facts
+ * (tags, folder, creator, uuid, …) with the version's profile as the content
+ * columns, and its label as `characterVersion`.
+ */
+export function cardAsOfVersion<T extends object>(
+	card: T,
+	version: Partial<Record<CharacterProfileField, unknown>> & {
+		label?: string | null
+	}
+): Omit<T, CardContentColumn | "characterVersion"> &
+	CardContentColumns & { characterVersion: string | null } {
+	return {
+		...card,
+		...cardColumnsOfProfile(profileOf(version)),
+		characterVersion: version.label ?? null
+	}
+}
+
+/**
+ * The character profile the content columns hold — a save's or a file's
+ * (`characterFieldsFromParsedData`): `cardProfileOf`, with the creator notes
+ * read losslessly (`creatorNotesOf`, which keeps the main note's `lang`). Columns left out read empty.
+ */
+export function profileOfCardColumns(
+	columns: Partial<Record<CardContentColumn, unknown>>
+): CharacterProfileV1 {
+	const c = columns as Record<string, any>
+	const profile = cardProfileOf({
+		name: c.name ?? "",
+		nickname: c.nickname ?? null,
+		aliases: Array.isArray(c.aliases) ? c.aliases : [],
+		summary: c.summary ?? null,
+		description: c.description ?? "",
+		personality: c.personality ?? null,
+		scenario: c.scenario ?? null,
+		firstMessage: c.firstMessage ?? null,
+		alternateGreetings: Array.isArray(c.alternateGreetings)
+			? c.alternateGreetings
+			: [],
+		groupOnlyGreetings: Array.isArray(c.groupOnlyGreetings)
+			? c.groupOnlyGreetings
+			: null,
+		exampleDialogues: Array.isArray(c.exampleDialogues)
+			? c.exampleDialogues
+			: [],
+		postHistoryInstructions: c.postHistoryInstructions ?? null,
+		creatorNotes: c.creatorNotes ?? null,
+		creatorNotesMultilingual: c.creatorNotesMultilingual ?? null,
+		strokes: Array.isArray(c.strokes) ? c.strokes : [],
+		avatarMediaId: typeof c.avatarMediaId === "number" ? c.avatarMediaId : null,
+		extensions:
+			c.extensions && typeof c.extensions === "object" && !Array.isArray(c.extensions)
+				? c.extensions
+				: {}
+	})
+	return {
+		...profile,
+		creatorNotes: creatorNotesOf(c.creatorNotes, c.creatorNotesMultilingual)
+	}
+}
+
+/**
+ * ⏳ The greetings with their **opener** set — for the writers whose wire still
+ * speaks of a `first_mes` / `firstMessage` (the library write's stored rows,
+ * the applet door): the first unmarked greeting is replaced, or one is put
+ * first when there is none. Text null or empty takes the opener out (the old
+ * column held no opener). Never mutates `greetings`.
+ */
+export function greetingsWithOpener(
+	greetings: readonly CharacterGreeting[],
+	text: string | null
+): CharacterGreeting[] {
+	const at = greetings.findIndex((g) => !g.groupOnly)
+	if (!text)
+		return greetings
+			.filter((_g, index) => index !== at)
+			.map((g) => ({ ...g }))
+	if (at < 0) return [{ text }, ...greetings.map((g) => ({ ...g }))]
+	return greetings.map((g, index) => (index === at ? { text } : { ...g }))
 }

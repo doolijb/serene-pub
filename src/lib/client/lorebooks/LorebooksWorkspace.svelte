@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Badge from "$lib/client/components/Badge.svelte"
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
+	import { showsAdvancedControls } from "$lib/client/advancedControls"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -10,7 +11,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { warnBeforeUnload } from "$lib/client/forms/unsavedEdits.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LoadingState from "$lib/client/components/LoadingState.svelte"
@@ -30,24 +31,30 @@
 		CHARACTER_LORE_TYPE_ID,
 		HISTORY_TYPE_ID
 	} from "$lib/shared/entries/types"
-	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import type { RowMenuEntries } from "$lib/client/components/menus/RowMenu.svelte"
 	import ActionConfirm from "$lib/client/components/sessionPage/ActionConfirm.svelte"
 	import { askingOf } from "$lib/client/components/sessionPage/actionConfirmAsking"
 	import {
 		SESSION_NOTES_LABEL,
 		SHARE_LABELS,
-		SHARE_CONFIRMS
+		SHARE_CONFIRMS,
+		FOLD_LABEL,
+		FOLD_CONFIRM
 	} from "$lib/shared/lorebooks/sessionNotes"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import BookReadBy from "./BookReadBy.svelte"
 	import BookSettings from "./BookSettings.svelte"
-	import { isStarterKit } from "./starterKitCards"
+	import {
+		isProvidedBook,
+		isReadOnlyBook,
+		isStarterKit,
+		primerRowLine,
+		providedRowLine
+	} from "./starterKitCards"
 	import DayOne from "./DayOne.svelte"
 	import LensTrack from "./LensTrack.svelte"
 	import LorebookActions from "./LorebookActions.svelte"
 	import LoreRail from "./LoreRail.svelte"
-	import ReplaceReadingModal from "./ReplaceReadingModal.svelte"
 	import ScopePopout from "./ScopePopout.svelte"
 	import MomentBar from "./time/MomentBar.svelte"
 	import CompareLines from "./time/CompareLines.svelte"
@@ -65,7 +72,12 @@
 		patchEmbedding,
 		patchScene
 	} from "./bookPatches"
-	import { lensDescriptor, lensForKey, QUEUE_LENS } from "./lenses/registry"
+	import {
+		lensDescriptor,
+		lensForKey,
+		lensShown,
+		QUEUE_LENS
+	} from "./lenses/registry"
 	import { mountFor } from "./lenses/mounts"
 	import type { LensBench } from "./lenses/types"
 	import { edgesOnLine } from "./graphs/asOf"
@@ -106,13 +118,14 @@
 		bookIsEmpty,
 		CAST_KIND,
 		drawnRulesLists as drawnListsOf,
+		otherRulesFacetGroups,
 		rulesListFacets,
 		scopeTitle,
+		type OtherRulesGroup,
 		type RulesList,
 		matchSessionRoute,
 		mergeCastCount,
 		railScopes,
-		READ_INTO_SESSION,
 		SAVED_SCOPES,
 		savedScopeCounts,
 		savedScopeFilters,
@@ -120,16 +133,19 @@
 		scopeChipLabel,
 		scopeRoute,
 		sessionMomentKey,
-		STOP_READING,
 		type SavedScopeId
 	} from "./scopes"
+	import { bookPoolItems, descriptorForKind, rulesListDoor } from "./sections"
 	import {
-		bookPoolItems,
-		descriptorForKind,
-		rulesListDoor
-	} from "./sections"
-	import { rememberRulesLists } from "./sections/derivedPiece"
+		forgetOtherRules,
+		rememberOtherRules,
+		rememberRulesLists
+	} from "./sections/derivedPiece"
 	import { castPoolItem } from "./castPool"
+	import {
+		hasOwnNames,
+		memberShownName
+	} from "$lib/shared/lorebooks/memberIdentity"
 	import { avatarSrc, lorebookCoverSrc } from "$lib/client/utils/media"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { memberFaceSrc } from "./cast/memberFace"
@@ -146,8 +162,14 @@
 		parseMoment
 	} from "./time/moment"
 	import {
+		afterBaseWrite,
+		asVersionAmendments,
+		readCastVersion,
+		withBaseVersion
+	} from "./cast/castVersionRead"
+	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+	import {
 		amendmentsForAppearance,
-		castAsOf,
 		compareLines,
 		entryAsOf,
 		groupAmendments
@@ -197,7 +219,9 @@
 	let actions: ReturnType<typeof LorebookActions> | undefined = $state()
 
 	let lorebookList: any[] = $state([])
-	let sessionNotes = $state<Sockets.Lorebooks.SessionNotes.Response["books"]>([])
+	let sessionNotes = $state<Sockets.Lorebooks.SessionNotes.Response["books"]>(
+		[]
+	)
 	let sessionNotesLoaded = $state(false)
 	/** 🚧 pr-6 (R-f): the lists a book can be opened from. */
 	let knownBooks = $derived<any[]>([...lorebookList, ...sessionNotes])
@@ -234,6 +258,11 @@
 	/** Which rules the lists above were read for, so a change of Rules asks again. */
 	let rulesListsFor: string | null = null
 	/**
+	 * 🚧 ★50 Lists of other rules than the book's that it holds entries of
+	 * (`entries:types` `otherRules`): listed and counted, never added to.
+	 */
+	let otherRules = $state<OtherRulesGroup[]>([])
+	/**
 	 * 🚧 The book's rules library (`lorebooks:library`, §C ruling 10): the
 	 * pieces the ‹Rules› library chip shows under the book, read only. Null
 	 * until it arrives; asked for with the lists, so a change of Rules asks
@@ -251,6 +280,11 @@
 	 * the Cast board, Entries and the Time lens each kept one of their own).
 	 */
 	let castRows = $state<any[]>([])
+	/**
+	 * The book's present on main (`lorebooks:bindingList`): the cast rows'
+	 * columns are read there, and "now" on main reads a member there too.
+	 */
+	let castPresent = $state<StoryDate | null>(null)
 	/** Whether the cast and the scenes have arrived for the open book. */
 	let castLoaded = $state(false)
 	let scenesLoaded = $state(false)
@@ -291,13 +325,18 @@
 		(book?.bookAccess as BookAccess | undefined) ??
 			(book?.isSharedWithMe ? "shared" : "owner")
 	)
-	let readOnly = $derived(bookAccess !== "owner")
+	/** 🚧 (m2e-F-C) The server's primer-row mark (★M2e-D-4): read-only, clone only. */
+	let bookIsReadOnlyStarter = $derived(isReadOnlyBook(book))
+	/** Read-only mode: a shared book, or a primer row (the server's mark). */
+	let readOnly = $derived(bookAccess !== "owner" || bookIsReadOnlyStarter)
 	/**
 	 * 🚧 The open book is a starter lorebook (PLAN-lorebook-kinds §B): edited in
 	 * place by the admin who made it, never read into a session, never
 	 * written by one — so it has no reading verb, no write mode and no Share.
 	 */
 	let bookIsKit = $derived(isStarterKit(book))
+	/** 🚧 (M2e) The open book comes with the pub or a plugin: no Delete (an admin disables it). */
+	let bookIsProvided = $derived(isProvidedBook(book))
 
 	/**
 	 * Sharing (PLAN-private-messages §6.7): the owner's **Share…** while
@@ -361,23 +400,18 @@
 		if (!book) return
 		socket.emit("lorebooks:share", { lorebookId: book.id, userIds })
 	}
-	let lens = $derived<LoreLens>(route.lens ?? DEFAULT_LENS)
+	// 🚧 Advanced controls (2026-11-10): a route naming a hidden lens draws
+	// List; the route itself is left alone, so the switch brings the lens back.
+	const userSettingsCtx = getContext<UserSettingsCtx | undefined>(
+		"userSettingsCtx"
+	)
+	let advanced = $derived(showsAdvancedControls(userSettingsCtx?.settings))
+	let lens = $derived<LoreLens>(
+		lensShown(route.lens ?? DEFAULT_LENS, advanced)
+	)
 	/** The lens's descriptor — what draws it, and how it treats day one. */
 	let activeLens = $derived(lensDescriptor(lens))
 
-	// Guests can view a shared session but can't reconfigure it — the server
-	// rejects sessions:setLorebook for non-owners anyway, this just avoids
-	// showing an action that would fail with an error toast.
-	let hasOpenSession = $derived(
-		openSessionCtx.sessionId !== null && openSessionCtx.isOwner
-	)
-	let openSessionHasLorebook = $derived(openSessionCtx.lorebookId !== null)
-	let canOfferAttachToSession = $derived(
-		hasOpenSession &&
-			!openSessionHasLorebook &&
-			// The book lock: a story underway keeps its own notes.
-			!openSessionCtx.lorebookFixed
-	)
 	/** What the session reading this book is called, or nothing. */
 	let readingInto = $derived(
 		book && openSessionCtx.lorebookId === book.id
@@ -527,15 +561,29 @@
 	 * resolves through here too — `characterId` is an ordinary column.
 	 */
 	let resolveCast = $derived.by(() => {
-		if (!castAmendments.length)
-			return <T extends { id: number }>(rows: readonly T[]) => rows as T[]
 		const byMember = groupAmendments(castAmendments, "castId")
-		return <T extends { id: number }>(rows: readonly T[]) =>
+		const present = castPresent
+		const at = amendmentsAt
+		// ⚠ Never short-circuited: a member with no Changes rows still reads
+		// as their base version (`readCastVersion`).
+		// `write`: read the member as they will stand after a base save of
+		// these fields (`afterBaseWrite`) — the masked-save warning's question.
+		return <T extends { id: number }>(
+			rows: readonly T[],
+			write?: { castId: number; fields: Record<string, unknown> }
+		) =>
 			rows.map((row) => {
-				const overlays = byMember.get(row.id)
-				return overlays
-					? (castAsOf(row, overlays as any, amendmentsAt) as T)
-					: row
+				const overlays = byMember.get(row.id) ?? []
+				const after =
+					write?.castId === row.id
+						? afterBaseWrite(row as any, overlays, write.fields)
+						: { row, overlays }
+				return readCastVersion(
+					after.row as T & { baseColumns?: any },
+					after.overlays,
+					at,
+					present
+				) as T
 			})
 	})
 
@@ -623,16 +671,12 @@
 					...row,
 					personalPosition: a.personalPosition
 				}
-				return overlays.length
-					? castAsOf(
-							appearance,
-							amendmentsForAppearance(
-								overlays,
-								a.personalPosition
-							) as any,
-							amendmentsAt
-						)
-					: appearance
+				return readCastVersion(
+					appearance,
+					amendmentsForAppearance(overlays, a.personalPosition),
+					amendmentsAt,
+					castPresent
+				)
 			})
 		})
 		return worldRoster(expanded as any, (id) => cardNames.get(id))
@@ -650,9 +694,11 @@
 		(resolveCast(rowsReadingOnLine(castRows, line)) as any[]).map((r) => ({
 			id: r.id,
 			name:
-				(r.characterId != null
-					? (cardNames.get(r.characterId) ?? r.name)
-					: r.name) || "Unnamed"
+				(r.characterId != null && hasOwnNames(r)
+					? memberShownName(r, { name: cardNames.get(r.characterId) })
+					: r.characterId != null
+						? (cardNames.get(r.characterId) ?? r.name)
+						: r.name) || "Unnamed"
 		}))
 	)
 
@@ -703,9 +749,11 @@
 			key: `entry#${d.id}`,
 			subject: "entry" as const
 		}))
+		// Cast rows are versions (lane cv-member2): each member from its base,
+		// the Changes rows folded whole, as `readCastVersion` reads them.
 		const cast = compareLines(
-			castRows as any[],
-			(id) => (byMember.get(id) ?? []) as any,
+			(castRows as any[]).map((r) => withBaseVersion(r)),
+			(id) => asVersionAmendments((byMember.get(id) ?? []) as any) as any,
 			at
 		).map((d) => ({ ...d, key: `cast#${d.id}`, subject: "cast" as const }))
 		return [...entries, ...cast]
@@ -738,9 +786,16 @@
 	 * of that kind on this line, or rows in its rules' library (ruled
 	 * 2026-10-21). A Freeform book draws none until it holds some.
 	 */
-	let drawnRulesLists = $derived(drawnListsOf(rulesLists, counts))
+	/** Its own rules' lists, then those of other rules it holds entries of. */
+	let everyRulesList = $derived([
+		...rulesLists,
+		...otherRules.flatMap((group) => group.types)
+	])
+	let drawnRulesLists = $derived(drawnListsOf(everyRulesList, counts))
 	/** The doors of every one of the book's lists: Everything holds their rows. */
-	let rulesListDoors = $derived(rulesLists.map((list) => rulesListDoor(list)))
+	let rulesListDoors = $derived(
+		everyRulesList.map((list) => rulesListDoor(list, openBookId))
+	)
 
 	/** Every row in the book, as the pool reads them. */
 	let bookPool = $derived(
@@ -761,6 +816,12 @@
 		},
 		get readOnly() {
 			return readOnly
+		},
+		get bookName() {
+			return book?.name ?? null
+		},
+		get ownerName() {
+			return book?.ownerName ?? null
 		},
 		get rows() {
 			return resolvedRows
@@ -785,7 +846,7 @@
 			return castDuplicates
 		},
 		get rulesLists() {
-			return rulesLists
+			return everyRulesList
 		},
 		get drawnRulesLists() {
 			return drawnRulesLists
@@ -909,7 +970,13 @@
 	 * it stands is the open session's to say.
 	 */
 	let closedReaders = $derived(
-		railSession ? [] : ((book as { readBy?: { id: number; name: string | null }[] } | undefined)?.readBy ?? [])
+		railSession
+			? []
+			: ((
+					book as
+						| { readBy?: { id: number; name: string | null }[] }
+						| undefined
+				)?.readBy ?? [])
 	)
 
 	/**
@@ -1089,6 +1156,7 @@
 	let liveLooseEnds = $derived(
 		looseEnds({
 			items: bookPool,
+			line,
 			members: castItems.map((m) => ({
 				id: m.id,
 				name: m.name,
@@ -1189,7 +1257,7 @@
 		if (!queueSnapshot) return
 		const next = nextLooseEnd(queueSnapshot, liveLooseEnds, queueCurrent)
 		if (!next) {
-			toaster.success({ title: "No loose ends left in this book" })
+			notify.success({ title: "No loose ends left in this book" })
 			return
 		}
 		void openLooseEnd(next)
@@ -1247,6 +1315,9 @@
 		return { label: rulesName ?? "Rules", facets }
 	})
 
+	/** 🚧 ★50 The rail's groups for other rules, after the book's own. */
+	let otherRulesGroups = $derived(otherRulesFacetGroups(otherRules, counts))
+
 	/** What the book's rules are called (`entries:types`): "Vis Itineris". */
 	let rulesName = $state<string | null>(null)
 	/**
@@ -1260,9 +1331,11 @@
 				label: SAVED_SCOPES.find((s) => s.id === saved)?.label ?? "",
 				count: savedCounts[saved] as number | undefined
 			}
-		const facet = [...scopes, ...(rulesGroup?.facets ?? [])].find(
-			(f) => f.id === route.scope
-		)
+		const facet = [
+			...scopes,
+			...(rulesGroup?.facets ?? []),
+			...otherRulesGroups.flatMap((group) => group.facets)
+		].find((f) => f.id === route.scope)
 		return {
 			label: facet?.label ?? scopeTitle(route.scope),
 			count: facet?.count
@@ -1302,28 +1375,6 @@
 			: { ...poolFacets, search }
 	)
 
-	/** The book the open session reads, when it is not this one. */
-	let otherReadBook = $derived.by(() => {
-		const id = openSessionCtx.lorebookId
-		if (id === null || id === book?.id) return null
-		return lorebookList.find((l) => l.id === id)?.name ?? "another lorebook"
-	})
-
-	/**
-	 * 🚧 The book lock (PLAN-lorebook-kinds §A): the open session's story is
-	 * underway, so it keeps the book it reads (or its own notes) — the verbs
-	 * stay in place, disabled, saying so.
-	 */
-	let readingFixed = $derived(!!openSessionCtx.lorebookFixed)
-	/** What reading this book into the open session, or stopping, does. */
-	let readingVerbTitle = $derived(
-		readingInto
-			? `Stop reading this book into ${readingInto}`
-			: otherReadBook
-				? `This session reads ${otherReadBook}; reading this book replaces it`
-				: "Read this book into the open session"
-	)
-
 	/**
 	 * 🚧 A starter lorebook's `⋯`: settings, a lorebook made from it, and its
 	 * delete. Never a reading verb: sessions start from a kit, never read one.
@@ -1341,8 +1392,14 @@
 			title: "Start a lorebook of your own from this starter lorebook",
 			onSelect: makeBookFromOpenKit
 		},
-		{ separator: true },
-		{
+		bookIsReadOnlyStarter && {
+			label: "Clone",
+			icon: Icons.CopyPlus,
+			title: "Make a starter lorebook of your own from this one",
+			onSelect: cloneOpenStarter
+		},
+		!bookIsProvided && { separator: true },
+		!bookIsProvided && {
 			label: "Delete starter lorebook",
 			icon: Icons.Trash2,
 			destructive: true,
@@ -1354,6 +1411,10 @@
 
 	function makeBookFromOpenKit() {
 		if (book) actions?.makeBookFromKit(book.id, book.name)
+	}
+
+	function cloneOpenStarter() {
+		if (book) actions?.cloneStarter(book.id)
 	}
 
 	/**
@@ -1397,8 +1458,13 @@
 					label: SHARE_LABELS.asLorebook,
 					icon: Icons.BookPlus,
 					onSelect: () =>
-						ask(SHARE_CONFIRMS.asLorebook, SHARE_LABELS.asLorebook, () =>
-							socket.emit("sessions:shareAsLorebook", { sessionId })
+						ask(
+							SHARE_CONFIRMS.asLorebook,
+							SHARE_LABELS.asLorebook,
+							() =>
+								socket.emit("sessions:shareAsLorebook", {
+									sessionId
+								})
 						)
 				}
 			]
@@ -1408,25 +1474,31 @@
 				label: SHARE_LABELS.toAttached(name),
 				icon: Icons.BookUp,
 				onSelect: () =>
-					ask(SHARE_CONFIRMS.toAttached(name), SHARE_LABELS.toAttached(name), () =>
-						socket.emit("sessions:applyOverlay", { sessionId, entryIds: null })
+					ask(
+						SHARE_CONFIRMS.toAttached(name),
+						SHARE_LABELS.toAttached(name),
+						() =>
+							socket.emit("sessions:applyOverlay", {
+								sessionId,
+								entryIds: null
+							})
 					)
 			},
 			{
-				label: SHARE_LABELS.cloneWithChanges,
-				icon: Icons.CopyPlus,
+				label: FOLD_LABEL(name),
+				icon: Icons.Merge,
 				onSelect: () =>
-					ask(
-						SHARE_CONFIRMS.cloneWithChanges(name),
-						SHARE_LABELS.cloneWithChanges,
-						() => socket.emit("sessions:cloneWithChanges", { sessionId })
+					ask(FOLD_CONFIRM(name), FOLD_LABEL(name), () =>
+						socket.emit("sessions:foldInParent", {
+							sessionId
+						})
 					)
 			}
 		]
 	}
 
 	let bookMenu = $derived<RowMenuEntries>(
-		readOnly
+		readOnly && !bookIsReadOnlyStarter
 			? [
 					// Shared with the reader: read and copy only (ruled Q3/Q4).
 					{
@@ -1434,7 +1506,9 @@
 						icon: Icons.Copy,
 						title: "Make your own copy of this book, entries, cast and all",
 						onSelect: () => {
-							duplicating = book ? { id: book.id, name: book.name } : null
+							duplicating = book
+								? { id: book.id, name: book.name }
+								: null
 						}
 					}
 				]
@@ -1443,64 +1517,52 @@
 				: bookIsKit
 					? kitMenu
 					: [
-		mode === "compact" &&
-			hasOpenSession &&
-			!readingFixed && {
-				label: readingInto ? STOP_READING : READ_INTO_SESSION,
-				icon: readingInto ? Icons.BookX : Icons.BookOpen,
-				title: readingVerbTitle,
-				onSelect: changeReading
-			},
-		{
-			label: "Book settings",
-			icon: Icons.SlidersHorizontal,
-			title: "Name, cover, rules, calendar and clock",
-			onSelect: openSettings
-		},
-		{
-			label: "Duplicate",
-			icon: Icons.Copy,
-			title: "Copy this book, entries, cast and all",
-			onSelect: () => {
-				duplicating = book ? { id: book.id, name: book.name } : null
-			}
-		},
-		isAdmin && {
-			label: "Save as starter lorebook",
-			icon: Icons.Package,
-			title: "Copy this book as a starter lorebook everyone on the pub can start from",
-			onSelect: () => {
-				if (book) actions?.saveAsStarterKit(book.id)
-			}
-		},
-		canShare && {
-			label: "Share…",
-			icon: Icons.Share2,
-			title: "Let people on this pub read this book and make their own copy",
-			onSelect: () => (sharing = true)
-		},
-		{
-			label: "Export… (paused)",
-			icon: Icons.Download,
-			disabled: true,
-			title: LOREBOOK_EXPORT_PAUSED
-		},
-		!hasOpenSession && {
-			label: READ_INTO_SESSION,
-			icon: Icons.BookOpen,
-			disabled: true,
-			title: "Open a session you own to read this book into it"
-		},
-		{ separator: true },
-		{
-			label: "Delete this lorebook",
-			icon: Icons.Trash2,
-			destructive: true,
-			onSelect: () => {
-				deletingId = book?.id ?? null
-			}
-		}
-			]
+							{
+								label: "Book settings",
+								icon: Icons.SlidersHorizontal,
+								title: "Name, cover, rules, calendar and clock",
+								onSelect: openSettings
+							},
+							{
+								label: "Duplicate",
+								icon: Icons.Copy,
+								title: "Copy this book, entries, cast and all",
+								onSelect: () => {
+									duplicating = book
+										? { id: book.id, name: book.name }
+										: null
+								}
+							},
+							isAdmin && {
+								label: "Save as starter lorebook",
+								icon: Icons.Package,
+								title: "Copy this book as a starter lorebook everyone on the pub can start from",
+								onSelect: () => {
+									if (book) actions?.saveAsStarterKit(book.id)
+								}
+							},
+							canShare && {
+								label: "Share…",
+								icon: Icons.Share2,
+								title: "Let people on this pub read this book and make their own copy",
+								onSelect: () => (sharing = true)
+							},
+							{
+								label: "Export… (paused)",
+								icon: Icons.Download,
+								disabled: true,
+								title: LOREBOOK_EXPORT_PAUSED
+							},
+							!bookIsProvided && { separator: true },
+							!bookIsProvided && {
+								label: "Delete this lorebook",
+								icon: Icons.Trash2,
+								destructive: true,
+								onSelect: () => {
+									deletingId = book?.id ?? null
+								}
+							}
+						]
 	)
 
 	/**
@@ -1539,6 +1601,9 @@
 	/** 🚧 The asker's own starter lorebooks, in a group of their own. */
 	let ownBooks = $derived(shelf.own.filter((l) => !isStarterKit(l)))
 	let ownKits = $derived(shelf.own.filter((l) => isStarterKit(l)))
+	/** 🚧 (m3b-F) Books that come with the pub or a plugin, apart from a person's shares. */
+	let readyMadeBooks = $derived(shelf.shared.filter((l) => isProvidedBook(l)))
+	let sharedBooks = $derived(shelf.shared.filter((l) => !isProvidedBook(l)))
 
 	/**
 	 * A section is drawn unless the book is gone, and only a drawn section can
@@ -1712,7 +1777,7 @@
 	function onWorkspaceKey(event: KeyboardEvent) {
 		if (route.lorebookId === null) return
 		if (!workspaceEl?.contains(event.target as Node | null)) return
-		const next = lensForKey(event)
+		const next = lensForKey(event, advanced)
 		if (!next) return
 		event.preventDefault()
 		openLens(next)
@@ -1746,56 +1811,41 @@
 	})
 
 	/**
-	 * A book waiting on the reader's word before it replaces the one the open
-	 * session reads. A session reads one book at a time, so reading another
-	 * stops reading this one — which is worth a question, not a surprise.
+	 * How long `scheduleCounts` waits before asking. A re-list arrives as one
+	 * `entries:list` per entry type, a burst of separate socket events, and
+	 * they should cost one ask between them.
 	 */
-	let replacing = $state<{
-		lorebookId: number
-		bookName: string
-		currentName: string
-	} | null>(null)
+	const COUNTS_THROTTLE_MS = 150
+	let countsTimer: ReturnType<typeof setTimeout> | null = null
+	let countsAskedAt = 0
 
-	function readIntoSession(lorebookId: number) {
-		if (openSessionCtx.sessionId === null) return
-		attachLorebookToSession(socket, openSessionCtx.sessionId, lorebookId)
-	}
-
-	/** Reads a book in, asking first when that stops reading another. */
-	function handleAttachToSession(lorebookId: number) {
-		if (openSessionCtx.sessionId === null) return
-		const current = openSessionCtx.lorebookId
-		if (current !== null && current !== lorebookId) {
-			replacing = {
-				lorebookId,
-				bookName:
-					lorebookList.find((l) => l.id === lorebookId)?.name ??
-					"this lorebook",
-				currentName:
-					lorebookList.find((l) => l.id === current)?.name ??
-					"another lorebook"
-			}
+	/**
+	 * `refreshCounts`, coalesced: the first call starts the window, later ones
+	 * inside it add nothing — and neither does a window opened just after a
+	 * direct ask (opening a book asks, then its lists arrive).
+	 */
+	function scheduleCounts(after: "list" | "change" = "change") {
+		if (countsTimer !== null) return
+		// A re-list right after a direct ask reads the same server state the
+		// ask did; a CHANGE (an update, an archive) never skips — it may have
+		// moved a figure the direct ask already carried.
+		if (after === "list" && Date.now() - countsAskedAt < COUNTS_THROTTLE_MS)
 			return
-		}
-		readIntoSession(lorebookId)
+		countsTimer = setTimeout(() => {
+			countsTimer = null
+			refreshCounts()
+		}, COUNTS_THROTTLE_MS)
 	}
 
-	function handleDetachFromSession() {
-		if (openSessionCtx.sessionId === null) return
-		attachLorebookToSession(socket, openSessionCtx.sessionId, null)
-	}
-
-	/** Reads this book into the open session, or stops reading it into one. */
-	function changeReading() {
-		if (!book || openSessionCtx.sessionId === null || readingFixed) return
-		if (openSessionCtx.lorebookId === book.id) handleDetachFromSession()
-		else handleAttachToSession(book.id)
-	}
-
-	/** The figures, which are the server's rather than ours to add up. */
+	/** The figures, which are the server's rather than ours to add up. A direct ask closes a waiting window. */
 	function refreshCounts() {
 		const id = route.lorebookId
 		if (id === null) return
+		if (countsTimer !== null) {
+			clearTimeout(countsTimer)
+			countsTimer = null
+		}
+		countsAskedAt = Date.now()
 		socket.emit("entries:counts", {
 			lorebookId: id,
 			// The figures are of what this line can see, so they move with it.
@@ -1929,10 +1979,15 @@
 		if (id === null || msg.lorebookId !== id) return
 		// Remembered before the rows are asked for, so each row lands on a
 		// door and a label (`descriptorForKind`, `kindLabel`).
+		const others: OtherRulesGroup[] = msg.otherRules ?? []
 		rememberRulesLists(msg.types)
+		rememberRulesLists(others.flatMap((group) => group.types))
+		rememberOtherRules(id, others)
+		heldOtherRulesBook = id
 		rulesLists = msg.types
+		otherRules = others
 		rulesName = msg.rulesName ?? null
-		for (const list of msg.types)
+		for (const list of [...msg.types, ...others.flatMap((g) => g.types)])
 			socket.emit("entries:list", {
 				lorebookId: id,
 				typeId: list.typeId as any
@@ -1961,6 +2016,7 @@
 	function handleEntriesList(msg: Sockets.Entries.List.Response) {
 		if (msg.lorebookId !== route.lorebookId) return
 		bookRows = { ...bookRows, [msg.typeId]: msg.entryList as PoolSource[] }
+		scheduleCounts("list")
 	}
 
 	/**
@@ -1983,9 +2039,16 @@
 		// (`amendments:deleteBranch`); the open session's copy follows here,
 		// found the way the server found it, rather than holding a dead id
 		// until a reload (#136).
-		if (openSessionCtx.sessionId !== null && openSessionCtx.lorebookId === msg.lorebookId)
+		if (
+			openSessionCtx.sessionId !== null &&
+			openSessionCtx.lorebookId === msg.lorebookId
+		)
 			sessionStore.patchSession(openSessionCtx.sessionId, {
-				lorebookBranchId: survivingLineOf(openSessionCtx.lorebookBranchId, before, msg.branches)
+				lorebookBranchId: survivingLineOf(
+					openSessionCtx.lorebookBranchId,
+					before,
+					msg.branches
+				)
 			})
 	}
 
@@ -2013,12 +2076,31 @@
 	function handleEntryUpdated(msg: Sockets.Entries.Update.Response) {
 		const entry = msg.entry
 		if (!entry || entry.lorebookId !== route.lorebookId) return
-		bookRows = {
-			...bookRows,
-			[entry.typeId]: (bookRows[entry.typeId] ?? []).map((row) =>
+		// Entry ids are unique across types, so a row whose type changed is
+		// dropped from every other list and put in its new type's list.
+		// A row that was never listed (archived, or its type not loaded yet)
+		// stays unlisted: the server's list decides what belongs.
+		const next: typeof bookRows = {}
+		let retyped = false
+		for (const [typeId, rows] of Object.entries(bookRows)) {
+			if (typeId === String(entry.typeId)) {
+				next[typeId] = rows
+				continue
+			}
+			const kept = rows.filter((row) => row.id !== entry.id)
+			if (kept.length !== rows.length) retyped = true
+			next[typeId] = kept
+		}
+		const held = next[entry.typeId]
+		if (held?.some((row) => row.id === entry.id)) {
+			next[entry.typeId] = held.map((row) =>
 				row.id === entry.id ? (entry as PoolSource) : row
 			)
+		} else if (retyped && held) {
+			next[entry.typeId] = [...held, entry as PoolSource]
 		}
+		bookRows = next
+		scheduleCounts()
 	}
 
 	/**
@@ -2105,6 +2187,8 @@
 
 	function handleEntryCounts(msg: Sockets.Entries.Counts.Response) {
 		if (msg.lorebookId !== route.lorebookId) return
+		// A late reply for a line we have left must not overwrite this one.
+		if ((msg.branchId ?? null) !== (route.branch ?? null)) return
 		counts = msg.counts
 	}
 
@@ -2123,6 +2207,7 @@
 		const before = castSignature(castRows)
 		// Kept, not just counted: every lens reads the cast from here.
 		castRows = msg.lorebookBindingList as any[]
+		castPresent = msg.present ?? null
 		castLoaded = true
 		const merged = mergeCastCount(counts, msg.lorebookBindingList)
 		// A figure that has not arrived cannot be merged into, and the answer
@@ -2166,39 +2251,6 @@
 		} satisfies Sockets.Entries.RecentDecisions.Params)
 	}
 
-	function handleSessionsSetLorebook(
-		msg: Sockets.Sessions.SetLorebook.Response
-	) {
-		if (
-			!msg.session ||
-			openSessionCtx.sessionId === null ||
-			msg.session.id !== openSessionCtx.sessionId
-		)
-			return
-		const readId = msg.session.lorebookId
-		const readName = readId
-			? lorebookList.find((l) => l.id === readId)?.name
-			: null
-		toaster.success({
-			title: readId
-				? `Reading ${readName ?? "the lorebook"} into this session`
-				: "Stopped reading the lorebook into this session"
-		})
-		// The ack says what the session reads, so the session store follows it
-		// here rather than waiting on the session's own reload: the reading
-		// line and the run's marks both hang off this one field.
-		sessionStore.patchSession(msg.session.id, {
-			lorebookId: msg.session.lorebookId ?? null,
-			lorebookBranchId: msg.session.lorebookBranchId ?? null
-		})
-		// Full reload of the open session, not just a field patch — lore-bound
-		// content (RAG notices, etc.) can depend on the session's lorebook.
-		socket.emit("sessions:get", {
-			id: openSessionCtx.sessionId,
-			limit: 25
-		})
-	}
-
 	/**
 	 * A deep link arrives as `digest.lore`, and this is its only reader: it
 	 * takes the address with it, so no second consumer can act on the same
@@ -2219,7 +2271,8 @@
 	// A book that stops existing leaves the workspace at its list of books
 	// rather than at a screen for a row that is gone.
 	$effect(() => {
-		if (isLoading || !sessionNotesLoaded || route.lorebookId === null) return
+		if (isLoading || !sessionNotesLoaded || route.lorebookId === null)
+			return
 		if (!knownBooks.some((l) => l.id === route.lorebookId))
 			loreRoute.set(emptyRoute())
 	})
@@ -2386,14 +2439,20 @@
 		}
 	})
 
+	// The book whose other-rules marks this workspace last remembered.
+	let heldOtherRulesBook: number | null = null
 	// The whole book, re-read whenever the BOOK changes — never on a
 	// navigation inside it (see `whenBookOpens`): the rail reports on every
 	// row rather than on the scope that happens to be open.
 	whenBookOpens(
 		() => openBookId,
 		(id) => {
+			if (heldOtherRulesBook !== null && heldOtherRulesBook !== id)
+				forgetOtherRules(heldOtherRulesBook)
+			heldOtherRulesBook = null
 			bookRows = {}
 			rulesLists = []
+			otherRules = []
 			rulesName = null
 			library = null
 			// The ‹Rules› library chip is off each time a book opens (owner
@@ -2401,6 +2460,7 @@
 			poolFacets = { ...poolFacets, library: false }
 			sceneRows = []
 			castRows = []
+			castPresent = null
 			castLoaded = false
 			scenesLoaded = false
 			counts = null
@@ -2473,16 +2533,6 @@
 	})
 
 	/**
-	 * The lorebook attach/detach ack. BARE, not scoped: `sessions:setLorebook`
-	 * has no entry in `SCOPED_EVENTS`, so the handler's own
-	 * `msg.session.id !== openSessionCtx.sessionId` check stays the filter.
-	 */
-	useInterest<"sessions:setLorebook">(
-		"sessions:setLorebook",
-		handleSessionsSetLorebook
-	)
-
-	/**
 	 * The four BARE keys. The list of books is not about one book; the two
 	 * scene writes are not in `SCOPED_EVENTS` (each names its book in the
 	 * payload, and `handleSceneWritten` drops another book's); and an `:error`
@@ -2541,35 +2591,15 @@
 	})
 
 	onDestroy(() => {
-		// Nothing to tear down: every listener this workspace holds is an
+		if (countsTimer !== null) clearTimeout(countsTimer)
+		if (heldOtherRulesBook !== null) forgetOtherRules(heldOtherRulesBook)
+		// Apart from the other-rules marks, nothing to tear down: every listener this workspace holds is an
 		// interest key, and the registry releases them as its effects are
 		// destroyed. The shell's Jump overlay owns the ⌘K chord and, scoped to
 		// this view, drives the same `[data-lore-search]` cursor state (see
 		// the registration below), so the box fills as you type.
 	})
 </script>
-
-{#snippet readingVerb()}
-	<!-- The book's one verb toward the open session, labelled (STYLE-GUIDE
-	     §6.3): offered only for a session the reader owns. -->
-	{#if hasOpenSession && !readingFixed && !bookIsSessionNotes}
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
-			title={readingVerbTitle}
-			data-lore-book-reading
-			onclick={changeReading}
-		>
-			{#if readingInto}
-				<Icons.BookX size={14} aria-hidden="true" />
-				<span>{STOP_READING}</span>
-			{:else}
-				<Icons.BookOpen size={14} aria-hidden="true" />
-				<span>{READ_INTO_SESSION}</span>
-			{/if}
-		</button>
-	{/if}
-{/snippet}
 
 {#snippet readingSubtitle()}
 	<!-- The reading line: which session reads this book, where it stands
@@ -2609,12 +2639,9 @@
 		title={book?.name ?? "Lorebook"}
 		onBack={backToList}
 		backLabel="Lorebooks"
-		primaryAction={mode === "desk" && !readOnly && !bookIsKit && !bookIsSessionNotes
-			? readingVerb
-			: undefined}
 		menuItems={bookMenu}
 		actionsLabel={book?.name ?? "this lorebook"}
-		subtitle={readOnly
+		subtitle={readOnly && !bookIsReadOnlyStarter
 			? sharedSubtitle
 			: bookIsKit
 				? kitSubtitle
@@ -2635,27 +2662,43 @@
 {#snippet kitSubtitle()}
 	<!-- 🚧 A starter lorebook: the badge, and what people do with it. -->
 	<p
-		class="text-surface-600-400 flex min-w-0 items-center gap-1.5 text-xs"
+		class="text-surface-600-400 flex min-w-0 flex-wrap items-center gap-1.5 text-xs"
 		data-lore-kit
 	>
 		<span
-			class="badge preset-tonal-surface shrink-0 px-1.5 py-0 text-meta"
+			class="badge preset-tonal-surface text-meta shrink-0 px-1.5 py-0"
 			data-starter-kit-badge
 		>
 			Starter lorebook
 		</span>
-		<span class="min-w-0 truncate">
-			Everyone on the pub can start a lorebook or a session from it.
-		</span>
+		{#if bookIsReadOnlyStarter}
+			<span class="min-w-0">{primerRowLine(book)}</span>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				data-primer-row-clone
+				onclick={cloneOpenStarter}
+			>
+				<Icons.CopyPlus class="size-4" aria-hidden="true" />
+				Clone
+			</button>
+		{:else}
+			<span class="min-w-0 truncate">
+				Everyone on the pub can start a lorebook or a session from it.
+			</span>
+		{/if}
 	</p>
 {/snippet}
 
 {#snippet sharedSubtitle()}
 	<!-- A book shared with the reader: whose it is, and that it only reads.
-	     It is never read into the reader's session (ruled Q3). -->
+	     It is never read into the reader's session (ruled Q3). A provided
+	     book says what it comes with instead (m3b-F). -->
 	<p class="text-surface-600-400 min-w-0 text-xs" data-lore-shared>
-		{book?.ownerName ? `Shared by ${book.ownerName}` : "Shared with you"} · read
-		only
+		{providedRowLine(book) ??
+			(book?.ownerName
+				? `Shared by ${book.ownerName}`
+				: "Shared with you")} · read only
 	</p>
 {/snippet}
 
@@ -2693,7 +2736,11 @@
 				{@render roster()}
 			{/if}
 			<span class="flex-1"></span>
-			<LensTrack value={lens} onselect={openLens} />
+			<LensTrack
+				value={lens}
+				advancedControls={advanced}
+				onselect={openLens}
+			/>
 		</div>
 	{/if}
 {/snippet}
@@ -2715,6 +2762,7 @@
 				<ScopePopout
 					{scopes}
 					{rulesGroup}
+					{otherRulesGroups}
 					scope={route.scope}
 					{savedCounts}
 					{saved}
@@ -2724,11 +2772,20 @@
 					onOpenLooseEnds={openQueue}
 					onOpenSettings={readOnly ? undefined : openSettings}
 				/>
-				<LensTrack compact value={lens} onselect={openLens} />
+				<LensTrack
+					compact
+					value={lens}
+					advancedControls={advanced}
+					onselect={openLens}
+				/>
 			</div>
 			{#if scopeChip}
 				<div class="flex min-w-0 items-center gap-2">
-					<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1" data-lore-scope-chip>
+					<Badge
+						size="md"
+						class="text-surface-700-300 flex min-w-0 items-center gap-1"
+						data-lore-scope-chip
+					>
 						<span class="min-w-0 truncate">{scopeChip}</span>
 						<button
 							type="button"
@@ -2841,7 +2898,7 @@
 			onClose={() =>
 				loreRoute.navigate({ type: "setCompare", compare: false })}
 		/>
-	{:else if route.settings && readOnly}
+	{:else if route.settings && readOnly && !bookIsReadOnlyStarter}
 		<!-- A shared book has no settings to change. -->
 		<EmptyState
 			icon={Icons.Lock}
@@ -2867,16 +2924,19 @@
 				{readingInto}
 				readBy={book.readBy ?? []}
 				primaryRuleset={book.primaryRuleset ?? null}
+				rulesFit={book.rulesetFitByGenre ?? null}
 				loreWriteMode={book.loreWriteMode ?? null}
-				canChangeReading={hasOpenSession && !readingFixed}
 				isStarterKit={bookIsKit}
+				isProvided={bookIsProvided}
+				readOnly={bookIsReadOnlyStarter}
+				readOnlyLine={primerRowLine(book)}
+				onClone={cloneOpenStarter}
 				onSaveAsStarterKit={isAdmin && !bookIsKit
 					? () => actions?.saveAsStarterKit(book.id)
 					: undefined}
 				onMakeBookFromKit={bookIsKit ? makeBookFromOpenKit : undefined}
 				bind:hasUnsavedChanges={tabHasUnsavedChanges}
 				onClose={() => loreRoute.navigate({ type: "closeSettings" })}
-				onChangeReading={changeReading}
 				onImport={() => (importing = true)}
 				onDuplicate={() =>
 					(duplicating = { id: book.id, name: book.name })}
@@ -2974,29 +3034,26 @@
 					/>
 				{:else}
 					{#if ownBooks.length}
-					<div
-						class="flex flex-col gap-2"
-						role="list"
-						aria-label="Lorebooks"
-					>
-						{#each ownBooks as l (l.id)}
-							<LorebookListItem
-								lorebook={l}
-								onclick={(lorebook) => openBook(lorebook.id)}
-								onOpenSettings={openBookSettings}
-								onDuplicate={(id, name) => (duplicating = { id, name })}
-								onDelete={(id) => (deletingId = id)}
-								bindingsCount={l.lorebookBindings?.length || 0}
-								entryCounts={l.entryCounts}
-								hasOpenSession={hasOpenSession && !readingFixed}
-								{openSessionHasLorebook}
-								isOpenSessionLorebook={openSessionCtx.lorebookId ===
-									l.id}
-								onAttachToSession={handleAttachToSession}
-								onDetachFromSession={handleDetachFromSession}
-							/>
-						{/each}
-					</div>
+						<div
+							class="flex flex-col gap-2"
+							role="list"
+							aria-label="Lorebooks"
+						>
+							{#each ownBooks as l (l.id)}
+								<LorebookListItem
+									lorebook={l}
+									onclick={(lorebook) =>
+										openBook(lorebook.id)}
+									onOpenSettings={openBookSettings}
+									onDuplicate={(id, name) =>
+										(duplicating = { id, name })}
+									onDelete={(id) => (deletingId = id)}
+									bindingsCount={l.lorebookBindings?.length ||
+										0}
+									entryCounts={l.entryCounts}
+								/>
+							{/each}
+						</div>
 					{/if}
 					{#if ownKits.length}
 						<!-- 🚧 An admin's own starter lorebooks (PLAN-lorebook-kinds
@@ -3014,19 +3071,41 @@
 							{#each ownKits as l (l.id)}
 								<LorebookListItem
 									lorebook={l}
-									onclick={(lorebook) => openBook(lorebook.id)}
+									onclick={(lorebook) =>
+										openBook(lorebook.id)}
 									onOpenSettings={openBookSettings}
 									onDelete={(id) => (deletingId = id)}
-									bindingsCount={l.lorebookBindings?.length || 0}
+									onClone={(id) => actions?.cloneStarter(id)}
+									bindingsCount={l.lorebookBindings?.length ||
+										0}
 									entryCounts={l.entryCounts}
-									hasOpenSession={false}
-									openSessionHasLorebook={false}
-									isOpenSessionLorebook={false}
 								/>
 							{/each}
 						</div>
 					{/if}
-					{#if shelf.shared.length}
+					{#if readyMadeBooks.length}
+						<!-- (m3b-F) A book that comes with the pub or a plugin,
+						     readable by everyone: read and Duplicate here, like
+						     a share. -->
+						<ListGroupLabel label="Ready-made" id="loreReadyMade" />
+						<div
+							class="flex flex-col gap-2"
+							role="list"
+							aria-labelledby="loreReadyMade"
+						>
+							{#each readyMadeBooks as l (l.id)}
+								<LorebookListItem
+									lorebook={l}
+									onclick={(lorebook) =>
+										openBook(lorebook.id)}
+									onDuplicate={(id, name) =>
+										(duplicating = { id, name })}
+									entryCounts={l.entryCounts}
+								/>
+							{/each}
+						</div>
+					{/if}
+					{#if sharedBooks.length}
 						<!-- Read and Duplicate only (ruled Q3/Q4): never
 						     deleted or read into a session from here. -->
 						<ListGroupLabel
@@ -3038,22 +3117,24 @@
 							role="list"
 							aria-labelledby="loreSharedWithYou"
 						>
-							{#each shelf.shared as l (l.id)}
+							{#each sharedBooks as l (l.id)}
 								<LorebookListItem
 									lorebook={l}
-									onclick={(lorebook) => openBook(lorebook.id)}
-									onDuplicate={(id, name) => (duplicating = { id, name })}
+									onclick={(lorebook) =>
+										openBook(lorebook.id)}
+									onDuplicate={(id, name) =>
+										(duplicating = { id, name })}
 									entryCounts={l.entryCounts}
-									hasOpenSession={false}
-									openSessionHasLorebook={false}
-									isOpenSessionLorebook={false}
 								/>
 							{/each}
 						</div>
 					{/if}
 					{#if filteredSessionNotes.length}
 						<!-- 🚧 pr-6 (R-f): each session's own book, here and never in a picker; Share moves it to the main list. -->
-						<ListGroupLabel label={SESSION_NOTES_LABEL} id="loreSessionNotes" />
+						<ListGroupLabel
+							label={SESSION_NOTES_LABEL}
+							id="loreSessionNotes"
+						/>
 						<div
 							class="flex flex-col gap-2"
 							role="list"
@@ -3062,12 +3143,10 @@
 							{#each filteredSessionNotes as l (l.id)}
 								<LorebookListItem
 									lorebook={l}
-									onclick={(lorebook) => openBook(lorebook.id)}
+									onclick={(lorebook) =>
+										openBook(lorebook.id)}
 									onOpenSettings={openBookSettings}
 									entryCounts={l.entryCounts}
-									hasOpenSession={false}
-									openSessionHasLorebook={false}
-									isOpenSessionLorebook={false}
 									sessionNotesOf={l}
 									shareItems={shareItemsFor(l)}
 								/>
@@ -3087,6 +3166,7 @@
 			<LoreRail
 				{scopes}
 				{rulesGroup}
+				{otherRulesGroups}
 				scope={route.settings ? null : route.scope}
 				{lens}
 				{search}
@@ -3141,7 +3221,6 @@
 	deletingBook={deletingId === null
 		? null
 		: (lorebookList.find((l) => l.id === deletingId) ?? null)}
-	{canOfferAttachToSession}
 	onDeleted={(id) => {
 		if (route.lorebookId === id) loreRoute.set(emptyRoute())
 	}}
@@ -3168,19 +3247,6 @@
 		g?.()
 	}}
 	onCancel={() => (shareAsking = null)}
-/>
-
-<ReplaceReadingModal
-	open={replacing !== null}
-	sessionName={openSessionCtx.sessionName ?? "The open session"}
-	currentBook={replacing?.currentName ?? ""}
-	nextBook={replacing?.bookName ?? ""}
-	onConfirm={() => {
-		const next = replacing
-		replacing = null
-		if (next) readIntoSession(next.lorebookId)
-	}}
-	onCancel={() => (replacing = null)}
 />
 
 <LorebookUnsavedChangesModal

@@ -43,16 +43,23 @@ import { entryDeclarations } from "$lib/server/entries/declarations"
 import type { EntryOrderKey, EntryRoles, StoryCalendar } from "@serene-pub/sdk"
 import { formatStoryTime, FORBIDDEN_TEMPLATE_NAMES } from "@serene-pub/sdk"
 import {
+	CORE_TEMPLATE_ENGINE,
 	renderTemplate,
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
+import { LAID_OUT_CONTEXT_KEYS } from "$lib/server/pipelines/prompt/templateContext"
 import {
 	isShippedVariable,
+	laidOutForHandlebars,
 	layoutUseOf,
+	NAMED_LAYOUTS_FIELD,
+	prepareExplicitLayouts,
 	renderVariable,
+	withExplicitLayouts,
 	SHIPPED_BAND_KEYS,
 	variableOfKey,
 	type LayoutUse,
+	type NamedLayouts,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
@@ -748,8 +755,13 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	 * `[]` for an empty cast because `JSON.stringify([])` is a truthy string.
 	 * Unifying the two would change one of them.
 	 */
-	const layout = (key: string, value: unknown) =>
-		renderVariable(input.variables, key, value, input)
+	// What each key held before its layout, for a template that names another
+	// layout for it (`layout <key> "<reference>"`, the pre-pass below).
+	const rawByKey = new Map<string, unknown>()
+	const layout = (key: string, value: unknown) => {
+		rawByKey.set(key, value)
+		return renderVariable(input.variables, key, value, input)
+	}
 
 	/**
 	 * **The bands, in one loop** (typed templates P2).
@@ -773,7 +785,8 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		laidOut[key] = await bandValue(key, allocationsFrom(key), layout, {
 			selected: !!input.variables?.[key]?.source,
 			core: meansCoreBand(input.variables, key),
-			variableId: variableOfKey(input.variables, key)
+			variableId: variableOfKey(input.variables, key),
+			record: (value) => rawByKey.set(key, value)
 		})
 	// Core's history roles carry the dates; a `history` the spec re-pointed at
 	// a variable of its own carries none of core's (2026-10-13).
@@ -802,6 +815,10 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	// this built arrays where every default story string consumes a keyed JSON
 	// object. A variable with the right name and the wrong shape is worse than a
 	// missing one — the template renders, and the prompt is quietly wrong.
+	// What the builder wrote out for the layouts a template names for its keys
+	// is not a variable: it is taken off the context and read by the pre-pass.
+	const { [NAMED_LAYOUTS_FIELD]: upstreamLayouts, ...templateContextRest } =
+		(input.templateContext ?? {}) as Record<string, unknown>
 	const context = {
 		// Prompts first, context second — **the order is the fix.** The slot
 		// carries the config's authored text exactly as written; the context
@@ -812,7 +829,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		// own reinforcement should have been. Both sides looked correct in
 		// isolation; only a byte comparison showed it.
 		...(input.prompts ?? {}),
-		...(input.templateContext ?? {}),
+		...templateContextRest,
 		worldLore: laidOut.worldLore,
 		// Admitted lore of cast members, laid out. It reaches the prompt where
 		// the template writes `{{{characterLore}}}` — the shipped one does.
@@ -913,14 +930,51 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		? PromptFormats.SPLIT_CHAT
 		: input.promptFormat
 
-	const rendered = await renderTemplate(input.engine, {
+	/**
+	 * 🚧 **Explicit layout references**, written out before the template runs
+	 * (PLAN variable-layouts 2026-11-10, Render item 6): every
+	 * `layout <key> "<reference>"` the template makes is rendered through the
+	 * row `world.ts` resolved for it, in this same sequential pass, and the
+	 * helper reads the text back. A template with no such call goes through
+	 * unchanged, byte for byte.
+	 */
+	const explicit = await prepareExplicitLayouts({
+		engine: input.engine,
 		template: packed.template,
+		layouts: input.variables,
+		valueOf: (key) => rawByKey.get(key),
+		inUse: (key) => {
+			const text =
+				key === "currentDate"
+					? currentDateLaidOut
+					: key in laidOut
+						? laidOut[key]
+						: (LAID_OUT_CONTEXT_KEYS as readonly string[]).includes(key)
+							? (context as Record<string, unknown>)[key]
+							: undefined
+			return typeof text === "string" ? text : undefined
+		},
+		upstream: upstreamLayouts as NamedLayouts | undefined,
+		run: input
+	})
+
+	// `String(…)`: a template whose whole body is one laid-out key returns
+	// Handlebars' SafeString object itself rather than a string (★6).
+	const rendered = String(await renderTemplate(input.engine, {
+		template: explicit.template,
 		// 🚧 Every value the template can render, with media markers broken —
 		// except each transcript line's `attachments`, which placement wrote
 		// (PLAN-composer-attachments §3.5.4; `mediaMarkers.ts`). The same object
 		// when nothing in it holds one, so a prompt with no attachments renders
 		// from the very scope it always did.
-		variables: neutralizeRenderScope(context),
+		variables: withExplicitLayouts(
+			laidOutSafeFor(
+				input.engine,
+				neutralizeRenderScope(context),
+				[...LAID_OUT_CONTEXT_KEYS, ...CORE_RENDERED_BANDS, "currentDate", ...declared]
+			),
+			explicit.renders && neutralizeRenderScope(explicit.renders)
+		),
 		promptFormat,
 		// The resolved row, where the caller had one to resolve. The key stays
 		// beside it: it is what the receipt reports and what a plugin's engine
@@ -931,7 +985,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		// the debug preview and the parity harness both render through here.
 		runId: input.runId,
 		user: input.user
-	})
+	}))
 
 	const isSplit = emit.renderMode === "role_array"
 	/**
@@ -1074,10 +1128,16 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		// What each of this step's own keys the template places rendered
 		// through (2026-10-13, P5): its variable, and the row or the floor.
 		...(() => {
-			const placed = new Set(referencedVariables(packed.template))
-			const layouts = [...CORE_RENDERED_BANDS, ...declared, "currentDate"]
-				.filter((key) => placed.has(key))
-				.map((key) => layoutUseOf(input.variables, key))
+			// Read from the rewritten template: a key written only as
+			// `layout <key> "<reference>"` is placed by that call, whose own
+			// line (`explicit.uses`) says what it rendered through.
+			const placed = new Set(referencedVariables(explicit.template))
+			const layouts = [
+				...[...CORE_RENDERED_BANDS, ...declared, "currentDate"]
+					.filter((key) => placed.has(key))
+					.map((key) => layoutUseOf(input.variables, key)),
+				...explicit.uses
+			]
 			return layouts.length ? { layouts } : {}
 		})(),
 		// Absent, not empty, on the ordinary path — see `RenderedContext.notes`.
@@ -1117,6 +1177,24 @@ const CORE_RENDERED_BANDS = ["worldLore", "characterLore", "history"] as const
 const OWN_RENDERS: ReadonlySet<string> = new Set(
 	Object.keys(assembleContract.descriptor.slots?.variables?.renders ?? {})
 )
+
+/**
+ * The render scope with every laid-out key marked safe, for core's Handlebars
+ * engine only (★6): `{{x}}` then prints what `{{{x}}}` does. Applied **after**
+ * `neutralizeRenderScope` (which leaves a non-plain object alone). Any other
+ * engine — Liquid, Jinja2, a plugin's — gets the same plain strings as ever.
+ */
+export function laidOutSafeFor<T extends Record<string, unknown>>(
+	engine: string | undefined,
+	scope: T,
+	laidOutKeys: readonly string[]
+): T {
+	if (engine !== CORE_TEMPLATE_ENGINE) return scope
+	const out: Record<string, unknown> = { ...scope }
+	for (const key of laidOutKeys)
+		if (key in out) out[key] = laidOutForHandlebars(out[key])
+	return out as T
+}
 
 /**
  * The bands this node's `variables` slot resolved beyond its own renders.
@@ -1188,7 +1266,13 @@ async function bandValue(
 	key: string,
 	allocations: readonly Allocation[],
 	layout: (key: string, value: unknown) => Promise<string>,
-	opts: { selected: boolean; core: boolean; variableId?: string }
+	opts: {
+		selected: boolean
+		core: boolean
+		variableId?: string
+		/** The value the band held, when it is not laid out through `layout`. */
+		record?: (value: unknown) => void
+	}
 ): Promise<unknown> {
 	// Core's entry roles are looked up by source kind, and a core key's kind is
 	// core's — so a key the spec re-pointed reads no roles at all rather than
@@ -1210,6 +1294,7 @@ async function bandValue(
 	// through it so the variable — not the key — decides.
 	if (CORE_BANDS.has(key))
 		return value === undefined ? undefined : await layout(key, value)
+	opts.record?.(value)
 	return value === undefined ? undefined : JSON.stringify(value)
 }
 

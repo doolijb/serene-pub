@@ -400,7 +400,7 @@ The same documentation ships inside the app on a built-in **Docs** page.
 - **[Getting Started](docs/getting-started.md)** - The setup wizard, step by step
 - **[Install Serene Pub](docs/install.md)** and **[Connect a model](docs/connect-a-model.md)** - Getting a pub running and talking
 - **[Connections](docs/connections.md)** - Connecting to AI models and managing local ones
-- **[Characters](docs/characters.md)** and **[Personas](docs/personas.md)** - Your cast, and who you play in a session
+- **[Characters](docs/characters.md)** and **[Personas](docs/personas.md)** - Your character cards, and who you play in a session
 - **[Lorebooks](docs/lorebooks.md)** - World-building, history, scenes and the narrative graph
 - **[Embeddings & RAG](docs/embeddings-and-rag.md)** - How semantic retrieval keeps long stories coherent
 - **[Pipelines](docs/pipelines.md)** and **[Context Templates](docs/context-templates.md)** - How replies are made, and what the model sees

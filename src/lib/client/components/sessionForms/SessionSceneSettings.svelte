@@ -11,15 +11,16 @@
 	 * Nothing here asks a model: every trigger is read off what the story
 	 * already holds — the lines' story-clock stamps, a time action, the
 	 * place the genre's state names, who wrote a line, how long the scene is,
-	 * how long the table paused.
+	 * how long the table paused. The triggers are read by the scenes routine
+	 * (🚧 *Find where scenes begin*) a couple of rounds late, not on each line.
 	 *
 	 * 🚧 *The place changes* shows only where the genre names a place
 	 * (`shape.scenes.place`, live scenes §15 G2), and the genre's own
-	 * **declared triggers** (★9, its summarize-scene spec's — the Lair's *the
-	 * party reached a new floor*) follow core's as switches, on by default,
+	 * **declared triggers** (★9, its summarize-scene spec's) follow core's as switches, on by default,
 	 * stored under the override's `triggers[key]` only when turned off.
 	 */
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import {
 	declaredScenePlace,
 	declaredTriggerStates,
@@ -41,6 +42,8 @@
 		override: SceneSettingsDecl | null
 		/** 🚧 The genre's declared boundary triggers (★9), from its summarize-scene spec. */
 		boundaryTriggers?: { key: string; label: string }[]
+		/** 🚧 The session being edited; when set, the form says if it runs the scenes routine. */
+		sessionId?: number | null
 		disabled?: boolean
 	}
 
@@ -48,10 +51,29 @@
 		genreShape,
 		override = $bindable(null),
 		boundaryTriggers = [],
+		sessionId = null,
 		disabled = false
 	}: Props = $props()
 
 	const uid = $props.id()
+
+	/** 🚧 Does the session run the scenes routine, not Off? `null` until known. */
+	let scenesRoutineOn = $state<boolean | null>(null)
+	$effect(() => {
+		if (typeof sessionId !== "number") return
+		return requestWithInterest(
+			"sessions:routines",
+			{ sessionId },
+			(res) => {
+				if (res?.sessionId !== sessionId) return
+				scenesRoutineOn = (res.routines ?? []).some(
+					(r) =>
+						r.pipeline === "core:spec/scene-boundaries" &&
+						r.mode !== "off"
+				)
+			}
+		)
+	})
 	const resolved = $derived(resolveSceneSettings(genreShape, override))
 	const genreDefault = $derived(resolveSceneSettings(genreShape))
 	const hasPlace = $derived(declaredScenePlace(genreShape) !== null)
@@ -81,6 +103,10 @@
 		set({ ...resolved, triggers: { ...resolved.triggers, ...patch } })
 	const withDeclared = (key: string, on: boolean) =>
 		set(resolved, { ...declared, [key]: on })
+
+	const showNoRoutine = $derived(
+		scenesRoutineOn === false && resolved.mode !== "manual"
+	)
 
 	const MODE_HELP: Record<SceneSettings["mode"], string> = {
 		manual: "You place every scene yourself, with Start scene here and End scene here on a message.",
@@ -113,7 +139,9 @@
 	<div class="flex flex-col gap-1">
 		<Select
 			label="How scenes begin"
-			describedBy="{uid}-mode-help"
+			describedBy={showNoRoutine
+				? `${uid}-mode-help ${uid}-no-routine`
+				: `${uid}-mode-help`}
 			{disabled}
 			options={(["manual", "suggested", "automatic"] as const).map((m) => ({
 				value: m,
@@ -127,6 +155,12 @@
 		<p class="text-surface-600-400 text-xs" id="{uid}-mode-help">
 			{MODE_HELP[resolved.mode]}
 		</p>
+		{#if showNoRoutine}
+			<p class="text-surface-600-400 text-xs" id="{uid}-no-routine">
+				Scenes here begin only when someone starts one: this session
+				runs no Find where scenes begin routine.
+			</p>
+		{/if}
 	</div>
 
 	{#if resolved.mode !== "manual"}

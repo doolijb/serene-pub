@@ -34,7 +34,9 @@ vi.mock("$lib/server/db", async (importOriginal) => {
 })
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-vitest-backdrop-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-vitest-backdrop-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
 }, 60_000)
@@ -63,7 +65,12 @@ async function session(userId: number) {
 async function file(userId: number, over: Record<string, unknown> = {}) {
 	const [f] = await testDb
 		.insert(schema.files)
-		.values({ userId, kind: "image", hash: `backdrop-${++n}`, ...over } as any)
+		.values({
+			userId,
+			kind: "image",
+			hash: `backdrop-${++n}`,
+			...over
+		} as any)
 		.returning()
 	return f
 }
@@ -104,23 +111,42 @@ describe("1 · core:outlet/set-backdrop@1", () => {
 		const s = await session(owner.id)
 		const audio = await file(owner.id, { kind: "audio", sessionId: s.id })
 		const pic = await file(owner.id, { sessionId: s.id })
-		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
 		const artifacts: any[] = []
-		const host = createHost(testDb as any, {
-			sessionId: s.id,
-			userId: owner.id,
-			specId: "test:spec/backdrop",
-			runId: "run-backdrop",
-			artifacts
-		} as any)
+		const host = createHost(
+			testDb as any,
+			{
+				sessionId: s.id,
+				userId: owner.id,
+				specId: "test:spec/backdrop",
+				runId: "run-backdrop",
+				artifacts
+			} as any
+		)
 		const out: any = await host.commit!(
-			{ media: [{ uuid: audio.uuid, kind: "audio" }, { uuid: pic.uuid, kind: "image", key: "scene" }] },
+			{
+				media: [
+					{ uuid: audio.uuid, kind: "audio" },
+					{ uuid: pic.uuid, kind: "image", key: "scene" }
+				]
+			},
 			NODE
 		)
-		expect(out).toMatchObject({ id: s.id, sessionId: s.id, mediaId: pic.id })
+		expect(out).toMatchObject({
+			id: s.id,
+			sessionId: s.id,
+			mediaId: pic.id
+		})
 		expect(await backdropOf(s.id)).toBe(pic.id)
 		expect(artifacts).toEqual([
-			{ kind: "session", entityId: s.id, action: "updated", nodeKey: "backdrop" }
+			{
+				kind: "session",
+				entityId: s.id,
+				action: "updated",
+				nodeKey: "backdrop"
+			}
 		])
 		const raised = await changes(s.id)
 		expect(raised).toHaveLength(1)
@@ -145,8 +171,13 @@ describe("1 · core:outlet/set-backdrop@1", () => {
 			.update(schema.sessions)
 			.set({ backdropMediaId: pic.id })
 			.where(eq(schema.sessions.id, s.id))
-		const { createHost } = await import("$lib/server/pipelines/runtime/host")
-		const host = createHost(testDb as any, { sessionId: s.id, userId: owner.id } as any)
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const host = createHost(
+			testDb as any,
+			{ sessionId: s.id, userId: owner.id } as any
+		)
 		const out: any = await host.commit!({ media: [] }, NODE)
 		expect(out).toMatchObject({ written: false, mediaId: null })
 		expect(await backdropOf(s.id)).toBe(pic.id)
@@ -158,9 +189,16 @@ describe("1 · core:outlet/set-backdrop@1", () => {
 		const stranger = await user()
 		const s = await session(owner.id)
 		const theirs = await file(stranger.id)
-		const { createHost } = await import("$lib/server/pipelines/runtime/host")
-		const host = createHost(testDb as any, { sessionId: s.id, userId: owner.id } as any)
-		await expect(host.commit!({ media: [theirs.uuid] }, NODE)).rejects.toThrow(/refused/)
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const host = createHost(
+			testDb as any,
+			{ sessionId: s.id, userId: owner.id } as any
+		)
+		await expect(
+			host.commit!({ media: [theirs.uuid] }, NODE)
+		).rejects.toThrow(/refused/)
 		expect(await backdropOf(s.id)).toBeNull()
 	})
 
@@ -169,10 +207,17 @@ describe("1 · core:outlet/set-backdrop@1", () => {
 		const guest = await user()
 		const admin = await user(true)
 		const s = await session(owner.id)
-		await testDb.insert(schema.sessionGuests).values({ sessionId: s.id, userId: guest.id } as any)
+		await testDb
+			.insert(schema.sessionGuests)
+			.values({ sessionId: s.id, userId: guest.id } as any)
 		const pic = await file(guest.id, { sessionId: s.id })
-		const { createHost } = await import("$lib/server/pipelines/runtime/host")
-		const asGuest = createHost(testDb as any, { sessionId: s.id, userId: guest.id } as any)
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const asGuest = createHost(
+			testDb as any,
+			{ sessionId: s.id, userId: guest.id } as any
+		)
 		const out: any = await asGuest.commit!({ media: [pic.uuid] }, NODE)
 		expect(out).toMatchObject({ written: false, mediaId: null })
 		expect(out.notes).toEqual([
@@ -181,7 +226,10 @@ describe("1 · core:outlet/set-backdrop@1", () => {
 		expect(await backdropOf(s.id)).toBeNull()
 		expect(await changes(s.id)).toHaveLength(0)
 
-		const asAdmin = createHost(testDb as any, { sessionId: s.id, userId: admin.id } as any)
+		const asAdmin = createHost(
+			testDb as any,
+			{ sessionId: s.id, userId: admin.id } as any
+		)
 		const ok: any = await asAdmin.commit!({ media: [pic.uuid] }, NODE)
 		expect(ok).toMatchObject({ sessionId: s.id, mediaId: pic.id })
 		expect(await backdropOf(s.id)).toBe(pic.id)
@@ -195,13 +243,19 @@ describe("2 · sessions:setBackdrop", () => {
 		const s = await session(owner.id)
 		const [character] = await testDb
 			.insert(schema.characters)
-			.values({ userId: castOwner.id, name: "Verity", description: "" } as any)
+			.values({
+				userId: castOwner.id,
+				name: "Verity",
+				description: ""
+			} as any)
 			.returning()
 		await testDb
 			.insert(schema.sessionCharacters)
 			.values({ sessionId: s.id, characterId: character.id } as any)
 		const pic = await file(castOwner.id, { characterId: character.id })
-		const { sessionsSetBackdrop } = await import("$lib/server/sockets/backdrop")
+		const { sessionsSetBackdrop } = await import(
+			"$lib/server/sockets/backdrop"
+		)
 
 		const emits: Array<[string, any]> = []
 		const res: any = await sessionsSetBackdrop.handler(
@@ -209,12 +263,18 @@ describe("2 · sessions:setBackdrop", () => {
 			{ sessionId: s.id, mediaRef: pic.uuid, request: "t1" },
 			(e: string, d: any) => emits.push([e, d])
 		)
-		expect(res).toEqual({ sessionId: s.id, request: "t1", backdropMediaId: pic.id })
+		expect(res).toEqual({
+			sessionId: s.id,
+			request: "t1",
+			backdropMediaId: pic.id
+		})
 		expect(emits).toEqual([["sessions:setBackdrop", res]])
 		expect(await backdropOf(s.id)).toBe(pic.id)
 		const raised = await changes(s.id)
 		expect(raised).toHaveLength(1)
-		expect(raised[0].payload).toMatchObject({ cause: { kind: "settings", userId: owner.id } })
+		expect(raised[0].payload).toMatchObject({
+			cause: { kind: "settings", userId: owner.id }
+		})
 
 		const cleared: any = await sessionsSetBackdrop.handler(
 			fakeSocket(owner.id),
@@ -231,9 +291,13 @@ describe("2 · sessions:setBackdrop", () => {
 		const guest = await user()
 		const admin = await user(true)
 		const s = await session(owner.id)
-		await testDb.insert(schema.sessionGuests).values({ sessionId: s.id, userId: guest.id } as any)
+		await testDb
+			.insert(schema.sessionGuests)
+			.values({ sessionId: s.id, userId: guest.id } as any)
 		const pic = await file(owner.id, { sessionId: s.id })
-		const { sessionsSetBackdrop } = await import("$lib/server/sockets/backdrop")
+		const { sessionsSetBackdrop } = await import(
+			"$lib/server/sockets/backdrop"
+		)
 
 		const emits: Array<[string, any]> = []
 		const refused: any = await sessionsSetBackdrop.handler(
@@ -260,7 +324,9 @@ describe("2 · sessions:setBackdrop", () => {
 		const stranger = await user()
 		const s = await session(owner.id)
 		const theirs = await file(stranger.id)
-		const { sessionsSetBackdrop } = await import("$lib/server/sockets/backdrop")
+		const { sessionsSetBackdrop } = await import(
+			"$lib/server/sockets/backdrop"
+		)
 		const notTheirs: any = await sessionsSetBackdrop.handler(
 			fakeSocket(owner.id),
 			{ sessionId: s.id, mediaRef: theirs.uuid },
@@ -277,6 +343,121 @@ describe("2 · sessions:setBackdrop", () => {
 	})
 })
 
+describe("2c · a cast image is the seated member's too", () => {
+	async function seatedWorld() {
+		const owner = await user()
+		const castOwner = await user()
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: owner.id, name: `Book ${++n}` } as any)
+			.returning()
+		const [s] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, lorebookId: book.id } as any)
+			.returning()
+		return { owner, castOwner, book, s }
+	}
+	const who = (sessionId: number, userId: number) => ({
+		sessionId,
+		userId,
+		castImages: true
+	})
+
+	test("a card-less member's gallery file counts for the session it is seated in, on either seat table, and not for another", async () => {
+		const { insertCastMember } = await import("$lib/server/characters/versions")
+		const { backdropFileFor, BackdropRefusal } = await import(
+			"$lib/server/sessions/backdrop"
+		)
+		const w = await seatedWorld()
+		const mk = async (name: string) =>
+			(
+				await insertCastMember(testDb as any, {
+					lorebookId: w.book.id,
+					characterId: null,
+					binding: `{{char:bd${++n}}}`,
+					name
+				} as any)
+			).member
+		const seated = await mk("Seated")
+		const voiced = await mk("Voiced")
+		const stranger = await mk("Stranger")
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({ userId: w.castOwner.id, name: "Held", description: "" } as any)
+			.returning()
+		await testDb
+			.insert(schema.sessionCharacters)
+			.values({ sessionId: w.s.id, characterId: card.id, castMemberId: seated.id } as any)
+		await testDb
+			.insert(schema.sessionPersonas)
+			.values({ sessionId: w.s.id, personaId: null, castMemberId: voiced.id } as any)
+		const picSeated = await file(w.castOwner.id)
+		const picVoiced = await file(w.castOwner.id)
+		const picStranger = await file(w.castOwner.id)
+		for (const [m, pic] of [
+			[seated, picSeated],
+			[voiced, picVoiced],
+			[stranger, picStranger]
+		] as const)
+			await testDb
+				.insert(schema.castMemberFiles)
+				.values({ castMemberId: m.id, fileId: pic.id })
+
+		expect(
+			await backdropFileFor(testDb as any, picSeated.uuid, who(w.s.id, w.owner.id))
+		).toEqual({ id: picSeated.id })
+		expect(
+			await backdropFileFor(testDb as any, picVoiced.uuid, who(w.s.id, w.owner.id))
+		).toEqual({ id: picVoiced.id })
+		await expect(
+			backdropFileFor(testDb as any, picStranger.uuid, who(w.s.id, w.owner.id))
+		).rejects.toBeInstanceOf(BackdropRefusal)
+		// A run (castImages false) may not use a gallery image at all.
+		await expect(
+			backdropFileFor(testDb as any, picSeated.uuid, {
+				...who(w.s.id, w.owner.id),
+				castImages: false
+			})
+		).rejects.toBeInstanceOf(BackdropRefusal)
+	})
+
+	test("a dated card change written as a version makes that card's gallery count", async () => {
+		const { insertCastMember } = await import("$lib/server/characters/versions")
+		const { insertDatedCardVersion } = await import("$lib/server/pipelines/testing/fixtures")
+		const { backdropFileFor, BackdropRefusal } = await import(
+			"$lib/server/sessions/backdrop"
+		)
+		const w = await seatedWorld()
+		const [a] = await testDb
+			.insert(schema.characters)
+			.values({ userId: w.castOwner.id, name: "Held card", description: "" } as any)
+			.returning()
+		const [b] = await testDb
+			.insert(schema.characters)
+			.values({ userId: w.castOwner.id, name: "Later card", description: "" } as any)
+			.returning()
+		const m = (
+			await insertCastMember(testDb as any, {
+				lorebookId: w.book.id,
+				characterId: a.id,
+				binding: `{{char:bd${++n}}}`,
+				name: "Dated"
+			} as any)
+		).member
+		await testDb
+			.insert(schema.sessionCharacters)
+			.values({ sessionId: w.s.id, characterId: a.id, castMemberId: m.id } as any)
+		const picB = await file(w.castOwner.id, { characterId: b.id })
+		await expect(
+			backdropFileFor(testDb as any, picB.uuid, who(w.s.id, w.owner.id))
+		).rejects.toBeInstanceOf(BackdropRefusal)
+		await insertDatedCardVersion(testDb, m.id, b.id, 30)
+		expect(
+			await backdropFileFor(testDb as any, picB.uuid, who(w.s.id, w.owner.id))
+		).toEqual({ id: picB.id })
+	})
+})
+
 describe("2b · a picture named by its file id (From this session)", () => {
 	test("the session's own picture by id is set; a stranger's by id is refused the same way", async () => {
 		const owner = await user()
@@ -284,7 +465,9 @@ describe("2b · a picture named by its file id (From this session)", () => {
 		const s = await session(owner.id)
 		const ours = await file(owner.id, { sessionId: s.id })
 		const theirs = await file(stranger.id)
-		const { sessionsSetBackdrop } = await import("$lib/server/sockets/backdrop")
+		const { sessionsSetBackdrop } = await import(
+			"$lib/server/sockets/backdrop"
+		)
 		const ok: any = await sessionsSetBackdrop.handler(
 			fakeSocket(owner.id),
 			{ sessionId: s.id, mediaRef: String(ours.id) },
@@ -312,13 +495,21 @@ describe("3 · published for enabled-when", () => {
 	test("backdrop.set and backdrop.mediaId follow the pointer", async () => {
 		const owner = await user()
 		const s = await session(owner.id)
-		const { publishedBackdrop } = await import("$lib/server/sessions/backdrop")
-		expect(await publishedBackdrop(testDb as any, s.id)).toEqual({ set: false, mediaId: null })
+		const { publishedBackdrop } = await import(
+			"$lib/server/sessions/backdrop"
+		)
+		expect(await publishedBackdrop(testDb as any, s.id)).toEqual({
+			set: false,
+			mediaId: null
+		})
 		const pic = await file(owner.id, { sessionId: s.id })
 		await testDb
 			.update(schema.sessions)
 			.set({ backdropMediaId: pic.id })
 			.where(eq(schema.sessions.id, s.id))
-		expect(await publishedBackdrop(testDb as any, s.id)).toEqual({ set: true, mediaId: pic.id })
+		expect(await publishedBackdrop(testDb as any, s.id)).toEqual({
+			set: true,
+			mediaId: pic.id
+		})
 	})
 })

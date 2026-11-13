@@ -10,6 +10,10 @@
  *
  * What it counts is the session lorebook's entries and nothing else: the one
  * thing Search by meaning searches (`SEMANTIC_SEARCH_SOURCES`).
+ *
+ * It speaks only of what a viewer can act on. Progress (some entries indexed,
+ * the rest on their way) lives in Activity (`lorebook_indexing`), not here
+ * (playtest 2, 2026-11-04, §0-C).
  */
 
 /** The lorebook's entries, split by index state, as the server counts them. */
@@ -25,11 +29,14 @@ export interface RagNoticeCounts {
 /**
  *   "none"       — no entry is indexed yet
  *   "stale"      — every entry that is indexed needs re-indexing, and none is missing
- *   "processing" — some entries are indexed and the rest are on their way
  */
-export type RagNoticeVariant = "none" | "stale" | "processing"
+export type RagNoticeVariant = "none" | "stale"
 
-/** What the notice has to say about these counts; null when every entry is indexed. */
+/**
+ * What the notice has to say about these counts; null when every entry is
+ * indexed, and null part way (some indexed, the rest on their way): that is
+ * progress, and Activity shows it.
+ */
 export function ragNoticeVariant(
 	counts: RagNoticeCounts | null | undefined
 ): RagNoticeVariant | null {
@@ -39,7 +46,7 @@ export function ragNoticeVariant(
 	if (readyCount === total) return null
 	if (staleCount > 0 && nullCount === 0) return "stale"
 	if (nullCount === total) return "none"
-	return "processing"
+	return null
 }
 
 /** The notice's sentence for a variant. */
@@ -47,9 +54,6 @@ export function ragNoticeSentence(
 	variant: RagNoticeVariant,
 	facts: {
 		modelName: string | null | undefined
-		readyCount: number
-		total: number
-		queueRunning: boolean
 	}
 ): string {
 	switch (variant) {
@@ -57,10 +61,6 @@ export function ragNoticeSentence(
 			return "Lorebook entries aren't indexed yet, so Search by meaning can't find them."
 		case "stale":
 			return `Lorebook entries were indexed with a different model and need re-indexing with ${facts.modelName || "the current model"}.`
-		case "processing":
-			return facts.queueRunning
-				? `Indexing ${facts.readyCount} of ${facts.total} lorebook entries.`
-				: `${facts.readyCount} of ${facts.total} lorebook entries are indexed. The rest are waiting to be indexed.`
 	}
 }
 
@@ -114,8 +114,6 @@ export function ragNoticeActions(
 					title: "Fill the Embeddings loadout in Admin › Models › Loadouts"
 				}
 			]
-		case "processing":
-			return [prioritize]
 	}
 }
 
@@ -166,4 +164,72 @@ export function markNoticeRead(sessionId: number, store: NoticeStore | null = de
 	} catch {
 		// A convenience: the line shows again next time.
 	}
+}
+
+/** The trailing-throttle window of `statusAsker().soon()`, in milliseconds. */
+export const STATUS_ASK_THROTTLE_MS = 500
+
+/**
+ * How the notice asks the server for its status: one ask in flight at a time.
+ *
+ * The server answers each ask with one reply, and replies are not matched to
+ * asks, so with several asks out the first reply to land would stand for all
+ * of them and an older figure could be the last word. Here a trigger that
+ * arrives while an ask is out only marks the answer stale; when the reply
+ * lands, exactly one more ask goes out. `soon()` is for noisy triggers (a
+ * count that moves per entry): a trailing throttle that ends in `now()`.
+ */
+export function statusAsker(
+	send: () => void,
+	opts: {
+		throttleMs?: number
+		setTimer?: (fn: () => void, ms: number) => unknown
+		clearTimer?: (timer: unknown) => void
+	} = {}
+) {
+	const throttleMs = opts.throttleMs ?? STATUS_ASK_THROTTLE_MS
+	const setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
+	const clearTimer =
+		opts.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>))
+	let inFlight = false
+	let dirty = false
+	let timer: unknown = null
+
+	function now() {
+		if (inFlight) {
+			dirty = true
+			return
+		}
+		inFlight = true
+		send()
+	}
+
+	function soon() {
+		if (timer !== null) return
+		timer = setTimer(() => {
+			timer = null
+			now()
+		}, throttleMs)
+	}
+
+	/** Call on every reply. */
+	function answered() {
+		inFlight = false
+		if (dirty) {
+			dirty = false
+			now()
+		}
+	}
+
+	/** Forget the ask in flight and any stale mark; sends nothing. */
+	function reset() {
+		inFlight = false
+		dirty = false
+		if (timer !== null) {
+			clearTimer(timer)
+			timer = null
+		}
+	}
+
+	return { now, soon, answered, reset, dispose: reset }
 }

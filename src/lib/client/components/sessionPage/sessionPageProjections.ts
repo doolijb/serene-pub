@@ -7,7 +7,19 @@
  */
 import { avatarSrc } from "$lib/client/utils/media"
 import { composerClosuresFor, DEFAULT_CHANNEL, parseChannel } from "@serene-pub/sdk"
-import { castFaceOf } from "./projections/characters"
+import {
+	castFaceOf,
+	castNameOf,
+	seatCardAsShown
+} from "./projections/characters"
+import {
+	castEntryOf,
+	messageRefOf,
+	seatOfCastMember,
+	seatOfRef,
+	seatRefOf,
+	type SeatsPayload
+} from "./projections/seatIdentity"
 import { sessionBookOf } from "$lib/client/sessions/store/derive"
 import {
 	resolveSprite,
@@ -63,18 +75,155 @@ import type { DraftWrite } from "$lib/client/components/sessionPage/collects"
 
 type LoadedSession = Sockets.Sessions.Get.Response["session"] | undefined
 
-/** A face for a turn ref, from the loaded cast (`character:<id>`). */
+/** The seats a ref is read against: structural, so the page's session and a fixture both fit. */
+type SeatRefSession = SeatsPayload
+
+/**
+ * 🚧 The card id a participant ref names in this session: the card of the seat
+ * the ref names — looked up (`seatOfRef`, never parsed), whether by the seat's
+ * own ref, its `player-seat:<id>`, or the `seated-member:<memberId>` of the
+ * member it holds. Which seat wins when several answer is `seatOfRef`'s order
+ * (`projections/seatIdentity.ts`, the server's `seatOf`). That seat's card id
+ * is returned, null when it has none; any other ref is null. ⏳ A
+ * `character:<id>` that names no seat here is that id — a card-form payload
+ * (a host before the seat flip) and the pickers that still name a card,
+ * until S5 drops the card form.
+ */
+export function seatCardIdOfRef(
+	session: SeatRefSession | null | undefined,
+	ref: string | null | undefined
+): number | null {
+	const found = seatOfRef(session, ref)
+	if (found)
+		return (found.form === "character" ? found.seat.characterId : found.seat.personaId) ?? null
+	const card = /^character:(\d+)$/.exec(ref ?? "")
+	return card ? Number(card[1]) : null
+}
+
+/**
+ * A face for a turn ref, from the loaded cast (`character:<id>`, or the
+ * 🚧 `seated-member:<memberId>` of a seat): a character seat's card as its
+ * cast member shows it, a persona seat's likewise (s27 S2c).
+ */
 export function characterForRefIn(
 	session: LoadedSession,
 	ref: string | null | undefined
 ): SelectCharacter | undefined {
-	const m = /^character:(\d+)$/.exec(ref ?? "")
-	if (!m) return undefined
-	const id = Number(m[1])
-	return (session?.sessionCharacters?.find((cc) => cc.characterId === id)
-		?.character ??
-		session?.sessionPersonas?.find((cp) => cp.personaId === id)
-			?.persona) as SelectCharacter | undefined
+	// The seat the ref names, and that seat's own card — never a seat found
+	// again by card id, where two seats could share one. A `character:<id>`
+	// no seat holds names no card, as `seatCardIdOfRef` keeps it.
+	const found = seatOfRef(session, ref)
+	if (!found) return undefined
+	const row = found.seat as {
+		character?: SelectCharacter | null
+		persona?: SelectCharacter | null
+	}
+	const card = found.form === "character" ? row.character : row.persona
+	return card
+		? (seatCardAsShown(session as any, card) as SelectCharacter)
+		: undefined
+}
+
+/**
+ * 🚧 The name and face `sp-avatar` and the turn line draw for a participant
+ * ref, found by the seat the ref names (`seatOfRef` — never by card id, where
+ * a card in two seats would answer for both). A character seat with a card:
+ * the cast's name and face, as `castNameOf` / `castFaceOf` give them. A
+ * player seat on a card: the header's name and the card as its member shows
+ * it. A card-less player seat (★S3W-1): its seat name and its seat portrait.
+ * No seat: ⏳ what `characterForRefIn` finds (null when nothing).
+ */
+export function participantForRefIn(
+	session: LoadedSession,
+	ref: string | null | undefined
+): { name: string; avatarUrl: string | null } | null {
+	const found = seatOfRef(session, ref)
+	if (found?.form === "character") {
+		const seat = found.seat as {
+			characterId?: number | null
+			character?: SelectCharacter | null
+		}
+		if (seat.character && seat.characterId != null) {
+			const who = seatCardAsShown(
+				session as any,
+				seat.character
+			) as SelectCharacter
+			return {
+				name: castNameOf(
+					session as any,
+					seat.characterId,
+					who,
+					who.name ?? ""
+				),
+				avatarUrl:
+					castFaceOf(session as any, seat.characterId, {}) ??
+					avatarSrc(who) ??
+					null
+			}
+		}
+	}
+	if (found?.form === "character") {
+		const seat = found.seat as {
+			character?: SelectCharacter | null
+			castMemberId?: number | null
+		}
+		// A card-less character seat: its member as `cardlessSeatShown` has it.
+		if (!seat.character && seat.castMemberId != null) {
+			const who = messageSpeaker(session as any, {
+				castMemberId: seat.castMemberId,
+				metadata: { speaker: ref }
+			})
+			if (who)
+				return {
+					name: resolveCharacterName(who, who.name ?? ""),
+					avatarUrl: avatarSrc(who) ?? null
+				}
+		}
+	}
+	if (found?.form === "player") {
+		const seat = found.seat as {
+			persona?: SelectCharacter | null
+			seatName?: string | null
+			portraitMediaId?: number | null
+			castMemberId?: number | null
+		}
+		if (seat.persona)
+			return {
+				name: personaSeatNameOf(session, {
+					persona: seat.persona,
+					seatName: seat.seatName
+				}),
+				avatarUrl:
+					avatarSrc(seatCardAsShown(session as any, seat.persona)) ??
+					null
+			}
+		const name = seat.seatName?.trim()
+		if (name)
+			return {
+				name,
+				avatarUrl:
+					avatarSrc(withPortrait({}, seat.portraitMediaId)) ?? null
+			}
+		// No seat name: the seat's member as `cardlessSeatShown` has it.
+		if (seat.castMemberId != null) {
+			const who = messageSpeaker(session as any, {
+				castMemberId: seat.castMemberId,
+				metadata: { speaker: ref }
+			})
+			if (who)
+				return {
+					name: resolveCharacterName(who, who.name ?? ""),
+					avatarUrl: avatarSrc(who) ?? null
+				}
+		}
+	}
+	const who = characterForRefIn(session, ref)
+	return who
+		? {
+				name: resolveCharacterName(who, who.name ?? ""),
+				avatarUrl: avatarSrc(who) ?? null
+			}
+		: null
 }
 
 // Check if current user can edit/control a specific message — mirrors
@@ -101,24 +250,54 @@ export function canControlMessageAs(
 ): boolean {
 	if (!userCtx.user?.id) return false
 
+	// The seats a line was spoken from (`seatOfMessage`'s rule, every seat
+	// kept): those holding the line's cast member when it names one and a
+	// seat of that form holds it, else those on the line's card.
+	const castMemberId = (msg as { castMemberId?: number | null }).castMemberId
 	if (msg.personaId) {
+		const players = session?.sessionPersonas ?? []
+		const held =
+			castMemberId != null
+				? players.filter((cp) => cp.castMemberId === castMemberId)
+				: []
 		return (
-			session?.sessionPersonas?.some(
-				(cp) =>
-					cp.personaId === msg.personaId &&
-					cp.persona?.userId === userCtx.user?.id
-			) ?? false
+			(held.length
+				? held
+				: players.filter((cp) => cp.personaId === msg.personaId)
+			).some((cp) => cp.persona?.userId === userCtx.user?.id)
 		)
 	}
 
 	if (msg.characterId) {
 		if (!isGuest) return true
+		const characters = session?.sessionCharacters ?? []
+		const held =
+			castMemberId != null
+				? characters.filter(
+						(cc) => cc.castMemberId === castMemberId && !cc.envoySlug
+					)
+				: []
 		return (
-			session?.sessionCharacters?.some(
-				(cc) =>
-					cc.characterId === msg.characterId &&
-					cc.character?.userId === userCtx.user?.id
-			) ?? false
+			(held.length
+				? held
+				: characters.filter((cc) => cc.characterId === msg.characterId)
+			).some((cc) => cc.character?.userId === userCtx.user?.id)
+		)
+	}
+
+	// 🚧 A card-less character seat's line (`seated-member:<id>`): the owner's,
+	// else the person who seated it (`seatedByUserId`) — the server's rule.
+	// A card-less PLAYER line (`player-seat:<id>`) is not this.
+	const speaker = (msg.metadata as { speaker?: unknown } | null | undefined)?.speaker
+	if (typeof speaker === "string" && speaker.startsWith("seated-member:") && !msg.isNarratorResponse) {
+		if (!isGuest) return true
+		const memberId = Number(speaker.slice("seated-member:".length))
+		return (session?.sessionCharacters ?? []).some(
+			(cc) =>
+				cc.castMemberId === memberId &&
+				!cc.characterId &&
+				!cc.envoySlug &&
+				cc.seatedByUserId === userCtx.user?.id
 		)
 	}
 
@@ -250,51 +429,87 @@ export function messageCharacterOf(
  * disagree about who someone looks like.
  */
 function headerFaceOf(
-	session: LoadedSession,
 	character: NonNullable<Parameters<typeof spriteSrc>[0]> & { id: number },
 	wanted: ReturnType<typeof currentSpriteIn>
 ): string | undefined {
+	// `character` is the card as its cast member shows it (`seatCardAsShown`):
+	// its own sprite sets, and its retold face as the avatar.
 	if (resolveSprite(character as any, wanted))
 		return spriteSrc(character as any, wanted)
+	return avatarSrc(character, {})
+}
+
+/**
+ * A player seat's shown name in the header and in `participantForRefIn`: the
+ * seat's own name when its cast member has a name too (the seat's name wins
+ * over it), else the member's name over the card's (s27 S2c).
+ */
+function personaSeatNameOf(
+	session: LoadedSession,
+	cp: { persona: SelectCharacter; seatName?: string | null }
+): string {
 	return (
-		castFaceOf(session as any, character.id, {}) ??
-		avatarSrc(character, {})
+		(session?.castNames?.[cp.persona.id] && cp.seatName?.trim()) ||
+		castNameOf(session as any, cp.persona.id, cp.persona, cp.persona.name)
 	)
 }
 
+/**
+ * The header's cast stack as a string. `nextRef` is the ref of the head of
+ * the turn order (null when no next block shows): a character row is next
+ * when its key — its seat's ref — is that ref, so a player seat on a card
+ * that also sits in a character seat never lights the character's row.
+ */
 export function headerCastKeyOf(
 	session: LoadedSession,
-	nextId: number | null
+	nextRef: string | null
 ): string {
 	const characters = (session?.sessionCharacters ?? [])
 		.filter((cc) => !!cc.character)
-		.map((cc) => ({
-			key: `character:${cc.character.id}`,
-			name: resolveCharacterName(cc.character, cc.character.name),
-			// The CURRENT sprite (DESIGN-sprites §7): the face on this
-			// character's newest line, else its avatar. Derived from the
-			// loaded messages, never stored.
-			avatarSrc:
-				headerFaceOf(
-					session,
+		.map((cc) => {
+			// The seat's own ref (host-filled), else ⏳ today's card form.
+			const key =
+				seatRefOf(cc, "character") ?? `character:${cc.character.id}`
+			// The card as its cast member shows it: its own sprite sets and
+			// face over the card's (s27 S2), so one rule draws the disc.
+			const shown = seatCardAsShown(session as any, cc.character)
+			return {
+				key,
+				name: castNameOf(
+					session as any,
+					cc.character.id,
 					cc.character,
-					currentSpriteIn(
-						currentSpriteOf(
-							cc.character.id,
-							(session?.sessionMessages ?? []) as any[]
-						),
-						(session as any)?.spriteSetOverrides?.[cc.character.id]
-					)
-				) ?? null,
-			isPersona: false,
-			isNext: cc.character.id === nextId
-		}))
+					cc.character.name
+				),
+				// The CURRENT sprite (DESIGN-sprites §7): the face on this
+				// character's newest line, else its avatar. Derived from the
+				// loaded messages, never stored.
+				avatarSrc:
+					headerFaceOf(
+						shown,
+						currentSpriteIn(
+							currentSpriteOf(
+								cc.character.id,
+								(session?.sessionMessages ?? []) as any[]
+							),
+							(session as any)?.spriteSetOverrides?.[
+								cc.character.id
+							]
+						)
+					) ?? null,
+				isPersona: false,
+				isNext: nextRef != null && key === nextRef
+			}
+		})
 	const personas = (session?.sessionPersonas ?? [])
 		.filter((cp) => !!cp.persona)
 		.map((cp) => ({
 			key: `persona:${cp.persona.id}`,
-			name: resolveCharacterName(cp.persona, cp.persona.name),
-			avatarSrc: avatarSrc(cp.persona) ?? null,
+			// The seat's cast member's own name, as a character seat's
+			// (s27 S2c); the seat's own name wins over it.
+			name: personaSeatNameOf(session, cp as any),
+			avatarSrc:
+				avatarSrc(seatCardAsShown(session as any, cp.persona)) ?? null,
 			isPersona: true,
 			isNext: false
 		}))
@@ -384,6 +599,23 @@ export interface DossierSources {
 	composerDraft(): DraftWrite
 	/** `$state.snapshot`, from the page: a plain copy of what a store holds. */
 	snapshot<T>(value: T): T
+}
+
+/**
+ * The id of the newest loaded row the viewing user wrote, on any channel: a
+ * `user` row carrying their `userId` (an assistant row can carry the owner's
+ * `userId` too, so the role decides). Null when there is none or no viewer.
+ */
+export function ownNewestMessageIdOf(
+	messages: readonly { id: number; role?: string | null; userId?: number | null }[] | null | undefined,
+	viewerUserId: number | null | undefined
+): number | null {
+	if (viewerUserId == null) return null
+	let newest: number | null = null
+	for (const m of messages ?? [])
+		if (m.role === "user" && m.userId === viewerUserId && (newest === null || m.id > newest))
+			newest = m.id
+	return newest
 }
 
 /**
@@ -479,10 +711,11 @@ export function projectConversationDossier(
 		systemSettingsCtx.settings?.activeEmbeddingModel,
 		...(session.sessionCharacters ?? []).map(
 			(cc) =>
-				`${cc.characterId}:${cc.character?.name}:${cc.character?.avatarMediaId}:${(session as any)?.castFaces?.[cc.characterId ?? -1] ?? ""}`
+				`${(cc as { ref?: string | null }).ref ?? ""}:${cc.castMemberId ?? ""}:${cc.characterId}:${cc.character?.name}:${cc.character?.avatarMediaId}:${(session as any)?.castFaces?.[cc.characterId ?? -1] ?? ""}:${JSON.stringify((session as any)?.castNames?.[cc.characterId ?? -1] ?? null)}:${JSON.stringify((session as any)?.castSpriteSets?.[cc.characterId ?? -1] ?? null)}`
 		),
 		...(session.sessionPersonas ?? []).map(
-			(cp) => `${cp.personaId}:${cp.persona?.name}:${cp.persona?.userId}`
+			(cp) =>
+				`${(cp as { ref?: string | null }).ref ?? ""}:${cp.castMemberId ?? ""}:${cp.personaId}:${cp.persona?.name}:${cp.persona?.userId}:${(session as any)?.castFaces?.[cp.personaId ?? -1] ?? ""}:${JSON.stringify((session as any)?.castNames?.[cp.personaId ?? -1] ?? null)}:${JSON.stringify((session as any)?.castSpriteSets?.[cp.personaId ?? -1] ?? null)}`
 		),
 		// An envoy's line takes its name and face off the view's list (U5g).
 		// A data: image by its length (it rides every line's key), a URL whole.
@@ -509,6 +742,8 @@ export function projectConversationDossier(
 			castKey,
 			m.characterId,
 			m.personaId,
+			// The speaker's seat member: a re-stamped line re-projects.
+			(m as { castMemberId?: number | null }).castMemberId,
 			m.userId,
 			m.role,
 			m.isGenerating,
@@ -531,11 +766,7 @@ export function projectConversationDossier(
 			continue
 		}
 		const who = getMessageCharacter(m)
-		const ref = m.characterId
-			? `character:${m.characterId}`
-			: m.personaId
-				? `character:${m.personaId}`
-				: null
+		const ref = messageRefOf(session, m)
 		const greeting = !!m.metadata?.isGreeting
 		const line: ConversationLineV1 = {
 			// 🚧 Two verdicts (ruled 2026-10-15): edit, hide and delete read
@@ -549,10 +780,13 @@ export function projectConversationDossier(
 			speaker: {
 				name: m.isNarratorResponse
 					? m.metadata?.narratorName || "Narrator"
-					: resolveCharacterName(who, ownVoice),
+					: m.characterId
+						? castNameOf(session as any, m.characterId, who, ownVoice)
+						: resolveCharacterName(who, ownVoice),
 				ref,
 				// The cast's retold face over the card's (plan cast-retold-fields);
-				// a persona is voiced, not cast, so only a character line gets one.
+				// a persona line's speaker (`messageSpeaker`) already carries its
+				// member's face, or its seat portrait, as the avatar.
 				face: remoteFaces.face(
 					(m.characterId
 						? castFaceOf(session as any, m.characterId, {})
@@ -606,25 +840,22 @@ export function projectConversationDossier(
 					const b = members.get(id)
 					if (!b) return []
 					const cid = b.characterId
-					const card =
-						cid != null
-							? ((session.sessionCharacters ?? []).find(
-									(cc) => cc.characterId === cid
-								)?.character ??
-								(session.sessionPersonas ?? []).find(
-									(cp) => cp.personaId === cid
-								)?.persona ??
-								null)
-							: null
-					const face = card
+					// The seat holding this member names its ref; ⏳ with no
+					// seat, the member's linked card's (card-form payload, S5).
+					const held = seatOfCastMember(session, b.id)
+					const ref =
+						(held ? seatRefOf(held.seat, held.form) : null) ??
+						(cid != null ? `character:${cid}` : null)
+					// The seat's face, a card-less player seat's portrait too
+					// (★S3W-1), as the turn line draws it.
+					const face = ref
 						? remoteFaces.face(
-								castFaceOf(session as any, cid!, {}) ??
-									avatarSrc(card as any)
+								participantForRefIn(session, ref)?.avatarUrl
 							)
 						: null
 					return [
 						{
-							ref: cid != null ? `character:${cid}` : null,
+							ref,
 							name: b.name,
 							face: face ?? null
 						}
@@ -712,6 +943,11 @@ export function projectConversationDossier(
 		).readAloud,
 		// How spoken lines play for THIS viewer (their setting); playback only.
 		spokenPlayback: userSettingsCtx.settings?.spokenPlayback ?? "auto",
+		// The newest loaded line this viewer wrote (a Dialogue box's "your line").
+		ownNewestMessageId: ownNewestMessageIdOf(
+			session.sessionMessages,
+			userCtx.user?.id
+		),
 		// 🚧 The runs in flight (the `sessions:runStatus` pushes the page hears):
 		// a spoken line whose pending run is here reads Speaking… (A4).
 		liveRunIds: src.data.liveRunIds,
@@ -838,15 +1074,31 @@ export function projectConversationDossier(
 				const cast = (stateStore.state?.cast ?? {}) as Record<string, unknown>
 				const byId = (cast.byId ?? {}) as Record<string, Record<string, unknown> | undefined>
 				const waitingFor = roundWaitingFor({
-					seats: session.sessionPersonas as never,
+					// A carded seat is named as its cast member shows it (s27 S2c);
+					// its own seat name still wins, in `roundWaitingFor`.
+					seats: (session.sessionPersonas ?? []).map((cp) =>
+						cp.persona && (session as any).castNames?.[cp.persona.id]
+							? {
+									...cp,
+									persona: {
+										...cp.persona,
+										name: castNameOf(
+											session as any,
+											cp.persona.id,
+											cp.persona,
+											cp.persona.name
+										)
+									}
+								}
+							: cp
+					) as never,
 					rows: session.sessionMessages as never,
 					viewerUserId: userCtx.user?.id ?? null,
 					preparedOnStory: (turnOrder?.order ?? []).filter(
 						(e) => ((e as { channel?: unknown }).channel ?? "main") === "main"
 					).length,
 					fateOf: (ref) => {
-						const key = ref.startsWith("player-seat:") ? `player_seat:${ref.slice(12)}` : ref.replace(/^character:/, "")
-						const bag = byId[key]
+						const bag = castEntryOf(byId, ref)
 						const fate = bag?.["core.fate"] ?? bag?.fate
 						return typeof fate === "string" ? fate : null
 					},

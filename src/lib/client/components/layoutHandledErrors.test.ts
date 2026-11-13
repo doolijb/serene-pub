@@ -33,6 +33,14 @@ describe("Layout's catch-all leaves these refusals to the surface that asked", (
 		expect(handledErrorEvents().has("entries:create:error")).toBe(true)
 	})
 
+	test("a library template write's refusal: the library page, the template form or the layout form says it", () => {
+		const handled = handledErrorEvents()
+		for (const verb of ["Create", "Clone", "Update", "Delete"])
+			expect(handled.has(`pipelines:library${verb}Template:error`), verb).toBe(
+				true
+			)
+	})
+
 	test("a merge's refusal: the absorb window says it in place, the duplicates list as its own toast", () => {
 		expect(handledErrorEvents().has("narrativeGraph:mergeNode:error")).toBe(
 			true

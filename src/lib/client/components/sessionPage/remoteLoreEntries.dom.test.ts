@@ -75,7 +75,7 @@ describe("core's remote Lore entries draws what the native panel drew", () => {
 
 describe("the page mounts Lore entries remote", () => {
 	test("core's own module, served at /core-ui/lore-entries, granted 'lore' for its requests", () => {
-		const widget = coreDefaultWidgets().find((p) => p.id === "lore-entries")!
+		const widget = coreDefaultWidgets(true).find((p) => p.id === "lore-entries")!
 		expect(widget.surface).toEqual({ kind: "remote", owner: "core", component: "lore-entries" })
 		expect(widget.src).toBe("/core-ui/lore-entries")
 		expect(widget.grants).toEqual(["lore"])

@@ -14,7 +14,8 @@ import { and, eq, sql } from "drizzle-orm"
 import { rulesetSections, storyDayIndex, type RulesetDecl, type StoryCalendar, type StoryTime } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 
-export function hoursCrossed(from: StoryTime, to: StoryTime, calendar: StoryCalendar | null): number | undefined {
+/** The absolute minute counts of two moments, or undefined when they cannot be placed on one line. */
+function minutePair(from: StoryTime, to: StoryTime, calendar: StoryCalendar | null): [number, number] | undefined {
 	let a: number | null
 	let b: number | null
 	if (calendar) {
@@ -26,7 +27,24 @@ export function hoursCrossed(from: StoryTime, to: StoryTime, calendar: StoryCale
 	} else return undefined
 	if (a == null || b == null) return undefined
 	const minuteOf = (t: StoryTime, day: number): number => day * 1440 + (t.hour ?? 0) * 60 + (t.minute ?? 0)
-	return Math.max(0, Math.floor(minuteOf(to, b) / 60) - Math.floor(minuteOf(from, a) / 60))
+	return [minuteOf(from, a), minuteOf(to, b)]
+}
+
+export function hoursCrossed(from: StoryTime, to: StoryTime, calendar: StoryCalendar | null): number | undefined {
+	const m = minutePair(from, to, calendar)
+	if (!m) return undefined
+	return Math.max(0, Math.floor(m[1] / 60) - Math.floor(m[0] / 60))
+}
+
+/**
+ * 🚧 **Whole story minutes from one moment to another** (lane sense-age2):
+ * `to − from` on the same absolute minute count and the same placing rules as
+ * `hoursCrossed`, but signed — a `to` before `from` is negative. Anything
+ * that cannot be placed is `undefined`.
+ */
+export function minutesBetween(from: StoryTime, to: StoryTime, calendar: StoryCalendar | null): number | undefined {
+	const m = minutePair(from, to, calendar)
+	return m ? m[1] - m[0] : undefined
 }
 
 /** The sentence the ledger note says. */

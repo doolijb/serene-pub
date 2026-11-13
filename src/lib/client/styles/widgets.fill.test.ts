@@ -99,11 +99,30 @@ describe("widgets.css — a widget fills its granted width", () => {
 			(r) =>
 				r.selector.includes('[data-widget-part~="messages.stage"]') &&
 				r.selector.includes('[data-widget-part~="messages.compose"]') &&
-				!r.selector.includes("data-line-width") &&
-				!r.selector.includes("data-sp-backing")
+				!r.selector.includes("data-line-width")
 		)
-		expect(base).toBeDefined()
+		expect(base === undefined).toBe(false)
 		expect(base!.body).toMatch(/inline-size:\s*100%/)
 		expect(base!.body).not.toMatch(/max-inline-size|max-width/)
+	})
+
+	it("gives the Composer's own root the column its target's Line width says, and fills by default", () => {
+		const root = '[data-widget-part~="composer.root"]'
+		const fills = rules.find(
+			(r) =>
+				selectors(r.selector).includes(root) && /inline-size:\s*100%/.test(r.body)
+		)
+		expect(fills === undefined).toBe(false)
+		const sels = rules
+			.filter((r) => /--sp-column-width|--sp-measure\s*:/.test(r.body))
+			.flatMap((r) => selectors(r.selector))
+		expect(sels.some((s) => s.startsWith(root + '[data-line-width="column"]'))).toBe(true)
+		expect(sels.some((s) => s.startsWith(root + ":is("))).toBe(true)
+	})
+
+	it("keeps no rule for the removed root attributes or the message backing", () => {
+		expect(CSS.includes("data-sp-backing")).toBe(false)
+		expect(CSS.includes("data-composer-position")).toBe(false)
+		expect(CSS.includes("data-show-messages")).toBe(false)
 	})
 })

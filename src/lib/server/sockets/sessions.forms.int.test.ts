@@ -173,6 +173,24 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
+/**
+ * 🚧 `forms.modelAnswers` (P1: the AI's form answer is opt-in by genre): the
+ * shipped genres do not declare it yet, so the AI-answer cases opt in here and
+ * the one "off" case turns it off.
+ */
+let modelAnswersOn = true
+vi.mock("$lib/server/pipelines/entities/sessionGenres", async (importOriginal) => {
+	const real = await importOriginal<typeof import("$lib/server/pipelines/entities/sessionGenres")>()
+	return {
+		...real,
+		getSessionGenre: async (db: Db, genreId: string) => {
+			const genre = await real.getSessionGenre(db, genreId)
+			return genre && modelAnswersOn
+				? { ...genre, shape: { ...genre.shape, forms: { modelAnswers: true } } }
+				: genre
+		}
+	}
+})
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -208,6 +226,19 @@ function fakeSocket(userId: number) {
 	} as any
 }
 const noopEmit = () => {}
+
+/**
+ * ⏳ A persona seat's participant reference as the session stores and emits it:
+ * `character:<personaId>` until the flip, `player-seat:<seatId>` once on.
+ */
+async function personaSeatRef(sessionId: number, personaId: number) {
+	const { memberFormOn } = await import("$lib/server/state/memberForm")
+	if (!memberFormOn()) return `character:${personaId}`
+	const schema = await import("$lib/server/db/schema")
+	const rows = await testDb.select().from(schema.sessionPersonas)
+	const seat = rows.find((r) => r.sessionId === sessionId && r.personaId === personaId)
+	return `player-seat:${seat!.id}`
+}
 
 async function character(userId: number, name: string, isPersona = false) {
 	const schema = await import("$lib/server/db/schema")
@@ -606,7 +637,7 @@ describe("R-15 · the addressee is the audience", () => {
 		expect(line.characterId).toBeNull()
 		expect(line.role).toBe("user")
 		expect(line.userId).toBe(guest.id)
-		expect((line.metadata as any)?.speaker).toBe(`character:${elara}`)
+		expect((line.metadata as any)?.speaker).toBe(await personaSeatRef(session.id, elara))
 
 		const { peekSessionChanges } = await import("$lib/server/messages/sessionChanges")
 		const changes = await peekSessionChanges(testDb as any, session.id)
@@ -615,7 +646,7 @@ describe("R-15 · the addressee is the audience", () => {
 			messageId: written.messageId,
 			blockId: block.id,
 			action: `${answerId}#${answerFn}`,
-			addressee: `character:${elara}`,
+			addressee: await personaSeatRef(session.id, elara),
 			answer: { choice: "yes" },
 			answeredBy: "click"
 		})
@@ -625,7 +656,7 @@ describe("R-15 · the addressee is the audience", () => {
 		const after = (await lastBlockTree(session.id))!
 		expect(after.messageId).toBe(written.messageId)
 		expect((after.blocks[0] as any).answered).toMatchObject({
-			by: `character:${elara}`,
+			by: await personaSeatRef(session.id, elara),
 			choice: "yes"
 		})
 		expect(typeof (after.blocks[0] as any).answered.at).toBe("string")
@@ -663,6 +694,168 @@ describe("R-15 · the addressee is the audience", () => {
 			(await fire(guest.id, { ...base, action: `${answerId}#${answerFn}`, blockId: "nope" }))
 				.error
 		).toMatch(/no longer here/)
+	})
+})
+
+describe("P1 · the AI's form answer is off until the genre opts in", () => {
+	test("without forms.modelAnswers the event still dispatches and the answer spec halts at its door before any model call, the receipt saying why", async () => {
+		const { owner, session, tom } = await sessionWithTom("noopt")
+		const { askId, askFn } = await publishAskAndAnswer("noopt", festival(`character:${tom}`))
+		modelAnswer = '{"choice":"maybe"}'
+		const before = modelCalls
+		modelAnswersOn = false
+		try {
+			const asked = await fire(owner.id, {
+				sessionId: session.id,
+				action: `${askId}#${askFn}`
+			})
+			expect(asked.error).toBeUndefined()
+		} finally {
+			modelAnswersOn = true
+		}
+		expect(modelCalls - before).toBe(0)
+		const runs = await runsOf(session.id)
+		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
+			`${askId}:ok`,
+			"core:spec/story-answer-form:halt"
+		])
+		expect(runs[1]!.haltReason).toBe(
+			"The AI does not answer forms in this genre: the genre does not opt in (forms.modelAnswers)."
+		)
+		expect(runs[1]!.parentRunId).toBe(runs[0]!.runId)
+	})
+
+	/**
+	 * A second registration on `form-addressed`, on top of the genre's
+	 * defaults: its one outlet writes a narration line. Registered on the
+	 * session, as an owner's own.
+	 */
+	async function publishAndRegisterListener(tag: string, sessionId: number) {
+		const { spec, compile, register } = await import("@serene-pub/sdk")
+		const C = await import("@serene-pub/contracts")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const { rowOfDecl } = await import("$lib/server/pipelines/registrations/rows")
+		const { upsertRow } = await import("$lib/server/pipelines/registrations/write")
+		const { invalidateRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+		const listenId = `core:spec/test-${tag}-listen`
+		const listen: SpecDocument = compile(
+			spec(listenId, { version: "1.0.0", taxonomy: { role: "action" } })
+				.inlet("input", C.formAddressed.v1(), {
+					genre: storyGenre,
+					event: "core:event/form-addressed@1"
+				})
+				.outlet("save", () =>
+					C.createMessage.v1({ narration: true, text: "A form was put to someone." })
+				)
+				.build()
+		)
+		await saveDocument(testDb as any, listen, { publish: true })
+		await upsertRow(
+			testDb as never,
+			rowOfDecl(
+				register("core:event/form-addressed@1", listenId),
+				{ kind: "session", sessionId },
+				"owner"
+			)
+		)
+		invalidateRegistrations()
+		return listenId
+	}
+
+	test("without forms.modelAnswers, a second registration on form-addressed still runs; only the answer halts", async () => {
+		const schema = await import("$lib/server/db/schema")
+		const { owner, session, tom } = await sessionWithTom("noopt-listen")
+		const { askId, askFn } = await publishAskAndAnswer("noopt-listen", festival(`character:${tom}`))
+		const listenId = await publishAndRegisterListener("noopt-listen", session.id)
+		modelAnswer = '{"choice":"maybe"}'
+		const before = modelCalls
+		modelAnswersOn = false
+		try {
+			const asked = await fire(owner.id, {
+				sessionId: session.id,
+				action: `${askId}#${askFn}`
+			})
+			expect(asked.error).toBeUndefined()
+		} finally {
+			modelAnswersOn = true
+		}
+		expect(modelCalls - before).toBe(0)
+		const runs = await runsOf(session.id)
+		expect(runs[0]!.specSlug).toBe(askId)
+		expect(runs[0]!.outcome).toBe("ok")
+		// Registration order is not this test's subject: compare as sets.
+		expect(runs.slice(1).map((r) => `${r.specSlug}:${r.outcome}`).sort()).toEqual(
+			[`${listenId}:ok`, "core:spec/story-answer-form:halt"].sort()
+		)
+		const halted = runs.find((r) => r.specSlug === "core:spec/story-answer-form")!
+		const listened = runs.find((r) => r.specSlug === listenId)!
+		expect(halted.haltReason).toBe(
+			"The AI does not answer forms in this genre: the genre does not opt in (forms.modelAnswers)."
+		)
+		expect(halted.parentRunId).toBe(runs[0]!.runId)
+		expect(listened.parentRunId).toBe(runs[0]!.runId)
+		const rows = await testDb
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, session.id))
+		expect(rows.map((r) => r.content)).toContain("A form was put to someone.")
+	})
+
+	test("with forms.modelAnswers, the answer runs and fires as before, and a second registration on form-addressed runs too", async () => {
+		const { owner, session, tom } = await sessionWithTom("opt-listen")
+		const { askId, askFn, answerId } = await publishAskAndAnswer("opt-listen", festival(`character:${tom}`))
+		const listenId = await publishAndRegisterListener("opt-listen", session.id)
+		modelAnswer = '{"choice":"maybe"}'
+		const before = modelCalls
+		const asked = await fire(owner.id, {
+			sessionId: session.id,
+			action: `${askId}#${askFn}`
+		})
+		expect(asked.error).toBeUndefined()
+		expect(modelCalls - before).toBe(1)
+		const runs = await runsOf(session.id)
+		expect(runs[0]!.specSlug).toBe(askId)
+		expect(runs.map((r) => `${r.specSlug}:${r.outcome}`).sort()).toEqual(
+			[
+				`${askId}:ok`,
+				"core:spec/story-answer-form:ok",
+				`${answerId}:ok`,
+				`${listenId}:ok`
+			].sort()
+		)
+		const written = (await lastBlockTree(session.id))!
+		expect((written.blocks[0] as any).answered).toMatchObject({
+			by: `character:${tom}`,
+			choice: "maybe"
+		})
+	})
+
+	test("without forms.modelAnswers, a form the AI would have answered is the owner's to answer, and a guest's press is refused", async () => {
+		const { owner, guest, session, tom } = await sessionWithTom("noopt-owner")
+		const { askId, askFn, answerId, answerFn } = await publishAskAndAnswer("noopt-owner", festival(`character:${tom}`))
+		modelAnswersOn = false
+		try {
+			await fire(owner.id, { sessionId: session.id, action: `${askId}#${askFn}` })
+			const written = (await lastBlockTree(session.id))!
+			const block = written.blocks[0] as any
+			const answer = (userId: number) =>
+				fire(userId, {
+					sessionId: session.id,
+					action: `${answerId}#${answerFn}`,
+					messageId: written.messageId,
+					blockId: block.id,
+					payload: { choice: "no" }
+				})
+			expect((await answer(guest.id)).error).toMatch(/AI portrays here.*lets no AI answer a form.*owner's to answer/)
+			const ok = await answer(owner.id)
+			expect(ok.error).toBeUndefined()
+			expect((await lastBlockTree(session.id))!.blocks[0]).toMatchObject({
+				answered: { by: `character:${tom}`, choice: "no" }
+			})
+		} finally {
+			modelAnswersOn = true
+		}
 	})
 })
 
@@ -1407,7 +1600,7 @@ describe("the review's rulings (2026-09-17)", () => {
 			(formRun.receipt as any).nodes.find((n: any) => n.nodeKey === "answer").output.values
 		).toEqual({ count: 2, note: "the cousins" })
 		expect((await lastBlockTree(session.id))!.blocks[1]).toMatchObject({
-			answered: { by: `character:${elara}` }
+			answered: { by: await personaSeatRef(session.id, elara) }
 		})
 	})
 
@@ -1852,7 +2045,7 @@ describe("the narrator names the player's persona", () => {
 		expect(asked.error).toBeUndefined()
 		const written = (await lastBlockTree(session.id))!
 		const block = written.blocks[0] as any
-		expect(block.addressee).toBe(`character:${rook}`)
+		expect(block.addressee).toBe(await personaSeatRef(session.id, rook))
 		// Nobody dispatched an answer: the addressee is a person's.
 		expect((await runsOf(session.id)).map((r) => r.specSlug)).toEqual([askId])
 
@@ -1870,7 +2063,7 @@ describe("the narrator names the player's persona", () => {
 		expect(line.characterId).toBeNull()
 		expect(line.role).toBe("user")
 		expect(line.userId).toBe(owner.id)
-		expect((line.metadata as any)?.speaker).toBe(`character:${rook}`)
+		expect((line.metadata as any)?.speaker).toBe(await personaSeatRef(session.id, rook))
 	})
 
 	test("a cast member named by the oracle still resolves, and the AI answers as before", async () => {
@@ -1923,7 +2116,7 @@ describe("the narrator names the player's persona", () => {
 		expect((await press(owner.id, { messageId: first.messageId, blockId: (first.blocks[0] as any).id }, "yes")).error).toBeUndefined()
 		const ownerLine = await lastLine(session.id)
 		expect(ownerLine).toMatchObject({ content: "Yes", personaId: rook, characterId: null, role: "user", userId: owner.id })
-		expect((ownerLine.metadata as any)?.speaker).toBe(`character:${rook}`)
+		expect((ownerLine.metadata as any)?.speaker).toBe(await personaSeatRef(session.id, rook))
 		// The record of the answer names the block's addressee — none — and the presser.
 		const { peekSessionChanges } = await import("$lib/server/messages/sessionChanges")
 		const answered = (await peekSessionChanges(testDb as any, session.id)).find(

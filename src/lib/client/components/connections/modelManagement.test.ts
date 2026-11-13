@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
+	connectionComesWithApp,
 	endpointKind,
 	formatBytes,
 	formatMegabytes,
@@ -301,5 +302,21 @@ describe("which endpoints earn a Models tab", () => {
 		expect(listsAvailableModels(null)).toBe(false)
 		expect(listsAvailableModels(undefined)).toBe(false)
 		expect(listsAvailableModels("")).toBe(false)
+	})
+})
+
+describe("connectionComesWithApp", () => {
+	const ONNX = [
+		CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+		CONNECTION_TYPE.LOCAL_ONNX_NER
+	]
+	test("both local ONNX types", () => {
+		for (const type of ONNX) expect(connectionComesWithApp(type)).toBe(true)
+	})
+	test("never any other type, nor none", () => {
+		expect(connectionComesWithApp(CONNECTION_TYPE.OLLAMA)).toBe(false)
+		expect(connectionComesWithApp("openai")).toBe(false)
+		expect(connectionComesWithApp(null)).toBe(false)
+		expect(connectionComesWithApp(undefined)).toBe(false)
 	})
 })

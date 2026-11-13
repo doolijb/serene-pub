@@ -26,6 +26,8 @@ export type AudioCppModelRow = {
 	reads?: string[]
 	writes?: string[]
 	family: string
+	/** The package's size on disk, as model facts (`source: "file"`). */
+	facts?: { sizeBytes: number; source: "file" }
 }
 
 async function getDb(): Promise<Db> {
@@ -57,22 +59,30 @@ export async function audioCppUpBaseUrl(
 	}
 }
 
-/** One model row per enabled package (pure). */
+/**
+ * One model row per enabled package (pure). A package that knows its size
+ * declares it as model facts, so the Models list can total the disk it takes.
+ */
 export function modelsFromPackages(
-	pkgs: EnabledAudioCppPackage[]
+	pkgs: readonly (EnabledAudioCppPackage & { sizeBytes?: number | null })[]
 ): AudioCppModelRow[] {
-	return pkgs.map((p) =>
-		p.task === "asr"
-			? {
-					id: p.id,
-					name: p.name,
-					modality: "asr",
-					reads: ["audio"],
-					writes: ["text"],
-					family: p.family
-				}
-			: { id: p.id, name: p.name, modality: "tts", family: p.family }
-	)
+	return pkgs.map((p) => {
+		const row: AudioCppModelRow =
+			p.task === "asr"
+				? {
+						id: p.id,
+						name: p.name,
+						modality: "asr",
+						reads: ["audio"],
+						writes: ["text"],
+						family: p.family
+					}
+				: { id: p.id, name: p.name, modality: "tts", family: p.family }
+		const size = p.sizeBytes
+		if (typeof size === "number" && Number.isFinite(size) && size > 0)
+			row.facts = { sizeBytes: size, source: "file" }
+		return row
+	})
 }
 
 export async function listModels(

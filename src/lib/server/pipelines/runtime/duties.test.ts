@@ -32,8 +32,10 @@ describe("dutyModes", () => {
 		expect(off.main.ceded).toEqual({ attributes: CEDED_TO_REPLY_CHANGES })
 		expect(dutyModes(C.reckoningDuties.id, ALL_ON, null, { replyChanges: "off" }).main.ceded).toBeUndefined()
 		expect(dutyModes(C.reckoningDuties.id, ALL_ON, null).modes.attributes).toBe("full")
-		const sweep = dutyModes(C.sweepDuties.id, { summary: true, worldState: true }, null, { replyChanges: "full" })
-		expect(sweep.modes).toEqual({ summary: "full", "world-state": "full" })
+		// `summary` is a retired sweep duty (§0-B, 2026-11-04): a stored override carrying it names no mode.
+		const sweep = dutyModes(C.sweepDuties.id, { summary: true, lore: true, worldState: true }, null, { replyChanges: "full" })
+		expect(sweep.modes).toEqual({ lore: "full", "world-state": "full" })
+		expect(dutyModes(C.sweepDuties.id, { summary: true }, null).any).toBe(false)
 		expect(sweep.main.ceded).toBeUndefined()
 	})
 

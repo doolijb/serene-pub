@@ -21,6 +21,7 @@ import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -82,16 +83,13 @@ async function seedBook() {
 		.insert(schema.characters)
 		.values({ userId: user.id, name: "Verity", description: "A delver." })
 		.returning()
-	const [member] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+	const member = (await insertCastMember(testDb, {
 			lorebookId: lorebook.id,
 			characterId: character.id,
 			binding: "{{char:1}}",
 			name: "Verity",
 			spriteSet: "winter"
-		})
-		.returning()
+		})).member
 	const [branch] = await testDb
 		.insert(schema.lorebookBranches)
 		.values({ lorebookId: lorebook.id, name: "What if" })

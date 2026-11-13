@@ -17,6 +17,12 @@ import {
 } from "$lib/shared/utils/resolveCharacterName"
 import { envoySlugOfRef, i18nText, senderRefOf } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
+import { seatRefLookupOfCast } from "$lib/server/pipelines/runtime/speakerRotation"
+// The one card-less character line rule, shared with the retrieval query's naming.
+import {
+	cardlessLineMemberId,
+	isCardlessSeatOf
+} from "$lib/server/pipelines/ranking/ragQuery"
 
 /** An envoy as the cast read carries it — a seat joined to its declaration. */
 interface CastEnvoy {
@@ -81,6 +87,17 @@ export class SessionMessageProcessor
 			narratorName?: string | null
 		} = {}
 	) {}
+
+	private seatRefOfMember?: ReturnType<typeof seatRefLookupOfCast>
+
+	/**
+	 * 🚧 The cast lookup the SDK's `senderRefOf` takes (seat-cast S3): a cast
+	 * member id → the `ref` of the seat in the cast read this processor holds.
+	 * Built once, from the cast in hand.
+	 */
+	private refOfMember() {
+		return (this.seatRefOfMember ??= seatRefLookupOfCast(this.session))
+	}
 
 	/** Every envoy the cast knows of: seated ones, then declared-only ones. */
 	private envoys(): CastEnvoy[] {
@@ -159,7 +176,7 @@ export class SessionMessageProcessor
 		 * P3-5).
 		 */
 		if ((message as { kind?: unknown }).kind === "answer" && message.role !== "user") {
-			const said = senderRefOf(message)
+			const said = senderRefOf(message, this.refOfMember())
 			const person = typeof said === "string" ? /^user:(\d+)$/.exec(said) : null
 			message = {
 				...message,
@@ -192,6 +209,7 @@ export class SessionMessageProcessor
 		const envoySlug = envoySlugOfRef(
 			(message.metadata as any)?.speaker ?? (message as any).speaker
 		)
+		let cardlessMember: number | null = null
 		if ((message as any).isNarratorResponse) {
 			const narratorName =
 				(message.metadata as any)?.narratorName || "Narrator"
@@ -224,7 +242,7 @@ export class SessionMessageProcessor
 			// name snapshot if the entity itself has since been deleted
 			// globally too.
 			const foundChar = this.session.sessionCharacters?.find(
-				(cc: any) => cc.character.id === message.characterId
+				(cc: any) => cc.character?.id === message.characterId
 			)?.character
 			let foundName: string | undefined
 			if (foundChar) {
@@ -245,6 +263,35 @@ export class SessionMessageProcessor
 				assistantName = foundName || this.unclaimedName()
 			}
 			const name = foundName || this.unclaimedName()
+			msgInterpolationContext = {
+				...msgInterpolationContext,
+				char: name,
+				character: name
+			}
+		}
+		// 🚧 A card-less character seat's line: named by the seat with no card
+		// whose member spoke it (`cardlessLineMemberId`), the departed ones too.
+		else if (
+			(cardlessMember = cardlessLineMemberId(message)) !== null &&
+			(this.session.sessionCharacters?.some((cc: any) =>
+				isCardlessSeatOf(cc, cardlessMember!)
+			) ||
+				this.session.removedSessionCharacters?.some((cc: any) =>
+					isCardlessSeatOf(cc, cardlessMember!)
+				))
+		) {
+			const seat =
+				this.session.sessionCharacters?.find((cc: any) =>
+					isCardlessSeatOf(cc, cardlessMember!)
+				) ??
+				this.session.removedSessionCharacters?.find((cc: any) =>
+					isCardlessSeatOf(cc, cardlessMember!)
+				)
+			const name = resolveCharacterName(
+				seat.character,
+				seat.removedName || this.unclaimedName()
+			)
+			assistantName = name
 			msgInterpolationContext = {
 				...msgInterpolationContext,
 				char: name,
@@ -314,10 +361,18 @@ export class SessionMessageProcessor
 			)
 			const seatLabel = (cp: any): string =>
 				(cp.persona ? resolvePersonaName(cp.persona) : cp.seatName ?? "").trim()
-			const sender = senderRefOf(message)
+			const sender = senderRefOf(message, this.refOfMember())
 			const seatId = sender?.startsWith("player-seat:") ? Number(sender.slice("player-seat:".length)) : null
 			let seat =
 				seatId == null ? undefined : seats.find((cp: any) => cp.seatId === seatId && seatLabel(cp))
+			// A sender the lookup names by the seat's own ref (a `seated-member:`
+			// one, from S4) is found by that ref among the cast's seats, never
+			// parsed for an id.
+			let namedBySeat = seatId != null
+			if (!seat && sender && seatId == null) {
+				seat = seats.find((cp: any) => cp.ref === sender && seatLabel(cp))
+				namedBySeat = !!seat
+			}
 			const multiSeat = seats.length > 1
 			if (!seat && multiSeat && message.userId != null) {
 				const own = seats.filter(
@@ -327,7 +382,7 @@ export class SessionMessageProcessor
 				// Only when it names one seat — a player holding two is not guessed.
 				if (own.length === 1) seat = own[0]
 			}
-			if (seat && (multiSeat || seatId != null || !userName?.trim())) {
+			if (seat && (multiSeat || namedBySeat || !userName?.trim())) {
 				userName = seatLabel(seat)
 				msgInterpolationContext = {
 					...msgInterpolationContext,

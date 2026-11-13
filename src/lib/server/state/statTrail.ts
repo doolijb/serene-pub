@@ -45,6 +45,9 @@ import {
 	type LineReading
 } from "$lib/server/state/reading"
 import type { StateOwner } from "$lib/server/state/owners"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf } from "$lib/server/state/seatRefs"
+import { seatOf } from "$lib/server/sessions/seats"
 import { nameLoreRefs, vocabularyFor } from "$lib/server/state/resolve"
 import {
 	assertOwnerInBook,
@@ -125,15 +128,26 @@ export interface StatTrail {
 }
 
 /** The session-layer owner a durable owner is played as, or null. */
-function sessionOwnerOf(
+async function sessionOwnerOf(
+	db: Db,
 	owner: LorebookOwnerFilter,
 	links: LorebookLinks,
 	sessionId: number
-): StateOwner | null {
+): Promise<StateOwner | null> {
 	if (owner.kind === "lorebook") return { kind: "session", id: sessionId }
 	if (owner.kind === "location") return { kind: "session_location", id: owner.id! }
 	const member = links.cast.find((c) => c.castMemberId === owner.id)
-	return member?.characterId ? { kind: "session_cast", id: member.characterId } : null
+	if (!member) return null
+	// A card-less member is a seat's only with the flip on (the seat holds it, by member, with no card).
+	if (!member.characterId && !memberFormOn()) return null
+	if (!memberFormOn()) return { kind: "session_cast", id: member.characterId! }
+	// 🚧 ⏳ Flip on (`memberForm.ts`): the seat that member sits in — by the member itself, else by the card it holds — under its own owner; a member-less seat keeps its card's `session_cast`.
+	const map = await loadSeatMap(db, sessionId)
+	const seat = map.seats.find((x) => x.castMemberId === member.castMemberId)
+	if (seat) return seat.kind === "player" ? { kind: "player_seat", id: seat.seatId } : { kind: "seated_member", id: member.castMemberId }
+	if (!member.characterId) return null
+	const card = { kind: "session_cast" as const, id: member.characterId }
+	return (memberFormOf(map, card) as StateOwner | null) ?? card
 }
 
 const durableOwnerOf = (owner: LorebookOwnerFilter, links: LorebookLinks): StateOwner =>
@@ -276,7 +290,7 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 	}
 
 	let messages: StatPoint[] = []
-	const played = sessionId !== null ? sessionOwnerOf(query.owner, links, sessionId) : null
+	const played = sessionId !== null ? await sessionOwnerOf(db, query.owner, links, sessionId) : null
 	if (mode !== "timeline" && sessionId !== null && played)
 		messages = await sessionLayerPoints(db, {
 			sessionId,
@@ -316,7 +330,7 @@ export interface SessionStatChange {
 
 export interface SessionStatTrailQuery {
 	sessionId: number
-	/** A session-layer owner: `session` (its id the session's), `session_cast`, `player_seat`, `session_location`. */
+	/** A session-layer owner: `session` (its id the session's), `session_cast`, `player_seat`, `session_location` — 🚧 ⏳ and `seated_member` once the flip is on (`memberForm.ts`). */
 	owner: StateOwner
 	/** Full slot id or local name. */
 	slotId: string
@@ -346,17 +360,28 @@ export function statChangeBy(updatedBy: string): SessionStatChange["by"] {
 }
 
 /** The book's durable owner a session-layer owner is played as, or null. */
-function durableOwnerFor(
+async function durableOwnerFor(
+	db: Db,
 	owner: StateOwner,
 	links: LorebookLinks,
 	sessionId: number
-): LorebookOwnerFilter | null {
+): Promise<LorebookOwnerFilter | null> {
 	if (owner.kind === "session")
 		return owner.id === sessionId ? { kind: "lorebook", id: links.lorebookId } : null
 	if (owner.kind === "session_location")
 		return links.locations.some((l) => l.entryId === owner.id) ? { kind: "location", id: owner.id } : null
 	if (owner.kind === "session_cast") {
 		const member = links.cast.find((c) => c.characterId === owner.id)
+		return member ? { kind: "cast_member", id: member.castMemberId } : null
+	}
+	// 🚧 ⏳ Flip on (`memberForm.ts`): a seat's trail is by its member — the book's member that is the seat's (or, the seat's member living in another book, the one its card is).
+	if (memberFormOn() && (owner.kind === "seated_member" || owner.kind === "player_seat")) {
+		const direct = owner.kind === "seated_member" ? links.cast.find((c) => c.castMemberId === owner.id) : undefined
+		if (direct) return { kind: "cast_member", id: direct.castMemberId }
+		const seat = await seatOf(db, sessionId, `${owner.kind === "seated_member" ? "seated-member" : "player-seat"}:${owner.id}`)
+		const member =
+			(seat?.castMemberId != null ? links.cast.find((c) => c.castMemberId === seat.castMemberId) : undefined) ??
+			(seat?.cardId != null ? links.cast.find((c) => c.characterId === seat.cardId) : undefined)
 		return member ? { kind: "cast_member", id: member.castMemberId } : null
 	}
 	return null
@@ -384,8 +409,11 @@ export async function sessionStatTrail(
 			? Math.min(query.limit, SESSION_STAT_TRAIL_MOST)
 			: SESSION_STAT_TRAIL_LIMIT
 	const reading = await sessionReadingOf(db, sessionId)
-	const links = reading ? await lorebookLinks(db, reading.lorebookId, reading) : null
-	const durable = links ? durableOwnerFor(owner, links, sessionId) : null
+	// The durable layer is an attached book's; the session's own notes keep
+	// the session layer.
+	const links =
+		reading && !reading.onOwnBook ? await lorebookLinks(db, reading.lorebookId, reading) : null
+	const durable = links ? await durableOwnerFor(db, owner, links, sessionId) : null
 
 	let tracked: boolean
 	let points: StatPoint[]

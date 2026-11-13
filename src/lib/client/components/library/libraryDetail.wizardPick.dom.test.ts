@@ -6,7 +6,7 @@
  * beside it, and a card taken there is chosen on the step. While that step
  * is on screen (`wizardCharacterStep.active`) the detail's primary reads
  * **Pick this character** and the chip on the chosen card **Picked**;
- * anywhere else they stay **Import** and **In your characters**.
+ * anywhere else they stay **Import** and **In your character cards**.
  */
 import { afterEach, describe, expect, test } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
@@ -88,21 +88,21 @@ describe("the Library detail inside the wizard", () => {
 		wizardCharacterStep.pickedCharacterId = 7
 		const host = render(7)
 		expect(host.textContent).toContain("Picked")
-		expect(host.textContent).not.toContain("In your characters")
+		expect(host.textContent).not.toContain("In your character cards")
 	})
 
-	test("an imported card the step did not choose stays In your characters", () => {
+	test("an imported card the step did not choose stays In your character cards", () => {
 		wizardCharacterStep.active = true
 		wizardCharacterStep.pickedCharacterId = 8
 		const host = render(7)
-		expect(host.textContent).toContain("In your characters")
+		expect(host.textContent).toContain("In your character cards")
 		expect(host.textContent).not.toContain("Picked")
 	})
 
-	test("outside the wizard an imported card reads In your characters", () => {
+	test("outside the wizard an imported card reads In your character cards", () => {
 		wizardCharacterStep.pickedCharacterId = 7
 		const host = render(7)
-		expect(host.textContent).toContain("In your characters")
+		expect(host.textContent).toContain("In your character cards")
 		expect(host.textContent).not.toContain("Picked")
 	})
 })

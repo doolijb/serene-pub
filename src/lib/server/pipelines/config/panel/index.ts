@@ -35,7 +35,8 @@ export type {
 	NamespaceSummary,
 	NamespaceView,
 	ViewScope,
-	Decl
+	Decl,
+	VariableKey
 } from "$lib/server/pipelines/config/panel/types"
 export {
 	OptionNotFoundError,
@@ -45,6 +46,7 @@ export {
 export { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 export {
 	declarations,
+	declarationsAndVariableKeys,
 	humanizeTypeId,
 	// The panel resolves display text this way and the builder needs the same
 	// rule: two readings of an `I18n` is one that eventually disagrees.
@@ -62,7 +64,6 @@ export {
 	writeOption,
 	clearOption,
 	resetConfig,
-	variableOptionGate,
 	contextTemplateOptionGate,
 	promptOptionGate
 } from "$lib/server/pipelines/config/panel/write"

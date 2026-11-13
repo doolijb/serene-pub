@@ -6,6 +6,8 @@ import { relations, sql } from "drizzle-orm"
 import { PromptFormats } from "../../shared/constants/PromptFormats"
 import type { ShownSprite } from "../../shared/sprites"
 import type { RetoldFlags } from "../../shared/lorebooks/retold"
+import type { CharacterTimbreInput } from "../../shared/characters/timbre"
+import type { CharacterLikenessInput } from "../../shared/characters/likeness"
 import type { RenderMode } from "../../shared/constants/completionTemplates"
 import {
 	pgTable,
@@ -134,7 +136,10 @@ export const userSettings = pgTable(
 		darkMode: boolean("dark_mode").notNull().default(true),
 		showHomePageBanner: boolean("show_home_page_banner").default(true),
 		/** 🚧 Starred starts (ruled 2026-10-19): a favourite genre, and a favourite preset per genre — pre-selected on the start form. */
-		startFavourites: json("start_favourites").$type<{ genre?: string; presetByGenre?: Record<string, number> } | null>(),
+		startFavourites: json("start_favourites").$type<{
+			genre?: string
+			presetByGenre?: Record<string, number>
+		} | null>(),
 		/**
 		 * 🚧 This user's **idle cron timeout** for their sessions (R11),
 		 * minutes — at most the system's; null = the system's.
@@ -148,6 +153,10 @@ export const userSettings = pgTable(
 			.notNull()
 			.default(true),
 		showAllCharacterFields: boolean("show_all_character_fields")
+			.notNull()
+			.default(false),
+		/** 🚧 Show advanced controls (2026-11-10): the per-user switch that shows the less everyday controls on sessions, lorebooks and characters. A preference, never a permission. */
+		showAdvancedControls: boolean("show_advanced_controls")
 			.notNull()
 			.default(false),
 		/**
@@ -224,7 +233,7 @@ export const userSettings = pgTable(
 		 * genre's library outlets (`create-character`, `create-lorebook`, …) do
 		 * when they act for them — `full` lands it (Back takes it back), `review`
 		 * proposes it in the session, `off` refuses. Nullable: NULL reads
-		 * `review` (the default). Read through `libraryWriteModeFor`, never alone.
+		 * `full` (the default since 2026-11-12). Read through `libraryWriteModeFor`, never alone.
 		 */
 		libraryWriteMode: text("library_write_mode"),
 		/**
@@ -263,7 +272,7 @@ export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 	user: one(users, {
 		fields: [userSettings.userId],
 		references: [users.id]
-	}),
+	})
 }))
 
 export const passphrases = pgTable(
@@ -1110,9 +1119,12 @@ export const loadouts = pgTable(
 		 * unfilled loadout falls back to, and which output kind groups it.
 		 */
 		transform: text("transform").notNull().default("text->text"),
-		connectionId: integer("connection_id").references(() => connections.id, {
-			onDelete: "set null"
-		}),
+		connectionId: integer("connection_id").references(
+			() => connections.id,
+			{
+				onDelete: "set null"
+			}
+		),
 		connectionModelId: integer("connection_model_id").references(
 			() => connectionModels.id,
 			{ onDelete: "set null" }
@@ -1136,7 +1148,8 @@ export const loadouts = pgTable(
 		 * step's override at dispatch; a key absent here reads the default.
 		 * NULL = every dial at its default.
 		 */
-		workflowValues: json("workflow_values").$type<Record<string, unknown>>(),
+		workflowValues:
+			json("workflow_values").$type<Record<string, unknown>>(),
 		/** `fast` | `cheap` | `best` — a shipped declaration's soft preference. */
 		tier: text("tier"),
 		/** The transform this loadout is the default for (both sides or neither). */
@@ -1242,7 +1255,8 @@ export const connectionScripts = pgTable(
 
 /**
  * The shape rules a stored story clock obeys, on every table that carries the
- * five `story_clock_*` columns (`lorebooks`, `lorebook_branches`, `sessions`).
+ * five `story_clock_*` columns (`lorebooks`, `lorebook_branches`, `sessions`,
+ * `session_messages`, `attribute_values`).
  *
  * They are `clockColumns` / `clockProblem` (`state/storyTime.ts`) said to the
  * database, so a writer that skips those helpers is refused rather than
@@ -1418,14 +1432,20 @@ export const lorebooks = pgTable(
 		 * not write the one it has. Managed by the session alone
 		 * (`$lib/server/lorebooks/ownBook.ts`): created on the first write,
 		 * hidden from every listing and picker (`session_id IS NULL` there),
-		 * readable and writable by the session's members and nobody else, and
-		 * deleted with the session by this cascade. "Create lorebook from
-		 * session" clears it, which is the whole of making it a real book.
+		 * readable and writable by the session's members and nobody else.
+		 * "Create lorebook from session" clears it, which is the whole of
+		 * making it a real book.
+		 *
+		 * 🚧 A plain int, no FK (0146, ★cv-time-1; owner: "the notes outlive
+		 * the parent while any patron rides them"): `sessions:delete` purges
+		 * the book (`purgeOwnBookOf`) unless a live session's
+		 * `branch_ancestry` names the deleted session — a branch still reads
+		 * its never-surfaced notes — and the last such branch's delete purges
+		 * it. A boot sweep removes any own book whose session is gone and that
+		 * no live ancestry names. Identity ids are never reused, so the
+		 * unique index below still holds.
 		 */
-		sessionId: integer("session_id").references(
-			(): AnyPgColumn => sessions.id,
-			{ onDelete: "cascade" }
-		),
+		sessionId: integer("session_id"),
 		/**
 		 * 🚧 The real book a session's own notes overlay (§26): set while the
 		 * session reads an attached lorebook it may not write (Review, Off, a
@@ -1437,6 +1457,19 @@ export const lorebooks = pgTable(
 		overlayOf: integer("overlay_of").references(
 			(): AnyPgColumn => lorebooks.id,
 			{ onDelete: "cascade" }
+		),
+		/**
+		 * 🚧 A **surfaced book**'s session (owner ★B-3, 2026-11-08): the
+		 * session whose own notes **Share as a lorebook** turned into this
+		 * book. Only that session, its branches and its next chapters read it
+		 * directly; any other new session starts on a copy. Set only by
+		 * `shareAsLorebook`; NULL on every other book (and on books shared
+		 * before this column: nothing recorded where they came from). SET
+		 * NULL: when the session goes the book becomes an ordinary lorebook.
+		 */
+		surfacedFromSessionId: integer("surfaced_from_session_id").references(
+			(): AnyPgColumn => sessions.id,
+			{ onDelete: "set null" }
 		),
 		/**
 		 * 🚧 The book's **lorebook annex** (M0, SHAPES L9): owner →
@@ -1643,6 +1676,17 @@ export const lorebookBindings = pgTable(
 		 * overlay — these flags are themselves amendable), not *diverged*.
 		 */
 		retold: json("retold").notNull().default({}).$type<RetoldFlags>(),
+		/**
+		 * The member's **own name** and **own nickname** in this book
+		 * (playtest §0-D, ruled 2026-11-04): shown over the card's, in this
+		 * book only; the card keeps its own. NULL = the card's reads through
+		 * (a blank save stores NULL). Read only through
+		 * `shared/lorebooks/memberIdentity.ts`; `name` above is the synced
+		 * shown name, which applies these. Not amendable, not a retold field
+		 * (no flag), and refused on a provided book (`markedBook`).
+		 */
+		ownName: text("own_name"),
+		ownNickname: text("own_nickname"),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
 		/**
@@ -1671,6 +1715,24 @@ export const lorebookBindings = pgTable(
 			(): AnyPgColumn => lorebookBindings.id,
 			{ onDelete: "set null" }
 		),
+		/**
+		 * 🚧 The attached book's member this own-book row holds a session's
+		 * writes about (plan §27 A); null on every other row. ⚠ Not
+		 * `lorebooks.overlay_of` (the own BOOK's attached book): the same
+		 * relation one level down, member to member.
+		 */
+		overlayOf: integer("overlay_of").references(
+			(): AnyPgColumn => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * 🚧 The member's own timbre, the same shape as a card's
+		 * `characters.extensions.serenepub.timbre` (`CharacterTimbreInput`,
+		 * `$lib/shared/characters/timbre`), read over its card's; null = the
+		 * card's reads through. Members carry voice, own over card (owner
+		 * 2026-11-05). Readers come in S2.
+		 */
+		timbre: json("timbre").$type<CharacterTimbreInput | null>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -1721,7 +1783,10 @@ export const lorebookBindings = pgTable(
 			.where(sql`${table.historyEntryId} IS NOT NULL`),
 		parentNodeIdIdx: index("lorebook_bindings_parent_node_id_idx")
 			.on(table.parentNodeId)
-			.where(sql`${table.parentNodeId} IS NOT NULL`)
+			.where(sql`${table.parentNodeId} IS NOT NULL`),
+		overlayOfIdx: index("lorebook_bindings_overlay_of_idx")
+			.on(table.overlayOf)
+			.where(sql`${table.overlayOf} IS NOT NULL`)
 	})
 )
 
@@ -1756,6 +1821,8 @@ export const lorebookBindingsRelations = relations(
 			relationName: "nodeAliases"
 		}),
 		aliasChildren: many(lorebookBindings, { relationName: "nodeAliases" }),
+		/** 🚧 The member's cast versions (plan §32 §1). */
+		versions: many(characterVersions),
 		outgoingRelationships: many(narrativeRelationships, {
 			relationName: "fromNode"
 		}),
@@ -2016,14 +2083,26 @@ export const characterTagsRelations = relations(characterTags, ({ one }) => ({
  *
  * Exactly one set per character is the default (`is_default`, enforced by the
  * partial unique index). It is created the first time a card gains a sprite.
+ *
+ * 🚧 A set belongs to a card **or** to a cast member (`cast_member_id`;
+ * members carry sprites, own over card, owner 2026-11-05) — exactly one.
  */
 export const spriteSets = pgTable(
 	"sprite_sets",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		characterId: integer("character_id")
-			.notNull()
-			.references(() => characters.id, { onDelete: "cascade" }),
+		characterId: integer("character_id").references(() => characters.id, {
+			onDelete: "cascade"
+		}),
+		/**
+		 * 🚧 A cast member's own set (members carry sprites, own over card,
+		 * owner 2026-11-05); exactly one of `character_id` / `cast_member_id`
+		 * is set.
+		 */
+		castMemberId: integer("cast_member_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "cascade" }
+		),
 		name: text("name").notNull(),
 		isDefault: boolean("is_default").notNull().default(false),
 		position: integer("position").notNull().default(0),
@@ -2033,7 +2112,18 @@ export const spriteSets = pgTable(
 		uniqueIndex("sprite_sets_character_name_idx").on(t.characterId, t.name),
 		uniqueIndex("sprite_sets_one_default_idx")
 			.on(t.characterId)
-			.where(sql`${t.isDefault}`)
+			.where(sql`${t.isDefault}`),
+		uniqueIndex("sprite_sets_cast_member_name_idx").on(
+			t.castMemberId,
+			t.name
+		),
+		uniqueIndex("sprite_sets_cast_member_one_default_idx")
+			.on(t.castMemberId)
+			.where(sql`${t.isDefault}`),
+		check(
+			"sprite_sets_one_owner_check",
+			sql`(${t.characterId} IS NULL) <> (${t.castMemberId} IS NULL)`
+		)
 	]
 )
 
@@ -2082,6 +2172,10 @@ export const spriteSetsRelations = relations(spriteSets, ({ one, many }) => ({
 		fields: [spriteSets.characterId],
 		references: [characters.id]
 	}),
+	castMember: one(lorebookBindings, {
+		fields: [spriteSets.castMemberId],
+		references: [lorebookBindings.id]
+	}),
 	sprites: many(sprites)
 }))
 
@@ -2095,6 +2189,55 @@ export const spritesRelations = relations(sprites, ({ one }) => ({
 		references: [files.id]
 	})
 }))
+
+/**
+ * 🚧 A cast member's **gallery**: the pictures the member has as its own, one
+ * row per (member, file). The file is a **role** (like a sprite's `file_id`),
+ * never provenance. Ordered by `position`, as a card's gallery is by
+ * `files.position`. A file deleted takes its rows (no empty gallery slot,
+ * unlike an empty sprite); the member deleted takes its rows.
+ *
+ * Not the card's gallery (`files.character_id`), and not lorebook-owned media
+ * (`files.lorebook_id`, a book's uploads). `files` is unique on (user, hash),
+ * so one image cannot sit in a card's gallery and two members' galleries
+ * through a column on `files` — hence a link table. Owner ★2, 2026-11-08;
+ * plan §34.2.
+ */
+export const castMemberFiles = pgTable(
+	"cast_member_files",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		castMemberId: integer("cast_member_id")
+			.notNull()
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		fileId: integer("file_id")
+			.notNull()
+			.references((): AnyPgColumn => files.id, { onDelete: "cascade" }),
+		position: integer("position").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("cast_member_files_member_file_uq").on(
+			t.castMemberId,
+			t.fileId
+		),
+		index("cast_member_files_file_idx").on(t.fileId)
+	]
+)
+
+export const castMemberFilesRelations = relations(
+	castMemberFiles,
+	({ one }) => ({
+		castMember: one(lorebookBindings, {
+			fields: [castMemberFiles.castMemberId],
+			references: [lorebookBindings.id]
+		}),
+		file: one(files, {
+			fields: [castMemberFiles.fileId],
+			references: [files.id]
+		})
+	})
+)
 
 export const lorebookTags = pgTable(
 	"lorebook_tags",
@@ -2387,6 +2530,8 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 	characterTags: many(characterTags),
 	/** The card's sprite sets — its art, DESIGN-sprites §2.1. */
 	spriteSets: many(spriteSets),
+	/** 🚧 The card's versions (plan §32 §1). */
+	versions: many(characterVersions),
 	sessionCharacters: many(sessionCharacters),
 	sessionPersonas: many(sessionPersonas),
 	sessionMessages: many(sessionMessages)
@@ -2501,11 +2646,10 @@ export const sessions = pgTable(
 		 * document — pipelines only. A person gets their own view
 		 * (`annexViewFor`, R57), never this column.
 		 *
-		 * 🚧 pr-6s2 (C4): owner `core` also holds the **core runtime keys** —
-		 * `turnOrder`, `turnTally`, `laneReads`, `rulesetDecks` — written by
-		 * the host's own helpers under the annex lock (`sessions/coreAnnex.ts`),
-		 * never retracted, never on a pipeline's read and never a pipeline's
-		 * to write.
+		 * 🚧 (ST3, 2026-11-11) It holds declared fields only: core's runtime
+		 * values live in their own columns below (`turn_order`, `turn_tally`,
+		 * `lane_reads`, `ruleset_decks`), and what a turn changed in it is
+		 * filed per key in `session_imprints`.
 		 *
 		 * The counterpart of `metadata`, which is core's own and read-only
 		 * from the pipeline layer. The split is
@@ -2543,6 +2687,29 @@ export const sessions = pgTable(
 			.default({})
 			.$type<Record<string, number>>(),
 		/**
+		 * 🚧 (ST3, 2026-11-11: "Move to columns") Core's **runtime values**,
+		 * once keys of the `core` annex document. Each has one writer and is
+		 * never sent to a client (both excluded-column lists in
+		 * `sockets/sessions.ts`); NULL until first written. ⚠ Not annex: no
+		 * pipeline reads or writes them.
+		 *
+		 *  - `turn_order` — `TurnOrderV1`, written by `writeTurnOrder` alone
+		 *    (`sessions/turnOrder.ts`). Bookkeeping: Back never takes it.
+		 *  - `turn_tally` — `TurnTallyV1`, written by `writeLaneTally` /
+		 *    `writeTurnTally` (`pipelines/routines/turnTally.ts`); Back
+		 *    replays it over the history that is left.
+		 *  - `lane_reads` — `{ "<userId>": { "<canonical lane>": <message id> } }`,
+		 *    written by `markLaneRead` (`channels/attention.ts`). Bookkeeping.
+		 *  - `ruleset_decks` — `{ [methodKey]: DeckState }`, written by the
+		 *    ruleset resolver (`rulesets/resolve.ts`); every draw files a
+		 *    `deck` session imprint, so a deck follows Back, swipe and
+		 *    regenerate.
+		 */
+		turnOrder: jsonb("turn_order").$type<Record<string, unknown>>(),
+		turnTally: jsonb("turn_tally").$type<Record<string, unknown>>(),
+		laneReads: jsonb("lane_reads").$type<Record<string, Record<string, number>>>(),
+		rulesetDecks: jsonb("ruleset_decks").$type<Record<string, Record<string, unknown>>>(),
+		/**
 		 * 🚧 The session's **composer states** (owner ruling 2026-10-15):
 		 * which channel lanes' composers the genre closed, for whom, and what
 		 * each waits on — channel (canonical, or `*`) → who (`user:<id>`, or
@@ -2555,17 +2722,23 @@ export const sessions = pgTable(
 		composerStates: jsonb("composer_states")
 			.notNull()
 			.default({})
-			.$type<Record<string, Record<string, { open: false; reason?: string }>>>(),
+			.$type<
+				Record<string, Record<string, { open: false; reason?: string }>>
+			>(),
 		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
 			onDelete: "set null"
 		}),
 		/**
 		 * Which line of the book this session runs on. NULL = main.
 		 *
-		 * A session is on a line, not at a moment: retrieval reads the book as
-		 * of NOW on this branch, which is the current state of that line's
-		 * story. Reading as of a past date is the author's tool, not the
-		 * model's (ruling 4 parks the pinned-session case).
+		 * A session reads its line at its own story clock: `sessionReadingOf`
+		 * builds the reading from this column, the session's clock
+		 * (`momentOf(session)`) and, when the session has no clock of its
+		 * own, the line's present (`linePresentOf`); a branch session's
+		 * reading also carries its session cuts. Retrieval reads entries
+		 * through that reading: a row on the line, and a dated row (a history
+		 * entry) only when dated at or before the earlier of the reading's
+		 * moment and its step's fork cut (`entryOnReadingSql`).
 		 *
 		 * `set null` rather than cascade: deleting a branch must not delete the
 		 * sessions played on it. `amendments:deleteBranch` moves them first, to
@@ -2699,9 +2872,31 @@ export const sessions = pgTable(
 		/** 🚧 The last message the branch kept, in that session. Plain int, no FK; set with `branchOfSessionId`. */
 		branchOfMessageId: integer("branch_of_message_id"),
 		/** 🚧 That session's name at the branch — a parent renamed or deleted later still reads as what it was called. */
-		branchOfName: text("branch_of_name")
+		branchOfName: text("branch_of_name"),
+		/**
+		 * 🚧 The branch's ancestors, nearest first; `mark` is the write-order
+		 * mark taken at the fork. Null = not a branch, or a branch made before
+		 * S4. Plan §32 §5b, §33.2. 🚧 `lineId` — the line the ancestor read
+		 * its own notes on at the fork, set only when it read them alone on a
+		 * line; missing reads main (★s4-fold2-1).
+		 */
+		branchAncestry: jsonb("branch_ancestry").$type<
+			{ sessionId: number; mark: number; lineId?: number }[] | null
+		>(),
+		/**
+		 * 🚧 The branch still rides its parent's line and forks its own at its
+		 * first book write. Plan §32 §5a.
+		 */
+		lineOnFirstWrite: boolean("line_on_first_write")
+			.notNull()
+			.default(false)
 	},
 	(table) => [
+		// 🚧 "Which sessions have ancestor X":
+		// `branch_ancestry @> '[{"sessionId": X}]'`. Plan §33.2.
+		index("sessions_branch_ancestry_idx")
+			.using("gin", table.branchAncestry.op("jsonb_path_ops"))
+			.where(sql`${table.branchAncestry} IS NOT NULL`),
 		index("sessions_user_id_idx").on(table.userId),
 		check(
 			"sessions_rigour_check",
@@ -2774,6 +2969,15 @@ export const sessionMessages = pgTable(
 		personaId: integer("persona_id").references(() => characters.id, {
 			onDelete: "set null"
 		}), // nullable
+		/**
+		 * 🚧 The speaker's cast member (★27-7, owner 2026-11-05: a column, not
+		 * a metadata stamp) — the member behind `character_id` / `persona_id`;
+		 * null until S2's writers fill it and S4's boot pass backfills.
+		 */
+		castMemberId: integer("cast_member_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
 		role: text("role").notNull(), // 'user', 'character', 'system', etc
 		/**
 		 * Filter lane within a session (20 §7, R6) — mirrored to
@@ -2951,12 +3155,25 @@ export const sessionMessages = pgTable(
 		 * back with the same ids (`RewoundTakenV1`, `sessions/rewind.ts`):
 		 * whether it was hidden before, and the one retraction rule's
 		 * `RetractedState` (values, configurations, proposals, clock moves,
-		 * zone snapshots, lore imprints, the notes' entries); on the turn's
-		 * first row also the annex and the turn tally as they stood.
+		 * zone snapshots, lore imprints, session imprints, the notes'
+		 * entries); on the turn's first row also the turn tally as it stood.
+		 * ⏳ A record written before ST3 carries `annexDeltas`, `seatBenches`
+		 * and `conversions` instead of session imprints; Forward converts them
+		 * as it revives the record (`reviveRetractedState`).
 		 * NULL whenever `rewind_ordinal` is. Server-only: a rewound row
 		 * never reaches a client, and a live row carries nothing here.
 		 */
-		rewindTaken: json("rewind_taken").$type<Record<string, unknown> | null>()
+		rewindTaken: json("rewind_taken").$type<Record<
+			string,
+			unknown
+		> | null>(),
+		/**
+		 * 🚧 The session and message where a branch's copied line was first
+		 * played (the root play); null on a line played here. Plain ints, no
+		 * FK. Plan §32 §1.
+		 */
+		originSessionId: integer("origin_session_id"),
+		originMessageId: integer("origin_message_id")
 	},
 	// The single hottest query in the app — every session load filters by this.
 	(table) => [
@@ -2974,7 +3191,10 @@ export const sessionMessages = pgTable(
 		index("session_messages_session_channel_idx").on(
 			table.sessionId,
 			table.channel
-		)
+		),
+		index("session_messages_cast_member_idx")
+			.on(table.castMemberId)
+			.where(sql`${table.castMemberId} IS NOT NULL`)
 	]
 )
 
@@ -3105,6 +3325,11 @@ export const messages = pgTable(
 		personaId: integer("persona_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
+		/** 🚧 The speaker's cast member — see `sessionMessages.castMemberId`. */
+		castMemberId: integer("cast_member_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
 		/** Resolved-at-write display name — retires `isNarratorResponse`. */
 		speakerLabel: text("speaker_label"),
 		/** Prompt-side role: user | assistant | system. */
@@ -3144,6 +3369,13 @@ export const messages = pgTable(
 		rewindOrdinal: integer("rewind_ordinal"),
 		debugMeta: json("debug_meta").$type<Record<string, any>>(),
 		queueItemId: text("queue_item_id"),
+		/**
+		 * 🚧 The session and message where a branch's copied line was first
+		 * played (the root play); null on a line played here. Plain ints, no
+		 * FK. Plan §32 §1.
+		 */
+		originSessionId: integer("origin_session_id"),
+		originMessageId: integer("origin_message_id"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -3153,55 +3385,89 @@ export const messages = pgTable(
 	(t) => [
 		index("messages_session_id_idx").on(t.sessionId),
 		index("messages_session_channel_idx").on(t.sessionId, t.channel),
-		index("messages_session_rewind_idx").on(t.sessionId, t.rewindOrdinal)
+		index("messages_session_rewind_idx").on(t.sessionId, t.rewindOrdinal),
+		index("messages_cast_member_idx")
+			.on(t.castMemberId)
+			.where(sql`${t.castMemberId} IS NOT NULL`)
 	]
 )
 
-/** 🚧 One side of an **annex delta**: an owner's annex document and its audiences (`document: null` = the owner had none). */
+/**
+ * ⏳ One side of an **annex delta**, the whole-document change record that
+ * `session_imprints` replaced (ST3, 2026-11-11): an owner's annex document and
+ * its audiences (`document: null` = the owner had none). Kept only to read a
+ * `rewind_taken` record written before the upgrade, which Forward converts to
+ * per-key imprints as it revives it.
+ */
 export interface AnnexDeltaSide {
 	document: Record<string, unknown> | null
 	audiences: Record<string, string[]> | null
 }
 
 /**
- * 🚧 **Annex deltas** (pr-6 B5, ruled 2026-10-24: annex revision points →
- * message-anchored annex changes). One row per write of one owner's annex
- * document by `set-session-annex` / `set-annex-field`, anchored to the turn's
- * message: what the document and its audiences were before and after. Back
- * takes it by the one retraction rule (`retractAnnexDeltasAnchoredTo`,
- * `sessions/annexChanges.ts`) and Forward puts it back; a delete of the row
- * takes it with the cascade; the settle line drops it. A write with no anchor
- * records none (it is permanent at once, as before). ⚠ Not the
- * `annex-changed` event's payload (`core:shape/annex-change@1`).
+ * 🚧 **A session imprint** (ST3, 2026-11-11; the name is provisional until the
+ * owner rules it — keep it here alone): one change a turn made to a session
+ * row, kept so it can be taken back — the sibling of `lore_imprints`, with the
+ * same shape and the same one retraction rule (`lorebooks/imprints.ts`), where
+ * a session row is always reverted. One row per write, never per turn:
+ *
+ *  - `seat-bench` — key `<character|player>:<seat id>`, before/after the
+ *    seat's benched flag (`set-seat-bench@1`);
+ *  - `ruleset-conversion` — key the ruleset id, before/after the session's
+ *    `ruleset_version` (`convertSessionRuleset`);
+ *  - `deck` — key the deck's method key, before/after its `DeckState` in
+ *    `sessions.ruleset_decks` (a draw);
+ *  - `annex` — key `<owner>/<key>` of the session annex, before/after the
+ *    key's value, with `owner_version` and the key's audience before/after.
+ *
+ * Anchored to the turn's message (`message_id`, a plain int as on
+ * `lore_imprints`: a delete retracts it inside its own transaction). A write
+ * with no anchor files none: it is permanent at once. `before` / `after` are
+ * wrapped `{ v }`, NULL where there was no value. `settled`: at or before the
+ * session's settle line, `before` gone, nothing takes it back.
+ *
+ * ⚠ Not a lore imprint (a change to a lorebook row), not a receipt, not the
+ * `annex-changed` event's payload.
  */
-export const annexDeltas = pgTable(
-	"annex_deltas",
+export const sessionImprints = pgTable(
+	"session_imprints",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		sessionId: integer("session_id")
 			.notNull()
 			.references(() => sessions.id, { onDelete: "cascade" }),
-		/** The turn's message the write is anchored to; the delta goes with its row. */
-		messageId: integer("message_id")
-			.notNull()
-			.references(() => messages.id, { onDelete: "cascade" }),
-		/** The annex owner whose document changed (`core`, a plugin id). */
-		owner: text("owner").notNull(),
-		/** The owner's version that wrote it (G1); NULL when the writer named none. */
-		ownerVersion: text("owner_version"),
-		/** The owner's document and audiences before the write. */
-		before: jsonb("before").notNull().$type<AnnexDeltaSide>(),
-		/** …and after it. */
-		after: jsonb("after").notNull().$type<AnnexDeltaSide>(),
+		/** The turn's message — plain, no key (see above). */
+		messageId: integer("message_id"),
 		/** The run that wrote it (`pipeline_runs.run_id`); NULL for a person's write. */
 		runId: text("run_id"),
-		createdAt: timestamp("created_at", { withTimezone: true })
-			.notNull()
-			.defaultNow()
+		/** `seat-bench` · `ruleset-conversion` · `deck` · `annex`. */
+		subjectKind: text("subject_kind").notNull(),
+		/** Which one, per kind (above). */
+		subjectKey: text("subject_key").notNull(),
+		before: jsonb("before").$type<{ v: unknown } | null>(),
+		after: jsonb("after").$type<{ v: unknown } | null>(),
+		/** `annex` only: the owner's version that wrote it (G1); NULL when the writer named none. */
+		ownerVersion: text("owner_version"),
+		/** `annex` only: who could see the key before and after (NULL = pipelines only). */
+		audienceBefore: jsonb("audience_before").$type<string[] | null>(),
+		audienceAfter: jsonb("audience_after").$type<string[] | null>(),
+		/** `standing` — in force; `settled` — at or before the settle line (`before` gone). */
+		status: text("status").notNull().default("standing"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
-		index("annex_deltas_message_idx").on(t.messageId),
-		index("annex_deltas_session_owner_idx").on(t.sessionId, t.owner, t.id)
+		index("session_imprints_message_idx")
+			.on(t.messageId)
+			.where(sql`${t.messageId} IS NOT NULL`),
+		index("session_imprints_subject_idx").on(t.sessionId, t.subjectKind, t.subjectKey, t.id),
+		check(
+			"session_imprints_subject_kind_check",
+			sql`${t.subjectKind} IN ('seat-bench', 'ruleset-conversion', 'deck', 'annex')`
+		),
+		check(
+			"session_imprints_status_check",
+			sql`${t.status} IN ('standing', 'settled')`
+		)
 	]
 )
 
@@ -3634,7 +3900,10 @@ export const trayItems = pgTable(
 	},
 	(t) => [
 		index("tray_items_user_session_idx").on(t.userId, t.sessionId),
-		index("tray_items_user_conversation_idx").on(t.userId, t.conversationId),
+		index("tray_items_user_conversation_idx").on(
+			t.userId,
+			t.conversationId
+		),
 		index("tray_items_file_idx").on(t.fileId),
 		check(
 			"tray_items_status_check",
@@ -3689,7 +3958,17 @@ export const sessionPersonas = pgTable(
 		personaId: integer("persona_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
+		/**
+		 * 🚧 The player seat's cast member — its card's member in the
+		 * session's book; null for a card-less player seat.
+		 */
+		castMemberId: integer("cast_member_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
 		position: integer("position").default(0), // Position in the session
+		// 🚧 The bench (owner 2026-11-10, benched seats): false = benched — in the session, out of play. Written only by `setSeatBench` (`sessions/seats.ts`) and the seat writer's revive. Mirrors `session_characters.is_active`.
+		isActive: boolean("is_active").notNull().default(true),
 		// Soft-delete: set when this participant is removed from the session so
 		// past messages can still resolve a speaker name. Null = active.
 		removedAt: timestamp("removed_at"),
@@ -3716,14 +3995,21 @@ export const sessionPersonas = pgTable(
 		 * picture to show, which is why this lives on the seat and not the
 		 * card. ⚠ Not the user's avatar, not a sprite.
 		 */
-		portraitMediaId: integer("portrait_media_id").references(() => files.id, {
-			onDelete: "set null"
-		})
+		portraitMediaId: integer("portrait_media_id").references(
+			() => files.id,
+			{
+				onDelete: "set null"
+			}
+		)
 	},
 	(table) => [
 		uniqueIndex("session_personas_pk").on(table.sessionId, table.personaId),
 		// canViewCharacter() looks up sessionPersonas by personaId alone.
-		index("session_personas_persona_id_idx").on(table.personaId)
+		index("session_personas_persona_id_idx").on(table.personaId),
+		index("session_personas_cast_member_idx").on(
+			table.sessionId,
+			table.castMemberId
+		)
 	]
 )
 
@@ -3752,11 +4038,21 @@ export const channelLanes = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
 	},
 	(table) => [
-		uniqueIndex("channel_lanes_lane_uq").on(table.sessionId, table.slug, table.lane),
-		uniqueIndex("channel_lanes_person_uq").on(table.sessionId, table.slug, table.userId)
+		uniqueIndex("channel_lanes_lane_uq").on(
+			table.sessionId,
+			table.slug,
+			table.lane
+		),
+		uniqueIndex("channel_lanes_person_uq").on(
+			table.sessionId,
+			table.slug,
+			table.userId
+		)
 	]
 )
 
@@ -3787,12 +4083,46 @@ export const sessionPersonasRelations = relations(
 export const sessionCharacters = pgTable(
 	"session_characters",
 	{
+		/** 🚧 The character seat's own id (plan §27 A). */
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		sessionId: integer("session_id")
 			.notNull()
 			.references(() => sessions.id, { onDelete: "cascade" }),
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
+		/**
+		 * 🚧 The seated cast member — written beside `character_id` by the one
+		 * seat writer (`sessions/seats.ts`); null for an envoy and for a
+		 * departed card-less row.
+		 */
+		castMemberId: integer("cast_member_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * 🚧 Who seated this character seat — acting rights (sending as,
+		 * firing turns, hand edits) follow the seater (owner 2026-11-05: "The
+		 * person who seated it"). Written only by `sessions/seats.ts`; filled
+		 * for existing seats by the character-versions boot pass from the
+		 * held card's owner. Plan §33.4.
+		 */
+		seatedByUserId: integer("seated_by_user_id").references(
+			() => users.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		/**
+		 * ⏳ Set on a seat the seat-members boot pass departed because another
+		 * seat of the session resolved to the same cast member: the surviving
+		 * seat. S4 re-stamps this seat's lines to the survivor's card and
+		 * merges its values, then clears nothing; S5 drops the column.
+		 */
+		mergedInto: integer("merged_into").references(
+			(): AnyPgColumn => sessionCharacters.id,
+			{ onDelete: "set null" }
+		),
 		/**
 		 * The seated envoy's slug — `mascot` for a genre's, `acme.master` for
 		 * an action's — or null for a character's seat. ⚠ "At most one of
@@ -3820,6 +4150,12 @@ export const sessionCharacters = pgTable(
 		),
 		// canViewCharacter() looks up sessionCharacters by characterId alone.
 		index("session_characters_character_id_idx").on(table.characterId),
+		// NOT unique: 0.6 data can hold two seats resolving to one member; a
+		// unique one (partial on `removed_at IS NULL`) comes in S4, after the merge.
+		index("session_characters_cast_member_idx").on(
+			table.sessionId,
+			table.castMemberId
+		),
 		// One seat per envoy per session (NULLs are distinct, so character
 		// seats are untouched by it).
 		uniqueIndex("session_characters_envoy_idx").on(
@@ -3878,239 +4214,251 @@ export const sessionGuestsRelations = relations(sessionGuests, ({ one }) => ({
 /**
  * Singleton table for system-wide settings
  */
-export const systemSettings = pgTable("system_settings", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	// `active_embedding_connection_id` lived here and is gone (0127). Its own
-	// comment said it would move "when the embedding path reads a capability
-	// default and that setter is written" — both are now true. The one active
-	// embedding connection is the `text->embedding` row in
-	// `connection_defaults`, written by `connections:setDefault` like every
-	// other star, and the re-embed that column's note asked for rides on it
-	// (`embedding/reindex.ts`).
-	lockConnection: boolean("lock_connection").notNull().default(false),
-	// The instance default connection and sampling config lived here as
-	// `default_connection_id` / `default_sampling_id`, and the per-modality
-	// image pair joined them in 0172. All of it is in `connection_defaults` now,
-	// keyed by capability (0181): a column pair per capability does not scale to
-	// an open capability space, every new one would have been a migration, and
-	// while both spellings existed every star press had to write both.
-	lockSamplingConfig: boolean("lock_sampling_config")
-		.notNull()
-		.default(false),
-	lockContextConfig: boolean("lock_context_config").notNull().default(false),
-	lockPromptConfig: boolean("lock_prompt_config").notNull().default(false),
-	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
-	/**
-	 * Every account must carry a second factor (27 §4). Enforced through the
-	 * setup gate, so a user without one is walked through enrolment rather
-	 * than locked out.
-	 */
-	requireTwoFactor: boolean("require_two_factor").notNull().default(false),
-	/**
-	 * SHA-256 of the last `SERENE_PUB_RECOVERY_KEY` that was applied (26 §10,
-	 * tier 3). One column is the entire one-time-use mechanism: on boot, a key
-	 * whose hash differs from this is applied and recorded; a key that matches
-	 * has already been used and is ignored, so the variables can sit in `.env`
-	 * inertly instead of reverting the user's password on every restart.
-	 *
-	 * A hash, not the key: it is an operator-chosen secret and there is no
-	 * reason to keep it readable at rest.
-	 */
-	recoveryKeyHash: text("recovery_key_hash"),
-	/**
-	 * 🚧 **Idle cron timeout**, the system's maximum (R11; PLAN-layering D7):
-	 * how long a session may go without a person's interaction before its
-	 * system-clock routines stop running. Minutes; each user's own setting is
-	 * at most this, each session's at most the owner's. 🚧 Default 3 days
-	 * (the plan's example), for the owner to confirm.
-	 */
-	cronIdleTimeoutMinutes: integer("cron_idle_timeout_minutes")
-		.notNull()
-		.default(4320),
-	/**
-	 * 🚧 **Most cron runs in a row**, the system's maximum (R11): how many
-	 * system-clock routine runs a session may have since its last
-	 * interaction. 🚧 Default 12 (the plan's example).
-	 */
-	cronMaxRunsInRow: integer("cron_max_runs_in_row").notNull().default(12),
-	// `vectorization_enabled` and `embedding_model_name` lived here and are gone
-	// (0127). **The star is the switch**: embeddings are on when something is
-	// registered for `text->embedding` in `connection_defaults` and off when
-	// nothing is, so unstarring or deleting the connection turns them off by
-	// itself. The three spellings this collapses — a boolean here, a model name
-	// here, and the endpoint halves in `vectorization_configs` — each had to be
-	// written "in step" by every handler that touched any of them.
-	// `embedding_model_dimensions`, dead since then, went too (lorebooks plan
-	// Phase D): the embedding connection carries the dimensions.
-	/**
-	 * The scripts kill switch (18 §10, §13.3 — ruled: default **on**). Unlike
-	 * plugins, nothing executes until an admin authors or imports a script, so
-	 * this is a recovery lever rather than a gate: off returns every run to
-	 * vanilla instantly, with every chain and attachment kept in place.
-	 */
-	scriptsEnabled: boolean("scripts_enabled").notNull().default(true),
-	contextDebuggingEnabled: boolean("context_debugging_enabled")
-		.notNull()
-		.default(false),
-	/**
-	 * Compile prompts through the pipeline instead of `PromptBuilder`.
-	 *
-	 * Off by default and deliberately so: the two paths are byte-identical
-	 * across the parity corpus, which is a strong claim about the cases someone
-	 * wrote fixtures for and says nothing about a lorebook nobody imagined.
-	 * `npm run pipeline:compare` answers that for a given instance, and this
-	 * flag is what an admin flips once it has.
-	 *
-	 * Only the *prompt* changes hands. Queueing, streaming, persistence, swipes
-	 * and thinking extraction stay with the code that already handles them —
-	 * the pipeline hands over a compiled payload at the one seam every adapter
-	 * funnels through, so everything downstream is untouched legacy code.
-	 */
-	/**
-	 * ⚠ Transitional, and **not a long-term choice an admin makes**.
-	 *
-	 * There is no legacy-versus-pipeline switch in the destination: pipelines
-	 * become the only path that compiles a reply. This gates the changeover
-	 * while the remaining specs are built, and comes out with the last of them.
-	 * Nothing new should branch on it.
-	 */
-	pipelinesEnabled: boolean("pipelines_enabled").notNull().default(false),
-	// Admin-configured CharaVault account, shared instance-wide across all
-	// users (not a per-user credential). Never sent to the client — see
-	// systemSettingsGet's column exclusions.
-	charaVaultEmail: text("chara_vault_email"),
-	charaVaultEncryptedToken: text("chara_vault_encrypted_token"),
-	charaVaultTokenIv: text("chara_vault_token_iv"),
-	charaVaultTokenAuthTag: text("chara_vault_token_auth_tag"),
-	/**
-	 * The instance's language (R5) — the admin's choice at setup, and the value
-	 * every user who has not picked one of their own inherits.
-	 *
-	 * NOT NULL with an English default, unlike `user_settings.language`, and
-	 * the asymmetry is deliberate: this is the bottom of the resolution chain,
-	 * so it is the one place an answer must always exist. See that column for
-	 * why the *user* end must be able to say "unset".
-	 */
-	defaultLanguage: text("default_language").notNull().default("en"),
-	/**
-	 * Whether the server may call an outside translation service to fill in UI
-	 * strings it has no translation for.
-	 *
-	 * **Off by default, and it stays off until an admin turns it on.** Turning
-	 * it on is a decision to send this app's *interface strings* — never
-	 * session content, characters or lore; see `server/i18n/translate.ts` for
-	 * what is actually sent — to whichever engine is configured. On a
-	 * self-hosted install that is a network egress an operator may not want, so
-	 * it is not something an upgrade may switch on for them.
-	 *
-	 * Setting the language to English needs none of this: English is the source
-	 * language, so nothing is ever translated and nothing is ever sent.
-	 */
-	autoTranslateEnabled: boolean("auto_translate_enabled")
-		.notNull()
-		.default(false),
-	/**
-	 * Which engine `translate` uses. `google` (keyless) or `libre`.
-	 *
-	 * `libre` plus `autoTranslateEndpoint` is the answer for an operator who
-	 * wants translation without a third party: point it at their own
-	 * LibreTranslate and nothing leaves the network.
-	 *
-	 * The engines needing an API key (`deepl`, `yandex`) are not offered: a
-	 * key is a secret, and a secret column is an encryption scheme, a
-	 * never-send-to-client exclusion and a rotation story — none of which
-	 * this lane builds, and all of which a half-done version would imply.
-	 */
-	autoTranslateEngine: text("auto_translate_engine")
-		.notNull()
-		.default("google"),
-	/**
-	 * Base URL for the `libre` engine. NULL means the library's public default.
-	 * Ignored by the `google` engine, which has no configurable endpoint.
-	 */
-	autoTranslateEndpoint: text("auto_translate_endpoint"),
-	/**
-	 * Take a backup once a day (ruled 2026-09-10).
-	 *
-	 * On by default. Until this existed the only automatic backup was the one
-	 * taken in front of a migration, which protects an upgrade and nothing
-	 * else — an install that never upgrades never had a backup at all, and the
-	 * failure this whole area exists for (a force-quit leaving PGlite
-	 * unopenable) does not wait for a version bump.
-	 *
-	 * Not a retention policy: nothing is culled and nothing is ever deleted
-	 * automatically. Off simply stops new ones being taken.
-	 */
-	backupDaily: boolean("backup_daily").notNull().default(true),
-	/**
-	 * Also archive `<dataDir>/users/` — media and avatars — beside the dump.
-	 *
-	 * **Off by default**, and that is the ruling rather than a guess: a dump is
-	 * the database, measured in megabytes, while a user's media library has no
-	 * ceiling at all, and a daily backup that silently doubles as a daily copy
-	 * of every image on the instance is not a default anybody asked for.
-	 *
-	 * On, it matters more than its size suggests: `files` rows are FK'd from
-	 * avatars (0109), so a database restored without the bytes those rows name
-	 * points at media that was never archived.
-	 */
-	backupIncludeUserFiles: boolean("backup_include_user_files")
-		.notNull()
-		.default(false),
-	/**
-	 * 🚧 The instance's **lore write mode** (plan A22, ruled 2026-09-30): what
-	 * every user who has not chosen one of their own follows
-	 * (`user_settings.lore_write_mode` NULL). **Full** by ruling
-	 * (PLAN-rulesets §27, 2026-10-16: trust the narrator — the timeline
-	 * makes every change reversible). Migration 0104 moved only the column
-	 * default: an existing instance's row keeps the mode it holds.
-	 */
-	loreWriteModeDefault: text("lore_write_mode_default")
-		.notNull()
-		.default("full"),
-	/**
-	 * 🚧 The instance's default **On revision** (PLAN-rulesets §28) for
-	 * everyone whose `user_settings.on_revision_default` is NULL.
-	 */
-	onRevisionDefault: text("on_revision_default")
-		.notNull()
-		.default("overwrite"),
-	/**
-	 * Private **messages between people** (PLAN-private-messages, ruled
-	 * 2026-10-12 Q7: on by default). Only meaningful once accounts are on; off
-	 * hides the Messages rail item everywhere and makes every `conversations:*`
-	 * handler refuse. Data stays.
-	 */
-	messagingEnabled: boolean("messaging_enabled").notNull().default(true),
-	/**
-	 * 🚧 **Keep spoken audio** (speech build S8, design §12): how long a
-	 * spoken line's audio file (`files.meta.spoken`) is kept before the
-	 * schedule-tick sweep reclaims it — `forever`, `archived` (until its
-	 * session is archived), or a whole number of days as digits (`"30"`).
-	 * Spoken audio is a derived form: it can always be spoken again.
-	 */
-	keepSpokenAudio: text("keep_spoken_audio").notNull().default("forever"),
-	/**
-	 * 🚧 The last good copy of each `serene-pub-gguf-list` file the server
-	 * reads (audio.cpp build, S3b): file name (`audio.yaml`,
-	 * `audio-families.yaml`) → `{ text, fetchedAt }`. Read when the fetch at
-	 * boot fails; the copy shipped under `server/audio/snapshot/` covers a
-	 * first boot offline. A cache, never authored: losing it costs one fetch.
-	 */
-	ggufListCache: jsonb("gguf_list_cache")
-		.notNull()
-		.default({})
-		.$type<Record<string, { text: string; fetchedAt: string }>>()
-}, (t) => [
-	check(
-		"system_settings_lore_write_mode_default_check",
-		sql`${t.loreWriteModeDefault} IN ('full', 'review', 'off')`
-	),
-	check(
-		"system_settings_on_revision_default_check",
-		sql`${t.onRevisionDefault} IN ('overwrite', 'branch')`
-	)
-])
+export const systemSettings = pgTable(
+	"system_settings",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		// `active_embedding_connection_id` lived here and is gone (0127). Its own
+		// comment said it would move "when the embedding path reads a capability
+		// default and that setter is written" — both are now true. The one active
+		// embedding connection is the `text->embedding` row in
+		// `connection_defaults`, written by `connections:setDefault` like every
+		// other star, and the re-embed that column's note asked for rides on it
+		// (`embedding/reindex.ts`).
+		lockConnection: boolean("lock_connection").notNull().default(false),
+		// The instance default connection and sampling config lived here as
+		// `default_connection_id` / `default_sampling_id`, and the per-modality
+		// image pair joined them in 0172. All of it is in `connection_defaults` now,
+		// keyed by capability (0181): a column pair per capability does not scale to
+		// an open capability space, every new one would have been a migration, and
+		// while both spellings existed every star press had to write both.
+		lockSamplingConfig: boolean("lock_sampling_config")
+			.notNull()
+			.default(false),
+		lockContextConfig: boolean("lock_context_config")
+			.notNull()
+			.default(false),
+		lockPromptConfig: boolean("lock_prompt_config")
+			.notNull()
+			.default(false),
+		isAccountsEnabled: boolean("is_accounts_enabled")
+			.notNull()
+			.default(false),
+		/**
+		 * Every account must carry a second factor (27 §4). Enforced through the
+		 * setup gate, so a user without one is walked through enrolment rather
+		 * than locked out.
+		 */
+		requireTwoFactor: boolean("require_two_factor")
+			.notNull()
+			.default(false),
+		/**
+		 * SHA-256 of the last `SERENE_PUB_RECOVERY_KEY` that was applied (26 §10,
+		 * tier 3). One column is the entire one-time-use mechanism: on boot, a key
+		 * whose hash differs from this is applied and recorded; a key that matches
+		 * has already been used and is ignored, so the variables can sit in `.env`
+		 * inertly instead of reverting the user's password on every restart.
+		 *
+		 * A hash, not the key: it is an operator-chosen secret and there is no
+		 * reason to keep it readable at rest.
+		 */
+		recoveryKeyHash: text("recovery_key_hash"),
+		/**
+		 * 🚧 **Idle cron timeout**, the system's maximum (R11; PLAN-layering D7):
+		 * how long a session may go without a person's interaction before its
+		 * system-clock routines stop running. Minutes; each user's own setting is
+		 * at most this, each session's at most the owner's. 🚧 Default 3 days
+		 * (the plan's example), for the owner to confirm.
+		 */
+		cronIdleTimeoutMinutes: integer("cron_idle_timeout_minutes")
+			.notNull()
+			.default(4320),
+		/**
+		 * 🚧 **Most cron runs in a row**, the system's maximum (R11): how many
+		 * system-clock routine runs a session may have since its last
+		 * interaction. 🚧 Default 12 (the plan's example).
+		 */
+		cronMaxRunsInRow: integer("cron_max_runs_in_row").notNull().default(12),
+		// `vectorization_enabled` and `embedding_model_name` lived here and are gone
+		// (0127). **The star is the switch**: embeddings are on when something is
+		// registered for `text->embedding` in `connection_defaults` and off when
+		// nothing is, so unstarring or deleting the connection turns them off by
+		// itself. The three spellings this collapses — a boolean here, a model name
+		// here, and the endpoint halves in `vectorization_configs` — each had to be
+		// written "in step" by every handler that touched any of them.
+		// `embedding_model_dimensions`, dead since then, went too (lorebooks plan
+		// Phase D): the embedding connection carries the dimensions.
+		/**
+		 * The scripts kill switch (18 §10, §13.3 — ruled: default **on**). Unlike
+		 * plugins, nothing executes until an admin authors or imports a script, so
+		 * this is a recovery lever rather than a gate: off returns every run to
+		 * vanilla instantly, with every chain and attachment kept in place.
+		 */
+		scriptsEnabled: boolean("scripts_enabled").notNull().default(true),
+		contextDebuggingEnabled: boolean("context_debugging_enabled")
+			.notNull()
+			.default(false),
+		/**
+		 * Compile prompts through the pipeline instead of `PromptBuilder`.
+		 *
+		 * Off by default and deliberately so: the two paths are byte-identical
+		 * across the parity corpus, which is a strong claim about the cases someone
+		 * wrote fixtures for and says nothing about a lorebook nobody imagined.
+		 * `npm run pipeline:compare` answers that for a given instance, and this
+		 * flag is what an admin flips once it has.
+		 *
+		 * Only the *prompt* changes hands. Queueing, streaming, persistence, swipes
+		 * and thinking extraction stay with the code that already handles them —
+		 * the pipeline hands over a compiled payload at the one seam every adapter
+		 * funnels through, so everything downstream is untouched legacy code.
+		 */
+		/**
+		 * ⚠ Transitional, and **not a long-term choice an admin makes**.
+		 *
+		 * There is no legacy-versus-pipeline switch in the destination: pipelines
+		 * become the only path that compiles a reply. This gates the changeover
+		 * while the remaining specs are built, and comes out with the last of them.
+		 * Nothing new should branch on it.
+		 */
+		pipelinesEnabled: boolean("pipelines_enabled").notNull().default(false),
+		// Admin-configured CharaVault account, shared instance-wide across all
+		// users (not a per-user credential). Never sent to the client — see
+		// systemSettingsGet's column exclusions.
+		charaVaultEmail: text("chara_vault_email"),
+		charaVaultEncryptedToken: text("chara_vault_encrypted_token"),
+		charaVaultTokenIv: text("chara_vault_token_iv"),
+		charaVaultTokenAuthTag: text("chara_vault_token_auth_tag"),
+		/**
+		 * The instance's language (R5) — the admin's choice at setup, and the value
+		 * every user who has not picked one of their own inherits.
+		 *
+		 * NOT NULL with an English default, unlike `user_settings.language`, and
+		 * the asymmetry is deliberate: this is the bottom of the resolution chain,
+		 * so it is the one place an answer must always exist. See that column for
+		 * why the *user* end must be able to say "unset".
+		 */
+		defaultLanguage: text("default_language").notNull().default("en"),
+		/**
+		 * Whether the server may call an outside translation service to fill in UI
+		 * strings it has no translation for.
+		 *
+		 * **Off by default, and it stays off until an admin turns it on.** Turning
+		 * it on is a decision to send this app's *interface strings* — never
+		 * session content, characters or lore; see `server/i18n/translate.ts` for
+		 * what is actually sent — to whichever engine is configured. On a
+		 * self-hosted install that is a network egress an operator may not want, so
+		 * it is not something an upgrade may switch on for them.
+		 *
+		 * Setting the language to English needs none of this: English is the source
+		 * language, so nothing is ever translated and nothing is ever sent.
+		 */
+		autoTranslateEnabled: boolean("auto_translate_enabled")
+			.notNull()
+			.default(false),
+		/**
+		 * Which engine `translate` uses. `google` (keyless) or `libre`.
+		 *
+		 * `libre` plus `autoTranslateEndpoint` is the answer for an operator who
+		 * wants translation without a third party: point it at their own
+		 * LibreTranslate and nothing leaves the network.
+		 *
+		 * The engines needing an API key (`deepl`, `yandex`) are not offered: a
+		 * key is a secret, and a secret column is an encryption scheme, a
+		 * never-send-to-client exclusion and a rotation story — none of which
+		 * this lane builds, and all of which a half-done version would imply.
+		 */
+		autoTranslateEngine: text("auto_translate_engine")
+			.notNull()
+			.default("google"),
+		/**
+		 * Base URL for the `libre` engine. NULL means the library's public default.
+		 * Ignored by the `google` engine, which has no configurable endpoint.
+		 */
+		autoTranslateEndpoint: text("auto_translate_endpoint"),
+		/**
+		 * Take a backup once a day (ruled 2026-09-10).
+		 *
+		 * On by default. Until this existed the only automatic backup was the one
+		 * taken in front of a migration, which protects an upgrade and nothing
+		 * else — an install that never upgrades never had a backup at all, and the
+		 * failure this whole area exists for (a force-quit leaving PGlite
+		 * unopenable) does not wait for a version bump.
+		 *
+		 * Not a retention policy: nothing is culled and nothing is ever deleted
+		 * automatically. Off simply stops new ones being taken.
+		 */
+		backupDaily: boolean("backup_daily").notNull().default(true),
+		/**
+		 * Also archive `<dataDir>/users/` — media and avatars — beside the dump.
+		 *
+		 * **Off by default**, and that is the ruling rather than a guess: a dump is
+		 * the database, measured in megabytes, while a user's media library has no
+		 * ceiling at all, and a daily backup that silently doubles as a daily copy
+		 * of every image on the instance is not a default anybody asked for.
+		 *
+		 * On, it matters more than its size suggests: `files` rows are FK'd from
+		 * avatars (0109), so a database restored without the bytes those rows name
+		 * points at media that was never archived.
+		 */
+		backupIncludeUserFiles: boolean("backup_include_user_files")
+			.notNull()
+			.default(false),
+		/**
+		 * 🚧 The instance's **lore write mode** (plan A22, ruled 2026-09-30): what
+		 * every user who has not chosen one of their own follows
+		 * (`user_settings.lore_write_mode` NULL). **Full** by ruling
+		 * (PLAN-rulesets §27, 2026-10-16: trust the narrator — the timeline
+		 * makes every change reversible). Migration 0104 moved only the column
+		 * default: an existing instance's row keeps the mode it holds.
+		 */
+		loreWriteModeDefault: text("lore_write_mode_default")
+			.notNull()
+			.default("full"),
+		/**
+		 * 🚧 The instance's default **On revision** (PLAN-rulesets §28) for
+		 * everyone whose `user_settings.on_revision_default` is NULL.
+		 */
+		onRevisionDefault: text("on_revision_default")
+			.notNull()
+			.default("overwrite"),
+		/**
+		 * Private **messages between people** (PLAN-private-messages, ruled
+		 * 2026-10-12 Q7: on by default). Only meaningful once accounts are on; off
+		 * hides the Messages rail item everywhere and makes every `conversations:*`
+		 * handler refuse. Data stays.
+		 */
+		messagingEnabled: boolean("messaging_enabled").notNull().default(true),
+		/**
+		 * 🚧 **Keep spoken audio** (speech build S8, design §12): how long a
+		 * spoken line's audio file (`files.meta.spoken`) is kept before the
+		 * schedule-tick sweep reclaims it — `forever`, `archived` (until its
+		 * session is archived), or a whole number of days as digits (`"30"`).
+		 * Spoken audio is a derived form: it can always be spoken again.
+		 */
+		keepSpokenAudio: text("keep_spoken_audio").notNull().default("forever"),
+		/**
+		 * 🚧 The last good copy of each `serene-pub-gguf-list` file the server
+		 * reads (audio.cpp build, S3b): file name (`audio.yaml`,
+		 * `audio-families.yaml`) → `{ text, fetchedAt }`. Read when the fetch at
+		 * boot fails; the copy shipped under `server/audio/snapshot/` covers a
+		 * first boot offline. A cache, never authored: losing it costs one fetch.
+		 */
+		ggufListCache: jsonb("gguf_list_cache")
+			.notNull()
+			.default({})
+			.$type<Record<string, { text: string; fetchedAt: string }>>()
+	},
+	(t) => [
+		check(
+			"system_settings_lore_write_mode_default_check",
+			sql`${t.loreWriteModeDefault} IN ('full', 'review', 'off')`
+		),
+		check(
+			"system_settings_on_revision_default_check",
+			sql`${t.onRevisionDefault} IN ('overwrite', 'branch')`
+		)
+	]
+)
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 	// `defaultConnection` and `defaultSamplingConfig` were here. Their columns
@@ -4214,6 +4562,16 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 	koboldCppManagedModelTtlSecs: integer("koboldcpp_managed_model_ttl_secs")
 		.notNull()
 		.default(300),
+	/**
+	 * Keep the text and the image model loaded together when the card has
+	 * room (owner ruling 2026-11-11). Measured, never guessed: the free
+	 * graphics memory after the resident model, against what the other needs
+	 * (`koboldcpp/coLoad.ts`); no figure, no co-load. Off: one slot, the two
+	 * swap as before.
+	 */
+	koboldCppManagedCoLoad: boolean("koboldcpp_managed_co_load")
+		.notNull()
+		.default(true),
 	koboldCppManagedSubprocessTimeoutSecs: integer(
 		"koboldcpp_managed_subprocess_timeout_secs"
 	)
@@ -4313,80 +4671,96 @@ export type LocalModelFormat = "gguf" | "onnx" | "safetensors"
 // them. So `format` carries no provenance because it needs none, and the
 // undetectable half of the row is what `kindSource`'s trust ordering guards.
 //
-// `filename` stays UNIQUE now that there are two directories to scan, so one
-// file named `foo.gguf` in EACH of them is a single row whose kind/size/
-// description are whichever directory the scan wrote last. Accepted rather than
-// fixed: a composite key would ripple into ~10 `eq(filename)` queries, every
-// socket param, and `connections.model` — which stores a bare filename. The
-// damage is bounded to metadata, because `resolveModelPath` tries the kind's
-// own directory FIRST: the text connection still loads llm/foo.gguf and the
-// image connection still loads image/foo.gguf. Renaming one fixes the display.
-export const localModels = pgTable("local_models", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	filename: text("filename").notNull().unique(),
-	modelName: text("model_name").notNull(),
-	modelUrl: text("model_url"),
-	downloadUrl: text("download_url"),
-	description: text("description"),
-	quantization: text("quantization"),
-	sizeBytes: bigint("size_bytes", { mode: "number" }),
-	status: text("status").notNull().default("downloading"), // "downloading" | "complete" | "error"
-	errorMessage: text("error_message"),
-	/**
-	 * The file's container — see {@link LocalModelFormat}.
-	 *
-	 * ⚠ The DEFAULT exists so the column could be added NOT NULL to a table
-	 * that already had rows; it is not a fallback anybody should lean on. Every
-	 * writer passes `formatForFilename(filename)`, and an `.onnx` row that took
-	 * the default would claim to be a GGUF.
-	 */
-	format: text("format").notNull().default("gguf").$type<LocalModelFormat>(),
-	/**
-	 * "text" | "image" | "embeddings" | "unknown" — which of koboldcpp's loaders
-	 * can open this file: the text model, the image model, or the co-resident
-	 * embeddings slot (`--embeddingsmodel`). Embedding GGUFs share the text
-	 * models directory (`modelsDirFor`). Never inferred from the extension: the
-	 * curated image models at huggingface.co/koboldcpp/imgmodel are every one of
-	 * them .gguf. `classifyModelFile` reads the GGUF header instead — an
-	 * `<arch>.pooling_type` key marks an embedding model whatever its
-	 * architecture — and answers "unknown" rather than guessing.
-	 *
-	 * ⚠ NOT a second spelling of `modality`, and the two cannot drift apart
-	 * because `modalityForKind` is the only thing that projects one into the
-	 * other. `kind` is a LOADER lane; `modality` is the ROLE.
-	 */
-	kind: text("kind")
-		.notNull()
-		.default("text")
-		.$type<"text" | "image" | "embeddings" | "unknown">(),
-	/**
-	 * "user" | "detected" | "declared" | "assumed", in descending trust. A scan
-	 * may overwrite anything below "user"; nothing automatic overwrites "user".
-	 */
-	kindSource: text("kind_source")
-		.notNull()
-		.default("assumed")
-		.$type<"user" | "detected" | "declared" | "assumed">(),
-	/**
-	 * What this model is FOR: `text-gen | embeddings | image-gen | ner | tts |
-	 * …` — the same open vocabulary `connections.modality` documents, reused
-	 * verbatim so a connection of a given modality can be pointed at a local
-	 * model of the same one. Not narrowed with `$type`, for the same reason
-	 * `connections.modality` is not either: a closed union here would be a
-	 * second, parallel vocabulary.
-	 *
-	 * NULL means "nobody knows yet" — the same open state `kind: "unknown"` is,
-	 * and where the backfill left every unknown row. It is NOT "text-gen unless
-	 * told otherwise": an unreadable file offered as a working text model fails
-	 * at load time with nothing on screen to say why.
-	 */
-	modality: text("modality"),
-	createdAt: timestamp("created_at").notNull().defaultNow(),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.defaultNow()
-		.$onUpdate(() => new Date())
-})
+// Two keys, both partial. A GGUF or safetensors file is ONE row by `filename`
+// alone, so one file named `foo.gguf` in EACH of the two KoboldCPP folders is a
+// single row whose kind/size/description are whichever directory the scan wrote
+// last (the scan derives `modality` from the folder, so a key that included it
+// would insert a second row for a reclassified file). The damage is bounded to
+// metadata, because `resolveModelPath` tries the kind's own directory FIRST: the
+// text connection still loads llm/foo.gguf and the image connection still loads
+// image/foo.gguf. Renaming one fixes the display. An ONNX row is one per
+// (Hub id, `modality`): the same Hub id can be downloaded for embeddings and for
+// ner, and each has its own cache directory.
+export const localModels = pgTable(
+	"local_models",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		filename: text("filename").notNull(),
+		modelName: text("model_name").notNull(),
+		modelUrl: text("model_url"),
+		downloadUrl: text("download_url"),
+		description: text("description"),
+		quantization: text("quantization"),
+		sizeBytes: bigint("size_bytes", { mode: "number" }),
+		status: text("status").notNull().default("downloading"), // "downloading" | "complete" | "error"
+		errorMessage: text("error_message"),
+		/**
+		 * The file's container — see {@link LocalModelFormat}.
+		 *
+		 * ⚠ The DEFAULT exists so the column could be added NOT NULL to a table
+		 * that already had rows; it is not a fallback anybody should lean on. Every
+		 * writer passes `formatForFilename(filename)`, and an `.onnx` row that took
+		 * the default would claim to be a GGUF.
+		 */
+		format: text("format")
+			.notNull()
+			.default("gguf")
+			.$type<LocalModelFormat>(),
+		/**
+		 * "text" | "image" | "embeddings" | "unknown" — which of koboldcpp's loaders
+		 * can open this file: the text model, the image model, or the co-resident
+		 * embeddings slot (`--embeddingsmodel`). Embedding GGUFs share the text
+		 * models directory (`modelsDirFor`). Never inferred from the extension: the
+		 * curated image models at huggingface.co/koboldcpp/imgmodel are every one of
+		 * them .gguf. `classifyModelFile` reads the GGUF header instead — an
+		 * `<arch>.pooling_type` key marks an embedding model whatever its
+		 * architecture — and answers "unknown" rather than guessing.
+		 *
+		 * ⚠ NOT a second spelling of `modality`, and the two cannot drift apart
+		 * because `modalityForKind` is the only thing that projects one into the
+		 * other. `kind` is a LOADER lane; `modality` is the ROLE.
+		 */
+		kind: text("kind")
+			.notNull()
+			.default("text")
+			.$type<"text" | "image" | "embeddings" | "unknown">(),
+		/**
+		 * "user" | "detected" | "declared" | "assumed", in descending trust. A scan
+		 * may overwrite anything below "user"; nothing automatic overwrites "user".
+		 */
+		kindSource: text("kind_source")
+			.notNull()
+			.default("assumed")
+			.$type<"user" | "detected" | "declared" | "assumed">(),
+		/**
+		 * What this model is FOR: `text-gen | embeddings | image-gen | ner | tts |
+		 * …` — the same open vocabulary `connections.modality` documents, reused
+		 * verbatim so a connection of a given modality can be pointed at a local
+		 * model of the same one. Not narrowed with `$type`, for the same reason
+		 * `connections.modality` is not either: a closed union here would be a
+		 * second, parallel vocabulary.
+		 *
+		 * NULL means "nobody knows yet" — the same open state `kind: "unknown"` is,
+		 * and where the backfill left every unknown row. It is NOT "text-gen unless
+		 * told otherwise": an unreadable file offered as a working text model fails
+		 * at load time with nothing on screen to say why.
+		 */
+		modality: text("modality"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(table) => [
+		uniqueIndex("local_models_filename_idx")
+			.on(table.filename)
+			.where(sql`${table.format} <> 'onnx'`),
+		uniqueIndex("local_models_onnx_filename_modality_idx")
+			.on(table.filename, table.modality)
+			.where(sql`${table.format} = 'onnx'`)
+	]
+)
 
 export type SelectLocalModel = typeof localModels.$inferSelect
 export type InsertLocalModel = typeof localModels.$inferInsert
@@ -4406,13 +4780,23 @@ export const scenes = pgTable(
 		lorebookId: integer("lorebook_id")
 			.notNull()
 			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		// History entry this scene contributes to — cascade so scenes don't outlive their entry
-		historyEntryId: integer("history_entry_id")
-			.notNull()
-			.references((): AnyPgColumn => lorebookEntries.id, {
-				onDelete: "cascade"
-			}),
+		// History entry this scene contributes to — cascade so scenes don't outlive their entry.
+		// NULL = not yet compiled (§0-B, 2026-11-04): a scene opens filed under
+		// nothing; compiling the history entry of its date (`historyEntryOfDate`)
+		// files it there. (The by-date compile, S-B2, creates that entry when the
+		// book has none.)
+		historyEntryId: integer("history_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "cascade" }
+		),
 		name: text("name"),
+		/**
+		 * 🚧 ★4b (2026-11-04): the name is the automatic one (`Scene N` [` · <place>`]
+		 * [` · <date>`]), so its leading `Scene N` is numbered at render by the
+		 * scene's position on its lane (`sceneDisplayNames`) — never stored
+		 * renumbered. False: a person's own name, shown as stored.
+		 */
+		nameIsDefault: boolean("name_is_default").notNull().default(false),
 		// The IDs of sessionMessages included in this scene
 		selectedMessageIds: json("selected_message_ids")
 			.notNull()
@@ -4484,6 +4868,18 @@ export const scenes = pgTable(
 			.$type<SceneSummaryStatus>(),
 		/** The summarize-scene spec that last processed this scene (receipt). */
 		processedBySpecId: text("processed_by_spec_id"),
+		/**
+		 * 🚧 Scene notes (`core:outlet/note-scene@1`, ★S4 2026-11-10): facts a
+		 * run noted in the scene that are not story lines (a death, a treaty, a
+		 * clock jump), oldest first. `runId` is `run:<id>`'s id, `messageId`
+		 * the turn's message the note is anchored to, `at` when it was written
+		 * (ISO). NULL = none. Read beside the summary by the scene's summarize
+		 * request and by Compile; never history, never messages. The one
+		 * writer is `appendSceneNote` (`scenes/liveScenes.ts`).
+		 */
+		notes: jsonb("notes").$type<
+			Array<{ text: string; runId: string | null; messageId: number | null; at: string }>
+		>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -4552,7 +4948,12 @@ export type SceneCharacterRole = "participant" | "mentioned"
  * summary applied, or written by hand), `failed`. Plain text with no CHECK
  * (`0113`), so a new state needs no migration.
  */
-export type SceneSummaryStatus = "none" | "running" | "review" | "done" | "failed"
+export type SceneSummaryStatus =
+	| "none"
+	| "running"
+	| "review"
+	| "done"
+	| "failed"
 
 /**
  * Which characters are in a scene, and how — replacing the untyped
@@ -4627,7 +5028,12 @@ export const sceneCharactersRelations = relations(
  * there; `dismissed` — *Not here*, never offered at that line again;
  * `placed` — Automatic mode placed the boundary itself.
  */
-export type SceneCueState = "pending" | "open" | "accepted" | "dismissed" | "placed"
+export type SceneCueState =
+	| "pending"
+	| "open"
+	| "accepted"
+	| "dismissed"
+	| "placed"
 
 /**
  * 🚧 **Scene cues** (PROPOSAL-live-scenes §4, lane D, 2026-10-13): one row
@@ -4676,7 +5082,12 @@ export const sceneCues = pgTable(
 		// The same trigger at the same line is one cue — and a dismissed one
 		// stays, so it is never offered again.
 		uniqueIndex("scene_cues_line_trigger")
-			.on(table.sessionId, table.channel, table.atMessageId, table.trigger)
+			.on(
+				table.sessionId,
+				table.channel,
+				table.atMessageId,
+				table.trigger
+			)
 			.where(sql`${table.atMessageId} IS NOT NULL`),
 		// One waiting time action per lane and trigger.
 		uniqueIndex("scene_cues_pending")
@@ -5029,7 +5440,10 @@ export const pipelineSpecs = pgTable("pipeline_specs", {
 	 * pub-selected configuration (`pipeline_config_selections`, unread since
 	 * 0110; the tables go at the RC1 squash).
 	 */
-	instanceValues: json("instance_values").$type<Record<string, Record<string, unknown>>>(),
+	instanceValues:
+		json("instance_values").$type<
+			Record<string, Record<string, unknown>>
+		>(),
 	createdAt: timestamp("created_at").notNull().defaultNow()
 })
 
@@ -5155,7 +5569,10 @@ export const pipelineDrafts = pgTable(
 		/** The version the draft started from; no FK — a version row may be culled later. */
 		basedOnVersionId: integer("based_on_version_id"),
 		document: json("document").notNull().$type<Record<string, any>>(),
-		findings: json("findings").notNull().default([]).$type<Record<string, any>[]>(),
+		findings: json("findings")
+			.notNull()
+			.default([])
+			.$type<Record<string, any>[]>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -6241,11 +6658,34 @@ export const pipelineVariableTemplates = pgTable(
 		withdrawnAt: timestamp("withdrawn_at"),
 		/** Core's shipped rendering: selectable and copyable, never edited in place. */
 		isImmutable: boolean("is_immutable").notNull().default(false),
+		/**
+		 * 🚧 The **layout reference** a context template names this row by —
+		 * `<owner>/<slug>@<major>`, unique within its variable (PLAN
+		 * variable-layouts, 2026-11-10). Fixed once set, so a template that
+		 * names it keeps working. Stamped at boot on core's, automatic and
+		 * plugin rows; NULL on a person's row until it is given one. ⚠ Not the
+		 * **template id** — that is the row's app-wide identity.
+		 */
+		reference: text("reference"),
+		/**
+		 * 🚧 The **pub's layout** for this row's variable: what a bare
+		 * `{{{key}}}` writes it out with when no preset says otherwise. At most
+		 * one per variable (partial unique below); none means the package
+		 * default. ⚠ Not a genre default and not a preset change.
+		 */
+		pubDefault: boolean("pub_default").notNull().default(false),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
 		index("pipeline_variable_templates_variable_idx").on(t.variableId),
+		uniqueIndex("pipeline_variable_templates_variable_reference_idx").on(
+			t.variableId,
+			t.reference
+		),
+		uniqueIndex("pipeline_variable_templates_pub_default_idx")
+			.on(t.variableId)
+			.where(sql`${t.pubDefault} = true`),
 		// The engine is in the key: one "Default" per language, and a layout
 		// written in one language cannot be selected into a slot that
 		// renders another.
@@ -6842,7 +7282,9 @@ export const plugins = pgTable(
 		 * runs as them (`auth/actingPerson.ts`). Null: never switched on, or they
 		 * are gone.
 		 */
-		enabledBy: integer("enabled_by").references(() => users.id, { onDelete: "set null" }),
+		enabledBy: integer("enabled_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
 		/** The compiled manifest — hooks, components, pipelines, declared permissions. */
 		manifest: json("manifest")
 			.notNull()
@@ -6909,10 +7351,12 @@ export const plugins = pgTable(
 		 * brings back (`plugins/providedMarks.ts` `PluginProvidedState`). Goes
 		 * with the row at uninstall, so reinstalling provides them anew.
 		 */
-		provided: jsonb("provided")
-			.notNull()
-			.default({})
-			.$type<{ dismissed?: Record<string, { at: string; by: number | null; version: string }> }>(),
+		provided: jsonb("provided").notNull().default({}).$type<{
+			dismissed?: Record<
+				string,
+				{ at: string; by: number | null; version: string }
+			>
+		}>(),
 		installedAt: timestamp("installed_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
@@ -7030,7 +7474,11 @@ export const userAnnexes = pgTable(
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
-		unique("user_annexes_user_owner_key_unique").on(t.userId, t.owner, t.key),
+		unique("user_annexes_user_owner_key_unique").on(
+			t.userId,
+			t.owner,
+			t.key
+		),
 		index("user_annexes_user_owner_idx").on(t.userId, t.owner)
 	]
 )
@@ -7806,10 +8254,26 @@ export const sessionPresets = pgTable(
 		defaults: json("defaults").$type<Record<string, unknown> | null>(),
 		/** 🚧 Values the preset pins — the preset layer of the settings cascade (`PresetDecl.settings`, 2026-10-19). */
 		settings: json("settings").$type<Record<string, unknown> | null>(),
+		/**
+		 * 🚧 The **preset's variable layouts** (`PresetDecl.variableLayouts`,
+		 * PLAN variable-layouts 2026-11-10): variable id → layout reference,
+		 * one per variable this preset's sessions write out differently from
+		 * the pub's layout. Only what the preset states; nothing inherited. A
+		 * reference that resolves to no row is skipped (the pub's layout
+		 * renders). ⚠ Not a layout preset, not a genre's `layouts` (session
+		 * layouts) and not `settings`.
+		 */
+		variableLayouts: json("variable_layouts")
+			.notNull()
+			.default({})
+			.$type<Record<string, string>>(),
 		/** 🚧 Model calls one turn costs, as the card prints it (`PresetDecl.callsPerTurn`). */
 		callsPerTurn: integer("calls_per_turn"),
 		/** 🚧 The cast floor this preset lowers the shape's to (`PresetDecl.cast`). */
-		castFloor: json("cast_floor").$type<{ characters?: number; personas?: number } | null>(),
+		castFloor: json("cast_floor").$type<{
+			characters?: number
+			personas?: number
+		} | null>(),
 		/** May users pick it? Disabled presets stay for admins and history. */
 		enabled: boolean("enabled").notNull().default(true),
 		isDefault: boolean("is_default").notNull().default(false),
@@ -7974,13 +8438,19 @@ export const registrations = pgTable(
 		/** The event id, the action identity (`<spec>#<key>`), or the cadence id. */
 		triggerRef: text("trigger_ref"),
 		/** A routine's cadence options (`CadenceRef.options`). */
-		cadenceOptions: jsonb("cadence_options").$type<Record<string, unknown> | null>(),
+		cadenceOptions: jsonb("cadence_options").$type<Record<
+			string,
+			unknown
+		> | null>(),
 		/** The pipeline's spec id — set on a registering row. */
 		specSlug: text("spec_slug"),
 		/** `ConditionDecl` — runs only when it holds (R31: absent = always). */
 		when: jsonb("when").$type<Record<string, unknown> | null>(),
 		/** `RegistrationValues` — changes to the pipeline's declared defaults (R38). */
-		values: jsonb("values").$type<Record<string, Record<string, unknown>> | null>(),
+		values: jsonb("values").$type<Record<
+			string,
+			Record<string, unknown>
+		> | null>(),
 		/** Many per trigger, run in this order, then by key (R24). */
 		order: integer("order"),
 		/** A routine's mode — `off`, `review`, `full` (R37). */
@@ -7988,7 +8458,10 @@ export const registrations = pgTable(
 		/** A routine's *Allow stacking* (R18). */
 		allowStacking: boolean("allow_stacking"),
 		/** A system-clock routine's caps (R11): `{ idleTimeoutMinutes?, maxRunsInRow? }`. */
-		caps: jsonb("caps").$type<{ idleTimeoutMinutes?: number; maxRunsInRow?: number } | null>(),
+		caps: jsonb("caps").$type<{
+			idleTimeoutMinutes?: number
+			maxRunsInRow?: number
+		} | null>(),
 		/** 🚧 The routine summary depth (pass 9 S3, ruled 2026-10-24): sources may name no line younger than this many lines. Null = the family default (`minAgeOf`). */
 		minAge: integer("min_age"),
 		/** This layer switched off a lower layer's registration of `key`. */
@@ -8512,8 +8985,8 @@ export const lorebookEntries = pgTable(
 		embedTextHash: text("embed_text_hash")
 			.notNull()
 			.generatedAlwaysAs(
-			sql`left(encode(sha256(decode(replace(CASE WHEN "type_id" IN ('core:entry/world-lore', 'core:entry/character-lore', 'core:entry/location', 'core:entry/item') AND coalesce("title", '') <> '' THEN "title" || chr(10) || "content" ELSE "content" END, '\\', '\\\\'), 'escape')), 'hex'), 16)`
-		),
+				sql`left(encode(sha256(decode(replace(CASE WHEN "type_id" IN ('core:entry/world-lore', 'core:entry/character-lore', 'core:entry/location', 'core:entry/item') AND coalesce("title", '') <> '' THEN "title" || chr(10) || "content" ELSE "content" END, '\\', '\\\\'), 'escape')), 'hex'), 16)`
+			),
 		/**
 		 * The hash of what the annotation lane reads for this entry now —
 		 * `entryAnnotationSource` in `annotations/index.ts`: the title, the
@@ -8789,9 +9262,14 @@ export const lorebookBranches = pgTable(
  * row, then main's amendments up to the moment in date order, then the
  * branch's, later winning per field (`asOf`, `$lib/shared/lorebooks/asOf.ts`).
  *
- * ⚠ **An amendment IS a date.** An undated one is refused by the CHECK below,
- * because a change with no date is just an edit to the entry and belongs on
- * the entry.
+ * ⚠ **An amendment IS a date — except a held amendment** 🚧, which a session
+ * keeps in its own book on top of an entry of the lorebook it reads. It may be
+ * undated, and reaches the lorebook only when the lorebook's owner applies it.
+ * Any other undated row is refused by the CHECK below: a change with no date
+ * is just an edit to the entry and belongs on the entry.
+ *
+ * **A held amendment is exactly a row with `base IS NOT NULL`.** That is the
+ * one marker every reader uses.
  *
  * ⚠ `fields` is a PARTIAL of the entry's writable columns, and only the keys
  * present are overlaid. An amendment that sets `enabled: false` says nothing
@@ -8805,7 +9283,9 @@ export const entryAmendments = pgTable(
 		/**
 		 * Carried beside `entry_id` so the pool can read every amendment in a
 		 * book with one query rather than one per entry. Cascades with the
-		 * book for the same reason every other lorebook child does.
+		 * book for the same reason every other lorebook child does. A held
+		 * amendment is filed under the holder's own book, not the entry's, so a
+		 * by-book read of the entry's book never sees it.
 		 */
 		lorebookId: integer("lorebook_id")
 			.notNull()
@@ -8823,10 +9303,18 @@ export const entryAmendments = pgTable(
 		branchId: integer("branch_id").references(() => lorebookBranches.id, {
 			onDelete: "cascade"
 		}),
-		/** The book's own calendar. `year` is required; the rest narrow it. */
-		year: integer("year").notNull(),
+		/** The book's own calendar. `year` is required unless the row is a held amendment (`base` set); the rest narrow it. */
+		year: integer("year"),
 		month: integer("month"),
 		day: integer("day"),
+		/** The turn's anchor message for a held amendment — plain, no key (as `lore_imprints.message_id`). NULL otherwise. */
+		sourceMessageId: integer("source_message_id"),
+		/**
+		 * Each changed field's value as the session read it when it wrote:
+		 * `{ v: value }`, NULL where the field was absent. Set only on a held
+		 * amendment — the one marker every reader uses.
+		 */
+		base: jsonb("base").$type<Record<string, { v: unknown } | null>>(),
 		/** A partial of the entry's writable columns. Only present keys overlay. */
 		fields: json("fields")
 			.notNull()
@@ -8869,6 +9357,11 @@ export const entryAmendments = pgTable(
 		check(
 			"entry_amendments_date_check",
 			sql`(${t.month} IS NOT NULL OR ${t.day} IS NULL)`
+		),
+		// An undated row is a held amendment, and names no month.
+		check(
+			"entry_amendments_undated_check",
+			sql`(${t.year} IS NOT NULL OR (${t.base} IS NOT NULL AND ${t.month} IS NULL))`
 		)
 	]
 )
@@ -9059,6 +9552,250 @@ export const castAmendments = pgTable(
 			sql`(${t.month} IS NOT NULL OR ${t.day} IS NULL)`
 		)
 	]
+)
+
+/**
+ * 🚧 A **character version** — one complete 🚧 character profile at a point.
+ * It belongs to a card (a **card version**, an authored release: `number` +
+ * `label`) or to a cast member (a **cast version**: its evolution along a book
+ * line); a reading picks one row (`versionInForce`). Plan §32 §1, §33.
+ *
+ * Exactly one of `card_id` / `cast_member_id` is set. A profile field named in
+ * `follows` reads its parent card version's value, and its own column is
+ * ignored; every other field is this version's own value, which may be empty.
+ */
+export const characterVersions = pgTable(
+	"character_versions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		cardId: integer("card_id").references(() => characters.id, {
+			onDelete: "cascade"
+		}),
+		castMemberId: integer("cast_member_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "cascade" }
+		),
+		/** Card versions only; unique per card. The current card version is the highest. */
+		number: integer("number"),
+		/** The **version label**, e.g. "1.1"; takes over `characters.character_version`. */
+		label: text("label"),
+		/** A cast version's parent card version; null = card-less. */
+		parentVersionId: integer("parent_version_id").references(
+			(): AnyPgColumn => characterVersions.id,
+			{ onDelete: "set null" }
+		),
+		/** Copied from the member. */
+		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
+			onDelete: "cascade"
+		}),
+		/** Null = main. */
+		branchId: integer("branch_id").references(() => lorebookBranches.id, {
+			onDelete: "cascade"
+		}),
+		/** Day grain; a null year is undated. */
+		year: integer("year"),
+		month: integer("month"),
+		day: integer("day"),
+		historyEntryId: integer("history_entry_id").references(
+			() => lorebookEntries.id,
+			{ onDelete: "set null" }
+		),
+		/** The session clock at the write; only the coalescing key reads them. */
+		atHour: integer("at_hour"),
+		atMinute: integer("at_minute"),
+		/** The life point; null = applies to every appearance. */
+		personalPosition: integer("personal_position"),
+		/** Plain ints, no FK (provenance). */
+		sourceSessionId: integer("source_session_id"),
+		sourceMessageId: integer("source_message_id"),
+		/** `user:<id>` · `run:<id>` · `script:<id>` · `plugin:<id>` · `lift`. */
+		writtenBy: text("written_by"),
+		note: text("note"),
+		/** Plain int, no FK (provenance). */
+		liftedFromAmendmentId: integer("lifted_from_amendment_id"),
+		/** The turn tie Back uses. */
+		validFromMessageId: integer("valid_from_message_id").references(
+			() => messages.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * 🚧 The **write order**: no default — the versions writer sets it
+		 * from the id on insert, and a copy inherits its source's. A branch's
+		 * write-order mark cuts what its ancestors wrote after the fork. §32 §5b.
+		 */
+		writeOrder: bigint("write_order", { mode: "number" }).notNull(),
+		/** The **retire mark** (§33.2); null = not retired. */
+		retiredOrder: bigint("retired_order", { mode: "number" }),
+		// ── The profile. Nullable: a followed field holds no own value. ──
+		name: text("name"),
+		nickname: text("nickname"),
+		aliases: text("aliases")
+			.array()
+			.notNull()
+			.default(sql`'{}'::text[]`),
+		summary: text("summary"),
+		description: text("description"),
+		personality: text("personality"),
+		scenario: text("scenario"),
+		/** The merged opener + alternates + group-only; empty greetings kept. */
+		greetings: jsonb("greetings")
+			.notNull()
+			.default([])
+			.$type<{ text: string; groupOnly?: boolean }[]>(),
+		exampleDialogues: text("example_dialogues")
+			.array()
+			.notNull()
+			.default(sql`'{}'::text[]`),
+		postHistoryInstructions: text("post_history_instructions"),
+		/** Named `creator_notes`, not `notes`, so it never reads as the provenance `note`. */
+		creatorNotes: jsonb("creator_notes").$type<{
+			text: string
+			lang?: string
+			variants: Record<string, string>
+		} | null>(),
+		strokes: jsonb("strokes").notNull().default([]).$type<Stroke[]>(),
+		faceMediaId: integer("face_media_id").references(() => files.id, {
+			onDelete: "set null"
+		}),
+		likeness: jsonb("likeness").$type<CharacterLikenessInput | null>(),
+		timbre: jsonb("timbre").$type<CharacterTimbreInput | null>(),
+		/** A sprite set's name; null = the default set. */
+		spriteSet: text("sprite_set"),
+		extensions: jsonb("extensions")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		/** Cast versions only. */
+		nodeState: text("node_state").$type<NodeState>(),
+		/** Cast versions only. */
+		nodeVisibility: text("node_visibility").$type<NodeVisibility>(),
+		/** The profile fields this version reads from its parent card version. */
+		follows: text("follows")
+			.array()
+			.notNull()
+			.default(sql`'{}'::text[]`),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		uniqueIndex("character_versions_card_number_idx").on(
+			t.cardId,
+			t.number
+		),
+		// At most one base per member.
+		uniqueIndex("character_versions_base_idx")
+			.on(t.castMemberId)
+			.where(
+				sql`${t.cardId} IS NULL AND ${t.branchId} IS NULL AND ${t.year} IS NULL AND ${t.personalPosition} IS NULL AND ${t.sourceSessionId} IS NULL`
+			),
+		index("character_versions_member_date_idx").on(
+			t.castMemberId,
+			t.branchId,
+			t.year,
+			t.month,
+			t.day
+		),
+		index("character_versions_book_idx").on(t.lorebookId),
+		index("character_versions_valid_from_message_idx")
+			.on(t.validFromMessageId)
+			.where(sql`${t.validFromMessageId} IS NOT NULL`),
+		index("character_versions_history_entry_idx")
+			.on(t.historyEntryId)
+			.where(sql`${t.historyEntryId} IS NOT NULL`),
+		index("character_versions_branch_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
+		index("character_versions_parent_idx")
+			.on(t.parentVersionId)
+			.where(sql`${t.parentVersionId} IS NOT NULL`),
+		index("character_versions_source_idx")
+			.on(t.sourceSessionId, t.sourceMessageId)
+			.where(sql`${t.sourceSessionId} IS NOT NULL`),
+		index("character_versions_face_media_idx")
+			.on(t.faceMediaId)
+			.where(sql`${t.faceMediaId} IS NOT NULL`),
+		check(
+			"character_versions_one_owner_check",
+			sql`(${t.cardId} IS NULL) <> (${t.castMemberId} IS NULL)`
+		),
+		// A card version has a number, follows nothing, and has no parent,
+		// book, line, date, life point, anchor, source or node fields.
+		check(
+			"character_versions_card_version_check",
+			sql`${t.cardId} IS NULL OR (${t.number} IS NOT NULL AND cardinality(${t.follows}) = 0 AND ${t.parentVersionId} IS NULL AND ${t.lorebookId} IS NULL AND ${t.branchId} IS NULL AND ${t.year} IS NULL AND ${t.historyEntryId} IS NULL AND ${t.atHour} IS NULL AND ${t.personalPosition} IS NULL AND ${t.sourceSessionId} IS NULL AND ${t.sourceMessageId} IS NULL AND ${t.validFromMessageId} IS NULL AND ${t.nodeState} IS NULL AND ${t.nodeVisibility} IS NULL)`
+		),
+		// A cast version has no number, has its book, and carries node state
+		// and visibility.
+		check(
+			"character_versions_cast_version_check",
+			sql`${t.castMemberId} IS NULL OR (${t.number} IS NULL AND ${t.lorebookId} IS NOT NULL AND ${t.nodeState} IS NOT NULL AND ${t.nodeVisibility} IS NOT NULL)`
+		),
+		// "A version with `follows` has a parent" is the writer's rule
+		// (`characters/versions.ts`), not a CHECK: `parent_version_id` is SET
+		// NULL on a card's hard delete (a user cascade, the attic), and a CHECK
+		// would turn that backstop into a refusal. A version left with follows
+		// and no parent reads those fields as empty and is logged (plan §33,
+		// cv-schema scope review, 2026-11-05).
+		check(
+			"character_versions_anchor_source_check",
+			sql`${t.validFromMessageId} IS NULL OR ${t.sourceSessionId} IS NOT NULL`
+		),
+		// An undated authored cast version can only be on main with no life
+		// point: that makes it the base.
+		check(
+			"character_versions_undated_base_check",
+			sql`${t.castMemberId} IS NULL OR ${t.year} IS NOT NULL OR ${t.sourceSessionId} IS NOT NULL OR (${t.branchId} IS NULL AND ${t.personalPosition} IS NULL)`
+		),
+		check(
+			"character_versions_date_check",
+			sql`(${t.month} IS NOT NULL OR ${t.day} IS NULL) AND (${t.year} IS NOT NULL OR ${t.month} IS NULL)`
+		)
+	]
+)
+
+export const characterVersionsRelations = relations(
+	characterVersions,
+	({ one, many }) => ({
+		card: one(characters, {
+			fields: [characterVersions.cardId],
+			references: [characters.id]
+		}),
+		castMember: one(lorebookBindings, {
+			fields: [characterVersions.castMemberId],
+			references: [lorebookBindings.id]
+		}),
+		parentVersion: one(characterVersions, {
+			fields: [characterVersions.parentVersionId],
+			references: [characterVersions.id],
+			relationName: "characterVersionParent"
+		}),
+		childVersions: many(characterVersions, {
+			relationName: "characterVersionParent"
+		}),
+		lorebook: one(lorebooks, {
+			fields: [characterVersions.lorebookId],
+			references: [lorebooks.id]
+		}),
+		branch: one(lorebookBranches, {
+			fields: [characterVersions.branchId],
+			references: [lorebookBranches.id]
+		}),
+		historyEntry: one(lorebookEntries, {
+			fields: [characterVersions.historyEntryId],
+			references: [lorebookEntries.id]
+		}),
+		validFromMessage: one(messages, {
+			fields: [characterVersions.validFromMessageId],
+			references: [messages.id]
+		}),
+		faceMedia: one(files, {
+			fields: [characterVersions.faceMediaId],
+			references: [files.id]
+		})
+	})
 )
 
 /**
@@ -9583,6 +10320,7 @@ export const bindingSuggestionsRelations = relations(
 // | `location` 🚧 | `lorebook_entries.id` — a place in this world (phase 4) | null |
 // | `session_location` 🚧 | `lorebook_entries.id` — this run's place | the session |
 // | `player_seat` 🚧 | `session_personas.id` — a player seat, card or not | the session |
+// | `seated_member` 🚧 | `lorebook_bindings.id` — the seated cast member (CHECK only until S4) | the session |
 //
 // No foreign key on `owner_id`: it points at six different tables depending on
 // the row beside it, which is the one thing a foreign key cannot express.
@@ -9717,7 +10455,7 @@ export const attributeConfigs = pgTable(
 			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"attribute_configs_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat', 'seated_member')`
 		)
 	]
 )
@@ -9792,9 +10530,26 @@ export const attributeValues = pgTable(
 		 * counter existed, which reads as "never moved since".
 		 */
 		stateVersion: integer("state_version"),
+		/**
+		 * 🚧 The writing session's story clock as it stood when a session
+		 * wrote this row (owner 2026-11-11: "tracking stat time relative to
+		 * the session"): stamped by `setValue` from `sessionStoryNowOf`
+		 * inside its transaction, never moved afterwards, and carried
+		 * unchanged by every copy of the row (branch, Back and Forward,
+		 * retract and restore). All NULL = no session wrote it (a starter
+		 * kit, a dowry, a plugin's book, an editor write, an import), the
+		 * session had no clock, or the row predates stamping. What a ruleset
+		 * function's `writtenAgo.minutes` counts from.
+		 */
+		storyClockYear: integer("story_clock_year"),
+		storyClockMonth: integer("story_clock_month"),
+		storyClockDay: integer("story_clock_day"),
+		storyClockHour: integer("story_clock_hour"),
+		storyClockMinute: integer("story_clock_minute"),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
+		...storyClockChecks("attribute_values", t),
 		index("attribute_values_owner_idx").on(
 			t.ownerKind,
 			t.ownerId,
@@ -9825,7 +10580,7 @@ export const attributeValues = pgTable(
 			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"attribute_values_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat', 'seated_member')`
 		)
 	]
 )
@@ -9987,7 +10742,9 @@ export const zoneContents = pgTable(
 		/** The zone type's id within it — `hand`, `carried`. */
 		zoneType: text("zone_type").notNull(),
 		/** The held entries, in order: `[{ entryId, entryType, name, fields, count?, exposed? }]`. */
-		entries: jsonb("entries").notNull().$type<Array<Record<string, unknown>>>(),
+		entries: jsonb("entries")
+			.notNull()
+			.$type<Array<Record<string, unknown>>>(),
 		validFromMessageId: integer("valid_from_message_id").references(
 			(): AnyPgColumn => messages.id,
 			{ onDelete: "cascade" }
@@ -9998,14 +10755,18 @@ export const zoneContents = pgTable(
 	},
 	(t) => [
 		// The whole read: "what does this session's zones hold now".
-		index("zone_contents_session_idx").on(t.sessionId, t.rulesetId, t.zoneType),
+		index("zone_contents_session_idx").on(
+			t.sessionId,
+			t.rulesetId,
+			t.zoneType
+		),
 		index("zone_contents_owner_idx").on(t.ownerKind, t.ownerId),
 		index("zone_contents_valid_from_message_id_idx")
 			.on(t.validFromMessageId)
 			.where(sql`${t.validFromMessageId} IS NOT NULL`),
 		check(
 			"zone_contents_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat', 'seated_member')`
 		)
 	]
 )
@@ -10036,6 +10797,10 @@ export const zoneContents = pgTable(
  * a relationship row, a cast member, the notes' rule-fed overlay), so it
  * carries no key; a row deleted since is simply gone.
  *
+ * `origin` is who or what made the change (only `run` and `apply` are written
+ * today); `batch` is one Apply press's id (the unit a take-back undoes);
+ * `cause` is who pressed and the session and message the change came from.
+ *
  * ⚠ Not a **receipt** (a run's whole record), not an **amendment** (a dated
  * overlay a person writes), not the **rule-fed overlay** (what the notes lay
  * over a book) and not a **run artifact** (which rows a run touched, with no
@@ -10064,6 +10829,12 @@ export const loreImprints = pgTable(
 		after: jsonb("after").$type<{ v: unknown } | null>(),
 		/** `standing` — in force; `kept` — its reply was replaced and the book had moved on, so it stayed; 🚧 `settled` — at or before the session's settle line (pr-6 B4): `before` is gone, nothing takes it back. */
 		status: text("status").notNull().default("standing"),
+		/** Who or what made the change: `run` · `routine` · `press` · `person` · `apply` · `book-run` · `upgrade`. Only `run` and `apply` are written today; the others are reserved names for the lanes that follow. */
+		origin: text("origin").notNull().default("run"),
+		/** One Apply press's id — the unit a take-back undoes. NULL for a change no press made. */
+		batch: text("batch"),
+		/** Who pressed, and the session and message the change came from. */
+		cause: jsonb("cause").$type<Record<string, unknown>>(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
@@ -10071,7 +10842,11 @@ export const loreImprints = pgTable(
 			.on(t.messageId)
 			.where(sql`${t.messageId} IS NOT NULL`),
 		index("lore_imprints_run_idx").on(t.sessionId, t.runId),
-		index("lore_imprints_subject_idx").on(t.subjectKind, t.subjectId, t.field),
+		index("lore_imprints_subject_idx").on(
+			t.subjectKind,
+			t.subjectId,
+			t.field
+		),
 		index("lore_imprints_kept_idx")
 			.on(t.lorebookId)
 			.where(sql`${t.status} = 'kept'`),
@@ -10079,7 +10854,14 @@ export const loreImprints = pgTable(
 			"lore_imprints_subject_kind_check",
 			sql`${t.subjectKind} IN ('entry', 'relationship', 'member', 'overlay', 'annex')`
 		),
-		check("lore_imprints_status_check", sql`${t.status} IN ('standing', 'kept', 'settled')`)
+		check(
+			"lore_imprints_origin_check",
+			sql`${t.origin} IN ('run', 'routine', 'press', 'person', 'apply', 'book-run', 'upgrade')`
+		),
+		check(
+			"lore_imprints_status_check",
+			sql`${t.status} IN ('standing', 'kept', 'settled')`
+		)
 	]
 )
 
@@ -10270,7 +11052,12 @@ export const rulesetVersions = pgTable(
 			onDelete: "set null"
 		})
 	},
-	(t) => [uniqueIndex("ruleset_versions_ruleset_version_unique").on(t.rulesetId, t.version)]
+	(t) => [
+		uniqueIndex("ruleset_versions_ruleset_version_unique").on(
+			t.rulesetId,
+			t.version
+		)
+	]
 )
 
 export const attributeSheets = pgTable(
@@ -10362,7 +11149,7 @@ export const ownerSheets = pgTable(
 		),
 		check(
 			"owner_sheets_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location', 'player_seat', 'seated_member')`
 		)
 	]
 )
@@ -10389,7 +11176,12 @@ export const sessionAttributePicks = pgTable(
 		enabled: boolean("enabled").notNull(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
-	(t) => [uniqueIndex("session_attribute_picks_session_slot_uq").on(t.sessionId, t.slotId)]
+	(t) => [
+		uniqueIndex("session_attribute_picks_session_slot_uq").on(
+			t.sessionId,
+			t.slotId
+		)
+	]
 )
 
 /**
@@ -10423,10 +11215,15 @@ export const attributeCarries = pgTable(
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
-		uniqueIndex("attribute_carries_owner_slot_uq").on(t.sessionId, t.ownerKind, t.ownerId, t.slotId),
+		uniqueIndex("attribute_carries_owner_slot_uq").on(
+			t.sessionId,
+			t.ownerKind,
+			t.ownerId,
+			t.slotId
+		),
 		check(
 			"attribute_carries_owner_kind_check",
-			sql`${t.ownerKind} IN ('session', 'session_cast', 'player_seat', 'session_location')`
+			sql`${t.ownerKind} IN ('session', 'session_cast', 'player_seat', 'session_location', 'seated_member')`
 		)
 	]
 )
@@ -10477,7 +11274,10 @@ export const authoredComponents = pgTable(
 		/** The entry file, a key of `files`. */
 		entry: text("entry").notNull(),
 		/** The source: relative path → text. Never served. */
-		files: jsonb("files").notNull().default({}).$type<Record<string, string>>(),
+		files: jsonb("files")
+			.notNull()
+			.default({})
+			.$type<Record<string, string>>(),
 		widget: jsonb("widget").notNull().$type<AuthoredWidgetShape>(),
 		/** Its upstream, for a clone (`ComponentDecl.basedOn`). Null for one written from scratch. */
 		basedOn: jsonb("based_on").$type<{
@@ -10507,7 +11307,10 @@ export const authoredComponents = pgTable(
 		draftEntry: text("draft_entry"),
 		draftFramework: text("draft_framework"), // svelte | vanilla
 		/** The draft's compile errors, located: `{ file, line, column, text }[]`. */
-		draftErrors: jsonb("draft_errors").$type<{ file: string; line: number; column: number; text: string }[] | null>(),
+		draftErrors: jsonb("draft_errors").$type<
+			| { file: string; line: number; column: number; text: string }[]
+			| null
+		>(),
 		draftUpdatedAt: timestamp("draft_updated_at"),
 		enabled: boolean("enabled").notNull().default(false),
 		/**
@@ -10515,15 +11318,23 @@ export const authoredComponents = pgTable(
 		 * (`plugins/permissions.ts`): denials plus one `__reviewed:` mark per
 		 * decided scope. A scope with no mark is refused — a request, not a grant.
 		 */
-		adminDenied: jsonb("admin_denied").notNull().default([]).$type<string[]>(),
-		createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+		adminDenied: jsonb("admin_denied")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		createdBy: integer("created_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
 		uniqueIndex("authored_components_slug_uq").on(t.slug),
 		check("authored_components_id_check", sql`${t.id} ~ '^[a-z0-9]{10}$'`),
-		check("authored_components_framework_check", sql`${t.framework} IN ('svelte', 'vanilla')`),
+		check(
+			"authored_components_framework_check",
+			sql`${t.framework} IN ('svelte', 'vanilla')`
+		),
 		check(
 			"authored_components_draft_framework_check",
 			sql`${t.draftFramework} IS NULL OR ${t.draftFramework} IN ('svelte', 'vanilla')`
@@ -10613,21 +11424,26 @@ export const notifications = pgTable(
 		regarding: text("regarding").notNull(),
 		level: text("level")
 			.notNull()
-			.$type<import("../../shared/notifications/kinds").NotificationLevel>(),
+			.$type<
+				import("../../shared/notifications/kinds").NotificationLevel
+			>(),
 		/** Where the call to action goes — a view address. */
 		href: text("href").notNull(),
 		/** Substitution values for the kind's text. */
 		vars: jsonb("vars")
 			.notNull()
 			.default({})
-			.$type<import("../../shared/notifications/kinds").NotificationVars>(),
+			.$type<
+				import("../../shared/notifications/kinds").NotificationVars
+			>(),
 		raisedAt: timestamp("raised_at").notNull().defaultNow(),
 		lastRaisedAt: timestamp("last_raised_at").notNull().defaultNow(),
 		readAt: timestamp("read_at"),
 		clearedAt: timestamp("cleared_at"),
-		clearedHow: text("cleared_how").$type<
-			import("../../shared/notifications/kinds").NotificationClearedHow
-		>()
+		clearedHow:
+			text("cleared_how").$type<
+				import("../../shared/notifications/kinds").NotificationClearedHow
+			>()
 	},
 	(t) => [
 		uniqueIndex("notifications_open_regarding_idx")
@@ -10725,7 +11541,10 @@ export const conversations = pgTable(
 	},
 	(t) => [
 		index("conversations_last_message_idx").on(t.lastMessageAt),
-		check("conversations_kind_check", sql`${t.kind} IN ('direct', 'group')`),
+		check(
+			"conversations_kind_check",
+			sql`${t.kind} IN ('direct', 'group')`
+		),
 		check(
 			"conversations_shape_check",
 			sql`(${t.kind} = 'direct' AND ${t.name} IS NULL AND ${t.hostUserId} IS NULL AND ${t.pairKey} IS NOT NULL) OR (${t.kind} = 'group' AND ${t.pairKey} IS NULL)`
@@ -10779,7 +11598,12 @@ export const conversationMessages = pgTable(
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
-	(t) => [index("conversation_messages_conversation_idx").on(t.conversationId, t.id)]
+	(t) => [
+		index("conversation_messages_conversation_idx").on(
+			t.conversationId,
+			t.id
+		)
+	]
 )
 
 /**
@@ -10799,7 +11623,7 @@ export const conversationAttachments = pgTable(
 		ordinal: integer("ordinal").notNull().default(0),
 		/** session | character | lorebook | file */
 		kind: text("kind").notNull(),
-		subjectId: integer("subject_id").notNull(),
+		subjectId: integer("subject_id").notNull()
 	},
 	(t) => [
 		uniqueIndex("conversation_attachments_uq").on(t.messageId, t.ordinal),
@@ -10850,14 +11674,17 @@ export const lorebookShares = pgTable(
 	]
 )
 
-export const conversationsRelations = relations(conversations, ({ one, many }) => ({
-	host: one(users, {
-		fields: [conversations.hostUserId],
-		references: [users.id]
-	}),
-	members: many(conversationMembers),
-	messages: many(conversationMessages)
-}))
+export const conversationsRelations = relations(
+	conversations,
+	({ one, many }) => ({
+		host: one(users, {
+			fields: [conversations.hostUserId],
+			references: [users.id]
+		}),
+		members: many(conversationMembers),
+		messages: many(conversationMessages)
+	})
+)
 
 export const conversationMembersRelations = relations(
 	conversationMembers,
@@ -10898,20 +11725,29 @@ export const conversationAttachmentsRelations = relations(
 	})
 )
 
-export const characterSharesRelations = relations(characterShares, ({ one }) => ({
-	character: one(characters, {
-		fields: [characterShares.characterId],
-		references: [characters.id]
-	}),
-	user: one(users, { fields: [characterShares.userId], references: [users.id] })
-}))
+export const characterSharesRelations = relations(
+	characterShares,
+	({ one }) => ({
+		character: one(characters, {
+			fields: [characterShares.characterId],
+			references: [characters.id]
+		}),
+		user: one(users, {
+			fields: [characterShares.userId],
+			references: [users.id]
+		})
+	})
+)
 
 export const lorebookSharesRelations = relations(lorebookShares, ({ one }) => ({
 	lorebook: one(lorebooks, {
 		fields: [lorebookShares.lorebookId],
 		references: [lorebooks.id]
 	}),
-	user: one(users, { fields: [lorebookShares.userId], references: [users.id] })
+	user: one(users, {
+		fields: [lorebookShares.userId],
+		references: [users.id]
+	})
 }))
 
 // ── Voicebank (speech build lane C, seam S4, 2026-10-28) ────────────────────
@@ -10975,9 +11811,12 @@ export const voicebankVoices = pgTable(
 	]
 )
 
-export const voicebankVoicesRelations = relations(voicebankVoices, ({ one }) => ({
-	loadout: one(loadouts, {
-		fields: [voicebankVoices.loadoutId],
-		references: [loadouts.id]
+export const voicebankVoicesRelations = relations(
+	voicebankVoices,
+	({ one }) => ({
+		loadout: one(loadouts, {
+			fields: [voicebankVoices.loadoutId],
+			references: [loadouts.id]
+		})
 	})
-}))
+)

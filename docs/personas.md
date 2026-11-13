@@ -25,7 +25,7 @@ Your persona in the Characters list with a small person icon after its name, and
 
 ### Use it in a session
 
-When you start a session, **Who you play as** shows your default persona, already chosen; **Change** picks another of your personas, or any character with **Show all characters**. See [Sessions](./sessions.md#start-a-session).
+When you start a session, **Who you play as** shows your default persona, already chosen; **Change** picks another of your personas, or any character with **Show all characters**. See [Sessions](./sessions.md#start-a-session). Where a genre names your seat (**Take a seat**), naming your character also creates a cast member for them in the session's lorebook.
 
 ## Everyday use
 

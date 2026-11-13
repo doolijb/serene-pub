@@ -6,13 +6,16 @@
  * Two sources, one ending:
  *
  * - a **shipped kit** is an SDK primer (`primers()`, `core:primer/…@N` or a
- *   plugin's): catalogue data, never a row, so it is immutable by
- *   construction. `writePrimerInto` writes its world into a row.
+ *   plugin's). Booted, it is imported as an immutable `starter_kit` row
+ *   carrying a provided mark (`plugins/providedPrimers.ts`, M2e ★M2e-1); the
+ *   list and a start read that row. Until the row exists (no admin yet) the
+ *   catalogue answers as before. `writePrimerInto` writes its world into a row.
  * - an **admin kit** is a `lorebooks` row of book kind `starter_kit`, owned by
  *   the admin who saved or cloned it, edited in place with the ordinary
- *   lorebook sockets. It is copied with `duplicateLorebookRows`; a copy for
- *   anyone but its owner takes its cast's character cards as its own
- *   (`ownCastCards`), so no kit ever lends out a card.
+ *   lorebook sockets. It is copied with `duplicateLorebookRows`; a copy's cast
+ *   is card-less, each member through `makeMemberCardless` (cause `starter`),
+ *   so no kit ever lends out a card and a copy of a provided row shares none
+ *   with the row, which stays immutable.
  *
  * Either way the target row ends with the kit's Rules (`primary_ruleset`,
  * `ruleset_version`) and the book kind it was made as (`bookFromKit`).
@@ -22,7 +25,7 @@
  * (plan §C), and a primer's `compendiumMode` is not read.
  *
  * ⚠ Every write takes the `tx` it is handed. The work that needs the module
- * `db` — character avatars, a cover's file, the vectorizer — is what
+ * `db` — a cover's file, the vectorizer — is what
  * `afterKitCopy` does once the transaction has committed.
  */
 
@@ -40,6 +43,9 @@ import {
 	type PrimerDecl
 } from "@serene-pub/sdk"
 import { locationSlot } from "@serene-pub/core-catalog"
+import { isDisabledProvidedBook, markedBook } from "$lib/server/plugins/providedMarks"
+import { insertCastMember } from "$lib/server/characters/versions"
+import { makeMemberCardless } from "$lib/server/cast/cardless"
 import { duplicateLorebookRows } from "$lib/server/utils/lorebookDuplicate"
 import { entryInsert, nextPosition } from "$lib/server/utils/lorebookEntries"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
@@ -67,6 +73,8 @@ export type ResolvedKit =
 				primaryRuleset: string
 				rulesetVersion: string | null
 			}
+			/** A provided row (a primer imported at boot): its copy takes every card, and carries no mark. */
+			provided: boolean
 			name: string
 	  }
 
@@ -146,17 +154,14 @@ export async function resolveKit(
 		const primer = getPrimer(ref.primerId)
 		if (!primer || primerIsEmpty(primer.content))
 			throw new Error(STARTER_KIT_SENTENCES.unknown)
+		// 🚧 (M2e) A primer imported as a row is read as its row.
+		const found = await primerRowOf(db, primer.id)
+		if (found) return kitOfRow(found.row)
 		return { source: "primer", primer, name: primerName(primer) }
 	}
 	if (ref && "lorebookId" in ref) {
 		const [row] = await db
-			.select({
-				id: schema.lorebooks.id,
-				name: schema.lorebooks.name,
-				userId: schema.lorebooks.userId,
-				primaryRuleset: schema.lorebooks.primaryRuleset,
-				rulesetVersion: schema.lorebooks.rulesetVersion
-			})
+			.select(kitRowColumns)
 			.from(schema.lorebooks)
 			.where(
 				and(
@@ -167,9 +172,73 @@ export async function resolveKit(
 			)
 			.limit(1)
 		if (!row) throw new Error(STARTER_KIT_SENTENCES.unknown)
-		return { source: "book", row, name: row.name }
+		return kitOfRow(row)
 	}
 	throw new Error(STARTER_KIT_SENTENCES.unknown)
+}
+
+const kitRowColumns = {
+	id: schema.lorebooks.id,
+	name: schema.lorebooks.name,
+	userId: schema.lorebooks.userId,
+	primaryRuleset: schema.lorebooks.primaryRuleset,
+	rulesetVersion: schema.lorebooks.rulesetVersion,
+	uuid: schema.lorebooks.uuid,
+	extraJson: schema.lorebooks.extraJson
+}
+
+/** A kit row as a resolved kit; a disabled provided row is refused as unknown (hidden everywhere). */
+function kitOfRow(row: {
+	id: number
+	name: string
+	userId: number
+	primaryRuleset: string
+	rulesetVersion: string | null
+	uuid: string
+	extraJson: unknown
+}): ResolvedKit {
+	if (isDisabledProvidedBook(row.extraJson, row.uuid))
+		throw new Error(STARTER_KIT_SENTENCES.unknown)
+	const { uuid, extraJson } = row
+	return {
+		source: "book",
+		row: {
+			id: row.id,
+			name: row.name,
+			userId: row.userId,
+			primaryRuleset: row.primaryRuleset,
+			rulesetVersion: row.rulesetVersion
+		},
+		provided: !!markedBook(extraJson, uuid),
+		name: row.name
+	}
+}
+
+/** The owner of a primer id (`core:primer/…` → `core`): the provided mark's `plugin`. */
+export const primerOwnerOf = (primerId: string): string =>
+	primerId.slice(0, Math.max(primerId.indexOf(":"), 0))
+
+/**
+ * 🚧 (M2e) The row a primer was imported as, found by its genuine mark
+ * (owner, slug = the primer id), disabled or not; null before it has one.
+ */
+export async function primerRowOf(db: Db, primerId: string) {
+	const rows = await db
+		.select()
+		.from(schema.lorebooks)
+		.where(
+			and(
+				eq(schema.lorebooks.kind, STARTER_KIT_KIND),
+				isNull(schema.lorebooks.sessionId),
+				sql`${schema.lorebooks.extraJson}->'provided'->>'plugin' = ${primerOwnerOf(primerId)}`,
+				sql`${schema.lorebooks.extraJson}->'provided'->>'slug' = ${primerId}`
+			)
+		)
+	for (const row of rows) {
+		const mark = markedBook(row.extraJson, row.uuid)
+		if (mark) return { row, mark }
+	}
+	return null
 }
 
 /** The kit's Rules, as a book or a session takes them. */
@@ -209,7 +278,7 @@ export async function kitReadRefusal(
 
 /** What `starterKits:list` shows of one kit. */
 export interface StarterKitCard {
-	/** `primer:<id>` or `book:<lorebookId>` — what `starterKit` / `starterKits:clone` take. */
+	/** `book:<lorebookId>`; `primer:<id>` only for a primer with no row yet — what `starterKit` / `starterKits:clone` take. */
 	id: string
 	/** Where it comes from: core's catalogue, a plugin's, or a pub admin. */
 	source: "core" | "plugin" | "admin"
@@ -222,35 +291,32 @@ export interface StarterKitCard {
 	ownerName?: string
 	/** True when the asker made it (and so edits it in place). Admin kits only. */
 	mine?: boolean
+	/** 🚧 (M2e) A primer imported as a row: whose it is, its slug, and whether an administrator switched it off. Absent on admin kits and on a primer with no row yet. */
+	provided?: { pluginId: string; slug: string; disabled: boolean }
 }
 
 const rulesNameOf = (id: string): string => i18nText(getRuleset(id)?.name) ?? id
 
-/** Every kit anyone may start from: the shipped ones, then the pub's admin kits by name. */
+/**
+ * Every kit anyone may start from: the provided ones (core's and plugins'
+ * primers, as their rows) then the pub's admin kits by name. A disabled
+ * provided row is left out unless `includeDisabled` (the caller passes it for
+ * admins only). A primer with no row yet is still listed from the catalogue.
+ */
 export async function starterKitCards(
 	db: Db,
-	userId: number
+	userId: number,
+	opts: { includeDisabled?: boolean } = {}
 ): Promise<StarterKitCard[]> {
-	const shipped: StarterKitCard[] = shippedKits().map((p) => ({
-		id: kitCardId({ primerId: p.id }),
-		source: p.id.startsWith("core:") ? "core" : "plugin",
-		name: primerName(p),
-		description: i18nText(p.description) ?? "",
-		rulesId: p.ruleset,
-		rulesName: rulesNameOf(p.ruleset),
-		counts: {
-			entries: p.content.entries.length + p.content.leads.length,
-			places: p.content.places.length,
-			cast: p.content.cast.length
-		}
-	}))
-	const rows = await db
+	const all = await db
 		.select({
 			id: schema.lorebooks.id,
 			name: schema.lorebooks.name,
 			description: schema.lorebooks.description,
 			userId: schema.lorebooks.userId,
 			primaryRuleset: schema.lorebooks.primaryRuleset,
+			uuid: schema.lorebooks.uuid,
+			extraJson: schema.lorebooks.extraJson,
 			username: schema.users.username,
 			displayName: schema.users.displayName
 		})
@@ -263,7 +329,11 @@ export async function starterKitCards(
 			)
 		)
 		.orderBy(schema.lorebooks.name, schema.lorebooks.id)
-	const ids = rows.map((r) => r.id)
+	const marked = all.map((r) => ({ r, mark: markedBook(r.extraJson, r.uuid) }))
+	const rows = marked.filter(
+		({ r }) => opts.includeDisabled || !isDisabledProvidedBook(r.extraJson, r.uuid)
+	)
+	const ids = rows.map(({ r }) => r.id)
 	const entryCounts = ids.length
 		? await db
 				.select({
@@ -291,11 +361,10 @@ export async function starterKitCards(
 				.where(inArray(schema.lorebookBindings.lorebookId, ids))
 				.groupBy(schema.lorebookBindings.lorebookId)
 		: []
-	const admin: StarterKitCard[] = rows.map((r) => {
+	const cardOfRow = ({ r, mark }: (typeof marked)[number]): StarterKitCard => {
 		const e = entryCounts.find((c) => c.lorebookId === r.id)
-		return {
+		const base = {
 			id: kitCardId({ lorebookId: r.id }),
-			source: "admin",
 			name: r.name,
 			description: r.description,
 			rulesId: r.primaryRuleset,
@@ -306,12 +375,47 @@ export async function starterKitCards(
 				cast: Number(
 					castCounts.find((c) => c.lorebookId === r.id)?.cast ?? 0
 				)
-			},
+			}
+		}
+		if (mark)
+			return {
+				...base,
+				source: mark.plugin === "core" ? "core" : "plugin",
+				provided: {
+					pluginId: mark.plugin,
+					slug: mark.slug,
+					disabled: mark.disabled === true
+				}
+			}
+		return {
+			...base,
+			source: "admin",
 			ownerName: r.displayName || r.username,
 			mine: r.userId === userId
 		}
-	})
-	return [...shipped, ...admin]
+	}
+	const provided = rows.filter((x) => x.mark).map(cardOfRow)
+	const admin = rows.filter((x) => !x.mark).map(cardOfRow)
+	// A primer with no row yet (no admin has existed): the catalogue answers.
+	const hasRow = new Set(
+		marked.flatMap(({ mark }) => (mark ? [mark.slug] : []))
+	)
+	const catalogue: StarterKitCard[] = shippedKits()
+		.filter((p) => !hasRow.has(p.id))
+		.map((p) => ({
+			id: kitCardId({ primerId: p.id }),
+			source: p.id.startsWith("core:") ? "core" : "plugin",
+			name: primerName(p),
+			description: i18nText(p.description) ?? "",
+			rulesId: p.ruleset,
+			rulesName: rulesNameOf(p.ruleset),
+			counts: {
+				entries: p.content.entries.length + p.content.leads.length,
+				places: p.content.places.length,
+				cast: p.content.cast.length
+			}
+		}))
+	return [...catalogue, ...provided, ...admin]
 }
 
 // ── One kit, copied into a row ──────────────────────────────────────────────
@@ -319,12 +423,6 @@ export async function starterKitCards(
 /** What a copy leaves for after its transaction: the files and queues the module `db` writes. */
 export interface KitCopy {
 	lorebookId: number
-	/** Cards made or copied for the asker, each with the avatar its copy still needs. */
-	cards: {
-		characterId: number
-		name: string
-		avatarFromMediaId: number | null
-	}[]
 	/** The kit row the copy came from, when its cover is to be re-stored for the copy. */
 	coverFrom: number | null
 }
@@ -361,14 +459,13 @@ export async function bookFromKit(
 				...own
 			})
 			.returning({ id: schema.lorebooks.id })
-		const { characterIds } = await writePrimerInto(tx, {
+		await writePrimerInto(tx, {
 			lorebookId: row.id,
 			userId: opts.userId,
 			primer: kit.primer
 		})
 		return {
 			lorebookId: row.id,
-			cards: characterIds.map((c) => ({ ...c, avatarFromMediaId: null })),
 			coverFrom: null
 		}
 	}
@@ -378,27 +475,39 @@ export async function bookFromKit(
 		opts.userId,
 		opts.name
 	)
+	// A copy of a provided row is a clone: it carries no mark (the copy's uuid
+	// would not match it anyway) and its cast is card-less, so it shares no
+	// card with the row, which stays immutable.
+	let extraJson: object | undefined
+	if (kit.provided) {
+		const [copied] = await tx
+			.select({ extraJson: schema.lorebooks.extraJson })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, id))
+		const { provided: _provided, ...rest } = (copied?.extraJson ?? {}) as Record<string, unknown>
+		extraJson = rest
+	}
 	await tx
 		.update(schema.lorebooks)
-		.set(own)
+		.set(extraJson ? { ...own, extraJson } : own)
 		.where(eq(schema.lorebooks.id, id))
-	const cards = await ownCastCards(tx, id, opts.userId)
-	return { lorebookId: id, cards, coverFrom: kit.row.id }
+	await makeCopyCardless(tx, id)
+	return { lorebookId: id, coverFrom: kit.row.id }
 }
 
 /**
- * A copied book's cast, on cards the copy's owner owns: every card another
- * person owns is copied to `userId` (`characters:duplicate`'s column rule:
- * no folder, favourite, default-persona claim or card lorebook link) and the
- * copy's members, and its annotations' character keys, are pointed at the
- * copies. One copy per card, however many members bind it. Runs on `tx` only;
- * the avatars are `afterKitCopy`'s.
+ * A copied book's cast, made card-less (plan §34.2; owner 2026-11-05: "every
+ * starter copies people card-less"). Every member of the copy goes through
+ * `makeMemberCardless` (cause `starter`), whoever asks, the asker's own cards
+ * included: the words, sprite sets, gallery, sheets and faces come onto the
+ * member, and its files are the asker's. Then the copy's annotations that named
+ * a card by `character:<id>` name the member that card was linked to instead
+ * (`cast_member:<id>`, no `character_id`; a book links a card to one member at
+ * most, `lorebook_bindings_character_unique`). Where an entry already holds a
+ * row under the member's key, that row gives way to the card's (the key is the
+ * table's primary key with the entry). Runs on `tx` only.
  */
-export async function ownCastCards(
-	tx: Db,
-	lorebookId: number,
-	userId: number
-): Promise<KitCopy["cards"]> {
+async function makeCopyCardless(tx: Db, lorebookId: number): Promise<void> {
 	const members = await tx
 		.select({
 			id: schema.lorebookBindings.id,
@@ -406,96 +515,39 @@ export async function ownCastCards(
 		})
 		.from(schema.lorebookBindings)
 		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
-	const cardIds = [
-		...new Set(
-			members
-				.map((m) => m.characterId)
-				.filter((c): c is number => c != null)
-		)
-	]
-	if (!cardIds.length) return []
-	const foreign = await tx
-		.select()
-		.from(schema.characters)
-		.where(
-			and(
-				inArray(schema.characters.id, cardIds),
-				sql`${schema.characters.userId} <> ${userId}`
-			)
-		)
-	const out: KitCopy["cards"] = []
-	for (const original of foreign) {
-		const {
-			id: oldId,
-			uuid: _uuid,
-			userId: _userId,
-			folderId: _folderId,
-			isFavorite: _isFavorite,
-			isDefaultPersona: _isDefaultPersona,
-			avatarMediaId,
-			createdAt: _createdAt,
-			updatedAt: _updatedAt,
-			embedding: _embedding,
-			embeddingModel: _embeddingModel,
-			embeddingSourceHash: _embeddingSourceHash,
-			embedTextHash: _embedTextHash,
-			vectorizedAt: _vectorizedAt,
-			lorebookId: _lorebookId,
-			...card
-		} = original as typeof original & Record<string, any>
-		const [copy] = await tx
-			.insert(schema.characters)
-			.values({ ...(card as any), userId, lorebookId: null })
-			.returning({
-				id: schema.characters.id,
-				name: schema.characters.name
-			})
+	for (const m of members)
+		await makeMemberCardless(tx, m.id, { cause: "starter" })
+	const entryIds = tx
+		.select({ id: schema.lorebookEntries.id })
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
+	for (const { id, characterId: cardId } of members) {
+		if (cardId == null) continue
+		const memberKey = `cast_member:${id}`
 		await tx
-			.update(schema.lorebookBindings)
-			.set({ characterId: copy.id })
-			.where(
-				and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					eq(schema.lorebookBindings.characterId, oldId)
-				)
-			)
-		// The copy's annotations name its card by id; the copied card is the one they mean now.
-		const entryIds = tx
-			.select({ id: schema.lorebookEntries.id })
-			.from(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
-		await tx
-			.update(schema.entryAnnotations)
-			.set({ characterId: copy.id })
+			.delete(schema.entryAnnotations)
 			.where(
 				and(
 					inArray(schema.entryAnnotations.entryId, entryIds),
-					eq(schema.entryAnnotations.characterId, oldId)
+					eq(schema.entryAnnotations.entityKey, memberKey)
 				)
 			)
 		await tx
 			.update(schema.entryAnnotations)
-			.set({ entityKey: `character:${copy.id}` })
+			.set({ entityKey: memberKey, characterId: null })
 			.where(
 				and(
 					inArray(schema.entryAnnotations.entryId, entryIds),
-					eq(schema.entryAnnotations.entityKey, `character:${oldId}`)
+					eq(schema.entryAnnotations.entityKey, `character:${cardId}`)
 				)
 			)
-		out.push({
-			characterId: copy.id,
-			name: copy.name,
-			avatarFromMediaId: avatarMediaId ?? null
-		})
 	}
-	return out
 }
 
 /**
- * What a kit copy does once its transaction has committed: each copied card
- * gets its own avatar file, the copy its own cover, and the copy and its new
- * cards go to the vectorizer. Best-effort, like `characters:duplicate`: the
- * book stands without a face or a cover. Uses the module `db`.
+ * What a kit copy does once its transaction has committed: the copy gets its
+ * own cover and goes to the vectorizer. Best-effort: the book stands without a
+ * cover or a place in the search queue. Uses the module `db`.
  */
 export async function afterKitCopy(
 	copy: KitCopy,
@@ -503,34 +555,12 @@ export async function afterKitCopy(
 	ownerName: string
 ): Promise<void> {
 	const { db } = await import("$lib/server/db")
-	const { readMedia } = await import("$lib/server/media")
-	const { MediaVariant } = await import(
-		"$lib/shared/constants/MediaVisibility"
-	)
-	const { handleCharacterAvatarUpload } = await import("$lib/server/utils")
-	for (const card of copy.cards) {
-		if (!card.avatarFromMediaId) continue
-		try {
-			const avatar = await readMedia(
-				db as unknown as Db,
-				card.avatarFromMediaId,
-				MediaVariant.ORIGINAL
-			)
-			if (avatar)
-				await handleCharacterAvatarUpload({
-					character: { id: card.characterId, userId },
-					avatarFile: Buffer.from(avatar.bytes)
-				})
-		} catch (error) {
-			console.error("A starter lorebook's card kept no face:", error)
-		}
-	}
 	if (copy.coverFrom != null) {
 		const { ownCopiedCover } = await import("$lib/server/sockets/lorebooks")
 		await ownCopiedCover(copy.lorebookId, userId)
 	}
 	try {
-		const { autoEnqueueLorebook, autoEnqueueCharacter } = await import(
+		const { autoEnqueueLorebook } = await import(
 			"$lib/server/embedding/vectorizationQueue"
 		)
 		const [book] = await db
@@ -539,8 +569,6 @@ export async function afterKitCopy(
 			.where(eq(schema.lorebooks.id, copy.lorebookId))
 		if (book)
 			await autoEnqueueLorebook(copy.lorebookId, book.name, ownerName)
-		for (const card of copy.cards)
-			await autoEnqueueCharacter(card.characterId, card.name)
 	} catch (error) {
 		console.error("A starter lorebook's copy was not queued for search:", error)
 	}
@@ -572,6 +600,67 @@ function slotHolding(
 	)?.id
 }
 
+/** One primer entry, place or lead, as the entry row it becomes. */
+export interface PrimerItem {
+	key: string
+	kind: "entry" | "place" | "lead"
+	typeId: string
+	title: string
+	content: string
+	keys: readonly string[]
+	fields?: Readonly<Record<string, unknown>>
+}
+
+/** A primer's entries, then its places, then its leads (the order they are written in). */
+export function primerItems(c: PrimerContent): PrimerItem[] {
+	return [
+		...c.entries.map((e) => ({
+			key: e.key,
+			kind: "entry" as const,
+			typeId: e.type,
+			title: e.title,
+			content: e.content,
+			keys: e.keys ?? [],
+			fields: e.fields
+		})),
+		...c.places.map((p) => ({
+			key: p.key,
+			kind: "place" as const,
+			typeId: LOCATION_TYPE_ID,
+			title: p.title,
+			content: p.content,
+			keys: p.keys ?? [],
+			fields: p.fields
+		})),
+		...c.leads.map((l) => ({
+			key: l.key,
+			kind: "lead" as const,
+			typeId: WORLD_LORE_TYPE_ID,
+			title: l.title,
+			content: l.content,
+			keys: [l.title],
+			fields: { category: LEAD_CATEGORY }
+		}))
+	]
+}
+
+/** The entry row a primer item becomes at `position` of its type. */
+export function primerItemRow(
+	item: PrimerItem,
+	lorebookId: number,
+	position: number
+) {
+	return entryInsert({
+		...(item.fields ?? {}),
+		lorebookId,
+		typeId: storedTypeId(item.typeId),
+		name: item.title,
+		content: item.content,
+		keys: [...item.keys],
+		position
+	} as never)
+}
+
 /**
  * 🚧 Write a primer's world into `lorebookId`, as rows of the book's own:
  *
@@ -582,8 +671,8 @@ function slotHolding(
  *   (*leads to*, the exit's name and description) and, where a registered
  *   slot holds the ruleset's exits repertoire for places, an exit piece on
  *   the place (`towards: location:<id>`, as the Dungeon Crawler writes them);
- * - **cast**: a character card for `userId` and a cast member binding it
- *   (`deriveNextBindingToken`), its sheet's stats and its pieces (into the
+ * - **cast**: a card-less cast member (`deriveNextBindingToken`; its name and
+ *   description are the member's own words), its sheet's stats and its pieces (into the
  *   slot that holds each repertoire) and where it is found
  *   (`core:slot/location@1`) as the book's stats, on main;
  * - **relationships**: a cast tie is two perspective rows (the reverse label
@@ -597,8 +686,11 @@ function slotHolding(
 export async function writePrimerInto(
 	tx: Db,
 	input: { lorebookId: number; userId: number; primer: PrimerDecl }
-): Promise<{ characterIds: { characterId: number; name: string }[] }> {
-	const { lorebookId, userId, primer } = input
+): Promise<{
+	/** Each primer entry, place and lead key → the entry row it became. */
+	entryIds: Record<string, number>
+}> {
+	const { lorebookId, primer } = input
 	const c = primer.content
 	await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
 	await tx
@@ -615,14 +707,8 @@ export async function writePrimerInto(
 	const entryOf = new Map<string, number>()
 	const memberOf = new Map<string, number>()
 
-	const insertEntry = async (row: {
-		typeId: string
-		title: string
-		content: string
-		keys?: readonly string[]
-		fields?: Readonly<Record<string, unknown>>
-	}): Promise<number> => {
-		const typeId = storedTypeId(row.typeId)
+	const insertEntry = async (item: PrimerItem): Promise<number> => {
+		const typeId = storedTypeId(item.typeId)
 		if (!entryDeclaration(typeId))
 			throw new Error(
 				`This starter lorebook needs the entry type '${typeId}', which this pub doesn't have installed.`
@@ -630,53 +716,17 @@ export async function writePrimerInto(
 		const [made] = await tx
 			.insert(schema.lorebookEntries)
 			.values(
-				entryInsert({
-					...(row.fields ?? {}),
+				primerItemRow(
+					item,
 					lorebookId,
-					typeId,
-					name: row.title,
-					content: row.content,
-					keys: [...(row.keys ?? [])],
-					position: await nextPosition(tx, lorebookId, typeId)
-				} as never)
+					await nextPosition(tx, lorebookId, typeId)
+				)
 			)
 			.returning({ id: schema.lorebookEntries.id })
 		return made.id
 	}
 
-	for (const e of c.entries)
-		entryOf.set(
-			e.key,
-			await insertEntry({
-				typeId: e.type,
-				title: e.title,
-				content: e.content,
-				keys: e.keys,
-				fields: e.fields
-			})
-		)
-	for (const p of c.places)
-		entryOf.set(
-			p.key,
-			await insertEntry({
-				typeId: LOCATION_TYPE_ID,
-				title: p.title,
-				content: p.content,
-				keys: p.keys,
-				fields: p.fields
-			})
-		)
-	for (const l of c.leads)
-		entryOf.set(
-			l.key,
-			await insertEntry({
-				typeId: WORLD_LORE_TYPE_ID,
-				title: l.title,
-				content: l.content,
-				keys: [l.title],
-				fields: { category: LEAD_CATEGORY }
-			})
-		)
+	for (const item of primerItems(c)) entryOf.set(item.key, await insertEntry(item))
 
 	const values: (typeof schema.attributeValues.$inferInsert)[] = []
 	const stat = (
@@ -728,26 +778,15 @@ export async function writePrimerInto(
 			stat("location", from, exitsSlot, pieces)
 	}
 
-	// The cast: a card each, bound into the book, with its sheet and pieces.
-	const made: { characterId: number; name: string }[] = []
+	// The cast: a card-less member each, with its sheet and pieces.
 	for (const m of c.cast) {
-		const [card] = await tx
-			.insert(schema.characters)
-			.values({ userId, name: m.name, description: m.description })
-			.returning({
-				id: schema.characters.id,
-				name: schema.characters.name
-			})
-		made.push({ characterId: card.id, name: card.name })
-		const [member] = await tx
-			.insert(schema.lorebookBindings)
-			.values({
-				lorebookId,
-				characterId: card.id,
-				binding: await deriveNextBindingToken(lorebookId, tx),
-				name: m.name
-			})
-			.returning({ id: schema.lorebookBindings.id })
+		const { member } = await insertCastMember(tx, {
+			lorebookId,
+			characterId: null,
+			binding: await deriveNextBindingToken(lorebookId, tx),
+			name: m.name,
+			description: m.description
+		})
 		memberOf.set(m.key, member.id)
 		for (const [slotId, v] of Object.entries(m.sheet ?? {}))
 			if (getAttributeSlot(slotId))
@@ -837,5 +876,5 @@ export async function writePrimerInto(
 				.onConflictDoNothing()
 		}
 	}
-	return { characterIds: made }
+	return { entryIds: Object.fromEntries(entryOf) }
 }

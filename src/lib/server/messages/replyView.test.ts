@@ -37,3 +37,45 @@ describe("replyView — a stray voice's label at the front", () => {
 		expect(view.content).toBe("Dungeon Master: As you walk…")
 	})
 })
+
+describe("replyView — the speaker re-anchors after a stray opening", () => {
+	const aria = { ownLabels: ["Aria"], strayLabels: ["Narrator"] }
+	const run = (text: string, final = true, f = aria) =>
+		replyView(text, undefined, f, { final }).content
+
+	test("narration kept, both labels off", () => {
+		expect(run("Narrator: The wind rises.\n\nAria: Hi there.")).toBe(
+			"The wind rises.\n\nHi there."
+		)
+	})
+
+	test("the emphasised own label too", () => {
+		expect(run("Narrator: The wind rises.\n\n**Aria:** Hi there.")).toBe(
+			"The wind rises.\n\nHi there."
+		)
+		expect(run("Narrator: The wind rises.\n\n**Aria**: Hi there.")).toBe(
+			"The wind rises.\n\nHi there."
+		)
+	})
+
+	test("streaming: a partial own label at a line start is held back", () => {
+		expect(run("Narrator: The wind rises.\n\nAri", false)).toBe(
+			"The wind rises.\n\n"
+		)
+		expect(run("Narrator: The wind rises.\n\nAria: Hi", false)).toBe(
+			"The wind rises.\n\nHi"
+		)
+	})
+
+	test("no stray front label: a later own label is kept", () => {
+		const text = "The wind rises.\n\nAria: Hi there."
+		expect(run(text)).toBe(text)
+		expect(run("The wind rises.\n\nAri", false)).toBe(
+			"The wind rises.\n\nAri"
+		)
+	})
+
+	test("a reply opening with the own label only is unchanged behaviour", () => {
+		expect(run("Aria: Hi there.\n\nMore.")).toBe("Hi there.\n\nMore.")
+	})
+})

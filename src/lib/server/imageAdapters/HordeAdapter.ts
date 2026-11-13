@@ -157,8 +157,8 @@ const PROFILE_SCHEMA: SettingsSchema = {
 		default: false
 	},
 	loras: {
-		type: "text",
-		format: "json",
+		type: "json",
+		maxBytes: 65536,
 		label: "LoRAs",
 		description:
 			'A JSON list sent as `loras`, e.g. [{"name": "123456", "model": 1}]. Workers fetch them from CivitAI.',

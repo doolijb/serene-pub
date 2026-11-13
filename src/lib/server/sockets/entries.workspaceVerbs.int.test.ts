@@ -97,6 +97,8 @@ function receiptWith(
 		source: string
 		id: number
 		included: boolean
+		reason?: string
+		why?: string
 	}>
 ) {
 	return {
@@ -108,7 +110,8 @@ function receiptWith(
 				output: {
 					decisions: decisions.map((d) => ({
 						included: d.included,
-						reason: d.included ? "filled_scored" : "excluded_cap",
+						reason: d.reason ?? (d.included ? "filled_scored" : "excluded_cap"),
+						...(d.why ? { why: d.why } : {}),
 						candidate: {
 							source: d.source,
 							id: d.id,
@@ -333,6 +336,41 @@ describe("entries:recentDecisions", () => {
 			[fired.id]: "fired",
 			[considered.id]: "considered"
 		})
+		// An inclusion carries no reason; a left-out entry carries select's code.
+		expect(res.facts?.[fired.id]).not.toHaveProperty("reason")
+		expect(res.facts?.[fired.id]).not.toHaveProperty("why")
+		expect(res.facts?.[considered.id]?.reason).toBe("excluded_cap")
+		expect(res.facts?.[considered.id]).not.toHaveProperty("why")
+	}, 60_000)
+
+	test("a left-out entry's fact carries the stored reason and why", async () => {
+		const { entryRecentDecisionsHandler } = await import("./entries")
+		const user = await makeUser("workspace-decisions-reason")
+		const lorebook = await makeLorebook(user.id, "Reason Book")
+		const entry = await makeEntry(lorebook.id)
+		const session = await makeSession(user.id, lorebook.id)
+		await makeRun(
+			session.id,
+			user.id,
+			receiptWith([
+				{
+					source: "worldLore",
+					id: entry.id,
+					included: false,
+					reason: "excluded_ineligible",
+					why: "A secret the speaker does not hold."
+				}
+			])
+		)
+
+		const res = await entryRecentDecisionsHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: lorebook.id, sessionId: session.id },
+			noopEmit
+		)
+
+		expect(res.facts?.[entry.id]?.reason).toBe("excluded_ineligible")
+		expect(res.facts?.[entry.id]?.why).toBe("A secret the speaker does not hold.")
 	}, 60_000)
 
 	test("an inclusion by one branch wins over another branch's rejection", async () => {
@@ -345,7 +383,13 @@ describe("entries:recentDecisions", () => {
 			session.id,
 			user.id,
 			receiptWith([
-				{ source: "worldLore", id: entry.id, included: false },
+				{
+					source: "worldLore",
+					id: entry.id,
+					included: false,
+					reason: "excluded_ineligible",
+					why: "A secret the speaker does not hold."
+				},
 				{ source: "worldLore", id: entry.id, included: true }
 			])
 		)
@@ -357,6 +401,8 @@ describe("entries:recentDecisions", () => {
 		)
 
 		expect(res.decisions[entry.id]).toBe("fired")
+		expect(res.facts?.[entry.id]).not.toHaveProperty("reason")
+		expect(res.facts?.[entry.id]).not.toHaveProperty("why")
 	}, 60_000)
 
 	test("never reports a message candidate whose id matches an entry's", async () => {

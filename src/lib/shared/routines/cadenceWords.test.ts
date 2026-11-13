@@ -7,6 +7,7 @@ import {
 	afterEachRound,
 	afterEachScene,
 	afterEachTurn,
+	everyNRounds,
 	everyNTurns,
 	onEvent,
 	schedule,
@@ -24,6 +25,8 @@ describe("cadenceWords", () => {
 		expect(cadenceWords(afterEachScene())).toBe("After each scene")
 		expect(cadenceWords(everyNTurns({ n: 5 }))).toBe("Every 5 turns")
 		expect(cadenceWords(everyNTurns({ n: 1 }))).toBe("After each turn")
+		expect(cadenceWords(everyNRounds({ n: 2 }))).toBe("Every 2 rounds")
+		expect(cadenceWords(everyNRounds({ n: 1 }))).toBe("After each round")
 	})
 
 	test("the clocks: real time and story time", () => {

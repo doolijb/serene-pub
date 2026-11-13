@@ -94,6 +94,40 @@ describe("personMay matrix", () => {
 				}, 60_000)
 })
 
+describe("reply-run: a waiting reply is the room's to stop", () => {
+	const sid = () => (things.session as { id: number }).id
+	const runs = async () => await import("$lib/server/pipelines/runtime/runRegistry")
+
+	it("any session member may write; a stranger finds no session", async () => {
+		const r = await runs()
+		r._reset()
+		r.start({ runId: "ap-reply", userId: ids.owner, sessionId: sid(), kind: "reply" })
+		const thing: PersonThing = { kind: "reply-run", sessionId: sid(), runId: "ap-reply" }
+		expect((await personMay(db, people.guest, "write", thing)).ok).toBe(true)
+		expect((await personMay(db, people.owner, "write", thing)).ok).toBe(true)
+		expect(await personMay(db, people.stranger, "write", thing)).toEqual({
+			ok: false,
+			reason: "Session not found."
+		})
+		expect((await personMay(db, people.guest, "delete", thing)).ok).toBe(false)
+		r._reset()
+	}, 60_000)
+
+	it("a mismatched session, an action run, a line-bound run or no run is not a reply", async () => {
+		const r = await runs()
+		r._reset()
+		r.start({ runId: "ap-action", userId: ids.owner, sessionId: sid(), kind: "action" })
+		r.start({ runId: "ap-line", userId: ids.owner, sessionId: sid(), kind: "reply", lineBound: true })
+		r.start({ runId: "ap-elsewhere", userId: ids.owner, sessionId: sid() + 999, kind: "reply" })
+		const notYours = { ok: false, reason: "Not your run." }
+		for (const runId of ["ap-action", "ap-line", "ap-elsewhere", "ap-gone"])
+			expect(
+				await personMay(db, people.guest, "write", { kind: "reply-run", sessionId: sid(), runId })
+			).toEqual(notYours)
+		r._reset()
+	}, 60_000)
+})
+
 describe("actingPersonFor", () => {
 	it("press/send/view resolve the user, with isAdmin read from users", async () => {
 		expect(await actingPersonFor(db, { via: "send", userId: ids.admin })).toEqual({
@@ -137,5 +171,27 @@ describe("actingPersonFor", () => {
 		await db.update(schema.users).set({ isDeleted: true }).where(eq(schema.users.id, gone.id))
 		expect(await actingPersonFor(db, { via: "press", userId: gone.id })).toBeNull()
 		expect(await actingPersonFor(db, { via: "press", userId: 999_999 })).toBeNull()
+	}, 60_000)
+})
+
+describe("one decider: checkSessionAccess and personMay agree (M2d ★B)", () => {
+	it("owner / guest / stranger / missing, asked through the same handle", async () => {
+		const { checkSessionAccess } = await import("$lib/server/utils/sessionAccess")
+		const sessionId = (things.session as { id: number }).id
+		for (const who of ["owner", "guest", "stranger"] as const) {
+			const access = await checkSessionAccess(sessionId, ids[who], db as any)
+			const may = await personMay(db, people[who], "read", things.session)
+			expect(may.ok, who).toBe(access.hasAccess)
+			const mayWrite = await personMay(db, people[who], "write", things.session)
+			expect(mayWrite.ok, who).toBe(access.isOwner)
+		}
+		await db.transaction(async (tx) => {
+			const access = await checkSessionAccess(sessionId, ids.guest, tx as any)
+			expect(access).toEqual({ isOwner: false, isGuest: true, hasAccess: true })
+		})
+		const missing = await checkSessionAccess(987_654, ids.owner, db as any)
+		expect(missing.hasAccess).toBe(false)
+		const may = await personMay(db, people.owner, "read", { kind: "session", id: 987_654 })
+		expect(may).toEqual({ ok: false, reason: "Session not found." })
 	}, 60_000)
 })

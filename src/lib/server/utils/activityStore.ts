@@ -222,6 +222,19 @@ export type CompileHistoryEntryActivity = {
 	 */
 	connection?: ConnectionIdentity
 	pendingResult?: { content: string }
+	/**
+	 * 🚧 The scenes not yet compiled that this run read (its day's unfiled
+	 * scenes); filed under the entry when the review is applied (`acted`),
+	 * never on a discard, supersede or lapse. Memory only, never persisted.
+	 */
+	sceneIds?: number[]
+	/**
+	 * 🚧 ★S7-2: the by-date ask this run answers (`date` null = *Undated*),
+	 * with the ask's `requestId` when it sent one, so a Compile window — or
+	 * the Chronicle's request — takes only its own ask's run. Absent for an
+	 * entry ask. Memory only, never persisted.
+	 */
+	byDate?: { date: StoryDate | null; requestId?: string }
 	startedAt: string
 }
 
@@ -272,11 +285,31 @@ export type SessionSummarizeActivity = {
 	startedAt: string
 }
 
+/**
+ * A lorebook's entries being indexed for Search by meaning (playtest 2, §0-C):
+ * the progress the composer's notice used to carry. Written only by
+ * `embedding/indexingActivity.ts`; it ends by itself, so it has no result, no
+ * error and no Stop. `userId` is the BOOK's owner, who (with administrators)
+ * sees it.
+ */
+export type LorebookIndexingActivity = {
+	kind: "lorebook_indexing"
+	id: string
+	userId: number
+	lorebookId: number
+	lorebookLabel: string
+	status: "running"
+	indexedCount: number
+	total: number
+	startedAt: string
+}
+
 export type Activity =
 	| GraphBuildActivity
 	| SceneSummarizeActivity
 	| CompileHistoryEntryActivity
 	| SessionSummarizeActivity
+	| LorebookIndexingActivity
 
 type Emitter = (event: string, data: unknown) => void
 
@@ -507,6 +540,8 @@ class ActivityStore {
 			lorebookLabel: string
 			branchId: number | null
 			moment: StoryDate | null
+			sceneIds?: number[]
+			byDate?: { date: StoryDate | null; requestId?: string }
 		},
 		abortController?: AbortController
 	): string {
@@ -651,6 +686,46 @@ class ActivityStore {
 		this.broadcast(updated)
 	}
 
+	/** One activity per book: raise it, or move its counts. */
+	upsertLorebookIndexing(params: {
+		userId: number
+		lorebookId: number
+		lorebookLabel: string
+		indexedCount: number
+		total: number
+	}) {
+		const existing = [...this.activities.values()].find(
+			(a): a is LorebookIndexingActivity =>
+				a.kind === "lorebook_indexing" && a.lorebookId === params.lorebookId
+		)
+		const next: LorebookIndexingActivity = existing
+			? { ...existing, ...params }
+			: {
+					kind: "lorebook_indexing",
+					id: uuidv4(),
+					status: "running",
+					startedAt: new Date().toISOString(),
+					...params
+				}
+		this.activities.set(next.id, next)
+		this.broadcast(next)
+	}
+
+	/** The book's indexing is done or stopped: its activity goes. */
+	endLorebookIndexing(lorebookId: number) {
+		for (const [id, a] of this.activities) {
+			if (a.kind === "lorebook_indexing" && a.lorebookId === lorebookId)
+				this.remove(id, "lapsed")
+		}
+	}
+
+	/** Every book's indexing activity: the lane stopped. */
+	endAllLorebookIndexing() {
+		for (const [id, a] of this.activities) {
+			if (a.kind === "lorebook_indexing") this.remove(id, "lapsed")
+		}
+	}
+
 	setAbortController(id: string, controller: AbortController) {
 		this.abortControllers.set(id, controller)
 	}
@@ -658,6 +733,8 @@ class ActivityStore {
 	cancel(id: string) {
 		const existing = this.activities.get(id)
 		if (!existing) return
+		// Indexing is the lane's; it is never stopped from Activity.
+		if (existing.kind === "lorebook_indexing") return
 		this.abortControllers.get(id)?.abort()
 		this.abortControllers.delete(id)
 		this.remove(id, "dismissed")
@@ -700,6 +777,37 @@ class ActivityStore {
 	}
 
 	/**
+	 * 🚧 Set once at wiring time, like the discard hook above: invoked when a
+	 * compile review is applied (`acted`) and carries `sceneIds` — the callee
+	 * files those scenes under the entry. Never on a discard, a supersede or
+	 * a lapse.
+	 */
+	private compileReviewApplied?: (
+		activity: CompileHistoryEntryActivity
+	) => void | Promise<void>
+
+	setCompileReviewApplied(
+		fn: (activity: CompileHistoryEntryActivity) => void | Promise<void>
+	) {
+		this.compileReviewApplied = fn
+	}
+
+	/** 🚧 Set once at wiring time: invoked whenever a compile activity is removed, however it went (acted, dismissed, superseded, lapsed), AFTER the applied hook (when that runs) has settled, so its callee may still read what the applied hook reads. */
+	private compileCleared?: (
+		activity: CompileHistoryEntryActivity,
+		how: ActivityClearedHow
+	) => void | Promise<void>
+
+	setCompileCleared(
+		fn: (
+			activity: CompileHistoryEntryActivity,
+			how: ActivityClearedHow
+		) => void | Promise<void>
+	) {
+		this.compileCleared = fn
+	}
+
+	/**
 	 * Take an activity away, and clear the notification it raised with `how`.
 	 * Defaults to `dismissed` — the card going away unapplied, which is what
 	 * every caller but a save, a supersede or a lapse means.
@@ -737,6 +845,24 @@ class ActivityStore {
 				)
 			).catch(() => {})
 		}
+		const applied =
+			existing.kind === "compile_history_entry" &&
+			existing.status === "review" &&
+			how === "acted" &&
+			existing.sceneIds?.length &&
+			this.compileReviewApplied
+				? Promise.resolve(this.compileReviewApplied(existing)).catch(
+						(e) =>
+							console.warn(
+								"[activityStore] a compile review's scenes were not filed:",
+								e
+							)
+					)
+				: Promise.resolve()
+		if (existing.kind === "compile_history_entry" && this.compileCleared)
+			void applied
+				.then(() => this.compileCleared!(existing, how))
+				.catch(() => {})
 		for (const [fn, { userId, isAdmin }] of this.emitters) {
 			if (isAdmin || existing.userId === userId) {
 				try {

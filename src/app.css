@@ -265,6 +265,27 @@
    which Lamplight raised to the 10px row radius (L13, 2026-10-24); a 10px
    corner on a 20px-tall word reads as a pill. */
 @layer base {
+	/* Every enabled control shows the hand (owner, 2026-11-06: "Cursor
+	   behavior … not working correctly"). Tailwind 4 / Skeleton 5 leave
+	   buttons at `default`; zero specificity, so a component's own cursor
+	   (not-allowed, grab, zoom-in…) still wins. */
+	:where(
+			button,
+			[role="button"],
+			[role="tab"],
+			[role="option"],
+			[role="menuitem"],
+			[role="menuitemradio"],
+			[role="menuitemcheckbox"],
+			summary,
+			select,
+			label:has(> input[type="checkbox"], > input[type="radio"]),
+			input[type="checkbox"],
+			input[type="radio"]
+		):not(:disabled, [aria-disabled="true"]) {
+		cursor: pointer;
+	}
+
 	[data-theme="lamplight"] code {
 		border-radius: var(--radius-md);
 	}

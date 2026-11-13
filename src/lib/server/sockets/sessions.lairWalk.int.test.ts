@@ -21,12 +21,13 @@
  *  - Regenerate the last turn takes the roll forms and the dice with it.
  */
 
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf } from "$lib/server/state/seatRefs"
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -178,10 +179,27 @@ async function settle() {
 	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
 }
 
+/** ⏳ A character seat's ref as it is stored and emitted: member form with the switch on, else the card's. */
+const seatRef = async (cardId: number): Promise<string> => {
+	const card = `character:${cardId}`
+	return memberFormOn() ? (memberFormOf(await loadSeatMap(db as any, sessionId), card) ?? card) : card
+}
+
 const rowsOf = async () =>
 	db.select().from(schema.sessionMessages).where(eq(schema.sessionMessages.sessionId, sessionId)).orderBy(asc(schema.sessionMessages.id))
 
 const meta = (row: { metadata: unknown }) => (row.metadata ?? {}) as Record<string, any>
+
+/**
+ * The two books the walk's session reads: the lorebook and its own book (Session notes).
+ * A room a Lair pipeline writes goes to the own book; only Apply (a scene closing)
+ * carries it to the lorebook.
+ */
+async function booksRead(): Promise<number[]> {
+	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+	const own = await ownBookOf(db as any, sessionId)
+	return own ? [lorebookId, own.id] : [lorebookId]
+}
 
 async function blocksOf(messageId: number): Promise<any[]> {
 	const { blockTreesOf } = await import("$lib/server/messages/blocks")
@@ -189,9 +207,9 @@ async function blocksOf(messageId: number): Promise<any[]> {
 }
 
 async function turnOrder() {
-	const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+	const [row] = await db.select({ turnOrder: schema.sessions.turnOrder }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
 	const { readTurnOrder } = await import("@serene-pub/sdk")
-	return readTurnOrder(coreAnnexIn(row!.annex)).order
+	return readTurnOrder(row!).order
 }
 
 /** A person's line through the real send. */
@@ -411,7 +429,7 @@ describe("the Lair, rewritten: a walk", () => {
 		expect(sent?.error, sent?.error).toBeUndefined()
 		const planRow = await until(async () => (await rowsOf()).find((r) => r.channel === "sanctum" && meta(r).turnPlan))
 		const plan = meta(planRow).turnPlan
-		expect(plan.turns).toEqual([`character:${brannoc}`, `player-seat:${rookSeat}`, `character:${verity}`])
+		expect(plan.turns).toEqual([await seatRef(brannoc), `player-seat:${rookSeat}`, await seatRef(verity)])
 		expect(plan.waits).toEqual([`player-seat:${rookSeat}`])
 		expect(plan.rolls?.forms?.length).toBe(1)
 		rollRowId = plan.rolls.messageId
@@ -432,7 +450,7 @@ describe("the Lair, rewritten: a walk", () => {
 		diceRowId = dice.id
 		expect(meta(dice).speaker).toBe("envoy:oracle")
 		const [diceBlock] = await blocksOf(dice.id)
-		expect(diceBlock).toMatchObject({ kind: "dice", stat: check.label, against: 20, by: `character:${brannoc}` })
+		expect(diceBlock).toMatchObject({ kind: "dice", stat: check.label, against: 20, by: await seatRef(brannoc) })
 		expect(typeof diceBlock.rolled).toBe("number")
 		expect(meta(dice).diceWords).toBe(`Brannoc — ${check.label}: ${String(diceBlock.outcome).replace(/[.!]+$/, "")}.`)
 		const [stamped] = await blocksOf(rollRowId)
@@ -557,7 +575,7 @@ describe("the Lair, rewritten: a walk", () => {
 			const [row] = await db
 				.select()
 				.from(schema.lorebookEntries)
-				.where(and(eq(schema.lorebookEntries.lorebookId, lorebookId), eq(schema.lorebookEntries.title, "The Drowned Hall")))
+				.where(and(inArray(schema.lorebookEntries.lorebookId, await booksRead()), eq(schema.lorebookEntries.title, "The Drowned Hall")))
 			return row
 		})
 		await settle()
@@ -567,7 +585,7 @@ describe("the Lair, rewritten: a walk", () => {
 		const links = await db
 			.select()
 			.from(schema.narrativeRelationships)
-			.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
+			.where(inArray(schema.narrativeRelationships.lorebookId, await booksRead()))
 		const touching = links.filter((l) => l.fromEntryId === hall!.id || l.toEntryId === hall!.id)
 		// The draft's way to the Vault (in the entry's own commit), and the knock's way back to where the party stand.
 		expect(touching.some((l) => l.fromEntryId === hall!.id && l.toEntryId === rooms["The Vault"] && l.relationshipType === "leads east to")).toBe(true)
@@ -603,7 +621,7 @@ describe("the Lair, rewritten: a walk", () => {
 		const [shaft] = await db
 			.select()
 			.from(schema.lorebookEntries)
-			.where(and(eq(schema.lorebookEntries.lorebookId, lorebookId), eq(schema.lorebookEntries.title, "The Shaft")))
+			.where(and(inArray(schema.lorebookEntries.lorebookId, await booksRead()), eq(schema.lorebookEntries.title, "The Shaft")))
 		expect(shaft?.content).toBe("A narrow shaft of wet rock.\n\nExits: up → The Vault")
 		const [up] = await db
 			.select()
@@ -619,15 +637,28 @@ describe("the Lair, rewritten: a walk", () => {
 		const node = { key: "change", definitionId: "core:outlet/update-lore-entry" } as any
 		const out: any = await host.commit!({ entry: "The Vault", content: "A treasury, its seal broken.", fields: { category: "Vaults" } }, node)
 		expect(out.entryId).toBe(rooms["The Vault"])
+		// The change is the session's: held in its own book, the lorebook's row untouched.
+		expect(out.route).toBe("own-book")
+		expect(out.lorebookId).toBe(lorebookId)
 		const [vault] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, rooms["The Vault"]!))
-		expect(vault!.content).toBe("A treasury, its seal broken.")
-		expect((vault!.fields as any).category).toBe("Vaults")
+		expect(vault!.content).not.toBe("A treasury, its seal broken.")
+		const readVault = async () => {
+			const { sessionReadingOf } = await import("$lib/server/state/reading")
+			const { entryOverlaysFor, entryAt } = await import("$lib/server/state/entriesOnReading")
+			const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
+			const [row] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, rooms["The Vault"]!))
+			const reading = (await sessionReadingOf(db as any, sessionId))!
+			const overlays = await entryOverlaysFor(db as any, row!.lorebookId, reading, [row!.id])
+			return entryAt(toEntryRow(row!), overlays, reading) as any
+		}
+		const read = await readVault()
+		expect(read.content).toBe("A treasury, its seal broken.")
+		expect(read.category).toBe("Vaults")
 		await expect(host.commit!({ entry: rooms["The Vault"], fields: { terrain: "stone" } }, node)).rejects.toThrow(/terrain/)
 		await expect(host.commit!({ entry: "The Nowhere Room", content: "x" }, node)).rejects.toThrow(/nothing to change/)
 		// `null` clears a field.
 		await host.commit!({ entry: rooms["The Vault"], fields: { category: null } }, node)
-		const [cleared] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, rooms["The Vault"]!))
-		expect((cleared!.fields as any).category).toBeUndefined()
+		expect((await readVault()).category ?? null).toBeNull()
 	})
 
 	test("Regenerate the last turn takes the roll forms and the dice with it", async () => {
@@ -687,7 +718,7 @@ describe("The rules decide (was Rules and dice), Decide checks at once: the plan
 		expect(diceRow.id).toBeLessThan(planRow.id)
 		expect(meta(diceRow).answersForm).toBeUndefined()
 		const [block] = await blocksOf(diceRow.id)
-		expect(block).toMatchObject({ kind: "dice", stat: check.label, against: 10, by: `character:${brannoc}` })
+		expect(block).toMatchObject({ kind: "dice", stat: check.label, against: 10, by: await seatRef(brannoc) })
 		// No form was put to the GM: the delver's turn follows at once.
 		await until(async () => (await rowsOf()).find((r) => r.characterId === brannoc && !r.isGenerating))
 	})
@@ -766,7 +797,7 @@ describe("a ruleset with no dice: a comparison against the rules' bands (M2)", (
 		await send(ownerId, "The gatekeeper will not budge.")
 		const oracle = await until(async () => (await rowsOf()).find((r) => meta(r).speaker === "envoy:oracle" && meta(r).diceWords))
 		const [block] = await blocksOf(oracle.id)
-		expect(block).toMatchObject({ kind: "dice", method: "compare", stat: "Resist", against: 3, by: `character:${brannoc}` })
+		expect(block).toMatchObject({ kind: "dice", method: "compare", stat: "Resist", against: 3, by: await seatRef(brannoc) })
 		expect(typeof block.rolled).toBe("number")
 		expect(block.faces).toBeUndefined()
 		// The words with no number say how it was decided.
@@ -943,7 +974,7 @@ describe("🚧 S4/★F: a walk under Wherewithal — The rules decide plays the 
 		const dice = await until(async () => (await rowsOf()).find((r) => meta(r).answersForm?.messageId === rollRowId))
 		expect(meta(dice).speaker).toBe("envoy:oracle")
 		const [block] = await blocksOf(dice.id)
-		expect(block).toMatchObject({ kind: "dice", method: "compare", stat: "Mettle against mettle", against: 5, by: `character:${brannoc}` })
+		expect(block).toMatchObject({ kind: "dice", method: "compare", stat: "Mettle against mettle", against: 5, by: await seatRef(brannoc) })
 		expect(block.faces).toBeUndefined()
 		// Its outcome is one of the ruleset's own words.
 		expect(inlet.outcomes!.map((o) => o.label)).toContain(String(block.outcome).replace(/[.!]+$/, ""))
@@ -1018,7 +1049,7 @@ describe("🚧 S4: a walk under a ruleset made on the pub from scratch, with one
 		const oracle = await until(async () => (await rowsOf()).find((r) => meta(r).speaker === "envoy:oracle" && meta(r).diceWords))
 		expect(oracle.id).toBeLessThan(planRow.id)
 		const [block] = await blocksOf(oracle.id)
-		expect(block).toMatchObject({ kind: "dice", method: "compare", stat: "Nerve against the odds", against: 6, by: `character:${brannoc}` })
+		expect(block).toMatchObject({ kind: "dice", method: "compare", stat: "Nerve against the odds", against: 6, by: await seatRef(brannoc) })
 		expect(["Folds", "Holds"]).toContain(String(block.outcome).replace(/[.!]+$/, ""))
 		expect(meta(oracle).diceWords).toBe(`Brannoc — Nerve against the odds, by comparison: ${String(block.outcome).replace(/[.!]+$/, "")}.`)
 		await until(async () => (await rowsOf()).find((r) => r.characterId === brannoc && !r.isGenerating))

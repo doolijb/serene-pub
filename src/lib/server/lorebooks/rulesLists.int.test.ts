@@ -185,3 +185,27 @@ describe("the rules library", () => {
 		expect(made.entry.derivedFrom ?? null).toBeNull()
 	})
 })
+
+describe("🚧 ★50 other rules' lists (owner ruling 2026-11-04)", () => {
+	test("a Freeform book holding a Vis Itineris entry lists Vis Itineris's lists under otherRules; a plain book lists none", async () => {
+		const { entryTypesHandler } = await import("$lib/server/sockets/entries")
+		const me = await owner()
+		const plain = await book(me.id)
+		const bare = await entryTypesHandler.handler(as(me.id), { lorebookId: plain.id }, quiet)
+		expect(bare.otherRules).toEqual([])
+		// A provided or converted book can hold an entry of rules it is not told by.
+		await testDb.insert(schema.lorebookEntries).values({
+			lorebookId: plain.id,
+			typeId: WEAPONS,
+			typeVersion: 1,
+			title: "Club",
+			position: 0
+		})
+		const res = await entryTypesHandler.handler(as(me.id), { lorebookId: plain.id }, quiet)
+		expect(res.rulesName).toBe("Freeform")
+		expect(res.types.some((t) => t.typeId === WEAPONS)).toBe(false)
+		expect(res.otherRules.map((g) => g.rulesName)).toEqual(["Vis Itineris"])
+		// Only the held list, not every Vis Itineris list.
+		expect(res.otherRules[0]!.types.map((t) => t.typeId)).toEqual([WEAPONS])
+	})
+})

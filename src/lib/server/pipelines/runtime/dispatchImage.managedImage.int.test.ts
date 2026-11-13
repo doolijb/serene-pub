@@ -144,6 +144,20 @@ vi.mock("$lib/server/koboldcpp/managedPreflight", () => ({
 }))
 
 /**
+ * The idle-unload timer, as the log sees it. The load arms it (inside the
+ * stubbed `ensureManagedReady`, not here); the render HOLDS it and arms it
+ * again only when processing finishes (ruling 2026-11-08).
+ */
+vi.mock("$lib/server/koboldcpp/modelManager", () => ({
+	clearTtl: (url: string) => log.push(`ttl:hold ${url}`),
+	resetTtl: (url: string) => log.push(`ttl:arm ${url}`),
+	getLoadedSignature: () => ({ resident: {} })
+}))
+vi.mock("$lib/server/koboldcpp/subprocessManager", () => ({
+	isRunning: () => true
+}))
+
+/**
  * A stand-in for the app's database connection, so the REAL
  * KoboldCppManagedImageAdapter can be imported for its `sdQuantToInt` without
  * dragging PGlite in. dispatchImage takes its own db as a parameter; this one is
@@ -413,7 +427,27 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// "called"; what matters is that it completes before the render and that
 		// both sit in one critical section.
 		await dispatch(withModel(5))
-		expect(log).toEqual(["preflight:start", "preflight:done", "render"])
+		expect(log).toEqual([
+			"preflight:start",
+			"preflight:done",
+			`ttl:hold ${MANAGER_URL}`,
+			"render",
+			`ttl:arm ${MANAGER_URL}`
+		])
+	})
+
+	it("holds the idle-unload timer from the confirmed load until the render finishes", async () => {
+		// A render longer than the TTL from its own load, or a series crossing
+		// it, had `unload_model` POSTed under its running `/txt2img` and lost
+		// the pictures already drawn (seen 2026-11-08). Re-arming after the
+		// render was never enough on its own: the load-time timer stayed live.
+		await dispatch(withModel(5))
+		const hold = log.indexOf(`ttl:hold ${MANAGER_URL}`)
+		const render = log.indexOf("render")
+		const arm = log.indexOf(`ttl:arm ${MANAGER_URL}`)
+		expect(hold).toBeGreaterThan(log.indexOf("preflight:done"))
+		expect(hold).toBeLessThan(render)
+		expect(arm).toBeGreaterThan(render)
 	})
 
 	it("sends the render at the MANAGER's address, not the row's stale one", async () => {

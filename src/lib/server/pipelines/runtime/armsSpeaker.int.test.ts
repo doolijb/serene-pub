@@ -187,6 +187,12 @@ beforeAll(async () => {
 		.returning()
 	verity = v.id
 	brask = b.id
+	// Both are seated: since ★4 (2026-11-08) an unseated member is background,
+	// and the narrator reads a background member's lore.
+	await db.insert(schema.sessionCharacters).values([
+		{ sessionId, characterId: verity, isActive: true },
+		{ sessionId, characterId: brask, isActive: true }
+	] as any)
 
 	// Two character bindings — each one's lore is that character's own — and
 	// an NPC binding with no card, whose lore only the narrator may read.

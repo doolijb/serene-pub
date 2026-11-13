@@ -40,11 +40,12 @@ import {
 	entryOverlaysFor,
 	placesOnReading
 } from "$lib/server/state/entriesOnReading"
-import type { StateOwner } from "$lib/server/state/owners"
+import { castOwnerOf, type StateOwner } from "$lib/server/state/owners"
 
 /** One owner's holding of one item — a character's, the world's, or a place's (phase 4). */
 export interface ItemHolder {
-	ownerKind: "session" | "session_cast" | "session_location"
+	/** 🚧 ⏳ `seated_member` / `player_seat` only once the flip is on (`memberForm.ts`): a seat then holds under its own owner. */
+	ownerKind: "session" | "session_cast" | "session_location" | "seated_member" | "player_seat"
 	ownerId: number
 	slotId: string
 	count: number
@@ -153,7 +154,12 @@ async function holdingsFor(
 	}> = [
 		{ owner: { kind: "session", id: sessionId }, facet: "world" },
 		...links.cast.map((c) => ({
-			owner: { kind: "session_cast" as const, id: c.characterId },
+			owner: castOwnerOf(c) as StateOwner & { kind: ItemHolder["ownerKind"] },
+			facet: "cast" as const
+		})),
+		// 🚧 ⏳ S4 (flip on): each card-less character seat holds under its own owner.
+		...(links.seatedMembers ?? []).map((s) => ({
+			owner: { kind: "seated_member" as const, id: s.seatMemberId },
 			facet: "cast" as const
 		})),
 		// What is lying in a place is held there (phase 4): a key left in the

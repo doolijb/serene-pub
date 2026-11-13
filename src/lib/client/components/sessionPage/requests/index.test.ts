@@ -59,6 +59,23 @@ describe("buildWidgetRequestAnswerer", () => {
 		expect(drafts).toEqual(["hi"])
 	})
 
+	test("show-channel, session-scenario and set-session-scenario have rows over the page's deps", async () => {
+		const writes: unknown[] = []
+		const answer = buildWidgetRequestAnswerer({
+			sessionId: () => 3,
+			readScenario: () => ({ scenario: "Inn.", canEdit: true }),
+			writeScenario: (id: number, scenario: string) => writes.push([id, scenario])
+		} as unknown as WidgetRequestDeps)
+		await expect(answer("show-channel", { channel: "main" }, core)).resolves.toBeUndefined()
+		await expect(answer("show-line", { messageId: 5 }, core)).resolves.toBeUndefined()
+		await expect(answer("session-scenario", {}, core)).resolves.toEqual({ scenario: "Inn.", canEdit: true })
+		await expect(answer("set-session-scenario", { scenario: "Hall." }, core)).resolves.toEqual({
+			scenario: "Hall.",
+			canEdit: true
+		})
+		expect(writes).toEqual([[3, "Hall."]])
+	})
+
 	test("session-places (W4) reads the page's session through its places read", async () => {
 		const asked: unknown[] = []
 		const answer = buildWidgetRequestAnswerer({
@@ -93,6 +110,22 @@ describe("buildWidgetRequestAnswerer", () => {
 			images: [{ ref: "u-1", src: "/media/u-1?r=1" }]
 		})
 		expect(asked).toEqual([3])
+	})
+
+	test("character-images with a castMemberId reaches readMemberGallery and answers its images", async () => {
+		const asked: number[] = []
+		const answer = buildWidgetRequestAnswerer({
+			characters: () => ({ members: [{ castMemberId: 7 }], sceneImages: { left: null, right: null } }),
+			readCharacterGallery: async () => [],
+			readMemberGallery: async (id: number) => {
+				asked.push(id)
+				return [{ uuid: "u-2", url: "/media/u-2?r=1", kind: "image" }]
+			}
+		} as unknown as WidgetRequestDeps)
+		await expect(answer("character-images", { castMemberId: 7 }, core)).resolves.toEqual({
+			images: [{ ref: "u-2", src: "/media/u-2?r=1" }]
+		})
+		expect(asked).toEqual([7])
 	})
 
 	test("stat-trail (F2) reads the page's session through its trail read", async () => {

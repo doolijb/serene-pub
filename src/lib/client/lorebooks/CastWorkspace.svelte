@@ -16,16 +16,19 @@
 		type PanelTab
 	} from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import MemberTimeline from "./cast/MemberTimeline.svelte"
+	import SpritesTab from "$lib/client/components/sprites/SpritesTab.svelte"
+	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
 	import { memberScenes, type MemberScene } from "./cast/memberScenes"
 	import type { TimeSceneRow } from "./time/storyTime"
 	import { LORE_SPLIT_KEY } from "./layoutMode"
-	import { onDestroy, onMount } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
 	import BindingSuggestionsPanel from "$lib/client/components/lorebookForms/BindingSuggestionsPanel.svelte"
@@ -51,6 +54,8 @@
 		castMaskedWarning,
 		deletedMemberToast,
 		fileCastAmendment,
+		laterVersionCount,
+		laterVersionsToast,
 		type PrivateLoreChoice
 	} from "./cast/castSave"
 	import {
@@ -135,7 +140,14 @@
 		 * conversation), so it is handed the RESOLVER rather than resolved
 		 * rows — the same seam `EntryWorkspace` uses, for the same reason.
 		 */
-		resolveCast?: <T extends { id: number }>(rows: readonly T[]) => T[]
+		resolveCast?: <T extends { id: number }>(
+			rows: readonly T[],
+			/**
+			 * Read the member as they will stand after a base save of `fields`
+			 * (the masked-save warning). The shell's resolver takes it.
+			 */
+			write?: { castId: number; fields: Record<string, unknown> }
+		) => T[]
 		/** One member's overlays, for their own account of them. */
 		castAmendmentsFor?: (castId: number) => Sockets.Amendments.CastRow[]
 		/** The moment being read. Absent is now, where a save is just a save. */
@@ -205,6 +217,15 @@
 	 * still reads.
 	 */
 	let readOnly = $derived(book.readOnly)
+	/**
+	 * The member's linked card, when the reader owns it: both the "Edit the
+	 * card" button (their own book) and the guest line's "Edit my card" (a
+	 * book that is not theirs) open it in Characters. Absent outside the
+	 * shell, there is no button.
+	 */
+	const userCtx: { user?: { id: number } | null } | undefined =
+		getContext("userCtx")
+	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
 	let castRows = $derived(book.cast as unknown as CastRow[])
 	/**
 	 * The book's relationships and cast rows: the workspace's ONE copy (plan
@@ -346,6 +367,52 @@
 			? (resolvedCast.find((r) => r.id === selectedMember.id) ?? null)
 			: null
 	)
+	let ownCardId = $derived(
+		selectedRow?.characterId != null &&
+			userCtx?.user?.id != null &&
+			selectedRow.character?.userId === userCtx.user.id
+			? selectedRow.characterId
+			: null
+	)
+	let canOpenCard = $derived(ownCardId != null && !!panelsCtx)
+	/**
+	 * **Copy to my characters**: the member as a card of the viewer's own,
+	 * opened in Characters. Only the copy THIS page asked for opens; a refusal
+	 * is said by Layout's catch-all and only re-arms the button.
+	 */
+	let copyPending = $state(false)
+	function copyToMyCharacters() {
+		if (!selectedMember || copyPending) return
+		copyPending = true
+		socket.emit("characters:duplicate", {
+			castMemberId: selectedMember.id
+		})
+	}
+	$effect(() =>
+		declareInterest<"characters:duplicate">(
+			"characters:duplicate",
+			(msg) => {
+				if (!copyPending) return
+				copyPending = false
+				const id = msg.character?.id
+				if (id && panelsCtx) {
+					panelsCtx.digest.characterId = id
+					panelsCtx.openPanel({ key: "characters", toggle: false })
+				}
+			}
+		)
+	)
+	$effect(() =>
+		declareInterest<"characters:duplicate:error">(
+			"characters:duplicate:error",
+			() => (copyPending = false)
+		)
+	)
+	function openOwnCard() {
+		if (ownCardId == null || !panelsCtx) return
+		panelsCtx.digest.characterId = ownCardId
+		panelsCtx.openPanel({ key: "characters", toggle: false })
+	}
 	let anchoredLore = $derived(
 		selectedMember ? (pool.lore.get(selectedMember.id) ?? []) : []
 	)
@@ -531,9 +598,23 @@
 		loreDraftKey = null
 	}
 
+	/**
+	 * The person said Discard and the member's form is about to go (another
+	 * member, or none): drop both drafts AND the bound flags now, as the entry
+	 * editor's `discardDraft` does, so the move's own guard does not ask a
+	 * second time about changes that were just thrown away. Only for moves
+	 * that take the member form away — a lore move keeps it mounted, its
+	 * draft with it.
+	 */
+	function discardMemberDrafts() {
+		discardLoreDraft()
+		memberDirty = false
+		hasUnsavedChanges = false
+	}
+
 	async function selectMember(id: number) {
 		if (!(await loreRoute.confirmLeave())) return
-		discardLoreDraft()
+		discardMemberDrafts()
 		void loreRoute.navigate({ type: "openCastMember", castId: id })
 	}
 
@@ -552,7 +633,7 @@
 
 	async function closeMember() {
 		if (!(await loreRoute.confirmLeave())) return
-		discardLoreDraft()
+		discardMemberDrafts()
 		void loreRoute.navigate({ type: "openCastMember", castId: null })
 	}
 
@@ -576,7 +657,7 @@
 	 */
 	function reportUnanswered(err: unknown, title: string) {
 		if (isReplyTimeout(err))
-			toaster.error({
+			notify.error({
 				title,
 				description:
 					"The server did not answer in time. Your changes are still here."
@@ -634,7 +715,7 @@
 				return
 			}
 			loreSaving = false
-			toaster.success({ title: "Character lore created" })
+			notify.success({ title: "Character lore created" })
 			// Still the create the author sent? Then open what it became.
 			if (awaitingSave !== "new") return
 			awaitingSave = null
@@ -649,7 +730,7 @@
 		const id = payload.id as number
 		const fields = changedFields(payload, lorePristine ?? {})
 		if (!Object.keys(fields).length) {
-			toaster.error({ title: "Nothing has changed" })
+			notify.error({ title: "Nothing has changed" })
 			return
 		}
 		const key = `entry#${id}`
@@ -680,7 +761,7 @@
 		loreSaving = false
 		// The draft itself is settled by the channel's `onUpdated`, which
 		// hears the same reply; this only says how it went.
-		toaster.success({ title: "Character lore saved" })
+		notify.success({ title: "Character lore saved" })
 	}
 
 	/**
@@ -721,13 +802,15 @@
 			icon: Icons.HeartHandshake,
 			count: selectedEdges.length
 		},
-		{ value: "timeline", label: "Timeline", icon: Icons.History }
+		{ value: "timeline", label: "Timeline", icon: Icons.History },
+		{ value: "sprites", label: "Sprites", icon: Icons.Drama },
+		{ value: "gallery", label: "Gallery", icon: Icons.Images }
 	])
 
 	/** A scene opens under Scenes, addressed under its history entry. */
 	async function openScene(row: MemberScene) {
 		if (!(await loreRoute.confirmLeave())) return
-		discardLoreDraft()
+		discardMemberDrafts()
 		void loreRoute.navigate({
 			type: "openEntry",
 			scope: "scenes",
@@ -749,6 +832,27 @@
 		if (!memberDirty) memberMoment = at
 	})
 
+	/** What each save of the open member would leave with its own words (★CV-13). */
+	let laterCounts = $derived.by(() => {
+		if (!selectedMember) return undefined
+		const rows = castAmendmentsFor?.(selectedMember.id) ?? []
+		return {
+			base: laterVersionCount(rows, {
+				kind: "base",
+				shownVersionId:
+					castRows.find((r) => r.id === selectedMember!.id)
+						?.castVersionId ?? null
+			}),
+			amend: memberMoment
+				? laterVersionCount(rows, {
+						kind: "amend",
+						branchId: branchId ?? null,
+						moment: memberMoment
+					})
+				: 0
+		}
+	})
+
 	/** Every overlay id this board has seen for a member, for `isOurCastAmendment`. */
 	function knownCastAmendmentIds(castId: number): number[] {
 		return (castAmendmentsFor?.(castId) ?? []).map((a) => a.id)
@@ -765,12 +869,14 @@
 		if (!resolveCast) return null
 		const base = castRows.find((r) => r.id === castId)
 		if (!base) return null
-		const [row] = resolveCast([{ ...base, ...fields } as CastRow])
+		const overlays = castAmendmentsFor?.(castId) ?? []
+		// A base save writes the version shown; the resolver reads the member
+		// as they will stand after it.
+		const [row] = resolveCast([base], { castId, fields })
 		if (!row) return null
 		const resolved = row as unknown as Record<string, unknown>
 		const masked = maskedFields(fields, resolved)
 		if (!masked.length) return null
-		const overlays = castAmendmentsFor?.(castId) ?? []
 		return castMaskedWarning(
 			masked.map((field) => ({
 				field,
@@ -793,15 +899,20 @@
 		castId: number,
 		fields: Record<string, unknown>,
 		title: string,
-		failTitle: string
+		failTitle: string,
+		changeLaterVersions = false
 	): Promise<boolean> {
 		const warning = baseSaveWarning(castId, fields)
+		let reply: Sockets.Lorebooks.UpdateBinding.Response
 		try {
-			await awaitReply({
+			reply = await awaitReply({
 				socket,
 				event: "lorebooks:updateBinding",
 				params: {
-					lorebookBinding: { id: castId, ...fields }
+					lorebookBinding: { id: castId, ...fields },
+					...(changeLaterVersions
+						? { changeLaterVersions: true }
+						: {})
 				} as Sockets.Lorebooks.UpdateBinding.Params,
 				errorEvent: "lorebooks:updateBinding:error",
 				fallbackError: "The cast member could not be saved.",
@@ -811,8 +922,17 @@
 			reportUnanswered(err, failTitle)
 			return false
 		}
-		if (warning) toaster.warning(warning)
-		else toaster.success({ title })
+		const later = laterVersionsToast(reply.laterVersions)
+		if (warning)
+			notify.warning(
+				later
+					? {
+							...warning,
+							description: `${warning.description} ${later}`
+						}
+					: warning
+			)
+		else notify.success(later ? { title, description: later } : { title })
 		return true
 	}
 
@@ -824,16 +944,17 @@
 		castId: number,
 		fields: Record<string, unknown>,
 		what: string,
-		at: StoryDate | null = momentDate
+		at: StoryDate | null = momentDate,
+		changeLaterVersions = false
 	): Promise<boolean> {
 		if (!at) return false
 		const date = at
-		let reply: Sockets.Amendments.List.Response
+		let reply: Sockets.Amendments.Create.Response
 		try {
 			reply = await fileCastAmendment(
 				socket,
 				{ lorebookId, castId, branchId },
-				{ ...date, fields },
+				{ ...date, fields, changeLaterVersions },
 				knownCastAmendmentIds(castId)
 			)
 		} catch (err) {
@@ -841,8 +962,10 @@
 			return false
 		}
 		const where = lineName(reply, branchId)
-		toaster.success({
-			title: `${what} as of ${formatDate(date)}${where ? ` on ${where}` : ""}`
+		const later = laterVersionsToast(reply.laterVersions)
+		notify.success({
+			title: `${what} as of ${formatDate(date)}${where ? ` on ${where}` : ""}`,
+			...(later ? { description: later } : {})
 		})
 		return true
 	}
@@ -859,7 +982,7 @@
 	): Record<string, unknown> | null {
 		const fields = changedFields(patch, pristine)
 		if (!Object.keys(fields).length) {
-			toaster.error({ title: "Nothing has changed" })
+			notify.error({ title: "Nothing has changed" })
 			return null
 		}
 		return fields
@@ -867,7 +990,8 @@
 
 	async function saveMember(
 		patch: Record<string, unknown>,
-		pristine: Record<string, unknown>
+		pristine: Record<string, unknown>,
+		options?: { changeLaterVersions: boolean }
 	): Promise<boolean> {
 		if (!selectedMember) return false
 		const fields = memberDiff(patch, pristine)
@@ -876,13 +1000,15 @@
 			selectedMember.id,
 			fields,
 			"Cast member saved",
-			"The cast member was not saved"
+			"The cast member was not saved",
+			options?.changeLaterVersions === true
 		)
 	}
 
 	async function amendMember(
 		patch: Record<string, unknown>,
-		pristine: Record<string, unknown>
+		pristine: Record<string, unknown>,
+		options?: { changeLaterVersions: boolean }
 	): Promise<boolean> {
 		if (!selectedMember || !memberMoment) return false
 		const fields = memberDiff(patch, pristine)
@@ -891,7 +1017,8 @@
 			selectedMember.id,
 			fields,
 			"Amended",
-			memberMoment
+			memberMoment,
+			options?.changeLaterVersions === true
 		)
 	}
 
@@ -953,7 +1080,7 @@
 		deleting = false
 		deleteTarget = null
 		deleteCheck = null
-		toaster.success({
+		notify.success({
 			title: deletedMemberToast(target.name, res.deletedLoreCount)
 		})
 		if (route.castId === target.id)
@@ -988,7 +1115,7 @@
 			reportUnanswered(err, "The cast member was not added")
 			return
 		}
-		toaster.success({
+		notify.success({
 			title: res.existing
 				? "That cast member is already in this book"
 				: "Cast member added"
@@ -1137,7 +1264,7 @@
 				},
 				onDeleted: (_id, askedHere) => {
 					if (askedHere)
-						toaster.success({ title: "Character lore deleted" })
+						notify.success({ title: "Character lore deleted" })
 				}
 			}
 		})
@@ -1155,44 +1282,44 @@
 
 {#snippet newMenu()}
 	{#if !readOnly}
-	<Popover
-		open={newMenuOpen}
-		onOpenChange={(e) => (newMenuOpen = e.open)}
-		positioning={{ placement: "bottom-end" }}
-	>
-		<Popover.Trigger
-			class="btn btn-sm preset-filled-primary-500 shrink-0 gap-1"
-			title="Add to the cast"
+		<Popover
+			open={newMenuOpen}
+			onOpenChange={(e) => (newMenuOpen = e.open)}
+			positioning={{ placement: "bottom-end" }}
 		>
-			<Icons.Plus size={14} aria-hidden="true" />
-			<span class="hidden @lg/view:inline">New</span>
-			<Icons.ChevronDown size={14} aria-hidden="true" />
-		</Popover.Trigger>
-		<Portal>
-			<Popover.Positioner class="z-[1000]!">
-				<Popover.Content
-					class="card bg-surface-100-900 flex min-w-52 flex-col gap-1 p-2 shadow-xl"
-				>
-					<button
-						class="btn btn-sm preset-tonal-surface w-full justify-start"
-						type="button"
-						onclick={startAddCharacter}
+			<Popover.Trigger
+				class="btn btn-sm preset-filled-primary-500 shrink-0 gap-1"
+				title="Add to the cast"
+			>
+				<Icons.Plus size={14} aria-hidden="true" />
+				<span class="hidden @lg/view:inline">New</span>
+				<Icons.ChevronDown size={14} aria-hidden="true" />
+			</Popover.Trigger>
+			<Portal>
+				<Popover.Positioner class="z-[1000]!">
+					<Popover.Content
+						class="card bg-surface-100-900 flex min-w-52 flex-col gap-1 p-2 shadow-xl"
 					>
-						<Icons.User size={14} aria-hidden="true" /> From a character
-					</button>
-					<button
-						class="btn btn-sm preset-tonal-surface w-full justify-start"
-						type="button"
-						title="Someone with no card of their own: an innkeeper, a rival nobody has met yet"
-						onclick={startAddBackground}
-					>
-						<Icons.UserRound size={14} aria-hidden="true" /> Background
-						character
-					</button>
-				</Popover.Content>
-			</Popover.Positioner>
-		</Portal>
-	</Popover>
+						<button
+							class="btn btn-sm preset-tonal-surface w-full justify-start"
+							type="button"
+							onclick={startAddCharacter}
+						>
+							<Icons.User size={14} aria-hidden="true" /> From a character
+						</button>
+						<button
+							class="btn btn-sm preset-tonal-surface w-full justify-start"
+							type="button"
+							title="Someone with no card of their own: an innkeeper, a rival nobody has met yet"
+							onclick={startAddBackground}
+						>
+							<Icons.UserRound size={14} aria-hidden="true" /> Background
+							character
+						</button>
+					</Popover.Content>
+				</Popover.Positioner>
+			</Portal>
+		</Popover>
 	{/if}
 {/snippet}
 
@@ -1210,27 +1337,27 @@
 				bind:value={search}
 			/>
 			{#if !readOnly}
-			<button
-				type="button"
-				class="btn btn-sm shrink-0 gap-1 {reviewOpen
-					? 'preset-pressed'
-					: 'preset-tonal-surface'}"
-				aria-pressed={reviewOpen}
-				aria-controls="castReviewPanel"
-				title="Suggested members and possible duplicates in this book"
-				data-cast-review-toggle
-				onclick={toggleReview}
-			>
-				<Icons.UserPlus size={14} aria-hidden="true" />
-				<span>Suggestions</span>
-				{#if reviewCount > 0}
-					<!-- A count, not an action: the ground's own stop, so it
+				<button
+					type="button"
+					class="btn btn-sm shrink-0 gap-1 {reviewOpen
+						? 'preset-pressed'
+						: 'preset-tonal-surface'}"
+					aria-pressed={reviewOpen}
+					aria-controls="castReviewPanel"
+					title="Suggested members and possible duplicates in this book"
+					data-cast-review-toggle
+					onclick={toggleReview}
+				>
+					<Icons.UserPlus size={14} aria-hidden="true" />
+					<span>Suggestions</span>
+					{#if reviewCount > 0}
+						<!-- A count, not an action: the ground's own stop, so it
 					     reads on the toggle at rest and pressed (★R2). -->
-					<span class="badge bg-surface-50-950 text-meta">
-						{reviewCount}
-					</span>
-				{/if}
-			</button>
+						<span class="badge bg-surface-50-950 text-meta">
+							{reviewCount}
+						</span>
+					{/if}
+				</button>
 			{/if}
 			{@render newMenu()}
 		</div>
@@ -1293,12 +1420,16 @@
 						: readOnly
 							? "Nobody is in the cast yet."
 							: "Nobody is in the cast yet. Add a character or a background character, and the lore about them lives on their page."}
-					ctaLabel={search || readOnly ? undefined : "Add a character"}
+					ctaLabel={search || readOnly
+						? undefined
+						: "Add a character"}
 					onCta={search || readOnly ? undefined : startAddCharacter}
 					secondaryLabel={search || readOnly
 						? undefined
 						: "Add a background character"}
-					onSecondary={search || readOnly ? undefined : startAddBackground}
+					onSecondary={search || readOnly
+						? undefined
+						: startAddBackground}
 				/>
 			{:else if lens === "cards"}
 				<!-- The card view (note 11): portrait-first, the character
@@ -1429,7 +1560,7 @@
 								{#if member.state !== "active"}
 									<span
 										class="badge {stateBadge(member.state)
-											.color} shrink-0 text-meta"
+											.color} text-meta shrink-0"
 									>
 										{member.state}
 									</span>
@@ -1438,7 +1569,7 @@
 									<span
 										class="badge {visibilityBadge(
 											member.visibility
-										)} shrink-0 text-meta"
+										)} text-meta shrink-0"
 									>
 										{member.visibility}
 									</span>
@@ -1449,14 +1580,14 @@
 							     read the row by. -->
 							<span class="flex items-baseline gap-2">
 								<span
-									class="text-surface-700-300 min-w-0 flex-1 truncate text-meta"
+									class="text-surface-700-300 text-meta min-w-0 flex-1 truncate"
 									data-cast-sentence
 								>
 									{sentence}
 								</span>
 								{#if member.tag}
 									<span
-										class="text-surface-600-400 shrink-0 font-mono text-meta"
+										class="text-surface-600-400 text-meta shrink-0 font-mono"
 										data-cast-tag
 									>
 										{member.tag}
@@ -1511,7 +1642,7 @@
 	>
 		<Icon size={14} aria-hidden="true" />
 		<span>{label}</span>
-		<span class="ml-auto text-meta font-normal opacity-75">{hint}</span>
+		<span class="text-meta ml-auto font-normal opacity-75">{hint}</span>
 		<Icons.Check
 			size={14}
 			class="shrink-0 {on ? '' : 'invisible'}"
@@ -1600,7 +1731,10 @@
 						type="button"
 						onclick={saveLore}
 						disabled={loreSaving ||
-							!CHARACTER_LORE_DOOR.validate(loreDraft, loreEntries)}
+							!CHARACTER_LORE_DOOR.validate(
+								loreDraft,
+								loreEntries
+							)}
 					>
 						<Icons.Save size={16} aria-hidden="true" />
 						<span>{creatingLore ? "Create" : "Save"}</span>
@@ -1660,6 +1794,47 @@
 					aria-labelledby="cast-member-member-tab"
 					hidden={memberTab !== "member"}
 				>
+					{#if canOpenCard && book.bookAccess !== "owner"}
+						<!-- The reader's own card, in a book that is not theirs:
+						     outside the fieldset so the button works while the
+						     book reads. -->
+						<div class="mb-4 flex flex-wrap items-center gap-2">
+							{#if book.bookName}
+								<p
+									class="text-surface-600-400 text-xs"
+									data-cast-guest-line
+								>
+									{selectedMember.name} lives in {book.ownerName
+										? `${book.ownerName}'s lorebook`
+										: "the lorebook"}
+									{book.bookName}; your card seeds them.
+								</p>
+							{/if}
+							<button
+								class="btn btn-sm preset-tonal-surface"
+								type="button"
+								onclick={openOwnCard}
+								data-cast-edit-my-card
+							>
+								<Icons.Pencil size={14} aria-hidden="true" /> Edit
+								my card
+							</button>
+						</div>
+					{/if}
+					<!-- Outside the fieldset: a reader of a shared book may
+					     still copy the member to their own characters. -->
+					<div class="mb-4 flex justify-end">
+						<button
+							class="btn btn-sm preset-tonal-surface"
+							type="button"
+							disabled={copyPending}
+							onclick={copyToMyCharacters}
+							data-cast-copy-to-my-characters
+						>
+							<Icons.Copy size={14} aria-hidden="true" /> Copy to my
+							characters
+						</button>
+					</div>
 					<!-- A shared book: the member reads, every control of the
 					     form and of their placings is disabled. -->
 					<fieldset
@@ -1674,6 +1849,7 @@
 							bind:hasUnsavedChanges={memberDirty}
 							onSave={saveMember}
 							onAmend={memberMoment ? amendMember : undefined}
+							{laterCounts}
 							momentLabel={memberMoment
 								? formatDate(memberMoment)
 								: null}
@@ -1685,6 +1861,10 @@
 								linkHow = how
 								characterPickerOpen = true
 							}}
+							onEditCard={canOpenCard && !readOnly
+								? openOwnCard
+								: undefined}
+							canUpdateCard={!readOnly}
 						/>
 
 						<PresencesPanel
@@ -1733,8 +1913,10 @@
 										type="button"
 										onclick={startLore}
 									>
-										<Icons.Plus size={14} aria-hidden="true" /> Add
-										lore
+										<Icons.Plus
+											size={14}
+											aria-hidden="true"
+										/> Add lore
 									</button>
 								{/if}
 							</div>
@@ -1798,8 +1980,9 @@
 						laterLabel={laterFor}
 						isNew={(edge) => newEdgeIds.has(edge.id)}
 						onKeep={(edge) => newEdgeIds.delete(edge.id)}
-						onSeeInGraph={() =>
-							onViewRelationships?.(selectedMember!.id)}
+						onSeeInGraph={onViewRelationships
+							? () => onViewRelationships(selectedMember!.id)
+							: undefined}
 						faceOf={faceOfKey}
 						onOpenMember={selectMember}
 					/>
@@ -1816,6 +1999,42 @@
 						memberName={selectedMember.name}
 						onOpenScene={(row) => void openScene(row)}
 					/>
+				</div>
+
+				<div
+					id="cast-member-sprites"
+					role="tabpanel"
+					aria-labelledby="cast-member-sprites-tab"
+					hidden={memberTab !== "sprites"}
+				>
+					<!-- Its own tab: the sprite editor writes at once, and the
+					     Member tab is a buffered form with Save. Mounted only
+					     while open, so it asks for the sets when read. -->
+					{#if memberTab === "sprites"}
+						<SpritesTab
+							owner={{ castMemberId: selectedMember.id }}
+							characterName={selectedMember.name}
+							isOwner={!readOnly}
+						/>
+					{/if}
+				</div>
+
+				<div
+					id="cast-member-gallery"
+					role="tabpanel"
+					aria-labelledby="cast-member-gallery-tab"
+					hidden={memberTab !== "gallery"}
+				>
+					<!-- The member's own pictures. Mounted only while open, so
+					     it asks for them when read. -->
+					{#if memberTab === "gallery"}
+						<EntityGalleryTab
+							owner={{ castMemberId: selectedMember.id }}
+							entityName={selectedMember.name}
+							isOwner={!readOnly}
+							currentAvatarMediaId={null}
+						/>
+					{/if}
 				</div>
 			</div>
 		</div>

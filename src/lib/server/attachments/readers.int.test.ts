@@ -177,9 +177,8 @@ describe("attachmentReaders (PGlite integration)", () => {
 			const byKey = new Map(r.calls.map((c) => [c.key, c]))
 			// The reply's calls keep their node keys and headings, first.
 			expect(r.calls[0].key).not.toContain("#")
-			// Look, Ask and the form answer, keyed by spec and node, headed by name.
+			// Look and the form answer, keyed by spec and node, headed by name.
 			expect(byKey.get("core:spec/story-look#write")?.label).toBe("Look")
-			expect(byKey.get("core:spec/story-ask#write")?.label).toBe("Ask")
 			expect(byKey.get("core:spec/story-answer-form#generate")?.label).toBe("Form answers")
 			expect(byKey.get("core:spec/story-look#write")?.reads).toEqual(["image", "text", "pdf"])
 			expect(new Set(r.calls.map((c) => c.key)).size).toBe(r.calls.length)

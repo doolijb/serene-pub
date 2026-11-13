@@ -322,15 +322,14 @@ describe("core's remote Actions", () => {
 		async () => {
 			const view = await mountActions({ settings: { groups: "turn" } })
 			expect(groups(view).map((g) => g.group)).toEqual(["turn"])
-			expect(view.query(part("empty"))).toBeNull()
-			// A group with nothing listed says so instead.
+			expect(view.query(part("empty")) === null).toBe(true)
+			// A group with nothing listed draws nothing (R10).
 			const none = await mountActions({
 				actions: { extra: LISTING.extra },
 				settings: { groups: "genre" }
 			})
-			expect(text(none.query(part("empty")))).toBe(
-				"This session offers none of these actions here."
-			)
+			expect(none.query(part("empty")) === null).toBe(true)
+			expect(text(none.query(part("root"))) ?? "").toBe("")
 		}
 	)
 

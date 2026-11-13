@@ -15,6 +15,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { eq, inArray } from "drizzle-orm"
+import { memberFormSwitch } from "$lib/server/state/memberForm"
 import * as schema from "$lib/server/db/schema"
 import {
 	attributeSlots,
@@ -371,7 +372,7 @@ describe("retraction", () => {
 		const { retractStateAnchoredTo } = await import(
 			"$lib/server/state/write"
 		)
-		await retractStateAnchoredTo(testDb as unknown as Db, m.id)
+		await retractStateAnchoredTo(testDb as unknown as Db, m.id, "replaced")
 		expect(
 			await testDb
 				.select()
@@ -1411,7 +1412,22 @@ describe("a card-less player seat", () => {
 				{ sessionId: w.session.id, updatedBy: "user", userId },
 				{ owner: { kind: "player_seat", id: seat }, slotId: HP, value }
 			)
-		await expect(write(guest.id, ann, 1)).rejects.toThrow(/only Ann's player or the session's owner/)
+		// Moved 2026-11-05 (lane ed, plan §25): whose hand may change a seat's sheet is no longer `setValue`'s
+		// (`assertSessionOwner` keeps only "is this seat this session's"); the one decider answers it
+		// (`state/handEdits.ts`), and the sockets ask it before the write.
+		const { handEditRefusal } = await import("$lib/server/state/handEdits")
+		const hand = (userId: number, seat: number) =>
+			handEditRefusal(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				userId,
+				owner: { kind: "player_seat", id: seat },
+				slotId: HP,
+				act: "set"
+			})
+		expect((await hand(guest.id, ann))?.sentence).toMatch(/only Ann's player or the session's owner/)
+		expect(await hand(guest.id, bo)).toBeNull()
+		expect(await hand(w.user.id, bo)).toBeNull()
+		expect(await hand(w.user.id, ann)).toBeNull()
 		await expect(write(guest.id, bo, 6)).resolves.toBeTypeOf("number")
 		await expect(write(w.user.id, bo, 5)).resolves.toBeTypeOf("number")
 		await expect(write(w.user.id, ann, 9)).resolves.toBeTypeOf("number")
@@ -1459,6 +1475,8 @@ describe("a card-less player seat", () => {
 		expect((await of(w.user.id)).all).toBe(true)
 	}, 60_000)
 	test("given a card, the seat keeps its row and its stats, and is addressed as the card", async () => {
+		// Pinned off, whatever the file's config says: this asserts card form.
+		memberFormSwitch.on = false
 		declareSlots()
 		const w = await world()
 		const db = testDb as unknown as Db

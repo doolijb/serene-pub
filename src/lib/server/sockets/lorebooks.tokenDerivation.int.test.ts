@@ -375,10 +375,14 @@ describe("createLorebookBindingHandler — token derivation (PGlite integration)
 
 		// A later card edit syncs every bound row — and merges, never
 		// replaces, so the member still answers to "the innkeeper".
-		await testDb
-			.update(schema.characters)
-			.set({ aliases: ["Captain"] })
-			.where(eq(schema.characters.id, character.id))
+		// The card's aliases are its current version's (the column is frozen).
+		const { ensureCardVersion, updateCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const current = await ensureCardVersion(testDb as any, character.id)
+		await updateCardVersion(testDb as any, current!.id, {
+			aliases: ["Captain"]
+		})
 		await syncLorebookBindingsForCharacter(character.id, testDb)
 		const [after] = await testDb
 			.select()

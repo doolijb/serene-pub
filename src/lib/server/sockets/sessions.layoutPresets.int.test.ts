@@ -15,6 +15,7 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { panelsV2Of } from "@serene-pub/sdk"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -34,11 +35,11 @@ beforeAll(async () => {
 afterAll(() => {})
 
 /**
- * A core genre whose genre default layout is the empty floor: the Guide.
- * (Chat's places the Author's note since 2026-10-03; these tests are about
- * the preset verbs, not what a genre ships.)
+ * A core genre whose genre default layout is the empty floor: Chat (the Guide
+ * and Story ship arrangements now; these tests are about the preset verbs,
+ * not what a genre ships).
  */
-const GENRE = "core:genre/guide"
+const GENRE = "core:genre/chat"
 
 function fakeSocket(userId: number) {
 	return { user: { id: userId }, io: { to: () => ({ emit: () => {} }) } } as any
@@ -76,6 +77,9 @@ async function seedDefault() {
 }
 
 const handlers = () => import("./sessions")
+
+/** A layout as it is stored now: its old slots stay, `panels` version 2 is added. */
+const asV2 = (layout: any) => ({ ...layout, panels: panelsV2Of(layout).panels })
 
 /**
  * An arrangement, as the editor sends one to Save as new — its grid read
@@ -153,7 +157,7 @@ describe("sessions:panelLayout — presets", () => {
 				noopEmit
 			)
 			expect(got.startedFromLayoutPresetId).toBe(saved.preset!.id)
-			expect(saved.preset!.layout).toEqual(ARRANGED)
+			expect(saved.preset!.layout).toEqual(asV2(ARRANGED))
 		},
 		60_000
 	)
@@ -239,8 +243,11 @@ describe("sessions:panelLayout — presets", () => {
 				noopEmit
 			)
 			expect(got.startedFromLayoutPresetId).toBe(saved.preset!.id)
+			// The set stored the layout as version 2: the pin is copied onto the
+			// Composer and Turn line that Messages split into.
+			const pin = { id: 1, slug: "x" }
 			expect(got.layoutSettings).toEqual({
-				widgetStyles: { messages: { id: 1, slug: "x" } }
+				widgetStyles: { messages: pin, composer: pin, "turn-line": pin }
 			})
 			expect(got.layout).toEqual({ active: [], tierSizeOverrides: {} })
 		},
@@ -410,7 +417,7 @@ describe("sessions:panelLayout — presets", () => {
 				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
-			expect(got.layout).toEqual(arranged)
+			expect(got.layout).toEqual({ ...arranged, panels: panelsV2Of(arranged as any).panels })
 			expect(got.startedFromLayoutPresetId).toBeNull()
 		},
 		60_000
@@ -473,7 +480,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				.where(eq(schema.sessionLayoutPresets.id, mine.id))
 			expect(row.name).toBe("After")
 			// Renaming is a name change and nothing else.
-			expect(row.layout).toEqual(ARRANGED)
+			expect(row.layout).toEqual(asV2(ARRANGED))
 			expect(row.authorUserId).toBe(s.owner.id)
 			expect(row.seedKey).toBeNull()
 		},
@@ -834,7 +841,10 @@ describe("a plugin genre's own layout (layout plan brief 1)", () => {
 			// session's row, the rest into its own homes.
 			expect(res.startedFromLayoutPresetId).toBe(res.presets[0].id)
 			expect(res.presets[0].isGenreDefault).toBe(true)
-			expect(res.layout).toEqual({ widgetGrid: BOARD_LAYOUT.widgetGrid })
+			expect(res.layout).toEqual({
+				widgetGrid: BOARD_LAYOUT.widgetGrid,
+				panels: panelsV2Of(BOARD_LAYOUT as any).panels
+			})
 			const coreRows = await testDb
 				.select()
 				.from(schema.sessionLayoutPresets)

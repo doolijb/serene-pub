@@ -28,6 +28,7 @@ import {
 	S,
 	SCOPE_ORDER,
 	SLOT_VALUE,
+	getVariable,
 	isTransformId,
 	scopeKindOf,
 	type ConfigWorld,
@@ -35,7 +36,7 @@ import {
 	type SlotDecl
 } from "@serene-pub/sdk"
 import {
-	capabilityDefaults,
+	resolvedCapabilityDefaults,
 	capabilityForSamplingShape
 } from "$lib/server/connections/capabilityDefaults"
 // Imported rather than re-declared. The string keys the `connection_defaults`
@@ -45,13 +46,21 @@ import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { completionTemplatesByKey } from "$lib/server/connections/completionTemplates"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
-import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
+import {
+	declarations,
+	declarationsAndVariableKeys,
+	type Decl
+} from "$lib/server/pipelines/config/panel"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { resolveWireMode } from "$lib/server/connections/resolve"
 import { midSystemFor } from "$lib/shared/connectionAdapters/midSystem"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { unreadSlotsOf } from "$lib/server/pipelines/boot/unreadAllowList"
 import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
+import type {
+	LayoutReason,
+	ReferencedLayout
+} from "$lib/server/pipelines/entities/variableLayouts"
 
 /**
  * The node key of a model call the pipeline does not name — an ad-hoc spec
@@ -221,7 +230,7 @@ export async function buildWorld(
 	// than the default for whatever family it was filed under. The session's
 	// own picks arrive with the pipeline layer below, as session-scope panel
 	// rows at the address a person set them.
-	const defaultsByCapability = await capabilityDefaults(db)
+	const defaultsByCapability = await resolvedCapabilityDefaults(db)
 	// The shape is the fallback and `??` is what keeps it one: a slot that named
 	// a capability never reads its declarations a second time, and a slot
 	// authored before capabilities existed still gets the answer it always got.
@@ -755,9 +764,9 @@ async function applyPipelineLayer(
 	// authored name and a plugin may call its variables slot anything, so a
 	// hard-coded `'variables'` would leave a plugin's reference undereferenced —
 	// and the node would receive a row id where it expected a template.
-	const allDecls = spec.activeVersionId
-		? await declarations(db, spec.activeVersionId)
-		: []
+	const { decls: allDecls, variableKeys } = spec.activeVersionId
+		? await declarationsAndVariableKeys(db, spec.activeVersionId)
+		: { decls: [] as Decl[], variableKeys: [] }
 	/**
 	 * Keyed by **address** — `(nodeKey, slot)` — not by slot name alone
 	 * (U5g). An envoy's instructions live at `envoy:<key>` in a slot also
@@ -768,10 +777,9 @@ async function applyPipelineLayer(
 	 * IS is the declaration's, at the address the row carries.
 	 */
 	const addressOf = (nodeKey: string, slot: string) => `${nodeKey}\u0000${slot}`
-	const varDecls = allDecls.filter(
-		(d) => d.control === "variable-template-ref"
+	const variableSlots = new Set(
+		variableKeys.map((k) => addressOf(k.nodeKey, k.slot))
 	)
-	const variableSlots = new Set(varDecls.map((d) => addressOf(d.nodeKey, d.slot)))
 	/**
 	 * Which slots hold a *context template* reference — read from the
 	 * declarations for the same reason the variable slots are: the row stores
@@ -816,6 +824,9 @@ async function applyPipelineLayer(
 	 * Returns undefined for a dangling id, which `push` then drops — the render
 	 * path falls through to its in-code default and still emits today's bytes.
 	 * A customization is the right thing to lose here; a prompt is not.
+	 *
+	 * Shared by the stored picks (⏳ leftover, `reason` below) and the
+	 * resolution by variable (preset / pub / default), which set their own.
 	 */
 	const derefLayout = async (value: unknown, variableId?: string) => {
 		if (typeof value !== "number") return undefined
@@ -835,17 +846,27 @@ async function applyPipelineLayer(
 	/**
 	 * What each variables-slot key renders, by address and key — the slot's
 	 * declared variable, or the one the spec's `renders` names for it (both
-	 * already folded into the declaration). Every layout this layer pushes
+	 * already folded into `variableKeys`). Every layout this layer pushes
 	 * carries it, so the render takes the floor and the absence rule from the
 	 * variable rather than from the key string.
 	 */
 	const variableAt = new Map<string, string>(
-		varDecls
-			.filter((d) => d.variableId)
-			.map((d) => [`${addressOf(d.nodeKey, d.slot)}\u0000${d.path}`, d.variableId!])
+		variableKeys.map((k) => [
+			`${addressOf(k.nodeKey, k.slot)}\u0000${k.path}`,
+			k.variableId
+		])
 	)
 	const variableOf = (nodeKey: string, slot: string, path: string) =>
 		variableAt.get(`${addressOf(nodeKey, slot)}\u0000${path}`)
+	/**
+	 * ⏳ A **leftover pick**: a per-step layout stored before layouts moved to
+	 * the variable. Read at every layer it is stored at, exactly as before, and
+	 * first in the resolution — it hides the variable's own layout at that key.
+	 */
+	const derefLeftover = async (value: unknown, variableId?: string) => {
+		const row = await derefLayout(value, variableId)
+		return row ? { ...row, reason: "leftover" as const } : undefined
+	}
 
 	/**
 	 * A template reference becomes the template itself — source **and** engine.
@@ -975,7 +996,7 @@ async function applyPipelineLayer(
 					nodeKey,
 					slot,
 					path,
-					await derefLayout(value, variableOf(nodeKey, slot, path))
+					await derefLeftover(value, variableOf(nodeKey, slot, path))
 				)
 				continue
 			}
@@ -1081,7 +1102,7 @@ async function applyPipelineLayer(
 				o.nodeKey,
 				o.slot,
 				o.path ?? "",
-				await derefLayout(
+				await derefLeftover(
 					o.value,
 					variableOf(o.nodeKey, o.slot, o.path ?? "")
 				)
@@ -1206,49 +1227,236 @@ async function applyPipelineLayer(
 		}
 	}
 
-	// ── the same floor, for layouts ──────────────────────────────────────
+	// ── resolution by variable, under every stored pick ──────────────────
 	//
-	// Weaker than the prompts floor by design. A variables slot that resolves
-	// to nothing is not a broken run: every render site keeps its in-code
-	// expression and uses it when no template arrives, so the prompt comes out
-	// byte-identical to what it was before this feature existed. This projects
-	// the shipped row anyway so the *panel* shows what is actually happening —
-	// an empty picker above output that plainly has a layout is the kind of
-	// discrepancy that costs an afternoon.
-	if (varDecls.length) {
+	// A variable is written out by one layout, chosen once for the pub, and a
+	// preset may decide differently for its sessions. So under any stored pick
+	// (the ⏳ leftover picks above, pushed at their own scopes and winning by
+	// scope order), each key gets, in order:
+	//
+	//   2. the session's preset's variable layout for the variable it renders
+	//      (`reason: "preset"`) — a reference that resolves to no row is
+	//      skipped, the preset's own notice names it (`danglingPresetLayouts`);
+	//   3. the pub's layout for that variable (`"pub"`);
+	//   4. a layout the pipeline's author named for this step (`"authored"`),
+	//      else the variable's own default (`"automatic"` when that row is the
+	//      variable's automatic object layout, else `"default"`);
+	//   5. none — the floor entry, `{ variableId, engine }` with no source,
+	//      which renders through the variable's in-code floor (`"no-layout"`).
+	//
+	// All pushed at `defaults`, the bottom of `SCOPE_ORDER`: pushed at
+	// `author`, the declared default would hide 2 and 3.
+	//
+	// Every key resolves, row or no row (owner ruling 2026-10-13): the variable
+	// it carries is how the render picks the right floor, and — for a band
+	// declared upstream (typed templates P2) — the resolved keys are how
+	// Assemble learns which bands to render at the top level.
+	if (variableKeys.length) {
 		const { defaultVariableTemplateFor } = await import(
 			"$lib/server/pipelines/boot/seedVariableTemplates"
 		)
-		const shipped = new Map<string, unknown>()
-		for (const d of varDecls) {
-			if (!d.variableId) continue
-			// A layout the declared defaults pick is not a hole.
-			if (declared.get(`${addressOf(d.nodeKey, d.slot)}\u0000${d.path}`) != null) continue
-			if (!shipped.has(d.variableId))
-				shipped.set(
-					d.variableId,
-					await derefLayout(
-						await defaultVariableTemplateFor(db, d.variableId),
-						d.variableId
-					)
+		const { pubLayoutOf, layoutByReference, presetVariableLayoutsOf } =
+			await import("$lib/server/pipelines/entities/variableTemplates")
+		const { declaredVariableLayouts } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		let presetLayouts: Record<string, string> = {}
+		if (scope.sessionId != null) {
+			const [session] = await db
+				.select({ presetId: schema.sessions.presetId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, scope.sessionId))
+				.limit(1)
+			if (session?.presetId != null)
+				presetLayouts = await presetVariableLayoutsOf(db, session.presetId)
+		}
+		const authored = await declaredVariableLayouts(
+			db,
+			spec.slug,
+			spec.activeVersionId,
+			variableKeys
+		)
+		// Per variable, not per key: a layout is the same row wherever it renders.
+		const cache = new Map<string, Awaited<ReturnType<typeof derefLayout>>>()
+		const once = async (
+			tier: string,
+			variableId: string,
+			find: () => Promise<Awaited<ReturnType<typeof derefLayout>>>
+		) => {
+			const at = `${tier}\u0000${variableId}`
+			if (!cache.has(at)) cache.set(at, await find())
+			return cache.get(at)
+		}
+		// The variable's own default row, with whether it is the automatic
+		// object layout (the one rule, `isAutomaticRow`); per variable, as above.
+		const defaults = new Map<
+			string,
+			| {
+					row: Awaited<ReturnType<typeof derefLayout>>
+					automatic: boolean
+			  }
+			| undefined
+		>()
+		const isAutomatic = async (V: string, id: number) => {
+			const { isAutomaticRow } = await import(
+				"$lib/server/pipelines/config/variableLayoutsView"
+			)
+			const [full] = await db
+				.select()
+				.from(schema.pipelineVariableTemplates)
+				.where(eq(schema.pipelineVariableTemplates.id, id))
+				.limit(1)
+			return !!full && isAutomaticRow(full, getVariable(V))
+		}
+		const onceDefault = async (V: string) => {
+			if (!defaults.has(V)) {
+				const id = await defaultVariableTemplateFor(db, V)
+				const row = id == null ? undefined : await derefLayout(id, V)
+				defaults.set(
+					V,
+					row
+						? {
+								row,
+								automatic: await isAutomatic(V, id as number)
+							}
+						: undefined
 				)
+			}
+			return defaults.get(V)
+		}
+		// 🚧 The layouts a template at a step names by reference
+		// (`layout <key> "<reference>"`), found in the template sources pushed
+		// above at that step's template slots — every scope's, so whichever one
+		// wins has its references resolved. Looked up within the key's variable.
+		// A template whose engine cannot be read here (not core's) names none.
+		//
+		// Not only the template at the node's own step: a key the context
+		// builder lays out upstream reaches Assemble as text, so the template
+		// that names it is at a different node than the variables slot that
+		// lays it out. So every reference any template of the spec names for a
+		// key is resolved at every variables-slot node that has the key, by
+		// that node's variable, never by the key's name.
+		const { variableLayoutCalls } = await import(
+			"@serene-pub/sdk/template-check"
+		)
+		const { CONTEXT_TEMPLATE_CHECK } = await import(
+			"$lib/shared/utils/templateCheckOptions"
+		)
+		const { CORE_LIQUID_ENGINE } = await import(
+			"$lib/shared/pipelines/templateEngines"
+		)
+		const callsInSpec: { key: string; reference: string }[] = []
+		for (const o of overrides) {
+			if (o.path !== "source" || typeof o.value !== "string") continue
+			if (!templateSlots.has(addressOf(o.nodeKey, o.slot))) continue
+			if (!o.value.includes("layout")) continue
+			const engine =
+				overrides.find(
+					(e) =>
+						e.path === "engine" &&
+						e.nodeKey === o.nodeKey &&
+						e.slot === o.slot &&
+						e.scopeKind === o.scopeKind &&
+						e.scopeId === o.scopeId
+				)?.value ?? CORE_TEMPLATE_ENGINE
+			if (engine !== CORE_TEMPLATE_ENGINE && engine !== CORE_LIQUID_ENGINE)
+				continue
+			callsInSpec.push(
+				...variableLayoutCalls(engine as string, o.value, CONTEXT_TEMPLATE_CHECK)
+			)
+		}
+		// By variable, through the lookup the template preview shares.
+		const { referencedLayoutOf } = await import(
+			"$lib/server/pipelines/entities/variableLayouts"
+		)
+		const referenced = new Map<string, ReferencedLayout | undefined>()
+		const onceReferenced = async (reference: string, V: string) => {
+			const at = `${reference}\u0000${V}`
+			if (!referenced.has(at))
+				referenced.set(at, await referencedLayoutOf(db, V, reference))
+			return referenced.get(at)
+		}
+		for (const k of variableKeys) {
+			const V = k.variableId
+			const namedRefs = [
+				...new Set(
+					callsInSpec
+						.filter((c) => c.key === k.path)
+						.map((c) => c.reference)
+				)
+			]
+			const references: Record<string, ReferencedLayout> = {}
+			for (const reference of namedRefs) {
+				const found = await onceReferenced(reference, V)
+				if (found) references[reference] = found
+			}
+			// Present, empty when none resolves, once any template names the
+			// key: the builder reads it as "someone asks", and says which layout
+			// is in use for a reference nothing answers.
+			const withReferences = namedRefs.length ? { references } : {}
+			let row = await once("preset", V, async () => {
+				const ref = presetLayouts[V]
+				const id = ref ? await layoutByReference(db, V, ref) : null
+				return id == null ? undefined : derefLayout(id, V)
+			})
+			let reason: LayoutReason = "preset"
+			if (!row) {
+				const pub = await once("pub", V, async () => {
+					const id = await pubLayoutOf(db, V)
+					return id == null ? undefined : derefLayout(id, V)
+				})
+				row = pub
+				reason = "pub"
+			}
+			if (!row) {
+				const named = authored.get(
+					`${addressOf(k.nodeKey, k.slot)}\u0000${k.path}`
+				)
+				row = named != null ? await derefLayout(named, V) : undefined
+				if (row) reason = "authored"
+				else {
+					const own = await onceDefault(V)
+					row = own?.row
+					reason = own?.automatic ? "automatic" : "default"
+				}
+			}
 			push(
 				"defaults",
 				undefined,
-				d.nodeKey,
-				d.slot,
-				d.path,
-				shipped.get(d.variableId) ??
-					// Every key resolves, row or no row (owner ruling 2026-10-13):
-					// the variable it carries is how the render picks the right
-					// floor, and — for a band declared upstream (typed templates
-					// P2) — the resolved keys are how Assemble learns which bands
-					// to render at the top level. No `source`, so it renders
-					// through the floor.
-					{ variableId: d.variableId, engine: CORE_TEMPLATE_ENGINE }
+				k.nodeKey,
+				k.slot,
+				k.path,
+				row
+					? { ...row, reason, ...withReferences }
+					: {
+							variableId: V,
+							engine: CORE_TEMPLATE_ENGINE,
+							reason: "no-layout" as const,
+							...withReferences
+						}
 			)
 		}
 	}
+}
+
+/**
+ * The entries of a preset's variable layouts that name no layout now — a
+ * reference whose package was removed or whose layout was withdrawn. The run
+ * skips each (the pub's layout renders); the preset shows these as a notice.
+ */
+export async function danglingPresetLayouts(
+	db: Db,
+	presetId: number
+): Promise<Array<{ variableId: string; reference: string }>> {
+	const { presetVariableLayoutsOf, layoutByReference } = await import(
+		"$lib/server/pipelines/entities/variableTemplates"
+	)
+	const stored = await presetVariableLayoutsOf(db, presetId)
+	const out: Array<{ variableId: string; reference: string }> = []
+	for (const [variableId, reference] of Object.entries(stored))
+		if ((await layoutByReference(db, variableId, reference)) == null)
+			out.push({ variableId, reference })
+	return out
 }
 
 /**

@@ -18,7 +18,7 @@
 	import { openInConnections } from "$lib/client/admin/railDoors"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
@@ -34,7 +34,10 @@
 		type RowStatus
 	} from "$lib/client/components/connections/connectionRowStatus"
 	import { defaultsSummary } from "$lib/client/components/connections/defaultsSummary"
-	import { endpointKind } from "$lib/client/components/connections/modelManagement"
+	import {
+		connectionComesWithApp,
+		endpointKind
+	} from "$lib/client/components/connections/modelManagement"
 	import {
 		MODALITY_ORDER,
 		connectionDeletion,
@@ -74,7 +77,7 @@
 		if (deleting.length) return
 		for (const event of releasing) socket.emit(event, { enabled: false })
 		releasing = []
-		toaster.success({ title: "Deleted" })
+		notify.success({ title: "Deleted" })
 	}
 	useInterest<"connections:delete">("connections:delete", handleDelete)
 
@@ -172,10 +175,23 @@
 			label: "Default",
 			values: (r) =>
 				defaultsHeldBy(r, defaults).length ? "holds" : "none",
-			optionLabel: (v) => (v === "holds" ? "Holds a default" : "Holds none"),
+			optionLabel: (v) =>
+				v === "holds" ? "Holds a default" : "Holds none",
 			order: ["holds", "none"]
 		}
 	]
+
+	/** The app-made connections never go; the rest of a selection may. */
+	function splitComesWithApp(selected: readonly Row[]) {
+		return {
+			going: selected.filter((r) => !connectionComesWithApp(r.type)),
+			kept: selected.filter((r) => connectionComesWithApp(r.type))
+		}
+	}
+	function keptLine(kept: readonly Row[]): string {
+		const names = kept.map((r) => r.name ?? `Connection ${r.id}`).join(", ")
+		return `${names} ${kept.length === 1 ? "comes" : "come"} with Serene Pub and ${kept.length === 1 ? "stays" : "stay"}. `
+	}
 
 	const bulkActions: AdminBulkAction<Row>[] = [
 		{
@@ -183,9 +199,27 @@
 			label: "Delete selected connections…",
 			icon: Icons.Trash2,
 			destructive: true,
-			confirm: (selected) => connectionDeletion(selected, defaults),
+			confirm: (selected) => {
+				const { going, kept } = splitComesWithApp(selected)
+				if (!kept.length) return connectionDeletion(going, defaults)
+				const line = keptLine(kept)
+				if (!going.length)
+					return {
+						title:
+							kept.length === 1
+								? `${kept[0].name ?? `Connection ${kept[0].id}`} comes with Serene Pub`
+								: "These come with Serene Pub",
+						summary:
+							line +
+							`To free space, use Delete from disk on one of ${kept.length === 1 ? "its" : "their"} models instead.`,
+						objects: [],
+						confirmLabel: ""
+					}
+				const deletion = connectionDeletion(going, defaults)
+				return { ...deletion, summary: line + deletion.summary }
+			},
 			run: (selected) => {
-				const ids = selected.map((r) => r.id)
+				const ids = splitComesWithApp(selected).going.map((r) => r.id)
 				releasing = [
 					...new Set([
 						...releasing,
@@ -222,7 +256,11 @@
 	emptyMessage="No connections yet. Add one to give Serene Pub a model to talk to."
 >
 	{#snippet headerActions()}
-		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openView}>
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface"
+			onclick={openView}
+		>
 			<Icons.Cable size={16} aria-hidden="true" />
 			Open Connections view
 		</button>
@@ -247,7 +285,13 @@
 			{#if held.length}
 				<span class="flex flex-wrap gap-1">
 					{#each held as h (h.capability)}
-						<Badge tone="primary" size="sm" title={h.modelName ? `${h.label}: ${h.modelName}` : h.label}>
+						<Badge
+							tone="primary"
+							size="sm"
+							title={h.modelName
+								? `${h.label}: ${h.modelName}`
+								: h.label}
+						>
 							{h.label}
 						</Badge>
 					{/each}
@@ -261,7 +305,7 @@
 			<!-- The index row's vocabulary (★R2 L4.1): a 6px dot and muted
 			     words, red only when a loadout runs on a broken connection. -->
 			<span
-				class="inline-flex items-center gap-1.5 text-chip {marks.text}"
+				class="text-chip inline-flex items-center gap-1.5 {marks.text}"
 				title={status.detail ?? undefined}
 			>
 				<span

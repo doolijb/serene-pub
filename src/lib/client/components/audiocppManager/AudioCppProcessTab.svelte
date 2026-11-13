@@ -43,7 +43,6 @@
 	let isUp = $derived(
 		!offline && (status?.status === "running" || status?.status === "starting")
 	)
-	let stopBlocked = $derived(!!status?.isExternal)
 	let anyBusy = $derived(busy !== null)
 </script>
 
@@ -125,7 +124,7 @@
 			</button>
 			<button
 				class="btn preset-tonal-surface"
-				disabled={anyBusy || stopBlocked}
+				disabled={anyBusy}
 				onclick={onStop}
 			>
 				{@render spin(busy === "stop")}
@@ -142,9 +141,4 @@
 			</button>
 		{/if}
 	</div>
-	{#if isUp && stopBlocked}
-		<p class="text-surface-600-400 text-xs">
-			Serene Pub did not start this audio.cpp, so it cannot stop it.
-		</p>
-	{/if}
 </div>

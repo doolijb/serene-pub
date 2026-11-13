@@ -171,7 +171,6 @@ async function turn(sessionId: number, sweep: unknown) {
 }
 
 const answer = (over: Record<string, unknown> = {}) => ({
-	summary: { name: "", content: "" },
 	lore: [],
 	cast: [],
 	worldState: [],
@@ -244,4 +243,26 @@ describe("the sweep (lane 2; a routine since lane 6)", () => {
 		await turn(sessionId, answer({ goals: "- [x] Reach the mill\n- [ ] Find the key" }))
 		expect(await said()).toHaveLength(1)
 	}, 240_000)
+
+	it("a sweep with every duty on files no history entry, even when the answer still carries a summary", async () => {
+		const sessionId = await sweptSession("sweep-no-summary", {
+			summary: "full",
+			lore: "full",
+			cast: "full",
+			scenes: "full",
+			goals: "full",
+			"world-state": "full",
+			relationships: "full"
+		})
+		const histories = async () =>
+			(await db.select({ id: schema.lorebookEntries.id }).from(schema.lorebookEntries).where(sql`split_part(${schema.lorebookEntries.typeId}, '@', 1) = 'core:entry/history'`)).length
+		const before = await histories()
+		await turn(sessionId, answer({ summary: { name: "Stale summary", content: "They walked to the mill." }, goals: "- [ ] Reach the mill" }))
+		expect(await histories(), "no history entry was filed").toBe(before)
+		const stale = await db.select({ id: schema.lorebookEntries.id }).from(schema.lorebookEntries).where(eq(schema.lorebookEntries.title, "Stale summary"))
+		expect(stale).toEqual([])
+		// Positive control: the same answer's goals were taken, so the answer was not refused as a whole.
+		const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+		expect((row!.annex as any)?.core?.["story-goals"]).toContain("Reach the mill")
+	}, 180_000)
 })

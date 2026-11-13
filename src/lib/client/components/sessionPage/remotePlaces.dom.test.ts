@@ -319,9 +319,9 @@ describe("core's remote Places", () => {
 					.query(`${map("node")}[data-node-id="place:3"]`)
 					?.getAttribute("aria-pressed")
 			).toBe("true")
-			expect(text(detail.querySelector(part("detail-none")))).toBe(
-				"No way out of here yet."
-			)
+			// R10: no ways draws no sentence.
+			expect(detail.querySelector(part("detail-none")) === null).toBe(true)
+			expect(text(detail)?.includes("No way out of here yet.")).toBe(false)
 			expect(text(detail.querySelector(part("linked")))).toBe(
 				"Verity keeps The Crypt."
 			)
@@ -410,20 +410,24 @@ describe("core's remote Places", () => {
 	)
 
 	test(
-		"the empty lines say why; a refused read is the widget's own line",
+		"an empty book draws nothing, a filter that matches none says why; a refused read is the widget's own line",
 		{ timeout: 120_000 },
 		async () => {
 			const none = await mountPlaces({
 				answer: { ...ANSWER, places: [], ways: [] }
 			})
-			expect(text(none.view.query(part("empty")))).toBe(
-				"This book has no places yet."
-			)
+			// R10: a book with no places, or no book, draws an empty root.
+			expect(none.view.query(part("empty")) === null).toBe(true)
+			expect(text(none.view.query(part("root")))).toBe("")
 			const noBook = await mountPlaces({
 				answer: { lorebookId: null, asOf: null, places: [], ways: [] }
 			})
-			expect(text(noBook.view.query(part("empty")))).toBe(
-				"This session reads no lorebook."
+			expect(noBook.view.query(part("empty")) === null).toBe(true)
+			expect(text(noBook.view.query(part("root")))).toBe("")
+			// A category filter that matches nothing says why: a cause the reader can act on.
+			const filtered = await mountPlaces({ settings: { categories: ["nowhere"] } })
+			expect(text(filtered.view.query(part("empty")))).toBe(
+				"None of this book's places is in nowhere."
 			)
 			const refused = await mountPlaces({
 				refuse: {

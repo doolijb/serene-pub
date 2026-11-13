@@ -28,12 +28,30 @@ export interface ActionListDeps {
 	sessionId(): number
 	/** The loaded session and its viewer: the newest line, the channels, the verbs, the narrator's name. */
 	data: SessionPageData
+	/** 🚧 Advanced controls (2026-11-10): this viewer's switch (`showsAdvancedControls`). Off leaves core's *Branch from here* out of every venue. */
+	advancedControls(): boolean
+}
+
+type Venues = Sockets.Sessions.Actions.Response["venues"]
+
+/** A copy of the venues without core's *Branch from here*; every venue key is kept. */
+function withoutBranch(venues: Venues): Venues {
+	const keep = (a: Sockets.Sessions.Actions.Action) =>
+		!(a.specSlug === "core" && a.key === "branch")
+	const out: Venues = {}
+	for (const [kind, v] of Object.entries(venues))
+		out[kind] = {
+			primary: v.primary.filter(keep),
+			overflow: v.overflow.filter(keep)
+		}
+	return out
 }
 
 /** The action list and its verdicts. Registers its listeners on the inbox at once. */
 export function createActionList(d: ActionListDeps) {
 	const socket = d.socket
 	const sessionId = $derived(d.sessionId())
+	const advancedControls = $derived(d.advancedControls())
 	const session = $derived(d.data.session)
 	const lastMessage = $derived(d.data.lastMessage)
 	const narratorName = $derived(d.data.narratorName)
@@ -50,9 +68,20 @@ export function createActionList(d: ActionListDeps) {
 	// client mapping on the function key, not a hardcoded button. Core's
 	// message verbs ride the same list, so the message menu and the quick
 	// row hand-write no verb button either.
-	let actionVenues = $state<Sockets.Sessions.Actions.Response["venues"]>({})
+	let listedVenues = $state<Venues>({})
+	// Hidden, never changed: `listedVenues` keeps what the server sent, and the
+	// read-side `actionVenues` leaves core's Branch out while advanced controls
+	// are off. It is derived at read time, so the switch flipping mid-session
+	// needs no new `sessions:actions` push. Venue keys are kept (an emptied
+	// venue stays empty, never missing) so the conversation's message menu never
+	// sees an absent list, which would make `MessageControls` fall back to its
+	// built-in Stop/Edit/Branch floors.
+	let actionVenues = $derived(
+		advancedControls ? listedVenues : withoutBranch(listedVenues)
+	)
 	/** 🚧 Where this viewer's Delete is refused (owner ruling ★9), off the list. */
-	let deleteRefusedThrough = $state<Sockets.Sessions.Actions.Response["deleteRefusedThrough"]>(null)
+	let deleteRefusedThrough =
+		$state<Sockets.Sessions.Actions.Response["deleteRefusedThrough"]>(null)
 	/**
 	 * What a block press of a form-venue action collects (lair pass R9) —
 	 * those actions are listed in no venue, so `listedAction` cannot find
@@ -68,9 +97,17 @@ export function createActionList(d: ActionListDeps) {
 	 * every other reader keeps; these arrive beside it, asked for each time
 	 * `main`'s does (`handleSessionsActions`), so a run's end refreshes both.
 	 */
-	let channelVenues = $state<
-		Record<string, Sockets.Sessions.Actions.Response["venues"]>
-	>({})
+	let listedChannelVenues = $state<Record<string, Venues>>({})
+	let channelVenues = $derived(
+		advancedControls
+			? listedChannelVenues
+			: Object.fromEntries(
+					Object.entries(listedChannelVenues).map(([c, v]) => [
+						c,
+						withoutBranch(v)
+					])
+				)
+	)
 	const onOtherChannel = (channel?: string): channel is string =>
 		!!channel && channel !== DEFAULT_CHANNEL
 	/** One venue of a channel's listing — `main`'s when none is named. */
@@ -222,7 +259,7 @@ export function createActionList(d: ActionListDeps) {
 				t,
 				t.specSlug === "core" &&
 					(t.key === "advance" || t.key === "pick")
-					? [[needsPersona, NO_PERSONA]]
+					? [[needsPersona, d.data.benchedOnlyReason ?? NO_PERSONA]]
 					: []
 			)
 		return paletteRowState(chipVerdict(t), { generating, statusText })
@@ -275,14 +312,16 @@ export function createActionList(d: ActionListDeps) {
 		if (msg.sessionId !== sessionId) return
 		// Another channel's listing (S1): kept beside `main`'s, never over it.
 		if (onOtherChannel(msg.channel)) {
-			channelVenues = {
-				...channelVenues,
+			listedChannelVenues = {
+				...listedChannelVenues,
 				[msg.channel]: withinAudience(msg.venues)
 			}
 			return
 		}
+		// A push carries the strip's state too (★H1): the title's words follow the reply that ended.
+		if (msg.rewind !== undefined) d.data.adoptRewind(msg.rewind)
 		// Outside the viewer's audience is hidden, never listed greyed (round 2).
-		actionVenues = withinAudience(msg.venues)
+		listedVenues = withinAudience(msg.venues)
 		formCollects = msg.formCollects ?? {}
 		deleteRefusedThrough = msg.deleteRefusedThrough ?? null
 		// Every other channel the session has is listed again with it: a run
@@ -300,8 +339,8 @@ export function createActionList(d: ActionListDeps) {
 	function markActionsSeen(keys: string[]) {
 		if (!keys.length) return
 		const set = new Set(keys)
-		const next: typeof actionVenues = {}
-		for (const [kind, v] of Object.entries(actionVenues))
+		const next: Venues = {}
+		for (const [kind, v] of Object.entries(listedVenues))
 			next[kind] = {
 				primary: v.primary.map((a) =>
 					set.has(actionIdentity(a)) ? { ...a, isNew: false } : a
@@ -310,7 +349,7 @@ export function createActionList(d: ActionListDeps) {
 					set.has(actionIdentity(a)) ? { ...a, isNew: false } : a
 				)
 			}
-		actionVenues = next
+		listedVenues = next
 		socket.emit("sessions:actionsSeen", { sessionId, keys })
 	}
 
@@ -342,7 +381,10 @@ export function createActionList(d: ActionListDeps) {
 	 * (owner ruling ★9, `deleteRefusedThrough`): a kept turn's row, which
 	 * loses Delete rather than offering it to refuse.
 	 */
-	function deleteRefused(row: { id: number; channel?: string | null }): boolean {
+	function deleteRefused(row: {
+		id: number
+		channel?: string | null
+	}): boolean {
 		const kept = deleteRefusedThrough
 		if (!kept || row.id > kept.messageId) return false
 		const slug = (row.channel || "main").split(":")[0]
@@ -353,7 +395,9 @@ export function createActionList(d: ActionListDeps) {
 		deleteRefused,
 		/** For a projection's cache key: moves whenever the delete floor does. */
 		get deleteRefusedKey(): string {
-			return deleteRefusedThrough ? `${deleteRefusedThrough.messageId}:${deleteRefusedThrough.channels.join(",")}` : ""
+			return deleteRefusedThrough
+				? `${deleteRefusedThrough.messageId}:${deleteRefusedThrough.channels.join(",")}`
+				: ""
 		},
 		/** `main`'s venues. */
 		get actionVenues() {

@@ -16,7 +16,7 @@ Rules don't have to mean dice. Some roll a die, some count a handful of dice or 
 
 A genre doesn't track anything itself: a session's stats are its rules' alone (see [Stats and states](./stats-and-states.md)). Instead, a genre says what it **plays best with**, by what each thing is (its tag): Story plays best with a health-like number, a mood word, what ails someone and somewhere to keep what they carry; the Dungeon Crawler with a health and a level to count, and the kinds of kit a hero carries. The start form's **Rules** card lists them as **Plays best with …**, rates each set of rules against them (**Perfect**, **Great**, **Good**, **Ok**, **Poor**), and, for the rules you pick, says what it will tell in words instead, and why. Nothing is locked: rules that lack something play that part in words, and rules of your own that don't follow core's conventions are always playable. An attribute or kind of entry is found by its tags (or its own id), so tag yours (`health`, `mood`, `level`, `condition`) to match.
 
-Rules that declare no attributes, such as **Freeform**, keep no stats at all: the sheet and the session's **Attributes** settings say _This session's rules declare no attributes_.
+Rules that declare no attributes, such as **Freeform**, keep no stats at all: the sheet draws nothing and the session's **Attributes** settings say _This session's rules declare no attributes_.
 
 ## Which rules a new session plays
 
@@ -53,7 +53,7 @@ A moment that could go either way is a **check**: picking a lock, swaying a judg
 
 - **One die against a target.** Roll a die, add a modifier, and meet or beat a target. How far over or under says how well it went. Vis Itineris rolls a d20.
 - **A pool of dice.** Roll as many dice as a stat says and count the ones that come up high enough. More successes, a better outcome.
-- **Draw cards.** Draw from a shuffled deck and add a modifier against a target. The deck remembers what has been drawn, and is shuffled again each scene (or only when it runs out).
+- **Draw cards.** Draw from a shuffled deck and add a modifier against a target. The deck remembers what has been drawn, and is shuffled again each scene (or only when it runs out). A draw goes with its turn: a swipe, a regenerate, Back and a delete put the cards back, and Forward deals them again. If two turns drew from one deck and the earlier is taken back, its cards stay spent; taking the later turn back afterwards puts the deck where it stood before both.
 - **Compare, no chance.** One value against another's, or against a target. The higher wins; nothing is rolled.
 - **Spend to succeed.** Spend from a pool: what is spent buys the outcome. Nobody spends what they don't have. When the model proposes a spend without saying how much, the rules spend the least that succeeds.
 - **The game master decides.** Nothing is rolled or spent: whoever runs the game, or the model, judges how it goes, in the rules' own words.
@@ -126,6 +126,8 @@ What a character can be comes from the rules, never from the genre. Vis Itineris
 
 Some things wear off or come due as time passes: poison every hour, a curse at midnight. When a genre passes time (a rest, a journey, a scene break), the rules apply whatever falls due. Something set for a specific date needs the session to keep a story clock. Without one, the rules note "needs a clock" and skip it. They never guess.
 
+Rules can count story time (a curse at midnight, an hourly poison) or real time. A genre that runs on real time, such as the Guide or Chat, keeps no story clock, so rules that count story time would never move there: **Genre fit** rates them *Poor* and says so. Rules that count real time rate *Poor* on a genre that keeps a story clock. It is a rating and a sentence; it never stops you choosing them. Rules can tell how long ago a value last changed in the story, counted on the session's own clock, and rules that ask for it can also tell how much real time has passed. A value nothing in the session has changed yet has no such time. Moving a session to a newer version of its rules keeps a renamed value's time, and a value the move adds has none.
+
 Rules that count a turn's actions say so to the model where numbers show: _A turn holds 3 actions and a reaction._
 
 ## Making rules of your own
@@ -134,7 +136,7 @@ Rules that count a turn's actions say so to the model where numbers show: _A tur
 Rules are made and changed in **Admin › Play › Rulesets**. Everyone else meets them under **Rules**.
 :::
 
-**Admin › Play › Rulesets** lists every set of rules the pub knows: the ones that come with Serene Pub, any a plugin brings and the ones made here, with where each comes from, whether it is a draft, published or retired, and its version.
+**Admin › Play › Rulesets** lists every set of rules the pub knows: the ones that come with Serene Pub, any a plugin brings and the ones made here, with where each comes from, whether it is a draft, published or retired, and its version. **Genre fit** says how each genre that rates rules (one that says what it [plays best with](#plays-best-with)) takes them, with the start form's words (*Story: Great · Lair: Good · Dungeon Crawler: Poor*); hover it for each one's reason, and a ruleset's own page lists them under its name. The Guide and Chat, which rate nothing else, speak up only for rules that count story time (see [Time](#time)). A genre that plays only certain rules says *Not offered* for the rest. Rules no genre rates show nothing there.
 
 **New ruleset** makes one. You pick an owner slug once (`acme.lab`): every set of rules you make lives under it, and it never changes. Then a label, and the id made from it (`hollow-hearts` makes `acme.lab:ruleset/hollow-hearts@1`; it stays), and **What kind of game is it?**. None of the answers locks you in.
 

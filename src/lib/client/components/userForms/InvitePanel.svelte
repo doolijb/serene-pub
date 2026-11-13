@@ -9,7 +9,7 @@
 	 */
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		requestWithInterest,
@@ -90,7 +90,7 @@
 	}
 	function handleError(res: Sockets.ErrorResponse) {
 		busy = false
-		toaster.error({ title: res.error })
+		notify.error({ source: "invites:refusal", title: res.error })
 	}
 
 	const ERRORS = [
@@ -145,7 +145,7 @@
 	async function copyLink() {
 		if (!link) return
 		await navigator.clipboard.writeText(link)
-		toaster.success({ title: "Invite link copied" })
+		notify.success({ title: "Invite link copied" })
 	}
 </script>
 

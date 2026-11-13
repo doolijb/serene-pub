@@ -1,8 +1,12 @@
 /**
- * 🚧 The boundary watcher (PROPOSAL-live-scenes §4, lane D): scene cues read
- * off the lines' story-clock stamps and the clock's moves — Suggested records
- * a cue, Automatic places the boundary, Manual does nothing — and the cue
- * decided as the owner's Yes or Not here. No model anywhere.
+ * 🚧 Where scene boundaries come from (PROPOSAL-live-scenes §4): read off the
+ * lines' story-clock stamps and the clock's moves — Suggested records a cue,
+ * Automatic places the boundary, Manual does nothing — and the cue decided as
+ * the owner's Yes or Not here. No model anywhere. Since 2026-11-12 the genre's
+ * scenes routine finds them, a couple of rounds late: these tests land lines,
+ * run the routine's walk (`sceneBoundariesOf`) and its outlet
+ * (`proposeJudgedSceneCue`) as the routine does, and check the per-line hook
+ * (`watchSceneBoundaries`) fires none of them itself.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -19,22 +23,48 @@ let dataDir: string
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	const db = await createTestDb()
-	return { db }
+	return { db, getCryptoSecretKey: () => "boundary-watcher-test-secret" }
 })
+vi.mock("$lib/server/embedding", () => ({
+	isModelReady: () => false,
+	getLoadedModelId: () => null,
+	embed: async () => [],
+	batchEmbed: async () => []
+}))
+vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
+	ensureSessionMessageEmbedded: async () => {},
+	autoEnqueueSession: async () => {},
+	autoEnqueueLorebook: async () => {}
+}))
+vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
+	emitToUserRedacted: async () => {},
+	broadcastToSessionUsers: async () => {}
+}))
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-boundary-watcher-int-test-"))
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
-}, 60_000)
+	// The real core genres: Story registers the scenes routine.
+	await (await import("$lib/server/db/defaults")).sync()
+	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	await bootstrapPipelines(testDb)
+}, 240_000)
 
 afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 let seq = 0
-/** A person, a book with a history entry at Year 5 Mo 1 Day 2, and a session on that day. */
-async function makeWorld(opts: { lorebook?: boolean; scenes?: unknown } = {}) {
+/**
+ * A person, a book with a history entry at Year 5 Mo 1 Day 2, and a session on
+ * that day: Story (which registers the scenes routine), Suggested unless the
+ * test's `scenes` says otherwise (`null`: the genre's own settings). `genreId`
+ * names a genre nothing published, for a session on the core defaults.
+ */
+async function makeWorld(
+	opts: { lorebook?: boolean; scenes?: Record<string, unknown> | null; genreId?: string } = {}
+) {
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `boundary-watcher-${++seq}`)
 	const [lorebook] = await testDb
@@ -50,11 +80,12 @@ async function makeWorld(opts: { lorebook?: boolean; scenes?: unknown } = {}) {
 			userId: user.id,
 			isGroup: false,
 			lorebookId: opts.lorebook === false ? null : lorebook.id,
+			...(opts.genreId ? { genreId: opts.genreId } : {}),
 			storyClockYear: 5,
 			storyClockMonth: 1,
 			storyClockDay: 2,
-			metadata: opts.scenes ? { scenes: opts.scenes } : {}
-		})
+			metadata: opts.scenes === null ? {} : { scenes: { mode: "suggested", ...opts.scenes } }
+		} as any)
 		.returning()
 	return { user, lorebook, session }
 }
@@ -78,6 +109,42 @@ async function watch(sessionId: number, messageId: number) {
 	return watchSceneBoundaries(testDb as any, { sessionId, messageId })
 }
 
+/** n plain lines on the current day. */
+async function plain(sessionId: number, n: number) {
+	const ids: number[] = []
+	for (let i = 0; i < n; i++) ids.push((await say(sessionId, `Line ${i + 1}.`)).id)
+	return ids
+}
+
+/**
+ * The walk alone, as the routine's query asks it (a line is old at 2 rounds;
+ * `every` wide enough for a young session's whole past), with Story's
+ * first-scene `opening` boundary left out: these tests are about the others.
+ */
+async function found(sessionId: number, opts: { depth?: number; every?: number } = {}) {
+	const { sceneBoundariesOf } = await import("./boundaryWatcher")
+	const r = await sceneBoundariesOf(testDb as any, sessionId, { depth: opts.depth ?? 2, every: opts.every ?? 10 })
+	return { ...r, boundaries: r.boundaries.filter((b) => b.trigger !== "opening") }
+}
+
+/** One run of the scenes routine: the walk, then each boundary through the outlet, in line order. */
+async function runRoutine(sessionId: number, opts: { depth?: number; every?: number } = {}) {
+	const { proposeJudgedSceneCue } = await import("./boundaryWatcher")
+	const walked = await found(sessionId, opts)
+	const outcomes = []
+	for (const b of walked.boundaries)
+		outcomes.push(
+			await proposeJudgedSceneCue(testDb as any, {
+				sessionId,
+				channel: "main",
+				atMessageId: b.at,
+				reason: b.reason,
+				trigger: b.trigger
+			})
+		)
+	return { ...walked, outcomes }
+}
+
 async function cuesOf(sessionId: number) {
 	return testDb
 		.select()
@@ -86,18 +153,33 @@ async function cuesOf(sessionId: number) {
 }
 
 describe("Suggested — the default (★1)", () => {
-	test("a line on a new story day raises a cue at it; the same line again raises nothing new", async () => {
+	test("a line on a new story day raises a cue at it, two rounds on; the same line again raises nothing new", async () => {
 		const w = await makeWorld()
 		const m1 = await say(w.session.id, "Night falls.")
 		expect(await watch(w.session.id, m1.id)).toBeNull()
 		await setDay(w.session.id, 3)
 		const m2 = await say(w.session.id, "Morning.")
-		const r = await watch(w.session.id, m2.id)
-		expect(r).toMatchObject({ outcome: "suggested", messageId: m2.id, triggers: ["dayCrossed"] })
-		await watch(w.session.id, m2.id)
+		// The per-line hook fires no trigger now, and the routine finds none yet.
+		expect(await watch(w.session.id, m2.id)).toBeNull()
+		expect(await cuesOf(w.session.id)).toEqual([])
+		expect((await runRoutine(w.session.id)).boundaries).toEqual([])
+		await say(w.session.id, "Later.")
+		const run = await runRoutine(w.session.id)
+		expect(run.boundaries).toEqual([{ at: m2.id, trigger: "dayCrossed", reason: "the day changed" }])
+		expect(run.outcomes).toMatchObject([{ outcome: "suggested" }])
+		// Run again, and place the same boundary again: still one cue.
+		expect((await runRoutine(w.session.id)).boundaries).toEqual([])
+		const { proposeJudgedSceneCue } = await import("./boundaryWatcher")
+		await proposeJudgedSceneCue(testDb as any, {
+			sessionId: w.session.id,
+			channel: "main",
+			atMessageId: m2.id,
+			reason: "the day changed",
+			trigger: "dayCrossed"
+		})
 		const cues = await cuesOf(w.session.id)
 		expect(cues).toHaveLength(1)
-		expect(cues[0]).toMatchObject({ atMessageId: m2.id, trigger: "dayCrossed", state: "open", channel: "main" })
+		expect(cues[0]).toMatchObject({ atMessageId: m2.id, trigger: "dayCrossed", state: "open", channel: "main", reason: null })
 
 		const { offeredSceneCues } = await import("./boundaryWatcher")
 		expect(await offeredSceneCues(testDb as any, w.session.id)).toEqual([
@@ -111,13 +193,26 @@ describe("Suggested — the default (★1)", () => {
 		await say(w.session.id, "Before.")
 		await setDay(w.session.id, 4)
 		const m2 = await say(w.session.id, "After.")
-		await watch(w.session.id, m2.id)
+		await plain(w.session.id, 1)
+		const first = await runRoutine(w.session.id)
+		expect(first.boundaries.map((b) => b.at)).toEqual([m2.id])
 		const [cue] = await cuesOf(w.session.id)
 		const out = await decideSceneCue(testDb as any, { cueId: cue!.id, userId: w.user.id, accept: false })
 		expect(out).toEqual({ sessionId: w.session.id, sceneId: null })
 		expect(await offeredSceneCues(testDb as any, w.session.id)).toEqual([])
-		// The same trigger at the same line: the dismissed row stands, nothing new.
-		await watch(w.session.id, m2.id)
+		// The same trigger at the same line: the walk starts after a decided cue, and
+		// the outlet leaves the dismissed row standing, nothing new.
+		expect((await runRoutine(w.session.id)).boundaries).toEqual([])
+		const { proposeJudgedSceneCue } = await import("./boundaryWatcher")
+		expect(
+			await proposeJudgedSceneCue(testDb as any, {
+				sessionId: w.session.id,
+				channel: "main",
+				atMessageId: m2.id,
+				reason: "the day changed",
+				trigger: "dayCrossed"
+			})
+		).toMatchObject({ outcome: "skipped", note: "this line's scene cue was already decided" })
 		const again = await cuesOf(w.session.id)
 		expect(again).toHaveLength(1)
 		expect(again[0]!.state).toBe("dismissed")
@@ -133,7 +228,8 @@ describe("Suggested — the default (★1)", () => {
 		await say(w.session.id, "Before.")
 		await setDay(w.session.id, 5)
 		const m2 = await say(w.session.id, "After.")
-		await watch(w.session.id, m2.id)
+		await plain(w.session.id, 1)
+		await runRoutine(w.session.id)
 		const [cue] = await cuesOf(w.session.id)
 		const stranger = await createTestUser(testDb, `boundary-stranger-${++seq}`)
 		await expect(
@@ -148,34 +244,43 @@ describe("Suggested — the default (★1)", () => {
 		expect(await offeredSceneCues(testDb as any, w.session.id)).toEqual([])
 	}, 60_000)
 
-	test("a cue behind the lane's latest boundary is moot and not offered", async () => {
+	test("a cue behind the channel's latest boundary is moot and not offered", async () => {
 		const { offeredSceneCues } = await import("./boundaryWatcher")
 		const { openScene } = await import("./liveScenes")
 		const w = await makeWorld()
 		await say(w.session.id, "One.")
 		await setDay(w.session.id, 6)
-		const m2 = await say(w.session.id, "Two.")
-		await watch(w.session.id, m2.id)
+		await say(w.session.id, "Two.")
 		const m3 = await say(w.session.id, "Three.")
+		await plain(w.session.id, 1)
+		// The routine's cue waits at the day-6 line, and is offered...
+		await runRoutine(w.session.id)
+		expect(await offeredSceneCues(testDb as any, w.session.id)).toHaveLength(1)
+		// ...until a scene opens after it.
 		await openScene(testDb as any, { sessionId: w.session.id, userId: w.user.id, atMessageId: m3.id })
 		expect(await offeredSceneCues(testDb as any, w.session.id)).toEqual([])
 	}, 60_000)
 })
 
 describe("a time action", () => {
-	test("a person's or a press's clock move leaves the lane's next line a time-action cue", async () => {
+	test("a person's or a press's clock move leaves the channel's next line a time-action marker; the routine places it", async () => {
 		const { noteTimeAction, offeredSceneCues } = await import("./boundaryWatcher")
 		const w = await makeWorld()
 		await say(w.session.id, "We rest.")
 		await noteTimeAction(testDb as any, { sessionId: w.session.id })
 		const pending = await cuesOf(w.session.id)
 		expect(pending).toMatchObject([{ atMessageId: null, trigger: "timeAction", state: "pending", channel: "main" }])
-		// Twice is still one waiting cue per lane.
+		// Twice is still one waiting cue per channel.
 		await noteTimeAction(testDb as any, { sessionId: w.session.id })
 		expect(await cuesOf(w.session.id)).toHaveLength(1)
 		const m2 = await say(w.session.id, "Three hours later.")
-		const r = await watch(w.session.id, m2.id)
-		expect(r?.triggers).toEqual(["timeAction"])
+		// The hook binds the marker to the landed line and leaves it pending: never offered.
+		expect(await watch(w.session.id, m2.id)).toBeNull()
+		expect(await cuesOf(w.session.id)).toMatchObject([{ atMessageId: m2.id, trigger: "timeAction", state: "pending" }])
+		expect(await offeredSceneCues(testDb as any, w.session.id)).toEqual([])
+		await plain(w.session.id, 1)
+		const run = await runRoutine(w.session.id)
+		expect(run.boundaries.map((b) => b.trigger)).toEqual(["timeAction"])
 		const offered = await offeredSceneCues(testDb as any, w.session.id)
 		expect(offered).toMatchObject([{ messageId: m2.id, triggers: ["timeAction"], reason: "time passed" }])
 	}, 60_000)
@@ -188,6 +293,12 @@ describe("a time action", () => {
 		await noteTimeAction(testDb as any, { sessionId: w.session.id })
 		const m2 = await say(w.session.id, "Dawn.")
 		await watch(w.session.id, m2.id)
+		await plain(w.session.id, 1)
+		const run = await runRoutine(w.session.id)
+		expect(run.boundaries.map((b) => [b.at, b.trigger])).toEqual([
+			[m2.id, "dayCrossed"],
+			[m2.id, "timeAction"]
+		])
 		const offered = await offeredSceneCues(testDb as any, w.session.id)
 		expect(offered).toHaveLength(1)
 		expect(offered[0]).toMatchObject({
@@ -207,6 +318,8 @@ describe("the other modes and triggers", () => {
 		await noteTimeAction(testDb as any, { sessionId: w.session.id })
 		const m2 = await say(w.session.id, "Two.")
 		expect(await watch(w.session.id, m2.id)).toBeNull()
+		await plain(w.session.id, 2)
+		expect(await found(w.session.id)).toEqual({ boundaries: [], why: "scenes are Manual here" })
 		expect(await cuesOf(w.session.id)).toEqual([])
 	}, 60_000)
 
@@ -218,42 +331,54 @@ describe("the other modes and triggers", () => {
 		const m2 = await say(w.session.id, "Two.")
 		await setDay(w.session.id, 3)
 		const m3 = await say(w.session.id, "Next day.")
-		const r = await watch(w.session.id, m3.id)
+		expect(await watch(w.session.id, m3.id)).toBeNull()
+		await plain(w.session.id, 1)
+		const { outcomes } = await runRoutine(w.session.id)
+		expect(outcomes).toHaveLength(1)
+		const r = outcomes[0]!
 		expect(r).toMatchObject({ outcome: "placed", closedSceneId: first.scene.id })
 		const scenes = await testDb
 			.select()
 			.from(schema.scenes)
 			.where(eq(schema.scenes.sessionId, w.session.id))
 		const closed = scenes.find((s) => s.id === first.scene.id)!
-		const opened = scenes.find((s) => s.id === r!.openedSceneId)!
+		const opened = scenes.find((s) => s.id === r.openedSceneId)!
 		expect(closed.closedAtMessageId).toBe(m2.id)
 		expect(opened).toMatchObject({ openedAtMessageId: m3.id, closedAtMessageId: null })
 		const [cue] = await cuesOf(w.session.id)
 		expect(cue!.state).toBe("placed")
 	}, 60_000)
 
-	test("narration and length fire only when switched on; a session with no lorebook is never watched", async () => {
+	test("narration and length fire only when switched on; a session with no lorebook is never walked", async () => {
 		const w = await makeWorld({
 			scenes: { triggers: { dayCrossed: false, narration: true, length: { lines: 2 } } }
 		})
-		const m1 = await say(w.session.id, "A.")
-		await watch(w.session.id, m1.id)
-		const m2 = await say(w.session.id, "B.")
-		expect(await watch(w.session.id, m2.id)).toBeNull()
+		await say(w.session.id, "A.")
+		await say(w.session.id, "B.")
 		const m3 = await say(w.session.id, "C.")
-		expect((await watch(w.session.id, m3.id))?.triggers).toEqual(["length"])
+		// C is not old enough to be read yet.
+		expect((await found(w.session.id)).boundaries).toEqual([])
 		const m4 = await say(w.session.id, "The wind howls.", { isNarratorResponse: true, role: "assistant" })
-		expect((await watch(w.session.id, m4.id))?.triggers).toEqual(["narration"])
+		expect((await watch(w.session.id, m4.id))).toBeNull()
+		expect((await found(w.session.id)).boundaries.map((b) => [b.at, b.trigger])).toEqual([[m3.id, "length"]])
+		await say(w.session.id, "E.")
+		expect((await found(w.session.id)).boundaries.map((b) => [b.at, b.trigger])).toEqual([
+			[m3.id, "length"],
+			[m4.id, "narration"]
+		])
 
 		const bare = await makeWorld({ lorebook: false })
 		await say(bare.session.id, "One.")
 		await setDay(bare.session.id, 7)
 		const b2 = await say(bare.session.id, "Two.")
 		expect(await watch(bare.session.id, b2.id)).toBeNull()
+		await plain(bare.session.id, 2)
+		expect((await found(bare.session.id)).boundaries).toEqual([])
+		expect((await runRoutine(bare.session.id)).outcomes).toEqual([])
 		expect(await cuesOf(bare.session.id)).toEqual([])
 	}, 60_000)
 
-	test("a side channel raises no cue until a scene was placed on it", async () => {
+	test("the routine reads the main channel alone: a side channel raises no cue, even after a scene was placed on it", async () => {
 		const { openScene } = await import("./liveScenes")
 		const w = await makeWorld()
 		await say(w.session.id, "Psst.", { channel: "sanctum" })
@@ -268,7 +393,11 @@ describe("the other modes and triggers", () => {
 		})
 		await setDay(w.session.id, 4)
 		const s3 = await say(w.session.id, "Next day, aside.", { channel: "sanctum" })
-		expect((await watch(w.session.id, s3.id))?.triggers).toEqual(["dayCrossed"])
+		// The hook fires no trigger on it any more, and the walk never reads it.
+		expect(await watch(w.session.id, s3.id)).toBeNull()
+		await plain(w.session.id, 3)
+		expect((await runRoutine(w.session.id)).boundaries).toEqual([])
+		expect(await cuesOf(w.session.id)).toEqual([])
 	}, 60_000)
 
 	test("a long pause in play fires when the next line comes more than the hours after", async () => {
@@ -279,14 +408,19 @@ describe("the other modes and triggers", () => {
 			.set({ createdAt: new Date(Date.now() - 5 * 3_600_000) })
 			.where(eq(schema.messages.id, m1.id))
 		const m2 = await say(w.session.id, "Back.")
-		expect((await watch(w.session.id, m2.id))?.triggers).toEqual(["pause"])
+		expect(await watch(w.session.id, m2.id)).toBeNull()
+		await plain(w.session.id, 1)
+		const run = await runRoutine(w.session.id)
+		expect(run.boundaries.map((b) => [b.at, b.trigger])).toEqual([[m2.id, "pause"]])
+		expect(run.outcomes).toMatchObject([{ outcome: "suggested" }])
 	}, 60_000)
 
 	test("the scene settings the cascade gives: the session's override over the defaults", async () => {
 		const { sessionSceneContext, writeSceneSettings } = await import(
 			"$lib/server/sessions/sceneSettings"
 		)
-		const w = await makeWorld()
+		// A genre nothing published: the core defaults, whatever Story's own are.
+		const w = await makeWorld({ scenes: null, genreId: "test:genre/unpublished" })
 		expect((await sessionSceneContext(testDb as any, w.session.id))?.settings.mode).toBe("suggested")
 		await writeSceneSettings(testDb as any, w.session.id, { mode: "automatic", summary: "onClose" })
 		const ctx = await sessionSceneContext(testDb as any, w.session.id)

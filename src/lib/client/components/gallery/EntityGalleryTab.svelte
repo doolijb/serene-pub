@@ -6,7 +6,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
 	import GeneratePortraitDialog from "$lib/client/components/gallery/GeneratePortraitDialog.svelte"
 	import { getContext } from "svelte"
@@ -17,11 +17,12 @@
 
 	interface Props {
 		/**
-		 * The gallery is a CHARACTER's. It had a second `entityType` branch for
-		 * personas; a persona is a character now, so the branch was a second
-		 * socket family for one row and it is gone rather than made optional.
+		 * Whose gallery. A character card's, or a cast member's own pictures
+		 * (`cast_member_files`). A persona is a character, so there is no
+		 * third kind. A member's gallery can delete a picture but has no
+		 * *Set as avatar* or *Use as likeness image*: those are the card's.
 		 */
-		entityId: number
+		owner: { characterId: number } | { castMemberId: number }
 		entityName: string
 		isOwner: boolean
 		/** The media id of the entity's current avatar, so "which tile is the
@@ -31,8 +32,18 @@
 		currentAvatarMediaId: number | null
 	}
 
-	let { entityId, entityName, isOwner, currentAvatarMediaId }: Props =
-		$props()
+	let { owner, entityName, isOwner, currentAvatarMediaId }: Props = $props()
+
+	const cardId = $derived("characterId" in owner ? owner.characterId : null)
+	const memberId = $derived(
+		"castMemberId" in owner ? owner.castMemberId : null
+	)
+	/** The key every emit carries. */
+	const ownerKey = $derived(
+		memberId != null
+			? { castMemberId: memberId }
+			: { characterId: cardId as number }
+	)
 
 	const socket = useTypedSocket()
 
@@ -82,14 +93,14 @@
 		if (!file) return
 
 		if (!file.type.startsWith("image/")) {
-			toaster.error({ title: "Please select an image file" })
+			notify.error({ title: "Please select an image file" })
 			return
 		}
 
 		isUploading = true
 		const buffer = await file.arrayBuffer()
 		socket.emit("characters:uploadGalleryImage", {
-			characterId: entityId,
+			...ownerKey,
 			imageFile: new Uint8Array(buffer) as any,
 			mimeType: file.type
 		})
@@ -106,8 +117,9 @@
 
 	function setAsAvatar(mediaId: number) {
 		menuOpenFor = null
+		if (cardId == null) return
 		socket.emit("characters:setAvatar", {
-			characterId: entityId,
+			characterId: cardId,
 			mediaId
 		})
 	}
@@ -120,7 +132,7 @@
 	function confirmDelete() {
 		if (pendingDeleteId === null) return
 		socket.emit("characters:deleteGalleryImage", {
-			characterId: entityId,
+			...ownerKey,
 			mediaId: pendingDeleteId
 		})
 		pendingDeleteId = null
@@ -138,7 +150,7 @@
 		tiles = e.detail.items
 		const mediaIds = tiles.map((t) => t.id)
 		socket.emit("characters:reorderGallery", {
-			characterId: entityId,
+			...ownerKey,
 			mediaIds
 		})
 	}
@@ -151,46 +163,69 @@
 	 */
 	const userCtx = (() => {
 		try {
-			return getContext<{ user?: { isAdmin?: boolean } } | undefined>("userCtx")
+			return getContext<{ user?: { isAdmin?: boolean } } | undefined>(
+				"userCtx"
+			)
 		} catch {
 			return undefined
 		}
 	})()
-	let canGenerate = $derived(isOwner || !!userCtx?.user?.isAdmin)
+	// A member's portraits are for whoever can edit its book: no admin exception.
+	let canGenerate = $derived(
+		memberId != null ? isOwner : isOwner || !!userCtx?.user?.isAdmin
+	)
 
 	let portraitOpen = $state(false)
-	let portraitPreview = $state<Sockets.Characters.PreviewPortrait.Response | null>(null)
+	let portraitPreview =
+		$state<Sockets.Characters.PreviewPortrait.Response | null>(null)
 	let portraitPreviewing = $state(false)
 	interface PortraitRun {
 		runId: string
 		count: number
 		phase: Sockets.Characters.Portrait.Progress["phase"] | "starting"
 		status: string
+		/** The backend's own word on the moment ("In the Horde's queue at position 3"). */
+		detail: string
 		percent: number | null
 		error: string | null
 		offered: number
 	}
 	let portraitRun = $state<PortraitRun | null>(null)
 	let portraitRunning = $derived(
-		!!portraitRun && portraitRun.phase !== "done" && portraitRun.phase !== "failed"
+		!!portraitRun &&
+			portraitRun.phase !== "done" &&
+			portraitRun.phase !== "failed"
 	)
 	/** The pictures the last portrait run added — marked *New* on their tiles. */
 	const newIds = new SvelteSet<number>()
 
 	function requestPortraitPreview(count: number, style: "tags" | "prose") {
 		portraitPreviewing = true
-		socket.emit("characters:previewPortrait", { characterId: entityId, count, style })
+		socket.emit("characters:previewPortrait", {
+			...ownerKey,
+			count,
+			style
+		})
 	}
-	function handlePortraitPreview(msg: Sockets.Characters.PreviewPortrait.Response) {
+	function handlePortraitPreview(
+		msg: Sockets.Characters.PreviewPortrait.Response
+	) {
 		if (!matchesEntity(msg)) return
 		portraitPreviewing = false
 		portraitPreview = msg
 	}
-	function handlePortraitPreviewError(msg: { error?: string; characterId?: number }) {
+	function handlePortraitPreviewError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
 		if (!matchesEntity(msg)) return
 		portraitPreviewing = false
 		portraitPreview = portraitPreview
-			? { ...portraitPreview, refusal: msg.error ?? "Could not prepare the portrait." }
+			? {
+					...portraitPreview,
+					refusal: msg.error ?? "Could not prepare the portrait."
+				}
 			: null
 	}
 	function generatePortrait(count: number, style: "tags" | "prose") {
@@ -202,22 +237,34 @@
 			count,
 			phase: "starting",
 			status: "",
+			detail: "",
 			percent: null,
 			error: null,
 			offered: 0
 		}
 		socket.emit("characters:generatePortrait", {
-			characterId: entityId,
+			...ownerKey,
 			count,
 			style,
 			runId
 		})
 	}
 	function handlePortraitProgress(msg: Sockets.Characters.Portrait.Progress) {
-		if (!matchesEntity(msg) || !portraitRun || msg.runId !== portraitRun.runId) return
+		if (
+			!matchesEntity(msg) ||
+			!portraitRun ||
+			msg.runId !== portraitRun.runId
+		)
+			return
 		portraitRun.phase = msg.phase
-		if (msg.status) portraitRun.status = statusTextOf(msg.status as StatusText)
-		else if (msg.phase === "offering") portraitRun.status = "Adding them to the gallery…"
+		// A status once sent stands until the next; a backend message rides
+		// beneath it and never replaces it.
+		if (msg.status) {
+			portraitRun.status = statusTextOf(msg.status as StatusText)
+			portraitRun.detail = msg.message ?? ""
+		} else if (msg.message) portraitRun.detail = msg.message
+		else if (msg.phase === "offering")
+			portraitRun.status = "Adding them to the gallery…"
 		if (msg.percent != null) portraitRun.percent = msg.percent
 		if (msg.phase === "done") {
 			for (const o of msg.offered ?? []) newIds.add(o.mediaId)
@@ -227,60 +274,110 @@
 		if (msg.phase === "failed") {
 			portraitRun.error = msg.error ?? "The portrait stopped."
 			portraitRun.status = ""
+			portraitRun.detail = ""
 		}
 	}
-	function handlePortraitError(msg: { error?: string; characterId?: number }) {
+	function handlePortraitError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
 		if (!matchesEntity(msg) || !portraitRun) return
 		portraitRun.phase = "failed"
 		portraitRun.error = msg.error ?? "The portrait did not start."
 	}
 	function stopPortrait() {
-		if (portraitRun) socket.emit("pipelines:cancelRun", { runId: portraitRun.runId })
+		if (portraitRun)
+			socket.emit("pipelines:cancelRun", { runId: portraitRun.runId })
 	}
 
 	function useAsLikeness(mediaId: number) {
 		menuOpenFor = null
-		socket.emit("characters:setLikenessImage", { characterId: entityId, mediaId })
+		if (cardId == null) return
+		socket.emit("characters:setLikenessImage", {
+			characterId: cardId,
+			mediaId
+		})
 	}
 	function handleLikenessOk(msg: { characterId?: number }) {
 		if (!matchesEntity(msg)) return
-		toaster.success({ title: "Likeness image updated" })
+		notify.success({
+			source: "socket:characters:setLikenessImage",
+			title: "Likeness image updated"
+		})
 	}
 	function handleLikenessErr(msg: { error?: string; characterId?: number }) {
 		if (!matchesEntity(msg)) return
-		toaster.error({ title: msg.error ?? "Could not set the likeness image." })
+		notify.error({
+			source: "socket:characters:setLikenessImage:error",
+			title: msg.error ?? "Could not set the likeness image."
+		})
 	}
 
-	function matchesEntity(msg: { characterId?: number }) {
-		return msg.characterId === entityId
+	/** Whether a reply or error is this owner's (a card reply has no `castMemberId`). */
+	function matchesEntity(msg: {
+		characterId?: number
+		castMemberId?: number
+	}) {
+		return memberId != null
+			? msg.castMemberId === memberId
+			: msg.characterId === cardId && msg.castMemberId == null
 	}
 
 	function handleList(msg: {
 		images: Sockets.Media[]
 		characterId?: number
+		castMemberId?: number
 	}) {
 		if (!matchesEntity(msg)) return
 		isLoading = false
 		images = msg.images
 	}
-	function handleUploadOk(msg: { success: boolean; characterId?: number }) {
+	function handleUploadOk(msg: {
+		success: boolean
+		characterId?: number
+		castMemberId?: number
+	}) {
 		if (!matchesEntity(msg)) return
 		isUploading = false
-		if (msg.success) toaster.success({ title: "Image uploaded" })
-		else toaster.error({ title: "Upload failed" })
+		if (msg.success)
+			notify.success({
+				source: "socket:characters:uploadGalleryImage",
+				title: "Image uploaded"
+			})
+		else
+			notify.error({
+				source: "socket:characters:uploadGalleryImage",
+				title: "Upload failed"
+			})
 	}
-	function handleUploadErr(msg: { characterId?: number }) {
+	function handleUploadErr(msg: {
+		characterId?: number
+		castMemberId?: number
+	}) {
 		if (!matchesEntity(msg)) return
 		isUploading = false
-		toaster.error({ title: "Upload failed" })
+		notify.error({
+			source: "socket:characters:uploadGalleryImage:error",
+			title: "Upload failed"
+		})
 	}
-	function handleDeleteOk(msg: { characterId?: number }) {
+	function handleDeleteOk(msg: {
+		characterId?: number
+		castMemberId?: number
+	}) {
 		if (!matchesEntity(msg)) return
-		toaster.success({ title: "Image deleted" })
+		notify.success({
+			source: "socket:characters:deleteGalleryImage",
+			title: "Image deleted"
+		})
 	}
 	function handleSetAvatarOk(msg: { character?: { id: number } }) {
-		if (msg.character?.id !== entityId) return
-		toaster.success({ title: "Avatar updated" })
+		if (msg.character?.id !== cardId) return
+		notify.success({
+			source: "socket:characters:setAvatar",
+			title: "Avatar updated"
+		})
 	}
 
 	/**
@@ -301,7 +398,52 @@
 	 * exactly as before.
 	 */
 	$effect(() => {
-		const id = entityId
+		const id = cardId
+		if (id == null) {
+			// A cast member's gallery replies are scoped `member:<id>` (the
+			// shared `SCOPED_EVENTS`); the portrait events and the `:error`
+			// twins are bare, so `matchesEntity` filters those. *Set as
+			// avatar* and likeness are the card's.
+			const scope = `member:${memberId}`
+			const releases: (() => void)[] = [
+				declareInterest<any>(
+					interestKey("characters:listGallery", scope),
+					handleList
+				),
+				declareInterest<any>(
+					interestKey("characters:uploadGalleryImage", scope),
+					handleUploadOk
+				),
+				declareInterest<any>(
+					interestKey("characters:deleteGalleryImage", scope),
+					handleDeleteOk
+				),
+				declareInterest<any>(
+					"characters:uploadGalleryImage:error",
+					handleUploadErr
+				),
+				declareInterest<any>(
+					interestKey("characters:previewPortrait"),
+					handlePortraitPreview
+				),
+				declareInterest<any>(
+					interestKey("characters:portrait"),
+					handlePortraitProgress
+				),
+				declareInterest<any>(
+					"characters:previewPortrait:error",
+					handlePortraitPreviewError
+				),
+				declareInterest<any>(
+					"characters:generatePortrait:error",
+					handlePortraitError
+				)
+			]
+			socket.emit("characters:listGallery", { castMemberId: memberId! })
+			return () => {
+				for (const release of releases) release()
+			}
+		}
 		const releases: (() => void)[] = [
 			declareInterest<"characters:listGallery">(
 				interestKey("characters:listGallery", id),
@@ -345,8 +487,14 @@
 				"characters:previewPortrait:error",
 				handlePortraitPreviewError
 			),
-			declareInterest<any>("characters:generatePortrait:error", handlePortraitError),
-			declareInterest<any>("characters:setLikenessImage:error", handleLikenessErr)
+			declareInterest<any>(
+				"characters:generatePortrait:error",
+				handlePortraitError
+			),
+			declareInterest<any>(
+				"characters:setLikenessImage:error",
+				handleLikenessErr
+			)
 		]
 		socket.emit("characters:listGallery", { characterId: id })
 		return () => {
@@ -380,20 +528,20 @@
 				</button>
 			{/if}
 			{#if isOwner}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface"
-				onclick={triggerUpload}
-				disabled={isUploading}
-				title="Upload an image"
-			>
-				{#if isUploading}
-					<Icons.Loader2 class="h-3 w-3 animate-spin" />
-				{:else}
-					<Icons.Upload class="h-3 w-3" />
-				{/if}
-				Upload
-			</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={triggerUpload}
+					disabled={isUploading}
+					title="Upload an image"
+				>
+					{#if isUploading}
+						<Icons.Loader2 class="h-3 w-3 animate-spin" />
+					{:else}
+						<Icons.Upload class="h-3 w-3" />
+					{/if}
+					Upload
+				</button>
 			{/if}
 		</div>
 	{/if}
@@ -405,24 +553,45 @@
 			data-testid="portrait-run"
 		>
 			{#if portraitRunning}
-				<Icons.Loader2 class="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+				<Icons.Loader2
+					class="mt-0.5 h-4 w-4 shrink-0 animate-spin"
+					aria-hidden="true"
+				/>
 				<div class="min-w-0 flex-1">
 					<p>
 						Drawing {portraitRun.count}
-						{portraitRun.count === 1 ? "picture" : "pictures"}{portraitRun.percent != null
+						{portraitRun.count === 1
+							? "picture"
+							: "pictures"}{portraitRun.percent != null
 							? ` · ${Math.round(portraitRun.percent)}%`
 							: ""}
 					</p>
 					{#if portraitRun.status}
-						<p class="text-surface-600-400 text-xs">{portraitRun.status}</p>
+						<p class="text-surface-600-400 text-xs">
+							{portraitRun.status}
+						</p>
+					{/if}
+					{#if portraitRun.detail}
+						<p class="text-surface-600-400 text-xs">
+							{portraitRun.detail}
+						</p>
 					{/if}
 				</div>
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={stopPortrait}>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={stopPortrait}
+				>
 					Stop
 				</button>
 			{:else if portraitRun.phase === "failed"}
-				<Icons.CircleAlert class="text-error-600-400 mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-				<p class="text-error-600-400 min-w-0 flex-1" role="alert">{portraitRun.error}</p>
+				<Icons.CircleAlert
+					class="text-error-600-400 mt-0.5 h-4 w-4 shrink-0"
+					aria-hidden="true"
+				/>
+				<p class="text-error-600-400 min-w-0 flex-1" role="alert">
+					{portraitRun.error}
+				</p>
 				<button
 					type="button"
 					class="btn btn-sm preset-tonal-surface"
@@ -431,11 +600,16 @@
 					Dismiss
 				</button>
 			{:else}
-				<Icons.Check class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+				<Icons.Check
+					class="mt-0.5 h-4 w-4 shrink-0"
+					aria-hidden="true"
+				/>
 				<p class="min-w-0 flex-1">
 					{portraitRun.offered}
-					{portraitRun.offered === 1 ? "new picture" : "new pictures"} below.
-					{#if isOwner}Open a picture's menu to use it as the avatar.{/if}
+					{portraitRun.offered === 1 ? "new picture" : "new pictures"}
+					below.
+					{#if isOwner && cardId != null}Open a picture's menu to use
+						it as the avatar.{/if}
 				</p>
 				<button
 					type="button"
@@ -531,12 +705,13 @@
 									(v) => (menuOpenFor = v ? tile.id : null)
 								}
 								items={[
-									currentAvatarMediaId !== tile.id && {
-										label: "Set as avatar",
-										icon: Icons.Star,
-										onSelect: () => setAsAvatar(tile.id)
-									},
-									{
+									cardId != null &&
+										currentAvatarMediaId !== tile.id && {
+											label: "Set as avatar",
+											icon: Icons.Star,
+											onSelect: () => setAsAvatar(tile.id)
+										},
+									cardId != null && {
 										label: "Use as likeness image",
 										icon: Icons.ScanFace,
 										onSelect: () => useAsLikeness(tile.id)
@@ -561,7 +736,7 @@
 
 					{#if newIds.has(tile.id)}
 						<span
-							class="bg-surface-950/70 pointer-events-none absolute bottom-1 left-1 rounded-full px-1.5 text-meta font-semibold text-white"
+							class="bg-surface-950/70 text-meta pointer-events-none absolute bottom-1 left-1 rounded-full px-1.5 font-semibold text-white"
 							data-testid="gallery-new-badge"
 						>
 							New
@@ -648,10 +823,13 @@
 <EntityGalleryViewModal
 	bind:open={lightboxOpen}
 	onOpenChange={(e) => (lightboxOpen = e.open)}
-	entity={{
-		type: "character",
-		id: entityId,
-		name: entityName,
-		avatar: lightboxPath
-	}}
+	entity={cardId != null
+		? {
+				type: "character",
+				id: cardId,
+				name: entityName,
+				avatar: lightboxPath
+			}
+		: null}
+	image={cardId == null ? lightboxPath : null}
 />

@@ -5,6 +5,8 @@
  * gated by session access like every other session read/write.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import { eq } from "drizzle-orm"
+import { panelsV2Of } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -202,8 +204,46 @@ describe("sessions:panelLayout", () => {
 				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
-			expect(got.layout).toEqual(good)
+			// A version 1 layout is stored as version 2 (`panelsV2Of`).
+			expect(got.layout).toEqual({ panels: panelsV2Of(good as any).panels })
 			expect(got.layoutSettings).toEqual(pins)
+		},
+		60_000
+	)
+
+	test(
+		"set stores a version 1 layout as version 2 and moves the composer setting onto a composer row",
+		async () => {
+			const { sessionsPanelLayoutSetHandler } = await import("./sessions")
+			const s = await scenario()
+			const v1 = {
+				panels: {
+					version: 1,
+					left: [],
+					middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+					right: []
+				}
+			}
+			const res = await sessionsPanelLayoutSetHandler.handler(
+				fakeSocket(s.owner.id),
+				{
+					sessionId: s.session.id,
+					layout: v1,
+					widgetSettings: { messages: { composer: "quill" } }
+				} as any,
+				noopEmit
+			)
+			expect(res.ok).toBe(true)
+			const rows = Object.fromEntries(
+				(
+					await testDb
+						.select()
+						.from(schema.widgetSettings)
+						.where(eq(schema.widgetSettings.sessionId, s.session.id))
+				).map((r) => [r.widgetInstanceId, r.values])
+			)
+			expect(rows.composer).toEqual({ composer: "quill" })
+			expect(rows.messages ?? {}).not.toHaveProperty("composer")
 		},
 		60_000
 	)

@@ -80,6 +80,7 @@ describe("the boot's projection", () => {
 			.where(eq(schema.registrations.presetId, await presetId("core-story-minimal")))
 		expect(minimal.filter((r) => r.dropped).map((r) => r.key).sort()).toEqual([
 			"after-each-round→story-reckoning",
+			"every-n-rounds→scene-boundaries",
 			"every-n-turns→story-sweep",
 			"on-event→story-illustrate-new-scene"
 		])
@@ -126,7 +127,8 @@ describe("what a session runs", () => {
 		const fns = await listSessionFunctions(db as any, sessionId, STORY)
 		const offered = fns.filter((f) => f.specSlug.startsWith("core:spec/story-"))
 		expect(offered.map((f) => f.key).sort()).toEqual(
-			["advance-time", "answer", "ask", "generate-image", "illustrate-scene", "look", "narrate", "narrate-character", "rest"].sort()
+			// Ask retired from Story (owner §0-F, 2026-11-04); Answer stays for existing blocks.
+			["advance-time", "answer", "generate-image", "illustrate-scene", "look", "narrate", "narrate-character", "rest"].sort()
 		)
 		expect(offered.every((f) => f.included && f.source === "default")).toBe(true)
 		// 🚧 R56: on a pub with no model that draws, the two picture actions are
@@ -236,7 +238,6 @@ describe("what a session runs", () => {
 			"timed-expiry": "full"
 		})
 		expect(await sessionDutiesOf(db as any, sessionId, sweepDuties.id)).toMatchObject({
-			summary: "full",
 			relationships: "off",
 			"goal-reached": "off"
 		})

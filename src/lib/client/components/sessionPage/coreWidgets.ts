@@ -69,6 +69,14 @@ function coreWidgetPanel(decl: WidgetDecl): ModePanel {
 }
 
 /**
+ * 🚧 Core widgets only an administrator is offered (Runs, lay-R): the tray
+ * and the phone editor's Add never list them for anyone else. The widget
+ * also draws nothing for a non-admin, and the server refuses its reads —
+ * receipts are an administrator's (R55).
+ */
+export const ADMIN_ONLY_WIDGET_IDS: ReadonlySet<string> = new Set(["session-runs"])
+
+/**
  * The side widgets, resolved: every widget core declares but its primary
  * (the conversation, which the layout mounts itself — `CORE_CONVERSATION`),
  * in the catalogue's order.
@@ -79,8 +87,11 @@ function coreWidgetPanel(decl: WidgetDecl): ModePanel {
  * longer means. A layout that places `world-state` draws it as a copy of
  * Stats (`SurfaceManager`'s copies: `widgetOfInstance` reads it as one).
  */
-export function coreDefaultWidgets(): ModePanel[] {
+export function coreDefaultWidgets(isAdmin: boolean): ModePanel[] {
 	return CORE_WIDGETS.filter(
-		(w) => w.role !== "primary" && !Object.hasOwn(WIDGET_ID_ALIASES, w.id)
+		(w) =>
+			w.role !== "primary" &&
+			!Object.hasOwn(WIDGET_ID_ALIASES, w.id) &&
+			(isAdmin || !ADMIN_ONLY_WIDGET_IDS.has(w.id))
 	).map(coreWidgetPanel)
 }

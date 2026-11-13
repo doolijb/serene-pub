@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { asksToJoin, composerWritingAs, isLivePlayerSeat, isOwnPlayerSeat, offersSeat, ownCardlessPlayerSeats } from "./playerSeat"
+import { asksToJoin, benchedOnly, BENCHED_ONLY_GUEST, BENCHED_ONLY_OWNER, composerWritingAs, isCardlessPlayerSeat, isLivePlayerSeat, isOwnPlayerSeat, offersSeat, ownCardlessPlayerSeats } from "./playerSeat"
 
 const card = { id: 1, personaId: 9, persona: { userId: 1, name: "Ann" }, userId: 1 }
 const named = { id: 2, personaId: null, persona: null, userId: 2, seatName: "Bo" }
@@ -18,6 +18,30 @@ describe("a player seat as a person's voice", () => {
 	test("anyone's live voice; their card-less seats in order", () => {
 		expect([card, named, blank, gone].map(isLivePlayerSeat)).toEqual([true, true, false, false])
 		expect(ownCardlessPlayerSeats([card, blank, gone, named], 2).map((s) => s.id)).toEqual([2])
+	})
+})
+
+describe("🚧 a benched seat is never a person's voice (owner 2026-11-10)", () => {
+	const benchedCard = { ...card, id: 5, isActive: false }
+	const benchedNamed = { ...named, id: 6, isActive: false }
+	test("isOwnPlayerSeat and isLivePlayerSeat are false for isActive: false", () => {
+		expect(isOwnPlayerSeat(benchedCard, 1)).toBe(false)
+		expect(isOwnPlayerSeat(benchedNamed, 2)).toBe(false)
+		expect([benchedCard, benchedNamed].map(isLivePlayerSeat)).toEqual([false, false])
+		expect(ownCardlessPlayerSeats([benchedNamed, named], 2).map((s) => s.id)).toEqual([2])
+		expect(ownCardlessPlayerSeats([benchedNamed], 2)).toEqual([])
+	})
+	test("isCardlessPlayerSeat stays a shape test: a benched seat is still one", () => {
+		expect(isCardlessPlayerSeat(benchedNamed)).toBe(true)
+		expect(isCardlessPlayerSeat(gone)).toBe(false)
+	})
+	// ★L2-1 (open): a guest whose only seat is benched has no voice, so the
+	// join gates ask again — pinned here so a change to it is a decision.
+	test("a guest whose only seat is benched is asked to join, or offered a seat", () => {
+		expect(asksToJoin({ isGuest: true, personasInMode: true, seats: [benchedCard], userId: 1 })).toBe(true)
+		expect(
+			offersSeat({ isGuest: true, personasInMode: true, seats: [benchedNamed], userId: 2, playerLabel: "Dungeon Master" })
+		).toBe(true)
 	})
 })
 
@@ -82,5 +106,28 @@ describe("🚧 a genre of player seats offers a guest who plays a seat (Lair rew
 		expect(offer({ isPlayer: false })).toBe(false)
 		expect(offer({ playerLabel: null })).toBe(false)
 		expect(offer({ personasInMode: false })).toBe(false)
+	})
+})
+
+describe("🚧 benchedOnly (owner 2026-11-11)", () => {
+	const mine = { id: 7, personaId: 9, persona: { userId: 1, name: "Ann" }, userId: 1 }
+	const benched = { ...mine, isActive: false }
+	test("a viewer whose only seat is benched", () => {
+		expect(benchedOnly({ seats: [benched], userId: 1 })).toBe(true)
+		expect(benchedOnly({ seats: [benched, named], userId: 1 })).toBe(true)
+	})
+	test("unchanged with a seat in play, no seat, a gone seat or someone else's bench", () => {
+		expect(benchedOnly({ seats: [benched, { ...mine, id: 8 }], userId: 1 })).toBe(false)
+		expect(benchedOnly({ seats: [], userId: 1 })).toBe(false)
+		expect(benchedOnly({ seats: null, userId: 1 })).toBe(false)
+		expect(benchedOnly({ seats: [{ ...benched, removedAt: new Date() }], userId: 1 })).toBe(false)
+		expect(benchedOnly({ seats: [benched], userId: 2 })).toBe(false)
+		expect(benchedOnly({ seats: [benched], userId: null })).toBe(false)
+	})
+	test("a benched-only guest is neither asked to join nor offered a seat", () => {
+		const guest = { isGuest: true, personasInMode: true, seats: [benched], userId: 1 }
+		expect(benchedOnly(guest)).toBe(true)
+		expect(BENCHED_ONLY_GUEST).toBe("You're on the bench — the owner can bring you back.")
+		expect(BENCHED_ONLY_OWNER).toBe("You're on the bench — bring yourself back in Participants.")
 	})
 })

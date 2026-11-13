@@ -22,6 +22,7 @@ interface GenreRulesDecl {
 	rigour?: { options: readonly string[]; default: string }
 	/** 🚧 What the genre uses of a ruleset — `rulesetFit` rates every choice against it. */
 	uses?: unknown
+	keepsTime?: "story" | "real" | "none"
 }
 
 export function genreRulesOffer(

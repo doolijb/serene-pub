@@ -679,15 +679,15 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * `text->embedding` is declared again now that `KoboldCppEmbeddingAdapter`
 	 * implements `embedText` (2026-09-26).
 	 *
-	 * ⚠ `text->audio` and `audio->text` are gone. The endpoint really does
-	 * report both over `/api/extra/version` and `capabilitiesFromFlags` really
-	 * does still read them — but nothing implements `synthesizeSpeech` or
-	 * `transcribeAudio` anywhere in the app, so those were two capabilities
-	 * that could be switched on and never called. The probe's answers for them are now fetched, written to the
-	 * durable `probe.found`, and discarded by resolution: correct, and worth
-	 * knowing before it reads as a bug. Existing user overrides for them sit in
-	 * the column doing nothing until the matching action lands, at which point
-	 * the key returns with its probe answer already waiting.
+	 * ⚠ `audio->text` is not declared. The endpoint reports `transcribe` over
+	 * `/api/extra/version` and `capabilitiesFromFlags` reads it — but nothing
+	 * implements `transcribeAudio` against KoboldCPP, so it would be a
+	 * capability that could be switched on and never called. The probe's answer
+	 * is fetched, written to the durable `probe.found`, and discarded by
+	 * resolution: correct, and worth knowing before it reads as a bug. A user
+	 * override for it sits in the column doing nothing until the action lands,
+	 * at which point the key returns with its probe answer already waiting —
+	 * as `text->audio` did when speech landed (2026-10-31).
 	 */
 	[CONNECTION_TYPE.KOBOLDCPP]: {
 		id: CONNECTION_TYPE.KOBOLDCPP,
@@ -756,8 +756,8 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	/**
 	 * The same wire format, with the admin API assumed.
 	 *
-	 * `text->audio` and `audio->text` are gone for the same reason as on plain
-	 * KOBOLDCPP: no `synthesizeSpeech` or `transcribeAudio` exists to call.
+	 * `audio->text` is not declared, for the same reason as on plain
+	 * KOBOLDCPP: no `transcribeAudio` exists to call. `text->audio` is probed.
 	 *
 	 * `text->embedding` is native here and probed on plain KOBOLDCPP, because
 	 * this app decides what the managed process holds: the embedding adapter

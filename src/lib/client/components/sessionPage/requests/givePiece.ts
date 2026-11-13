@@ -20,7 +20,7 @@ type Params = WidgetRequests["give-piece"]["params"]
 type Result = WidgetRequests["give-piece"]["result"]
 
 /** The owners a piece moves between: a cast member, a player's seat, a place. */
-const GIVE_KINDS = new Set(["session_cast", "player_seat", "session_location"])
+const GIVE_KINDS = new Set(["session_cast", "seated_member", "player_seat", "session_location"])
 
 /** The page's write: sends `state:givePiece` and settles on its reply. */
 export type GiveWrite = (ask: {

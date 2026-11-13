@@ -8,7 +8,8 @@
  * what Assemble's `characterLore` shows beside the entry.
  */
 import type { BasePromptSession } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import { inPlay } from "$lib/shared/sessions/inPlay"
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 import { stripCardDecorators } from "$lib/shared/utils/characterCardDecorators"
 import { castTagNumber, rewriteCastTags } from "$lib/server/utils/castTags"
 import {
@@ -48,17 +49,27 @@ export function populateLorebookEntryBindings<T extends LorebookEntry>(
  * name (nickname first), else the member's own name — a background member
  * has no card, and a deleted card is nobody's (the reader leaves it off
  * `character`). The card and the `name` are the ones the session's reading
- * has when the reader resolved them (`castMemberAt`, as the pipeline host's
- * lore read does): `character` is the card a dated change draws them with by
- * then, never the linked one kept on `characterId` for the private-lore gate.
+ * has when the reader resolved them (`membersAsRead`, as the pipeline host's
+ * lore read does): `shownName` is the member as read, and `character` is the
+ * card their version in force draws them with by then, never the linked one
+ * kept on `characterId` for the private-lore gate.
  * Empty when neither has one: the tag is left as written.
  */
 export function castTagName(binding: {
+	/** The member's name as the session's reading has it (`MemberAsRead.shownName`: nickname || name); wins when present. */
+	shownName?: string | null
 	name?: string | null
+	ownName?: string | null
+	ownNickname?: string | null
 	character?: { name?: string | null; nickname?: string | null } | null
 }): string {
+	// A hydrated binding carries the member as read: nickname || name of the
+	// version in force on the session's reading.
+	const shown = binding.shownName?.trim()
+	if (shown) return shown
+	// The member's own name in this book wins over the card's (§0-D).
 	return (
-		resolveCharacterName(binding.character, "") ||
+		memberShownName(binding, binding.character, "") ||
 		binding.name?.trim() ||
 		""
 	)
@@ -93,16 +104,41 @@ export function castTagName(binding: {
  * answer this function already gives a background/NPC binding, which is the
  * shape an unbound row is one step short of.
  */
+/** The session the private-lore gate reads: the prompt session, and optionally who is seated. */
+type LoreGateSession = BasePromptSession & {
+	/**
+	 * 🚧 The `lorebook_bindings` ids of every member seated in this session (a
+	 * seat in play of either table holds it); present, it makes "background member"
+	 * mean "not seated" (owner ★4, 2026-11-08), absent the old "no linked card" rule.
+	 */
+	seatedMemberIds?: readonly number[]
+}
+
+/**
+ * ⏳ `currentCastMemberId` is the speaker of a card-less seat (set only when
+ * `currentCharacterId` is null — a member id is never a card id); the
+ * narrator is both ids null. With `session.seatedMemberIds` a **background**
+ * member is one not seated in this session (owner ★4, 2026-11-08): its lore
+ * is the narrator's, and a seated member's is its own speaker's, never the
+ * narrator's. 🚧 The one rule is **benched** (owner 2026-11-10): "seated" means
+ * a seat in play, so a benched member reads as background (the narrator reads
+ * it, its own seat does not), and a member whose seat is in play reads
+ * normally, deceased or not (the binding's `nodeState` is not read). A player
+ * seat in play that seats or voices a member still reads it for everyone; a
+ * removed or benched player seat unlocks nothing.
+ */
 export function isCharacterLoreEntryVisible(
 	entry: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>,
-	session: BasePromptSession,
-	currentCharacterId: number | null
+	session: LoreGateSession,
+	currentCharacterId: number | null,
+	currentCastMemberId: number | null = null
 ): boolean {
+	const narrator = currentCharacterId === null && currentCastMemberId === null
 	// Unbound: the world's knowledge, so the narrator's — never a speaker's.
 	// The lorebook checks below still apply: an entry belonging to another
 	// book is not this session's to read, whoever is asking.
 	if (!entry.lorebookBindingId) {
-		if (currentCharacterId !== null) return false
+		if (!narrator) return false
 		const book = session.lorebook
 		return !!book && session.lorebookId === entry.lorebookId
 	}
@@ -116,23 +152,32 @@ export function isCharacterLoreEntryVisible(
 	if (!binding) return false
 
 	const cards = memberCards(binding)
-	if (currentCharacterId !== null && cards.includes(currentCharacterId))
-		return true
 	// ⚠ A binding on a character one of this session's users VOICES is
 	// visible for the WHOLE session, not just that character's own turn.
-	// Keeping only the perspective test above would cut every persona's
+	// Keeping only the perspective test would cut every persona's
 	// private lore out of every prompt, because a persona is never the
 	// perspective a turn is generated from.
-	if (
-		(session.sessionPersonas || []).some(
-			(cp) => cp.persona?.id != null && cards.includes(cp.persona.id)
-		)
+	// 🚧 (seat-cast S2) …and one a player seat SEATS as the member
+	// (`castMemberId` = the binding), whatever card the seat holds.
+	const playerSeat = (session.sessionPersonas || []).some(
+		(cp) =>
+			inPlay(cp) &&
+			((cp as { castMemberId?: number | null }).castMemberId === binding.id ||
+				(cp.persona?.id != null && cards.includes(cp.persona.id)))
 	)
+	// The seat speaking IS this member (a card-less seat names its member).
+	if (currentCastMemberId !== null && binding.id === currentCastMemberId)
 		return true
-	// Background/NPC binding (no linked card) — only the Narrator
-	// (no-perspective mode) can know about it, besides a speaker holding a
-	// card a dated change draws them with (above).
-	return !binding.characterId && currentCharacterId === null
+	if (currentCharacterId !== null && cards.includes(currentCharacterId))
+		return true
+	if (playerSeat) return true
+	// Background/NPC binding — only the Narrator (no-perspective mode) can
+	// know about it, besides a speaker holding a card a dated change draws
+	// them with (above). ★4: with the seated members known, background = not
+	// seated (carded or not); a seated member's lore is not the narrator's.
+	if (session.seatedMemberIds)
+		return narrator && !session.seatedMemberIds.includes(binding.id)
+	return !binding.characterId && narrator
 }
 
 /**

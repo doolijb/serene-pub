@@ -7,6 +7,10 @@
  * is the session's vocabulary (genre baseline + picks), refused otherwise;
  * items lying in a place are its `inventory`, moved by the list ops, counted by
  * the item supply, and written back to the entry by `recordToTimeline`.
+ *
+ * (sense-b4) Pins that a place's stat values and their write-back are NOT moved
+ * by the own-book route: they land on the lorebook's entry under Full, for a
+ * session whose scenes end by themselves too (twin in "write-back to the lorebook").
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -24,6 +28,12 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 let testDb: TestDb
 let dataDir: string
+
+const scenesEnd = vi.hoisted(() => new Set<number>())
+vi.mock("$lib/server/lorebooks/ownBook", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/lorebooks/ownBook")>()),
+	scenesEndByThemselves: async (_db: unknown, sessionId: number) => scenesEnd.has(sessionId)
+}))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -301,5 +311,23 @@ describe("write-back to the lorebook", () => {
 		// A later session in the same world finds the lantern where it was left.
 		const next = await newSession(w.user.id, w.GENRE, w.lorebook.id, w.verity.id, `${w.suffix}-next`)
 		expect(await valueOf(db(), { sessionId: next.id, owner: place(w.crypt.id), slotId: BAG })).toEqual(["lantern"])
+	})
+
+	test("unchanged for a session whose scenes end by themselves: the place's values are still filed against its entry", async () => {
+		declareSlots()
+		const w = await world()
+		scenesEnd.add(w.session.id)
+		await testDb.insert(schema.userSettings).values({ userId: w.user.id, loreWriteMode: "full" })
+		const { applyChange } = await import("$lib/server/state/write")
+		const { recordToTimeline } = await import("$lib/server/state/durable")
+		await applyChange(db(), { sessionId: w.session.id, updatedBy: "user" }, { owner: place(w.crypt.id), slotId: BAG, op: "add", items: ["lantern"] })
+		const report = await recordToTimeline(db(), w.session.id, { reason: "mark" })
+		expect(report.owners).toContain(`location:${w.crypt.id}`)
+		const rows = await testDb
+			.select()
+			.from(schema.attributeValues)
+			.where(and(eq(schema.attributeValues.ownerKind, "location"), eq(schema.attributeValues.ownerId, w.crypt.id)))
+		expect(rows).toHaveLength(1)
+		expect(rows[0]).toMatchObject({ sessionId: null, sourceSessionId: w.session.id, value: { v: ["lantern"] } })
 	})
 })

@@ -16,7 +16,6 @@ const status = (over: Record<string, unknown> = {}) => ({
 	pid: 1234,
 	startedAt: new Date().toISOString(),
 	restartCount: 0,
-	isExternal: false,
 	port: 5002,
 	baseUrl: "http://127.0.0.1:5002",
 	version: "v0.9.3",
@@ -71,18 +70,6 @@ describe("AudioCppProcessTab", () => {
 		expect(names.includes("Restart")).toBe(false)
 	})
 
-	test("external: Stop disabled with the reason", () => {
-		const r = render({ status: status({ isExternal: true }) })
-		const stop = r.buttons().find((b) => b.text === "Stop")
-		expect(stop?.disabled).toBe(true)
-		expect(
-			r
-				.text()
-				.includes(
-					"Serene Pub did not start this audio.cpp, so it cannot stop it."
-				)
-		).toBe(true)
-	})
 
 	test("config not applied while running says Restarting to apply", () => {
 		const r = render({ status: status({ configApplied: false }) })

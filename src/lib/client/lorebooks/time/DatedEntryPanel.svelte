@@ -66,6 +66,9 @@
 	const readOnlyBook = bookReadOnly()
 	let readOnly = $derived(readOnlyBook.value)
 
+	/** Scenes not yet compiled that a compile of this entry would take in. */
+	let unfiled = $derived(Number(source?.unfiledSceneCount) || 0)
+
 	let bounds = $derived(
 		isNew
 			? { min: null, max: null }
@@ -197,10 +200,12 @@
 				<button
 					class="btn btn-sm preset-tonal-primary shrink-0"
 					type="button"
-					disabled={scenes.length === 0}
-					title={scenes.length === 0
-						? "Capture a scene from a session first"
-						: "Compile these scenes into this entry again"}
+					disabled={scenes.length === 0 && unfiled === 0}
+					title={scenes.length > 0
+						? "Compile these scenes into this entry again"
+						: unfiled > 0
+							? "Compile this day's scenes into this entry"
+							: "Capture a scene from a session first"}
 					onclick={onRecompile}
 				>
 					<Icons.Wand size={13} aria-hidden="true" /> Recompile
@@ -209,8 +214,14 @@
 			</div>
 			{#if scenes.length === 0}
 				<p class="text-surface-700-300 text-xs italic">
-					Nothing was compiled into this entry. Capture a scene from a
-					session and it lists here.
+					{#if unfiled > 0}
+						{unfiled}
+						{unfiled === 1 ? "scene" : "scenes"} not yet compiled for
+						this day.
+					{:else}
+						Nothing was compiled into this entry. Capture a scene
+						from a session and it lists here.
+					{/if}
 				</p>
 			{:else}
 				<ul class="flex flex-col gap-1">

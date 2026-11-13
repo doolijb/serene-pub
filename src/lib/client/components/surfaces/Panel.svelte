@@ -17,10 +17,7 @@
 		SCOPED_SECTION_CONTEXT_KEYS,
 		withHostCard
 	} from "$lib/shared/widgets/context"
-	import {
-		HOST_CARD_CLASS,
-		hostCardShown
-	} from "$lib/client/sessionLayout/hostCard"
+	import { HOST_CARD_CLASS } from "$lib/client/sessionLayout/hostCard"
 	import type { WidgetSectionScope } from "@serene-pub/sdk"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
@@ -59,8 +56,8 @@
 		hideHeader?: boolean
 		/**
 		 * Is this mount momentarily opened over the session — a pop-over, a
-		 * flyout, the phone's panel sheet? Then it wears the host card whatever
-		 * its Card setting says (ruled 2026-09-27; `sessionLayout/hostCard`).
+		 * pop-over? Then it wears the host card (`sessionLayout/hostCard`). A
+		 * panel in a session zone does not: the zone's panel draws the backing.
 		 */
 		popover?: boolean
 		/**
@@ -158,24 +155,29 @@
 	// panels wear chrome (21 §5: primary is the anchor, not a widget).
 	let isPrimary = $derived(instance.role === "primary")
 
-	/* ── the host card (ruled 2026-09-27; sessionLayout/hostCard) ─────────
-	 * A widget placed in a session zone sits FLUSH: no surface, no border, no
-	 * title bar — its own style decides. The card is its `hostCard` setting's,
-	 * and always on while it is opened over the session (`popover`). The
-	 * pack-era grid host (`chrome="grid"`) keeps its card: its reorder and
-	 * drawer controls live in the title bar and have nowhere else to go.
+	/* ── the host card (sessionLayout/hostCard) ───────────────────────────
+	 * A widget placed in a session zone draws NO card here: the zone's panel
+	 * draws the backing (PLAN 2026-11-05 R7), and the widget's box is told so
+	 * (`chrome.card` is what the placement says). Only a pop-over opened over
+	 * the session wears the host card; the pack-era grid host
+	 * (`chrome="grid"`) keeps its card: its reorder and drawer controls live
+	 * in the title bar and have nowhere else to go.
 	 *
 	 * Classes on the SAME section, never a wrapper that comes and goes: a
-	 * wrapper toggled by a setting would re-parent the body and reload its
+	 * wrapper toggled by a flag would re-parent the body and reload its
 	 * frame (21 §4). The widget is told the answer in its placement
 	 * (`layout.v1.chrome.card`) and on its box (`data-sp-card`). */
-	let card = $derived(
-		!isPrimary &&
-			(chrome === "grid" ||
-				hostCardShown({ setting: resolved.settings.hostCard, popover }))
-	)
+	let card = $derived(!isPrimary && (chrome === "grid" || popover))
 	let showHeader = $derived(card && !hideHeader)
-	let told = $derived(withHostCard(placement, card, showHeader))
+	let told = $derived.by(() => {
+		if (card) return withHostCard(placement, true, showHeader)
+		// Flush: this box paints nothing, but the panel around it may.
+		const flush = withHostCard(placement, false)
+		return {
+			...flush,
+			chrome: { ...flush.chrome, card: placement?.chrome?.card ?? false }
+		}
+	})
 
 	// A frame idles when it's collapsed, or drawered but not the open drawer —
 	// suspended, never unmounted, so its state and port survive (21 §7).

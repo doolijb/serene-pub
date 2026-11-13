@@ -135,4 +135,56 @@ describe("projectSessionState", () => {
 		// No place among the owners: no `locations` key at all, as before phase 4.
 		expect(projectSessionState(source(), 7).resolved).not.toHaveProperty("locations")
 	})
+
+	test("🚧 a seated member's values are read off its own entry, not a card's that shares its id (s27 S3)", () => {
+		// Cast member 7 is Bea; card 7 is Cal. `byId` is member-keyed; the card-keyed entry beside it is a different person.
+		const bea = { id: 7, key: "bea", name: "Bea", ref: "seated-member:7", castMemberId: 7, cardId: 31, "core.hp": 5, hp: 5 }
+		const cal = { id: 7, key: "cal", name: "Cal", ref: "seated-member:9", castMemberId: 9, cardId: 7, "core.hp": 99, hp: 99 }
+		const member = { key: "member:7", kind: "seated_member", id: 7, label: "Bea", configs: {} }
+		const v = projectSessionState(
+			source({
+				state: { world: {}, cast: { byId: { "7": cal, "12": bea } } as never },
+				owners: [member as never, owner]
+			}),
+			7
+		)
+		expect(v.resolved.cast["member:7"]).toEqual({ "core.hp": 5, hp: 5 })
+		// Today's owner: untouched, absent from the index it reads by key.
+		expect(v.resolved.cast.ada).toEqual({})
+		// A member the index also files under its owner key reads that first.
+		const keyed = projectSessionState(
+			source({
+				state: { world: {}, cast: { byId: { "12": bea }, "member:7": bea } as never },
+				owners: [member as never]
+			}),
+			7
+		)
+		expect(keyed.resolved.cast["member:7"]).toEqual({ "core.hp": 5, hp: 5 })
+	})
+
+	test("member form (the flip): each seat reads its own entry — a seated_member, a carded player seat keyed player_seat:<id>, a K-2 member in both seats with one slug", () => {
+		const entry = (over: Record<string, unknown>) => ({ key: "bea", name: "Bea", ...over })
+		const charEntry = entry({ id: 7, ref: "seated-member:7", castMemberId: 7, "core.hp": 5, hp: 5 })
+		const seatEntry = entry({ id: 4, ref: "player-seat:4", castMemberId: 7, "core.hp": 40, hp: 40 })
+		// card 7 is a different person from member 7
+		const cardSeven = entry({ id: 7, key: "cal", name: "Cal", ref: "seated-member:9", castMemberId: 9, "core.hp": 99, hp: 99 })
+		const rows = [
+			{ key: "bea", kind: "seated_member", id: 7, label: "Bea", ref: "seated-member:7", castMemberId: 7, configs: {} },
+			{ key: "player_seat:4", kind: "player_seat", id: 4, label: "Bea", ref: "player-seat:4", castMemberId: 7, configs: {} }
+		]
+		const v = projectSessionState(
+			source({
+				state: {
+					world: {},
+					// both seats share the slug "bea"; the slug entry is whichever filled last
+					cast: { byId: { "seated_member:9": cardSeven, "seated_member:7": charEntry, "player_seat:4": seatEntry }, bea: seatEntry } as never
+				},
+				owners: rows as never
+			}),
+			7
+		)
+		expect(v.resolved.cast.bea).toEqual({ "core.hp": 5, hp: 5 })
+		expect(v.resolved.cast["player_seat:4"]).toEqual({ "core.hp": 40, hp: 40 })
+		expect(v.owners.map((o) => o.ref)).toEqual(["seated-member:7", "player-seat:4"])
+	})
 })

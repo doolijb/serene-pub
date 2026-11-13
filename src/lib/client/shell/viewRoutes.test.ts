@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { nextWidth, snapWidth, viewForPath, viewPath } from "./viewRoutes"
+import {
+	appsAddressVerdict,
+	isAppletLauncherPath,
+	nextWidth,
+	snapWidth,
+	viewForPath,
+	viewPath
+} from "./viewRoutes"
 
 describe("view addresses", () => {
 	it("maps a view to its address and back", () => {
@@ -50,5 +57,26 @@ describe("widths", () => {
 		expect(snapWidth(600, 1376)).toBe("half")
 		expect(snapWidth(1200, 1376)).toBe("focus")
 		expect(snapWidth(100, 0)).toBe("dock")
+	})
+})
+
+describe("Apps view address (M2d)", () => {
+	it("owns /apps, not the launchers under it", () => {
+		expect(viewPath("apps")).toBe("/apps")
+		expect(viewForPath("/apps")).toBe("apps")
+		expect(viewForPath("/apps/")).toBe("apps")
+		expect(viewForPath("/apps/some.plugin")).toBeNull()
+	})
+	it("a launcher path needs a segment after /apps/", () => {
+		expect(isAppletLauncherPath("/apps/some.plugin")).toBe(true)
+		expect(isAppletLauncherPath("/apps/some.plugin/x")).toBe(true)
+		expect(isAppletLauncherPath("/apps")).toBe(false)
+		expect(isAppletLauncherPath("/apps/")).toBe(false)
+		expect(isAppletLauncherPath("/appsx")).toBe(false)
+	})
+	it("a cold /apps waits for the genres, then opens or goes Home", () => {
+		expect(appsAddressVerdict(null)).toBe("wait")
+		expect(appsAddressVerdict(0)).toBe("home")
+		expect(appsAddressVerdict(2)).toBe("open")
 	})
 })

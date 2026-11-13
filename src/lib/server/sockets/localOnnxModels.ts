@@ -51,10 +51,9 @@
  */
 
 import { db } from "$lib/server/db"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
-import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { syncConnectionModelsById } from "$lib/server/connections/modelSync"
 import {
 	connectionModelById,
@@ -73,6 +72,7 @@ import {
 	dirSizeBytes,
 	invalidateCachedScan,
 	localModelState,
+	localOnnxAskedFor,
 	onnxModalityOf,
 	releaseDownload,
 	removeCached,
@@ -211,9 +211,11 @@ async function stateResponse(
  * `modalityForKind` only ever projects the other way. Recording `"text"` here
  * would file these repos as text generators for every reader of that column.
  *
- * `filename` is UNIQUE table-wide, so the row is matched on it and updated
- * rather than inserted blindly: a retry after a failure, or a second download
- * after a remove, must reuse the row instead of failing on the constraint.
+ * An ONNX row is unique per (`filename`, `modality`) — the same Hub id can be
+ * downloaded for embeddings and for ner — so the row is matched on both and
+ * updated rather than inserted blindly: a retry after a failure, or a second
+ * download after a remove, must reuse the row instead of failing on the
+ * constraint.
  *
  * `quantization` is the precision this download fetches (`dtypeFor`), or null
  * for the runtime's default. It is what both loaders read for a model the
@@ -242,7 +244,12 @@ async function beginRegistryRow(
 	const [existing] = await db
 		.select({ id: schema.localModels.id })
 		.from(schema.localModels)
-		.where(eq(schema.localModels.filename, modelId))
+		.where(
+			and(
+				eq(schema.localModels.filename, modelId),
+				eq(schema.localModels.modality, modality)
+			)
+		)
 		.limit(1)
 	if (existing) {
 		await db
@@ -256,6 +263,7 @@ async function beginRegistryRow(
 
 async function settleRegistryRow(
 	modelId: string,
+	modality: OnnxModality,
 	patch: {
 		status: string
 		sizeBytes?: number | null
@@ -265,7 +273,12 @@ async function settleRegistryRow(
 	await db
 		.update(schema.localModels)
 		.set(patch)
-		.where(eq(schema.localModels.filename, modelId))
+		.where(
+			and(
+				eq(schema.localModels.filename, modelId),
+				eq(schema.localModels.modality, modality)
+			)
+		)
 }
 
 async function dropRegistryRow(modelId: string, modality: OnnxModality) {
@@ -326,7 +339,9 @@ export function dtypeRefusal(
 	if (!isOnnxDtype(dtype))
 		return `${dtype} is not a precision this app can ask for. Choose one of ${ONNX_DTYPES.join(", ")}.`
 	const def =
-		modality === "embeddings" ? findModel(row.model) : findNerModel(row.model)
+		modality === "embeddings"
+			? findModel(row.model)
+			: findNerModel(row.model)
 	if ((row.extraJson as any)?.onnx?.addedByUser === true) return null
 	const offered = new Set<string>([
 		...(def?.dtype ? [def.dtype] : []),
@@ -546,12 +561,12 @@ async function runWarm(
 			await removeCached(modelId, modality)
 			await dropRegistryRow(modelId, modality)
 		} else if (failure) {
-			await settleRegistryRow(modelId, {
+			await settleRegistryRow(modelId, modality, {
 				status: "error",
 				errorMessage: failure
 			})
 		} else {
-			await settleRegistryRow(modelId, {
+			await settleRegistryRow(modelId, modality, {
 				status: "complete",
 				sizeBytes: await dirSizeBytes(modelId, modality),
 				errorMessage: null
@@ -659,7 +674,9 @@ export const connectionsDownloadModel: Handler<
 		if (requested) {
 			const refusal = dtypeRefusal(modality, row, requested)
 			if (refusal) {
-				emitToUser("connections:downloadModel:error", { error: refusal })
+				emitToUser("connections:downloadModel:error", {
+					error: refusal
+				})
 				return await stateResponse(endpoint, row, refusal)
 			}
 		}
@@ -1100,25 +1117,20 @@ export async function reconcileOnnxDownloadsOnBoot() {
  * adapters' `listModels`, and an admin opening Connections should not be the one
  * waiting on GitHub.
  *
- * ⚠ Only when a local ONNX endpoint exists. An install that has never
- * configured one has nothing to warm, and a boot that reaches out anyway would
- * be a network call nobody asked for. Never throws, and never awaited by its
+ * ⚠ Only when somebody asked for a local ONNX model, the one shared
+ * predicate `localOnnxAskedFor` (also read by the `connections:list`
+ * projection): one is on disk (a
+ * complete `onnx` `local_models` row for embeddings or named entities), or a
+ * loadout names a local ONNX connection. The two connections now always
+ * exist (`ensureLocalOnnxConnections`), so their existence no longer says
+ * anyone asked; a boot that reached out on that alone would be a network call
+ * nobody asked for. Never throws, and never awaited by its
  * caller: a list that cannot be loaded falls back to the built-in catalogue
  * exactly as it does at any other moment.
  */
 async function warmRecommendedList() {
 	try {
-		const [endpoint] = await db
-			.select({ id: schema.connections.id })
-			.from(schema.connections)
-			.where(
-				inArray(schema.connections.type, [
-					CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
-					CONNECTION_TYPE.LOCAL_ONNX_NER
-				])
-			)
-			.limit(1)
-		if (!endpoint) return
+		if (!(await localOnnxAskedFor(db))) return
 		const { recommendedEmbeddingModels, recommendedNerModels } =
 			await import("$lib/server/localModels/onnxList")
 		await Promise.all([

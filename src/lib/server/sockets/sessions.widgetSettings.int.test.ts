@@ -89,7 +89,8 @@ describe("sessions:panelLayout — widget settings", () => {
 				sessionId: s.session.id,
 				layout: {},
 				widgetSettings: {
-					messages: { composer: "minimal", order: "newest-first" }
+					messages: { order: "newest-first" },
+					composer: { composer: "minimal" }
 				}
 			} as any,
 			noopEmit
@@ -100,7 +101,8 @@ describe("sessions:panelLayout — widget settings", () => {
 			noopEmit
 		)
 		expect(res.widgetSettings).toEqual({
-			messages: { composer: "minimal", order: "newest-first" }
+			messages: { order: "newest-first" },
+			composer: { composer: "minimal" }
 		})
 	})
 
@@ -131,7 +133,7 @@ describe("sessions:panelLayout — widget settings", () => {
 			{
 				sessionId: s.session.id,
 				layout: {},
-				widgetSettings: { messages: { composer: "minimal" } }
+				widgetSettings: { composer: { composer: "minimal" } }
 			} as any,
 			noopEmit
 		)
@@ -146,7 +148,7 @@ describe("sessions:panelLayout — widget settings", () => {
 			noopEmit
 		)
 		expect(res.widgetSettings).toEqual({
-			messages: { composer: "minimal" }
+			composer: { composer: "minimal" }
 		})
 	})
 
@@ -159,7 +161,7 @@ describe("sessions:panelLayout — widget settings", () => {
 			{
 				sessionId: s.session.id,
 				layout: {},
-				widgetSettings: { messages: { composer: "writer" } }
+				widgetSettings: { composer: { composer: "writer" } }
 			} as any,
 			noopEmit
 		)
@@ -282,9 +284,9 @@ const storedIds = async (sessionId: number) =>
 describe("sessions:panelLayout — the widget seating gate", () => {
 	test("a core widget's id is accepted", async () => {
 		const s = await gateScenario()
-		const { warnings } = await save(s, { messages: { composer: "writer" } })
+		const { warnings } = await save(s, { composer: { composer: "writer" } })
 		expect(warnings).toEqual([])
-		expect(await storedIds(s.session.id)).toEqual(["messages"])
+		expect(await storedIds(s.session.id)).toEqual(["composer"])
 	})
 
 	test("a widget the session's genre declares is accepted", async () => {
@@ -351,19 +353,21 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 	test("a key the client omits is still swept", async () => {
 		const s = await gateScenario()
 		await save(s, {
-			messages: { composer: "minimal" },
+			composer: { composer: "minimal" },
 			stats: { compact: true }
 		})
-		expect(await storedIds(s.session.id)).toEqual(["messages", "stats"])
-		const { warnings } = await save(s, { messages: { composer: "minimal" } })
+		expect(await storedIds(s.session.id)).toEqual(["composer", "stats"])
+		const { warnings } = await save(s, {
+			composer: { composer: "minimal" }
+		})
 		expect(warnings).toEqual([])
-		expect(await storedIds(s.session.id)).toEqual(["messages"])
+		expect(await storedIds(s.session.id)).toEqual(["composer"])
 	})
 
 	test("the accepted keys still land beside a dropped one", async () => {
 		const s = await gateScenario()
 		const { warnings } = await save(s, {
-			messages: { composer: "minimal" },
+			composer: { composer: "minimal" },
 			casefile: { open: true },
 			[s.live]: { faces: 6 },
 			[s.dead]: { spooky: true },
@@ -371,7 +375,7 @@ describe("sessions:panelLayout — the widget seating gate", () => {
 		})
 		expect(warnings).toHaveLength(2)
 		expect(await storedIds(s.session.id)).toEqual(
-			["messages", "casefile", s.live].sort()
+			["composer", "casefile", s.live].sort()
 		)
 	})
 })

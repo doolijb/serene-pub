@@ -17,7 +17,7 @@ import type { WidgetRequests } from "@serene-pub/sdk"
 type Params = WidgetRequests["set-owner-face"]["params"]
 
 /** The owner kinds a face may be asked for (`OwnerRefV1`). */
-const OWNER_KINDS = new Set(["session", "session_cast", "player_seat", "session_location"])
+const OWNER_KINDS = new Set(["session", "session_cast", "seated_member", "player_seat", "session_location"])
 
 /** The page's write: sends `state:setOwnerFace` and settles on its reply. */
 export type OwnerFaceWrite = (ask: {

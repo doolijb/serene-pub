@@ -34,6 +34,9 @@ import {
 	type NewMessage,
 	type NewPart
 } from "./projectLegacy"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import type { SeatChange } from "$lib/server/sessions/seats"
+import { inPlay } from "$lib/shared/sessions/inPlay"
 import { textOf, type TextOfOptions } from "./textOf"
 import { byLaneThenTime, channelSpansLanes, channelWhere } from "./channels"
 
@@ -106,6 +109,283 @@ async function withStoryClockStamp<
 	}
 }
 
+/**
+ * The seat a row's speaker is, as a participant reference — the flip-off
+ * speaker stamp's rule (card form): a persona line is the card the person
+ * voiced (`character:<personaId>`); else a `metadata.speaker` that is a
+ * `player-seat:<id>` (a seat with no card); else the character
+ * (`character:<characterId>`). No reference: narration, an envoy's line, a
+ * persona-less person's line — left unstamped. ⏳ Retired with the card form
+ * (S5); the flip-on rule is `speakerSeatOf`.
+ */
+function speakerRefOfValues(v: {
+	characterId?: number | null
+	personaId?: number | null
+	metadata?: unknown
+}): string | null {
+	if (v.personaId != null) return `character:${v.personaId}`
+	const speaker = (v.metadata as { speaker?: unknown } | null | undefined)
+		?.speaker
+	if (typeof speaker === "string" && /^player-seat:\d+$/.test(speaker.trim()))
+		return speaker.trim()
+	if (v.characterId != null) return `character:${v.characterId}`
+	return null
+}
+
+/**
+ * 🚧 The speaker stamp (★27-7): a message spoken by a seat carries the
+ * seat's cast member (`cast_member_id`), null while the seat has none. A
+ * caller that already says (a copy keeps its original's, an import) is left
+ * alone; a row with no speaker ref stays unstamped. `cache` (a bulk write)
+ * holds one answer per `sessionId|ref`. Runs on the handle the store was
+ * given — inside a transaction that is the `tx`. A failed seat read fails the
+ * write, as any other query in it does (inside a transaction a failed select
+ * aborts it anyway).
+ */
+async function speakerMemberOf(
+	db: Db,
+	sessionId: number,
+	ref: string,
+	cache?: Map<string, number | null>
+): Promise<number | null> {
+	const key = `${sessionId}|${ref}`
+	if (cache?.has(key)) return cache.get(key) ?? null
+	const { seatOf } = await import("$lib/server/sessions/seats")
+	const memberId = (await seatOf(db, sessionId, ref))?.castMemberId ?? null
+	cache?.set(key, memberId)
+	return memberId
+}
+
+/** The seat of a row's speaker as the stamp reads it: its member, and its `hostSeatRefOf` ref. */
+interface SpeakerSeat {
+	castMemberId: number | null
+	ref: string | null
+}
+
+/**
+ * ⏳ **The one rule** — the seat of a row's speaker, flip on (S4;
+ * `state/memberForm.ts`), in this order: (a) a persona line → the
+ * `player-seat:<id>` that `metadata.speaker` names when that seat holds the
+ * persona, else the player seat whose `persona_id` is it (live before
+ * departed, then position, then id — never a character seat that holds the
+ * same card, ★K-2; ⏳ a persona held only by a character seat falls back to
+ * `seatOf`'s card reading); (b) else `metadata.speaker` is `player-seat:<id>`
+ * → that seat; (c) else a character line → the character seat holding the
+ * card (`seatOf`'s order); (d) else `metadata.speaker` is
+ * `seated-member:<id>` → `seatOf` of it; (e) else none — narration, an envoy's
+ * line, a persona-less person's line.
+ */
+async function speakerSeatOf(
+	db: Db,
+	sessionId: number,
+	v: {
+		characterId?: number | null
+		personaId?: number | null
+		metadata?: unknown
+	},
+	cache?: Map<string, SpeakerSeat | null>
+): Promise<SpeakerSeat | null> {
+	const said = (v.metadata as { speaker?: unknown } | null | undefined)?.speaker
+	const speaker = typeof said === "string" ? said.trim() : ""
+	const key = `${sessionId}|${v.personaId ?? ""}|${v.characterId ?? ""}|${speaker}`
+	if (cache?.has(key)) return cache.get(key) ?? null
+	const { seatOf } = await import("$lib/server/sessions/seats")
+	const { hostSeatRefOf } = await import("$lib/server/pipelines/prompt/seatCards")
+	const answer = (
+		seat: Awaited<ReturnType<typeof seatOf>>
+	): SpeakerSeat | null =>
+		seat
+			? {
+					castMemberId: seat.castMemberId,
+					ref: hostSeatRefOf({
+						kind: seat.kind,
+						seatId: seat.seatId,
+						castMemberId: seat.castMemberId,
+						cardId: seat.cardId
+					})
+				}
+			: null
+	let found: SpeakerSeat | null = null
+	if (v.personaId != null) {
+		const named = /^player-seat:\d+$/.test(speaker)
+			? await seatOf(db, sessionId, speaker)
+			: null
+		if (named && named.cardId === v.personaId) found = answer(named)
+		else {
+			const seats = await db
+				.select({
+					id: schema.sessionPersonas.id,
+					castMemberId: schema.sessionPersonas.castMemberId,
+					removedAt: schema.sessionPersonas.removedAt,
+					isActive: schema.sessionPersonas.isActive,
+					position: schema.sessionPersonas.position
+				})
+				.from(schema.sessionPersonas)
+				.where(
+					and(
+						eq(schema.sessionPersonas.sessionId, sessionId),
+						eq(schema.sessionPersonas.personaId, v.personaId)
+					)
+				)
+			// In play first, then benched, then removed; a line already spoken
+			// stays its speaker's, so a benched or removed seat still answers
+			// when it is the only one holding the card.
+			const rank = (s: (typeof seats)[number]) => (inPlay(s) ? 0 : s.removedAt == null ? 1 : 2)
+			seats.sort(
+				(a, b) =>
+					rank(a) - rank(b) ||
+					(a.position ?? 0) - (b.position ?? 0) ||
+					a.id - b.id
+			)
+			const seat = seats[0]
+			found = seat
+				? answer({
+						kind: "player",
+						seatId: seat.id,
+						castMemberId: seat.castMemberId,
+						cardId: v.personaId,
+						departed: seat.removedAt != null,
+						actingUserId: null
+					})
+				: answer(await seatOf(db, sessionId, `character:${v.personaId}`))
+		}
+	} else if (/^player-seat:\d+$/.test(speaker))
+		found = answer(await seatOf(db, sessionId, speaker))
+	else if (v.characterId != null)
+		found = answer(await seatOf(db, sessionId, `character:${v.characterId}`))
+	else if (/^seated-member:\d+$/.test(speaker))
+		found = answer(await seatOf(db, sessionId, speaker))
+	cache?.set(key, found)
+	return found
+}
+
+/** ⏳ True for a ref in member form (`seated-member:` / `player-seat:`) — what the flip-on stamp writes to `metadata.speaker`. */
+const isMemberFormRef = (ref: string | null | undefined): ref is string =>
+	typeof ref === "string" && /^(seated-member|player-seat):\d+$/.test(ref)
+
+async function withSpeakerStamp<
+	T extends Omit<typeof schema.sessionMessages.$inferInsert, "id">
+>(
+	db: Db,
+	values: T,
+	cache?: Map<string, number | null>,
+	seatCache?: Map<string, SpeakerSeat | null>
+): Promise<T> {
+	if (values.castMemberId !== undefined) return values
+	// ⏳ Flip on: the one rule — the member, and `metadata.speaker` stamped
+	// with the seat's member-form ref (`hostSeatRefOf`).
+	if (memberFormOn()) {
+		const seat = await speakerSeatOf(db, values.sessionId, values, seatCache)
+		if (seat === null) return values
+		return {
+			...values,
+			castMemberId: seat.castMemberId,
+			...(isMemberFormRef(seat.ref)
+				? {
+						metadata: {
+							...(values.metadata && typeof values.metadata === "object"
+								? (values.metadata as Record<string, unknown>)
+								: {}),
+							speaker: seat.ref
+						}
+					}
+				: {})
+		}
+	}
+	const ref = speakerRefOfValues(values)
+	if (ref === null) return values
+	return {
+		...values,
+		castMemberId: await speakerMemberOf(db, values.sessionId, ref, cache)
+	}
+}
+
+/**
+ * Whether a patch moves the speaker (`characterId` / `personaId`) without
+ * saying who the member is — the only patch that re-stamps. Checked on keys,
+ * so a streaming patch costs nothing.
+ */
+function movesSpeaker(
+	patch: Partial<typeof schema.sessionMessages.$inferInsert>
+): boolean {
+	return (
+		patch.castMemberId === undefined &&
+		(patch.characterId !== undefined || patch.personaId !== undefined)
+	)
+}
+
+/**
+ * Re-stamp each returned row of a patch that moved its speaker; returns the
+ * rows as stamped. Flip on, `metadata.speaker` is re-stamped with the seat's
+ * member-form ref too (a stale one never wins), and dropped when the new
+ * seat has none.
+ */
+async function restampSpeakers(
+	db: Db,
+	rows: Array<typeof schema.sessionMessages.$inferSelect>
+): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
+	const cache = new Map<string, number | null>()
+	const seatCache = new Map<string, SpeakerSeat | null>()
+	const out: typeof rows = []
+	for (const row of rows) {
+		if (memberFormOn()) {
+			const meta =
+				row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+					? (row.metadata as Record<string, unknown>)
+					: null
+			// A row that names a card is read by it: the stamp it carried
+			// may be the moved speaker's, so it never decides.
+			const unstamped =
+				meta && (row.characterId != null || row.personaId != null)
+					? (({ speaker: _s, ...rest }) => rest)(meta)
+					: meta
+			const seat = await speakerSeatOf(
+				db,
+				row.sessionId,
+				{ characterId: row.characterId, personaId: row.personaId, metadata: unstamped },
+				seatCache
+			)
+			const castMemberId = seat?.castMemberId ?? null
+			const was = meta?.speaker
+			let metadata: Record<string, unknown> | null | undefined = undefined
+			if (isMemberFormRef(seat?.ref)) {
+				if (was !== seat!.ref) metadata = { ...(meta ?? {}), speaker: seat!.ref }
+			} else if (isMemberFormRef(typeof was === "string" ? was : null)) {
+				const { speaker: _gone, ...rest } = meta!
+				metadata = rest
+			}
+			if (castMemberId === row.castMemberId && metadata === undefined) {
+				out.push(row)
+				continue
+			}
+			const [updated] = await db
+				.update(schema.sessionMessages)
+				.set({ castMemberId, ...(metadata !== undefined ? { metadata } : {}) })
+				.where(eq(schema.sessionMessages.id, row.id))
+				.returning()
+			out.push(updated ?? row)
+			continue
+		}
+		const ref = speakerRefOfValues(row)
+		// A patch that left no speaker takes the stamp with it.
+		const castMemberId =
+			ref === null
+				? null
+				: await speakerMemberOf(db, row.sessionId, ref, cache)
+		if (castMemberId === row.castMemberId) {
+			out.push(row)
+			continue
+		}
+		const [updated] = await db
+			.update(schema.sessionMessages)
+			.set({ castMemberId })
+			.where(eq(schema.sessionMessages.id, row.id))
+			.returning()
+		out.push(updated ?? row)
+	}
+	return out
+}
+
 /* ── the forward stack (RF fix 5, 2026-10-23) ───────────────────────────── */
 
 /**
@@ -158,6 +438,28 @@ export async function discardForwardStack(db: Db, sessionId: number): Promise<nu
 	return ids
 }
 
+/**
+ * 🚧 Sets `cast_member_id` of one session's lines (`session_messages` and their `messages` mirror) from each member in `moves` to its target, inside the caller's transaction; returns the lines moved.
+ */
+export async function repointSpeakerStamps(
+	db: Db,
+	sessionId: number,
+	moves: ReadonlyMap<number, number>
+): Promise<number> {
+	let moved = 0
+	for (const table of [schema.sessionMessages, schema.messages] as const)
+		for (const [from, to] of moves) {
+			if (from === to) continue
+			const rows = await db
+				.update(table)
+				.set({ castMemberId: to })
+				.where(and(eq(table.sessionId, sessionId), eq(table.castMemberId, from)))
+				.returning({ id: table.id })
+			if (table === schema.sessionMessages) moved += rows.length
+		}
+	return moved
+}
+
 /** Insert one legacy-shaped message; mirrors to the new model. */
 export async function insertLegacy(
 	db: Db,
@@ -165,7 +467,10 @@ export async function insertLegacy(
 ): Promise<typeof schema.sessionMessages.$inferSelect> {
 	// 🚧 A new row while rewound replaces the forward stack (RF fix 5).
 	await discardForwardStack(db, values.sessionId)
-	const stamped = await withStoryClockStamp(db, values)
+	const stamped = await withSpeakerStamp(
+		db,
+		await withStoryClockStamp(db, values)
+	)
 	const [row] = await db
 		.insert(schema.sessionMessages)
 		.values(trimCommittedContent(stamped))
@@ -184,7 +489,17 @@ export async function insertLegacyMany(
 	for (const sessionId of new Set(values.map((v) => v.sessionId)))
 		await discardForwardStack(db, sessionId)
 	const stamped: typeof values = []
-	for (const v of values) stamped.push(await withStoryClockStamp(db, v))
+	const seatMembers = new Map<string, number | null>()
+	const seatsStamped = new Map<string, SpeakerSeat | null>()
+	for (const v of values)
+		stamped.push(
+			await withSpeakerStamp(
+				db,
+				await withStoryClockStamp(db, v),
+				seatMembers,
+				seatsStamped
+			)
+		)
 	const rows = await db
 		.insert(schema.sessionMessages)
 		.values(stamped.map(trimCommittedContent))
@@ -199,11 +514,16 @@ export async function updateLegacy(
 	id: number,
 	patch: Partial<typeof schema.sessionMessages.$inferInsert>
 ): Promise<typeof schema.sessionMessages.$inferSelect | undefined> {
-	const [row] = await db
+	const [written] = await db
 		.update(schema.sessionMessages)
 		.set(trimCommittedContent(patch))
 		.where(eq(schema.sessionMessages.id, id))
 		.returning()
+	// 🚧 A patch that moves the speaker re-stamps the member (above).
+	const row =
+		written && movesSpeaker(patch)
+			? (await restampSpeakers(db, [written]))[0]
+			: written
 	if (row) await mirrorRow(db, row)
 	return row
 }
@@ -217,11 +537,15 @@ export async function updateLegacyWhere(
 	where: SQL | undefined,
 	patch: Partial<typeof schema.sessionMessages.$inferInsert>
 ): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
-	const rows = await db
+	const written = await db
 		.update(schema.sessionMessages)
 		.set(trimCommittedContent(patch))
 		.where(where)
 		.returning()
+	// 🚧 A patch that moves the speaker re-stamps the member (above).
+	const rows = movesSpeaker(patch)
+		? await restampSpeakers(db, written)
+		: written
 	for (const row of rows) await mirrorRow(db, row)
 	return rows
 }
@@ -243,11 +567,16 @@ export async function updateLegacyWhere(
  * a delete behaves as a swipe does): the anchors the `messages.id` cascade
  * cannot reach — lore imprints and the notes' entries, plain ints —
  * are taken back here by the one rule (`retractLoreAnchoredTo`), in the
- * caller's transaction. Hand it the `tx`.
+ * caller's transaction. Hand it the `tx`. 🚧 What a turn changed on its
+ * session (ST3: a deck draw, a seat bench, a ruleset conversion, an annex
+ * write — `session_imprints`) goes with its anchor too
+ * (`retractSessionImprints`): each subject goes back as it was before the turn.
+ * `opts.seatChanges` gets the seat moves, for the caller to announce after commit.
  */
 export async function deleteLegacyWhere(
 	db: Db,
-	where: SQL | undefined
+	where: SQL | undefined,
+	opts?: { seatChanges?: SeatChange[] }
 ): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
 	const rows = await db
 		.delete(schema.sessionMessages)
@@ -265,12 +594,20 @@ export async function deleteLegacyWhere(
 				all.map((r) => r.id)
 			)
 		)
-	await retractLoreOf(db, all)
+	const moved = await retractLoreOf(db, all)
+	if (opts?.seatChanges) opts.seatChanges.push(...moved)
 	return all
 }
 
-/** Delete one message from both worlds; scene spans keep its id (above). */
-export async function deleteLegacy(db: Db, id: number): Promise<void> {
+/**
+ * Delete one message from both worlds; scene spans keep its id (above).
+ * `opts.seatChanges` gets the seat moves, for the caller to announce after commit.
+ */
+export async function deleteLegacy(
+	db: Db,
+	id: number,
+	opts?: { seatChanges?: SeatChange[] }
+): Promise<void> {
 	const rows = await db
 		.delete(schema.sessionMessages)
 		.where(eq(schema.sessionMessages.id, id))
@@ -285,19 +622,29 @@ export async function deleteLegacy(db: Db, id: number): Promise<void> {
 				anchored.map((r) => r.id)
 			)
 		)
-	await retractLoreOf(db, [...rows, ...anchored])
+	const moved = await retractLoreOf(db, [...rows, ...anchored])
+	if (opts?.seatChanges) opts.seatChanges.push(...moved)
 }
 
-/** 🚧 The deleted rows' lorebook writes, taken back per session (RF fix 4; above). */
+/** 🚧 The deleted rows' lorebook writes and session imprints, taken back per session (RF fix 4; above). */
 async function retractLoreOf(
 	db: Db,
 	rows: ReadonlyArray<{ id: number; sessionId: number }>
-): Promise<void> {
-	if (!rows.length) return
+): Promise<SeatChange[]> {
+	if (!rows.length) return []
+	const seatChanges: SeatChange[] = []
 	const { retractLoreAnchoredTo } = await import("$lib/server/state/write")
+	const { retractSessionImprints } = await import("$lib/server/sessions/sessionImprints")
 	const bySession = new Map<number, number[]>()
 	for (const r of rows) bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r.id])
-	for (const [sessionId, ids] of bySession) await retractLoreAnchoredTo(db, sessionId, ids)
+	for (const [sessionId, ids] of bySession) {
+		await retractLoreAnchoredTo(db, sessionId, ids)
+		seatChanges.push(...(await retractSessionImprints(db, { sessionId, messageIds: ids })).seatChanges)
+	}
+	// 🚧 And the scene notes they wrote (B2-1): a plain int in `scenes.notes`.
+	const { takeSceneNotesAt } = await import("$lib/server/scenes/liveScenes")
+	for (const r of rows) await takeSceneNotesAt(db, r.id, r.sessionId)
+	return seatChanges
 }
 
 /**
@@ -392,6 +739,7 @@ async function upsertProjection(
 				userId: message.userId,
 				characterId: message.characterId,
 				personaId: message.personaId,
+				castMemberId: message.castMemberId,
 				speakerLabel: nativeKind
 					? existing.speakerLabel
 					: message.speakerLabel,

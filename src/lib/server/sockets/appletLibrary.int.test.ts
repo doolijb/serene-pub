@@ -133,7 +133,11 @@ describe("appletApi:libraryCharacters", () => {
 			if (!cursor) break
 		}
 		expect(names.has("Bobs")).toBe(false)
-		expect(names.size).toBe(8)
+		// ★S4-1: a genuinely marked card is a hidden carrier; a re-import's (Dup) is not.
+		expect(names.has("Mine")).toBe(false)
+		expect(names.has("Theirs")).toBe(false)
+		expect(names.has("Dup")).toBe(true)
+		expect(names.size).toBe(6)
 		const q = await ask("pluginsLibraryCharacters", a, { pluginId: "acme.read", q: "PAGE" })
 		expect(q.res!.result.rows.map((r: any) => r.name).sort()).toEqual(["Page 0", "Page 1", "Page 2", "Page 3"])
 		expect(q.res!.result.rows[0].avatarUrl).toBeNull()
@@ -178,9 +182,69 @@ describe("appletApi:updateCharacter", () => {
 		expect(r.error).toBeUndefined()
 		expect(r.res).toMatchObject({ requestId: "u1", result: { id: ids.mine, name: "Mine Renamed" } })
 		const [row] = await db.select().from(schema.characters).where(eq(schema.characters.id, ids.mine))
-		expect(row.firstMessage).toBe("Hello")
+		// the write is on the card's current version; the row's content columns are frozen
+		// (its name is the version's ⏳ copy), its provided mark stays on the row
+		const versions = await db
+			.select()
+			.from(schema.characterVersions)
+			.where(eq(schema.characterVersions.cardId, ids.mine))
+		expect(versions).toHaveLength(1)
+		expect(versions[0]).toMatchObject({
+			name: "Mine Renamed",
+			nickname: null,
+			greetings: [{ text: "Hello" }]
+		})
+		expect(row.name).toBe("Mine Renamed")
+		expect(row.firstMessage).toBeNull()
 		expect((row.extensions as any).serenepub.provided.plugin).toBe("acme.write")
 		expect(r.events.map((e) => e.event)).toContain("characters:update")
+	})
+
+	test("firstMessage replaces the opener and keeps the other greetings; a newer version takes the write", async () => {
+		const { ensureCardVersion, newCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const { profileOf } = await import("$lib/shared/characters/profile")
+		const v1 = await ensureCardVersion(db as any, ids.mine)
+		await newCardVersion(db as any, ids.mine, {
+			...profileOf(v1!),
+			greetings: [
+				{ text: "Hello" },
+				{ text: "Again" },
+				{ text: "All", groupOnly: true }
+			]
+		})
+		const r = await ask("pluginsUpdateCharacter", a, {
+			pluginId: "acme.write",
+			characterId: ids.mine,
+			firstMessage: "Welcome",
+			description: "Rewritten."
+		})
+		expect(r.error).toBeUndefined()
+		const versions = (
+			await db
+				.select()
+				.from(schema.characterVersions)
+				.where(eq(schema.characterVersions.cardId, ids.mine))
+		).sort((x, y) => x.number! - y.number!)
+		expect(versions).toHaveLength(2)
+		expect(versions[0]).toMatchObject({
+			greetings: [{ text: "Hello" }],
+			description: "Mine d"
+		})
+		expect(versions[1]).toMatchObject({
+			greetings: [
+				{ text: "Welcome" },
+				{ text: "Again" },
+				{ text: "All", groupOnly: true }
+			],
+			description: "Rewritten."
+		})
+		const [row] = await db
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, ids.mine))
+		expect(row.description).toBe("Rewritten.")
 	})
 })
 

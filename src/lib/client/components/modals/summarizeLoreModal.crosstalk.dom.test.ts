@@ -3,13 +3,6 @@
  * mounted on EVERY session page, and the answers it listens for are pushed
  * to every tab of the user (`emitToUser`). A handler that does not ask
  * whether an answer is its own acts on another tab's.
- *
- * `sessions:setLorebook` was the worst of them: an attach in tab B toasted
- * "Lorebook attached" in tab A and called A's `onLorebookSet`, which wrote
- * B's book onto A's session. The answer names its session, so the modal
- * asks. `lorebooks:create:error` is the same class: another tab's (or the
- * sidebar's) failed create toasted here too, though this modal asked for
- * nothing.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
@@ -75,74 +68,8 @@ afterEach(() => {
 	document.body.innerHTML = ""
 })
 
-/** Tab A's session page, as far as its always-mounted Summarize modal goes. */
-function openTabA(onLorebookSet: (id: number) => void) {
-	const target = document.createElement("div")
-	document.body.append(target)
-	app = mount(SummarizeLoreModal, {
-		target,
-		props: {
-			open: false,
-			onOpenChange: () => {},
-			sessionId: TAB_A_SESSION,
-			lorebookId: null,
-			selectedMessageIds: [],
-			onSaved: () => {},
-			onLorebookSet
-		}
-	})
-	flushSync()
-}
-
-describe("SummarizeLoreModal hears only its own session's answers", () => {
-	test("tab B's lorebook attach is ignored by tab A — no toast, no onLorebookSet", () => {
-		const onLorebookSet = vi.fn()
-		openTabA(onLorebookSet)
-
-		client.dispatch("sessions:setLorebook", {
-			session: { id: TAB_B_SESSION, lorebookId: 9 }
-		})
-		flushSync()
-
-		expect(onLorebookSet).not.toHaveBeenCalled()
-		expect(toaster.success).not.toHaveBeenCalled()
-	})
-
-	test("its own session's attach still lands, once", () => {
-		const onLorebookSet = vi.fn()
-		openTabA(onLorebookSet)
-
-		client.dispatch("sessions:setLorebook", {
-			session: { id: TAB_A_SESSION, lorebookId: 5 }
-		})
-		flushSync()
-
-		expect(onLorebookSet).toHaveBeenCalledTimes(1)
-		expect(onLorebookSet).toHaveBeenCalledWith(5)
-		expect(toaster.success).toHaveBeenCalledTimes(1)
-	})
-
-	test("a lorebook create this modal never asked for fails silently here", () => {
-		openTabA(() => {})
-
-		client.dispatch("lorebooks:create:error", { error: "Name taken" })
-		flushSync()
-
-		expect(toaster.error).not.toHaveBeenCalled()
-	})
-})
-
-/**
- * A create this modal asked for is told apart by the `requestId` it sent,
- * which the server echoes on the broadcast and on the refusal. Claiming by
- * "a create is pending" or by the name raced: another surface's refusal
- * landing while this modal's create was in flight was reported here AND
- * consumed the claim, so the modal's own book then arrived and was never
- * attached; and another create with the same name was attached in its place.
- */
-describe("SummarizeLoreModal claims only its own lorebook create", () => {
-	/** Tab A's modal, open on a session with no book, after asking to create `name`. */
-	function askToCreate(name: string): string {
+describe("SummarizeLoreModal does not offer to read a book in", () => {
+	test("a session with no book id yet shows no attach controls and sends no lorebook write", () => {
 		const target = document.createElement("div")
 		document.body.append(target)
 		app = mount(SummarizeLoreModal, {
@@ -153,82 +80,22 @@ describe("SummarizeLoreModal claims only its own lorebook create", () => {
 				sessionId: TAB_A_SESSION,
 				lorebookId: null,
 				selectedMessageIds: [],
-				onSaved: () => {},
-				onLorebookSet: () => {}
+				onSaved: () => {}
 			}
 		})
 		flushSync()
-		const newButton = [...document.querySelectorAll("button")].find((b) =>
-			b.textContent?.includes("New")
-		)!
-		newButton.click()
-		flushSync()
-		const input = document.querySelector<HTMLInputElement>(
-			'input[aria-label="New lorebook name"]'
-		)!
-		input.value = name
-		input.dispatchEvent(new Event("input", { bubbles: true }))
-		flushSync()
-		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
-		flushSync()
-		const create = client.emits.find((e) => e.event === "lorebooks:create")
-		expect(create?.payload.name).toBe(name)
-		expect(typeof create?.payload.requestId).toBe("string")
-		return create!.payload.requestId
-	}
-	const attaches = () =>
-		client.emits.filter((e) => e.event === "sessions:setLorebook")
-
-	test("another surface's refusal neither toasts here nor loses this modal's create", () => {
-		const requestId = askToCreate("Atlas")
-
+		const text = document.body.textContent ?? ""
+		expect(text.includes("Read into this session")).toBe(false)
+		expect(text.includes("Saving to")).toBe(false)
+		expect(document.querySelector('input[aria-label="New lorebook name"]')).toBeNull()
 		client.dispatch("lorebooks:create:error", { error: "Name taken" })
-		client.dispatch("lorebooks:create:error", {
-			requestId: "someone-else",
-			error: "Name taken"
-		})
 		flushSync()
 		expect(toaster.error).not.toHaveBeenCalled()
-
-		client.dispatch("lorebooks:create", {
-			lorebook: { id: 7, name: "Atlas" },
-			requestId
-		})
-		flushSync()
-		expect(attaches()).toEqual([
-			{
-				event: "sessions:setLorebook",
-				payload: { sessionId: TAB_A_SESSION, lorebookId: 7 }
-			}
-		])
-	})
-
-	test("its own refusal toasts once", () => {
-		const requestId = askToCreate("Atlas")
-
-		client.dispatch("lorebooks:create:error", { requestId, error: "Name taken" })
-		client.dispatch("lorebooks:create:error", { requestId, error: "Name taken" })
-		flushSync()
-		expect(toaster.error).toHaveBeenCalledTimes(1)
-	})
-
-	test("another create of the same name is not attached; its own is", () => {
-		const requestId = askToCreate("Atlas")
-
-		client.dispatch("lorebooks:create", {
-			lorebook: { id: 6, name: "Atlas" },
-			requestId: "sidebar"
-		})
-		client.dispatch("lorebooks:create", { lorebook: { id: 5, name: "Atlas" } })
-		flushSync()
-		expect(attaches()).toEqual([])
-
-		client.dispatch("lorebooks:create", {
-			lorebook: { id: 7, name: "Atlas" },
-			requestId
-		})
-		flushSync()
-		expect(attaches().map((e) => e.payload.lorebookId)).toEqual([7])
+		expect(
+			client.emits.some(
+				(e) => e.event === "sessions:setLorebook" || e.event === "lorebooks:create"
+			)
+		).toBe(false)
 	})
 })
 
@@ -250,8 +117,7 @@ describe("SummarizeLoreModal hears only its own session's summarize run", () => 
 				sessionId: TAB_A_SESSION,
 				lorebookId: 5,
 				selectedMessageIds: [1, 2],
-				onSaved: () => {},
-				onLorebookSet: () => {}
+				onSaved: () => {}
 			}
 		})
 		flushSync()

@@ -38,7 +38,8 @@
  *
  * ## The five gates, and why each one is separate
  *
- * 1. **A name the cast answers to is never a key** (`castRefusal`). The
+ * 1. **A name the cast answers to is never a key** (`castRefusal`), whether it
+ *    resolves to a card (`character`) or to a card-less member (`cast_member`). The
  *    gazetteer already resolves a character's name, her nicknames and her
  *    absorbed aliases to one identity, and the distinctive tokens of a
  *    multi-word name with her — so "Captain" is refused along with "Vell" when
@@ -581,7 +582,9 @@ export function roundTrip(key: string, text: string): boolean {
  *     judged by the corpus gates alone. Measured: on a small book it got
  *     through.
  *
- * `entry` is not refused. A thing the lorebook has a row for is a subject.
+ * `character` and `cast_member` are both refused: a member with no card answers
+ * to its names as much as a carded one. `entry` is not refused. A thing the
+ * lorebook has a row for is a subject.
  */
 function castRefusal(
 	key: string,
@@ -589,7 +592,7 @@ function castRefusal(
 	ref: EntityRef | undefined
 ): boolean {
 	const kind = ref?.kind ?? gazetteer.byName.get(key)?.kind
-	return kind === "character"
+	return kind === "character" || kind === "cast_member"
 }
 
 interface Candidate {

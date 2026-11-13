@@ -28,6 +28,7 @@ import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { coreObjectLayouts } from "$lib/server/pipelines/entities/objectVariableLayouts"
+import { SHIPPED_SPEECH_VARIABLE_LAYOUTS } from "@serene-pub/core-catalog"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
@@ -94,10 +95,16 @@ describe("a renamed shipped layout is an update, not a second row", () => {
 			.select()
 			.from(schema.pipelineVariableTemplates)
 			.where(isNotNull(schema.pipelineVariableTemplates.seedKey))
-		// The hand-written rows, plus core's automatic object layouts
-		// (`core:var/likenesses@1` is the first, 2026-10-12).
-		const expected =
-			SHIPPED_VARIABLE_TEMPLATES.length + coreObjectLayouts().length
+		// The hand-written rows, core's automatic object layouts
+		// (`core:var/likenesses@1` is the first, 2026-10-12) and the catalogue's
+		// speech layouts. A speech layout takes its variable's seed key, so the
+		// automatic row of the same key is not a separate row: count distinct
+		// seed keys, the way the seeder does.
+		const expected = new Set([
+			...SHIPPED_VARIABLE_TEMPLATES.map((t) => seedKeyFor(t)),
+			...coreObjectLayouts().map((t) => t.seedKey),
+			...SHIPPED_SPEECH_VARIABLE_LAYOUTS.map((t) => t.seedKey)
+		]).size
 		expect(seeded.length).toBe(expected)
 		// One row per (variableId, variant), which is what the key now asserts.
 		expect(new Set(seeded.map((r: any) => r.seedKey)).size).toBe(expected)

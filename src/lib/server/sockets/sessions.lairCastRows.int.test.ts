@@ -390,10 +390,15 @@ async function turnRows(sessionId: number) {
 		.orderBy(asc(schema.sessionMessages.id))
 }
 
-/** The reply runs — the turn order's own recomputes left out. */
+/** The reply runs — the turn order's own recomputes left out (the Lair registers no round tick; its keeper moves the clock). */
 const respondRuns = async (sessionId: number) =>
 	(await runsOf(sessionId))
-		.filter((r) => r.specSlug !== "core:spec/lair-turn-order")
+		// The turn order's recomputes and the round's tick (the Lair registers it) are not reply runs.
+		.filter(
+			(r) =>
+				r.specSlug !== "core:spec/lair-turn-order" &&
+				r.specSlug !== "core:spec/round-tick"
+		)
 		.map((r) => `${r.specSlug}:${r.outcome}`)
 
 const reset = () => {

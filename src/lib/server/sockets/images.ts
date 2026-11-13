@@ -256,8 +256,7 @@ export const imagesGenerate: Handler<
 		// into the adapter's copy only, exactly where connections:get does before
 		// the key leaves the server, never persisting the plaintext.
 		const conn =
-			connection.extraJson &&
-			typeof (connection.extraJson as any).apiKey === "string"
+			connection.extraJson && (connection.extraJson as any).apiKey
 				? {
 						...connection,
 						extraJson: {
@@ -533,6 +532,44 @@ export const imagesDrawingSheet: Handler<
 			try {
 				const { mayFillSprites } = await import("$lib/server/sprites/attach")
 				if (await mayFillSprites(db, socket.user.id, characterId)) {
+					const { spriteExpressionPair } = await import(
+						"$lib/server/sprites/reexpress"
+					)
+					const { samplingKeysSheetDrops } = await import(
+						"$lib/shared/imageGen/types"
+					)
+					const pair = await spriteExpressionPair(db)
+					if (pair.ok)
+						res = {
+							...res,
+							expressions: pair.sheet.expressions === true,
+							...(isAdmin
+								? { sheet: pair.sheet, drops: samplingKeysSheetDrops(pair.sheet) }
+								: {})
+						}
+				}
+			} catch {
+				// No sheet is an answer: nothing is offered.
+			}
+			emitToUser("images:drawingSheet", res)
+			return res
+		}
+		// 🚧 A cast member's Sprites tab asks the same: whoever can edit the
+		// member's lorebook may ask; only an admin sees the sheet.
+		if (params?.castMemberId != null && socket.user) {
+			const castMemberId = params.castMemberId
+			const isAdmin = !!socket.user.isAdmin
+			let res: ImageDrawingSheetResponse = {
+				sheet: null,
+				drops: [],
+				castMemberId,
+				expressions: false
+			}
+			try {
+				const { canEditCastMember } = await import(
+					"$lib/server/cast/memberAccess"
+				)
+				if (await canEditCastMember(db, castMemberId, socket.user.id)) {
 					const { spriteExpressionPair } = await import(
 						"$lib/server/sprites/reexpress"
 					)

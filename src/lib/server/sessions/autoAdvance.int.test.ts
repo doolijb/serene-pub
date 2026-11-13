@@ -24,7 +24,6 @@
  *     the fire road's own (pinned in `fireTurn.int.test.ts`).
  */
 
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -298,11 +297,11 @@ describe("auto-advance — the listener", () => {
 		const head = entry("character:3")
 		await on(s.id, sendOf(userId), orderWith(head, 8000))
 		const [row] = await db
-			.select({ annex: schema.sessions.annex })
+			.select({ turnOrder: schema.sessions.turnOrder })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, s.id))
 		// The listener wrote no order of its own — the recompute did.
-		expect(readTurnOrder(coreAnnexIn(row!.annex)).order).toEqual([])
+		expect(readTurnOrder(row!).order).toEqual([])
 	})
 })
 
@@ -322,11 +321,16 @@ describe("auto-advance — planned turns", () => {
 
 	const planned = (ref: string) => entry(ref, "plan")
 	/** A run's own cause with no `auto`: the Castellan's run a person pressed. */
-	const pressedRunOf = (id: number) => ({ kind: "run", runId: "run-pressed", userId: id }) as const
+	const pressedRunOf = (id: number) =>
+		({ kind: "run", runId: "run-pressed", userId: id }) as const
 
 	it("fires a planned turn on the cause of a run a person started, under `next`", async () => {
 		const s = await makeSession("next")
-		const out = await on(s.id, pressedRunOf(userId), orderWith(planned("character:3"), 9000))
+		const out = await on(
+			s.id,
+			pressedRunOf(userId),
+			orderWith(planned("character:3"), 9000)
+		)
 		expect(out).toMatchObject({ fired: true, mode: "next" })
 		expect(fires).toEqual([planned("character:3")])
 		_resetAutoAdvance(s.id)
@@ -334,9 +338,17 @@ describe("auto-advance — planned turns", () => {
 
 	it("fires a planned turn on an auto run's cause under `next`, where a strategy's entry is refused", async () => {
 		const s = await makeSession("next")
-		const out = await on(s.id, autoOf(userId), orderWith(planned("character:4"), 9100))
+		const out = await on(
+			s.id,
+			autoOf(userId),
+			orderWith(planned("character:4"), 9100)
+		)
 		expect(out).toMatchObject({ fired: true, mode: "next" })
-		const strategy = await on(s.id, autoOf(userId), orderWith(entry("character:5"), 9200))
+		const strategy = await on(
+			s.id,
+			autoOf(userId),
+			orderWith(entry("character:5"), 9200)
+		)
 		expect(strategy).toMatchObject({ fired: false, reason: "cause" })
 		expect(fires).toEqual([planned("character:4")])
 		_resetAutoAdvance(s.id)
@@ -349,12 +361,20 @@ describe("auto-advance — planned turns", () => {
 			{ kind: "settings", userId },
 			{ kind: "system" }
 		])
-			expect(await on(s.id, cause, orderWith(planned("character:6"), 9300))).toMatchObject({
+			expect(
+				await on(s.id, cause, orderWith(planned("character:6"), 9300))
+			).toMatchObject({
 				fired: false,
 				reason: "cause"
 			})
 		const off = await makeSession("off")
-		expect(await on(off.id, pressedRunOf(userId), orderWith(planned("character:6"), 9400))).toMatchObject({
+		expect(
+			await on(
+				off.id,
+				pressedRunOf(userId),
+				orderWith(planned("character:6"), 9400)
+			)
+		).toMatchObject({
 			fired: false,
 			reason: "off"
 		})

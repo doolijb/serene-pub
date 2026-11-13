@@ -1,5 +1,7 @@
 import { storedSwapsOf, type StoredSwapContribution } from "$lib/shared/swaps"
+import { inPlay } from "$lib/shared/sessions/inPlay"
 
+import { isNewAttachOfDisabledBook, markedBook, providedBooksReadableBy } from "$lib/server/plugins/providedMarks"
 import { randomUUID } from "node:crypto"
 import {
 	envoySlugOfRef,
@@ -48,7 +50,7 @@ import {
 	channelDeclsOf,
 	channelsOf
 } from "$lib/server/messages/channels"
-import { formatChannel, isWidgetInstanceId, parseChannel, validateSessionLayout, widgetOfInstance, type ChannelLaneV1 } from "@serene-pub/sdk"
+import { drawnWidgetIds, formatChannel, isWidgetInstanceId, parseChannel, validateSessionLayout, widgetOfInstance, type ChannelLaneV1, type SessionLayoutV1 } from "@serene-pub/sdk"
 import {
 	and,
 	asc,
@@ -56,6 +58,7 @@ import {
 	desc,
 	eq,
 	inArray,
+	isNotNull,
 	isNull,
 	lt,
 	max,
@@ -63,12 +66,26 @@ import {
 	sql
 } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
-import { resolveOrCreateBindingRow } from "$lib/server/utils/characterBindingSync"
-import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 import {
+	SEAT_REFUSALS,
+	announceSeatChanges,
+	sameMemberRefusal,
+	seatCast,
+	seatOf,
+	seatPlayer,
+	settleSeats,
+	syncMintedSeatMembers,
+	unseat,
+	setSeatBench,
+	type MintedSeatMember,
+	type SeatChange
+} from "$lib/server/sessions/seats"
+import {
 	lastVisibleMessages,
-	liveMessageCounts
+	liveMessageCounts,
+	seatCastShownForSessions
 } from "$lib/server/sessions/rowProjection"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import { sessionGenreOf } from "$lib/server/sessions/annexFields"
@@ -101,6 +118,7 @@ import { InterpolationEngine } from "../utils/interpolation/InterpolationEngine"
 import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
 import { refusable } from "./refusable"
+import type { AutomaticApplyCause } from "$lib/server/lorebooks/ownBook"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import { resolveTaskConfig } from "../utils/resolveTaskConfig"
@@ -118,8 +136,10 @@ import {
 } from "$lib/server/utils/sessionAccess"
 import {
 	cloneLayoutPreset,
+	arrangementOf,
 	copyLayoutIntoSession,
 	deleteUserLayoutPreset,
+	genreDefaultLayoutRow,
 	LAYOUT_PRESET_NEEDS_NAME,
 	LAYOUT_PRESET_CANT_SAVE,
 	LAYOUT_PRESET_UNKNOWN,
@@ -223,12 +243,23 @@ async function checkPersonasOwnership(
  * lorebooks is a strictly per-user table — a session's lorebookId must belong
  * to the requesting user, or a session could pull another user's private
  * lore into its prompts and its binding-sync writes.
+ * 🚧 (m3-core, ★M3-1 "Pub wide") Or be a live provided book, which every
+ * person may read into their own session. ⚠ Open (★M3-core-1): the
+ * binding sync (`runLorebookBindingCheck`) still mints a member's cast rows
+ * into such a book directly, outside its write mode.
  */
 async function checkLorebookOwnership(
 	lorebookId: number,
-	userId: number
+	userId: number,
+	/** The session whose book this is, when it already has one: re-sending the book it reads is not a new attach. */
+	sessionId?: number
 ): Promise<boolean> {
-	if (!(await findOwnedBook(db, userId, lorebookId))) return false
+	if (
+		!(await findOwnedBook(db, userId, lorebookId)) &&
+		!(await providedBooksReadableBy(db as unknown as Db, userId, [lorebookId])).has(lorebookId)
+	)
+		return false
+	if (await isNewAttachOfDisabledBook(db as unknown as Db, lorebookId, sessionId)) return false
 	// 🚧 A session's own notes are never read into another session
 	// (PLAN-rulesets §26): they are found only through their session.
 	const [book] = await db
@@ -407,9 +438,34 @@ async function buildSessionsListFor(
 					)
 				: and(eq(c.userId, userId), eq(c.sessionType, sessionType)),
 		orderBy: desc(schema.sessions.updatedAt),
-		// Pipeline state and every member's unsent drafts never ride a list (V1a).
-		columns: { annex: false, annexAudiences: false, drafts: false }
+		// Pipeline state and every member's unsent drafts never ride a list (V1a);
+		// nor core's runtime columns: read marks are every member's, and a
+		// deck's state lets a player work out the next card.
+		columns: {
+			annex: false,
+			annexAudiences: false,
+			drafts: false,
+			turnOrder: false,
+			turnTally: false,
+			laneReads: false,
+			rulesetDecks: false
+		}
 	})
+	// 🚧 Each seat's card as its current card version has it: the relational
+	// read's name and face are the stale ⏳ copies. The trimmed shape stays.
+	await putCardsNow(
+		[
+			...sessionsList.map((s) => ({
+				rows: s.sessionCharacters,
+				key: "character"
+			})),
+			...sessionsList.map((s) => ({
+				rows: s.sessionPersonas,
+				key: "persona"
+			}))
+		],
+		{ only: ["id", "name", "avatarMediaId"], avatar: true }
+	)
 
 	// isOwner/isGuest let the client show the right menu affordances:
 	// owners get full edit + delete, guests get a scoped edit (characters/
@@ -440,15 +496,43 @@ async function buildSessionsListFor(
 	// card every member sees never quotes a private lane.
 	const sessionIds = sessionsList.map((s) => s.id)
 	const messageCounts = await liveMessageCounts(db, sessionIds)
+	// The sessions whose seats may read a member over their card, asked ONCE
+	// and handed to both readers below (s27 S2).
+	const { sessionsWithMemberWords } = await import(
+		"$lib/server/sessions/rowProjection"
+	)
+	const withMemberWords = await sessionsWithMemberWords(db, sessionIds)
 	const lastMessages = new Map<number, Sockets.Sessions.List.LastMessage>()
 	if (sessionIds.length > 0) {
 		// The last visible line per session, from the projection the
 		// `sessions:rowChanged` push reads too (`sessions/rowProjection.ts`):
 		// one DISTINCT ON for the whole list, and the same three exclusions
 		// on both paths.
-		for (const [id, last] of await lastVisibleMessages(db, sessionIds))
+		for (const [id, last] of await lastVisibleMessages(db, sessionIds, {
+			withMemberWords
+		}))
 			lastMessages.set(id, last)
 	}
+
+	// What each seat's cast member shows over its card (s27 S2): names and
+	// faces by seated card id, as `sessions:get` sends them. Read only for
+	// the sessions whose seats can differ from their cards.
+	const castShown = await seatCastShownForSessions(
+		db,
+		sessionsList.map((s) => ({
+			id: s.id,
+			// Character seats, then player seats (★pT-1, 2026-11-05: a
+			// player seat reads its member too); a card held by both is
+			// the character seat's.
+			rows: [
+				...s.sessionCharacters.filter((cc) => cc.character !== null),
+				...s.sessionPersonas
+					.filter((cp) => cp.persona !== null)
+					.map((cp) => ({ ...cp, character: cp.persona }))
+			]
+		})),
+		{ withMemberWords }
+	)
 
 	// What each session's run in flight is doing right now (R-19) — the
 	// registry's word, so a list built while a reply is being written says
@@ -478,6 +562,8 @@ async function buildSessionsListFor(
 			...(runStatuses.has(session.id)
 				? { runStatus: runStatuses.get(session.id)! }
 				: {}),
+			castNames: castShown.get(session.id)?.castNames ?? {},
+			castFaces: castShown.get(session.id)?.castFaces ?? {},
 			// sessionCharacters/sessionPersonas rows can have a null character/
 			// persona when the linked row was deleted (the FK is nullable,
 			// onDelete: "set null") — filter those out, matching the same
@@ -500,6 +586,94 @@ async function buildSessionsListFor(
 	})
 
 	return { sessionList: sessionsWithEditPermission }
+}
+
+/** A seat's card after `putCardsNow` on a read trimmed to ids: its name as the card now has it. */
+type SeatCardNames = { id: number; name?: string; nickname?: string | null }
+
+/** `lorebook_bindings` ⏳ frozen content columns — left out of a relational read of bindings. */
+const BINDING_FROZEN_OFF = {
+	description: false,
+	personality: false,
+	scenario: false,
+	firstMessage: false,
+	alternateGreetings: false,
+	exampleDialogues: false,
+	faceMediaId: false,
+	retold: false,
+	ownName: false,
+	ownNickname: false,
+	timbre: false,
+	spriteSet: false,
+	nodeState: false,
+	nodeVisibility: false
+} as const
+
+/**
+ * 🚧 Put each seat's card as its **current card version** has it (`cardsNow`)
+ * over the relational read's card, in place (owner ruling 2026-11-05:
+ * "Everything in session is cast -> active card"). The relational read keeps
+ * ids, library facts and relations (`spriteSets`); the content columns — which
+ * nothing writes any more — come from the version, never from the row. `only`
+ * limits what is taken (a trimmed wire shape stays trimmed); `avatar` resolves
+ * the `avatarMedia { uuid, rev }` from the version's face, one `files` query
+ * for the set. A card the version read does not know is left as it was. Two
+ * `cardsNow` queries for any number of seats.
+ */
+async function putCardsNow(
+	groups: { rows: readonly any[]; key: string }[],
+	opts: { only?: readonly string[]; avatar?: boolean } = {}
+): Promise<void> {
+	const ids = groups.flatMap((g) =>
+		g.rows.flatMap((row) => {
+			const id = row?.[g.key]?.id
+			return typeof id === "number" ? [id] : []
+		})
+	)
+	if (!ids.length) return
+	const { cardsNow } = await import("$lib/server/cast/seatedCast")
+	const now = await cardsNow(db as unknown as Db, ids)
+	const faces = new Map<number, { uuid: string; rev: number }>()
+	if (opts.avatar) {
+		const faceIds = [
+			...new Set(
+				[...now.values()]
+					.map((c) => c.avatarMediaId)
+					.filter((id): id is number => id != null)
+			)
+		]
+		if (faceIds.length)
+			for (const f of await db
+				.select({
+					id: schema.files.id,
+					uuid: schema.files.uuid,
+					rev: schema.files.rev
+				})
+				.from(schema.files)
+				.where(inArray(schema.files.id, faceIds)))
+				faces.set(f.id, { uuid: f.uuid, rev: f.rev })
+	}
+	for (const g of groups)
+		for (const row of g.rows) {
+			const card = row?.[g.key]
+			const fresh = card ? now.get(card.id) : undefined
+			if (!fresh) continue
+			const taken: Record<string, unknown> = opts.only
+				? Object.fromEntries(
+						opts.only.map((k) => [k, (fresh as any)[k]])
+					)
+				: { ...fresh }
+			row[g.key] = {
+				...card,
+				...taken,
+				...(opts.avatar
+					? {
+							avatarMedia:
+								faces.get(fresh.avatarMediaId ?? -1) ?? null
+						}
+					: {})
+			}
+		}
 }
 
 /**
@@ -612,15 +786,51 @@ export const sessionsTypingHandler: Handler<
 			params.sessionId,
 			"sessions:userTyping",
 			async () => {
-				const persona = await db.query.characters.findFirst({
-					where: eq(schema.characters.id, params.personaId),
-					columns: { id: true, name: true }
-				})
+				// The card as its current card version has it (never the ⏳ copy).
+				const { cardsNow } = await import("$lib/server/cast/seatedCast")
+				const persona = (
+					await cardsNow(db as unknown as Db, [params.personaId])
+				).get(params.personaId)
 				if (!persona) return null
+				// 🚧 The name is the player seat's: a seat name, else the
+				// member it seats as read (★pT-1, 2026-11-05: "Everything in
+				// session is cast -> active card"), else the card's own. Live
+				// seats before departed, then position, then id.
+				const [seat] = await db
+					.select({
+						castMemberId: schema.sessionPersonas.castMemberId,
+						seatName: schema.sessionPersonas.seatName
+					})
+					.from(schema.sessionPersonas)
+					.where(
+						and(
+							eq(schema.sessionPersonas.sessionId, params.sessionId),
+							eq(schema.sessionPersonas.personaId, persona.id)
+						)
+					)
+					.orderBy(
+						sql`(${schema.sessionPersonas.removedAt} is not null)`,
+						asc(sql`coalesce(${schema.sessionPersonas.position}, 0)`),
+						asc(schema.sessionPersonas.id)
+					)
+					.limit(1)
+				let personaName = persona.name
+				if (seat) {
+					const { seatCardsAsRead } = await import(
+						"$lib/server/pipelines/prompt/seatCards"
+					)
+					const { withSeatName } = await import("$lib/server/sessions/seatName")
+					const [read] = await seatCardsAsRead(db as unknown as Db, params.sessionId, [
+						{ castMemberId: seat.castMemberId, character: persona }
+					])
+					personaName =
+						withSeatName(read.character as typeof persona, seat.seatName)?.name ??
+						persona.name
+				}
 				return {
 					sessionId: params.sessionId,
 					personaId: persona.id,
-					personaName: persona.name
+					personaName
 				} satisfies Sockets.Sessions.UserTyping.Response
 			}
 		)
@@ -725,18 +935,36 @@ export const sessionsCreateHandler: Handler<
 					await shareAsLorebook(db as unknown as Db, { sessionId: params.from!, userId })
 				).lorebookId
 			}
+			// The chapter starts where the followed session's story stands
+			// (★C2). A session that follows its line is followed by one that
+			// follows it too, so only a clock of its own is carried.
+			const { sessionStoryNowOf } = await import("$lib/server/state/storyTime")
+			const now = followed ? await sessionStoryNowOf(db, params.from!) : null
+			const carriedClock =
+				now?.from === "session"
+					? {
+							storyClockYear: now.year,
+							storyClockMonth: now.month ?? null,
+							storyClockDay: now.day ?? null,
+							storyClockHour: now.hour ?? null,
+							storyClockMinute: now.minute ?? null
+						}
+					: {}
 			params = {
 				...params,
 				session: {
 					...params.session,
 					lorebookId,
-					lorebookBranchId: followed?.lorebookBranchId ?? null
+					lorebookBranchId: followed?.lorebookBranchId ?? null,
+					...carriedClock
 				}
 			}
 		}
 		const tags = params.tags || []
 		const personaIds = params.personaIds || []
 		const characterIds = params.characterIds || []
+		// 🚧 Card-less members to seat (plan §34.2), checked against the book below.
+		const castMemberIds = [...new Set(params.castMemberIds || [])]
 		const characterPositions = params.characterPositions || {}
 
 		// A new session has no existing characters/personas to diff against — every
@@ -773,10 +1001,11 @@ export const sessionsCreateHandler: Handler<
 				: null
 		if (params.session.lorebookId != null && !kitAsBook && creationMode === "new-world") {
 			// A world to copy need only be readable: owner or share recipient.
-			const { assertReadableBook } = await import("$lib/server/utils/ownedBook")
+			const { assertReadableBook, LOREBOOK_NOT_FOUND } = await import("$lib/server/utils/ownedBook")
 			await assertReadableBook(db as unknown as Db, userId, params.session.lorebookId, {
 				isAdmin: false
 			})
+			if (await isNewAttachOfDisabledBook(db as unknown as Db, params.session.lorebookId)) throw new Error(LOREBOOK_NOT_FOUND)
 		} else if (params.session.lorebookId != null && !kitAsBook) {
 			const ownsLorebook = await checkLorebookOwnership(
 				params.session.lorebookId,
@@ -808,6 +1037,18 @@ export const sessionsCreateHandler: Handler<
 		// kit is found now, and copied into the session's notes once the
 		// session row exists. A kit is started from, never read as the book.
 		if (kitAsBook) return refuse(kitAsBook)
+		// 🚧 A surfaced book is read directly by its owner (owner 2026-11-09, "Own:
+		// start on; shared: copy"), its session's branches and next chapters;
+		// any other start copies it (★B-3).
+		if (params.session.lorebookId != null) {
+			const { surfacedBookRefusal } = await import("$lib/server/lorebooks/ownBook")
+			const surfaced = await surfacedBookRefusal(db as unknown as Db, {
+				lorebookId: params.session.lorebookId,
+				creationMode,
+				userId
+			})
+			if (surfaced) return refuse(surfaced)
+		}
 		if (params.starterKit != null && params.session.lorebookId != null)
 			return refuse(STARTER_KIT_SENTENCES.kitAndBook)
 		if (creationMode === "new-world" && params.starterKit == null && params.session.lorebookId == null)
@@ -893,6 +1134,16 @@ export const sessionsCreateHandler: Handler<
 		/** The genre's name, for a refusal below. */
 		let genreName: string | null = null
 		/**
+		 * 🚧 (M3b, owner 2026-11-05 ★M3-4) The genre's `castFromLorebook`
+		 * declaration, its floored shape and its declared fields: what the
+		 * book-seats-its-cast step below reads. Null when the genre declares none.
+		 */
+		let castFromLorebook: { field?: string } | null = null
+		let flooredShape: Parameters<
+			(typeof import("$lib/server/pipelines/entities/sessionGenres"))["shapeViolations"]
+		>[0] | null = null
+		let declaredShapeFields: Record<string, { default?: unknown }> = {}
+		/**
 		 * 🚧 What the session is born with through the exposure cascade (R32,
 		 * A10): the genre fields the person may set (a locked one is taken
 		 * from its layer, whatever was sent) and the rules it plays — its
@@ -935,7 +1186,7 @@ export const sessionsCreateHandler: Handler<
 					}
 					: mode.shape
 				const violations = shapeViolations(floored, {
-					characters: characterIds.length,
+					characters: characterIds.length + castMemberIds.length,
 					personas: personaIds.length,
 					// A starter lorebook gives the session a world of its own (its notes).
 					hasLorebook: params.session.lorebookId != null || startKit != null
@@ -948,6 +1199,13 @@ export const sessionsCreateHandler: Handler<
 					(mode.shape as any)?.fields ?? {}
 				)
 				genreName = mode.name
+				castFromLorebook =
+					(mode.shape as { castFromLorebook?: { field?: string } }).castFromLorebook ?? null
+				flooredShape = floored
+				declaredShapeFields = ((mode.shape as any)?.fields ?? {}) as Record<
+					string,
+					{ default?: unknown }
+				>
 			}
 			try {
 				const { resolveAtStart } = await import("$lib/server/sessions/exposure")
@@ -1002,6 +1260,8 @@ export const sessionsCreateHandler: Handler<
 			// no clock of its own (it follows that line's present) — or what
 			// the create names, checked (`sessionLinePatch`).
 			lorebookBranchId: requestedBranchId,
+			// Branching off at the start: checked below, written only for an own book.
+			lineOnFirstWrite: requestedLineOnFirstWrite,
 			storyClockYear: requestedClockYear,
 			storyClockMonth: requestedClockMonth,
 			storyClockDay: requestedClockDay,
@@ -1014,6 +1274,29 @@ export const sessionsCreateHandler: Handler<
 			samplingConfigId?: number | null
 			swaps?: unknown
 		}
+		// 🚧 `lineOnFirstWrite` (branch off at a point): only a start on a book of
+		// the asker's own, read directly. The owner is read here, before the transaction.
+		let startLineOnFirstWrite = false
+		if (requestedLineOnFirstWrite === true) {
+			let ownDirectBook = false
+			if (
+				creationMode === "new" &&
+				startKit == null &&
+				sessionDataWithoutTags.lorebookId != null
+			) {
+				const [book] = await db
+					.select({ userId: schema.lorebooks.userId })
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, sessionDataWithoutTags.lorebookId))
+					.limit(1)
+				ownDirectBook = book?.userId === userId
+			}
+			if (!ownDirectBook)
+				return refuse(
+					"Only a lorebook of your own can be branched off at the start. Choose one of yours, or start on its latest line."
+				)
+			startLineOnFirstWrite = true
+		}
 		// Field values only under names the mode declares (19 §1) — the same
 		// filter runTurn applies at supply, applied at write so the row never
 		// carries keys nothing declared.
@@ -1025,6 +1308,84 @@ export const sessionsCreateHandler: Handler<
 				>
 			).filter(([k]) => declaredFieldKeys.includes(k))
 		)
+		// 🚧 (M3b, owner 2026-11-05 ★M3-4) The book seats its cast, genre-declared:
+		// only a genre that declares `castFromLorebook` (its switch field true, or
+		// no field) with a book attached. Read here, outside the create transaction.
+		let seatedCast: { castMemberId: number; cardId: number | null }[] = []
+		if (castFromLorebook && flooredShape && sessionDataWithoutTags.lorebookId != null) {
+			const field = castFromLorebook.field
+			const stored = field
+				? ((sessionDataWithoutTags as any).genreFields as Record<string, unknown>)[field]
+				: true
+			const on = field ? (stored !== undefined ? stored : declaredShapeFields[field]?.default) === true : true
+			if (on) {
+				const { bookCastToSeat } = await import("$lib/server/sessions/seatBookCast")
+				seatedCast = await bookCastToSeat(db as unknown as Db, {
+					lorebookId: sessionDataWithoutTags.lorebookId,
+					userId,
+					isAdmin: !!socket.user!.isAdmin,
+					exclude: new Set([...characterIds, ...personaIds]),
+					excludeMembers: new Set(castMemberIds)
+				})
+			}
+			if (seatedCast.length) {
+				const { shapeViolations } = await import(
+					"$lib/server/pipelines/entities/sessionGenres"
+				)
+				const violations = shapeViolations(flooredShape, {
+					characters:
+						characterIds.length + castMemberIds.length + seatedCast.length,
+					personas: personaIds.length,
+					hasLorebook: true
+				})
+				if (violations.length)
+					return refuse(
+						`This session does not fit '${genreName}': ${violations.join("; ")}.`
+					)
+			}
+		}
+		// 🚧 One cast member is one character seat (owner 2026-11-05): two of the
+		// picked cards that are one member of the book the session will read are
+		// refused in words, before anything is made.
+		{
+			const twice = await sameMemberRefusal(db as unknown as Db, {
+				lorebookId: sessionDataWithoutTags.lorebookId ?? null,
+				cardIds: characterIds,
+				castMemberIds
+			})
+			if (twice) return refuse(twice)
+		}
+		// 🚧 The listed members (plan §34.2) must be members of the book the session
+		// will read — not overlay rows. `new-world` reads a copy of the chosen book,
+		// whose members have ids of their own, so none listed here is in it.
+		if (castMemberIds.length) {
+			const book =
+				creationMode === "new-world"
+					? null
+					: (sessionDataWithoutTags.lorebookId ?? null)
+			const rows = await db
+				.select({
+					id: schema.lorebookBindings.id,
+					lorebookId: schema.lorebookBindings.lorebookId,
+					overlayOf: schema.lorebookBindings.overlayOf,
+					name: schema.lorebookBindings.name
+				})
+				.from(schema.lorebookBindings)
+				.where(inArray(schema.lorebookBindings.id, castMemberIds))
+			const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+			const nameOf = async (id: number, fallback: string) =>
+				(await membersAsRead(db as unknown as Db, [id], {})).get(id)?.shownName?.trim() ||
+				fallback.trim() ||
+				"That person"
+			for (const id of castMemberIds) {
+				const row = rows.find((r) => r.id === id)
+				if (!row) return refuse(SEAT_REFUSALS.memberGone())
+				if (row.overlayOf != null)
+					return refuse(SEAT_REFUSALS.overlayRow(await nameOf(row.overlayOf, row.name)))
+				if (book == null || row.lorebookId !== book)
+					return refuse(SEAT_REFUSALS.outsideBooks(await nameOf(row.id, row.name)))
+			}
+		}
 		// 🚧 Speech: the narrator voice is checked at every write, not only
 		// through the settings form (lane V finding V-3, 2026-10-28).
 		{
@@ -1054,7 +1415,8 @@ export const sessionsCreateHandler: Handler<
 			const { STANDARD_GENRE_ID } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
-			const genre = getGenre((params.session as any).genreId ?? STANDARD_GENRE_ID)
+			const rulesGenreId: string = (params.session as any).genreId ?? STANDARD_GENRE_ID
+			const genre = getGenre(rulesGenreId)
 			const declared = genre?.rulesets
 			const strict = declared && "only" in declared ? declared.only : null
 			const genreDefault = declared
@@ -1062,34 +1424,26 @@ export const sessionsCreateHandler: Handler<
 					? declared.only[0]
 					: declared.default
 				: undefined
-			const rulesName = (id: string) => {
-				const n = getRuleset(id)?.name as unknown
-				return typeof n === "string"
-					? n
-					: ((n as Record<string, string> | undefined)?.en ?? id)
-			}
-			const listed = (ids: readonly string[]) => {
-				const names = ids.map(rulesName)
-				return names.length > 1
-					? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`
-					: (names[0] ?? "")
-			}
 			// 🚧 A book's (or a kit's) own rules are adopted; one on Freeform,
 			// every book's default, brings none, and the session's own Rules
 			// stand below (fix7, 2026-10-23; `adoptedBookRules`).
 			const { adoptedBookRules } = await import("$lib/shared/rulesets/rulesOffer")
+			const { strictRulesRefusal, rulesetIncompatibleRefusal } = await import(
+				"$lib/server/rulesets/bookRules"
+			)
 			let adopted = false
 			if (startKit) {
 				// The kit's Rules, held to the genre's as a book's are.
 				const { kitRules } = await import("$lib/server/lorebooks/starterKits")
 				const rules = kitRules(startKit)
 				if (adoptedBookRules(rules.primaryRuleset)) {
-					if (strict && !strict.includes(rules.primaryRuleset))
-						return refuse(
-							`${genreName ?? "This genre"} plays only by ${listed(strict)} rules, and ` +
-								`the starter lorebook '${startKit.name}' uses ${rulesName(rules.primaryRuleset)} rules. ` +
-								`Choose a starter lorebook that uses ${listed(strict)}, or another genre.`
-						)
+					// 🚧 `only`, then Incompatible rules (owner 2026-11-05); a next chapter is never re-judged.
+					const kitRefusal = strictRulesRefusal(
+						rulesGenreId,
+						{ name: startKit.name, primaryRuleset: rules.primaryRuleset },
+						{ starter: true, nextChapter: creationMode === "next-chapter" }
+					)
+					if (kitRefusal) return refuse(kitRefusal)
 					data.primaryRuleset = rules.primaryRuleset
 					data.rulesetVersion = rules.rulesetVersion
 					adopted = true
@@ -1105,28 +1459,38 @@ export const sessionsCreateHandler: Handler<
 					.where(eq(schema.lorebooks.id, data.lorebookId))
 					.limit(1)
 				if (book && adoptedBookRules(book.primaryRuleset)) {
-					if (strict && !strict.includes(book.primaryRuleset))
-						return refuse(
-							`${genreName ?? "This genre"} plays only by ${listed(strict)} rules, and ` +
-								`the lorebook '${book.name}' uses ${rulesName(book.primaryRuleset)} rules. ` +
-								`Choose a lorebook that uses ${listed(strict)}, or another genre.`
-						)
+					const bookRefusal = strictRulesRefusal(rulesGenreId, book, {
+						nextChapter: creationMode === "next-chapter"
+					})
+					if (bookRefusal) return refuse(bookRefusal)
 					data.primaryRuleset = book.primaryRuleset
 					data.rulesetVersion = book.rulesetVersion
 					adopted = true
 				}
 			}
 			if (!adopted) {
-				// 🚧 R32: a ruleset a layer locked is taken, whatever was sent.
-				if (atStart?.locked.includes("ruleset") && typeof atStart.rules.ruleset === "string")
-					data.primaryRuleset = atStart.rules.ruleset
+				// 🚧 A preset's ruleset is a default, never a lock (owner 2026-11-05, R32
+				// amended for rulesets): the person's pick wins; Incompatible rules are
+				// refused (never swapped), except for a next chapter.
+				const validRuleset = (id: string) =>
+					!!getRuleset(id) && (!strict || strict.includes(id))
 				const picked =
-					typeof data.primaryRuleset === "string" &&
-					getRuleset(data.primaryRuleset.trim()) &&
-					(!strict || strict.includes(data.primaryRuleset.trim()))
+					typeof data.primaryRuleset === "string" && validRuleset(data.primaryRuleset.trim())
 						? data.primaryRuleset.trim()
 						: null
-				data.primaryRuleset = picked ?? genreDefault ?? "core:ruleset/freeform@1"
+				if (picked && creationMode !== "next-chapter") {
+					const incompatible = rulesetIncompatibleRefusal(rulesGenreId, picked)
+					if (incompatible) return refuse(incompatible)
+				}
+				// Nothing valid sent: the cascade's value (the preset's, even one stored with
+				// `lock`) unless the genre can't play it, which falls through silently.
+				const cascaded =
+					typeof atStart?.rules.ruleset === "string" &&
+					validRuleset(atStart.rules.ruleset) &&
+					!rulesetIncompatibleRefusal(rulesGenreId, atStart.rules.ruleset)
+						? atStart.rules.ruleset
+						: null
+				data.primaryRuleset = picked ?? cascaded ?? genreDefault ?? "core:ruleset/freeform@1"
 			}
 			// 🚧 Pinned to the version it starts on when nothing adopted pins one (a genre's or preset's pick, or a book
 			// that carries none): a pub or package ruleset's published version, so "Update rules" and a conversion work
@@ -1200,6 +1564,7 @@ export const sessionsCreateHandler: Handler<
 			}
 			const sessionData: InsertSession = {
 				...sessionDataWithoutTags,
+				...(startLineOnFirstWrite ? { lineOnFirstWrite: true } : {}),
 				...(worldId !== (sessionDataWithoutTags.lorebookId ?? null) ? { lorebookId: worldId } : {}),
 				...(await sessionLinePatch(tx, {
 					before: null,
@@ -1217,7 +1582,7 @@ export const sessionsCreateHandler: Handler<
 								})
 				})),
 				userId,
-				isGroup: characterIds.length > 1
+				isGroup: characterIds.length + castMemberIds.length + seatedCast.length > 1
 			}
 			const [row] = await tx
 				.insert(schema.sessions)
@@ -1262,10 +1627,6 @@ export const sessionsCreateHandler: Handler<
 				userId,
 				socket.user?.displayName || socket.user?.username || ""
 			)
-			if (madeFromKit.cards.length) {
-				const { buildCharactersList } = await import("./characters")
-				await emitToUser("characters:list", () => buildCharactersList(userId))
-			}
 		}
 		// Creating until its create run is over (`sessions/creating.ts`): the
 		// window in which the create pipeline's settings still apply to it.
@@ -1299,31 +1660,139 @@ export const sessionsCreateHandler: Handler<
 			await processSessionTags(newSession.id, tags, userId)
 		}
 
-		// Batch insert personas
-		if (personaIds.length > 0) {
-			await db.insert(schema.sessionPersonas).values(
-				personaIds.map((personaId, i) => ({
-					sessionId: newSession.id,
-					personaId,
-					position: i
-				}))
-			)
-			// Attaching a character as a voice IS the user saying they play
-			// it — see markCharacterAsPersona, the one writer of that flag.
-			for (const personaId of personaIds)
-				await markCharacterAsPersona(personaId)
+		// The seats, through the one seat writer (`sessions/seats.ts`): personas,
+		// the picked characters, then the book's seated cast — in one transaction.
+		// `settleSeats` (fill-only: it never departs a seat) fills what the
+		// pre-check (which saw only the attached book) could not.
+		let seatsMinted = false
+		const mintedMembers: MintedSeatMember[] = []
+		// A seat the writer refuses (a listed member the pre-check above could not
+		// see is outside the session's books) aborts the seats in its own words.
+		const refusedSeat: { sentence?: string } = {}
+		try {
+			await db.transaction(async (tx) => {
+				const tdb = tx as unknown as Db
+				for (const [i, personaId] of personaIds.entries()) {
+					const seat = await seatPlayer(tdb, {
+						sessionId: newSession.id,
+						personaId,
+						position: i
+					})
+					if (seat.minted) seatsMinted = true
+					mintedMembers.push(...seat.mintedMembers)
+				}
+				for (const characterId of characterIds) {
+					const seat = await seatCast(tdb, {
+						sessionId: newSession.id,
+						cardId: characterId,
+						position: characterPositions[characterId] || 0,
+						secondCard: "allow",
+						seatedBy: userId
+					})
+					if (seat.ok && seat.minted) seatsMinted = true
+					if (seat.ok) mintedMembers.push(...seat.mintedMembers)
+				}
+				// 🚧 The listed card-less members (plan §34.2), after the picked cards.
+				const afterCards = characterIds.length
+					? Math.max(...characterIds.map((id) => characterPositions[id] || 0)) + 1
+					: 0
+				for (const [i, castMemberId] of castMemberIds.entries()) {
+					const seat = await seatCast(tdb, {
+						sessionId: newSession.id,
+						castMemberId,
+						position: afterCards + i,
+						secondCard: "allow",
+						seatedBy: userId
+					})
+					if (!seat.ok) {
+						refusedSeat.sentence = seat.refusal
+						throw new Error(seat.refusal)
+					}
+					if (seat.minted) seatsMinted = true
+					mintedMembers.push(...seat.mintedMembers)
+				}
+				// 🚧 (M3b) The book's seated cast (computed above from the book, never taken
+				// from the request, so no ownership check): after the picked ones, in book
+				// order, by member. `new-world` reads a copy of the book whose members have
+				// new ids: a carded member is seated by its card there (the copy has the
+				// card's member), a card-less one has no id to seat by and is not seated.
+				const afterMembers = afterCards + castMemberIds.length
+				for (const [i, { castMemberId, cardId }] of seatedCast.entries()) {
+					if (creationMode === "new-world" && cardId == null) continue
+					const seat = await seatCast(
+						tdb,
+						creationMode === "new-world"
+							? {
+									sessionId: newSession.id,
+									cardId,
+									position: afterMembers + i,
+									secondCard: "allow",
+									seatedBy: userId
+								}
+							: {
+									sessionId: newSession.id,
+									castMemberId,
+									position: afterMembers + i,
+									secondCard: "allow",
+									seatedBy: userId
+								}
+					)
+					if (!seat.ok) {
+						refusedSeat.sentence = seat.refusal
+						throw new Error(seat.refusal)
+					}
+					if (seat.minted) seatsMinted = true
+					mintedMembers.push(...seat.mintedMembers)
+				}
+				const settled = await settleSeats(tdb, newSession.id)
+				if (settled.minted > 0) seatsMinted = true
+				mintedMembers.push(...settled.mintedMembers)
+			})
+		} catch (err) {
+			if (refusedSeat.sentence === undefined) throw err
+			// The session row is already written: take it back with the refusal.
+			await db.delete(schema.sessions).where(eq(schema.sessions.id, newSession.id))
+			markCreated(newSession.id)
+			// The create had committed more than the row: its own book (or kit
+			// copy) and, for a new world, the world's copy. Take them back too,
+			// each best-effort on its own; the boot sweep is the own book's
+			// backstop (the world copy has none).
+			try {
+				const { purgeOwnBookOf } = await import(
+					"$lib/server/lorebooks/ownBook"
+				)
+				await purgeOwnBookOf(db, newSession.id)
+			} catch (e) {
+				console.warn(
+					"[sessions:create] the refused session's own book was not taken back:",
+					e
+				)
+			}
+			const worldCopyId = newSession.lorebookId
+			if (creationMode === "new-world" && worldCopyId != null)
+				try {
+					const { purgeLorebook } = await import(
+						"$lib/server/lorebooks/tableRegistry"
+					)
+					await db.transaction(async (tx) => {
+						await purgeLorebook(tx as unknown as Db, worldCopyId)
+						await tx
+							.delete(schema.lorebooks)
+							.where(eq(schema.lorebooks.id, worldCopyId))
+					})
+				} catch (e) {
+					console.warn(
+						"[sessions:create] the refused session's world copy was not taken back:",
+						e
+					)
+				}
+			return refuse(refusedSeat.sentence)
 		}
-
-		// Batch insert characters
-		if (characterIds.length > 0) {
-			await db.insert(schema.sessionCharacters).values(
-				characterIds.map((characterId) => ({
-					sessionId: newSession.id,
-					characterId,
-					position: characterPositions[characterId] || 0
-				}))
-			)
-		}
+		// Committed: the names of the members just made come from their cards.
+		await syncMintedSeatMembers(db, mintedMembers)
+		// Attaching a character as a voice IS the user saying they play
+		// it — see markCharacterAsPersona, the one writer of that flag.
+		for (const personaId of personaIds) await markCharacterAsPersona(personaId)
 		/**
 		 * The genre's envoys (plans/29 R-18; U5g): every `default: true`
 		 * envoy is seated with no choice, and a preset's `defaults.envoys`
@@ -1402,7 +1871,8 @@ export const sessionsCreateHandler: Handler<
 				socket,
 				newSession.id,
 				newSession.lorebookId,
-				emitToUser
+				emitToUser,
+				{ minted: seatsMinted }
 			).catch(console.error)
 		}
 
@@ -1616,14 +2086,33 @@ async function getSessionFromDB(
 		// Never to a client, whoever asks (R57, V1a): `annex` is pipeline
 		// state whose keys carry audiences, merged per reader elsewhere, and
 		// `drafts` holds every member's unsent text — the asker's own rides
-		// `sessions:get` as `userDraft`.
-		columns: { annex: false, annexAudiences: false, drafts: false }
+		// `sessions:get` as `userDraft`. Nor core's runtime columns: read
+		// marks are every member's, and a deck's state lets a player work out
+		// the next card.
+		columns: {
+			annex: false,
+			annexAudiences: false,
+			drafts: false,
+			turnOrder: false,
+			turnTally: false,
+			laneReads: false,
+			rulesetDecks: false
+		}
 	})
 
 	// Drizzle may not properly handle orderby,
 	// Lets sort it manually
 	const session = await res
 	if (session) {
+		// 🚧 Each seat's card as its current card version has it (the row's
+		// content columns are stale); the same shape goes to the client.
+		await putCardsNow(
+			[
+				{ rows: session.sessionCharacters, key: "character" },
+				{ rows: session.sessionPersonas, key: "persona" }
+			],
+			{ avatar: true }
+		)
 		// Order the sessionCharacters by position
 		session.sessionCharacters.sort(
 			(a, b) => (a.position ?? 0) - (b.position ?? 0)
@@ -1674,7 +2163,11 @@ async function getSessionFromDB(
 }
 
 // Returns complete session data for prompt compilation
-async function getPromptSessionFromDb(sessionId: number, userId: number) {
+/** Exported for tests. */
+export async function getPromptSessionFromDb(
+	sessionId: number,
+	userId: number
+) {
 	// Check if user has access (owner or guest)
 	const sessionAccess = await checkSessionAccess(sessionId, userId)
 	if (!sessionAccess.hasAccess) {
@@ -1732,6 +2225,12 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 				},
 				orderBy: (cc, { asc }) => asc(cc.position ?? 0)
 			},
+			// 🚧 Live player seats, benched ones too (owner 2026-11-10): a
+			// benched seat is out of play for the prompt, which `promptFields`
+			// and the lore gate decide with `inPlay` — but a benched persona's
+			// past lines still need its name (`SessionMessageProcessor`,
+			// `ragQuery` read these rows), so the read keeps them, as it does
+			// the character seats above.
 			sessionPersonas: {
 				where: (cp, { isNull }) => isNull(cp.removedAt),
 				with: {
@@ -1743,7 +2242,11 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 			},
 			lorebook: {
 				with: {
+					// The binding's frozen content columns (⏳, nothing writes
+					// them) are never loaded: what a reader needs of a member's
+					// words comes from its card now (`putCardsNow` below).
 					lorebookBindings: {
+						columns: BINDING_FROZEN_OFF,
 						with: { character: true }
 					}
 					// No entry lists are loaded here: `BasePromptSession.lorebook`
@@ -1776,10 +2279,13 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 		const [removedSessionCharacters, removedSessionPersonas] =
 			await Promise.all([
 				db.query.sessionCharacters.findMany({
-					where: (cc, { eq, and, isNotNull }) =>
+					// Not an envoy's departed row (an envoy's seat is never a
+					// character seat here); a card-less seat's row has no card.
+					where: (cc, { eq, and, isNotNull, isNull }) =>
 						and(
 							eq(cc.sessionId, sessionId),
-							isNotNull(cc.removedAt)
+							isNotNull(cc.removedAt),
+							isNull(cc.envoySlug)
 						),
 					with: { character: true }
 				}),
@@ -1794,6 +2300,58 @@ async function getPromptSessionFromDb(sessionId: number, userId: number) {
 			])
 		;(session as any).removedSessionCharacters = removedSessionCharacters
 		;(session as any).removedSessionPersonas = removedSessionPersonas
+		// 🚧 Every card as its current card version has it, before a member
+		// is read over it (the rows' content columns are stale): live seats,
+		// departed seats and the book's roster, one read.
+		await putCardsNow([
+			{ rows: session.sessionCharacters, key: "character" },
+			{ rows: session.sessionPersonas, key: "persona" },
+			{ rows: removedSessionCharacters, key: "character" },
+			{ rows: removedSessionPersonas, key: "persona" },
+			{ rows: session.lorebook?.lorebookBindings ?? [], key: "character" }
+		])
+
+		// 🚧 (seat-cast S2) A seated character is read as the cast member
+		// their seat seats — the member's own name and retold text over the
+		// member's active card (owner 2026-11-05) — so every prompt reader of these rows (and the
+		// adapter session derived from them) names and quotes the member, not
+		// the card. Live and departed seats alike: a departed seat's name
+		// still labels the transcript. A player seat's card is read the same
+		// way (★pT-1, 2026-11-05: "Everything in session is cast -> active
+		// card"); its `seatName` stays on the row, beside the card.
+		const { seatCardsAsRead } = await import(
+			"$lib/server/pipelines/prompt/seatCards"
+		)
+		const personasAsRead = async <
+			P extends { persona: object | null; castMemberId: number | null }
+		>(
+			rows: P[]
+		): Promise<P[]> =>
+			(
+				await seatCardsAsRead(
+					db,
+					sessionId,
+					rows.map((cp) => ({ ...cp, character: cp.persona }))
+				)
+			).map(({ character, ...cp }) => ({ ...cp, persona: character }) as unknown as P)
+		// `{ cardless: true }`: a card-less character seat reads its member's own
+		// fields as a card-shaped row with no `id` (`cardlessSeatCard`); the
+		// player seats above never take it.
+		session.sessionCharacters = await seatCardsAsRead(
+			db,
+			sessionId,
+			session.sessionCharacters,
+			{ cardless: true }
+		)
+		;(session as any).removedSessionCharacters = await seatCardsAsRead(
+			db,
+			sessionId,
+			removedSessionCharacters,
+			{ cardless: true }
+		)
+		session.sessionPersonas = await personasAsRead(session.sessionPersonas)
+		;(session as any).removedSessionPersonas =
+			await personasAsRead(removedSessionPersonas)
 	}
 	return session
 }
@@ -1875,22 +2433,77 @@ export const sessionsDeleteHandler: Handler<
 				)
 			}
 
-			// 🚧 The session's own book goes with it (PLAN-rulesets §26): the
-			// row by the cascade, and first what on it carries no key.
-			const { purgeOwnBookOf } = await import("$lib/server/lorebooks/ownBook")
-			await purgeOwnBookOf(db, params.id)
-			{
-				const { relistSessionNotes } = await import("./lorebooks")
-				relistSessionNotes(socket, emitToUser)
-			}
-
 			// The scenes captured from this session outlive it (their
 			// `session_id` is set to NULL) and keep their spans: the ids are
 			// their place in play (`inPlayOrder`), and `deriveSceneMentions`
 			// counts only the messages that exist.
+			// 🚧 Its ancestors, read before the row goes (plan §33.2): what they
+			// retired for this branch alone is swept once it is gone.
+			const [gone] = await db
+				.select({ branchAncestry: schema.sessions.branchAncestry })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.id))
+				.limit(1)
+
 			await db
 				.delete(schema.sessions)
 				.where(eq(schema.sessions.id, params.id))
+
+			// 🚧 The session's own book goes with it (PLAN-rulesets §26) — unless
+			// a branch still reads it: then it stays after the row until the last
+			// branch goes (plan §33.3, below). Best-effort: the row is gone
+			// either way, and the boot sweep removes a book left behind.
+			try {
+				const { purgeOwnBookOf } = await import(
+					"$lib/server/lorebooks/ownBook"
+				)
+				await purgeOwnBookOf(db, params.id)
+			} catch (e) {
+				console.warn(
+					"[sessions:delete] the session's notes were not purged; the boot sweep removes them:",
+					e
+				)
+			}
+
+			// 🚧 Retired cast versions nobody reads any more are swept when the
+			// last descendant goes (§33.2). Best-effort: the session is gone
+			// either way, and a row left retired reads for nobody.
+			const ancestors = (gone?.branchAncestry ?? []).map((a) => a.sessionId)
+			if (ancestors.length)
+				try {
+					const { sweepRetiredVersions } = await import(
+						"$lib/server/characters/versions"
+					)
+					await db.transaction((tx) =>
+						sweepRetiredVersions(tx as unknown as Db, ancestors)
+					)
+				} catch (e) {
+					console.warn(
+						"[sessions:delete] retired cast versions were not swept:",
+						e
+					)
+				}
+
+			// 🚧 Its ancestors' notes kept for it go with it (plan §33.3): each
+			// ancestor that is gone and that no branch reads any more. Best
+			// effort, like the sweep.
+			if (ancestors.length)
+				try {
+					const { purgeKeptOwnBooks } = await import(
+						"$lib/server/lorebooks/ownBook"
+					)
+					await purgeKeptOwnBooks(db, ancestors)
+				} catch (e) {
+					console.warn(
+						"[sessions:delete] kept session notes were not purged:",
+						e
+					)
+				}
+
+			{
+				const { relistSessionNotes } = await import("./lorebooks")
+				relistSessionNotes(socket, emitToUser)
+			}
 
 			// Every member's notifications about the session go with it
 			// (notifications carry no FK to what they regard). Never throws.
@@ -1917,22 +2530,21 @@ export const sessionsDeleteHandler: Handler<
 }
 
 /**
- * 🚧 M2c: an applet genre's launcher title — what `/apps/<pluginId>` shows (its
- * plugin's `session-view` frame title, else the plugin's name) — read through
- * the launcher's own test (`appletMount`), so the Apps row is listed exactly
- * when the launcher mounts. Null for any other genre.
+ * 🚧 M2c/M2d: an applet genre's launcher card — what `/apps/<pluginId>` shows (title, poster, logo, blurb) —
+ * read through the launcher's own test (`appletMount`), so the Apps row is listed exactly when the launcher
+ * mounts. Null for any other genre.
  */
-async function appletTitleOf(g: {
+async function appletCardFor(g: {
 	genreId: string
 	name: string
 	shape?: unknown
-}): Promise<string | null> {
+}): Promise<import("$lib/server/plugins/appletMount").AppletCard | null> {
 	const shape = g.shape as { applet?: boolean; view?: string } | undefined
 	if (shape?.applet !== true || typeof shape.view !== "string") return null
 	const { pluginsEnabled } = await import("$lib/server/plugins/flag")
 	if (!pluginsEnabled()) return null
 	const { notCoreRow } = await import("$lib/server/plugins/frameHost")
-	const { appletMount } = await import("$lib/server/plugins/appletMount")
+	const { appletMount, appletCardOf } = await import("$lib/server/plugins/appletMount")
 	const [row] = await db
 		.select({
 			enabled: schema.plugins.enabled,
@@ -1944,7 +2556,8 @@ async function appletTitleOf(g: {
 		.from(schema.plugins)
 		.where(and(eq(schema.plugins.pluginId, shape.view), notCoreRow()))
 		.limit(1)
-	return appletMount(shape.view, row, [{ genreId: g.genreId, name: g.name, shape }])?.title ?? null
+	const mount = appletMount(shape.view, row, [{ genreId: g.genreId, name: g.name, shape }])
+	return mount ? appletCardOf(mount) : null
 }
 
 /**
@@ -1968,14 +2581,14 @@ async function genreRowFor(
 	const { rulesetDecides } = await import("$lib/server/rulesets/methods")
 	const decides = (id: string) => rulesetDecides(getRuleset(id))
 	const declared = await genreBoundaryTriggers(db, g.genreId).catch(() => [])
-	// 🚧 M2c: an applet genre carries its launcher's title for the Sessions view's Apps row.
-	const appletTitle = await appletTitleOf(g)
+	// 🚧 M2c/M2d: an applet genre carries its launcher's card for the Sessions view's Apps row.
+	const appletCard = await appletCardFor(g)
 	const offer = genreRulesOffer(getGenre(g.genreId) as any, pickableRulesets())
 	const rules = offer ? withRigoursPlayed(offer, decides) : null
 	return {
 		...g,
 		...(rules ? { rules } : {}),
-		...(appletTitle ? { appletTitle } : {}),
+		...(appletCard ? { appletCard } : {}),
 		...(declared.length
 			? {
 					sceneBoundaryTriggers: declared.map((t) => ({
@@ -2596,6 +3209,7 @@ export const sessionsFireActionHandler: Handler<
 						...(Array.isArray(params.recipients) ? { recipients: params.recipients } : {}),
 						...(params.clockStep !== undefined ? { clockStep: params.clockStep } : {}),
 						actor: { userId },
+						fromPressDoor: true,
 						busy: REWIND_STRIP_REASONS.generating
 					})
 					const res: Sockets.Sessions.FireAction.Response = {
@@ -2850,6 +3464,7 @@ export const sessionsFireActionHandler: Handler<
 					...(Array.isArray(params.recipients) ? { recipients: params.recipients } : {}),
 					...(params.clockStep !== undefined ? { clockStep: params.clockStep } : {}),
 					actor: { userId },
+					fromPressDoor: true,
 					runId,
 					// So the status relay pushes `sessions:runStatus` and,
 					// where the run has a live row, the row's own
@@ -3294,12 +3909,21 @@ export const sessionsViewHandler: Handler<
 				const decl = owner
 					? surfacesOf(owner.manifest).sessionView
 					: undefined
-				if (owner && decl)
+				if (owner && decl) {
 					res.sessionView = {
 						pluginId: owner.pluginId,
 						src: frameSrc(owner.pluginId, decl.entry, owner.version),
 						title: decl.title ?? owner.name
 					}
+					// 🚧 m3-core: an applet genre's frame holds the launcher's grants too (plan §9).
+					if ((mode?.shape as any)?.applet === true) {
+						const { appletMount } = await import("$lib/server/plugins/appletMount")
+						const mount = appletMount(owner.pluginId, { ...owner, enabled: true }, [
+							{ genreId, name: "", shape: mode!.shape as any }
+						])
+						if (mount) res.sessionView.appletGrants = mount.grants
+					}
+				}
 			}
 
 			// The mode's declared surface-grid panels (21). An enabled
@@ -3902,7 +4526,7 @@ export const sessionsChannelLanesHandler: Handler<
 		const latestIds = grouped.map((g) => Number(g.latestId)).filter((n) => Number.isInteger(n))
 		const latestRows = latestIds.length
 			? await db
-					.select({ id: m.id, createdAt: m.createdAt, role: m.role, characterId: m.characterId, personaId: m.personaId })
+					.select({ id: m.id, createdAt: m.createdAt, role: m.role, characterId: m.characterId, personaId: m.personaId, castMemberId: m.castMemberId })
 					.from(m)
 					.where(inArray(m.id, latestIds))
 			: []
@@ -3925,7 +4549,9 @@ export const sessionsChannelLanesHandler: Handler<
 					at: new Date(latest.createdAt as unknown as string | number | Date).toISOString(),
 					role: latest.role,
 					characterId: latest.characterId,
-					personaId: latest.personaId
+					personaId: latest.personaId,
+					// 🚧 Host-filled (seat-cast S3): the message's own `cast_member_id`.
+					castMemberId: latest.castMemberId ?? null
 				}
 			}
 			if (!seen) lanes.push(entry)
@@ -3980,6 +4606,48 @@ export const sessionsLaneReadHandler: Handler<
 }
 
 /**
+ * Owner 2026-11-04, item 15: _Reset to genre default layout_ clears the
+ * person's settings and style pins for the widgets the layout places, so they
+ * look as the genre ships them. Only this person's rows, only these ids; every
+ * other key of `layout_settings` rides through. Runs inside the copy's
+ * transaction, before the copy, so what the layout itself brings still wins.
+ */
+async function clearPlacedWidgetValues(
+	tx: Db,
+	args: { sessionId: number; userId: number; ids: string[] }
+): Promise<void> {
+	if (!args.ids.length) return
+	await tx
+		.delete(schema.widgetSettings)
+		.where(
+			and(
+				eq(schema.widgetSettings.sessionId, args.sessionId),
+				eq(schema.widgetSettings.userId, args.userId),
+				inArray(schema.widgetSettings.widgetInstanceId, args.ids)
+			)
+		)
+	const mine = and(
+		eq(schema.sessionPanelLayouts.sessionId, args.sessionId),
+		eq(schema.sessionPanelLayouts.userId, args.userId)
+	)
+	const [row] = await tx
+		.select({ layoutSettings: schema.sessionPanelLayouts.layoutSettings })
+		.from(schema.sessionPanelLayouts)
+		.where(mine)
+		.limit(1)
+	const settings = row?.layoutSettings as Record<string, unknown> | null
+	const pins = settings?.widgetStyles
+	if (!pins || typeof pins !== "object" || Array.isArray(pins)) return
+	const kept = Object.fromEntries(
+		Object.entries(pins).filter(([id]) => !args.ids.includes(id))
+	)
+	await tx
+		.update(schema.sessionPanelLayouts)
+		.set({ layoutSettings: { ...settings, widgetStyles: kept } })
+		.where(mine)
+}
+
+/**
  * Replace the caller's session layout by COPYING one in: a session layout
  * preset (_Start from_ a card, _Start again from "X"_, _Reset to genre default
  * layout_) or `null` (_Start from scratch_). The incoming layout's widget
@@ -3987,6 +4655,10 @@ export const sessionsLaneReadHandler: Handler<
  * keeps its others (owner LB). A preset the caller may not copy — another
  * genre's, a withdrawn one, a stranger's private one, a missing id — is
  * refused with one sentence and nothing is written.
+ *
+ * `clearPlacedWidgets` (sent by _Reset to genre default layout_ only, and
+ * honoured only for the genre default itself) first clears the caller's
+ * settings and style pins for the widgets that layout places.
  *
  * Answered like `:get`, so the page re-seeds from one message.
  */
@@ -4007,14 +4679,24 @@ export const sessionsPanelLayoutStartFromHandler: Handler<
 			error = LAYOUT_PRESET_UNKNOWN
 		} else {
 			const genreId = await sessionGenreOf(db, params.sessionId)
-			const outcome = await db.transaction((tx) =>
-				copyLayoutIntoSession(tx, {
+			const clearPlaced = params.clearPlacedWidgets === true
+			const outcome = await db.transaction(async (tx) => {
+				if (clearPlaced && presetId !== null) {
+					const row = await genreDefaultLayoutRow(genreId, tx)
+					if (row && row.id === presetId)
+						await clearPlacedWidgetValues(tx, {
+							sessionId: params.sessionId,
+							userId,
+							ids: drawnWidgetIds(arrangementOf(row.layout) as SessionLayoutV1)
+						})
+				}
+				return copyLayoutIntoSession(tx, {
 					sessionId: params.sessionId,
 					userId,
 					genreId,
 					layoutPresetId: presetId
 				})
-			)
+			})
 			if (outcome.ok) ok = true
 			else error = outcome.error
 		}
@@ -4151,6 +4833,13 @@ export const sessionsPanelLayoutSetHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const access = await checkSessionAccess(params.sessionId, userId)
+		// ⏳ A page still holding a version 1 layout (or only the old slots) is
+		// saved as panels version 2, its moved Messages settings and style pins
+		// with it, BEFORE it is checked (PLAN-session-layout-simplify D14).
+		if (access.hasAccess && params.layout && typeof params.layout === "object") {
+			const { panelLayoutWriteAsV2 } = await import("$lib/server/db/sessionLayoutPanels")
+			params = await panelLayoutWriteAsV2(params.sessionId, userId, params)
+		}
 		let ok = false
 		let error: string | undefined
 		const setsSettings = "layoutSettings" in params
@@ -4679,6 +5368,8 @@ export async function buildSessionActions(
 		member?: boolean
 		/** The push a run's start sends (W-A1): the list reads as generating, whatever the registry says a beat later. */
 		starting?: boolean
+		/** A push (never the page's own request) carries the Back/Forward strip's state too (★H1, 2026-11-04), so the title's words follow a reply that ended. */
+		withRewind?: boolean
 	} = {}
 ): Promise<Sockets.Sessions.Actions.Response> {
 	const access = opts.member
@@ -4696,6 +5387,10 @@ export async function buildSessionActions(
 		)
 	}
 	if (!access.hasAccess) return res
+	if (opts.withRewind) {
+		const { rewindStateOf } = await import("$lib/server/sessions/rewind")
+		res.rewind = await rewindStateOf(db, sessionId)
+	}
 	res.venues = (await listSessionActions(
 		db,
 		sessionId,
@@ -4896,6 +5591,23 @@ export const sessionsSetFunctionHandler: Handler<
  * overrides, cast faces, the book lock. Mutates and returns `sessionData`.
  */
 async function withSessionExtras(sessionData: any, sessionId: number): Promise<any> {
+	// 🚧 The name of the book the session reads, for every reader (★bk-lock-2).
+	const { SESSION_NOTES_LABEL } = await import(
+		"$lib/shared/lorebooks/sessionNotes"
+	)
+	try {
+		let name: string | null = null
+		if (sessionData.lorebookId != null) {
+			const [book] = await db
+				.select({ name: schema.lorebooks.name })
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.id, sessionData.lorebookId))
+			name = book?.name ?? null
+		}
+		;sessionData.lorebookName = name ?? SESSION_NOTES_LABEL
+	} catch {
+		;sessionData.lorebookName = SESSION_NOTES_LABEL
+	}
 	// The session's sprite-set overrides (DESIGN-sprites §2.3), so a portrait
 	// shows the outfit the session changed to before the next line records it.
 	try {
@@ -4913,31 +5625,205 @@ async function withSessionExtras(sessionData: any, sessionId: number): Promise<a
 		;sessionData.spriteSetOverrides = {}
 	}
 
-	// The faces the session's cast members are drawn with
-	// (PLAN-cast-retold-fields): card id → file id, for each seat whose card
-	// is a member of the session's book that retells its face. `{}` when
-	// nobody does — the cards' own avatars stand.
+	// What each seat's cast member shows over its card (s27 S2: the member
+	// as read, wherever it lives, over the member's active card): names and
+	// faces by seated card id, and the member's own sprite sets when one has
+	// an image. `{}` when every seat reads its card — the cards stand.
+	// The member read of each seat row (keyed by the row), kept for the
+	// host-filled identity below so members are read once.
+	const seatReads = new Map<
+		any,
+		{ activeCardId: number | null; nodeState?: string } | null
+	>()
 	try {
-		const { retoldMembersForSession } = await import(
-			"$lib/server/lorebooks/retold"
+		const { seatMembersAsRead } = await import(
+			"$lib/server/pipelines/prompt/seatCards"
 		)
-		const castFaces: Record<number, number> = {}
-		const members = await retoldMembersForSession(
-			db,
-			{
-				id: sessionId,
-				lorebookId: sessionData.lorebookId ?? null
-			},
-			(sessionData.sessionCharacters ?? [])
-				.map((sc: any) => sc.characterId)
-				.filter((id: unknown): id is number => typeof id === "number")
+		const { seatCastShownFrom, memberSpriteSetsBySeat } = await import(
+			"$lib/server/sessions/rowProjection"
 		)
-		for (const [cardId, member] of members)
-			if (member.retold.face === true && member.faceMediaId != null)
-				castFaces[cardId] = member.faceMediaId
+		// Character seats, then player seats (★pT-1, 2026-11-05: "Everything
+		// in session is cast -> active card"); a card held by both is the
+		// character seat's. A card-less player seat has no card id to key by.
+		const seated: any[] = [
+			...(sessionData.sessionCharacters ?? []).filter((sc: any) => sc.character),
+			...(sessionData.sessionPersonas ?? []).filter((sp: any) => sp.persona)
+		]
+		const rows = seated.map((seat: any) =>
+			seat.persona ? { ...seat, character: seat.persona } : seat
+		)
+		const asReads = await seatMembersAsRead(db, sessionId, rows)
+		seated.forEach((seat: any, i: number) => seatReads.set(seat, asReads[i]))
+		const { castNames, castFaces } = seatCastShownFrom(rows, asReads)
 		;sessionData.castFaces = castFaces
+		;sessionData.castNames = castNames
+		;sessionData.castSpriteSets = await memberSpriteSetsBySeat(
+			db,
+			rows,
+			asReads
+		)
 	} catch {
 		;sessionData.castFaces = {}
+		;sessionData.castNames = {}
+		;sessionData.castSpriteSets = {}
+	}
+
+	// 🚧 Host-filled identity (seat-cast S3: match on it, never build it):
+	// each seat row's `ref` (`hostSeatRefOf`: the member form once the flip is
+	// on — ⏳ `character:<id>` for a member-less character seat — else the card
+	// form, `player-seat:<id>` for a card-less player seat), its stored `castMemberId`, and `cardId` — the
+	// member's active card on the timeline, else the held card (null for a
+	// card-less player seat). A failed member read leaves the held card.
+	{
+		const { hostSeatRefOf } = await import(
+			"$lib/server/pipelines/prompt/seatCards"
+		)
+		// Seats holding no card but a cast member, of either table: a card-less
+		// player seat, a card-less character seat (never an envoy's).
+		const cardless: any[] = [
+			...(sessionData.sessionCharacters ?? []).filter(
+				(sc: any) =>
+					!sc.character &&
+					sc.characterId == null &&
+					!sc.envoySlug &&
+					sc.castMemberId != null
+			),
+			...(sessionData.sessionPersonas ?? []).filter(
+				(sp: any) => !sp.persona && sp.castMemberId != null
+			)
+		]
+		const cardlessReads = new Map<
+			number,
+			{
+				activeCardId: number | null
+				nodeState?: string
+				name: string
+				nickname: string | null
+				faceMediaId: number | null
+			}
+		>()
+		if (cardless.length) {
+			try {
+				const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+				const reads = await membersAsRead(
+					db as unknown as Db,
+					cardless.map((sp: any) => sp.castMemberId as number),
+					{ sessionId }
+				)
+				for (const [id, read] of reads) cardlessReads.set(id, read)
+			} catch {
+				// the held card (none) stands
+			}
+		}
+		// 🚧 The card-less seats shown as their cast member, by member id.
+		{
+			const shown: Record<
+				number,
+				{ name: string; nickname: string | null; faceMediaId: number | null }
+			> = {}
+			for (const seat of cardless) {
+				const read = cardlessReads.get(seat.castMemberId)
+				if (read)
+					shown[seat.castMemberId] = {
+						name: read.name,
+						nickname: read.nickname ?? null,
+						faceMediaId: read.faceMediaId ?? null
+					}
+			}
+			;sessionData.cardlessSeatShown = shown
+		}
+		for (const sc of sessionData.sessionCharacters ?? []) {
+			const held: number | null = sc.character?.id ?? sc.characterId ?? null
+			// A card-less character seat: `seated-member:<id>`, no card.
+			if (held == null && (sc.envoySlug || sc.castMemberId == null)) continue
+			const read = seatReads.get(sc)
+			const ref = hostSeatRefOf({
+				kind: "character",
+				seatId: sc.id,
+				castMemberId: sc.castMemberId ?? null,
+				cardId: held
+			})
+			if (held != null) sc.ref = ref ?? `character:${held}`
+			else if (ref) sc.ref = ref
+			if (sc.castMemberId === undefined) sc.castMemberId = null
+			;sc.cardId = held == null ? null : read ? read.activeCardId : held
+		}
+		for (const sp of sessionData.sessionPersonas ?? []) {
+			const held: number | null = sp.persona?.id ?? null
+			const read =
+				seatReads.get(sp) ??
+				(held == null && sp.castMemberId != null
+					? (cardlessReads.get(sp.castMemberId) ?? null)
+					: null)
+			;sp.ref =
+				hostSeatRefOf({
+					kind: "player",
+					seatId: sp.id,
+					castMemberId: sp.castMemberId ?? null,
+					cardId: held
+				}) ?? `player-seat:${sp.id}`
+			if (sp.castMemberId === undefined) sp.castMemberId = null
+			;sp.cardId = read ? read.activeCardId : held
+		}
+
+	// 🚧 bench-L4b (★L4-1): on a benched seat only, `hasLines` (any line of
+	// the seat in the session; the client offers Remove only when false) and
+	// `fellInStory` (an open bench record to=true, a deceased member, or a
+	// player seat replaced by a newer card-less one of the same user). A seat in
+	// play or a removed row gets neither; a failure leaves them absent, which
+	// the client reads as "has lines" and "not fallen".
+	try {
+		const isBenched = (r: any) => !r.removedAt && r.isActive === false
+		const benchedChars = (sessionData.sessionCharacters ?? []).filter(isBenched)
+		const benchedPlayers = (sessionData.sessionPersonas ?? []).filter(isBenched)
+		if (benchedChars.length || benchedPlayers.length) {
+			const { seatHasLines } = await import("$lib/server/sessions/seats")
+			const { standingSeatBenches, seatBenchKey } = await import(
+				"$lib/server/sessions/sessionImprints"
+			)
+			const benches = await standingSeatBenches(db as unknown as Db, sessionId)
+			const fellOpen = (kind: "character" | "player", seatId: number) =>
+				benches.get(seatBenchKey(kind, seatId)) === true
+			const deceased = (row: any) =>
+				(seatReads.get(row) ??
+					(row.castMemberId != null
+						? cardlessReads.get(row.castMemberId)
+						: null))?.nodeState === "deceased"
+			for (const sc of benchedChars) {
+				sc.hasLines = await seatHasLines(db as unknown as Db, {
+					sessionId,
+					kind: "character",
+					seatId: sc.id,
+					castMemberId: sc.castMemberId ?? null,
+					cardId: sc.characterId ?? null
+				})
+				sc.fellInStory = fellOpen("character", sc.id) || deceased(sc)
+			}
+			for (const sp of benchedPlayers) {
+				sp.hasLines = await seatHasLines(db as unknown as Db, {
+					sessionId,
+					kind: "player",
+					seatId: sp.id,
+					castMemberId: sp.castMemberId ?? null,
+					cardId: sp.personaId ?? null
+				})
+				const player = sp.userId ?? sp.persona?.userId
+				sp.fellInStory =
+					fellOpen("player", sp.id) ||
+					deceased(sp) ||
+					(player != null &&
+						(sessionData.sessionPersonas ?? []).some(
+							(o: any) =>
+								o.id > sp.id &&
+								!o.removedAt &&
+								o.personaId == null &&
+								o.userId === player
+						))
+			}
+		}
+	} catch {
+		// absent: the safe side
+	}
 	}
 
 	// 🚧 The book lock (PLAN-lorebook-kinds §A): once play has written, the
@@ -5433,11 +6319,23 @@ export const sessionsSaveDraftHandler: Handler<
 
 /**
  * The cast a session reads into its book, kept whole:
- * - Quietly create bindings for chars/personas that don't have one yet.
+ * - Settle the session's seats (`settleSeats`, `sessions/seats.ts`, the one
+ *   seat writer): fills each live seat's member — the cast member its card is
+ *   in the session's books, or one made for a card nobody has yet, made only
+ *   in an attached book the session's owner owns and that is not provided; S1
+ *   makes nothing in the own book (★S1-3) — and **never departs a seat**
+ *   (fill-only; the boot pass alone merges). It runs first, before the gates
+ *   below: a book the session's owner does not own, or a provided book, still
+ *   has its seats' members found (members are minted into it never). The
+ *   names of the members it made are filled from their cards once the
+ *   settling has committed (`syncMintedSeatMembers`).
  * - Emit bindingCheck:result for any orphaned bindings (bindings without a char/persona),
  *   which the home page puts to the person as a question — unless
  *   `askAboutOrphans` is false: a caller that seats many sessions at once
  *   (an import, an overwrite) seats them without asking anything per session.
+ * - `minted`: the caller has already made members for this session's seats
+ *   (a create seated them through the writer), so the book's cast list is
+ *   sent again even when settling found nothing more to make.
  *
  * Ruling 2026-09-12: cast members arrive from the session on their own.
  * There is no "pull the cast" button to press, so every path that puts a
@@ -5445,77 +6343,55 @@ export const sessionsSaveDraftHandler: Handler<
  * already reads one — calls this. Removing a member does NOT remove the
  * binding: lore, relationships and scene appearances may be anchored to it.
  *
- * Creation goes through resolveOrCreateBindingRow rather than a bare insert.
- * This read every binding once and inserted against that snapshot, which is
- * only safe while one path can reach it; now that several can, two of them
- * running at once (an attach and a member add) would both pass the same
- * check. The advisory lock inside that helper covers check-and-insert as one
- * step, and the partial unique indexes (0125) refuse the second row outright.
+ * Creation goes through the seat writer's mint (`findOrInsertBinding`)
+ * rather than a bare insert, under the book's advisory lock: two paths
+ * running at once (an attach and a member add) would otherwise both pass the
+ * same check, and the partial unique indexes (0125) refuse the second row
+ * outright.
  */
 export async function runLorebookBindingCheck(
 	socket: any,
 	sessionId: number,
 	lorebookId: number,
 	emitToUser: (event: string, data: any) => void,
-	{ askAboutOrphans = true }: { askAboutOrphans?: boolean } = {}
+	{
+		askAboutOrphans = true,
+		minted = false
+	}: { askAboutOrphans?: boolean; minted?: boolean } = {}
 ): Promise<void> {
-	const [sessionChars, sessionPersonas, existingBindings] = await Promise.all(
-		[
-			db.query.sessionCharacters.findMany({
-				where: and(
-					eq(schema.sessionCharacters.sessionId, sessionId),
-					isNull(schema.sessionCharacters.removedAt)
-				),
-				columns: { characterId: true }
-			}),
-			db.query.sessionPersonas.findMany({
-				where: and(
-					eq(schema.sessionPersonas.sessionId, sessionId),
-					isNull(schema.sessionPersonas.removedAt)
-				),
-				columns: { personaId: true }
-			}),
-			db.query.lorebookBindings.findMany({
-				where: eq(schema.lorebookBindings.lorebookId, lorebookId)
-			})
-		]
+	// The orphan question reads this snapshot, taken before the seats settle:
+	// a member minted by the settle is bound by construction and never one.
+	const existingBindings = await db.query.lorebookBindings.findMany({
+		where: eq(schema.lorebookBindings.lorebookId, lorebookId)
+	})
+	// The seats' members, found or made where `seats.ts` says it may.
+	const settled = await db.transaction(async (tx) =>
+		settleSeats(tx as unknown as Db, sessionId)
 	)
-
-	// Every card a member has — linked, or one a dated change draws them with
-	// (plan A25): seating either is seating them, never a second member.
-	const bindingsByChar = new Set(
-		(await castMemberCards(db, lorebookId)).memberOf.keys()
-	)
-	// The SAME set as `bindingsByChar` — a voiced character's binding IS a
-	// character binding, so a cast member who is also somebody's persona must
-	// not be given a second row.
-	const bindingsByPersona = bindingsByChar
-
-	// Flow 1a: Create missing bindings for chars/personas. Each binding's
-	// token is derived from the lorebook's own per-lorebook counter (never
-	// reused after a delete) — never a recomputed max/count, which is what
-	// let deleted binding numbers get silently reused before.
-	let minted = false
-	// A deleted card still seated finds no member (null) and is given none.
-	for (const { characterId } of sessionChars) {
-		if (!characterId || bindingsByChar.has(characterId)) continue
-		const found = await resolveOrCreateBindingRow(
-			{ lorebookId, characterId },
-			db
-		)
-		minted ||= found?.created === true
-		bindingsByChar.add(characterId)
-	}
-
-	for (const { personaId } of sessionPersonas) {
-		if (!personaId || bindingsByPersona.has(personaId)) continue
-		const found = await resolveOrCreateBindingRow(
-			{ lorebookId, characterId: personaId },
-			db
-		)
-		minted ||= found?.created === true
-		bindingsByPersona.add(personaId)
-	}
+	await syncMintedSeatMembers(db, settled.mintedMembers)
+	// 🚧 m3 (★M3-core-1): a provided book is readable pub-wide, so a member's
+	// session may read it — but its cast rows are the OWNER's book's and a
+	// member's writes land under the book's write mode, never straight in. A
+	// session whose owner does not own the book gets no relist or question
+	// here (the same gate the relist below already uses); the member's own
+	// characters are found in the session's own book until the overlay book
+	// exists.
+	const [sessionRow] = await db
+		.select({ userId: schema.sessions.userId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!sessionRow || !(await findOwnedBook(db, sessionRow.userId, lorebookId))) return
+	// 🚧 m3b (PLAN-sdk-creation-seams §23, challenger finding): no member rows into
+	// a provided book for anyone, the enabling admin included. Its cast is the
+	// plugin's and changes only through its write mode; a minted row would put the
+	// admin's new persona into a pub-wide book and seat it in everyone's later games.
+	const [bookRow] = await db
+		.select({ uuid: schema.lorebooks.uuid, extraJson: schema.lorebooks.extraJson })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.id, lorebookId))
+		.limit(1)
+	if (bookRow && markedBook(bookRow.extraJson, bookRow.uuid)) return
 
 	// The cast changed, so anyone looking at it should see the new rows
 	// without reloading — the same refresh lorebooks:createBinding sends.
@@ -5524,27 +6400,27 @@ export async function runLorebookBindingCheck(
 	// nothing on their behalf. Lazy (socket-interest plan, ruling 4): the
 	// three-way join behind the cast is paid only when a socket is showing
 	// it.
-	if (minted) {
+	if (minted || settled.minted > 0) {
 		if (await findOwnedBook(db, socket.user!.id, lorebookId)) await relistBindings(socket, lorebookId, emitToUser)
 	}
 
 	// Flow 1b: Collect orphaned bindings (no character). Read off the
-	// pre-loop snapshot: a row minted above is bound by construction and can
-	// never be one.
+	// pre-settle snapshot: a row minted by the settle is bound by construction
+	// and can never be one.
 	const orphaned = existingBindings.filter((b) => !b.characterId)
 	if (askAboutOrphans && orphaned.length > 0) {
 		// The lazy form, with the projection INSIDE it: the orphan list is
 		// built for this payload and nothing else, so a session whose cast
 		// panel nobody has open builds none of it.
 		//
-		// There is no list of session members left without a member: flow 1a
-		// above mints one for every session character (or throws), so that
-		// list was always empty and is gone from the reply (finding #140).
+		// There is no list of session members left without a member: the settle
+		// above gives every session character one (or throws), so that list was
+		// always empty and is gone from the reply (finding #140).
 		//
-		// ⚠ The three reads at the top of this function stay OUT of the
-		// thunk, deliberately: flow 1a mints bindings from them, and that
-		// has to happen whether or not anybody is watching. What the gate
-		// may skip is the answer, never the work the check exists to do.
+		// ⚠ The reads and the settle at the top of this function stay OUT of
+		// the thunk, deliberately: the settle makes members, and that has to
+		// happen whether or not anybody is watching. What the gate may skip
+		// is the answer, never the work the check exists to do.
 		await emitToUser("bindingCheck:result", () => {
 			const bindingCheckRes: Sockets.BindingCheck.Result.Response = {
 				lorebookId,
@@ -5571,6 +6447,8 @@ export async function runLorebookBindingCheck(
  *   old book is cleared: it was a date on another calendar. Unless this same
  *   save names a line or a clock, which then apply to the new book.
  * - A named branch must be a branch of the book the session will read.
+ * - A named line is a line of the attached book, or of the session's own book
+ *   when none is attached (the line is never a book change).
  * - A named clock must land in that book's calendar; null clears it (the
  *   session follows its line's present).
  * - A session moving to another book brings its own story-time stats: the
@@ -5618,9 +6496,16 @@ export async function sessionLinePatch(tx: Db, args: {
 	if (args.lorebookBranchId !== undefined) {
 		const branchId = args.lorebookBranchId ?? null
 		if (branchId !== null) {
-			if (!book) throw new Error("Only a shared lorebook has branches to read.")
+			// No attached book: the line is checked against the session's own
+			// book's (★bk-fold-1) — never a line of any other book.
+			const lineBook =
+				book ||
+				(args.session
+					? ((await (await import("$lib/server/lorebooks/ownBook")).ownBookOf(tx, args.session.id))?.id ?? null)
+					: null)
+			if (!lineBook) throw new Error("Only a shared lorebook has branches to read.")
 			try {
-				await branchOfBook(tx, book, branchId)
+				await branchOfBook(tx, lineBook, branchId)
 			} catch (e) {
 				if (e instanceof BranchRefusal)
 					throw new Error(`That branch is not a branch of this session's lorebook.`)
@@ -5714,6 +6599,22 @@ export const sessionsUpdateHandler: Handler<
 				)
 			}
 
+			// 🚧 One cast member is one character seat (owner 2026-11-05): a list
+			// that seats two cards of one member is refused in words, before
+			// anything is written. Answered as every refusal of this handler is
+			// (a thrown sentence, sent as `sessions:update:error`).
+			if (
+				params.characterIds !== undefined ||
+				params.castMemberIds !== undefined
+			) {
+				const twice = await sameMemberRefusal(db as unknown as Db, {
+					sessionId: params.session.id!,
+					cardIds: params.characterIds ?? [],
+					castMemberIds: params.castMemberIds
+				})
+				if (twice) throw new Error(twice)
+			}
+
 			// Guests may manage characters/personas on a session (further
 			// ownership-checked below) but never session-level settings — name,
 			// scenario, lorebook, connection/sampling/prompt overrides, tags,
@@ -5725,10 +6626,10 @@ export const sessionsUpdateHandler: Handler<
 			if (sessionAccess.isOwner) {
 				const tags = params.tags || []
 
-				// lorebookId needs an ownership check (lorebooks is strictly
-				// per-user) before it's accepted — everything else here is
-				// either owner-only data or a reference to an admin-managed
-				// global table (samplingConfigs), which needs no such check.
+				// The lorebook is never written from here (the book lock below);
+				// everything else here is either owner-only data or a reference
+				// to an admin-managed global table (samplingConfigs), which
+				// needs no ownership check.
 				//
 				// ⚠ `connectionId` was on that list, then was refused for
 				// non-admins, and is now simply gone (0130): a session names no
@@ -5737,82 +6638,22 @@ export const sessionsUpdateHandler: Handler<
 				// client still posting the field changes nothing and is told
 				// nothing, because there is no boundary left for it to have
 				// crossed.
-				if (params.session.lorebookId != null) {
-					// 🚧 A starter lorebook is started from, never read (PLAN-lorebook-kinds §B).
-					const { kitReadRefusal } = await import("$lib/server/lorebooks/starterKits")
-					const kitRefusal = await kitReadRefusal(
-						db as unknown as Db,
-						params.session.lorebookId
-					)
-					if (kitRefusal) throw new Error(kitRefusal)
-					const ownsLorebook = await checkLorebookOwnership(
-						params.session.lorebookId,
-						userId
-					)
-					if (!ownsLorebook) {
-						throw new Error(
-							"Access denied. You can only read a lorebook you own into a session."
-						)
-					}
-				}
-
-				// A change of book (PLAN-lorebook-kinds §A): refused once play
-				// has written (the book lock); a book read in before play is
-				// held to the genre's rules as one chosen at the start is
-				// (`strictRulesRefusal`) and gives the session its Rules
-				// (`rulesFromBook`). The book it already reads is not asked
-				// again.
-				let bookRules: Awaited<
-					ReturnType<typeof import("$lib/server/sessions/bookLock").rulesFromBook>
-				> = null
+				// The book lock (★B-5, 2026-11-08): a session keeps the lorebook it
+				// started with. Said before the owner-only checks and the write. The
+				// same value is accepted (old clients post every field) and the
+				// book is never written from here, so a book needing the
+				// kit/ownership check can only ever be the one already read.
 				if (params.session.lorebookId !== undefined) {
-					const next = params.session.lorebookId ?? null
 					const [now] = await db
-						.select({
-							genreId: schema.sessions.genreId,
-							lorebookId: schema.sessions.lorebookId,
-							rigour: schema.sessions.rigour
-						})
+						.select({ lorebookId: schema.sessions.lorebookId })
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, params.session.id!))
-					if (now && (now.lorebookId ?? null) !== next) {
-						const { bookChangeRefusal, rulesFromBook } = await import(
-							"$lib/server/sessions/bookLock"
-						)
-						const locked = await bookChangeRefusal(
-							db as unknown as Db,
-							{ id: params.session.id!, lorebookId: now.lorebookId ?? null },
-							next
-						)
-						if (locked) throw new Error(locked)
-						if (next !== null) {
-							const [book] = await db
-								.select({
-									name: schema.lorebooks.name,
-									primaryRuleset: schema.lorebooks.primaryRuleset
-								})
-								.from(schema.lorebooks)
-								.where(eq(schema.lorebooks.id, next))
-							const { strictRulesRefusal } = await import(
-								"$lib/server/rulesets/bookRules"
-							)
-							const refusal = book
-								? strictRulesRefusal(now.genreId, book)
-								: null
-							if (refusal) throw new Error(refusal)
-							bookRules = await rulesFromBook(
-								db as unknown as Db,
-								{
-									genreId: now.genreId,
-									rigour:
-										typeof params.session.rigour === "string"
-											? params.session.rigour
-											: now.rigour
-								},
-								next
-							)
-						}
-					}
+					const { bookChangeRefusal } = await import("$lib/server/sessions/bookLock")
+					const locked = bookChangeRefusal(
+						{ lorebookId: now?.lorebookId ?? null },
+						params.session.lorebookId ?? null
+					)
+					if (locked) throw new Error(locked)
 				}
 
 				// Explicit allowlist, not a spread of the full client payload
@@ -6003,12 +6844,8 @@ export const sessionsUpdateHandler: Handler<
 							...(name !== undefined ? { name } : {}),
 							...(sessionType !== undefined ? { sessionType } : {}),
 							...(scenario !== undefined ? { scenario } : {}),
-							...(lorebookId !== undefined ? { lorebookId } : {}),
 							...(onRevision !== undefined ? { onRevision } : {}),
 							...(rigour !== undefined ? { rigour } : {}),
-							// A book taken before play brings its Rules (and
-							// How strict clamped to them) — after the form's own.
-							...(bookRules ?? {}),
 							...(mergedGenreFields !== undefined
 								? { genreFields: mergedGenreFields }
 								: {}),
@@ -6016,12 +6853,6 @@ export const sessionsUpdateHandler: Handler<
 						})
 						.where(eq(schema.sessions.id, params.session.id!))
 				})
-				// The session's own book follows its book (`overlay_of`).
-				if (lorebookId !== undefined) {
-					const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
-					await ownBookFor(db, params.session.id!)
-				}
-
 				// The `playerLabel` override (lair re-plan R4): on the row's
 				// metadata, written as its own key so nothing else there moves.
 				// Only for a genre that declares a label — a rename of nothing
@@ -6067,8 +6898,12 @@ export const sessionsUpdateHandler: Handler<
 					await pushSceneCues(socket.io, params.session.id!)
 				}
 
-				// Process tags after session update
-				await processSessionTags(params.session.id!, tags, userId)
+				// Process tags after session update — only when the caller sent a
+				// tag list: a partial update (the Author's note Scenario, taking a
+				// seat) omits `tags`, and reading that as "no tags" deleted every
+				// tag the owner had on the session (lay-C scope review, 2026-11-06).
+				if (params.tags !== undefined)
+					await processSessionTags(params.session.id!, tags, userId)
 				fieldsMoved = genreFieldsPatch !== undefined
 
 				// `session-updated` (§4.1): emitted once, only when a
@@ -6177,12 +7012,13 @@ export const sessionsUpdateHandler: Handler<
 				}
 			}
 
-			// Membership deltas dispatch as member events (24 §5) after the
-			// sync — snapshots rather than per-branch bookkeeping, so revives,
-			// permission-blocked removals and upserts all count what actually
-			// changed. A genre's pipelines bind by declaring (genre,
-			// member-added/removed); nothing serves today, and the dispatch
-			// resolving to nothing costs one SELECT.
+			// Membership changes are the seat writer's to say: each write below
+			// (`seatCast`, `seatPlayer`, `settleSeats`, `unseat`, the seat-name
+			// writers) hands back what it changed, and `announceSeatChanges`
+			// dispatches them as member events (24 §5) once the writes are
+			// done. The snapshot is kept only for a reorder (`cast-changed`
+			// `position`), which no writer reports.
+			const seatChanges: SeatChange[] = []
 			const memberSnapshot = async () => {
 				const ccs = await db.query.sessionCharacters.findMany({
 					where: (cc, { eq }) => eq(cc.sessionId, params.session.id!)
@@ -6190,32 +7026,59 @@ export const sessionsUpdateHandler: Handler<
 				const cps = await db.query.sessionPersonas.findMany({
 					where: (cp, { eq }) => eq(cp.sessionId, params.session.id!)
 				})
+				// Card-less seats announce like any seat: live is S4's seat
+				// rule (not an envoy, a member or a card).
 				const liveCcs = ccs.filter(
-					(c) => !c.removedAt && c.characterId != null
+					(c) =>
+						!c.removedAt &&
+						c.envoySlug == null &&
+						(c.characterId != null || c.castMemberId != null)
 				)
 				const liveCps = cps.filter(
 					(c) => !c.removedAt && c.personaId != null
 				)
+				const { hostSeatRefOf } = await import(
+					"$lib/server/pipelines/prompt/seatCards"
+				)
+				// A seat's ref: the member form once the flip is on, else
+				// the card form (a persona is a character row, 0132).
+				const ccRef = (c: (typeof liveCcs)[number]) =>
+					hostSeatRefOf({
+						kind: "character",
+						seatId: c.id,
+						castMemberId: c.castMemberId,
+						cardId: c.characterId
+					})
+				const cpRef = (c: (typeof liveCps)[number]) =>
+					hostSeatRefOf({
+						kind: "player",
+						seatId: c.id,
+						castMemberId: c.castMemberId,
+						cardId: c.personaId
+					}) ?? `character:${c.personaId}`
+				// A seat with no ref at all is skipped rather than given a bad one.
+				const refCcs = liveCcs.filter((c) => ccRef(c) != null)
 				return {
-					characters: new Set(liveCcs.map((c) => c.characterId as number)),
-					personas: new Set(liveCps.map((c) => c.personaId as number)),
 					// Seat positions by participant reference, for the
 					// `cast-changed` diff (PLAN-turn-order §4.1): a reorder
-					// is a cast change, not a membership one. A persona is a
-					// character row (0132), so its reference is `character:`.
+					// is a cast change, not a membership one. The seat's
+					// ref is `hostSeatRefOf`'s: the member form once the
+					// flip is on, else the card form (a persona is a
+					// character row, 0132).
 					positions: new Map<string, number>([
-						...liveCcs.map(
-							(c) => [`character:${c.characterId}`, c.position ?? 0] as const
+						...refCcs.map(
+							(c) => [ccRef(c) as string, c.position ?? 0] as const
 						),
-						...liveCps.map(
-							(c) => [`character:${c.personaId}`, c.position ?? 0] as const
-						)
+						...liveCps.map((c) => [cpRef(c), c.position ?? 0] as const)
 					])
 				}
 			}
+			// A request carrying only `castMemberIds` seats card-less members, so
+			// it takes the snapshot too.
 			const membersBefore =
 				params.characterIds !== undefined ||
-				params.personaIds !== undefined
+				params.personaIds !== undefined ||
+				params.castMemberIds !== undefined
 					? await memberSnapshot()
 					: null
 
@@ -6223,8 +7086,11 @@ export const sessionsUpdateHandler: Handler<
 			if (params.characterIds !== undefined) {
 				const existingCCs = await db.query.sessionCharacters.findMany({
 					where: (cc, { eq }) => eq(cc.sessionId, params.session.id!),
-					with: { character: true }
+					// Ids and the owner only; the name a departed seat falls
+					// back to is the card now (below), never the row's copy.
+					with: { character: { columns: { id: true, userId: true } } }
 				})
+				await putCardsNow([{ rows: existingCCs, key: "character" }])
 				// Diffing/ownership decisions below are all against currently
 				// *active* participants — a removed row must not block a
 				// re-add, and must not be silently "removed" again.
@@ -6260,6 +7126,27 @@ export const sessionsUpdateHandler: Handler<
 				// remove anyone's. A row the caller isn't permitted to touch
 				// is simply left alone (not removed, no error), matching
 				// this handler's existing per-row tolerance.
+				// 🚧 (seat-cast S2) The name a departed seat keeps is its
+				// member as read, not the card it holds.
+				const seatsLeaving = activeCCs.filter(
+					(cc) =>
+						cc.characterId !== null &&
+						!newCharacterIds.has(cc.characterId) &&
+						(sessionAccess.isOwner ||
+							cc.character?.userId === userId)
+				)
+				const { seatCardsAsRead } = await import(
+					"$lib/server/pipelines/prompt/seatCards"
+				)
+				const seatsLeavingAsRead = new Map(
+					(
+						await seatCardsAsRead(
+							db as unknown as Db,
+							params.session.id!,
+							seatsLeaving
+						)
+					).map((read) => [read.id, read.character])
+				)
 				for (const cc of activeCCs) {
 					if (cc.characterId === null) continue
 					if (!newCharacterIds.has(cc.characterId)) {
@@ -6267,28 +7154,18 @@ export const sessionsUpdateHandler: Handler<
 							sessionAccess.isOwner ||
 							cc.character?.userId === userId
 						if (!canRemove) continue
-						await db
-							.update(schema.sessionCharacters)
-							.set({
-								removedAt: new Date(),
+						seatChanges.push(
+							...(await unseat(db, {
+								sessionId: params.session.id!,
+								kind: "character",
+								seatId: cc.id,
 								removedName: resolveCharacterName(
-									cc.character,
+									(seatsLeavingAsRead.get(cc.id) ??
+										cc.character) as SeatCardNames | null,
 									"Unknown"
-								),
-								isActive: false
-							})
-							.where(
-								and(
-									eq(
-										schema.sessionCharacters.sessionId,
-										params.session.id!
-									),
-									eq(
-										schema.sessionCharacters.characterId,
-										cc.characterId
-									)
 								)
-							)
+							}))
+						)
 					}
 				}
 				for (let i = 0; i < params.characterIds.length; i++) {
@@ -6316,30 +7193,122 @@ export const sessionsUpdateHandler: Handler<
 						// have a soft-removed row for this session (sessionId +
 						// characterId is uniquely indexed), in which case this
 						// re-add must revive it rather than violate that index.
-						await db
-							.insert(schema.sessionCharacters)
-							.values({
+						// The seat writer does both and gives the seat its member.
+						const seat = await db.transaction(async (tx) =>
+							seatCast(tx as unknown as Db, {
 								sessionId: params.session.id!,
-								characterId,
-								position
+								cardId: characterId,
+								position,
+								seatedBy: userId
 							})
-							.onConflictDoUpdate({
-								target: [
-									schema.sessionCharacters.sessionId,
-									schema.sessionCharacters.characterId
-								],
-								set: {
-									position,
-									removedAt: null,
-									removedName: null,
-									isActive: true
-								}
-							})
+						)
+						if (!seat.ok) throw new Error(seat.refusal)
+						seatChanges.push(...seat.changes)
+						// Committed: a member just made is named from its card.
+						await syncMintedSeatMembers(db, seat.mintedMembers)
 					}
 				}
+				// A group counts its card-less seats too (plan §34.2).
+				const [cardless] = await db
+					.select({ n: sql<number>`count(*)::int` })
+					.from(schema.sessionCharacters)
+					.where(
+						and(
+							eq(schema.sessionCharacters.sessionId, params.session.id!),
+							isNull(schema.sessionCharacters.removedAt),
+							isNull(schema.sessionCharacters.envoySlug),
+							isNull(schema.sessionCharacters.characterId),
+							isNotNull(schema.sessionCharacters.castMemberId)
+						)
+					)
 				await db
 					.update(schema.sessions)
-					.set({ isGroup: params.characterIds.length > 1 })
+					.set({ isGroup: params.characterIds.length + (cardless?.n ?? 0) > 1 })
+					.where(eq(schema.sessions.id, params.session.id!))
+			}
+
+			// 🚧 Sync the card-less character seats (plan §34.2) if provided: members
+			// of the session's books seated without a card. Only these rows are
+			// diffed here — a carded row is the `characterIds` diff's.
+			if (params.castMemberIds !== undefined) {
+				const cs = schema.sessionCharacters
+				const wanted = [...new Set(params.castMemberIds)]
+				const seats = await db
+					.select({
+						id: cs.id,
+						castMemberId: cs.castMemberId,
+						seatedBy: cs.seatedByUserId,
+						position: cs.position,
+						characterId: cs.characterId
+					})
+					.from(cs)
+					.where(
+						and(
+							eq(cs.sessionId, params.session.id!),
+							isNull(cs.removedAt),
+							isNull(cs.envoySlug),
+							or(isNotNull(cs.characterId), isNotNull(cs.castMemberId))
+						)
+					)
+				const cardless = seats.filter(
+					(seat) => seat.characterId === null && seat.castMemberId !== null
+				)
+				const heldMembers = new Set(cardless.map((seat) => seat.castMemberId))
+				let nextPosition =
+					Math.max(-1, ...seats.map((seat) => seat.position ?? 0)) + 1
+				for (const castMemberId of wanted) {
+					if (heldMembers.has(castMemberId)) continue
+					const seat = await db.transaction(async (tx) =>
+						seatCast(tx as unknown as Db, {
+							sessionId: params.session.id!,
+							castMemberId,
+							position: nextPosition++,
+							seatedBy: userId
+						})
+					)
+					if (!seat.ok) throw new Error(seat.refusal)
+					seatChanges.push(...seat.changes)
+				}
+				// A seat leaves when the caller is the session's owner or seated it.
+				const leaving = cardless.filter(
+					(seat) =>
+						!wanted.includes(seat.castMemberId!) &&
+						(sessionAccess.isOwner || seat.seatedBy === userId)
+				)
+				if (leaving.length) {
+					const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+					const asRead = await membersAsRead(
+						db as unknown as Db,
+						leaving.map((seat) => seat.castMemberId!),
+						{ sessionId: params.session.id! }
+					)
+					for (const seat of leaving)
+						seatChanges.push(
+							...(await unseat(db, {
+								sessionId: params.session.id!,
+								kind: "character",
+								seatId: seat.id,
+								removedName: resolveCharacterName(
+									asRead.get(seat.castMemberId!),
+									"Unknown"
+								)
+							}))
+						)
+				}
+				const [live] = await db
+					.select({ n: sql<number>`count(*)::int` })
+					.from(cs)
+					.where(
+						and(
+							eq(cs.sessionId, params.session.id!),
+							isNull(cs.removedAt),
+							isNull(cs.envoySlug),
+							or(isNotNull(cs.characterId), isNotNull(cs.castMemberId))
+						)
+					)
+				await db
+					.update(schema.sessions)
+					.set({ isGroup: (live?.n ?? 0) > 1 })
 					.where(eq(schema.sessions.id, params.session.id!))
 			}
 
@@ -6347,8 +7316,9 @@ export const sessionsUpdateHandler: Handler<
 			if (params.personaIds !== undefined) {
 				const existingCPs = await db.query.sessionPersonas.findMany({
 					where: (cp, { eq }) => eq(cp.sessionId, params.session.id!),
-					with: { persona: true }
+					with: { persona: { columns: { id: true, userId: true } } }
 				})
+				await putCardsNow([{ rows: existingCPs, key: "persona" }])
 				const activeCPs = existingCPs.filter((cp) => !cp.removedAt)
 				const existingPersonaIds = new Set(
 					activeCPs
@@ -6377,6 +7347,37 @@ export const sessionsUpdateHandler: Handler<
 
 				// Soft delete, same rule as characters above: guests may only
 				// remove personas they own; the session owner may remove anyone's.
+				// 🚧 The name a departed player seat keeps is its member as read
+				// (★pT-1, 2026-11-05: "Everything in session is cast -> active
+				// card"), a seat name still winning (`withSeatName`).
+				const personaSeatsLeaving = activeCPs.filter(
+					(cp) =>
+						cp.personaId !== null &&
+						!newPersonaIds.has(cp.personaId) &&
+						(sessionAccess.isOwner ||
+							cp.persona?.userId === userId)
+				)
+				const { seatCardsAsRead: personaSeatsAsRead } = await import(
+					"$lib/server/pipelines/prompt/seatCards"
+				)
+				const { withSeatName: nameOverSeat } = await import(
+					"$lib/server/sessions/seatName"
+				)
+				const personaSeatsLeavingAsRead = new Map(
+					(
+						await personaSeatsAsRead(
+							db as unknown as Db,
+							params.session.id!,
+							personaSeatsLeaving.map((cp) => ({
+								...cp,
+								character: cp.persona as SeatCardNames | null
+							}))
+						)
+					).map((read) => [
+						read.id,
+						nameOverSeat(read.character, read.seatName)
+					])
+				)
 				for (const cp of activeCPs) {
 					if (cp.personaId === null) continue
 					if (!newPersonaIds.has(cp.personaId)) {
@@ -6384,27 +7385,18 @@ export const sessionsUpdateHandler: Handler<
 							sessionAccess.isOwner ||
 							cp.persona?.userId === userId
 						if (!canRemove) continue
-						await db
-							.update(schema.sessionPersonas)
-							.set({
-								removedAt: new Date(),
+						seatChanges.push(
+							...(await unseat(db, {
+								sessionId: params.session.id!,
+								kind: "player",
+								seatId: cp.id,
 								removedName: resolvePersonaName(
-									cp.persona,
+									personaSeatsLeavingAsRead.get(cp.id) ??
+										(cp.persona as SeatCardNames | null),
 									"Unknown"
 								)
-							})
-							.where(
-								and(
-									eq(
-										schema.sessionPersonas.sessionId,
-										params.session.id!
-									),
-									eq(
-										schema.sessionPersonas.personaId,
-										cp.personaId
-									)
-								)
-							)
+							}))
+						)
 					}
 				}
 				for (let i = 0; i < params.personaIds.length; i++) {
@@ -6432,6 +7424,12 @@ export const sessionsUpdateHandler: Handler<
 							await import("$lib/server/sessions/seatName")
 						).givePlayerSeatACard(db, params.session.id!, personaId)
 					) {
+						// The seat now has a card: it gets its cast member.
+						const settled = await db.transaction(async (tx) =>
+							settleSeats(tx as unknown as Db, params.session.id!)
+						)
+						seatChanges.push(...settled.changes)
+						await syncMintedSeatMembers(db, settled.mintedMembers)
 						await db
 							.update(schema.sessionPersonas)
 							.set({ position: i })
@@ -6445,25 +7443,16 @@ export const sessionsUpdateHandler: Handler<
 					} else {
 						// Upsert: revive a soft-removed row if one exists for
 						// this sessionId + personaId rather than violating the
-						// unique index on that pair.
-						await db
-							.insert(schema.sessionPersonas)
-							.values({
+						// unique index on that pair (the seat writer's default).
+						const seat = await db.transaction(async (tx) =>
+							seatPlayer(tx as unknown as Db, {
 								sessionId: params.session.id!,
 								personaId,
 								position: i
 							})
-							.onConflictDoUpdate({
-								target: [
-									schema.sessionPersonas.sessionId,
-									schema.sessionPersonas.personaId
-								],
-								set: {
-									position: i,
-									removedAt: null,
-									removedName: null
-								}
-							})
+						)
+						seatChanges.push(...seat.changes)
+						await syncMintedSeatMembers(db, seat.mintedMembers)
 						await markCharacterAsPersona(personaId)
 					}
 				}
@@ -6477,116 +7466,45 @@ export const sessionsUpdateHandler: Handler<
 				const { writeSeatName } = await import(
 					"$lib/server/sessions/seatName"
 				)
-				const liveSeatIds = async () =>
-					new Set(
-						(
-							await db
-								.select({ id: schema.sessionPersonas.id })
-								.from(schema.sessionPersonas)
-								.where(
-									and(
-										eq(schema.sessionPersonas.sessionId, params.session.id!),
-										isNull(schema.sessionPersonas.removedAt)
-									)
-								)
-						).map((r) => r.id)
-					)
-				const seatsBefore = await liveSeatIds()
-				const seatId = await writeSeatName(db, {
+				await writeSeatName(db, {
 					sessionId: params.session.id!,
 					userId,
 					isOwner: sessionAccess.isOwner,
 					playerSeatId: params.playerSeatId ?? null,
-					name: params.seatName
+					name: params.seatName,
+					changes: seatChanges
 				})
-				// A NEW card-less player seat is a member added, exactly as a seated
-				// persona is (24 §5), so turn order and every client
-				// recompute. It has no card, so its reference is the
-				// seat's own: `player-seat:<id>`.
-				if (seatId !== null && !seatsBefore.has(seatId))
-					await emitMemberEvent(socket, {
-						sessionId: params.session.id!,
-						userId,
-						event: sessionEvents.memberAdded,
-						ref: `player-seat:${seatId}`
-					})
 			}
 
 			// 🚧 Card-less player seats renamed or removed in Edit Session
-			// (`editCardlessPlayerSeats`). A removed one is a member gone, as
-			// a removed persona is: `member-removed` with `player-seat:<id>`.
+			// (`editCardlessPlayerSeats`). A first remove benches the seat; only
+			// an unused benched seat is removed. It reports `unseat`'s change.
 			if (params.playerSeatChanges?.length) {
 				const { editCardlessPlayerSeats } = await import(
 					"$lib/server/sessions/seatName"
 				)
-				const removedSeats = await editCardlessPlayerSeats(db, {
+				await editCardlessPlayerSeats(db, {
 					sessionId: params.session.id!,
 					userId,
 					isOwner: sessionAccess.isOwner,
-					changes: params.playerSeatChanges
+					changes: params.playerSeatChanges,
+					seatChanges
 				})
-				for (const seatId of removedSeats)
-					await emitMemberEvent(socket, {
-						sessionId: params.session.id!,
-						userId,
-						event: sessionEvents.memberRemoved,
-						ref: `player-seat:${seatId}`
-					})
 			}
 
-			// The member events (24 §5), best-effort: a failed dispatch must
-			// never fail the update that caused it.
+			// The member events (24 §5), best-effort and after every seat
+			// write: a failed dispatch must never fail the update that caused it.
+			await announceSeatChanges(
+				db,
+				socket.io,
+				{ sessionId: params.session.id!, userId },
+				seatChanges
+			)
+
+			// A reorder is not a membership change, so never a member event.
 			if (membersBefore) {
 				try {
 					const after = await memberSnapshot()
-					const deltas: Array<{
-						event:
-							| typeof sessionEvents.memberAdded
-							| typeof sessionEvents.memberRemoved
-						kind: "character" | "persona"
-						id: number
-					}> = []
-					for (const id of after.characters)
-						if (!membersBefore.characters.has(id))
-							deltas.push({
-								event: sessionEvents.memberAdded,
-								kind: "character",
-								id
-							})
-					for (const id of membersBefore.characters)
-						if (!after.characters.has(id))
-							deltas.push({
-								event: sessionEvents.memberRemoved,
-								kind: "character",
-								id
-							})
-					for (const id of after.personas)
-						if (!membersBefore.personas.has(id))
-							deltas.push({
-								event: sessionEvents.memberAdded,
-								kind: "persona",
-								id
-							})
-					for (const id of membersBefore.personas)
-						if (!after.personas.has(id))
-							deltas.push({
-								event: sessionEvents.memberRemoved,
-								kind: "persona",
-								id
-							})
-					// A seat added or removed (R31): through the one emitter,
-					// so it lands in the ledger and reaches plugin listeners
-					// like every other session event, with the cast-change
-					// payload — `ref` the member, `change` added/removed.
-					// A persona is a character row (0132), so its reference
-					// is `character:<id>` too.
-					for (const delta of deltas)
-						await emitMemberEvent(socket, {
-							sessionId: params.session.id!,
-							userId,
-							event: delta.event,
-							ref: `character:${delta.id}`
-						})
 					// A seat that MOVED (PLAN-turn-order §4.1): one
 					// `cast-changed { change: 'position' }` per member still
 					// seated whose position differs — a reorder, not a
@@ -6720,6 +7638,45 @@ export const sessionsAddPersonaHandler: Handler<
 					)
 				})
 
+			// A benched seat comes back rather than being refused (benched seats).
+			if (
+				existingSessionPersona &&
+				existingSessionPersona.removedAt == null &&
+				existingSessionPersona.isActive === false
+			) {
+				const back = await db.transaction(async (tx) =>
+					setSeatBench(tx as unknown as Db, {
+						sessionId,
+						kind: "player",
+						seatId: existingSessionPersona.id,
+						benched: false
+					})
+				)
+				if (!back.ok) {
+					const res: Sockets.Sessions.AddPersona.Response = {
+						success: false,
+						error: back.refusal
+					}
+					emitToUser("sessions:addPersona", res)
+					return res
+				}
+				await announceSeatChanges(
+					db,
+					socket.io,
+					{ sessionId, userId },
+					back.changes
+				)
+				await broadcastSessionToParticipants(socket, sessionId, userId)
+				await (
+					await import("$lib/server/sessions/actionsPush")
+				).pushSessionActions(socket.io, sessionId)
+				const res: Sockets.Sessions.AddPersona.Response = {
+					success: true
+				}
+				emitToUser("sessions:addPersona", res)
+				return res
+			}
+
 			if (existingSessionPersona) {
 				const res: Sockets.Sessions.AddPersona.Response = {
 					success: false,
@@ -6744,12 +7701,26 @@ export const sessionsAddPersonaHandler: Handler<
 			// Add persona to session — 🚧 into its player's card-less player seat
 			// when they have one (`givePlayerSeatACard`), else on a row of its own.
 			const { givePlayerSeatACard } = await import("$lib/server/sessions/seatName")
-			if (!(await givePlayerSeatACard(db, sessionId, personaId)))
-				await db.insert(schema.sessionPersonas).values({
-					sessionId,
-					personaId,
-					position: nextPosition
-				})
+			const seatChanges: SeatChange[] = []
+			if (await givePlayerSeatACard(db, sessionId, personaId)) {
+				// The seat now has a card: it gets its cast member.
+				const settled = await db.transaction(async (tx) =>
+					settleSeats(tx as unknown as Db, sessionId)
+				)
+				seatChanges.push(...settled.changes)
+				await syncMintedSeatMembers(db, settled.mintedMembers)
+			} else {
+				const seat = await db.transaction(async (tx) =>
+					seatPlayer(tx as unknown as Db, {
+						sessionId,
+						personaId,
+						position: nextPosition,
+						onExisting: "insert"
+					})
+				)
+				seatChanges.push(...seat.changes)
+				await syncMintedSeatMembers(db, seat.mintedMembers)
+			}
 			await markCharacterAsPersona(personaId)
 
 			// A member added to a session that reads a book joins that book's
@@ -6766,6 +7737,10 @@ export const sessionsAddPersonaHandler: Handler<
 					emitToUser
 				).catch(console.error)
 			}
+
+			// The seat has landed: `member-added` (a card-less seat taking this
+			// card changes no seat's ref, so says nothing).
+			await announceSeatChanges(db, socket.io, { sessionId, userId }, seatChanges)
 
 			// Broadcast updated session to all participants
 			await broadcastSessionToParticipants(socket, sessionId, userId)
@@ -6964,16 +7939,64 @@ export const sessionsRemoveGuestHandler: Handler<
 				return res
 			}
 
-			// Remove guest from session
-			const removed = await db
-				.delete(schema.sessionGuests)
-				.where(
-					and(
-						eq(schema.sessionGuests.sessionId, sessionId),
-						eq(schema.sessionGuests.userId, guestUserId)
+			// Remove guest from session — and bench their player seats in the
+			// same transaction (owner 2026-11-10, ★3: removing a guest benches
+			// the player seats they sat in; the lines keep their speaker).
+			const seatChanges: SeatChange[] = []
+			const removed = await db.transaction(async (tx) => {
+				const deleted = await tx
+					.delete(schema.sessionGuests)
+					.where(
+						and(
+							eq(schema.sessionGuests.sessionId, sessionId),
+							eq(schema.sessionGuests.userId, guestUserId)
+						)
 					)
+					.returning({ userId: schema.sessionGuests.userId })
+				if (!deleted.length) return deleted
+				const seats = await tx
+					.select({ id: schema.sessionPersonas.id })
+					.from(schema.sessionPersonas)
+					.leftJoin(
+						schema.characters,
+						eq(
+							schema.characters.id,
+							schema.sessionPersonas.personaId
+						)
+					)
+					.where(
+						and(
+							eq(schema.sessionPersonas.sessionId, sessionId),
+							isNull(schema.sessionPersonas.removedAt),
+							or(
+								eq(schema.sessionPersonas.userId, guestUserId),
+								and(
+									isNull(schema.sessionPersonas.userId),
+									eq(schema.characters.userId, guestUserId)
+								)
+							)
+						)
+					)
+					.orderBy(schema.sessionPersonas.id)
+				for (const seat of seats) {
+					const benched = await setSeatBench(tx as unknown as Db, {
+						sessionId,
+						kind: "player",
+						seatId: seat.id,
+						benched: true
+					})
+					if (!benched.ok) throw new Error(benched.refusal)
+					seatChanges.push(...benched.changes)
+				}
+				return deleted
+			})
+			if (seatChanges.length)
+				await announceSeatChanges(
+					db,
+					socket.io,
+					{ sessionId, userId },
+					seatChanges
 				)
-				.returning({ userId: schema.sessionGuests.userId })
 
 			// A removed guest has nothing left to act on here. Never throws.
 			await (
@@ -7104,10 +8127,11 @@ export const sessionsOverlayItemsHandler: Handler<
 	async (socket, params: Sockets.Sessions.OverlayItems.Params, emitToUser) => {
 		const access = await checkSessionAccess(params.sessionId, socket.user!.id)
 		if (!access.hasAccess) throw new Error("This session is not one you are in.")
-		const { overlayItemsOf } = await import("$lib/server/lorebooks/ownBook")
+		const { overlayItemsOf, overlayAccessOf } = await import("$lib/server/lorebooks/ownBook")
 		const res: Sockets.Sessions.OverlayItems.Response = {
 			sessionId: params.sessionId,
-			items: await overlayItemsOf(db, params.sessionId)
+			items: await overlayItemsOf(db, params.sessionId),
+			...(await overlayAccessOf(db, params.sessionId, socket.user!.id))
 		}
 		emitToUser("sessions:overlayItems", res)
 		return res
@@ -7117,8 +8141,9 @@ export const sessionsOverlayItemsHandler: Handler<
 
 /**
  * 🚧 **Apply to the lorebook** (PLAN-rulesets §26): overlay items move into
- * the attached lorebook with their provenance and leave the notes. One item
- * (`entryIds: [id]`) or all (absent). The lorebook's owner only.
+ * the attached lorebook with their provenance and leave the notes; 🚧 a held
+ * change to a lorebook entry is folded in (`amendmentIds`). One item
+ * (`entryIds: [id]`) or all (both absent). The lorebook's owner only.
  */
 export const sessionsApplyOverlayHandler: Handler<
 	Sockets.Sessions.ApplyOverlay.Params,
@@ -7126,29 +8151,177 @@ export const sessionsApplyOverlayHandler: Handler<
 > = refusable(
 	"sessions:applyOverlay",
 	async (socket, params: Sockets.Sessions.ApplyOverlay.Params, emitToUser) => {
-		const { applyOverlayItems, overlayItemsOf } = await import("$lib/server/lorebooks/ownBook")
+		const { applyOverlayItems } = await import("$lib/server/lorebooks/ownBook")
 		const entryIds = Array.isArray(params.entryIds)
 			? params.entryIds.filter((id): id is number => Number.isSafeInteger(id))
+			: null
+		const amendmentIds = Array.isArray(params.amendmentIds)
+			? params.amendmentIds.filter((id): id is number => Number.isSafeInteger(id))
+			: null
+		const linkIds = Array.isArray(params.linkIds)
+			? params.linkIds.filter((id): id is number => Number.isSafeInteger(id))
 			: null
 		const done = await applyOverlayItems(db, {
 			sessionId: params.sessionId,
 			userId: socket.user!.id,
-			entryIds
+			entryIds,
+			amendmentIds,
+			linkIds
 		})
 		const res: Sockets.Sessions.ApplyOverlay.Response = {
 			sessionId: params.sessionId,
 			lorebookId: done.lorebookId,
-			applied: done.applied
+			applied: done.applied,
+			appliedChanges: done.appliedChanges,
+			stillHeld: done.stillHeld,
+			appliedLinks: done.appliedLinks,
+			mergedDays: done.mergedDays,
+			droppedLinks: done.droppedLinks,
+			heldDays: done.heldDays,
+			batch: done.batch
 		}
 		emitToUser("sessions:applyOverlay", res)
-		emitToUser("sessions:overlayItems", {
-			sessionId: params.sessionId,
-			items: await overlayItemsOf(db, params.sessionId)
-		} satisfies Sockets.Sessions.OverlayItems.Response)
+		// The transaction has committed: say where the settle line went, then move every member's card.
+		if (done.settled) {
+			const { announceHistorySettled } = await import("$lib/server/sessions/settle")
+			await announceHistorySettled(db, {
+				sessionId: params.sessionId,
+				userId: socket.user!.id,
+				...done.settled,
+				io: socket.io
+			})
+		}
+		await tellApplyMoved(socket.io, params.sessionId)
 		return res
 	},
 	"The changes could not be applied to the lorebook."
 )
+
+/**
+ * 🚧 What was applied from this session, one batch per Apply, newest first.
+ * Anyone in the session reads it; only the lorebook's owner takes one back.
+ */
+export const sessionsAppliedBatchesHandler: Handler<
+	Sockets.Sessions.AppliedBatches.Params,
+	Sockets.Sessions.AppliedBatches.Response
+> = refusable(
+	"sessions:appliedBatches",
+	async (socket, params: Sockets.Sessions.AppliedBatches.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess) throw new Error("This session is not one you are in.")
+		const { appliedBatchesOf, overlayAccessOf } = await import("$lib/server/lorebooks/ownBook")
+		const res: Sockets.Sessions.AppliedBatches.Response = {
+			sessionId: params.sessionId,
+			batches: await appliedBatchesOf(db, params.sessionId),
+			mayApply: (await overlayAccessOf(db, params.sessionId, userId)).mayApply
+		}
+		emitToUser("sessions:appliedBatches", res)
+		return res
+	},
+	"The session's applied changes could not be read."
+)
+
+/**
+ * 🚧 **Take back** one Apply, all or nothing. The lorebook's owner only. A
+ * refusal is said in place (`refused`), never as an error toast.
+ */
+export const sessionsTakeBackApplyHandler: Handler<
+	Sockets.Sessions.TakeBackApply.Params,
+	Sockets.Sessions.TakeBackApply.Response
+> = refusable(
+	"sessions:takeBackApply",
+	async (socket, params: Sockets.Sessions.TakeBackApply.Params, emitToUser) => {
+		if (!Number.isSafeInteger(params?.sessionId) || typeof params?.batch !== "string" || !params.batch)
+			throw new Error("Take back needs a session and an apply.")
+		const { takeBackApply, OwnBookRefusal } = await import("$lib/server/lorebooks/ownBook")
+		let res: Sockets.Sessions.TakeBackApply.Response
+		try {
+			await takeBackApply(db, { batch: params.batch, userId: socket.user!.id, sessionId: params.sessionId })
+			res = { sessionId: params.sessionId, batch: params.batch, refused: null }
+		} catch (e) {
+			if (!(e instanceof OwnBookRefusal)) throw e
+			res = { sessionId: params.sessionId, batch: params.batch, refused: e.message }
+		}
+		emitToUser("sessions:takeBackApply", res)
+		if (res.refused == null) await tellApplyMoved(socket.io, params.sessionId)
+		return res
+	},
+	"The apply could not be taken back.",
+	undefined,
+	(p) => ({ sessionId: (p as any)?.sessionId })
+)
+
+/**
+ * 🚧 Every member of the session is sent their own two lists again — after an
+ * Apply, a take-back, or a change that applied by itself — so the card shows
+ * it (P1). The server is the `io` given, else the one the socket layer keeps
+ * on `globalThis` (a caller with no socket: a scene closing, the boundary
+ * watcher). Never throws.
+ */
+export async function tellApplyMoved(io: unknown, sessionId: number): Promise<void> {
+	try {
+		const server = (io ??
+			(globalThis as { __SERENE_PUB_SOCKET_STATE__?: { io?: unknown } }).__SERENE_PUB_SOCKET_STATE__?.io) as any
+		if (!server) return
+		const { overlayItemsOf, overlayAccessOf, appliedBatchesOf } = await import("$lib/server/lorebooks/ownBook")
+		const items = await overlayItemsOf(db, sessionId)
+		const batches = await appliedBatchesOf(db, sessionId)
+		for (const uid of await getSessionUserIds(sessionId)) {
+			const { mayApply, appliesItself } = await overlayAccessOf(db, sessionId, uid)
+			await emitToUserRedacted(server, uid, "sessions:overlayItems", {
+				sessionId,
+				items,
+				mayApply,
+				appliesItself
+			} satisfies Sockets.Sessions.OverlayItems.Response)
+			await emitToUserRedacted(server, uid, "sessions:appliedBatches", {
+				sessionId,
+				batches,
+				mayApply
+			} satisfies Sockets.Sessions.AppliedBatches.Response)
+		}
+	} catch (e) {
+		console.warn(`[apply] the lists could not be re-sent for session ${sessionId}:`, e)
+	}
+}
+
+/**
+ * 🚧 The moments held changes apply by themselves (scene close, summary saved,
+ * Close out): run `applyHeldAutomatically`, then — after its transaction —
+ * announce the settle line and move every member's card. Never throws, so it
+ * never fails what triggered it. Never call it with a transaction handle.
+ */
+export async function applyHeldAutomaticallyAndTell(
+	handle: Db,
+	input: { sessionId: number; automatic: AutomaticApplyCause; sceneId?: number; before?: number; io?: unknown }
+): Promise<void> {
+	try {
+		const { applyHeldAutomatically } = await import("$lib/server/lorebooks/ownBook")
+		const result = await applyHeldAutomatically(handle, {
+			sessionId: input.sessionId,
+			automatic: input.automatic,
+			...(input.sceneId != null ? { sceneId: input.sceneId } : {}),
+			...(input.before != null ? { before: input.before } : {})
+		})
+		if (!result || (!result.applied.length && !result.appliedChanges.length && !result.dropped.length)) return
+		const server = (input.io ??
+			(globalThis as { __SERENE_PUB_SOCKET_STATE__?: { io?: unknown } }).__SERENE_PUB_SOCKET_STATE__?.io) as any
+		if (result.settled) {
+			const { announceHistorySettled } = await import("$lib/server/sessions/settle")
+			await announceHistorySettled(handle, {
+				sessionId: input.sessionId,
+				userId: result.userId,
+				...result.settled,
+				io: server ?? undefined,
+				cause: { kind: "system" }
+			})
+		}
+		await tellApplyMoved(server, input.sessionId)
+	} catch (e) {
+		console.warn(`[apply] the automatic apply for session ${input.sessionId} could not be announced:`, e)
+	}
+}
 
 /**
  * 🚧 What deleting this message does to the timeline (PLAN-rulesets §28),
@@ -7274,8 +8447,8 @@ export const sessionsBranchHandler: Handler<
 }
 
 /**
- * Re-points a removed (soft-deleted) session participant's message history to a
- * new character/persona, and makes the new one an active participant — the
+ * Re-points a removed (soft-deleted) or benched session participant's message
+ * history to a new character/persona, and makes the new one an active participant — the
  * "adopt this removed participant's history" flow paired with the soft
  * delete in sessionsUpdateHandler. Permission mirrors the removal path: the
  * session owner can reassign anyone's removed slot; a non-owner can only
@@ -7314,13 +8487,13 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 
 			if (type === "character") {
 				const removedCC = await db.query.sessionCharacters.findFirst({
-					where: (cc, { and, eq, isNotNull }) =>
+					where: (cc, { and, eq, isNotNull, or }) =>
 						and(
 							eq(cc.sessionId, sessionId),
 							eq(cc.characterId, oldId),
-							isNotNull(cc.removedAt)
+							or(isNotNull(cc.removedAt), eq(cc.isActive, false))
 						),
-					with: { character: true }
+					with: { character: { columns: { id: true, userId: true } } }
 				})
 				if (!removedCC) {
 					const res: Sockets.Sessions.ReassignRemovedParticipant.Response =
@@ -7364,54 +8537,92 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 				// row while messages still reference it, which nulls out
 				// via onDelete: "set null" and reverts to "Unknown": the
 				// exact data loss this handler exists to prevent.
-				await db.transaction(async (tx) => {
-					await updateLegacyWhere(
-						tx,
-						and(
-							eq(schema.sessionMessages.sessionId, sessionId),
-							eq(schema.sessionMessages.characterId, oldId)
-						),
-						{ characterId: newId }
-					)
-					await tx
-						.insert(schema.sessionCharacters)
-						.values({
+				// A refused seat (a second card of a member already seated —
+				// `seatCast`) rolls the whole transaction back and is answered
+				// in its own words.
+				const refused: { sentence?: string } = {}
+				let reassignedMinted: MintedSeatMember[] = []
+				let reassignedChanges: SeatChange[] = []
+				try {
+					await db.transaction(async (tx) => {
+						const seat = await seatCast(tx as unknown as Db, {
 							sessionId,
-							characterId: newId,
-							position: removedCC.position ?? 0
+							cardId: newId,
+							position: removedCC.position ?? 0,
+							seatedBy: userId
 						})
-						.onConflictDoUpdate({
-							target: [
-								schema.sessionCharacters.sessionId,
-								schema.sessionCharacters.characterId
-							],
-							set: {
-								removedAt: null,
-								removedName: null,
-								isActive: true
-							}
-						})
-					await tx
-						.delete(schema.sessionCharacters)
-						.where(
+						if (!seat.ok) {
+							refused.sentence = seat.refusal
+							throw new Error(seat.refusal)
+						}
+						reassignedMinted = seat.mintedMembers
+						reassignedChanges = seat.changes
+						// The lines are now spoken by the new seat: stamp
+						// its member (the seat is written first, so it is
+						// there to be read).
+						await updateLegacyWhere(
+							tx,
 							and(
-								eq(
-									schema.sessionCharacters.sessionId,
-									sessionId
-								),
-								eq(schema.sessionCharacters.characterId, oldId)
-							)
+								eq(schema.sessionMessages.sessionId, sessionId),
+								eq(schema.sessionMessages.characterId, oldId)
+							),
+							{
+								characterId: newId,
+								castMemberId:
+									(
+										await seatOf(
+											tx as unknown as Db,
+											sessionId,
+											`character:${newId}`
+										)
+									)?.castMemberId ?? null
+							}
 						)
-				})
+						await tx
+							.delete(schema.sessionCharacters)
+							.where(
+								and(
+									eq(
+										schema.sessionCharacters.sessionId,
+										sessionId
+									),
+									eq(schema.sessionCharacters.characterId, oldId)
+								)
+							)
+					})
+				} catch (e) {
+					if (refused.sentence === undefined) throw e
+					const res: Sockets.Sessions.ReassignRemovedParticipant.Response =
+						{ error: refused.sentence }
+					emitToUser("sessions:reassignRemovedParticipant", res)
+					return res
+				}
+				// A benched seat was live: deleting it takes its member off the
+				// roster, so say so (a removed row left the roster already).
+				if (removedCC.removedAt === null)
+					reassignedChanges.push({
+						kind: "character",
+						change: "removed",
+						seatId: removedCC.id,
+						castMemberId: removedCC.castMemberId ?? null,
+						cardId: oldId
+					})
+				await syncMintedSeatMembers(db, reassignedMinted)
+				await announceSeatChanges(
+					db,
+					socket.io,
+					{ sessionId, userId },
+					reassignedChanges
+				)
 			} else {
 				const removedCP = await db.query.sessionPersonas.findFirst({
-					where: (cp, { and, eq, isNotNull }) =>
+					where: (cp, { and, eq, isNotNull, or }) =>
 						and(
 							eq(cp.sessionId, sessionId),
 							eq(cp.personaId, oldId),
-							isNotNull(cp.removedAt)
+							or(isNotNull(cp.removedAt), eq(cp.isActive, false))
 						),
-					with: { persona: true }
+					with: { persona: { columns: { id: true, userId: true } } }
 				})
 				if (!removedCP) {
 					const res: Sockets.Sessions.ReassignRemovedParticipant.Response =
@@ -7442,29 +8653,29 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 					return res
 				}
 
+				let reassignedMinted: MintedSeatMember[] = []
+				let reassignedChanges: SeatChange[] = []
 				await db.transaction(async (tx) => {
+					const playerSeat = await seatPlayer(tx as unknown as Db, {
+						sessionId,
+						personaId: newId,
+						position: removedCP.position ?? 0
+					})
+					reassignedMinted = playerSeat.mintedMembers
+					reassignedChanges = playerSeat.changes
+					// The lines are now spoken by the new player seat:
+					// stamp the member that seat just took.
 					await updateLegacyWhere(
 						tx,
 						and(
 							eq(schema.sessionMessages.sessionId, sessionId),
 							eq(schema.sessionMessages.personaId, oldId)
 						),
-						{ personaId: newId }
-					)
-					await tx
-						.insert(schema.sessionPersonas)
-						.values({
-							sessionId,
+						{
 							personaId: newId,
-							position: removedCP.position ?? 0
-						})
-						.onConflictDoUpdate({
-							target: [
-								schema.sessionPersonas.sessionId,
-								schema.sessionPersonas.personaId
-							],
-							set: { removedAt: null, removedName: null }
-						})
+							castMemberId: playerSeat.castMemberId
+						}
+					)
 					await markCharacterAsPersona(newId, tx)
 					await tx
 						.delete(schema.sessionPersonas)
@@ -7475,6 +8686,23 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 							)
 						)
 				})
+				// A benched seat was live: deleting it takes its member off the
+				// roster, so say so (a removed row left the roster already).
+				if (removedCP.removedAt === null)
+					reassignedChanges.push({
+						kind: "player",
+						change: "removed",
+						seatId: removedCP.id,
+						castMemberId: removedCP.castMemberId ?? null,
+						cardId: oldId
+					})
+				await syncMintedSeatMembers(db, reassignedMinted)
+				await announceSeatChanges(
+					db,
+					socket.io,
+					{ sessionId, userId },
+					reassignedChanges
+				)
 			}
 
 			// The replacement is a new member of this session, so it joins the
@@ -7641,17 +8869,21 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				"$lib/server/sessions/seatName"
 			)
 			/**
-			 * 🚧 A card whose seat here has retired (a new character after a
-			 * death, PLAN-dc-after-walk2 Q0-2, owner ruling ★2): the card stays
-			 * with the fallen seat, and a line sent with it while the person has
-			 * a live card-less seat speaks from that seat — the new character,
+			 * 🚧 A card whose seats here are all out of play, benched or removed
+			 * (a new character after a death, PLAN-dc-after-walk2 Q0-2, owner
+			 * ruling ★2; the bench, 2026-11-10): the card stays with the fallen
+			 * seat, and a line sent with it while the person has an in-play
+			 * card-less seat speaks from that seat — the new character,
 			 * under its own name, whose line the round counts. A composer from
 			 * before the seat moved still sends the card.
 			 */
 			let speakingCard = personaId ?? null
 			if (speakingCard) {
 				const held = await db
-					.select({ removedAt: schema.sessionPersonas.removedAt })
+					.select({
+						removedAt: schema.sessionPersonas.removedAt,
+						isActive: schema.sessionPersonas.isActive
+					})
 					.from(schema.sessionPersonas)
 					.where(
 						and(
@@ -7659,7 +8891,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 							eq(schema.sessionPersonas.personaId, speakingCard)
 						)
 					)
-				if (held.length && held.every((h) => h.removedAt)) {
+				if (held.length && held.every((h) => !inPlay(h))) {
 					if ((await cardlessPlayerSeatOf(db, sessionId, userId)) !== null) speakingCard = null
 				}
 			}
@@ -7699,7 +8931,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				sessionId,
 				userId,
 				speaker: speakingCard
-					? `character:${speakingCard}`
+					? await playerSeatRefOfPersona(db, sessionId, speakingCard)
 					: seatId !== null
 						? playerSeatSpeaker(seatId)
 						: null,
@@ -8254,9 +9486,11 @@ export const sessionMessagesRegenerateHandler: Handler<
 					// 🚧 The clock moves this reply carried go back with it
 					// (live scenes §15 G5) — refused in words, before anything
 					// is written, when the calendar cannot take one back.
+					// "replaced": the message stays and is told again — it keeps
+					// the round's tick (★ST2-1) and any `keepOnRetell` fields.
 					let retracted: Awaited<ReturnType<typeof retractStateAnchoredTo>>
 					try {
-						retracted = await retractStateAnchoredTo(db, params.id)
+						retracted = await retractStateAnchoredTo(db, params.id, "replaced")
 					} catch (e) {
 						const { StoryClockRefusal } = await import("$lib/server/state/storyTime")
 						if (!(e instanceof StoryClockRefusal || e instanceof SettledRefusal)) throw e
@@ -8269,6 +9503,13 @@ export const sessionMessagesRegenerateHandler: Handler<
 					}
 					if (retracted.clockMoved)
 						broadcastSessionRow(socket.io, messageToRegenerate.sessionId)
+					// The seats the old reply benched or brought back, told to open pages.
+					await announceSeatChanges(
+						db,
+						socket.io,
+						{ sessionId: messageToRegenerate.sessionId, userId: socket.user!.id },
+						retracted.seatChanges
+					)
 					// 🚧 Announced once the retraction has committed (live
 					// scenes §15 G14), as an outlet's write announces: every
 					// tab re-reads its state and the ledger loses the old
@@ -8882,15 +10123,23 @@ export const sessionMessagesSwipeRightHandler: Handler<
 				// Take back what the swipe being left behind changed about
 				// the world — this replaces the reply without deleting the
 				// row, so the anchor cascade cannot see it. Its clock moves
-				// too (asked above), all but a tick.
+				// too (asked above), all but the round's tick (★ST2-1).
+				// "replaced": the line is told again, `keepOnRetell` fields stay.
 				let retracted: Awaited<ReturnType<typeof retractStateAnchoredTo>>
 				try {
-					retracted = await retractStateAnchoredTo(db, message.id, { annex: "keep" })
+					retracted = await retractStateAnchoredTo(db, message.id, "replaced")
 				} catch (e) {
 					if (e instanceof SettledRefusal) return respond(undefined, e.message)
 					throw e
 				}
 				if (retracted.clockMoved) broadcastSessionRow(socket.io, message.sessionId)
+				// The seats the left-behind swipe benched or brought back, told to open pages.
+				await announceSeatChanges(
+					db,
+					socket.io,
+					{ sessionId: message.sessionId, userId: socket.user!.id },
+					retracted.seatChanges
+				)
 				// 🚧 Committed: announced as the regenerate's is (§15 G14).
 				if (retracted.changed)
 					await broadcastToSessionUsers(socket.io, message.sessionId, "state:changed", {
@@ -8939,7 +10188,15 @@ export const sessionMessagesSwipeRightHandler: Handler<
 				if (!outcome.ok && !outcome.stopped) {
 					try {
 						const { restoreRetractedState } = await import("$lib/server/state/write")
-						if (await restoreRetractedState(db, retracted.taken)) {
+						const seatChanges: SeatChange[] = []
+						const restored = await restoreRetractedState(db, retracted.taken, { seatChanges })
+						await announceSeatChanges(
+							db,
+							socket.io,
+							{ sessionId: message.sessionId, userId: socket.user!.id },
+							seatChanges
+						)
+						if (restored) {
 							if (retracted.clockMoved) broadcastSessionRow(socket.io, message.sessionId)
 							await broadcastToSessionUsers(socket.io, message.sessionId, "state:changed", {
 								sessionId: message.sessionId
@@ -9028,11 +10285,12 @@ export const sessionMessagesCancelHandler: Handler<
 			// over the partial a person had just stopped. Scoped to the rows
 			// being released: an image render or a summary somebody else
 			// started in this session is not what this Stop was about.
+			let stoppedRuns = 0
 			{
 				const runRegistry = await import(
 					"$lib/server/pipelines/runtime/runRegistry"
 				)
-				runRegistry.cancelSession(
+				stoppedRuns = runRegistry.cancelSession(
 					params.sessionId,
 					`user:${userId}`,
 					targetIds
@@ -9053,6 +10311,7 @@ export const sessionMessagesCancelHandler: Handler<
 			const { emitSessionEvent } = await import(
 				"$lib/server/pipelines/runtime/sessionEvents"
 			)
+			let released = 0
 			for (const id of targetIds) {
 				const [updated] = await updateLegacyWhere(
 					db,
@@ -9070,6 +10329,7 @@ export const sessionMessagesCancelHandler: Handler<
 					}
 				)
 				if (updated) {
+					released++
 					await broadcastToSessionUsers(
 						socket.io,
 						params.sessionId,
@@ -9125,9 +10385,14 @@ export const sessionMessagesCancelHandler: Handler<
 				}
 			}
 
-			const res: Sockets.SessionMessages.Cancel.Response = {
-				success: `Cancelled ${targetIds.size} generating message(s)`
-			}
+			// A Stop that arrived late stopped and released nothing: not an
+			// error, and nothing to claim either.
+			const res: Sockets.SessionMessages.Cancel.Response =
+				released + stoppedRuns > 0
+					? {
+							success: `Cancelled ${released > 0 ? released : stoppedRuns} generating message(s)`
+						}
+					: {}
 			emitToUser("sessionMessages:cancel", res)
 
 			return res
@@ -9328,13 +10593,6 @@ export const promptTokenCountHandler: Handler<
 			// when the linked row was deleted (the FK is nullable, onDelete:
 			// "set null") — filter those out, matching the same fix in
 			// dispatch.ts/sessionsListHandler.
-			const activeSessionCharacters = session.sessionCharacters.filter(
-				(
-					cc
-				): cc is typeof cc & {
-					character: NonNullable<typeof cc.character>
-				} => cc.character !== null && cc.isActive
-			)
 			const sessionCharactersWithCharacter =
 				session.sessionCharacters.filter(
 					(
@@ -9407,9 +10665,23 @@ export const promptTokenCountHandler: Handler<
 			)
 			const head = await headTurnEntry(db, params.sessionId)
 			const headRef = typeof head?.ref === "string" ? head.ref : null
-			let currentCharacterId: number | null =
-				headRef && headRef.startsWith("character:")
-					? Number(headRef.slice("character:".length))
+			// 🚧 (seat-cast S2) A head named by its seated member reads as
+			// its seat's card; nobody seated as that member → no head.
+			const { storedSeatRef } = await import(
+				"$lib/server/state/seatRefs"
+			)
+			const headCardRef = headRef
+				? await storedSeatRef(db, params.sessionId, headRef)
+				: null
+			// ⏳ With the flip on (`state/memberForm.ts`) the stored head is a
+			// member form (`seated-member:` / `player-seat:`): its card is the
+			// seat's `cardId`; off, the card form's own number.
+			let currentCharacterId: number | null = memberFormOn()
+				? headCardRef
+					? ((await seatOf(db, params.sessionId, headCardRef))?.cardId ?? null)
+					: null
+				: headCardRef && headCardRef.startsWith("character:")
+					? Number(headCardRef.slice("character:".length))
 					: null
 			if (currentCharacterId !== null && !Number.isInteger(currentCharacterId))
 				currentCharacterId = null
@@ -9417,13 +10689,55 @@ export const promptTokenCountHandler: Handler<
 				headRef?.startsWith("envoy:")
 					? (headRef as `envoy:${string}`)
 					: null
-			if (!currentCharacterId && !envoySpeaker) {
-				const sorted = [...activeSessionCharacters].sort(
-					(a, b) => (a.position ?? 0) - (b.position ?? 0)
+			// 🚧 A head that is a card-less seat's member (`seated-member:<id>`,
+			// the seat holds no card): compiled for by that ref as `speaker`,
+			// as the envoy head is. A member id, never a card id.
+			let cardlessSpeaker: string | null = null
+			const { hostSeatRefOf } = await import(
+				"$lib/server/pipelines/prompt/seatCards"
+			)
+			if (!currentCharacterId && !envoySpeaker && memberFormOn() && headCardRef) {
+				const headSeat = await seatOf(db, params.sessionId, headCardRef)
+				if (
+					headSeat &&
+					headSeat.kind === "character" &&
+					!headSeat.departed &&
+					headSeat.cardId == null &&
+					headSeat.castMemberId != null
 				)
-				currentCharacterId = sorted[0]?.character.id ?? null
+					cardlessSpeaker = hostSeatRefOf({
+						kind: "character",
+						seatId: headSeat.seatId,
+						castMemberId: headSeat.castMemberId,
+						cardId: null
+					})
 			}
-			if (!currentCharacterId && !envoySpeaker) {
+			if (!currentCharacterId && !envoySpeaker && !cardlessSpeaker) {
+				// The first active seat by position: a card, else (a live
+				// card-less seat — no envoy, a member, `removedAt` null) its
+				// member's ref.
+				const firstSeat = session.sessionCharacters
+					.filter(
+						(cc) =>
+							cc.isActive &&
+							cc.removedAt == null &&
+							cc.envoySlug == null &&
+							(cc.characterId != null || cc.castMemberId != null)
+					)
+					.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0]
+				// By the row's own `characterId`: a card-less seat's `character`
+				// is its member read as a card-shaped row with NO `id`.
+				if (firstSeat?.characterId != null)
+					currentCharacterId = firstSeat.characterId
+				else if (firstSeat)
+					cardlessSpeaker = hostSeatRefOf({
+						kind: "character",
+						seatId: firstSeat.id,
+						castMemberId: firstSeat.castMemberId,
+						cardId: null
+					})
+			}
+			if (!currentCharacterId && !envoySpeaker && !cardlessSpeaker) {
 				const { seatedEnvoys } = await import(
 					"$lib/server/pipelines/entities/envoys"
 				)
@@ -9433,7 +10747,7 @@ export const promptTokenCountHandler: Handler<
 				if (seat) envoySpeaker = `envoy:${seat.slug}`
 			}
 
-			if (!currentCharacterId && !envoySpeaker) {
+			if (!currentCharacterId && !envoySpeaker && !cardlessSpeaker) {
 				const res: Sockets.Sessions.PromptTokenCount.Response = {
 					error: "No character available for prompt."
 				}
@@ -9465,7 +10779,11 @@ export const promptTokenCountHandler: Handler<
 				sessionId: params.sessionId,
 				userId,
 				currentCharacterId,
-				...(envoySpeaker ? { speaker: envoySpeaker } : {}),
+				...(envoySpeaker
+					? { speaker: envoySpeaker }
+					: cardlessSpeaker
+						? { speaker: cardlessSpeaker as `seated-member:${string}` }
+						: {}),
 				text: params.content ?? "",
 				// The point of the preview: the text being typed is not a row
 				// yet, so the run has to be told about it or the count reflects
@@ -9597,7 +10915,7 @@ export const sessionsFireTurnHandler: Handler<
 				await noteSocketInteraction(access, params.sessionId, "action")
 
 				const [row] = await db
-					.select({ annex: schema.sessions.annex })
+					.select({ turnOrder: schema.sessions.turnOrder })
 					.from(schema.sessions)
 					.where(eq(schema.sessions.id, params.sessionId))
 					.limit(1)
@@ -9607,6 +10925,23 @@ export const sessionsFireTurnHandler: Handler<
 						ok: false,
 						error: "Session not found."
 					})
+				// 🚧 seat-cast S3: an entry's ref is read as the form the session
+				// stores (`storedSeatRef`: the member form once the flip is on —
+				// ⏳ a card form from an old tab is translated — else the card
+				// form) before it is compared (`sameEntry`) with the stored order,
+				// judged or fired.
+				// A member nobody is seated as stays as sent, which no order entry
+				// equals; it is refused below and by `fireTurnEntry`, never stored.
+				if (params.entry && typeof params.entry.ref === "string") {
+					const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+					const stored = await storedSeatRef(
+						db,
+						params.sessionId,
+						params.entry.ref
+					)
+					if (stored !== null && stored !== params.entry.ref)
+						params.entry = { ...params.entry, ref: stored }
+				}
 				// 🚧 A channel for the owner alone (Lair rewrite D6): no
 				// guest presses anything there.
 				if (!access.isOwner && params.channel) {
@@ -9643,8 +10978,7 @@ export const sessionsFireTurnHandler: Handler<
 				const { readTurnOrder, isSameChannel } = await import(
 					"@serene-pub/sdk"
 				)
-				const { coreAnnexIn } = await import("$lib/server/sessions/coreAnnex")
-				let order = readTurnOrder(coreAnnexIn(row.annex)).order
+				let order = readTurnOrder(row).order
 				let head = order[0]
 				/**
 				 * An entry is its reference AND its channel (lair re-plan
@@ -9781,17 +11115,44 @@ export const sessionsFireTurnHandler: Handler<
 					const channelHead = firstOn(seated.channel)
 					const isHead = !!channelHead && sameEntry(channelHead, seated)
 					let ownsIt = false
+					const seatRefForm =
+						typeof seated.ref === "string"
+							? (await import("$lib/server/sessions/seats")).parseSeatRef(
+									seated.ref
+								)?.form
+							: undefined
 					if (
 						typeof seated.ref === "string" &&
-						seated.ref.startsWith("character:")
+						(seatRefForm === "character" ||
+							seatRefForm === "seated-member" ||
+							// ⏳ A player seat is named `player-seat:<id>` once
+							// the flip is on, carded or not.
+							(seatRefForm === "player-seat" && memberFormOn()))
 					) {
-						const id = Number(seated.ref.slice("character:".length))
-						const [character] = await db
-							.select({ userId: schema.characters.userId })
-							.from(schema.characters)
-							.where(eq(schema.characters.id, id))
-							.limit(1)
-						ownsIt = character?.userId === userId
+						// 🚧 Judged through the seat (owner ruling 2026-11-05: "The
+						// person who seated it"): `seatActorOf` — the seater of a
+						// character seat, the player of a player seat; unset, the
+						// owner of the member's active card. A `character:` ref no
+						// seat of this session holds keeps its card's owner (the
+						// card form; ⏳ a member-less character seat's ref).
+						const { seatOf, seatActorOf } = await import(
+							"$lib/server/sessions/seats"
+						)
+						const seat = await seatOf(db, params.sessionId, seated.ref)
+						// ⏳ A card-less player seat's entry stays nobody's here, as
+						// before the flip (`player-seat:` named only those then).
+						if (seat && !(seatRefForm === "player-seat" && seat.cardId == null)) {
+							ownsIt =
+								(await seatActorOf(db, params.sessionId, seat)) === userId
+						} else if (seatRefForm === "character") {
+							const cardId = Number(seated.ref.slice("character:".length))
+							const [character] = await db
+								.select({ userId: schema.characters.userId })
+								.from(schema.characters)
+								.where(eq(schema.characters.id, cardId))
+								.limit(1)
+							ownsIt = character?.userId === userId
+						}
 					}
 					if (!isHead && !ownsIt)
 						return reply({
@@ -10452,10 +11813,50 @@ export const sessionsSetEnvoySeatHandler: Handler<
 }
 
 /**
+ * ⏳ The ref a person's persona line is offered under: with the flip on
+ * (`state/memberForm.ts`) the player seat holding the persona — live before
+ * departed, then position, then seat id (never a character seat that holds
+ * the same card, ★K-2) — as `hostSeatRefOf` names it; else, or when no seat
+ * holds it, the card form `character:<personaId>`.
+ */
+async function playerSeatRefOfPersona(
+	dbh: Db,
+	sessionId: number,
+	personaId: number
+): Promise<string> {
+	if (memberFormOn()) {
+		const seats = await dbh
+			.select({
+				id: schema.sessionPersonas.id,
+				castMemberId: schema.sessionPersonas.castMemberId,
+				removedAt: schema.sessionPersonas.removedAt,
+				position: schema.sessionPersonas.position
+			})
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					eq(schema.sessionPersonas.personaId, personaId)
+				)
+			)
+		seats.sort(
+			(a, b) =>
+				Number(a.removedAt != null) - Number(b.removedAt != null) ||
+				(a.position ?? 0) - (b.position ?? 0) ||
+				a.id - b.id
+		)
+		if (seats[0]) return `player-seat:${seats[0].id}`
+	}
+	return `character:${personaId}`
+}
+
+/**
  * A member joined or left (PLAN-turn-order R31): `member-added` /
  * `member-removed` through the one emitter, with the cast-change payload
  * (`change: 'added' | 'removed'`) under the person's `settings` cause.
- * Best-effort, as `emitCastChanged` is: the seat has landed.
+ * Best-effort: the seat has landed. For envoys and
+ * guests only — a character or player seat goes through `announceSeatChanges`
+ * (`sessions/seats.ts`), which the seat writer's changes feed.
  */
 async function emitMemberEvent(
 	socket: { io: SessionIo },
@@ -10483,43 +11884,6 @@ async function emitMemberEvent(
 }
 
 /**
- * One seated participant's row moved (PLAN-turn-order §4.1, A2):
- * `cast-changed` under the person's `settings` cause. Best-effort — the
- * toggle has landed and been re-sent; an emitter failing is logged.
- */
-async function emitCastChanged(
-	socket: { io: SessionIo },
-	change: {
-		sessionId: number
-		userId: number
-		ref: string
-		change: "enabled" | "position" | "portrayal"
-		value: unknown
-	}
-): Promise<void> {
-	try {
-		const { emitSessionEvent } = await import(
-			"$lib/server/pipelines/runtime/sessionEvents"
-		)
-		await emitSessionEvent(db, {
-			sessionId: change.sessionId,
-			userId: change.userId,
-			event: sessionEvents.castChanged,
-			payload: {
-				sessionId: change.sessionId,
-				ref: change.ref,
-				change: change.change,
-				value: change.value,
-				cause: { kind: "settings", userId: change.userId }
-			},
-			io: socket.io
-		})
-	} catch (err) {
-		console.warn("cast-changed emit failed:", err)
-	}
-}
-
-/**
  * Switch one cast seat on or off — SET to `params.enabled`, never flipped
  * (note 34 follow-up): the Edit Session form holds the switch until Save,
  * so a flip from a stale form would invert the seat. A repeated set is a
@@ -10536,7 +11900,15 @@ export const sessionsSetCastSeatEnabledHandler: Handler<
 		const refuse = (error: string, enabled = false) => {
 			const res: Sockets.Sessions.SetCastSeatEnabled.Response = {
 				sessionId: params.sessionId,
-				characterId: params.characterId,
+				...(params.characterId != null
+					? { characterId: params.characterId }
+					: {}),
+				...(params.castMemberId != null
+					? { castMemberId: params.castMemberId }
+					: {}),
+				...(params.playerSeatId != null
+					? { playerSeatId: params.playerSeatId }
+					: {}),
 				enabled,
 				error
 			}
@@ -10547,84 +11919,160 @@ export const sessionsSetCastSeatEnabledHandler: Handler<
 			const userId = socket.user!.id
 			if (typeof params.enabled !== "boolean")
 				return refuse("Say whether the seat is switched on or off.")
+			if (
+				[params.characterId, params.castMemberId, params.playerSeatId].filter(
+					(v) => v != null
+				).length !== 1
+			)
+				return refuse(
+					"Name one seat: a character, a cast member or a player seat."
+				)
 
 			// checkSessionAccess (owner OR guest), not an owner-only ad-hoc check —
 			// a guest who brought their own character into a shared session must
 			// be able to switch that character's own seat; only the per-row
-			// escalation below decides whether *this* character is theirs to
-			// manage.
+			// escalation below decides whether *this* seat is theirs to manage.
 			const sessionAccess = await checkSessionAccess(
 				params.sessionId,
 				userId
 			)
 			if (!sessionAccess.hasAccess) return refuse("Session not found.")
 
-			const session = await db.query.sessions.findFirst({
-				where: (c, { eq }) => eq(c.id, params.sessionId),
-				with: {
-					sessionCharacters: {
-						where: (cc, { eq, and, isNull }) =>
-							and(
-								eq(cc.characterId, params.characterId),
-								isNull(cc.removedAt)
-							),
-						with: { character: { columns: { userId: true } } }
-					}
-				}
-			})
-
-			if (
-				!session?.sessionCharacters ||
-				session.sessionCharacters.length === 0
-			)
-				return refuse("Session character not found.")
-
-			const sessionCharacter = session.sessionCharacters[0]
-			const canManage =
-				sessionAccess.isOwner ||
-				sessionCharacter.character?.userId === userId
-			if (!canManage)
-				return refuse(
-					"Access denied. Only the session owner or this character's owner can change this.",
-					!!sessionCharacter.isActive
+			let kind: "character" | "player" = "character"
+			let seatId: number
+			let seatIsActive: boolean
+			let echo: Partial<Sockets.Sessions.SetCastSeatEnabled.Response>
+			if (params.playerSeatId != null) {
+				// A player seat (benched seats): by its own row, benched or in play.
+				kind = "player"
+				const [pseat] = await db
+					.select({
+						id: schema.sessionPersonas.id,
+						isActive: schema.sessionPersonas.isActive,
+						playerId: schema.sessionPersonas.userId,
+						cardOwnerId: schema.characters.userId
+					})
+					.from(schema.sessionPersonas)
+					.leftJoin(
+						schema.characters,
+						eq(schema.characters.id, schema.sessionPersonas.personaId)
+					)
+					.where(
+						and(
+							eq(schema.sessionPersonas.id, params.playerSeatId),
+							eq(schema.sessionPersonas.sessionId, params.sessionId),
+							isNull(schema.sessionPersonas.removedAt)
+						)
+					)
+					.limit(1)
+				if (!pseat) return refuse("That seat is not in this session.")
+				if (
+					!(
+						sessionAccess.isOwner ||
+						pseat.playerId === userId ||
+						pseat.cardOwnerId === userId
+					)
 				)
+					return refuse(
+						"Only the session owner or this seat's player can change this.",
+						!!pseat.isActive
+					)
+				seatId = pseat.id
+				seatIsActive = !!pseat.isActive
+				echo = { playerSeatId: params.playerSeatId }
+			} else {
+				// The live seat: by card, or by member (a card-less, non-envoy seat).
+				const byCard = params.characterId != null
+				const [seat] = await db
+					.select({
+						id: schema.sessionCharacters.id,
+						isActive: schema.sessionCharacters.isActive,
+						castMemberId: schema.sessionCharacters.castMemberId,
+						seatedBy: schema.sessionCharacters.seatedByUserId,
+						cardOwnerId: schema.characters.userId
+					})
+					.from(schema.sessionCharacters)
+					.leftJoin(
+						schema.characters,
+						eq(
+							schema.characters.id,
+							schema.sessionCharacters.characterId
+						)
+					)
+					.where(
+						and(
+							eq(schema.sessionCharacters.sessionId, params.sessionId),
+							isNull(schema.sessionCharacters.removedAt),
+							byCard
+								? eq(
+										schema.sessionCharacters.characterId,
+										params.characterId!
+									)
+								: and(
+										eq(
+											schema.sessionCharacters.castMemberId,
+											params.castMemberId!
+										),
+										isNull(schema.sessionCharacters.characterId),
+										isNull(schema.sessionCharacters.envoySlug)
+									)
+						)
+					)
+					.limit(1)
+
+				if (!seat) return refuse("Session character not found.")
+
+				if (byCard) {
+					if (!(sessionAccess.isOwner || seat.cardOwnerId === userId))
+						return refuse(
+							"Access denied. Only the session owner or this character's owner can change this.",
+							!!seat.isActive
+						)
+				} else if (!(sessionAccess.isOwner || seat.seatedBy === userId))
+					return refuse(
+						"Only the session owner or the person who seated this cast member can change this.",
+						!!seat.isActive
+					)
+
+				seatId = seat.id
+				seatIsActive = !!seat.isActive
+				echo = byCard
+					? { characterId: params.characterId }
+					: { castMemberId: params.castMemberId }
+			}
 
 			const res: Sockets.Sessions.SetCastSeatEnabled.Response = {
 				sessionId: params.sessionId,
-				characterId: params.characterId,
+				...echo,
 				enabled: params.enabled
 			}
 			// Already so: nothing moved, so no write and no cast-changed —
 			// the answer alone, so the asker still settles.
-			if (!!sessionCharacter.isActive === params.enabled) {
+			const result = await db.transaction(async (tx) =>
+				setSeatBench(tx as unknown as Db, {
+					sessionId: params.sessionId,
+					kind,
+					seatId,
+					benched: !params.enabled
+				})
+			)
+			if (!result.ok) return refuse(result.refusal, seatIsActive)
+			if (result.changes.length === 0) {
 				emitToUser("sessions:setCastSeatEnabled", res)
 				return res
 			}
 
-			await db
-				.update(schema.sessionCharacters)
-				.set({ isActive: params.enabled })
-				.where(
-					and(
-						eq(
-							schema.sessionCharacters.characterId,
-							params.characterId
-						),
-						eq(schema.sessionCharacters.sessionId, params.sessionId)
-					)
-				)
-
 			emitToUser("sessions:setCastSeatEnabled", res)
-			await resendSession(socket, session.id, emitToUser)
-			// A seat's row moved (PLAN-turn-order §4.1, A2): `cast-changed`
-			// under the person's `settings` cause, which never fires a turn.
-			await emitCastChanged(socket, {
-				sessionId: params.sessionId,
-				userId,
-				ref: `character:${params.characterId}`,
-				change: "enabled",
-				value: params.enabled
-			})
+			await resendSession(socket, params.sessionId, emitToUser)
+			// A seat's row moved (PLAN-turn-order §4.1, A2): the seat writer's
+			// change says it as `cast-changed` under the person's `settings`
+			// cause, which never fires a turn.
+			await announceSeatChanges(
+				db,
+				socket.io,
+				{ sessionId: params.sessionId, userId },
+				result.changes
+			)
 
 			return res
 		} catch (error) {
@@ -10673,10 +12121,28 @@ export const sessionsAccountVisibilityHandler: Handler<
 
 		// The caller's own characters/personas bound into this session — what a
 		// bound entity discloses to the rest of the participants.
-		res.exposed.characters = await db
+		// A seat exposes the card it holds AND the card its cast member is
+		// linked to, like `canViewCharacter`; each card is listed once.
+		// Names are the cards' current card versions (`cardsNow`), never the
+		// ⏳ copy; the queries select ids.
+		const { cardsNow: cardsNowOf } = await import(
+			"$lib/server/cast/seatedCast"
+		)
+		const named = async (
+			rows: { id: number }[]
+		): Promise<{ id: number; name: string }[]> => {
+			const now = await cardsNowOf(
+				db as unknown as Db,
+				rows.map((r) => r.id)
+			)
+			return rows.flatMap((r) => {
+				const card = now.get(r.id)
+				return card ? [{ id: r.id, name: card.name }] : []
+			})
+		}
+		const characterHeld = await db
 			.select({
-				id: schema.characters.id,
-				name: schema.characters.name
+				id: schema.characters.id
 			})
 			.from(schema.sessionCharacters)
 			.innerJoin(
@@ -10689,11 +12155,38 @@ export const sessionsAccountVisibilityHandler: Handler<
 					eq(schema.characters.userId, userId)
 				)
 			)
+		const characterLinked = await db
+			.select({
+				id: schema.characters.id
+			})
+			.from(schema.sessionCharacters)
+			.innerJoin(
+				schema.lorebookBindings,
+				eq(
+					schema.lorebookBindings.id,
+					schema.sessionCharacters.castMemberId
+				)
+			)
+			.innerJoin(
+				schema.characters,
+				eq(schema.lorebookBindings.characterId, schema.characters.id)
+			)
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, params.sessionId),
+					eq(schema.characters.userId, userId)
+				)
+			)
+			.orderBy(schema.characters.id)
+		res.exposed.characters = await named(characterHeld)
+		for (const card of await named(characterLinked))
+			if (!res.exposed.characters.some((c) => c.id === card.id))
+				res.exposed.characters.push(card)
 
 		// Aliased: `session_characters` above already joined `characters` in
 		// this handler, and both member tables point at it.
-		res.exposed.personas = await db
-			.select({ id: voicedCharacter.id, name: voicedCharacter.name })
+		const personaHeld = await db
+			.select({ id: voicedCharacter.id })
 			.from(schema.sessionPersonas)
 			.innerJoin(
 				voicedCharacter,
@@ -10705,6 +12198,68 @@ export const sessionsAccountVisibilityHandler: Handler<
 					eq(voicedCharacter.userId, userId)
 				)
 			)
+		const personaLinked = await db
+			.select({ id: voicedCharacter.id })
+			.from(schema.sessionPersonas)
+			.innerJoin(
+				schema.lorebookBindings,
+				eq(
+					schema.lorebookBindings.id,
+					schema.sessionPersonas.castMemberId
+				)
+			)
+			.innerJoin(
+				voicedCharacter,
+				eq(schema.lorebookBindings.characterId, voicedCharacter.id)
+			)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, params.sessionId),
+					eq(voicedCharacter.userId, userId)
+				)
+			)
+			.orderBy(voicedCharacter.id)
+		res.exposed.personas = await named(personaHeld)
+		for (const card of await named(personaLinked))
+			if (!res.exposed.personas.some((c) => c.id === card.id))
+				res.exposed.personas.push(card)
+
+		// A seat also exposes its member's ACTIVE card on the session's
+		// reading (the dated card; owner ruling 2026-11-05: "Everything in
+		// session is cast -> active card"), once each, when it is the caller's.
+		const { seatedCastOf } = await import("$lib/server/cast/seatedCast")
+		const seatsNow = await seatedCastOf(db as unknown as Db, params.sessionId)
+		const activeIds = new Set<number>()
+		for (const seat of seatsNow) {
+			const active = seat.asRead?.activeCardId
+			if (active != null) activeIds.add(active)
+		}
+		if (activeIds.size) {
+			const ownedActiveIds = await db
+				.select({ id: schema.characters.id })
+				.from(schema.characters)
+				.where(
+					and(
+						inArray(schema.characters.id, [...activeIds]),
+						eq(schema.characters.userId, userId)
+					)
+				)
+			const ownedActiveById = new Map(
+				(await named(ownedActiveIds)).map((c) => [c.id, c])
+			)
+			for (const seat of seatsNow) {
+				const active = seat.asRead?.activeCardId
+				if (active == null || active === seat.cardId) continue
+				if (active === seat.asRead?.linkedCardId) continue
+				const card = ownedActiveById.get(active)
+				if (!card) continue
+				const list =
+					seat.kind === "character"
+						? res.exposed.characters
+						: res.exposed.personas
+				if (!list.some((c) => c.id === card.id)) list.push(card)
+			}
+		}
 
 		// The session's lorebook is a single binding on the session row.
 		// Exposed only when the caller owns it.
@@ -10821,6 +12376,8 @@ export function registerSessionHandlers(
 	register(socket, sessionsShareAsLorebookHandler, emitToUser)
 	register(socket, sessionsOverlayItemsHandler, emitToUser)
 	register(socket, sessionsApplyOverlayHandler, emitToUser)
+	register(socket, sessionsAppliedBatchesHandler, emitToUser)
+	register(socket, sessionsTakeBackApplyHandler, emitToUser)
 	register(socket, sessionsRevisionNoticeHandler, emitToUser)
 	register(socket, sessionsReassignRemovedParticipantHandler, emitToUser)
 	register(socket, sessionMessagesSendPersonaMessageHandler, emitToUser)

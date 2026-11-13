@@ -30,6 +30,7 @@ import { registerWorkflowHandlers } from "./workflows"
 import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
 import { registerCharacterFolderHandlers } from "./characterFolders"
+import { registerCharacterRowsHandlers } from "./characterRows"
 import { registerSpriteHandlers } from "./sprites"
 import { registerPortraitHandlers } from "./portrait"
 import { registerDescribeLikenessHandlers } from "./describeLikeness"
@@ -62,6 +63,7 @@ import { registerOllamaHandlers } from "./ollama"
 import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerAudioCppHandlers } from "./audiocpp"
 import { registerModelPresenceHandlers } from "./modelPresence"
+import { registerModelHubCardHandlers } from "./modelHubCard"
 import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
 import { registerNerHandlers } from "./ner"
@@ -78,6 +80,7 @@ import { registerLorebookStateHandlers } from "./lorebookState"
 import { registerCardStateHandlers } from "./cardState"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
+import { registerPipelinesVariableLayoutsHandlers } from "./pipelinesVariableLayouts"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
 import { registerRulesetHandlers } from "./rulesets"
 import { registerTunnelHandlers } from "./tunnels"
@@ -85,6 +88,7 @@ import { registerAllowedHostHandlers } from "./allowedHosts"
 import { registerBackupHandlers } from "./backups"
 import { registerUpdateHandlers } from "./updates"
 import { registerAdminOverviewHandlers } from "./adminOverview"
+import { registerAdminCastLiftHandlers } from "./adminCastLift"
 import { registerAdminLogbookHandlers } from "./adminLogbook"
 import {
 	logbookBegin,
@@ -308,9 +312,11 @@ export function connectSockets(io: {
 		registerKoboldCppHandlers(socket, emitToUser, register)
 		registerAudioCppHandlers(socket, emitToUser, register)
 		registerModelPresenceHandlers(socket, emitToUser, register)
+		registerModelHubCardHandlers(socket, emitToUser, register)
 		registerSystemSettingsHandlers(socket, emitToUser, register)
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerCharacterFolderHandlers(socket, emitToUser, register)
+		registerCharacterRowsHandlers(socket, emitToUser, register)
 		registerSpriteHandlers(socket, emitToUser, register)
 		// 🚧 Generate portrait (I8) — the Gallery tab's card action.
 		registerPortraitHandlers(socket, emitToUser, register)
@@ -357,6 +363,7 @@ export function connectSockets(io: {
 		registerLorebookStateHandlers(socket, emitToUser, register)
 		registerCardStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
+		registerPipelinesVariableLayoutsHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
 		registerRulesetHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)
@@ -364,6 +371,7 @@ export function connectSockets(io: {
 		registerBackupHandlers(socket, emitToUser, register)
 		registerUpdateHandlers(socket, emitToUser, register)
 		registerAdminOverviewHandlers(socket, emitToUser, register)
+		registerAdminCastLiftHandlers(socket, emitToUser, register)
 		registerAdminLogbookHandlers(socket, emitToUser, register)
 		registerTotpHandlers(socket, emitToUser, register)
 		registerAccountHandlers(socket, emitToUser, register)

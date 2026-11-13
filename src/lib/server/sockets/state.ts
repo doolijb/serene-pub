@@ -41,7 +41,7 @@
  * re-reads its own view. The widgets and plugin frames are handed
  * `session_state.v1`, built from `state:get`, so they read the same view.
  * And a value the caller does not hear is not theirs to change: `state:set`
- * and `state:configure` refuse it (`unheardWrite`), `state:decide` answers
+ * and `state:configure` refuse it (`state/handEdits.ts`), `state:decide` answers
  * a pending change the caller is not shown as one that does not exist, and
  * `state:get` offers no control for it (`describeState`).
  */
@@ -80,7 +80,15 @@ import {
 	type SessionLinks,
 	type TrackedSlot
 } from "$lib/server/state/resolve"
-import { castMemberKey, locationOwnerKey } from "$lib/server/state/keys"
+import { castLinkKey, castMemberKey, locationOwnerKey } from "$lib/server/state/keys"
+import { castOwnerOf } from "$lib/server/state/owners"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { isSeatedMemberOwner, storedSeatOwner } from "$lib/server/state/seatRefs"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { parseSeatRef } from "$lib/server/sessions/seats"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { cardsNowAsSeatsRead } from "$lib/server/pipelines/prompt/seatCards"
+import { handEditJudge, handEditRefusal } from "$lib/server/state/handEdits"
 import { carryableAttributes, carryKeyOf, carryRowsOf, notCarriedFor, setAttributeCarry } from "$lib/server/state/carries"
 import { sessionRulesets, withoutForeignRepertoire } from "$lib/server/rulesets/settings"
 import { repertoiresOnWire, withPiecesRead } from "$lib/server/rulesets/read"
@@ -89,6 +97,7 @@ import { entriesAsRead, MAIN_HEAD, placesOnReading } from "$lib/server/state/ent
 import {
 	earshotSlots,
 	hearingOf,
+	hearingWithHiddenStats,
 	hears,
 	stateAsHeard,
 	valueHeard,
@@ -110,9 +119,6 @@ import {
 	assertLoreRefsInSession,
 	assertTracked,
 	setValue,
-	playerEditsOwnSheet,
-	lockAllows,
-	slotLockOf,
 	StateRefusal
 } from "$lib/server/state/write"
 
@@ -212,16 +218,39 @@ function echoingRequestId(
  * (`setValue`, `configure`, `decideProposal`) with the caller as `userId`,
  * inside the refusal `guarded` turns into a sentence.
  */
-function owner(
+const CARD_STATS_ELSEWHERE = "Card stats are edited in the card editor."
+
+async function owner(
 	emitToUser: (event: string, data: any) => void,
 	event: string,
+	sessionId: number,
 	raw: unknown
-): StateOwner {
-	const o = raw as { kind?: unknown; id?: unknown } | undefined
+): Promise<StateOwner> {
+	// 🚧 A seated member (`{ kind: "seated_member", id }`) is read as its seat's stored owner at the door.
+	const seated = await seatedOwnerAtDoor(sessionId, raw)
+	if (seated === null) refuse(emitToUser, event, NOT_IN_CAST)
+	const o = seated as { kind?: unknown; id?: unknown } | undefined
 	if (!isOwnerKind(o?.kind) || typeof o?.id !== "number")
 		refuse(emitToUser, event, "That is not an owner.")
 	return { kind: o!.kind as StateOwner["kind"], id: o!.id as number }
 }
+
+/**
+ * 🚧 An owner a client names as `{ kind: "seated_member", id: <memberId> }`, as its seat's stored owner
+ * (`session_cast` by card / `player_seat` by seat id); any other owner is passed on as it came. Null when
+ * the member has no seat in this session — every door refuses that in `NOT_IN_CAST`, the sentence the
+ * state layer already gives for a character outside the cast. No row is ever written under `seated_member`
+ * while the flip is off; once it is on (`memberForm.ts`) the door reads the other way — a `session_cast`
+ * owner comes back as its seat's `seated_member` / `player_seat`.
+ */
+const seatedOwnerAtDoor = async (sessionId: number, raw: unknown): Promise<unknown | null> => {
+	// 🚧 ⏳ Flip on (`memberForm.ts`): the door runs the other way too — a `session_cast` owner comes back as its seat's member form; a member-less seat (the door answers null) keeps its card form.
+	if (memberFormOn() && raw && typeof raw === "object" && (raw as { kind?: unknown }).kind === "session_cast")
+		return (await storedSeatOwner(db, sessionId, raw as { kind: unknown; id: unknown })) ?? raw
+	return isSeatedMemberOwner(raw) ? storedSeatOwner(db, sessionId, raw) : raw
+}
+
+const NOT_IN_CAST = "that character is not in this session's cast."
 
 /** A refusal from the state layer is a sentence a person wrote; pass it through. */
 async function guarded<T>(
@@ -296,75 +325,76 @@ const toProposalRow = (row: any): Sockets.State.ProposalRow => ({
  * Which cast members' holder-only values the caller's replies carry (A28): all of
  * them for the session's owner, the members they portray for anybody else.
  */
-const callerHearing = async (socket: any, sessionId: number, links: SessionLinks): Promise<Hearing> =>
-	hearingOf(db, sessionId, socket.user!.id, links.cast, links.playerSeats)
-
-/**
- * Why the caller may not change `slotId` on `target`, or `null` when they
- * may (A28): a value not everybody hears is changed only by whoever hears
- * it — a holder-only one by the session's owner and whoever plays its
- * member, an owner-only one by the session's owner. A guest who cannot read
- * a whisper never overwrites or clears it, so its player never reads a
- * guest's words as the owner's.
- */
-/**
- * 🚧 Who may change it (PLAN-rulesets-functions D4, `changedBy`): a person's
- * write to an attribute of the session's ruleset whose `changedBy` leaves
- * them out is refused in words — the session's owner writes as the game
- * master, anyone else as the holder. Rules-only attributes change through
- * the rules (a function, a reply that carries changes), never by hand.
- */
-async function changedByRefusal(socket: any, sessionId: number, slotId: unknown): Promise<string | null> {
-	if (typeof slotId !== "string") return null
-	const [row] = await db
-		.select({ primaryRuleset: schema.sessions.primaryRuleset })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	const { getRuleset } = await import("@serene-pub/sdk")
-	const ruleset = row?.primaryRuleset ? getRuleset(row.primaryRuleset) : undefined
-	if (!ruleset) return null
-	const { changedByAllows } = await import("$lib/server/rulesets/scopes")
-	const access = await checkSessionAccess(sessionId, socket.user!.id)
-	const writer = access.isOwner ? "gm" : "holder"
-	if (changedByAllows(ruleset, slotId, writer)) return null
-	const decl = getAttributeSlot(slotId)
-	const label = (decl && i18nTextIn(decl.label)) ?? slotKey(slotId)
-	return writer === "gm"
-		? `${label} changes only by the rules — a function or a reply that carries changes — never by hand.`
-		: `Only the game master or the rules change ${label}.`
-}
-
-async function unheardWrite(
+const callerHearing = async (
 	socket: any,
 	sessionId: number,
-	target: StateOwner,
-	slotId: unknown
-): Promise<string | null> {
-	const slots = earshotSlots()
-	if (typeof slotId !== "string" || !(slots.holder.has(slotId) || slots.ownerOnly.has(slotId))) return null
-	const links = await sessionLinks(db, sessionId)
-	const hearing = await callerHearing(socket, sessionId, links)
-	if (valueHeard(hearing, slots, { owner: target, slotId }, castMemberOf(links))) return null
-	const decl = getAttributeSlot(slotId)
-	const label = (decl && i18nTextIn(decl.label)) ?? slotKey(slotId)
-	const characterId =
-		target.kind === "cast_member"
-			? castMemberOf(links)(target.id)
-			: target.kind === "session_cast" || target.kind === "card"
-				? target.id
-				: null
-	const name =
-		target.kind === "session_location" || target.kind === "location"
-			? links.locations.find((l) => l.entryId === target.id)?.name
-			: target.kind === "player_seat"
-				? links.playerSeats?.find((s) => s.playerSeatId === target.id)?.name
-				: links.cast.find((c) => c.characterId === characterId)?.name
-	const whose = name ? `${name}'s ${label}` : label
-	return slots.holder.has(slotId)
-		? `Only the session's owner and whoever plays ${name ?? "that character"} can change ${whose}.`
-		: `Only the session's owner can change ${whose}.`
+	links: SessionLinks
+): Promise<Hearing> =>
+	hearingOf(
+		db,
+		sessionId,
+		socket.user!.id,
+		links.cast,
+		links.playerSeats,
+		links.seatedMembers ?? []
+	)
+
+/**
+ * 🚧 The cast member ids of the live AI character seats `userId` seated in a
+ * session (`session_characters.seated_by_user_id`; envoys and departed rows excluded).
+ */
+async function seatsSeatedBy(
+	sessionId: number,
+	userId: number
+): Promise<Set<number>> {
+	const rows = await db
+		.select({ castMemberId: schema.sessionCharacters.castMemberId })
+		.from(schema.sessionCharacters)
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				isNull(schema.sessionCharacters.removedAt),
+				isNull(schema.sessionCharacters.envoySlug),
+				eq(schema.sessionCharacters.seatedByUserId, userId)
+			)
+		)
+	return new Set(
+		rows.flatMap((r) => (r.castMemberId != null ? [r.castMemberId] : []))
+	)
 }
+
+/**
+ * 🚧 This connection's seats showing hidden stats in a session, still valid: what the
+ * caller asked to read (`state:get` `showHiddenStats`) that they still seated. Lives
+ * as long as the connection, so a reload is a new visit.
+ */
+async function hiddenStatsShownMembers(
+	socket: any,
+	sessionId: number
+): Promise<Set<number>> {
+	const asked: Set<number> | undefined = socket.data?.hiddenStatsShown?.get(sessionId)
+	if (!asked || asked.size === 0) return new Set()
+	const seated = await seatsSeatedBy(sessionId, socket.user!.id)
+	return new Set([...asked].filter((m) => seated.has(m)))
+}
+
+/**
+ * 🚧 What the caller hears: `callerHearing` plus the AI seats they seated and asked to
+ * show hidden stats. It is the caller's hearing for reads, for their hand edits (judged by
+ * `sheetLatitudeAllows` through `handEditRefusal` / `handEditJudge`) and for the proposals they
+ * list and decide — ★s4-fb-3 (owner, 2026-11-10: "Seater may also edit"). Nobody else gains
+ * anything: only seats the caller seated count.
+ */
+const callerView = async (
+	socket: any,
+	sessionId: number,
+	links: SessionLinks
+): Promise<Hearing> =>
+	hearingWithHiddenStats(
+		await callerHearing(socket, sessionId, links),
+		links,
+		await hiddenStatsShownMembers(socket, sessionId)
+	)
 
 /**
  * The one place a write ends: re-resolve, answer the caller with the state as
@@ -381,7 +411,7 @@ async function settled(
 	// A referenced piece goes out read (§8): the widget carries no compendium.
 	const state = await withPiecesRead(
 		db,
-		stateAsHeard(await stateFor(db, sessionId), await callerHearing(socket, sessionId, links))
+		stateAsHeard(await stateFor(db, sessionId), await callerView(socket, sessionId, links))
 	)
 	const res = { sessionId, state }
 	emitToUser(event, res)
@@ -482,12 +512,40 @@ async function configuredPairs(layers: StateOwner[]): Promise<Set<string>> {
 	return new Set(rows.map((r) => `${r.ownerKind}:${r.ownerId}:${r.slotId}`))
 }
 
+/** A built owner row: a seat is its `castOwnerOf(link)` owner — `session_cast` / `player_seat` (flip off, `memberForm.ts`), 🚧 ⏳ `seated_member` / `player_seat` once it is on. */
+type BuiltOwnerRow = Sockets.State.StateOwnerRow
+
 /** The chain a session-layer owner resolves down. */
 const chainOf = (
-	owner: { kind: Sockets.State.StateOwnerRow["kind"]; id: number },
+	owner: { kind: BuiltOwnerRow["kind"]; id: number },
 	links: SessionLinks
-): StateOwner[] =>
-	resolutionChain(owner, {
+): StateOwner[] => {
+	// 🚧 ⏳ Flip on: a seat in member form is found by its member / seat id; its link says which card and members sit behind it.
+	const seat =
+		owner.kind === "seated_member"
+			? links.cast.find((c) => c.seatMemberId === owner.id)
+			: owner.kind === "player_seat" && memberFormOn()
+				? links.cast.find((c) => c.playerSeatId === owner.id)
+				: undefined
+	if (seat)
+		return resolutionChain(owner, {
+			castMemberId: seat.castMemberId ?? null,
+			characterId: seat.characterId,
+			lorebookId: links.lorebookId
+		})
+	// 🚧 ⏳ A card-less character seat: its member is its layer (as `chainFor` reads it), and it has no card layer.
+	const cardless =
+		owner.kind === "seated_member"
+			? links.seatedMembers?.find((s) => s.seatMemberId === owner.id)
+			: undefined
+	if (cardless)
+		return resolutionChain(owner, {
+			castMemberId:
+				cardless.castMemberId ?? cardless.ownBookMemberId ?? null,
+			characterId: null,
+			lorebookId: links.lorebookId
+		})
+	return resolutionChain(owner, {
 		castMemberId:
 			owner.kind === "session_cast"
 				? (links.cast.find((c) => c.characterId === owner.id)?.castMemberId ?? null)
@@ -495,6 +553,7 @@ const chainOf = (
 		characterId: owner.kind === "session_cast" ? owner.id : null,
 		lorebookId: links.lorebookId
 	})
+}
 
 /**
  * The slots THIS SESSION tracks — its vocabulary, which its genre enables
@@ -516,51 +575,46 @@ const chainOf = (
 async function ownSeatsOf(
 	sessionId: number,
 	viewerUserId: number | null
-): Promise<{ seatIds: Set<number>; cardIds: Set<number> }> {
+): Promise<{ seatIds: Set<number>; cardIds: Set<number>; memberIds: Set<number> }> {
 	const seatIds = new Set<number>()
 	const cardIds = new Set<number>()
-	if (viewerUserId == null) return { seatIds, cardIds }
+	// 🚧 ⏳ The cast members the viewer's own seats hold (flip on: a `seated_member` owner is "mine" by its member).
+	const memberIds = new Set<number>()
+	if (viewerUserId == null) return { seatIds, cardIds, memberIds }
 	const rows = await db
 		.select({
 			id: schema.sessionPersonas.id,
 			personaId: schema.sessionPersonas.personaId,
 			userId: schema.sessionPersonas.userId,
+			castMemberId: schema.sessionPersonas.castMemberId,
 			cardOwner: schema.characters.userId
 		})
 		.from(schema.sessionPersonas)
 		.leftJoin(schema.characters, eq(schema.characters.id, schema.sessionPersonas.personaId))
 		.where(and(eq(schema.sessionPersonas.sessionId, sessionId), isNull(schema.sessionPersonas.removedAt)))
 	for (const r of rows) {
-		if ((r.userId ?? r.cardOwner) !== viewerUserId) continue
+		// 🚧 A seat whose member is seated is owned by the owner of the member's active card (the
+		// seat's card when the member is cardless); a seat with no member, by its card.
+		let cardOwner = r.cardOwner
+		if (r.userId == null && r.castMemberId != null && r.personaId != null) {
+			const active = (await memberAsRead(db, r.castMemberId, { sessionId }))
+				?.activeCardId
+			if (active != null && active !== r.personaId) {
+				const [card] = await db
+					.select({ userId: schema.characters.userId })
+					.from(schema.characters)
+					.where(eq(schema.characters.id, active))
+					.limit(1)
+				cardOwner = card?.userId ?? null
+			}
+		}
+		if ((r.userId ?? cardOwner) !== viewerUserId) continue
 		seatIds.add(r.id)
 		if (r.personaId != null) cardIds.add(r.personaId)
+		if (r.castMemberId != null) memberIds.add(r.castMemberId)
 	}
-	return { seatIds, cardIds }
+	return { seatIds, cardIds, memberIds }
 }
-
-/**
- * 🚧 Whether the viewer may change an owner's values by hand (audit A14) —
- * the same answer the write gives (`assertSessionOwner`, `state/write.ts`),
- * so a widget never offers an edit the host refuses:
- *
- *  · the world, a cast member, a place — play, any player's to change
- *    (what they cannot hear is filtered slot by slot, as the write does);
- *  · a player seat, card-less (`player_seat`) or carded (its card's
- *    `session_cast`, 2026-10-17) — the session's owner always; its own
- *    player only while Honour mode is on; anybody else never.
- *
- * A slot's `lock` (PLAN-sheet §10) is per slot, in `configs[slot].lock`;
- * an owner whose every slot is locked to the viewer reads `editable: false`
- * too (`lockAllows`, the write's own rule).
- */
-const ownerEditable =
-	(viewer: { sessionOwner: boolean; mySeats: ReadonlySet<number>; myCards: ReadonlySet<number>; seatCards: ReadonlySet<number>; playerHand: boolean }) =>
-	(owner: { kind: Sockets.State.StateOwnerRow["kind"]; id: number }): boolean => {
-		if (owner.kind === "player_seat") return viewer.sessionOwner || (viewer.mySeats.has(owner.id) && viewer.playerHand)
-		if (owner.kind === "session_cast" && viewer.seatCards.has(owner.id))
-			return viewer.sessionOwner || (viewer.myCards.has(owner.id) && viewer.playerHand)
-		return true
-	}
 
 /** 🚧 The cards voiced by a live player seat of the session — the carded seats, written as their cards. */
 async function seatCardsOf(sessionId: number): Promise<Set<number>> {
@@ -587,11 +641,9 @@ async function facesOf(
 	const seats = new Map<number, Face>()
 	const face = (id: number | null | undefined): Face => (id != null ? { src: mediaIdUrl(id), mediaRef: String(id) } : null)
 	if (castIds.length) {
-		const cards = await db
-			.select({ id: schema.characters.id, avatarMediaId: schema.characters.avatarMediaId })
-			.from(schema.characters)
-			.where(inArray(schema.characters.id, [...castIds]))
-		for (const c of cards) cast.set(c.id, face(c.avatarMediaId))
+		// The seat's member's face as read; a card no member answers for, its current version's.
+		const cards = await cardsNowAsSeatsRead(db, sessionId, castIds)
+		for (const c of cards.values()) cast.set(c.id, face(c.avatarMediaId))
 	}
 	const portraits = await db
 		.select({
@@ -617,10 +669,14 @@ async function describeState(
 	tracked: readonly TrackedSlot[],
 	hearing: Hearing,
 	/** 🚧 Who is asking: their own seat's owner rows carry `mine` (the stats widget's `owners: 'mine'`). */
-	viewerUserId: number | null = null
+	viewerUserId: number | null = null,
+	/** 🚧 What the viewer hears (`callerView`): for reads and for the hand-edit judge (★s4-fb-3). */
+	viewHearing: Hearing = hearing,
+	/** 🚧 The seats this connection shows hidden stats for (`hiddenStatsShownMembers`). */
+	hiddenStatsShown: ReadonlySet<number> = new Set()
 ): Promise<{
 	slots: Sockets.State.SlotDescriptor[]
-	owners: Sockets.State.StateOwnerRow[]
+	owners: BuiltOwnerRow[]
 }> {
 	const trackedById = new Map(tracked.map((t) => [t.id, t]))
 	// 🚧 In the session's own order (2026-10-18, the 100-turn walk #40): the
@@ -639,44 +695,87 @@ async function describeState(
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 	const plays = sessionRulesets(session)
-	// The session's owner hears everything; a player's hand on their own
-	// sheet waits on Honour mode. Read once, only when there is a seat to ask about.
+	// 🚧 Who the viewer is and what their hand may change (`state/handEdits.ts`, plan §25 B): the
+	// same decider the writes ask, so a widget never offers an edit the host refuses.
 	const seatCards = await seatCardsOf(sessionId)
-	const playerHand =
-		!hearing.all && ((links.playerSeats ?? []).length || seatCards.size)
-			? await playerEditsOwnSheet(db, sessionId)
-			: false
-
-	const { seatIds: mySeats, cardIds: myCards } = await ownSeatsOf(sessionId, viewerUserId)
+	const { seatIds: mySeats, cardIds: myCards, memberIds: myMembers } = await ownSeatsOf(sessionId, viewerUserId)
 	const sessionOwner = viewerUserId != null ? session?.userId === viewerUserId : hearing.all
-	const editable = ownerEditable({ sessionOwner, mySeats, myCards, seatCards, playerHand })
+	// 🚧 The AI seats the viewer seated (not for the owner, who hears everything): `showingHiddenStats` rides their owner row.
+	const seatedByViewer =
+		viewerUserId != null && !sessionOwner ? await seatsSeatedBy(sessionId, viewerUserId) : new Set<number>()
+	const showingHiddenStatsOf = (memberId: number | null | undefined) =>
+		typeof memberId === "number" && seatedByViewer.has(memberId) ? { showingHiddenStats: hiddenStatsShown.has(memberId) } : {}
+	const judge = await handEditJudge(db, sessionId, viewerUserId, { links, hearing: viewHearing })
 	const faces = await facesOf(
 		sessionId,
-		links.cast.map((m) => m.characterId),
+		[
+			...links.cast.map((m) => m.characterId),
+			// A card-less seat's face is its member's active card's.
+			...(links.seatedMembers ?? []).flatMap((s) =>
+				s.seatActiveCardId != null ? [s.seatActiveCardId] : []
+			)
+		],
 		(links.playerSeats ?? []).map((p) => p.playerSeatId)
 	)
 
-	const owners: Sockets.State.StateOwnerRow[] = [
+	const owners: BuiltOwnerRow[] = [
 		{
 			key: "world",
 			kind: "session",
 			id: sessionId,
 			label: session?.name ?? "World",
-			editable: editable({ kind: "session", id: sessionId }),
+			editable: false,
 			face: null,
 			configs: {}
 		},
-		...links.cast.map((member) => ({
-			key: castKey(member.name),
-			kind: "session_cast" as const,
-			id: member.characterId,
-			label: member.name,
-			editable: editable({ kind: "session_cast", id: member.characterId }),
-			face: faces.cast.get(member.characterId) ?? null,
-			// 🚧 The viewer's own card, seated as their player seat.
-			...(myCards.has(member.characterId) ? { mine: true } : {}),
-			// 🚧 A card seated as a player seat (2026-10-18): `owners: seats`.
-			...(seatCards.has(member.characterId) ? { seat: true } : {}),
+		...links.cast.map((member) => {
+			// 🚧 ⏳ Flip on (`memberForm.ts`): the seat's own owner — `seated_member` by its member, `player_seat` for a carded player seat; off, always its card's `session_cast`.
+			const stored = castOwnerOf(member)
+			const inMemberForm = stored.kind !== "session_cast"
+			return {
+				key: stored.kind === "player_seat" ? castLinkKey(member) : castKey(member.name),
+				kind: stored.kind as BuiltOwnerRow["kind"],
+				id: stored.id,
+				label: member.name,
+				// 🚧 Host-filled identity (S3): the card form of the seat's ref until S4.
+				ref:
+					stored.kind === "seated_member"
+						? `seated-member:${stored.id}`
+						: stored.kind === "player_seat"
+							? `player-seat:${stored.id}`
+							: `character:${member.characterId}`,
+				castMemberId: member.seatMemberId ?? null,
+				editable: false,
+				face: faces.cast.get(member.characterId) ?? null,
+				// 🚧 The viewer's own card, seated as their player seat; in member form, their own seat.
+				...((
+					stored.kind === "player_seat"
+						? mySeats.has(stored.id)
+						: stored.kind === "seated_member"
+							? myMembers.has(stored.id)
+							: myCards.has(member.characterId)
+				)
+					? { mine: true }
+					: {}),
+				...(stored.kind === "seated_member" ? showingHiddenStatsOf(stored.id) : {}),
+				// 🚧 A card seated as a player seat (2026-10-18): `owners: seats`.
+				...((inMemberForm ? stored.kind === "player_seat" : seatCards.has(member.characterId)) ? { seat: true } : {}),
+				configs: {}
+			}
+		}),
+		// 🚧 ⏳ Each card-less character seat (flip on): keyed as `stateFor` files it (`castKey(name)`);
+		// ⚠ its `id` is a member id, never a card id — the face reads its member's active card, if any.
+		...(links.seatedMembers ?? []).map((seat) => ({
+			key: castKey(seat.name),
+			kind: "seated_member" as const,
+			id: seat.seatMemberId,
+			label: seat.name,
+			ref: `seated-member:${seat.seatMemberId}`,
+			castMemberId: seat.seatMemberId,
+			editable: false,
+			face: (seat.seatActiveCardId != null ? faces.cast.get(seat.seatActiveCardId) : null) ?? null,
+			...(myMembers.has(seat.seatMemberId) ? { mine: true } : {}),
+			...showingHiddenStatsOf(seat.seatMemberId),
 			configs: {}
 		})),
 		// 🚧 Each card-less player seat: a cast member with no card, keyed
@@ -688,10 +787,9 @@ async function describeState(
 			kind: "player_seat" as const,
 			id: seat.playerSeatId,
 			label: seat.name,
-			// 🚧 The session's owner writes any seat's sheet; its player
-			// only while Honour mode is on (`assertSessionOwner`,
-			// 2026-10-16) — so a player's own sheet draws read-only until then.
-			editable: editable({ kind: "player_seat", id: seat.playerSeatId }),
+			ref: `player-seat:${seat.playerSeatId}`,
+			castMemberId: seat.seatMemberId ?? null,
+			editable: false,
 			face: faces.seats.get(seat.playerSeatId) ?? null,
 			...(mySeats.has(seat.playerSeatId) ? { mine: true } : {}),
 			seat: true,
@@ -707,7 +805,7 @@ async function describeState(
 					kind: "session_location" as const,
 					id: place.entryId,
 					label: place.name,
-					editable: editable({ kind: "session_location", id: place.entryId }),
+					editable: false,
 					face: null,
 					configs: {}
 				}))
@@ -737,7 +835,7 @@ async function describeState(
 			if (off?.has(decl.id)) continue
 			// Nor is one the caller does not hear there (A28): a guest is
 			// offered no Whisper box on a character they do not play.
-			if (!valueHeard(hearing, slots, { owner: { kind: owner.kind, id: owner.id }, slotId: decl.id })) continue
+			if (!valueHeard(viewHearing, slots, { owner: { kind: owner.kind, id: owner.id }, slotId: decl.id })) continue
 			const deviates = chain.some((layer) =>
 				configured.has(`${layer.kind}:${layer.id}:${decl.id}`)
 			)
@@ -755,17 +853,32 @@ async function describeState(
 		// widget labels a piece and draws its form without the declaration (§8).
 		const repertoires = repertoiresOnWire(owner.configs)
 		if (repertoires) owner.repertoires = repertoires
-		// 🚧 Every slot locked to the viewer's hand (PLAN-sheet §10): nothing
-		// here is theirs to edit, whoever the owner is.
-		const configs = Object.values(owner.configs)
-		if (owner.editable && configs.length && configs.every((c) => !lockAllows(slotLockOf(c), { hand: true, sessionOwner })))
-			owner.editable = false
+		// 🚧 What the viewer's hand may change on this owner, slot by slot (`state/handEdits.ts`,
+		// plan §25 B): a refused slot carries its cause in words (`handLocked`, P1), and the owner
+		// is `editable` when anything on it is the viewer's to change — a value, a thing taken
+		// from a list it holds, or (a place) a thing put down there or picked up by the viewer.
+		const handLocked: Record<string, string> = {}
+		let handCanChange = false
+		for (const [slotId, config] of Object.entries(owner.configs)) {
+			const edit = judge.refusal({ owner: { kind: owner.kind, id: owner.id }, slotId, act: "set", config })
+			if (edit) handLocked[slotId] = edit.sentence
+			else handCanChange = true
+			if (
+				!handCanChange &&
+				owner.kind !== "session_location" &&
+				getAttributeSlot(slotId)?.type === "list" &&
+				!judge.refusal({ owner: { kind: owner.kind, id: owner.id }, slotId, act: "take-from", config })
+			)
+				handCanChange = true
+		}
+		owner.editable = handCanChange || (owner.kind === "session_location" && judge.role !== "watcher")
+		if (Object.keys(handLocked).length) owner.handLocked = handLocked
 	}
 
 	// 🚧 What the ruleset works out from each character's sheet and puts on
 	// it (2026-10-18, `derived`): armour class, read-only on the widget. Only
 	// the cast and the seats carry a sheet the ruleset reads.
-	const sheeted = owners.filter((o) => o.kind === "session_cast" || o.kind === "player_seat")
+	const sheeted = owners.filter((o) => o.kind === "session_cast" || o.kind === "seated_member" || o.kind === "player_seat")
 	if (sheeted.length && plays.length) {
 		const { sheetDerivedOf } = await import("$lib/server/rulesets/resolve")
 		const derived = await sheetDerivedOf(db, sessionId, sheeted)
@@ -862,6 +975,11 @@ async function ledgerFor(
 	// Q3-2, the walk's N14: "P2 Solo VI points Time Day 1, 08:00 → 08:05").
 	const worldLabel = ""
 	const memberOf = new Map(links.cast.map((c) => [c.characterId, c]))
+	// 🚧 ⏳ Flip on: a `seated_member` row is named by the seat whose member it is.
+	const memberOfSeatMember = new Map<number, { name: string }>([
+		...(links.seatedMembers ?? []).map((s) => [s.seatMemberId, s] as const),
+		...links.cast.flatMap((c) => (c.seatMemberId != null ? [[c.seatMemberId, c] as const] : []))
+	])
 
 	const slots = earshotSlots()
 	const values = (
@@ -889,31 +1007,43 @@ async function ledgerFor(
 				.select({
 					id: schema.sessionPersonas.id,
 					seatName: schema.sessionPersonas.seatName,
-					cardName: schema.characters.name
+					personaId: schema.sessionPersonas.personaId,
+					castMemberId: schema.sessionPersonas.castMemberId
 				})
 				.from(schema.sessionPersonas)
-				.leftJoin(
-					schema.characters,
-					eq(schema.characters.id, schema.sessionPersonas.personaId)
-				)
 				.where(eq(schema.sessionPersonas.sessionId, sessionId))
 		: []
-	const seatOf = new Map(
-		seatRows.map((r) => [r.id, r.seatName?.trim() || r.cardName || ""])
+	const seatCardNow = await cardsNow(
+		db,
+		seatRows.flatMap((r) => (r.personaId != null ? [r.personaId] : []))
 	)
+	// 🚧 …else the seat's cast member as read over its active card (the card's name when it has no member).
+	const seatLabelOf = new Map<number, string>()
+	for (const r of seatRows) {
+		const read =
+			!r.seatName?.trim() && r.castMemberId != null && r.personaId != null
+				? await memberAsRead(db, r.castMemberId, { sessionId })
+				: null
+		seatLabelOf.set(r.id, r.seatName?.trim() || read?.name || (r.personaId != null ? seatCardNow.get(r.personaId)?.name : undefined) || "")
+	}
 	const named = (ownerKind: string, ownerId: number) =>
 		ownerKind === "session"
 			? { key: "world", label: worldLabel }
 			: ownerKind === "player_seat"
 				? {
 						key: castMemberKey({ playerSeatId: ownerId }),
-						label: seatOf.get(ownerId) ?? ""
+						label: seatLabelOf.get(ownerId) ?? ""
 					}
 			: ownerKind === "session_location"
 				? {
 						key: locationOwnerKey(placeOf.get(ownerId)?.name ?? String(ownerId)),
 						label: placeOf.get(ownerId)?.name ?? ""
 					}
+				: ownerKind === "seated_member"
+					? {
+							key: castKey(memberOfSeatMember.get(ownerId)?.name ?? ""),
+							label: memberOfSeatMember.get(ownerId)?.name ?? ""
+						}
 				: {
 						key: castKey(memberOf.get(ownerId)?.name ?? ""),
 						label: memberOf.get(ownerId)?.name ?? ""
@@ -1016,7 +1146,8 @@ async function ledgerFor(
 				toLabel: move.toLabel,
 				from: move.from,
 				to: move.to,
-				skipped: move.skipped
+				skipped: move.skipped,
+				reason: move.reason
 			}
 		}))
 	]
@@ -1056,12 +1187,18 @@ async function ledgerPlaces(links: SessionLinks): Promise<LocationLink[]> {
 	const out: LocationLink[] = links.lorebookId
 		? await placesOnReading(db, links.lorebookId, links.reading ?? MAIN_HEAD, "book")
 		: []
-	// 🚧 The session's own notes' rooms too (PLAN-rulesets §26): a crawl with
-	// no lorebook names its rooms from them, at the notes' head.
+	// 🚧 The session's own notes' rooms too (PLAN-rulesets §26): a crawl whose
+	// lorebook is its own notes names its rooms from them — at main's head beside an
+	// attached book, on the session's reading when it reads them alone.
 	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
 	const ownBook = await ownBookOf(db, links.sessionId)
 	if (ownBook && ownBook.id !== links.lorebookId)
-		for (const place of await placesOnReading(db, ownBook.id, MAIN_HEAD, "book"))
+		for (const place of await placesOnReading(
+			db,
+			ownBook.id,
+			links.lorebookId ? MAIN_HEAD : (links.reading ?? MAIN_HEAD),
+			"book"
+		))
 			out.push({ ...place, sessionOnly: true })
 	return out
 }
@@ -1093,6 +1230,9 @@ async function baselinesFor(
 	const memberByKey = new Map(
 		links.cast.map((c) => [castKey(c.name), c] as const)
 	)
+	const seatByKey = new Map(
+		(links.seatedMembers ?? []).map((s) => [castKey(s.name), s] as const)
+	)
 	const placeByKey = new Map(
 		places.map((l) => [locationOwnerKey(l.name), l] as const)
 	)
@@ -1105,7 +1245,12 @@ async function baselinesFor(
 				? [{ kind: "cast_member" as const, id: c.castMemberId }]
 				: []),
 			{ kind: "card" as const, id: c.characterId }
-		])
+		]),
+		// A card-less seat's member is its layer; it has no card.
+		...(links.seatedMembers ?? []).flatMap((s) => {
+			const id = s.castMemberId ?? s.ownBookMemberId
+			return id ? [{ kind: "cast_member" as const, id }] : []
+		})
 	]
 	const rowsAt = await valuedPairs(layers)
 	// The bottom of the chain is the session's sheet default, then the
@@ -1115,6 +1260,8 @@ async function baselinesFor(
 	const out: Sockets.State.LedgerBaseline[] = []
 	for (const { ownerKey, slotId } of wanted.values()) {
 		const member = memberByKey.get(ownerKey)
+		const seat = member ? undefined : seatByKey.get(ownerKey)
+		const seatMemberId = seat ? (seat.castMemberId ?? seat.ownBookMemberId) : null
 		const place = placeByKey.get(ownerKey)
 		const owner: StateOwner | null =
 			ownerKey === "world"
@@ -1134,7 +1281,9 @@ async function baselinesFor(
 								id: member.castMemberId
 							}
 						: { kind: "card" as const, id: member.characterId }
-					: null
+					: seatMemberId && rowsAt.has(`cast_member:${seatMemberId}:${slotId}`)
+						? { kind: "cast_member" as const, id: seatMemberId }
+						: null
 		const value = owner
 			? await valueOf(
 					db,
@@ -1189,14 +1338,28 @@ export const stateGet: Handler<
 			"state:get",
 			params?.sessionId
 		)
+		// 🚧 `showHiddenStats` present (even `[]`) replaces this connection's set for the session, keeping only seats the caller seated.
+		if (Array.isArray(params?.showHiddenStats)) {
+			const seated = await seatsSeatedBy(sessionId, socket.user!.id)
+			const members = new Set<number>()
+			for (const ref of params.showHiddenStats) {
+				const parsed = typeof ref === "string" ? parseSeatRef(ref) : null
+				if (parsed?.form === "seated-member" && seated.has(parsed.id)) members.add(parsed.id)
+			}
+			socket.data ??= {}
+			const byTable: Map<number, Set<number>> = (socket.data.hiddenStatsShown ??= new Map())
+			byTable.set(sessionId, members)
+		}
 		const links = await sessionLinks(db, sessionId)
 		const state = await stateFor(db, sessionId)
 		const hearing = await callerHearing(socket, sessionId, links)
+		const hiddenStatsShown = await hiddenStatsShownMembers(socket, sessionId)
+		const viewHearing = hearingWithHiddenStats(hearing, links, hiddenStatsShown)
 		const res = {
 			sessionId,
 			// The caller's view: a whisper only for whoever may hear it (A28).
-			state: await withPiecesRead(db, stateAsHeard(state, hearing)),
-			...(await describeState(sessionId, links, state.slots, hearing, socket.user?.id ?? null)),
+			state: await withPiecesRead(db, stateAsHeard(state, viewHearing)),
+			...(await describeState(sessionId, links, state.slots, hearing, socket.user?.id ?? null, viewHearing, hiddenStatsShown)),
 			// 🚧 A table that keeps no numbers (Q2-3, ★3): its widgets draw words.
 			...((await keepsNoNumbers(sessionId)) ? { wordsOnly: true as const } : {}),
 			// 🚧 The people its story has met (Q3-5): Scene Portraits' faces.
@@ -1220,7 +1383,8 @@ async function storyTimeWords(sessionId: number, links: SessionLinks): Promise<{
 		const now = await sessionStoryNowOf(db, sessionId)
 		if (!now) return {}
 		const { formatDate } = await import("$lib/shared/lorebooks/storyDate")
-		const calendar = links.lorebookId ? await bookCalendarOf(db, links.lorebookId) : null
+		// The calendar of the book the session reads — its own notes' too (★bk-fold-1), which `links.calendar` holds.
+		const calendar = links.calendar ?? (links.lorebookId ? await bookCalendarOf(db, links.lorebookId) : null)
 		const words = formatDate(clockOfNow(now) as never, calendar)
 		return words ? { storyTime: words } : {}
 	} catch (e) {
@@ -1234,7 +1398,7 @@ async function storyTimeWords(sessionId: number, links: SessionLinks): Promise<{
  * walk's #29): the `core:entry/character-lore` entries of the session's OWN
  * notes (its own book — where a story that writes people, a dungeon
  * crawl's, puts each one it meets), as the session sees them, entry order.
- * ⏳ A session with a lorebook of its own lists none: that book holds people
+ * ⏳ A session that reads an attached lorebook lists no one: that book holds people
  * the story never met, and nothing yet marks the ones it did.
  */
 async function metPeopleOf(sessionId: number): Promise<{ entryId: number; name: string }[]> {
@@ -1247,7 +1411,9 @@ async function metPeopleOf(sessionId: number): Promise<{ entryId: number; name: 
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (row?.lorebookId && row.lorebookId !== ownBook.id) return []
-	const people = (await entriesAsRead(db, ownBook.id, MAIN_HEAD, "session", ["core:entry/character-lore"]))
+	const { sessionReadingOf } = await import("$lib/server/state/reading")
+	const ownAt = (await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+	const people = (await entriesAsRead(db, ownBook.id, ownAt, "session", ["core:entry/character-lore"]))
 		.filter((p) => !p.unseen && p.name.trim())
 		.map(({ entryId, name }) => ({ entryId, name: name.trim() }))
 	if (!people.length) return []
@@ -1320,7 +1486,7 @@ export const stateLedger: Handler<
 		const res = await ledgerFor(
 			sessionId,
 			links,
-			await callerHearing(socket, sessionId, links)
+			await callerView(socket, sessionId, links)
 		)
 		emitToUser("state:ledger", res)
 		return res
@@ -1353,7 +1519,9 @@ export const stateSetOwnerFace: Handler<
 				return refuseFace("Which session? None was named.")
 			const access = await checkSessionAccess(sessionId, socket.user!.id)
 			if (!access.hasAccess) return refuseFace("Session not found.")
-			const o = params.owner as { kind?: unknown; id?: unknown } | undefined
+			const seated = await seatedOwnerAtDoor(sessionId, params.owner)
+			if (seated === null) return refuseFace(NOT_IN_CAST)
+			const o = seated as { kind?: unknown; id?: unknown } | undefined
 			if (!o || typeof o.kind !== "string" || typeof o.id !== "number" || !Number.isInteger(o.id))
 				return refuseFace("Whose face? No owner was named.")
 			const { writeSeatPortrait } = await import("$lib/server/sessions/seatPortrait")
@@ -1404,22 +1572,34 @@ export const stateSet: Handler<
 				"state:set",
 				params?.sessionId
 			)
-			const target = owner(reply.emitToUser, "state:set", params?.owner)
+			const target = await owner(reply.emitToUser, "state:set", sessionId, params?.owner)
+			if (target.kind === "card") refuse(reply.emitToUser, "state:set", CARD_STATS_ELSEWHERE)
 			await guarded(reply.emitToUser, "state:set", async () => {
 				// Only what this session's genre enables (ruled 2026-09-25).
 				await assertTracked(db, sessionId, params.slotId)
-				// Only a value the writer hears (A28): a guest never changes a whisper they cannot read.
-				const unheard = await unheardWrite(socket, sessionId, target, params.slotId)
-				if (unheard) throw new StateRefusal(unheard)
-				// 🚧 Who may change it (D4): the ruleset's `changedBy` for its own attributes.
-				const notYours = await changedByRefusal(socket, sessionId, params.slotId)
-				if (notYours) throw new StateRefusal(notYours)
+				// 🚧 The one decider of a person's hand (`state/handEdits.ts`, plan §25 B): who they are in
+				// the session, whose the target is, the sheet latitude, `changedBy`, the stat's lock and
+				// whether they hear the value (A28). Judged on the session-visible owner, before the
+				// world-scope mapping below.
+				const links = await sessionLinks(db, sessionId)
+				const refused = await handEditRefusal(
+					db,
+					{
+						sessionId,
+						userId: socket.user!.id,
+						owner: target,
+						slotId: params.slotId,
+						act: "set"
+					},
+					{ links, hearing: await callerView(socket, sessionId, links) }
+				)
+				if (refused) throw new StateRefusal(refused.sentence)
 				// A lore reference names an entry of this session's lorebook (3a).
 				await assertLoreRefsInSession(db, sessionId, { value: params.value, slotId: params.slotId })
 				// 🚧 A slot that lives on the world (`scope: 'world'`, M0) is written to the book.
 				const written =
 					getAttributeSlot(params.slotId)?.scope === "world"
-						? await (await import("$lib/server/state/worldScope")).worldOwnerOf(db, sessionId, target)
+						? await (await import("$lib/server/state/worldScope")).worldOwnerOf(db, sessionId, target, socket.user!.id)
 						: target
 				return setValue(
 					db,
@@ -1495,10 +1675,26 @@ export const stateConfigure: Handler<
 			"state:configure",
 			params?.sessionId
 		)
-		const target = owner(emitToUser, "state:configure", params?.owner)
-		// Only a slot the writer hears on that owner (A28), as `state:set`.
-		const unheard = await unheardWrite(socket, sessionId, target, params?.slotId)
-		if (unheard) refuse(emitToUser, "state:configure", unheard)
+		const target = await owner(emitToUser, "state:configure", sessionId, params?.owner)
+		if (target.kind === "card") refuse(emitToUser, "state:configure", CARD_STATS_ELSEWHERE)
+		// 🚧 The one decider of a person's hand (`state/handEdits.ts`): only the session's owner sets or
+		// clears a lock, and a slot the writer does not hear is not theirs to touch (A28).
+		if (typeof params?.slotId === "string") {
+			const links = await sessionLinks(db, sessionId)
+			const refused = await handEditRefusal(
+				db,
+				{
+					sessionId,
+					userId: socket.user!.id,
+					owner: target,
+					slotId: params.slotId,
+					act: "configure",
+					lock: !!params.config && typeof params.config === "object" && "lock" in params.config
+				},
+				{ links, hearing: await callerView(socket, sessionId, links) }
+			)
+			if (refused) refuse(emitToUser, "state:configure", refused.sentence)
+		}
 		await guarded(emitToUser, "state:configure", () =>
 			configure(
 				db,
@@ -1529,7 +1725,7 @@ export const stateProposals: Handler<
 		const links = await sessionLinks(db, sessionId)
 		const res = {
 			sessionId,
-			proposals: await proposalRows(sessionId, await callerHearing(socket, sessionId, links), links)
+			proposals: await proposalRows(sessionId, await callerView(socket, sessionId, links), links)
 		}
 		emitToUser("state:proposals", res)
 		return res
@@ -1564,7 +1760,7 @@ export const stateDecide: Handler<
 		// not theirs to accept or reject (A28) — and is answered as one that
 		// does not exist, so guessing ids learns nothing.
 		const judging = await sessionLinks(db, sessionId)
-		if (!proposalHeard(await callerHearing(socket, sessionId, judging), earshotSlots(), row!.payload, judging))
+		if (!proposalHeard(await callerView(socket, sessionId, judging), earshotSlots(), row!.payload, judging))
 			refuse(emitToUser, "state:decide", "Proposal not found.")
 
 		const outcome = await guarded(emitToUser, "state:decide", () =>
@@ -1575,7 +1771,7 @@ export const stateDecide: Handler<
 		// moved since the proposal's base. `movedSlots` names it, and the
 		// row comes back in `proposals` collapsed for the list to draw.
 		const links = await sessionLinks(db, sessionId)
-		const hearing = await callerHearing(socket, sessionId, links)
+		const hearing = await callerView(socket, sessionId, links)
 		const res: Sockets.State.Decide.Response = {
 			sessionId,
 			proposalId: Number(params.proposalId),
@@ -1629,19 +1825,23 @@ export const stateGivePiece: Handler<Sockets.State.GivePiece.Params, Sockets.Sta
 				return refuseGive("Which session? None was named.")
 			const access = await checkSessionAccess(sessionId, socket.user!.id)
 			if (!access.hasAccess) return refuseGive("Session not found.")
-			const ownerOf = (raw: unknown): StateOwner | null => {
-				const o = raw as { kind?: unknown; id?: unknown } | undefined
+			const ownerOf = async (raw: unknown): Promise<StateOwner | null> => {
+				const o = (await seatedOwnerAtDoor(sessionId, raw)) as { kind?: unknown; id?: unknown } | null | undefined
 				return o && isOwnerKind(o.kind) && typeof o.id === "number" && Number.isInteger(o.id)
 					? { kind: o.kind as StateOwner["kind"], id: o.id }
 					: null
 			}
-			const from = ownerOf(params.from)
-			const to = ownerOf(params.to)
+			const from = await ownerOf(params.from)
+			const to = await ownerOf(params.to)
+			if (isSeatedMemberOwner(params.from) && !from) return refuseGive(NOT_IN_CAST)
+			if (isSeatedMemberOwner(params.to) && !to) return refuseGive(NOT_IN_CAST)
 			if (!from || !to) return refuseGive("Who gives it, and to whom? Both are named.")
 			if (typeof params.slotId !== "string" || !params.slotId) return refuseGive("Which list? None was named.")
 			if (typeof params.index !== "number" || !Number.isInteger(params.index) || params.index < 0)
 				return refuseGive("Which thing? None was named.")
 			const { givePiece } = await import("$lib/server/state/give")
+			// 🚧 Showing is hearing (★s4-fb-3): the judge sees the hidden stats this connection shows.
+			const links = await sessionLinks(db, sessionId)
 			const given = await givePiece(db, {
 				sessionId,
 				userId: socket.user!.id,
@@ -1649,7 +1849,8 @@ export const stateGivePiece: Handler<Sockets.State.GivePiece.Params, Sockets.Sta
 				to,
 				slotId: params.slotId,
 				index: params.index,
-				...(typeof params.count === "number" ? { count: params.count } : {})
+				...(typeof params.count === "number" ? { count: params.count } : {}),
+				known: { links, hearing: await callerView(socket, sessionId, links) }
 			})
 			const res = { sessionId, ...token, given: given.given }
 			emitToUser("state:givePiece", res)
@@ -1690,15 +1891,17 @@ export const stateShowTieSide: Handler<Sockets.State.ShowTieSide.Params, Sockets
 			const userId = socket.user!.id
 			const access = await checkSessionAccess(sessionId, userId)
 			if (!access.hasAccess) return refuse("Session not found.")
-			const o = params.owner as { kind?: unknown; id?: unknown } | undefined
-			if (!o || (o.kind !== "session_cast" && o.kind !== "player_seat") || typeof o.id !== "number" || !Number.isInteger(o.id))
+			const seated = await seatedOwnerAtDoor(sessionId, params.owner)
+			if (seated === null) return refuse(NOT_IN_CAST)
+			const o = seated as { kind?: unknown; id?: unknown } | undefined
+			if (!o || (o.kind !== "session_cast" && o.kind !== "seated_member" && o.kind !== "player_seat") || typeof o.id !== "number" || !Number.isInteger(o.id))
 				return refuse("Whose side? None was named.")
 			if (typeof params.entryType !== "string" || !params.entryType || typeof params.towards !== "string" || !params.towards)
 				return refuse("Which tie? None was named.")
 			// The holder's to show, or the game master's.
 			const [session] = await db.select({ userId: schema.sessions.userId }).from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1)
-			const { seatIds, cardIds } = await ownSeatsOf(sessionId, userId)
-			const mine = o.kind === "session_cast" ? cardIds.has(o.id) : seatIds.has(o.id)
+			const { seatIds, cardIds, memberIds } = await ownSeatsOf(sessionId, userId)
+			const mine = o.kind === "session_cast" ? cardIds.has(o.id) : o.kind === "seated_member" ? memberIds.has(o.id) : seatIds.has(o.id)
 			if (session?.userId !== userId && !mine) return refuse("Only its holder can show that side.")
 			const { setTieSideShown } = await import("$lib/server/rulesets/ties")
 			const done = await setTieSideShown(db, {
@@ -1815,10 +2018,19 @@ async function carriesOnWire(
 	const attributes = [...carryableAttributes(plays).values()]
 	if (!attributes.length) return []
 	const rows = await carryRowsOf(db, sessionId)
-	const hearing = sessionOwner ? null : await hearingOf(db, sessionId, userId, links.cast, links.playerSeats)
+	const hearing = sessionOwner
+		? null
+		: await hearingOf(
+				db,
+				sessionId,
+				userId,
+				links.cast,
+				links.playerSeats,
+				links.seatedMembers ?? []
+			)
 	type Holder = Sockets.State.Attributes.CarryHolder
 	const mayChange = (owner: Holder["owner"]) =>
-		sessionOwner || (!!hearing && (owner.kind === "session_cast" || owner.kind === "player_seat") && hears(hearing, carryKeyOf(owner)))
+		sessionOwner || (!!hearing && (owner.kind === "session_cast" || owner.kind === "seated_member" || owner.kind === "player_seat") && hears(hearing, carryKeyOf(owner)))
 	const holder = (owner: Holder["owner"], name: string, slotId: string): Holder => ({
 		owner,
 		name,
@@ -1829,7 +2041,15 @@ async function carriesOnWire(
 		const holders: Holder[] = []
 		if (a.carriedBy.includes("world")) holders.push(holder({ kind: "session", id: sessionId }, "The world", a.slotId))
 		if (a.carriedBy.includes("cast")) {
-			for (const m of links.cast) holders.push(holder({ kind: "session_cast", id: m.characterId }, m.name, a.slotId))
+			for (const m of links.cast) holders.push(holder(castOwnerOf(m) as Holder["owner"], m.name, a.slotId))
+			for (const seat of links.seatedMembers ?? [])
+				holders.push(
+					holder(
+						{ kind: "seated_member", id: seat.seatMemberId },
+						seat.name,
+						a.slotId
+					)
+				)
 			for (const seat of links.playerSeats ?? []) holders.push(holder({ kind: "player_seat", id: seat.playerSeatId }, seat.name, a.slotId))
 		}
 		if (a.carriedBy.includes("location"))
@@ -1881,7 +2101,7 @@ export const stateSetCarry: Handler<Sockets.State.SetCarry.Params, Sockets.State
 		const request = typeof params?.request === "string" && params.request ? params.request : undefined
 		const sessionId = await scoped(socket, emitToUser, event, params?.sessionId)
 		const about = { sessionId, ...(request ? { request } : {}) }
-		const target = owner(emitToUser, event, params?.owner)
+		const target = await owner(emitToUser, event, sessionId, params?.owner)
 		if (typeof params?.slotId !== "string" || typeof params?.carries !== "boolean")
 			refuse(emitToUser, event, "Say which attribute, and whether it is carried.", about)
 		const [session] = await db
@@ -1898,7 +2118,7 @@ export const stateSetCarry: Handler<Sockets.State.SetCarry.Params, Sockets.State
 			refuse(
 				emitToUser,
 				event,
-				target.kind === "session_cast" || target.kind === "player_seat"
+				target.kind === "session_cast" || target.kind === "seated_member" || target.kind === "player_seat"
 					? `Only whoever plays ${holder!.name}, or the session's owner, can change what ${holder!.name} carries.`
 					: "Only the session's owner can change what the world and its places carry.",
 				about

@@ -31,7 +31,6 @@ import {
 	type TurnOrderV1
 } from "@serene-pub/sdk"
 import { writeTurnOrder } from "./turnOrder"
-import { coreAnnexIn } from "./coreAnnex"
 
 let db: TestDb
 let userId: number
@@ -95,10 +94,10 @@ describe("pushTurnOrder", () => {
 		const { pushTurnOrder } = await import("./turnOrderPush")
 		await pushTurnOrder(io, session.id, order(2000, "explicit"))
 		const [row] = await db
-			.select({ annex: schema.sessions.annex })
+			.select({ turnOrder: schema.sessions.turnOrder })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, session.id))
-		expect(readTurnOrder(coreAnnexIn(row!.annex))).toEqual(
+		expect(readTurnOrder(row!)).toEqual(
 			readTurnOrder({ turnOrder: order(2000, "explicit") })
 		)
 	})

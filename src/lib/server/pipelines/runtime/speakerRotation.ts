@@ -34,6 +34,7 @@
  */
 
 import type { ParticipantRef } from "@serene-pub/sdk"
+import { inPlay } from "$lib/shared/sessions/inPlay"
 import {
 	countedTurns,
 	DEFAULT_CHANNEL,
@@ -52,6 +53,8 @@ export interface RotationSeat {
 	/** `characters.userId` — who owns the card, for the user-split rule. */
 	ownerUserId: number | null
 	name?: string
+	/** 🚧 ⏳ The seat's host-filled participant ref (member form once `state/memberForm.ts` is on); absent reads `character:<characterId>`. */
+	ref?: string
 }
 
 /** A seated in-turn envoy — a candidate when no character is due. */
@@ -101,6 +104,74 @@ const speakerRefOf = (m: RotationMessage): unknown =>
 /** The seat a person's line was sent from — the SDK's one reading (`senderRefOf`). */
 export { senderRefOf }
 
+/**
+ * 🚧 The cast lookup the SDK's turn-order rules take (`refOfMember` of
+ * `senderRefOf`, `spokenRefsSince`, `roundRobinOrder`): a cast member id → the
+ * `ref` the `session_cast` read's seat row carries for the seat that stores
+ * that member (member form when `state/memberForm.ts` is on, card form off —
+ * the host fills it). With no `seatKind` live seats come before departed ones,
+ * character seats before player seats, then by position (a member two seats
+ * share is the first's, as `seatOf` orders them). `'character-seat'` asks for
+ * the member's character seats first, `'player-seat'` for its player seats
+ * first (a member holding both: a person's line is the player seat, a reply
+ * the character seat); either falls back to any seat of the member. A row with
+ * no `ref` or no member stored answers nobody. Built from the cast in hand,
+ * never a query.
+ */
+export type SeatRefOfMember = (
+	castMemberId: number,
+	seatKind?: "character-seat" | "player-seat"
+) => ParticipantRef | undefined
+
+export function seatRefLookupOfCast(
+	cast: CastRead | null | undefined
+): SeatRefOfMember {
+	const seats: Array<{ live: boolean; player: boolean; position: number; memberId: number; ref: ParticipantRef }> = []
+	const take = (
+		row: { ref?: string | null; castMemberId?: number | null; removedAt?: unknown; position?: number | null } | null | undefined,
+		player: boolean,
+		index: number
+	) => {
+		if (!row || typeof row.ref !== "string" || !row.ref || row.castMemberId == null) return
+		seats.push({
+			live: row.removedAt == null,
+			player,
+			position: row.position ?? index,
+			memberId: row.castMemberId,
+			ref: row.ref as ParticipantRef
+		})
+	}
+	;(cast?.sessionCharacters ?? []).forEach((cc, i) => take(cc, false, i))
+	;(cast?.sessionPersonas ?? []).forEach((cp, i) => take(cp, true, i))
+	if (!seats.length) return () => undefined
+	// A kind hint ranks first (its live seats, then position); no hint is today's order.
+	const build = (preferPlayer: boolean | null) => {
+		const rank = (x: (typeof seats)[number]) =>
+			preferPlayer === null ? 0 : Number(x.player !== preferPlayer)
+		const by = new Map<number, ParticipantRef>()
+		const sorted = [...seats].sort((a, b) =>
+			preferPlayer === null
+				? Number(b.live) - Number(a.live) ||
+					Number(a.player) - Number(b.player) ||
+					a.position - b.position
+				: rank(a) - rank(b) || Number(b.live) - Number(a.live) || a.position - b.position
+		)
+		for (const seat of sorted)
+			if (!by.has(seat.memberId)) by.set(seat.memberId, seat.ref)
+		return by
+	}
+	const none = build(null)
+	const characterFirst = build(false)
+	const playerFirst = build(true)
+	return (castMemberId, seatKind) =>
+		(seatKind === "player-seat"
+			? playerFirst
+			: seatKind === "character-seat"
+				? characterFirst
+				: none
+		).get(castMemberId)
+}
+
 /** What `turn/select` scripts are handed, and hand back. */
 export interface TurnSelection {
 	/** The pick, once a link makes one. Null until then. */
@@ -127,7 +198,14 @@ export interface CastRead {
 		enabled?: boolean | null
 		position?: number | null
 		removedAt?: unknown
-		character?: { id: number; name?: string; userId?: number | null } | null
+		/** `id` and `userId` are absent on a card-less seat's card-shaped `character` (`cardlessSeatCard`). */
+		character?: { id?: number; name?: string; userId?: number | null } | null
+		/** 🚧 Host-filled identity (seat-cast S3): the seat's own participant ref and cast member. */
+		ref?: string | null
+		castMemberId?: number | null
+		seatId?: number
+		/** 🚧 Who seated it — the acting person of a card-less seat, never a card's `userId`; absent until the host `session_cast` read selects it. */
+		seatedByUserId?: number | null
 	}>
 	sessionPersonas?: Array<{
 		position?: number | null
@@ -137,6 +215,9 @@ export interface CastRead {
 		seatId?: number
 		seatName?: string | null
 		seatUserId?: number | null
+		/** 🚧 Host-filled identity (seat-cast S3): the seat's own participant ref and cast member. */
+		ref?: string | null
+		castMemberId?: number | null
 	}>
 	envoys?: Array<{
 		slug: string
@@ -155,20 +236,26 @@ export interface CastRead {
 export function rotationSeats(cast: CastRead): RotationSeat[] {
 	return (cast.sessionCharacters ?? [])
 		.map((cc, index) => ({ cc, position: cc.position ?? index }))
-		.filter(({ cc }) => cc.character && cc.enabled === true && !cc.removedAt)
+		// A card-less seat (no card id) is not rotated by card id: it is a
+		// turn-pool candidate by its ref and member.
+		.filter(
+			({ cc }) =>
+				cc.character?.id != null && inPlay(cc)
+		)
 		.sort((a, b) => a.position - b.position)
 		.map(({ cc, position }) => ({
-			characterId: cc.character!.id,
+			characterId: cc.character!.id!,
 			position,
 			ownerUserId: cc.character!.userId ?? null,
-			name: cc.character!.name
+			name: cc.character!.name,
+			...(typeof cc.ref === "string" && cc.ref ? { ref: cc.ref } : {})
 		}))
 }
 
 /** The persona seats, for the user-split rule. */
 export function rotationPersonas(cast: CastRead): RotationPersona[] {
 	return (cast.sessionPersonas ?? [])
-		.filter((cp) => cp.persona && !cp.removedAt)
+		.filter((cp) => cp.persona && inPlay(cp))
 		.map((cp) => ({
 			personaId: cp.persona!.id,
 			ownerUserId: cp.persona!.userId ?? null
@@ -286,13 +373,24 @@ export function nextEnvoyTurn(
 	).slug
 }
 
-/** The newest reply's speaker as a reference, or null when the person spoke last. */
+/**
+ * The newest reply's speaker as a reference, or null when the person spoke
+ * last. 🚧 ⏳ With the cast lookup a reply with a `castMemberId` the cast
+ * answers is that seat's ref (member form once `state/memberForm.ts` is on);
+ * else the card form, until S5.
+ */
 export function lastSpeakerRef(
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): ParticipantRef | null {
 	const turns = rotationTurns(messages)
 	const newest = turns[turns.length - 1]
 	if (!newest || newest.role !== "assistant") return null
+	const seat =
+		newest.castMemberId != null && refOfMember
+			? refOfMember(newest.castMemberId, "character-seat")
+			: undefined
+	if (seat) return seat
 	if (newest.characterId != null) return `character:${newest.characterId}`
 	const ref = speakerRefOf(newest)
 	return typeof ref === "string" && ref.startsWith("envoy:")
@@ -307,16 +405,20 @@ export function lastSpeakerRef(
 export function turnSelection(
 	seats: readonly RotationSeat[],
 	envoys: readonly RotationEnvoy[],
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): TurnSelection {
 	const turns = rotationTurns(messages)
 	const dueId = roundRobinSpeaker(seats, messages)
+	/** The seat's ref: the row's host-filled one, else the card form. */
+	const refOfCard = (id: number) =>
+		(seats.find((s) => s.characterId === id)?.ref ?? `character:${id}`) as ParticipantRef
 	const dueEnvoy = dueId == null ? nextEnvoyTurn(envoys, messages) : null
 	return {
 		speaker: null,
 		candidates: [
 			...seats.map((s) => ({
-				speaker: `character:${s.characterId}` as ParticipantRef,
+				speaker: refOfCard(s.characterId),
 				characterId: s.characterId,
 				name: s.name,
 				position: s.position
@@ -330,11 +432,11 @@ export function turnSelection(
 		],
 		due:
 			dueId != null
-				? `character:${dueId}`
+				? refOfCard(dueId)
 				: dueEnvoy
 					? `envoy:${dueEnvoy}`
 					: null,
-		lastSpeaker: lastSpeakerRef(turns),
+		lastSpeaker: lastSpeakerRef(turns, refOfMember),
 		sinceUser: turns.length - 1 - lastUserIndex(turns)
 	}
 }
@@ -388,9 +490,10 @@ export interface TurnCandidate {
  * plugin's strategy reads too, so core and plugins cannot drift.
  */
 export function spokenRefsSince(
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): Set<string> {
-	return sdkSpokenRefsSince(messages)
+	return sdkSpokenRefsSince(messages, refOfMember)
 }
 
 /** Whether a row is a person's line on `main` (a row with no channel, or a `main` lane, is `main`'s). */
@@ -459,14 +562,15 @@ const heldOn = (
  */
 export function standingTurnPlan(
 	messages: readonly RotationMessage[],
-	before?: number
+	before?: number,
+	refOfMember?: SeatRefOfMember
 ): { index: number; turns: ParticipantRef[]; row: RotationMessage } | null {
 	const counts = (row: RotationMessage | null | undefined): row is RotationMessage =>
 		!!row && !row.isHidden && !(before !== undefined && typeof row.id === "number" && row.id >= before)
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const row = messages[i]
 		if (!counts(row)) continue
-		if (isPersonsMainLine(row) && senderRefOf(row) === null) return null
+		if (isPersonsMainLine(row) && senderRefOf(row, refOfMember) === null) return null
 		const turns = plannedRefsOf(row)
 		if (!turns) continue
 		// The person lines after it, oldest first: each a seat's own turn.
@@ -474,7 +578,7 @@ export function standingTurnPlan(
 		for (const ref of planList(row, "skipped")) waiting.delete(ref)
 		for (const later of messages.slice(i + 1)) {
 			if (!counts(later) || !isPersonsMainLine(later)) continue
-			const sender = senderRefOf(later)
+			const sender = senderRefOf(later, refOfMember)
 			if (!sender || !waiting.has(sender)) return null
 			waiting.delete(sender)
 		}
@@ -494,11 +598,14 @@ export function standingTurnPlan(
  * rewrite D3) nothing is prepared yet. `planned` is whether a plan stands at
  * all — one naming nobody still answered the person's line.
  */
-function plannedTurns(messages: readonly RotationMessage[]): {
+function plannedTurns(
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
+): {
 	planned: boolean
 	entries: TurnEntry[]
 } {
-	const standing = standingTurnPlan(messages)
+	const standing = standingTurnPlan(messages, undefined, refOfMember)
 	if (!standing) return { planned: false, entries: [] }
 	const after = messages.slice(standing.index + 1)
 	if (heldOn(standing.row, after)) return { planned: true, entries: [] }
@@ -507,9 +614,19 @@ function plannedTurns(messages: readonly RotationMessage[]): {
 		if (!row || row.isHidden) continue
 		if (row.stopped === true) return { planned: true, entries: [] }
 		if (parseChannel(row.channel ?? DEFAULT_CHANNEL).slug !== DEFAULT_CHANNEL) continue
+		// 🚧 ⏳ A reply is read in both forms: the seat's own ref (member form once on) and the card form a plan may still name.
 		if (typeof row.characterId === "number") spoken.add(`character:${row.characterId}`)
+		if (row.role === "assistant" && row.castMemberId != null) {
+			const seat = refOfMember?.(row.castMemberId, "character-seat")
+			if (seat) spoken.add(seat)
+		}
+		// ⏳ The narrator strategy holds no cast (its pool admits nobody): the speaker stamp on a reply is its seat's ref in member form once on.
+		if (row.role === "assistant") {
+			const stamped = speakerRefOf(row)
+			if (typeof stamped === "string") spoken.add(stamped)
+		}
 		if (row.role === "user") {
-			const sender = senderRefOf(row)
+			const sender = senderRefOf(row, refOfMember)
 			if (sender) spoken.add(sender)
 		}
 	}
@@ -550,7 +667,8 @@ function plannedTurns(messages: readonly RotationMessage[]): {
  * hands the reply road.
  */
 export function narratorEntries(
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): TurnEntry[] {
 	const newest = new Map<string, { index: number; row: RotationMessage }>()
 	messages.forEach((row, index) => {
@@ -560,7 +678,7 @@ export function narratorEntries(
 			row
 		})
 	})
-	const plan = plannedTurns(messages)
+	const plan = plannedTurns(messages, refOfMember)
 	const voices: TurnEntry[] = [...newest]
 		.filter(([, { row }]) => row.role === "user")
 		.filter(([channel]) => !(plan.planned && channel === DEFAULT_CHANNEL))
@@ -579,9 +697,10 @@ export function narratorEntries(
  */
 export function roundRobinEntries(
 	candidates: readonly TurnCandidate[],
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): TurnEntry[] {
-	return roundRobinOrder(candidates, messages)
+	return roundRobinOrder(candidates, messages, refOfMember)
 }
 
 /**
@@ -591,18 +710,19 @@ export function roundRobinEntries(
  */
 export function userSplitEntries(
 	candidates: readonly TurnCandidate[],
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): TurnEntry[] {
 	const turns = rotationTurns(messages)
 	const at = lastUserIndex(turns)
-	const sender = at >= 0 ? senderRefOf(turns[at]!) : null
+	const sender = at >= 0 ? senderRefOf(turns[at]!, refOfMember) : null
 	const owner =
 		sender != null
 			? (candidates.find((c) => c.ref === sender)?.ownerUserId ?? null)
 			: null
 	const own =
 		owner != null ? candidates.filter((c) => c.ownerUserId === owner) : []
-	return roundRobinEntries(own.length ? own : candidates, messages)
+	return roundRobinEntries(own.length ? own : candidates, messages, refOfMember)
 }
 
 /**
@@ -692,7 +812,8 @@ export interface TurnOrderSelection {
  * (`isNarratorResponse`, a side note) are skipped; a row from no seat (no persona, no `player-seat:` speaker) is counted by nobody.
  */
 export function sentSinceReply(
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): Record<string, string[]> {
 	const out: Record<string, string[]> = {}
 	const closed = new Set<string>()
@@ -707,7 +828,7 @@ export function sentSinceReply(
 			closed.add(channel)
 			continue
 		}
-		const ref = senderRefOf(row)
+		const ref = senderRefOf(row, refOfMember)
 		if (!ref) continue
 		const list = (out[channel] ??= [])
 		if (!list.includes(ref)) list.push(ref)
@@ -718,16 +839,17 @@ export function sentSinceReply(
 /** The selection a scripted strategy builds before it calls its chain. */
 export function turnOrderSelection(
 	candidates: readonly TurnCandidate[],
-	messages: readonly RotationMessage[]
+	messages: readonly RotationMessage[],
+	refOfMember?: SeatRefOfMember
 ): TurnOrderSelection {
 	const turns = rotationTurns(messages)
 	return {
-		order: roundRobinEntries(candidates, messages),
+		order: roundRobinEntries(candidates, messages, refOfMember),
 		candidates: [...candidates],
-		lastSpeaker: lastSpeakerRef(turns),
+		lastSpeaker: lastSpeakerRef(turns, refOfMember),
 		sinceUser: turns.length - 1 - lastUserIndex(turns),
-		voiceEntries: narratorEntries(messages),
-		sentSinceReply: sentSinceReply(messages)
+		voiceEntries: narratorEntries(messages, refOfMember),
+		sentSinceReply: sentSinceReply(messages, refOfMember)
 	}
 }
 
@@ -737,7 +859,7 @@ export function turnOrderSelection(
  * with at most ONE entry put at its head once the round is over — an AI
  * voice speaking without being asked. Pure: what the session's genre
  * settings switched on (`modes` — Story's *Let others speak up* and
- * *Narrator asides*, read by `core:script/unprompted-modes`) over the
+ * *Narrator's turn*, read by `core:script/unprompted-modes`) over the
  * history the recompute already read.
  *
  * The round is over when the order holds nothing an AI still has to say —
@@ -754,7 +876,11 @@ export function turnOrderSelection(
  *    any character has two lines since the person's;
  *  · `narrator-interjections` — the narrator's own line (`narrate`, the
  *    genre's Narrate action; a plain reply in no one's voice when unset);
- *    done once a narration landed since the person's line.
+ *    done once a narration landed since the person's line. 🚧 Cadence
+ *    (2026-11-04): `modes["narrator-every"]` (a positive integer, else 1) —
+ *    it comes only once the person has written that many lines on `main`
+ *    since the narrator's last line (a person's own Narrate press counts as
+ *    one, and resets the count).
  *
  * The person's next line opens a new round, and the recompute it causes
  * prepares none of these (nobody has answered yet), so an unfired one
@@ -793,28 +919,48 @@ export function unpromptedEntries(
 	if (kept.some((e) => !isPersons(e))) return kept
 
 	if (side) {
-		const lines = new Map<number, number>()
-		const firstAt = new Map<number, number>()
+		// 🚧 ⏳ A reply is the candidate it answers for: by its `castMemberId` when the candidate carries one (member form, once `state/memberForm.ts` is on), else the card form.
+		const refByMember = new Map<number, string>()
+		for (const c of candidates)
+			if (c.kind === "character" && typeof c.castMemberId === "number")
+				refByMember.set(c.castMemberId, String(c.ref))
+		const replyRef = (m: RotationMessage): string | null =>
+			(m.castMemberId != null ? refByMember.get(m.castMemberId) : undefined) ??
+			(m.characterId != null ? `character:${m.characterId}` : null)
+		const lines = new Map<string, number>()
+		const firstAt = new Map<string, number>()
 		replies.forEach((m, i) => {
-			if (m.characterId == null) return
-			lines.set(m.characterId, (lines.get(m.characterId) ?? 0) + 1)
-			if (!firstAt.has(m.characterId)) firstAt.set(m.characterId, i)
+			const ref = replyRef(m)
+			if (ref == null) return
+			lines.set(ref, (lines.get(ref) ?? 0) + 1)
+			if (!firstAt.has(ref)) firstAt.set(ref, i)
 		})
 		const spokeTwice = [...lines.values()].some((n) => n > 1)
-		const last = replies[replies.length - 1]?.characterId ?? null
+		const last = replyRef(replies[replies.length - 1]!)
 		if (!spokeTwice) {
-			const idOf = (c: TurnCandidate) => Number(String(c.ref).slice("character:".length))
 			const seated = candidates.filter(
-				(c) => c.kind === "character" && String(c.ref).startsWith("character:") && idOf(c) !== last
+				(c) =>
+					c.kind === "character" &&
+					(String(c.ref).startsWith("character:") || String(c.ref).startsWith("seated-member:")) &&
+					String(c.ref) !== last
 			)
 			const pick = [...seated].sort(
 				(a, b) =>
-					(firstAt.get(idOf(a)) ?? Number.MAX_SAFE_INTEGER) - (firstAt.get(idOf(b)) ?? Number.MAX_SAFE_INTEGER)
+					(firstAt.get(String(a.ref)) ?? Number.MAX_SAFE_INTEGER) - (firstAt.get(String(b.ref)) ?? Number.MAX_SAFE_INTEGER)
 			)[0]
 			if (pick) return [{ ref: pick.ref, via: "unprompted" }, ...kept]
 		}
 	}
-	if (narrator && !since.some((m) => m.isNarratorResponse))
+	const rawEvery = modes["narrator-every"]
+	const every = typeof rawEvery === "number" && Number.isInteger(rawEvery) && rawEvery > 0 ? rawEvery : 1
+	let lastNarration = -1
+	for (let i = main.length - 1; i >= 0; i--)
+		if (main[i]!.isNarratorResponse) {
+			lastNarration = i
+			break
+		}
+	const rounds = main.slice(lastNarration + 1).filter((m) => m.role === "user").length
+	if (narrator && !since.some((m) => m.isNarratorResponse) && rounds >= every)
 		return [
 			{ ref: null, via: "unprompted", ...(opts.narrate ? { subject: opts.narrate } : {}) },
 			...kept

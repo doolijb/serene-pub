@@ -3,7 +3,7 @@
  * attached session's newest run did with this entry, in one line.
  *
  * Two halves, both pure. `readInFacts` reads one entry's place out of the
- * run's own explanation; `readInLine` says it. Every clause after the verdict
+ * run's own explanation; `readInLine` says it. Every clause after the decision line
  * is optional, because a run records what it records: a figure nobody measured
  * is left out rather than written as a zero, and "nobody is reading this book"
  * is a third answer rather than a weaker no.
@@ -34,8 +34,12 @@ export interface ReadInFacts {
 	tokens?: number
 	/** The ceiling the retrieved context was given. */
 	budget?: number
-	/** The run's own sentence about the decision. */
+	/** The run's own sentence about the decision: the first gate that stopped it. */
+	decisionLine?: string
+	/** Select's code for the decision (`excluded_budget`…), where the store kept one. */
 	reason?: string
+	/** The decision's own sentence, as the ranking store keeps it. */
+	why?: string
 }
 
 /** The half of the facts that comes out of the run. */
@@ -46,6 +50,80 @@ export type RunExplanation = Explanation
 
 const isEntryRow = (row: Sockets.Pipelines.RetrievalRow) =>
 	typeof row.id === "number" && !NON_ENTRY_BANDS.has(row.source)
+
+/** The skip reasons the server words; kept equal by a test. */
+export const ARCHIVED_REASON = "entry is archived"
+export const DISABLED_REASON = "entry is disabled"
+const HIDDEN_REASON = "not visible to the current speaker"
+
+/** The first-gate sentences (provisional copy). */
+export const GATE = {
+	off: "it is switched off",
+	archived: "it is archived",
+	offForAWhile: "it is off for a while at this point in the story",
+	notReadHere:
+		"it is archived in this session, not on its line, or dated after its clock",
+	otherSpeaker: "it is another speaker's character lore",
+	budget: "it was left out for budget",
+	pinnedDidNotFit: "it is pinned, but it did not fit"
+} as const
+
+const BUDGET_CODES = new Set([
+	"excluded_budget",
+	"excluded_token_limit",
+	"excluded_share_cap",
+	"excluded_group_disabled",
+	"excluded_unknown_source"
+])
+const PINNED_CODES = new Set([
+	"excluded_pinned_token_limit",
+	"excluded_pinned_group_disabled"
+])
+
+/** A rule's own sentence, minus one trailing full stop. */
+const ruleSentence = (why: string) => why.replace(/\.$/, "")
+
+/** The entry's skipped row, when a mechanism declined it before the ranker. */
+export function skippedEntryRow(
+	explanation: Explanation,
+	entryId: number
+): Sockets.Pipelines.RetrievalRow | undefined {
+	return (explanation.rows ?? []).find(
+		(r) => isEntryRow(r) && r.id === entryId && r.outcome === "skipped"
+	)
+}
+
+/**
+ * The off gate's sentence. Off in the base row → switched off; on in the base row but off as the
+ * session reads it (an amendment) → off for a while. Unknown base row → switched off: the plain claim
+ * that holds whichever way it is off, where "for a while" would assert an amendment nobody saw.
+ */
+export function offDecisionLine(baseEnabled: boolean | undefined): string {
+	return baseEnabled === true ? GATE.offForAWhile : GATE.off
+}
+
+/** A skipped row's sentence: a named gate, or the reason verbatim. */
+export function skipDecisionLine(
+	reason: string | undefined,
+	baseEnabled?: boolean
+): string | undefined {
+	if (!reason) return undefined
+	if (reason === ARCHIVED_REASON) return GATE.archived
+	if (reason === DISABLED_REASON) return offDecisionLine(baseEnabled)
+	if (reason === HIDDEN_REASON) return GATE.otherSpeaker
+	return reason
+}
+
+/** What the ranking store's code and sentence say, where they name a gate. */
+export function storeDecisionLine(
+	reason: string | undefined,
+	why: string | undefined
+): string | undefined {
+	if (reason === "excluded_ineligible" && why) return ruleSentence(why)
+	if (reason && BUDGET_CODES.has(reason)) return GATE.budget
+	if (reason && PINNED_CODES.has(reason)) return GATE.pinnedDidNotFit
+	return undefined
+}
 
 /**
  * The entries the ranker judged, best first.
@@ -92,7 +170,17 @@ export function readInFacts(
 
 	const judged = judgedEntryRows(explanation)
 	const row = judged.find((r) => r.id === entryId)
-	if (!row) return facts
+	if (!row) {
+		const skipped = skippedEntryRow(explanation, entryId)
+		const line =
+			skipped &&
+			skipDecisionLine(
+				skipped.skipReason || undefined,
+				skipped.entry?.enabled
+			)
+		if (line) facts.decisionLine = line
+		return facts
+	}
 
 	// Rank and "of" mean what the ranking store means by them (L1): a place
 	// among the lore entries the turn READ IN, never among everything judged.
@@ -105,7 +193,13 @@ export function readInFacts(
 	if (typeof row.tokens === "number") facts.tokens = row.tokens
 	const matched = matchedKeyword(row)
 	if (matched) facts.matched = matched
-	if (row.verdict) facts.reason = row.verdict
+	if (row.reason) facts.reason = row.reason
+	const rule =
+		row.reason === "excluded_ineligible" && row.why?.[0]
+			? ruleSentence(row.why[0])
+			: undefined
+	if (rule) facts.decisionLine = rule
+	else if (row.verdict) facts.decisionLine = row.verdict
 	return facts
 }
 
@@ -118,12 +212,13 @@ export function readInLine(
 		return "No session is reading this book"
 
 	if (facts.decision !== "fired") {
-		const reason =
-			facts.reason ??
+		const line =
+			facts.decisionLine ??
+			storeDecisionLine(facts.reason, facts.why) ??
 			(facts.decision === "considered"
 				? "weighed and left out"
 				: "nothing reported on it")
-		return `Not read in last turn · ${reason}`
+		return `Not read in last turn · ${line}`
 	}
 
 	const parts = ["Read in"]

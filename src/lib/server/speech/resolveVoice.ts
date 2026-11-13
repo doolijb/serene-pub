@@ -10,7 +10,7 @@
  * the loadout / service arms speak on the fallback pair (the speak step's slot,
  * else the speaking loadout).
  */
-import { eq, sql } from "drizzle-orm"
+import { and, eq, isNull, sql } from "drizzle-orm"
 import { readSpeechFacts } from "$lib/shared/connectionAdapters/speechFacts"
 import { parseParticipantRef, type ParticipantRef } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
@@ -33,6 +33,11 @@ import {
 	readAllEnvoySpeech,
 	speechAutoVoiceKey
 } from "$lib/shared/sessions/speechSettings"
+import { ensureCardVersion } from "$lib/server/characters/versions"
+import { profileOf } from "$lib/shared/characters/profile"
+import { memberAsRead, membersAsRead } from "$lib/server/cast/memberAsRead"
+import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import { normaliseLanguage } from "./language"
 import { pickAutoVoice, type AutoCasting, type AutoVoicePick } from "./autoVoice"
 import {
@@ -58,7 +63,7 @@ export interface ResolveVoiceInput {
 	/** A cue's language, when the line carried one. */
 	cueLanguage?: string | null
 	text?: string | null
-	/** 🚧 A timbre to use instead of the speaker's card (the voice try-out's draft). Absent: the speaker's card's. */
+	/** 🚧 A timbre to use instead of the speaker's (the voice try-out's draft). Absent: the speaker's as read: the cast member's own, else the card's. */
 	timbre?: CharacterTimbreInput | null
 	/**
 	 * Store Auto's fresh pick for this speaker in the session (dispatch only).
@@ -112,20 +117,37 @@ async function asked(
 }
 
 async function characterTimbre(db: Db, characterId: number): Promise<CharacterTimbreInput> {
-	const [row] = await db
-		.select({ extensions: schema.characters.extensions })
-		.from(schema.characters)
-		.where(eq(schema.characters.id, characterId))
-		.limit(1)
-	return timbreOfExtensions(row?.extensions)
+	const version = await ensureCardVersion(db, characterId)
+	return timbreOfExtensions({
+		serenepub: { timbre: profileOf(version ?? {}).timbre }
+	})
 }
 
-/** The speaker's timbre; users, envoys, roles and the narrator have none. */
+/**
+ * The speaker's timbre as read: a seated speaker's cast member's own, else the
+ * member's active card (`memberAsRead` layers the member over that card); a
+ * seat with no member yet, or no seat, reads the card. Users, envoys, roles
+ * and the narrator have none.
+ */
 async function speakerTimbre(
 	db: Db,
-	ref: ParticipantRef | null
+	ref: ParticipantRef | null,
+	sessionId: number | null
 ): Promise<CharacterTimbreInput | null> {
 	if (!ref) return null
+	// The seat step runs first, so a `seated-member:` ref (an SDK form since
+	// seat-cast S3) is read through its seat; one no seat holds has no timbre
+	// and never reaches the `character` branch below.
+	const seatRef = sessionId != null ? parseSeatRef(ref) : null
+	if (sessionId != null && seatRef) {
+		const seat = await seatOf(db, sessionId, ref)
+		if (seat?.castMemberId != null) {
+			const read = await memberAsRead(db, seat.castMemberId, { sessionId })
+			if (read) return read.timbre
+		}
+		if (seat) return seat.cardId != null ? characterTimbre(db, seat.cardId) : null
+	}
+	if (seatRef?.form === "seated-member") return null
 	let parsed
 	try {
 		parsed = parseParticipantRef(ref)
@@ -150,11 +172,16 @@ async function speakerTimbre(
 }
 
 /**
- * Whether the speaker's card says its lines are never spoken (`timbre.silent`).
- * Users, envoys, roles and the narrator are never silent this way.
+ * Whether the speaker's timbre says its lines are never spoken (`timbre.silent`):
+ * the cast member's own, else the card's. Users, envoys, roles and the
+ * narrator are never silent this way. No `sessionId` reads the card.
  */
-export async function speakerSilent(db: Db, ref: ParticipantRef | null): Promise<boolean> {
-	const t = await speakerTimbre(db, ref)
+export async function speakerSilent(
+	db: Db,
+	ref: ParticipantRef | null,
+	sessionId?: number | null
+): Promise<boolean> {
+	const t = await speakerTimbre(db, ref, sessionId ?? null)
 	return t?.silent === true
 }
 
@@ -249,9 +276,10 @@ async function castingOf(d: Db, sessionId: number | null, ref: string): Promise<
 }
 
 /**
- * Every slug already spoken for in the session: the cast cards' own
- * `timbre.voice` (seated characters AND persona seats), the envoys' voice
- * overrides, and the OTHER speakers' stored Auto picks.
+ * Every slug already spoken for in the session: the seated cast's own
+ * `timbre.voice` (a cast member's own, else the card's; seated characters AND
+ * persona seats), the envoys' voice overrides, and the OTHER speakers' stored
+ * Auto picks.
  */
 async function usedVoiceSlugs(
 	d: Db,
@@ -260,19 +288,47 @@ async function usedVoiceSlugs(
 	exceptRef: string
 ): Promise<string[]> {
 	const used: string[] = []
-	const characterIds = new Set<number>()
-	const seats = await d
-		.select({ id: schema.sessionCharacters.characterId })
+	const seats: Array<{ cardId: number | null; memberId: number | null }> = []
+	const characterSeats = await d
+		.select({
+			id: schema.sessionCharacters.characterId,
+			memberId: schema.sessionCharacters.castMemberId
+		})
 		.from(schema.sessionCharacters)
-		.where(eq(schema.sessionCharacters.sessionId, sessionId))
-	for (const r of seats) if (r.id != null) characterIds.add(r.id)
-	const personas = await d
-		.select({ id: schema.sessionPersonas.personaId })
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				isNull(schema.sessionCharacters.envoySlug)
+			)
+		)
+	// A card-less seat (no card, a member) counts by its member's own voice.
+	for (const r of characterSeats)
+		if (r.id != null || r.memberId != null) seats.push({ cardId: r.id, memberId: r.memberId })
+	const personaSeats = await d
+		.select({
+			id: schema.sessionPersonas.personaId,
+			memberId: schema.sessionPersonas.castMemberId
+		})
 		.from(schema.sessionPersonas)
 		.where(eq(schema.sessionPersonas.sessionId, sessionId))
-	for (const r of personas) if (r.id != null) characterIds.add(r.id)
-	for (const id of characterIds) {
-		const v = (await characterTimbre(d, id)).voice
+	for (const r of personaSeats) if (r.id != null) seats.push({ cardId: r.id, memberId: r.memberId })
+	// Only a member's OWN voice is read from the member; the card's is read as before.
+	const members = await membersAsRead(
+		d,
+		seats.flatMap((s) => (s.memberId != null ? [s.memberId] : [])),
+		{ sessionId }
+	)
+	const cardVoices = new Map<number, string | undefined>()
+	for (const s of seats) {
+		const read = s.memberId != null ? members.get(s.memberId) : undefined
+		let v: string | undefined
+		if (read?.voiceFrom === "member") v = read.timbre?.voice
+		else if (s.cardId == null) v = read?.timbre?.voice
+		else {
+			if (!cardVoices.has(s.cardId))
+				cardVoices.set(s.cardId, (await characterTimbre(d, s.cardId)).voice)
+			v = cardVoices.get(s.cardId)
+		}
 		if (typeof v === "string" && v.trim()) used.push(v.trim())
 	}
 	for (const e of Object.values(readAllEnvoySpeech(genreFields))) {
@@ -282,6 +338,20 @@ async function usedVoiceSlugs(
 	for (const [ref, slug] of Object.entries(readAllAutoVoices(genreFields)))
 		if (ref !== exceptRef) used.push(slug)
 	return used
+}
+
+/**
+ * ⏳ The ref Auto's pick is keyed by (`speechAutoVoice:<ref>`): with the flip
+ * on (`state/memberForm.ts`) the seat's member form — one key per seat, the
+ * form the `seat-keys` boot pass leaves — so a card-form speaker (an old line
+ * with no stamped `metadata.speaker`, a plugin's `character:<cardId>`) reads
+ * and writes the same key through `storedSeatRef`; a ref no seat answers (an
+ * envoy, the narrator, an unseated card) stays as it is. Off: unchanged.
+ */
+async function autoVoiceRefOf(d: Db, sessionId: number | null, ref: string): Promise<string> {
+	if (sessionId == null || !memberFormOn()) return ref
+	const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+	return (await storedSeatRef(d, sessionId, ref)) ?? ref
 }
 
 interface AutoOutcome {
@@ -308,10 +378,11 @@ async function autoFor(
 			.limit(1)
 		genreFields = row?.genreFields ?? null
 	}
-	const stored = readAllAutoVoices(genreFields)[args.speakerRef] ?? null
+	const speakerRef = await autoVoiceRefOf(d, args.sessionId, args.speakerRef)
+	const stored = readAllAutoVoices(genreFields)[speakerRef] ?? null
 	const used =
 		args.sessionId != null
-			? await usedVoiceSlugs(d, args.sessionId, genreFields, args.speakerRef)
+			? await usedVoiceSlugs(d, args.sessionId, genreFields, speakerRef)
 			: []
 	const pick = pickAutoVoice({
 		candidates: args.voices.candidates,
@@ -319,7 +390,7 @@ async function autoFor(
 		usedSlugs: used,
 		stored,
 		casting: await castingOf(d, args.sessionId, args.speakerRef),
-		speakerRef: args.speakerRef,
+		speakerRef,
 		sessionId: args.sessionId
 	})
 	return {
@@ -341,7 +412,7 @@ async function rememberAutoPick(
 	o: AutoOutcome,
 	write: boolean
 ): Promise<void> {
-	const key = speechAutoVoiceKey(speakerRef)
+	const key = speechAutoVoiceKey(await autoVoiceRefOf(d, sessionId, speakerRef))
 	await d.transaction(async (tx) => {
 		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"speech_auto_voice:" + sessionId}))`)
 		const [row] = await tx
@@ -379,7 +450,7 @@ export async function resolveVoice(
 	const fallbackSampling = input.fallback ? input.fallback.samplingConfigId : (loadout?.samplingConfigId ?? null)
 	const loadoutVoice = await loadoutSamplingVoice(d, fallbackSampling)
 	const timbre =
-		input.timbre !== undefined ? input.timbre : await speakerTimbre(d, input.speakerRef)
+		input.timbre !== undefined ? input.timbre : await speakerTimbre(d, input.speakerRef, input.sessionId)
 	const sessionNarratorVoice = await sessionSpeechSetting(
 		d,
 		input.sessionId,

@@ -14,11 +14,13 @@
  *     the sheet the new plan's. Twice in a row; after a swipe. The row
  *     regenerate is not offered on Story: taking a turn again IS the retake
  *     (re-plan, re-roll); only a swipe keeps the dice (\`lastTelling\`).
- *  3. **Honour mode.** Deleting the latest turn is the owner's, only while
- *     Honour mode is on: the reply goes with its roll line and its journal
+ *  3. **Keep every turn.** (Moved 2026-11-05, lane ed, plan §25: was Honour
+ *     mode, with the opposite polarity — the field is now `keepEveryTurn`,
+ *     default ON, ★sl-4.) Deleting the latest turn is the owner's, only while
+ *     Keep every turn is off: the reply goes with its roll line and its journal
  *     line, the sheet comes back, nothing fires, and the round is ready again
  *     — Continue takes it with a new plan. An older turn is never deleted.
- *     The retake is the owner's whatever Honour mode says; a guest's is
+ *     The retake is the owner's whatever Keep every turn says; a guest's is
  *     refused.
  */
 
@@ -328,8 +330,11 @@ async function remove(userId: number, id: number) {
 	return res as { id: number; success?: string; error?: string }
 }
 
-async function honour(sessionId: number, on: boolean) {
-	await db.update(schema.sessions).set({ genreFields: { honorMode: on } } as any).where(eq(schema.sessions.id, sessionId))
+// Moved 2026-11-05 (lane ed, plan §25): was `honour(sessionId, on)` writing `honorMode`.
+// The field is `keepEveryTurn` now and its polarity is the opposite: ON (the
+// genre's default) refuses the owner's delete of the latest turn.
+async function keepEveryTurn(sessionId: number, on: boolean) {
+	await db.update(schema.sessions).set({ genreFields: { keepEveryTurn: on } } as any).where(eq(schema.sessions.id, sessionId))
 }
 
 /**
@@ -477,9 +482,9 @@ describe("a way out the world changes", () => {
 	})
 })
 
-describe("honour mode", () => {
+describe("keep every turn", () => {
 	it("the latest turn is the owner's to delete, only while it is on; an older turn never; the retake is the owner's either way", async () => {
-		const { sessionId, seat } = await table("honour", true)
+		const { sessionId, seat } = await table("keep-every-turn", true)
 		// 🚧 Deletion needs a pipeline (RF fix 5): core's Dungeon Crawler
 		// registers none, so this table registers one — the turn rule below
 		// is what a genre that keeps its turns and deletes gets.
@@ -496,8 +501,8 @@ describe("honour mode", () => {
 		// A guest: their own line of the latest round, and the reply — refused.
 		expect((await remove(guestId, bo.id)).error).toBe(TURN_DELETE_REFUSALS.notOwner)
 		expect((await remove(guestId, one.reply.id)).error).toBeTruthy()
-		// The owner, with Honour mode off (the default): refused.
-		expect((await remove(ownerId, one.reply.id)).error).toBe(TURN_DELETE_REFUSALS.honourOff)
+		// The owner, with Keep every turn on (the default): refused, in words.
+		expect((await remove(ownerId, one.reply.id)).error).toBe(TURN_DELETE_REFUSALS.keepEveryTurn)
 		// 🚧 …and offered no Delete at all (owner ruling ★9): the list's floor
 		// covers the whole latest turn, its round's lines included.
 		const { turnDeleteRefusedThrough } = await import("$lib/server/messages/verbs")
@@ -506,7 +511,7 @@ describe("honour mode", () => {
 		expect(off!.messageId).toBeGreaterThanOrEqual(one.reply.id)
 		expect(off!.messageId).toBeGreaterThan(bo.id)
 		expect((await storyOf(sessionId)).map((r) => r.id)).toContain(one.reply.id)
-		// The retake is exempt: the owner's with Honour mode off; a guest's refused.
+		// The retake is exempt: the owner's with Keep every turn on; a guest's refused.
 		expect((await retake(guestId, sessionId)).error).toBeTruthy()
 		calls.length = 0
 		expect((await retake(ownerId, sessionId)).error).toBeUndefined()
@@ -524,8 +529,8 @@ describe("honour mode", () => {
 		// 10 − 2, then − 3.
 		expect(await value(sessionId, seat, "core:slot/hp@1")).toBe(5)
 
-		await honour(sessionId, true)
-		// 🚧 With it on, the owner's floor is the older turns only: the latest
+		await keepEveryTurn(sessionId, false)
+		// 🚧 With it off, the owner's floor is the older turns only: the latest
 		// keeps Delete, the one before it does not.
 		const on = await turnDeleteRefusedThrough(db as any, sessionId, ownerId)
 		expect(on!.messageId).toBeGreaterThanOrEqual(annLine.id)

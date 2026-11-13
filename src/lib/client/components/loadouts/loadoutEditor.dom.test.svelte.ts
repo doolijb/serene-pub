@@ -65,7 +65,9 @@ function list(over: Partial<Sockets.Loadouts.List.Response> = {}) {
 		canReply: false,
 		samplingOptions: {
 			"text->text": [
-				{ id: 5, name: "Chat", shape: S.textGen, seedKey: "sampling-default" }
+				{ id: 5, name: "Chat", shape: S.textGen, seedKey: "sampling-default" },
+				// ★47 (owner 2026-11-04): the Reply loadout seeds the reasoning-off "Reply" config.
+				{ id: 11, name: "Reply", shape: S.textGen, seedKey: "sampling-reply" }
 			],
 			"text->image": [
 				{ id: 7, name: "SD 1.5", shape: S.imageGen, seedKey: "sampling-sd15" }
@@ -164,7 +166,8 @@ describe("the Sampling card", () => {
 					shape: S.textGen,
 					values: { temperature: 0.7 },
 					enabled: ["temperature"]
-				}
+				},
+				{ id: 11, name: "Reply", shape: S.textGen, values: {}, enabled: [] }
 			]
 		})
 		await settle()
@@ -174,11 +177,12 @@ describe("the Sampling card", () => {
 			/does not fit/.test(n.textContent ?? "")
 		)
 		expect(notice?.textContent).toContain(
-			"SDXL does not fit this model, so sampling is now Chat."
+			"SDXL does not fit this model, so sampling is now Reply."
 		)
-		const chat = radio(/^\s*Chat/)!
-		expect(chat.getAttribute("aria-checked")).toBe("true")
-		expect(chat.textContent).toContain("Temperature 0.7")
+		// The swap lands on the seeded Reply config (★47), not on Chat.
+		const reply = radio(/^\s*Reply/)!
+		expect(reply.getAttribute("aria-checked")).toBe("true")
+		expect(radio(/^\s*Chat/)!.getAttribute("aria-checked")).toBe("false")
 	})
 })
 

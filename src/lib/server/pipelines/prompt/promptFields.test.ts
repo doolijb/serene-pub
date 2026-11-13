@@ -51,16 +51,15 @@ const cara = (over: Record<string, unknown> = {}) =>
 	})
 
 describe("the enabled filter", () => {
-	it("names only enabled characters, but still shows a switched-off one's card", async () => {
-		// The cards filter ignores `enabled`; the names filter reads it
-		// (index.ts:288-306 vs :260-271). Merging them would either drop a
-		// card or add a name.
+	it("names only enabled characters, and a switched-off one's card leaves the block (owner 2026-11-10)", async () => {
+		// A benched seat is out of play: no name, no card — except as the
+		// speaker (promptFields.benched.test.ts).
 		const r = resolveContextInput({
 			...base(),
 			sessionCharacters: [cc(), cara({ enabled: false })]
 		})
 		expect(r.characterNames).toEqual(["Alice"])
-		expect(r.characters.map((c) => c.name)).toEqual(["Alice", "Cara"])
+		expect(r.characters.map((c) => c.name)).toEqual(["Alice"])
 	})
 
 	it("reads no per-character visibility any more — a stray one changes nothing", async () => {

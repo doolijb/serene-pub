@@ -1,0 +1,1 @@
+ALTER TABLE "session_personas" ADD COLUMN "is_active" boolean DEFAULT true NOT NULL;

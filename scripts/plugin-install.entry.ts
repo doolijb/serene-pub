@@ -95,6 +95,23 @@ await exitAfterClose(
 		let layoutLines: string[] = []
 		if (flags.has("--enable")) {
 			await setEnabled(db, report.pluginId, true)
+			// 🚧 M3: an enable records WHO enabled it (`plugins.enabled_by`, M2b) — the
+			// admin a provided book is imported as. The socket's enable writes the
+			// pressing admin; a terminal install has none, so the first live admin
+			// stands in, else the provided-book sync finds "no administrator to import
+			// as" and imports nothing, silently.
+			{
+				const { firstLiveAdmin } = await import("$lib/server/plugins/providedPrimers")
+				const { plugins: pluginsTable } = await import("$lib/server/db/schema")
+				const { eq, isNull, and } = await import("drizzle-orm")
+				const admin = await firstLiveAdmin(db)
+				if (admin != null)
+					await db
+						.update(pluginsTable)
+						.set({ enabledBy: admin })
+						.where(and(eq(pluginsTable.pluginId, report.pluginId), isNull(pluginsTable.enabledBy)))
+				else process.stdout.write(`  (no administrator yet: provided lorebooks import once one enables it)\n`)
+			}
 			// Everything projected from the stored manifest follows the enable
 			// switch: presets, prompts, template engines, event subscriptions,
 			// layouts. Run them here so a `--enable` install is complete when the

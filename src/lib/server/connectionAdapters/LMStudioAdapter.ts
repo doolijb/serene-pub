@@ -131,6 +131,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		systemPrompt,
 		session,
 		currentCharacterId,
+		tokenLimit,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
@@ -138,6 +139,15 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId: number | null
+		/**
+		 * The window the dispatch sized the prompt to (`contextWindowFrom`,
+		 * R-8). Kept, not dropped: a dispatch injects its prompt, and
+		 * `compilePrompt` returns on `injectedPrompt` before it would fill
+		 * `tokenLimit` in, so this is the only route the window has to the
+		 * model load. Dropping it sent `contextLength: 0`, which LM Studio's
+		 * SDK rejects outright.
+		 */
+		tokenLimit?: number
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -149,7 +159,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			tokenCounter: new TokenCounters(
 				connection.tokenCounter || TokenCounterOptions.ESTIMATE
 			),
-			tokenLimit: 0, // This is set dynamically based on the LM Studio API
+			// The legacy path overwrites this in `compilePrompt`; a dispatch
+			// supplies it and never reaches that line.
+			tokenLimit: tokenLimit ?? 0,
 			contextThresholdPercent: 0.9,
 			generatingMessageMetadata
 		})
@@ -230,6 +242,10 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				console.warn("Could not check available models:", error)
 			}
 
+			// Never send a non-positive window: the SDK throws on
+			// `contextLength < 1` before anything reaches LM Studio.
+			if (!(this.tokenLimit > 0))
+				this.tokenLimit = await this.getContextTokenLimit()
 			const opts: BaseLoadModelOpts<LLMLoadModelConfig> = {
 				config: {
 					contextLength: this.tokenLimit,

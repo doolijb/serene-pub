@@ -341,55 +341,77 @@ export async function linksOnReadingThatWay(
 		RelationshipSaying,
 		"lorebookId" | "title" | "relationshipType" | "reverseRelationshipType"
 	>,
-	reading: LineReading
+	reading: LineReading,
+	/**
+	 * 🚧 A second book the session reads: a session whose own notes take the
+	 * write asks its own book (`saying.lorebookId`, at `reading`) and the
+	 * attached lorebook here. A row of the first book that a ruleset tie made
+	 * (`rules_run_id` set — a copy of a lorebook row) never counts as a
+	 * standing link of the notes. Absent: the one-book question, unchanged.
+	 */
+	alsoIn?: { lorebookId: number; reading: LineReading }
 ): Promise<LinkOnReading[]> {
 	if (!hasEntryEnd(ends)) return []
 	const r = schema.narrativeRelationships
-	const rows = await tx
-		.select({
-			id: r.id,
-			fromNodeId: r.fromNodeId,
-			fromEntryId: r.fromEntryId,
-			relationshipType: r.relationshipType,
-			reverseRelationshipType: r.reverseRelationshipType,
-			status: r.status,
-			visibility: r.visibility,
-			branchId: r.branchId,
-			historyEntryId: r.historyEntryId
-		})
-		.from(r)
-		.where(
-			and(
-				eq(r.lorebookId, saying.lorebookId),
-				wordsAre(r.title, saying.title),
-				sharesASentence(ends, saying)
+	const ask = async (
+		lorebookId: number,
+		at: LineReading,
+		leaveTieCopies: boolean
+	): Promise<LinkOnReading[]> => {
+		const rows = await tx
+			.select({
+				id: r.id,
+				fromNodeId: r.fromNodeId,
+				fromEntryId: r.fromEntryId,
+				relationshipType: r.relationshipType,
+				reverseRelationshipType: r.reverseRelationshipType,
+				status: r.status,
+				visibility: r.visibility,
+				branchId: r.branchId,
+				historyEntryId: r.historyEntryId
+			})
+			.from(r)
+			.where(
+				and(
+					eq(r.lorebookId, lorebookId),
+					leaveTieCopies ? isNull(r.rulesRunId) : undefined,
+					wordsAre(r.title, saying.title),
+					sharesASentence(ends, saying)
+				)
 			)
-		)
-		.orderBy(r.id)
-	if (rows.length === 0) return []
-	const seen = await rowsOnReading(tx, rows, reading)
-	const same = (a: string | null, b: string | null): boolean =>
-		a != null && b != null && a.toLowerCase() === b.toLowerCase()
-	const type = saying.relationshipType
-	const reverse = saying.reverseRelationshipType
-	return seen.map((row) => {
-		const sameWayRound =
-			row.fromEntryId === ends.fromEntryId &&
-			row.fromNodeId === ends.fromNodeId
-		const saysAll = sameWayRound
-			? same(row.relationshipType, type) &&
-				(reverse == null || same(row.reverseRelationshipType, reverse))
-			: same(row.reverseRelationshipType, type) &&
-				(reverse == null || same(row.relationshipType, reverse))
-		return {
-			id: row.id,
-			fromEntryId: row.fromEntryId,
-			saysAll,
-			standing: row.status === "active" && row.visibility !== "secret",
-			status: row.status,
-			visibility: row.visibility
-		}
-	})
+			.orderBy(r.id)
+		if (rows.length === 0) return []
+		const seen = await rowsOnReading(tx, rows, at)
+		const same = (a: string | null, b: string | null): boolean =>
+			a != null && b != null && a.toLowerCase() === b.toLowerCase()
+		const type = saying.relationshipType
+		const reverse = saying.reverseRelationshipType
+		return seen.map((row) => {
+			const sameWayRound =
+				row.fromEntryId === ends.fromEntryId &&
+				row.fromNodeId === ends.fromNodeId
+			const saysAll = sameWayRound
+				? same(row.relationshipType, type) &&
+					(reverse == null || same(row.reverseRelationshipType, reverse))
+				: same(row.reverseRelationshipType, type) &&
+					(reverse == null || same(row.relationshipType, reverse))
+			return {
+				id: row.id,
+				fromEntryId: row.fromEntryId,
+				saysAll,
+				standing: row.status === "active" && row.visibility !== "secret",
+				status: row.status,
+				visibility: row.visibility
+			}
+		})
+	}
+	// A ruleset's own copy in the notes says the same thing to the session that
+	// reads it, so the write answers "already said" (as it did before the two
+	// books were read together); leaving it out wrote a second row saying it,
+	// or raised the pair index's raw error when both were undated.
+	const first = await ask(saying.lorebookId, reading, false)
+	if (!alsoIn) return first
+	return [...first, ...(await ask(alsoIn.lorebookId, alsoIn.reading, false))]
 }
 
 /**

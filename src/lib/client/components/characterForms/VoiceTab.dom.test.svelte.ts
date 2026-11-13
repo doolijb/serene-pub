@@ -31,9 +31,10 @@ const settle = async () => {
 		flushSync()
 	}
 }
-const render = (isAdmin: boolean) => {
+const render = (isAdmin: boolean, castMember?: { linked: boolean }) => {
 	const props = $state({
 		characterName: "Ada",
+		castMember,
 		timbre: { ...EMPTY_TIMBRE_DRAFT, voice: "bruno", narrationVoice: "ada", description: "warm", settings: {} }
 	})
 	app = mount(VoiceTab, {
@@ -77,6 +78,27 @@ describe("VoiceTab", () => {
 		expect(document.body.textContent).not.toContain("Main")
 		expect(Array.from(narrator.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Try")).toBe(false)
 		expect(tryNows().length).toBeLessThanOrEqual(1)
+	})
+
+	test("the card form keeps Travels with the card", () => {
+		render(false)
+		expect(document.body.textContent).toContain("Travels with the card.")
+		expect(document.body.textContent).toContain("Who speaks for Ada when a line is read aloud.")
+	})
+
+	test("a linked member reads as an override, with no Travels line", () => {
+		render(false, { linked: true })
+		const text = document.body.textContent ?? ""
+		expect(text).toContain("Ada's own voice in this book, used instead of the card's.")
+		expect(text).not.toContain("Who speaks for")
+		expect(text).not.toContain("Travels")
+	})
+
+	test("a card-less member keeps the plain header, with no Travels line", () => {
+		render(false, { linked: false })
+		const text = document.body.textContent ?? ""
+		expect(text).toContain("Who speaks for Ada when a line is read aloud.")
+		expect(text).not.toContain("Travels")
 	})
 
 	test("typing in the shared voice fields writes the bound timbre (getter/setter binding)", () => {

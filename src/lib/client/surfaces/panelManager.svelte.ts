@@ -26,6 +26,7 @@ import {
 	layoutWidgetIds,
 	panelsOf,
 	type PanelLayoutV1,
+	type PanelLayoutV2,
 	widgetOfInstance,
 	type SessionLayoutV1
 } from "@serene-pub/sdk"
@@ -35,10 +36,7 @@ import type {
 	WidgetEventSource
 } from "$lib/shared/widgets/context"
 import { pack } from "./pack"
-import {
-	withPanelOpen,
-	withPanelPinned
-} from "$lib/client/sessionLayout/livePanels"
+import { withPanelOpen } from "$lib/client/sessionLayout/livePanels"
 import {
 	instanceTitle,
 	normalizeLayout,
@@ -252,6 +250,18 @@ export class SurfaceManager implements WidgetEventSource {
 	 * (Start from, Reset, Start from scratch) — and re-read it.
 	 */
 	seedCount = $state(0)
+
+	/**
+	 * How many copies have landed into this manager (`noteCopyLanded`), the
+	 * key the conversation remounts on: a `sessions:view` reply re-seeds too
+	 * (`seedCount`), and that must not remount a widget being read.
+	 */
+	copiesLanded = $state(0)
+
+	/** A copy landed from the server and the manager was re-seeded from it. */
+	noteCopyLanded(): void {
+		this.copiesLanded++
+	}
 
 	/**
 	 * (Re)seed from the mode's declared panels + this user's session layout —
@@ -781,7 +791,7 @@ export class SurfaceManager implements WidgetEventSource {
 	}
 
 	/** Replace the arrangement; it persists (debounced) like every edit. */
-	setPanels(panels: PanelLayoutV1) {
+	setPanels(panels: PanelLayoutV1 | PanelLayoutV2) {
 		this.panels = panels
 		this.#syncCopies()
 		this.#schedulePersist()
@@ -793,8 +803,8 @@ export class SurfaceManager implements WidgetEventSource {
 	 * `panels` writes the converted arrangement, and from then on the row
 	 * has them.
 	 */
-	#currentPanels(): PanelLayoutV1 {
-		return $state.snapshot(panelsOf(this.arrangement)) as PanelLayoutV1
+	#currentPanels(): PanelLayoutV2 {
+		return $state.snapshot(panelsOf(this.arrangement)) as PanelLayoutV2
 	}
 
 	/**
@@ -804,12 +814,6 @@ export class SurfaceManager implements WidgetEventSource {
 	 */
 	setPanelOpen(key: string, tab: string) {
 		const next = withPanelOpen(this.#currentPanels(), key, tab)
-		if (next) this.setPanels(next)
-	}
-
-	/** A side panel docked (`true`) or moved to the rail (`false`). */
-	setPanelPinned(key: string, pinned: boolean) {
-		const next = withPanelPinned(this.#currentPanels(), key, pinned)
 		if (next) this.setPanels(next)
 	}
 

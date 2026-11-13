@@ -340,7 +340,12 @@ export type SocketEventMap = {
 	}
 	"characters:listSprites:error": {
 		params: Sockets.Characters.ListSprites.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:createSpriteSet": {
 		params: Sockets.Characters.CreateSpriteSet.Params
@@ -348,7 +353,12 @@ export type SocketEventMap = {
 	}
 	"characters:createSpriteSet:error": {
 		params: Sockets.Characters.CreateSpriteSet.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:updateSpriteSet": {
 		params: Sockets.Characters.UpdateSpriteSet.Params
@@ -356,7 +366,12 @@ export type SocketEventMap = {
 	}
 	"characters:updateSpriteSet:error": {
 		params: Sockets.Characters.UpdateSpriteSet.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:deleteSpriteSet": {
 		params: Sockets.Characters.DeleteSpriteSet.Params
@@ -364,7 +379,12 @@ export type SocketEventMap = {
 	}
 	"characters:deleteSpriteSet:error": {
 		params: Sockets.Characters.DeleteSpriteSet.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:uploadSprite": {
 		params: Sockets.Characters.UploadSprite.Params
@@ -372,7 +392,12 @@ export type SocketEventMap = {
 	}
 	"characters:uploadSprite:error": {
 		params: Sockets.Characters.UploadSprite.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:addStandardSprites": {
 		params: Sockets.Characters.AddStandardSprites.Params
@@ -380,7 +405,12 @@ export type SocketEventMap = {
 	}
 	"characters:addStandardSprites:error": {
 		params: Sockets.Characters.AddStandardSprites.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:updateSprite": {
 		params: Sockets.Characters.UpdateSprite.Params
@@ -388,7 +418,12 @@ export type SocketEventMap = {
 	}
 	"characters:updateSprite:error": {
 		params: Sockets.Characters.UpdateSprite.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:deleteSprite": {
 		params: Sockets.Characters.DeleteSprite.Params
@@ -396,7 +431,12 @@ export type SocketEventMap = {
 	}
 	"characters:deleteSprite:error": {
 		params: Sockets.Characters.DeleteSprite.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:reorderSprites": {
 		params: Sockets.Characters.ReorderSprites.Params
@@ -404,7 +444,12 @@ export type SocketEventMap = {
 	}
 	"characters:reorderSprites:error": {
 		params: Sockets.Characters.ReorderSprites.Params
-		response: Sockets.ErrorResponse & { characterId: number }
+		response: Sockets.ErrorResponse & {
+			/** The card the request named; absent for a cast member's own. */
+			characterId?: number
+			/** 🚧 The cast member the request named; absent for a card's. */
+			castMemberId?: number
+		}
 	}
 	"characters:countStrokeTokens": {
 		params: Sockets.Characters.CountStrokeTokens.Params
@@ -495,6 +540,22 @@ export type SocketEventMap = {
 		response: Sockets.Plugins.SetEnabled.Response
 	}
 	"plugins:setEnabled:error": {
+		params: never
+		response: { error?: string }
+	}
+	"plugins:disableProvidedBook": {
+		params: Sockets.Plugins.SetProvidedBookDisabled.Params
+		response: Sockets.Plugins.SetProvidedBookDisabled.Response
+	}
+	"plugins:disableProvidedBook:error": {
+		params: never
+		response: { error?: string }
+	}
+	"plugins:enableProvidedBook": {
+		params: Sockets.Plugins.SetProvidedBookDisabled.Params
+		response: Sockets.Plugins.SetProvidedBookDisabled.Response
+	}
+	"plugins:enableProvidedBook:error": {
 		params: never
 		response: { error?: string }
 	}
@@ -915,6 +976,24 @@ export type SocketEventMap = {
 		params: Sockets.Admin.OverviewStale.Params
 		response: Sockets.Admin.OverviewStale.Response
 	}
+	// 🚧 Admin › Data and backups: the cast members the upgrade lifted with a note.
+	"admin:castLiftNotes": {
+		params: Sockets.Admin.CastLiftNotes.Params
+		response: Sockets.Admin.CastLiftNotes.Response
+	}
+	"admin:castLiftNotes:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// 🚧 Follow the card's greetings, for a member the upgrade gave its own list.
+	"admin:castLiftFollowGreetings": {
+		params: Sockets.Admin.CastLiftFollowGreetings.Params
+		response: Sockets.Admin.CastLiftFollowGreetings.Response
+	}
+	"admin:castLiftFollowGreetings:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	// Admin → History: the admin logbook, filtered and paged.
 	"admin:logbook": {
 		params: Sockets.Admin.Logbook.Params
@@ -1009,6 +1088,13 @@ export type SocketEventMap = {
 	"models:machineHardware": {
 		params: Sockets.Models.MachineHardware.Params
 		response: Sockets.Models.MachineHardware.Response
+	}
+	// 🚧 One Hugging Face repo's card facts and GGUF file sizes, for the
+	// finder model page (admin; gated). Failures ride the reply's own
+	// `error`; there is no `:error` entry.
+	"models:hubCard": {
+		params: Sockets.Models.HubCard.Params
+		response: Sockets.Models.HubCard.Response
 	}
 	"connections:scripts": {
 		params: Sockets.Connections.Scripts.Params
@@ -1698,10 +1784,6 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Update.Params
 		response: Sockets.Sessions.Update.Response
 	}
-	"sessions:setLorebook": {
-		params: Sockets.Sessions.SetLorebook.Params
-		response: Sockets.Sessions.SetLorebook.Response
-	}
 	// Answers only on `:progress`, `:complete` and `:error` — never under
 	// its own name; `response` is the `:complete` shape.
 	"sessions:summarize": {
@@ -1855,7 +1937,7 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.ErrorResponse
 	}
-	// 🚧 pr-6 (B §B-4): Share as a lorebook (was createLorebookFromPhantom) and Clone with changes and attach.
+	// 🚧 pr-6 (B §B-4): Share as a lorebook (was createLorebookFromPhantom) and Merge ‹book› into these notes.
 	"sessions:shareAsLorebook": {
 		params: Sockets.Sessions.ShareAsLorebook.Params
 		response: Sockets.Sessions.ShareAsLorebook.Response
@@ -1864,13 +1946,13 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.Sessions.ShareAsLorebook.Response
 	}
-	"sessions:cloneWithChanges": {
-		params: Sockets.Sessions.CloneWithChanges.Params
-		response: Sockets.Sessions.CloneWithChanges.Response
+	"sessions:foldInParent": {
+		params: Sockets.Sessions.FoldInParent.Params
+		response: Sockets.Sessions.FoldInParent.Response
 	}
-	"sessions:cloneWithChanges:error": {
+	"sessions:foldInParent:error": {
 		params: never
-		response: Sockets.Sessions.CloneWithChanges.Response
+		response: Sockets.ErrorResponse
 	}
 	// 🚧 pr-6 (B §B-5, §B-6): Archive · Unarchive · Close out (also the catch-up offer's press).
 	"sessions:archive": {
@@ -1918,6 +2000,22 @@ export type SocketEventMap = {
 		response: Sockets.Sessions.ApplyOverlay.Response
 	}
 	"sessions:applyOverlay:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:appliedBatches": {
+		params: Sockets.Sessions.AppliedBatches.Params
+		response: Sockets.Sessions.AppliedBatches.Response
+	}
+	"sessions:appliedBatches:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:takeBackApply": {
+		params: Sockets.Sessions.TakeBackApply.Params
+		response: Sockets.Sessions.TakeBackApply.Response
+	}
+	"sessions:takeBackApply:error": {
 		params: never
 		response: Sockets.ErrorResponse
 	}
@@ -2822,27 +2920,91 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
-	"pipelines:cloneVariableTemplate": {
-		params: Sockets.Pipelines.CloneVariableTemplate.Params
-		response: Sockets.Pipelines.CloneVariableTemplate.Response
+	"pipelines:templateVariableLayouts": {
+		params: Sockets.Pipelines.VariableLayouts.ForTemplate.Params
+		response: Sockets.Pipelines.VariableLayouts.ForTemplate.Response
 	}
-	"pipelines:cloneVariableTemplate:error": {
+	"pipelines:templateVariableLayouts:error": {
+		params: never
+		response: Sockets.Pipelines.VariableLayouts.ForTemplate.Refusal
+	}
+	"pipelines:leftoverPicks": {
+		params: Sockets.Pipelines.LeftoverPicks.Params
+		response: Sockets.Pipelines.LeftoverPicks.Response
+	}
+	"pipelines:leftoverPicks:error": {
+		params: never
+		response: Sockets.Pipelines.LeftoverPicks.Refusal
+	}
+	"pipelines:clearLeftoverPick": {
+		params: Sockets.Pipelines.ClearLeftoverPick.Params
+		response: Sockets.Pipelines.ClearLeftoverPick.Response
+	}
+	"pipelines:clearLeftoverPick:error": {
+		params: never
+		response: Sockets.Pipelines.LeftoverPicks.Refusal
+	}
+	"pipelines:moveLeftoversIntoTemplate": {
+		params: Sockets.Pipelines.MoveLeftoversIntoTemplate.Params
+		response: Sockets.Pipelines.MoveLeftoversIntoTemplate.Response
+	}
+	"pipelines:moveLeftoversIntoTemplate:error": {
+		params: never
+		response: Sockets.Pipelines.MoveLeftoversIntoTemplate.Refusal
+	}
+	"pipelines:libraryVariables": {
+		params: Sockets.Pipelines.VariableLayouts.List.Params
+		response: Sockets.Pipelines.VariableLayouts.List.Response
+	}
+	"pipelines:libraryVariables:error": {
 		params: never
 		response: { error?: string }
 	}
-	"pipelines:updateVariableTemplate": {
-		params: Sockets.Pipelines.UpdateVariableTemplate.Params
-		response: Sockets.Pipelines.UpdateVariableTemplate.Response
+	"pipelines:libraryVariable": {
+		params: Sockets.Pipelines.VariableLayouts.One.Params
+		response: Sockets.Pipelines.VariableLayouts.One.Response
 	}
-	"pipelines:updateVariableTemplate:error": {
+	"pipelines:libraryVariable:error": {
 		params: never
 		response: { error?: string }
 	}
-	"pipelines:deleteVariableTemplate": {
-		params: Sockets.Pipelines.DeleteVariableTemplate.Params
-		response: Sockets.Pipelines.DeleteVariableTemplate.Response
+	"pipelines:librarySetPubLayout": {
+		params: Sockets.Pipelines.VariableLayouts.SetPub.Params
+		response: Sockets.Pipelines.VariableLayouts.SetPub.Response
 	}
-	"pipelines:deleteVariableTemplate:error": {
+	"pipelines:librarySetPubLayout:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryUseEverywhereCounts": {
+		params: Sockets.Pipelines.VariableLayouts.UseEverywhereCounts.Params
+		response: Sockets.Pipelines.VariableLayouts.UseEverywhereCounts.Response
+	}
+	"pipelines:libraryUseEverywhereCounts:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:presetVariableLayouts": {
+		params: Sockets.Pipelines.PresetVariableLayouts.Params
+		response: Sockets.Pipelines.PresetVariableLayouts.Response
+	}
+	"pipelines:presetVariableLayouts:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:setPresetVariableLayout": {
+		params: Sockets.Pipelines.SetPresetVariableLayout.Params
+		response: Sockets.Pipelines.SetPresetVariableLayout.Response
+	}
+	"pipelines:setPresetVariableLayout:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:stampVariableTemplateReference": {
+		params: Sockets.Pipelines.StampVariableTemplateReference.Params
+		response: Sockets.Pipelines.StampVariableTemplateReference.Response
+	}
+	"pipelines:stampVariableTemplateReference:error": {
 		params: never
 		response: { error?: string }
 	}
@@ -3280,6 +3442,10 @@ export type SocketEventMap = {
 		params: Sockets.KoboldCPP.SetModelTtl.Params
 		response: Sockets.KoboldCPP.SetModelTtl.Response
 	}
+	"koboldcpp:setCoLoad": {
+		params: Sockets.KoboldCPP.SetCoLoad.Params
+		response: Sockets.KoboldCPP.SetCoLoad.Response
+	}
 	"koboldcpp:listBinaryVariants": {
 		params: Sockets.KoboldCPP.ListBinaryVariants.Params
 		response: Sockets.KoboldCPP.ListBinaryVariants.Response
@@ -3655,6 +3821,10 @@ export type SocketEventMap = {
 		params: Sockets.Vectorization.CheckRagStatus.Params
 		response: Sockets.Vectorization.CheckRagStatus.Response
 	}
+	"vectorization:checkRagStatus:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"vectorization:setSessionRagIgnored": {
 		params: Sockets.Vectorization.SetSessionRagIgnored.Params
 		response: Sockets.Vectorization.SetSessionRagIgnored.Response
@@ -3724,6 +3894,10 @@ export type SocketEventMap = {
 	"userSettings:updateEasyCharacterCreation": {
 		params: Sockets.UserSettings.UpdateEasyCharacterCreation.Params
 		response: Sockets.UserSettings.UpdateEasyCharacterCreation.Response
+	}
+	"userSettings:updateShowAdvancedControls": {
+		params: Sockets.UserSettings.UpdateShowAdvancedControls.Params
+		response: Sockets.UserSettings.UpdateShowAdvancedControls.Response
 	}
 	"userSettings:updateShowAllCharacterFields": {
 		params: Sockets.UserSettings.UpdateShowAllCharacterFields.Params
@@ -3984,6 +4158,23 @@ export type SocketEventMap = {
 		response: Sockets.Lorebooks.BindingsForCharacter.Response
 	}
 	"lorebooks:bindingsForCharacter:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// 🚧 Update ‹member› to card ‹label›: the member moves to its card's current version.
+	"lorebooks:updateMemberToCardVersion": {
+		params: Sockets.Lorebooks.UpdateMemberToCardVersion.Params
+		response: Sockets.Lorebooks.UpdateMemberToCardVersion.Response
+	}
+	"lorebooks:updateMemberToCardVersion:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:memberOfSeat": {
+		params: Sockets.Lorebooks.MemberOfSeat.Params
+		response: Sockets.Lorebooks.MemberOfSeat.Response
+	}
+	"lorebooks:memberOfSeat:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
@@ -5270,12 +5461,20 @@ export type SocketEventMap = {
 	// Copy to my characters (PLAN-private-messages §6.7, Q3): the owner or a
 	// reader gets a full card copy under their own account.
 	"characters:duplicate": {
-		params: { characterId: number }
+		params: { characterId: number } | { castMemberId: number }
 		response: Sockets.Characters.Create.Response
 	}
 	"characters:duplicate:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+	"characters:page": {
+		params: Sockets.Characters.Page.Params
+		response: Sockets.Characters.Page.Response
+	}
+	"characters:page:error": {
+		params: Sockets.Characters.Page.ErrorResponse
+		response: Sockets.Characters.Page.ErrorResponse
 	}
 	"lorebooks:share": {
 		params: LorebooksShareParams

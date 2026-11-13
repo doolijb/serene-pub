@@ -28,8 +28,9 @@
 import crypto from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { and, eq, isNull, asc, type SQL } from "drizzle-orm"
+import { and, eq, isNull, asc, max, type SQL } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { isFailedQuery } from "$lib/server/db/errors"
 import {
 	MediaFidelity,
 	MediaKind,
@@ -469,9 +470,13 @@ export type MediaParent =
 	| { characterId: number }
 	| { sessionId: number }
 	| { messageId: number }
+	/** 🚧 A cast member's gallery — the files linked through `cast_member_files`. */
+	| { castMemberId: number }
 	| { userId: number; bucket?: never }
 
-function parentWhere(parent: MediaParent): SQL {
+function parentWhere(
+	parent: Exclude<MediaParent, { castMemberId: number }>
+): SQL {
 	if ("characterId" in parent)
 		return eq(schema.files.characterId, parent.characterId)
 	if ("messageId" in parent)
@@ -500,6 +505,24 @@ export async function mediaFor(
 	db: Db,
 	parent: MediaParent
 ): Promise<FileRow[]> {
+	// A member's gallery is a link table, so it is a join, not a column match.
+	if ("castMemberId" in parent)
+		return (
+			await db
+				.select({ file: schema.files })
+				.from(schema.castMemberFiles)
+				.innerJoin(
+					schema.files,
+					eq(schema.files.id, schema.castMemberFiles.fileId)
+				)
+				.where(
+					eq(schema.castMemberFiles.castMemberId, parent.castMemberId)
+				)
+				.orderBy(
+					asc(schema.castMemberFiles.position),
+					asc(schema.castMemberFiles.id)
+				)
+		).map((r) => r.file)
 	return db
 		.select()
 		.from(schema.files)
@@ -617,9 +640,166 @@ export async function reorderMedia(
 	let position = 0
 	for (const id of orderedIds) {
 		if (!allowed.has(id)) continue
+		// A member's gallery order is the LINK's position, not the file's.
+		if ("castMemberId" in parent) {
+			await db
+				.update(schema.castMemberFiles)
+				.set({ position: position++ })
+				.where(
+					and(
+						eq(
+							schema.castMemberFiles.castMemberId,
+							parent.castMemberId
+						),
+						eq(schema.castMemberFiles.fileId, id)
+					)
+				)
+			continue
+		}
 		await db
 			.update(schema.files)
 			.set({ position: position++ })
 			.where(eq(schema.files.id, id))
 	}
+}
+
+/**
+ * 🚧 Append files to a cast member's gallery, after its highest position, in
+ * the order given; a file already linked is skipped. Answers how many links it
+ * added.
+ *
+ * The one writer of `cast_member_files` (P2: the media module owns it). Pass
+ * the handle you are on — `tx` inside a transaction.
+ */
+export async function addToMemberGallery(
+	db: Db,
+	castMemberId: number,
+	fileIds: readonly number[]
+): Promise<number> {
+	const [{ top }] = await db
+		.select({ top: max(schema.castMemberFiles.position) })
+		.from(schema.castMemberFiles)
+		.where(eq(schema.castMemberFiles.castMemberId, castMemberId))
+	let position = top === null || top === undefined ? 0 : top + 1
+	let added = 0
+	for (const fileId of fileIds) {
+		const rows = await db
+			.insert(schema.castMemberFiles)
+			.values({ castMemberId, fileId, position })
+			.onConflictDoNothing()
+			.returning({ id: schema.castMemberFiles.id })
+		if (rows.length) {
+			added++
+			position++
+		}
+	}
+	return added
+}
+
+/**
+ * 🚧 Remove a picture from a cast member's gallery, and delete the file itself
+ * only when nothing else uses it; answers whether a link was removed.
+ *
+ * The media module owns `cast_member_files`: `addToMemberGallery` adds, this
+ * removes. The file is kept when a sprite points at it, any character version
+ * (card or cast, retired included) wears it as its face, another member's
+ * gallery links it, it is a card's gallery picture, or it belongs to a session,
+ * message or conversation. Pass the handle you are on.
+ */
+export async function removeFromMemberGallery(
+	db: Db,
+	castMemberId: number,
+	fileId: number
+): Promise<boolean> {
+	const removed = await db
+		.delete(schema.castMemberFiles)
+		.where(
+			and(
+				eq(schema.castMemberFiles.castMemberId, castMemberId),
+				eq(schema.castMemberFiles.fileId, fileId)
+			)
+		)
+		.returning({ id: schema.castMemberFiles.id })
+	if (!removed.length) return false
+	const used =
+		(await db.query.sprites.findFirst({
+			where: eq(schema.sprites.fileId, fileId),
+			columns: { id: true }
+		})) ??
+		(await db.query.characterVersions.findFirst({
+			where: eq(schema.characterVersions.faceMediaId, fileId),
+			columns: { id: true }
+		})) ??
+		(await db.query.castMemberFiles.findFirst({
+			where: eq(schema.castMemberFiles.fileId, fileId),
+			columns: { id: true }
+		}))
+	if (used) return true
+	const file = await db.query.files.findFirst({
+		where: eq(schema.files.id, fileId),
+		columns: {
+			characterId: true,
+			sessionId: true,
+			messageId: true,
+			conversationId: true
+		}
+	})
+	if (
+		!file ||
+		file.characterId ||
+		file.sessionId ||
+		file.messageId ||
+		file.conversationId
+	)
+		return true
+	await deleteFile(db, fileId)
+	return true
+}
+
+/**
+ * 🚧 The file a new owner wears. A file is one row per user and its bytes sit
+ * under that user's folder, so a picture that moves to another user's book (a
+ * duplicate made by a guest; owner 2026-11-05: what a member cannot do without
+ * a card is copied to the member) needs a row of that user's own.
+ *
+ * The same id when the file is already the owner's. Otherwise the original's
+ * bytes are stored for the new owner (`createMedia` dedupes per user, so a hit
+ * is the same picture already theirs) and the new id is answered. A file that
+ * is gone, or whose bytes cannot be read, answers the original id — the picture
+ * stays shared rather than lost — with one `console.warn`.
+ */
+export async function fileForOwner(
+	db: Db,
+	fileId: number,
+	owner: { userId: number; lorebookId: number }
+): Promise<number> {
+	const file = await getMedia(db, fileId)
+	if (file && file.userId === owner.userId) return fileId
+	try {
+		const read = file ? await readMedia(db, fileId) : null
+		if (file && read) {
+			const { file: copy, created } = await createMedia(db, {
+				userId: owner.userId,
+				lorebookId: owner.lorebookId,
+				bytes: read.bytes,
+				filename: file.filename
+			})
+			// A new row keeps the picture's crop; a dedupe hit keeps its own.
+			if (created && file.frame)
+				await db
+					.update(schema.files)
+					.set({ frame: file.frame })
+					.where(eq(schema.files.id, copy.id))
+			return copy.id
+		}
+	} catch (e) {
+		// Unreadable bytes or a refused sniff fall through to the shared
+		// file; a database failure inside the caller's transaction does not
+		// (the transaction is aborted, so hiding it would only move the error).
+		if (isFailedQuery(e)) throw e
+	}
+	console.warn(
+		`[media] file ${fileId} could not be copied for user ${owner.userId} (book ${owner.lorebookId}); it stays shared`
+	)
+	return fileId
 }

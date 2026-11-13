@@ -37,37 +37,68 @@
 		/** For a row to point `aria-describedby` at. */
 		id?: string
 		class?: string
+		/**
+		 * 🚧 M2d: how many lines the lead may take (default 1: truncated, the
+		 * facts after it on the same line). At 2 the lead wraps and clamps at
+		 * two lines, and the facts follow on their own line under it (the
+		 * applet card's blurb).
+		 */
+		leadLines?: 1 | 2
 	}
 
-	let { items = [], children, id, class: className = "" }: Props = $props()
+	let {
+		items = [],
+		children,
+		id,
+		class: className = "",
+		leadLines = 1
+	}: Props = $props()
 
 	const facts = $derived(metaLineItems(items))
 </script>
 
-<span
-	{id}
-	class="text-surface-600-400 flex min-w-0 items-baseline text-left {className}"
-	data-meta-line
->
-	{#if children}
-		<!-- 13px (STYLE-GUIDE §3.2 "secondary body"; `text-chip` once L13's
-		     type utilities land). -->
-		<span class="min-w-0 truncate text-chip leading-[1.45]">
-			{@render children()}
-		</span>
-	{/if}
+{#snippet factList(inline: boolean)}
 	{#each facts as fact, i (i)}
-		{#if children || i > 0}
+		{#if (inline && children) || i > 0}
 			<!-- The separator's spaces collapse at a flex item's edge, so the
 			     room is padding; the text keeps them, as a joined string would. -->
 			<span class="shrink-0 px-1 text-xs">{" · "}</span>
 		{/if}
 		<span
-			class="text-xs whitespace-nowrap {children
+			class="text-xs whitespace-nowrap {inline && children
 				? 'shrink-0'
 				: 'min-w-0 truncate'}"
 		>
 			{fact}
 		</span>
 	{/each}
+{/snippet}
+
+<span
+	{id}
+	class="text-surface-600-400 flex min-w-0 {leadLines === 2
+		? 'flex-col items-start'
+		: 'items-baseline'} text-left {className}"
+	data-meta-line
+>
+	{#if children}
+		<!-- 13px (STYLE-GUIDE §3.2 "secondary body"; `text-chip` once L13's
+		     type utilities land). -->
+		<span
+			class="min-w-0 {leadLines === 2
+				? 'line-clamp-2'
+				: 'truncate'} text-chip leading-[1.45]"
+		>
+			{@render children()}
+		</span>
+	{/if}
+	{#if leadLines === 2}
+		{#if facts.length}
+			<span class="flex max-w-full min-w-0 items-baseline">
+				{@render factList(false)}
+			</span>
+		{/if}
+	{:else}
+		{@render factList(true)}
+	{/if}
 </span>

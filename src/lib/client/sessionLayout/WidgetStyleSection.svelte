@@ -37,6 +37,7 @@
 		createDebouncer,
 		resolveWidgetStyle,
 		stylePickerOptions,
+		widgetStylePins,
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
 
@@ -110,6 +111,8 @@
 	let awaitingSave = $state(false)
 	/** Delete is two clicks, not a confirm dialog on top of this one. */
 	let armedDelete = $state<number | null>(null)
+	/** Does this widget instance hold a style pin? Only then is there something to reset. */
+	let pinned = $derived(!!widgetStylePins()[widgetId])
 
 	/**
 	 * One debouncer per overlay, not per module: two widgets' editors would
@@ -477,10 +480,26 @@
 	{@render editorBody()}
 {:else}
 	<section class="ws-card" aria-labelledby="ws-style-{widgetId}">
-		<h3 class="ws-section" id="ws-style-{widgetId}">
-			<Icons.Palette size={12} />
-			<span>Style</span>
-		</h3>
+		<div class="ws-head">
+			<h3 class="ws-section" id="ws-style-{widgetId}">
+				<Icons.Palette size={12} />
+				<span>Style</span>
+			</h3>
+			{#if pinned}
+				<button
+					class="ws-reset"
+					title="Go back to the style this widget wears by default; its settings stay."
+					aria-label="Reset style"
+					onclick={() => {
+						armedDelete = null
+						styles.pin(widgetId, null)
+					}}
+				>
+					<Icons.RotateCcw size={11} />
+					<span>Reset</span>
+				</button>
+			{/if}
+		</div>
 		<Select
 			class="ws-select"
 			label="Style for {label}"
@@ -554,6 +573,25 @@
 		font-size: 12px;
 		font-weight: 400;
 		opacity: 0.72;
+	}
+	.ws-head {
+		display: flex;
+		align-items: center;
+	}
+	.ws-reset {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
+		margin-inline-start: auto;
+		padding: 0.1rem 0.3rem;
+		border-radius: 0.25rem;
+		font-size: 12px;
+		opacity: 0.72;
+	}
+	.ws-reset:hover,
+	.ws-reset:focus-visible {
+		background: color-mix(in oklab, currentColor 12%, transparent);
+		opacity: 1;
 	}
 	/* A section of the modal, not a floating card: no border or shadow of its
 	   own, a rule above it to part it from the settings over it. */

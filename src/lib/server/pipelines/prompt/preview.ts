@@ -48,7 +48,10 @@ import {
 	renderTemplate
 } from "$lib/server/pipelines/prompt/renderers"
 import {
+	laidOutForHandlebars,
+	prepareExplicitLayouts,
 	renderVariable,
+	withExplicitLayouts,
 	shippedRowsByKey,
 	variableOfKey,
 	type ResolvedLayouts
@@ -115,9 +118,35 @@ function structuralContext(): Record<string, unknown> {
  * template writes: `{{{characters}}}`, not `{{{core:var/characters@1}}}`.
  */
 export async function sampleContext(
-	layouts?: ResolvedLayouts
+	layouts?: ResolvedLayouts,
+	/**
+	 * The engine that will render it. Core's Handlebars gets every laid-out
+	 * value marked safe, as a run's does (`laidOutForHandlebars`); any other
+	 * engine gets plain strings.
+	 */
+	engine?: string
 ): Promise<Record<string, unknown>> {
+	return (await sampleLaidOut(layouts, engine)).context
+}
+
+/**
+ * `sampleContext`, and with it what each key held before its layout and the
+ * layouts every key was written with — what the explicit-reference pre-pass
+ * needs to render a draft's `layout <key> "<reference>"` calls.
+ */
+async function sampleLaidOut(
+	layouts?: ResolvedLayouts,
+	engine?: string
+): Promise<{
+	context: Record<string, unknown>
+	raw: Record<string, unknown>
+	laid: Record<string, string>
+	layouts: ResolvedLayouts
+}> {
 	const out: Record<string, unknown> = structuralContext()
+	const raw: Record<string, unknown> = {}
+	const laidBy: Record<string, string> = {}
+	const effective: ResolvedLayouts = { ...layouts }
 	for (const decl of allVariables()) {
 		const values = sampleValues(decl)
 		for (const key of Object.keys(decl.scope)) {
@@ -135,10 +164,14 @@ export async function sampleContext(
 						...layouts,
 						[key]: { variableId: decl.id, engine: CORE_TEMPLATE_ENGINE }
 					}
-			out[key] = await renderVariable(forKey, key, values[key])
+			effective[key] = forKey[key]
+			raw[key] = values[key]
+			const laid = await renderVariable(forKey, key, values[key])
+			laidBy[key] = laid
+			out[key] = engine === CORE_TEMPLATE_ENGINE ? laidOutForHandlebars(laid) : laid
 		}
 	}
-	return out
+	return { context: out, raw, laid: laidBy, layouts: effective }
 }
 
 /**
@@ -193,11 +226,23 @@ export async function previewContextTemplate(
 	error?: string
 }> {
 	try {
-		const rendered = await renderTemplate(input.engine, {
+		const sample = await sampleLaidOut(input.layouts, input.engine)
+		// A draft's `layout <key> "<reference>"` calls, written out the way a
+		// run writes them — from the rows `input.layouts` carries for them.
+		const explicit = await prepareExplicitLayouts({
+			engine: input.engine,
 			template: input.source,
-			variables: await sampleContext(input.layouts),
-			promptFormat: PromptFormats.SPLIT_CHAT
+			layouts: sample.layouts,
+			valueOf: (key) => sample.raw[key],
+			inUse: (key) => sample.laid[key]
 		})
+		const rendered = String(
+			await renderTemplate(input.engine, {
+				template: explicit.template,
+				variables: withExplicitLayouts(sample.context, explicit.renders),
+				promptFormat: PromptFormats.SPLIT_CHAT
+			})
+		)
 		return {
 			messages: parseSplitChatPrompt(
 				rendered

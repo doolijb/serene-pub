@@ -140,8 +140,9 @@ async function makeBook() {
 describe("re-dating a history entry a fork's rows use", () => {
 	test("past the fork's date is refused, and the fork's scene then survives its parent's delete", async () => {
 		const b = await makeBook()
-		// main ─(now)─ B ─Y5─ C
-		const parent = await b.fork("B", null, null)
+		// main ─Y0─ B ─Y5─ C
+		// B is dated at Year 0: a fork owns dated history only after its fork date (rule C).
+		const parent = await b.fork("B", null, 0)
 		const c = await b.fork("C", parent, 5)
 		const y3 = await b.history(3, parent)
 		const onC = await b.scene(y3.id, c)
@@ -161,7 +162,8 @@ describe("re-dating a history entry a fork's rows use", () => {
 
 	test("up to the fork's date, earlier, or with nothing on the fork using it, the move is allowed", async () => {
 		const b = await makeBook()
-		const parent = await b.fork("B", null, null)
+		// B is dated at Year 0: a fork owns dated history only after its fork date (rule C).
+		const parent = await b.fork("B", null, 0)
 		const c = await b.fork("C", parent, 5)
 		const used = await b.history(3, parent)
 		const unused = await b.history(2, parent)

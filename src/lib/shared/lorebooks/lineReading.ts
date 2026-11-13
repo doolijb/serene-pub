@@ -35,10 +35,29 @@
  * field, and a nearer line always wins over an ancestor — the precedence
  * `amendmentsAsOf` has always had between a branch and main, generalised.
  *
+ * ## Cast versions: one row in force
+ *
+ * A cast member's versions are rows on the line like any other, and a reading
+ * takes ONE of them (`versionInForce`): the latest by date, then the nearer
+ * holder (an own book of the overlay chain before the attached book, the
+ * reader's own book first; on the attached book, the line before its
+ * ancestors), then the higher life point, write order and id. A branch's
+ * session cuts (`Line.sessionCuts`, `rowPassesSessionCut`) hide what an
+ * ancestor session wrote after the fork, and a retire mark keeps a row the
+ * ancestor has since retired readable by the branches that forked before it.
+ *
  * ⚠ `compareDates` orders. `dateValue` is a placement scalar that collides
  * once a month or a day passes 100, and is never used here.
  */
-import { compareDates, type StoryClock, type StoryDate } from "./storyDate"
+import {
+	compareDates,
+	dayOnly,
+	type StoryClock,
+	type StoryDate
+} from "./storyDate"
+// A function-only cycle: `amendments.ts` imports this module too, and each side
+// only calls the other inside function bodies, never at load.
+import { amendmentsForAppearance } from "./amendments"
 
 /** A branch row, as little of it as the chain needs (the wire's `Branch` fits). */
 export interface LineBranch {
@@ -62,6 +81,20 @@ export interface LineStep {
 	cut: StoryDate | null
 }
 
+/**
+ * 🚧 A **session cut** (plan §32 §5b, §33.2): how far into one ancestor
+ * session a branch's reading sees. One per ancestor, nearest first; the first
+ * cut for a session is the one that counts.
+ */
+export interface SessionCut {
+	/** The ancestor session. */
+	sessionId: number
+	/** The highest origin message the reader still has from that session (its live copied lines); null = none (the branch went Back past every one), so only rows with no source message read. */
+	through: number | null
+	/** The write-order mark: the highest write order at the fork, taken under the state lock. */
+	mark: number
+}
+
 /** A line being read: the branch, and its chain down to main. */
 export interface Line {
 	/** The line itself. NULL = main. */
@@ -72,6 +105,16 @@ export interface Line {
 	 * own step alone, with no main.
 	 */
 	steps: readonly LineStep[]
+	/**
+	 * Absent or empty = not a branch, or a branch made before S4: nothing is
+	 * cut by session. Cast versions read it (`rowPassesSessionCut` here; its
+	 * SQL mirror is in `state/lineSql.ts`), and so do durable stat values:
+	 * `rowsOnReading` keeps a value row tied to an ancestor session's turn
+	 * (`validFromMessageId`) only up to that cut's `through`. Entries ride
+	 * the line uncut by session (they are cut by story date only,
+	 * `entryOnReadingSql`). `lineOf` does not set it — the reader adds it: `{ ...lineOf(id, branches), sessionCuts }`.
+	 */
+	sessionCuts?: readonly SessionCut[]
 }
 
 /** Main: shared rows only, never cut. */
@@ -81,10 +124,16 @@ export const MAIN_LINE: Line = Object.freeze({
 }) as Line
 
 /** A branch's fork date, or null when it forked at now (no cut). */
-export function forkDateOf(branch: LineBranch | null | undefined): StoryDate | null {
+export function forkDateOf(
+	branch: LineBranch | null | undefined
+): StoryDate | null {
 	if (!branch || branch.forkYear == null) return null
 	const month = branch.forkMonth ?? null
-	return { year: branch.forkYear, month, day: month == null ? null : (branch.forkDay ?? null) }
+	return {
+		year: branch.forkYear,
+		month,
+		day: month == null ? null : (branch.forkDay ?? null)
+	}
 }
 
 /** The earlier of two cuts, where null is "no cut" (so the other wins). */
@@ -167,9 +216,19 @@ export function clockPastDeleted<C extends StoryClock>(
 	const cut = forkDateOf(deleted)
 	if (cut === null) return clock
 	const month = clock.month ?? null
-	const date = { year: clock.year, month, day: month == null ? null : (clock.day ?? null) }
+	const date = {
+		year: clock.year,
+		month,
+		day: month == null ? null : (clock.day ?? null)
+	}
 	if (compareDates(date, cut) <= 0) return clock
-	return { year: cut.year, month: cut.month, day: cut.day, hour: null, minute: null }
+	return {
+		year: cut.year,
+		month: cut.month,
+		day: cut.day,
+		hour: null,
+		minute: null
+	}
 }
 
 /**
@@ -235,11 +294,16 @@ export function lineOf(
 	return { branchId, steps }
 }
 
-/** The same chain with every fork cut lifted (a pipeline's "whole line" read). */
+/**
+ * The same chain with every fork cut lifted (a pipeline's "whole line" read).
+ * It lifts fork DATE cuts only: `sessionCuts` are kept — a session cut is not
+ * a date cut.
+ */
 export function uncutLine(line: Line): Line {
 	return {
 		branchId: line.branchId,
-		steps: line.steps.map((s) => ({ branchId: s.branchId, cut: null }))
+		steps: line.steps.map((s) => ({ branchId: s.branchId, cut: null })),
+		...(line.sessionCuts ? { sessionCuts: line.sessionCuts } : {})
 	}
 }
 
@@ -250,6 +314,29 @@ export function stepOf(
 ): LineStep | undefined {
 	const id = rowBranchId ?? null
 	return line.steps.find((s) => s.branchId === id)
+}
+
+/**
+ * **Who owns a dated history day** (rule C, owner, 2026-11-10): the step of
+ * the chain whose branch owns the history entry of `date` for this line. A
+ * line owns a day only strictly AFTER its fork date; on or before it the day
+ * belongs to the nearest ancestor that may own it; a dateless fork owns no
+ * dated history; main, the last step, owns the rest. Partial dates compare as
+ * `compareDates` does (Year 2 and Year 2 Month 5 are different days). Pure.
+ *
+ * `steps[i + 1].cut` is the earliest fork date along steps 0..i, so the walk
+ * stops at step i when the date lies past that cut. A null cut means no fork
+ * date so far: step i owns nothing dated and the walk goes on.
+ * `scenes/historyEntryOfDate.ts` is its server user (where a day-entry path
+ * makes an empty entry, and the free-date check).
+ */
+export function historyOwnerStep(line: Line, date: StoryDate): LineStep {
+	const steps = line.steps
+	for (let i = 0; i < steps.length - 1; i++) {
+		const cut = steps[i + 1].cut
+		if (cut !== null && compareDates(date, cut) > 0) return steps[i]
+	}
+	return steps[steps.length - 1]
 }
 
 /** The non-main branch ids of the chain, the line itself first. */
@@ -305,17 +392,56 @@ export function rowsReadingOnLine<T extends { branchId?: number | null }>(
 	)
 }
 
-/** A dated overlay, as little of it as the line rule needs. */
-export interface LineDated {
+/** A dated overlay of a line, as little of it as the line rule needs. */
+export interface LineDatedRow {
 	id: number
 	branchId: number | null
 	year: number
 	month?: number | null
 	day?: number | null
+	/** Absent: this is a line's row. A held amendment sets it (`HeldDated`). */
+	held?: undefined
 }
 
-function byDateThenId(a: LineDated, b: LineDated): number {
+/**
+ * A held amendment 🚧: the session's own, laid on top of the line it reads.
+ * `anchor` is the turn's message (`source_message_id`), null when it has none.
+ * It may be undated (`year` null); it has no branch and is never a line's.
+ */
+export interface HeldDated {
+	id: number
+	branchId: number | null
+	year: number | null
+	month?: number | null
+	day?: number | null
+	held: { anchor: number | null }
+}
+
+/** A line's row or a held amendment; test `held` to tell them apart. */
+export type LineDated = LineDatedRow | HeldDated
+
+function byDateThenId(a: LineDatedRow, b: LineDatedRow): number {
 	return compareDates(a, b) || a.id - b.id
+}
+
+/** Anchor ascending (null first), then id. */
+function byAnchorThenId(a: HeldDated, b: HeldDated): number {
+	return (a.held.anchor ?? -Infinity) === (b.held.anchor ?? -Infinity)
+		? a.id - b.id
+		: (a.held.anchor ?? -Infinity) < (b.held.anchor ?? -Infinity)
+			? -1
+			: 1
+}
+
+/** Whether a held amendment applies at the moment: undated always; dated at or before it (day grain). */
+function heldAppliesAt(a: HeldDated, moment: StoryDate | null): boolean {
+	if (a.year == null || moment === null) return true
+	return (
+		compareDates(
+			dayOnly({ year: a.year, month: a.month ?? null, day: a.day ?? null }),
+			moment
+		) <= 0
+	)
 }
 
 /**
@@ -323,25 +449,35 @@ function byDateThenId(a: LineDated, b: LineDated): number {
  *
  * Main first, then each ancestor branch outward, then the line's own; inside
  * a step by date then id. `moment` null is the head (every dated amendment on
- * the chain, fork cuts still applied).
+ * the chain, fork cuts still applied). Then the session's held amendments,
+ * LAST, by anchor then id: they are the session's, not a line's, so fork cuts
+ * never reach them.
  */
 export function amendmentsOnLine<A extends LineDated>(
 	amendments: readonly A[],
 	line: Line,
 	moment: StoryDate | null = null
 ): A[] {
-	const groups: A[][] = line.steps.map(() => [])
+	const groups: LineDatedRow[][] = line.steps.map(() => [])
+	const held: HeldDated[] = []
 	const cuts = line.steps.map((s) => earlierCut(s.cut, moment))
 	for (const a of amendments) {
-		const i = line.steps.findIndex((s) => s.branchId === (a.branchId ?? null))
+		if (a.held) {
+			if (heldAppliesAt(a, moment)) held.push(a)
+			continue
+		}
+		const i = line.steps.findIndex(
+			(s) => s.branchId === (a.branchId ?? null)
+		)
 		if (i < 0) continue
 		const cut = cuts[i]
 		if (cut === null || compareDates(a, cut) <= 0) groups[i].push(a)
 	}
-	const out: A[] = []
+	const out: LineDated[] = []
 	for (let i = groups.length - 1; i >= 0; i--)
 		out.push(...groups[i].sort(byDateThenId))
-	return out
+	out.push(...held.sort(byAnchorThenId))
+	return out as A[]
 }
 
 /**
@@ -359,9 +495,154 @@ export function amendmentsAheadOnLine<A extends LineDated>(
 	if (!moment) return []
 	return amendments
 		.filter((a) => {
+			if (a.held) return false
 			const step = stepOf(line, a.branchId)
 			if (!step || compareDates(a, moment) <= 0) return false
 			return step.cut === null || compareDates(a, step.cut) <= 0
 		})
-		.sort(byDateThenId)
+		.sort((x, y) => byDateThenId(x as LineDatedRow, y as LineDatedRow))
+}
+
+/**
+ * A cast version, as little of it as the one-row read needs. The field names
+ * are the `characterVersions` column names, so a selected row fits.
+ */
+export interface LineCastVersion {
+	id: number
+	/** NULL = main. */
+	branchId: number | null
+	/** Day grain; a null year is undated (never cut, ranks below every dated row). */
+	year: number | null
+	month?: number | null
+	day?: number | null
+	/** The life point; null = every appearance (ranks below every number). */
+	personalPosition: number | null
+	writeOrder: number
+	retiredOrder: number | null
+	sourceSessionId: number | null
+	sourceMessageId: number | null
+	/**
+	 * Which own book of the overlay chain holds the row, counted from the
+	 * reader: 0 = the reading session's own book, 1 = its nearest ancestor's,
+	 * …; null/absent = the attached book, read along the line's steps. The
+	 * reader sets it (the table has no such column). An overlay row reads as
+	 * on its own book's main (`MAIN_LINE`).
+	 */
+	overlayDepth?: number | null
+}
+
+/**
+ * 🚧 Whether a cast version survives the line's session cuts (plan §32 §5b,
+ * §33.2). The cut for the row's source is the first in `line.sessionCuts`
+ * with that session; a row with no source has none.
+ *
+ *   - **Retire mark.** A row with `retiredOrder` set reads only for a reader
+ *     that has a cut for its source whose `mark < retiredOrder` (it forked
+ *     before the row was retired). Every other reader passes it by: the
+ *     source session itself, a session forked after the retire, any reader
+ *     with no cut for that source (the book's own screens). Forward clears
+ *     the mark (null) and the row reads again by the next two tests.
+ *   - **Session cut.** When a cut exists, the row reads only when
+ *     `sourceMessageId` is null or `<= through` (a null `through` passes only
+ *     rows with a null source message), AND `writeOrder <= mark`.
+ *
+ * A row from any other source (null, the reader itself, a session not among
+ * the cuts) is not cut. `sessionCutSql` (`lineSql.ts`) is the SQL form.
+ */
+export function rowPassesSessionCut(
+	row: Pick<
+		LineCastVersion,
+		"writeOrder" | "retiredOrder" | "sourceSessionId" | "sourceMessageId"
+	>,
+	line: Line
+): boolean {
+	const cut =
+		row.sourceSessionId == null
+			? undefined
+			: line.sessionCuts?.find((c) => c.sessionId === row.sourceSessionId)
+	if (!cut) return row.retiredOrder == null
+	if (row.retiredOrder != null && !(cut.mark < row.retiredOrder)) return false
+	const messageSeen =
+		row.sourceMessageId == null ||
+		(cut.through != null && row.sourceMessageId <= cut.through)
+	return messageSeen && row.writeOrder <= cut.mark
+}
+
+/** The holder rank of a candidate: higher is nearer. Any overlay row outranks every attached-book row. */
+function holderRank(row: LineCastVersion, line: Line): number {
+	if (row.overlayDepth != null) return 1_000_000 - row.overlayDepth
+	return -line.steps.findIndex((s) => s.branchId === (row.branchId ?? null))
+}
+
+/** Positive when life point `a` is later than `b`; null ranks below every number. */
+function personalPositionOver(a: number | null, b: number | null): number {
+	if (a == null || b == null) return a == null ? (b == null ? 0 : -1) : 1
+	return a - b
+}
+
+/** Positive when `a` is in force over `b`: date, nearer holder, life point, write order, id. */
+function inForceOver(
+	a: LineCastVersion,
+	b: LineCastVersion,
+	line: Line
+): number {
+	if (a.year == null || b.year == null) {
+		if (a.year != null) return 1
+		if (b.year != null) return -1
+	} else {
+		const byDate = compareDates(
+			{ year: a.year, month: a.month ?? null, day: a.day ?? null },
+			{ year: b.year, month: b.month ?? null, day: b.day ?? null }
+		)
+		if (byDate) return byDate
+	}
+	return (
+		holderRank(a, line) - holderRank(b, line) ||
+		personalPositionOver(a.personalPosition, b.personalPosition) ||
+		a.writeOrder - b.writeOrder ||
+		a.id - b.id
+	)
+}
+
+/**
+ * 🚧 The ONE cast version a reading takes (plan §32 §3, §33.2).
+ *
+ * Candidates: a row with `overlayDepth` set must read on its own book's main
+ * (`MAIN_LINE`), any other on `line`, at `moment`; every row must pass
+ * `rowPassesSessionCut`. Then the one life-point filter
+ * (`amendmentsForAppearance`; `appearance` null = every row). The greatest
+ * candidate wins by, in order: date (undated lowest), the nearer holder (any
+ * overlay row outranks every attached-book row; among overlay rows the lower
+ * `overlayDepth`; among attached rows the line before its ancestors, main
+ * last), the higher life point (null lowest), the higher write order, the
+ * higher id (a copy inherits its source's write order, so two rows can tie).
+ * Answers the row itself, or null when no row is a candidate.
+ *
+ * Resolving the winner's `follows` fields against its parent card version is
+ * the reader's, not this function's.
+ */
+export function versionInForce<V extends LineCastVersion>(
+	rows: readonly V[],
+	line: Line,
+	moment: StoryDate | null,
+	appearance: number | null
+): V | null {
+	const dateOf = (row: V): StoryDate | null =>
+		row.year == null
+			? null
+			: { year: row.year, month: row.month ?? null, day: row.day ?? null }
+	const candidates = amendmentsForAppearance(
+		rows.filter(
+			(row) =>
+				(row.overlayDepth != null
+					? rowReadsOnLine(row, MAIN_LINE, dateOf(row), moment)
+					: rowReadsOnLine(row, line, dateOf(row), moment)) &&
+				rowPassesSessionCut(row, line)
+		),
+		appearance
+	)
+	let best: V | null = null
+	for (const row of candidates)
+		if (best === null || inForceOver(row, best, line) > 0) best = row
+	return best
 }

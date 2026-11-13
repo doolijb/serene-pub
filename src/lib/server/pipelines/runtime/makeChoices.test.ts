@@ -13,8 +13,9 @@
  * form's addressee by the model's say-so. The `addressee` port, wired,
  * still wins.
  */
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { coreBindings } from "./bindings"
+import { memberFormSwitch } from "$lib/server/state/memberForm"
 
 const bindings = coreBindings()
 const makeChoices = bindings["core:task/make-choices@1"]!
@@ -34,9 +35,9 @@ const CAST = {
 		{ character: { id: 14, name: "Alder" }, removedAt: "2026-09-17T00:00:00.000Z" }
 	],
 	sessionPersonas: [
-		{ persona: { id: 7, name: "Jody", nickname: "Rook" } },
+		{ persona: { id: 7, name: "Jody", nickname: "Rook" }, seatId: 3 },
 		// Departed: no longer anyone's presence here.
-		{ persona: { id: 8, name: "Wren" }, removedAt: "2026-09-17T00:00:00.000Z" }
+		{ persona: { id: 8, name: "Wren" }, seatId: 4, removedAt: "2026-09-17T00:00:00.000Z" }
 	],
 	envoys: [{ slug: "mascot", name: { en: "The Mascot" } }]
 }
@@ -59,7 +60,18 @@ async function blockFor(addressee: string, over: Record<string, unknown> = {}) {
 	return (r as any).value
 }
 
-describe("make-choices: who the addressee names", () => {
+/** ⏳ S4: a persona's seat is `player-seat:<seatId>` once the flip is on, its card `character:<id>` before. */
+describe.each([false, true])("make-choices: who the addressee names (member form %s)", (on) => {
+	let was = false
+	beforeEach(() => {
+		was = memberFormSwitch.on
+		memberFormSwitch.on = on
+	})
+	afterEach(() => {
+		memberFormSwitch.on = was
+	})
+	const PERSONA = on ? "player-seat:3" : "character:7"
+
 	it("a cast member's name or nickname, case-insensitively", async () => {
 		expect((await blockFor("tom")).addressee).toBe("character:12")
 		expect((await blockFor("TOMMY")).addressee).toBe("character:12")
@@ -67,8 +79,8 @@ describe("make-choices: who the addressee names", () => {
 	})
 
 	it("a member's presence by name or nickname — the player's persona is addressable", async () => {
-		expect((await blockFor("Jody")).addressee).toBe("character:7")
-		expect((await blockFor("rook")).addressee).toBe("character:7")
+		expect((await blockFor("Jody")).addressee).toBe(PERSONA)
+		expect((await blockFor("rook")).addressee).toBe(PERSONA)
 	})
 
 	it("a departed participant of either kind is nobody: unaddressed, by name and by reference", async () => {
@@ -101,7 +113,8 @@ describe("make-choices: who the addressee names", () => {
 		expect((await blockFor("character:999")).addressee).toBeNull()
 		expect((await blockFor("envoy:nobody")).addressee).toBeNull()
 		// A live presence is addressable by reference like a cast member.
-		expect((await blockFor("character:7")).addressee).toBe("character:7")
+		expect((await blockFor("character:7")).addressee).toBe(PERSONA)
+		if (on) expect((await blockFor("player-seat:3")).addressee).toBe("player-seat:3")
 		// A role or a user is not a cast member at all.
 		expect((await blockFor("owner")).addressee).toBeNull()
 		expect((await blockFor("user:3")).addressee).toBeNull()

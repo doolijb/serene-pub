@@ -9,6 +9,7 @@ import * as schema from "$lib/server/db/schema"
 import { insertSessionMessageRow } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { CLOSE_OUT_REFUSALS, catchUpLabel, catchUpNotice } from "$lib/shared/sessions/archive"
+import { WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 
 let testDb: TestDb
 
@@ -170,6 +171,86 @@ describe("sessions:closeOut", () => {
 			CLOSE_OUT_REFUSALS.notOwner
 		)
 		expect(await scenesOf(w.session.id)).toHaveLength(0)
+	}, 60_000)
+})
+
+/** The session reads its book through its own notes (Full for its owner), with one held note at the first line. */
+async function withHeldNote(w: Awaited<ReturnType<typeof world>>) {
+	const { insertOwnBook, ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+	await testDb.insert(schema.userSettings).values({ userId: w.owner.id, loreWriteMode: "full" })
+	await insertOwnBook(testDb as unknown as Db, {
+		sessionId: w.session.id,
+		userId: w.owner.id,
+		name: null,
+		overlayOf: w.bookId,
+		primaryRuleset: "core:ruleset/freeform@1",
+		rulesetVersion: null
+	})
+	const notes = (await ownBookFor(testDb as unknown as Db, w.session.id)).id
+	const [entry] = await testDb
+		.insert(schema.lorebookEntries)
+		.values({
+			lorebookId: notes,
+			typeId: WORLD_LORE_TYPE_ID,
+			typeVersion: 1,
+			position: ++seq,
+			title: `Held ${seq}`,
+			content: "Held.",
+			sourceMessageId: w.lines[0].id
+		})
+		.returning()
+	return { notes, entryId: entry!.id }
+}
+
+const applyRecordsOf = (sessionId: number) =>
+	testDb
+		.select()
+		.from(schema.loreImprints)
+		.where(eq(schema.loreImprints.sessionId, sessionId))
+
+describe("sessions:closeOut — held changes apply at Close out", () => {
+	test("with nothing left to close out (nothing): applied, then refused", async () => {
+		const { sessionsCloseOutHandler: h } = await import("./sessionArchive")
+		const { openScene } = await import("$lib/server/scenes/liveScenes")
+		const w = await world({ lines: 3 })
+		const held = await withHeldNote(w)
+		// Every line is in a scene already: nothing to close out.
+		await openScene(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.owner.id,
+			channel: "main",
+			atMessageId: w.lines[0].id,
+			closeAt: w.lines[2].id
+		})
+		expect(await applyRecordsOf(w.session.id)).toEqual([])
+		await expect(h.handler(fakeSocket(w.owner.id), { sessionId: w.session.id }, noEmit)).rejects.toThrow(
+			CLOSE_OUT_REFUSALS.nothing
+		)
+		const records = await applyRecordsOf(w.session.id)
+		expect(records.map((r) => [r.subjectId, (r.cause as any).automatic])).toEqual([[held.entryId, "close-out"]])
+	}, 60_000)
+
+	test("with no close-out registration (notRegistered): applied, then refused", async () => {
+		const { sessionsCloseOutHandler: h } = await import("./sessionArchive")
+		const w = await world({ lines: 3 })
+		const held = await withHeldNote(w)
+		await testDb.update(schema.sessions).set({ genreId: "nope:genre/none" }).where(eq(schema.sessions.id, w.session.id))
+		await expect(h.handler(fakeSocket(w.owner.id), { sessionId: w.session.id }, noEmit)).rejects.toThrow(
+			CLOSE_OUT_REFUSALS.notRegistered
+		)
+		const records = await applyRecordsOf(w.session.id)
+		expect(records.map((r) => [r.subjectId, (r.cause as any).automatic])).toEqual([[held.entryId, "close-out"]])
+	}, 60_000)
+
+	test("not for a guest (notOwner): nothing applies", async () => {
+		const { sessionsCloseOutHandler: h } = await import("./sessionArchive")
+		const w = await world({ lines: 3 })
+		await withHeldNote(w)
+		await testDb.insert(schema.sessionGuests).values({ sessionId: w.session.id, userId: w.stranger.id, isPlayer: true })
+		await expect(h.handler(fakeSocket(w.stranger.id), { sessionId: w.session.id }, noEmit)).rejects.toThrow(
+			CLOSE_OUT_REFUSALS.notOwner
+		)
+		expect(await applyRecordsOf(w.session.id)).toEqual([])
 	}, 60_000)
 })
 

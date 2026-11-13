@@ -37,6 +37,7 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { primerRowEditProblem, providedBooksReadableBy } from "$lib/server/plugins/providedMarks"
 import {
 	and,
 	asc,
@@ -79,9 +80,9 @@ import {
 import { assertAnchorEntry, assertAnchorInBook } from "$lib/server/utils/anchorEntry"
 import { foldRelationshipsUndatedBy } from "$lib/server/utils/relationshipGuards"
 import { assertRedateKeepsLines } from "$lib/server/utils/forkHistory"
-import { formatDate, nextStoryDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { compareDates, dayOnly, formatDate, nextStoryDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { ENTRY_DATE_PARTS } from "$lib/shared/lorebooks/amendments"
-import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
+import { MAIN_LINE, historyOwnerStep, type Line } from "$lib/shared/lorebooks/lineReading"
 import { LOCATION_TYPE_ID, isDerivedEntryTypeId } from "$lib/shared/entries/types"
 import {
 	bookRulesLists,
@@ -92,9 +93,20 @@ import {
 import {
 	assertDateLands,
 	bookCalendarOf,
-	lockBookCalendar
+	lockBookCalendar,
+	sessionStoryNowOf
 } from "$lib/server/state/storyTime"
-import { BranchRefusal, lineOfBook, sessionReadingOf } from "$lib/server/state/reading"
+import {
+	assertHistoryDateFree,
+	historyEntryOfDate
+} from "$lib/server/scenes/historyEntryOfDate"
+import {
+	BranchRefusal,
+	historyEntryDate,
+	lineOfBook,
+	sessionReadingOf
+} from "$lib/server/state/reading"
+import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
 import { activityStore } from "$lib/server/utils/activityStore"
 import {
 	MAIN_HEAD,
@@ -195,7 +207,7 @@ const listOrder = (typeId: string) =>
 export async function listEntryRows(
 	lorebookId: number,
 	typeId: EntryTypeId
-): Promise<LorebookEntry[]> {
+): Promise<Array<LorebookEntry & { unfiledSceneCount?: number }>> {
 	const rows = await db
 		.select()
 		.from(schema.lorebookEntries)
@@ -211,11 +223,51 @@ export async function listEntryRows(
 		lorebookId,
 		rows.map((r) => r.id)
 	)
+	const unfiled = typeId === HISTORY_TYPE_ID ? await unfiledSceneCounts(lorebookId, rows) : new Map()
 	return rows.map((r) => {
-		const entry = toEntryRow(r, vectors.get(r.id))
+		let entry: LorebookEntry & { unfiledSceneCount?: number } = toEntryRow(r, vectors.get(r.id))
 		const notes = kept.get(r.id)
-		return notes ? ({ ...entry, keptImprints: notes } as LorebookEntry) : entry
+		if (notes) entry = { ...entry, keptImprints: notes } as LorebookEntry
+		const count = unfiled.get(r.id)
+		return count ? { ...entry, unfiledSceneCount: count } : entry
 	})
+}
+
+/**
+ * How many not-yet-compiled scenes each history entry of a book would take in
+ * on a compile: the unfiled scenes whose day's entry is that entry
+ * (`unfiledScenesByEntry`, the one reading of the date rule) **that the entry's
+ * own line reads** (main's shared scenes and that line's chain). The compile
+ * from that line takes exactly these, so a fork's scene never enables Compile
+ * on a main entry that will not take it. Once per distinct line among `rows`;
+ * an entry on a line that isn't the book's gets no count. Absent at 0.
+ */
+async function unfiledSceneCounts(
+	lorebookId: number,
+	rows: ReadonlyArray<{ id: number; branchId: number | null }>
+): Promise<Map<number, number>> {
+	const { unfiledScenesByEntry } = await import("$lib/server/scenes/unfiledScenesByEntry")
+	const entriesByLine = new Map<number | null, number[]>()
+	for (const row of rows) {
+		const key = row.branchId ?? null
+		entriesByLine.set(key, [...(entriesByLine.get(key) ?? []), row.id])
+	}
+	const counts = new Map<number, number>()
+	for (const [branchId, ids] of entriesByLine) {
+		let byEntry
+		try {
+			const line = await lineOfBook(db, lorebookId, branchId)
+			byEntry = await unfiledScenesByEntry(db, { lorebookId, line })
+		} catch (e) {
+			if (e instanceof BranchRefusal) continue
+			throw e
+		}
+		for (const id of ids) {
+			const n = byEntry.get(id)?.length
+			if (n) counts.set(id, n)
+		}
+	}
+	return counts
 }
 
 /**
@@ -519,6 +571,8 @@ export const copyFromLibraryHandler: Handler<
 	async (socket, params: Sockets.Entries.CopyFromLibrary.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 		const typeId = assertTypeId(params.typeId)
 		const found = await libraryRowOf(db, book.id, typeId, String(params.pieceId ?? ""))
 		if (!found)
@@ -668,6 +722,10 @@ async function createEntry(
 		typeof data.content === "string" ? data.content.trim() : ""
 
 	const book = await assertOwnedBook(db, userId, data.lorebookId)
+	{
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
+	}
 	// A rules list's entry belongs in a book told by those rules (§C).
 	{
 		const refusal = await rulesListRefusal(db, data.lorebookId, typeId)
@@ -677,6 +735,9 @@ async function createEntry(
 	// A session write (plan A12): the row lands where the session reads —
 	// its line, decided here and never by the request — and a dated row
 	// that brings no date is dated at the session's story now.
+	// Dated at the session's story now: dated again inside the transaction
+	// when the session's first write forks its line there.
+	let datedAtStoryNow = false
 	if (params.sessionId != null) {
 		const write = await sessionLoreWrite(db, {
 			sessionId: params.sessionId,
@@ -684,7 +745,8 @@ async function createEntry(
 			lorebookId: data.lorebookId
 		})
 		data.branchId = write.branchId
-		if (entryDeclaration(typeId)?.roles.order && data.year == null)
+		datedAtStoryNow = !!entryDeclaration(typeId)?.roles.order && data.year == null
+		if (datedAtStoryNow)
 			Object.assign(
 				data,
 				historyDateOfSessionWrite(
@@ -752,16 +814,88 @@ async function createEntry(
 	}
 	const { newEntry, member, settled } = await db.transaction(async (tx) => {
 		await lockBookCalendar(tx, data.lorebookId)
+		// The session's first write forks its own line here, inside the write's
+		// transaction and after every check before it, so a refused write forks nothing.
+		if (params.sessionId != null) {
+			const rode = data.branchId ?? null
+			await ensureSessionLine(tx, params.sessionId)
+			data.branchId = (await sessionReadingOf(tx, params.sessionId))?.branchId ?? null
+			// Forked just now: what was checked on the line it rode is checked
+			// on its own line (the fork is the book's, so the branch check holds),
+			// and a row dated at story now takes the new line's story now.
+			if (data.branchId !== rode) {
+				await assertAnchorEntry(
+					data.anchorEntryId,
+					data.lorebookId,
+					undefined,
+					data.branchId,
+					typeId,
+					tx
+				)
+				if (datedAtStoryNow)
+					Object.assign(
+						data,
+						historyDateOfSessionWrite(
+							{ storyNow: await sessionStoryNowOf(tx, params.sessionId) },
+							await bookCalendarOf(tx, data.lorebookId)
+						)
+					)
+			}
+		}
 		// A dated entry's date must land in the book's calendar, once it
 		// declares one (DESIGN-story-time §0: validated at entry, so the
 		// preflight list can never refill) — under the lock, so a calendar
 		// is never declared between this check and the row (A18(d)).
-		if (entryDeclaration(typeId)?.roles.order && data.year != null)
-			await assertDateLands(tx, data.lorebookId, {
+		let dayEntry: typeof schema.lorebookEntries.$inferSelect | null = null
+		if (entryDeclaration(typeId)?.roles.order && data.year != null) {
+			const date: StoryDate = {
 				year: Number(data.year),
 				month: data.month ?? null,
 				day: data.day ?? null
-			})
+			}
+			await assertDateLands(tx, data.lorebookId, date)
+			// ★H1/★H2 (owner, 2026-11-10): a blank session write is the "entry
+			// of this day" path — it finds the day's entry (or makes an empty
+			// one on the owning line) and answers it. It carries no cast member
+			// and no sources, so nothing else needs writing to the row; a write
+			// that does carry either takes the plain path below.
+			if (
+				params.sessionId != null &&
+				data.content === "" &&
+				castCharacterId == null &&
+				!sources
+			) {
+				const found = await historyEntryOfDate(
+					tx,
+					{
+						lorebookId: data.lorebookId,
+						branchId: data.branchId ?? null,
+						date
+					},
+					{ create: true }
+				)
+				;[dayEntry] = await tx
+					.select()
+					.from(schema.lorebookEntries)
+					.where(eq(schema.lorebookEntries.id, found.historyEntryId))
+			} else {
+				// A person's create, or a session write that carries content,
+				// onto a taken date is refused. 🚧 A session's text is not
+				// appended to the day's entry: nothing here records it as an
+				// imprinted change a retake could take back (open ★).
+				await assertHistoryDateFree(tx, {
+					lorebookId: data.lorebookId,
+					branchId: data.branchId ?? null,
+					date
+				})
+			}
+		}
+		if (dayEntry)
+			return {
+				newEntry: dayEntry,
+				member: null,
+				settled: undefined
+			}
 		const member =
 			castCharacterId != null
 				? await findOrInsertBinding(
@@ -880,6 +1014,8 @@ export const updateEntryHandler: Handler<
 		const existing = await findOwnedEntry(params.entry.id, typeId)
 		if (!existing || existing.lorebookUserId !== userId)
 			throw new Error("Entry not found or access denied.")
+		const primerProblem = await primerRowEditProblem(db, existing.entry.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		// `lorebookId` is deliberately excluded — ownership is verified against
 		// the entry's *current* lorebook above, so a client-supplied replacement
@@ -986,6 +1122,19 @@ export const updateEntryHandler: Handler<
 					await lockBookCalendar(tx, existing.entry.lorebookId)
 					if (movedDate) {
 						await assertDateLands(tx, existing.entry.lorebookId, movedDate)
+						// A re-date onto a taken day is refused; a save that resends the
+						// stored date is never (a doubled date must stay editable).
+						const stored = historyEntryDate(existing.entry.fields)
+						if (
+							!stored ||
+							compareDates(dayOnly(stored), dayOnly(movedDate)) !== 0
+						)
+							await assertHistoryDateFree(tx, {
+								lorebookId: existing.entry.lorebookId,
+								branchId: existing.entry.branchId ?? null,
+								date: movedDate,
+								exceptId: params.entry.id
+							})
 						await assertRedateKeepsLines(tx, params.entry.id, movedDate)
 					}
 					if (reparents)
@@ -1076,6 +1225,10 @@ export const entrySetMarksHandler: Handler<
 			.limit(1)
 		if (!found || (found.lorebookUserId !== userId && !socket.user?.isAdmin))
 			return refuse("Entry not found or access denied.")
+		{
+			const primerProblem = await primerRowEditProblem(db, found.entry.lorebookId)
+			if (primerProblem) return refuse(primerProblem)
+		}
 		const patch: { enabled?: boolean; constant?: boolean } = {}
 		if (typeof params.off === "boolean") patch.enabled = !params.off
 		if (typeof params.pinned === "boolean") patch.constant = params.pinned
@@ -1107,7 +1260,8 @@ export const entrySetMarksHandler: Handler<
 		for (const field of ["enabled", "constant"] as const) {
 			if (heldBy || patch[field] === undefined || seen[field] === patch[field]) continue
 			const wins = amendmentDeciding(overlays, updated.id, field, reading)
-			if (!wins) continue
+			// A held amendment is this session's own change, undated; no date names it.
+			if (!wins || wins.held || wins.year == null) continue
 			const date = { year: wins.year, month: wins.month ?? null, day: wins.day ?? null }
 			heldBy = {
 				field,
@@ -1181,7 +1335,12 @@ export const entrySessionEntriesHandler: Handler<
 			.limit(1)
 		if (!book) return answer({ ...base, lorebookId: null })
 		// The own book is the session's: the owner-only line is for an attached book.
-		if (session?.lorebookId != null && book.userId !== userId && !socket.user?.isAdmin)
+		if (
+			session?.lorebookId != null &&
+			book.userId !== userId &&
+			!socket.user?.isAdmin &&
+			!(await providedBooksReadableBy(db as unknown as Db, userId, [sessionBookId])).has(sessionBookId)
+		)
 			return answer({ ...base, lorebookId: sessionBookId, ownerOnly: true })
 
 		const limit = Math.min(Math.max(params.limit ?? 50, 1), 200)
@@ -1420,6 +1579,8 @@ export const deleteEntryHandler: Handler<
 		const existing = await findOwnedEntry(params.id, typeId)
 		if (!existing || existing.lorebookUserId !== userId)
 			throw new Error("Entry not found or access denied.")
+		const primerProblem = await primerRowEditProblem(db, existing.entry.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		// A place's stats go with it, and with every entry the delete cascades
 		// to (plan B0): collected before the delete, when there is still a
@@ -1475,6 +1636,8 @@ export const updateEntryPositionsHandler: Handler<
 		const typeId = assertTypeId(params.typeId)
 
 		await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, params.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		// Every id in the request must belong to THIS lorebook and THIS type —
 		// without it, owning any lorebook was enough to reposition (and thus
@@ -1606,6 +1769,11 @@ export async function reorderEntries(
  * all in a free-form book. History is the only ordered type there is, and a
  * second one would want a **named policy**, the way the anchor field role does,
  * rather than a branch here.
+ *
+ * One history entry per date per line: when the line already reads an entry on
+ * the next day, that entry is the answer and nothing is made. Otherwise the new
+ * empty entry is filed on the line that owns that day (a fork owns only days
+ * after its fork date; an earlier day is its ancestor's).
  */
 export const iterateNextEntryHandler: Handler<
 	Sockets.Entries.IterateNext.Params,
@@ -1624,6 +1792,8 @@ export const iterateNextEntryHandler: Handler<
 		const existing = await findOwnedEntry(params.id, typeId)
 		if (!existing || existing.lorebookUserId !== userId)
 			throw new Error("Entry not found or access denied.")
+		const primerProblem = await primerRowEditProblem(db, existing.entry.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		// The line the new entry lands on: the one being read, as the create
 		// path takes it — checked against the book. Absent, it is the source
@@ -1665,6 +1835,31 @@ export const iterateNextEntryHandler: Handler<
 				await bookCalendarOf(tx, existing.entry.lorebookId)
 			)
 			await assertDateLands(tx, existing.entry.lorebookId, next)
+			// The entry of that day, when the line already reads one, is the
+			// answer: no shifting, no insert (★H1, owner, 2026-11-10).
+			const found = await historyEntryOfDate(
+				tx,
+				{
+					lorebookId: existing.entry.lorebookId,
+					branchId,
+					date: next
+				},
+				{ create: false }
+			)
+			if (found) {
+				const [row] = await tx
+					.select()
+					.from(schema.lorebookEntries)
+					.where(eq(schema.lorebookEntries.id, found.historyEntryId))
+				return [row]
+			}
+			// None: the empty entry is made on the line that owns the day
+			// (rule C, ★H2) — an ancestor's, when the day is at or before the
+			// fork.
+			const ownerBranchId = historyOwnerStep(
+				await lineOfBook(tx, existing.entry.lorebookId, branchId),
+				next
+			).branchId
 			const { year, month, day } = next
 			const inBook = inBookOfType(existing.entry.lorebookId, typeId)
 			// Every final is ≥ `position`, and `position` is one past a row that
@@ -1716,7 +1911,7 @@ export const iterateNextEntryHandler: Handler<
 						month,
 						day,
 						position,
-						branchId
+						branchId: ownerBranchId
 					} as any)
 				)
 				.returning()
@@ -1845,7 +2040,11 @@ export const entryCountsHandler: Handler<
 
 		counts[PLACE_KIND] = counts[LOCATION_TYPE_ID] ?? 0
 
-		const res = { lorebookId: params.lorebookId, counts }
+		const res = {
+			lorebookId: params.lorebookId,
+			branchId: params.branchId ?? null,
+			counts
+		}
 		emitToUser("entries:counts", res)
 		return res
 	},
@@ -1952,6 +2151,8 @@ export const entryRecentDecisionsHandler: Handler<
 				included: schema.rankingDecisions.included,
 				rank: schema.rankingDecisions.rank,
 				tokens: schema.rankingDecisions.tokens,
+				reason: schema.rankingDecisions.reason,
+				why: schema.rankingDecisions.why,
 				detail: schema.rankingDecisions.detail
 			})
 			.from(schema.rankingDecisions)
@@ -2013,12 +2214,16 @@ export const entryRecentDecisionsHandler: Handler<
 			const matched = (
 				r.detail as { matched?: Array<{ key: string; fuzzy?: boolean }> } | null
 			)?.matched?.filter((m) => !m.fuzzy)
+			// Each assignment replaces the whole fact, so an inclusion met after
+			// a rejection leaves no stale reason behind.
 			facts[id] = {
 				...(r.rank != null ? { rank: r.rank } : {}),
 				...(r.rank != null ? { of: readIn.get(r.rankingId) ?? 0 } : {}),
 				...(r.tokens != null ? { tokens: r.tokens } : {}),
 				...(Array.isArray(matched) && matched[0]?.key ? { matched: matched[0].key } : {}),
-				...(budgetOf.get(r.rankingId) != null ? { budget: budgetOf.get(r.rankingId)! } : {})
+				...(budgetOf.get(r.rankingId) != null ? { budget: budgetOf.get(r.rankingId)! } : {}),
+				...(!r.included && r.reason ? { reason: r.reason } : {}),
+				...(!r.included && r.why ? { why: r.why } : {})
 			}
 		}
 		const relationships = turn
@@ -2058,6 +2263,8 @@ export const settleImprintHandler: Handler<
 		if (lorebookId == null) throw new Error(KEPT_IMPRINT_REFUSALS.missing)
 		if (!(await findOwnedBook(db, socket.user!.id, lorebookId)))
 			throw new Error(KEPT_IMPRINT_REFUSALS.notYours)
+		const primerProblem = await primerRowEditProblem(db, lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 		const settled = await db.transaction(async (tx) => {
 			await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
 			return settleKeptImprint(tx as unknown as Db, params.imprintId, choice)

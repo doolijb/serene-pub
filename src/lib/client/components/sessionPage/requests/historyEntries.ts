@@ -15,6 +15,9 @@
  *   owns the session (a guest reads the clock, and is told whose the rest
  *   is: `ownerOnly`);
  * - the scenes: the page's own scene list (`scenes:list`, this session's);
+ * - 🚧 **Not yet compiled** (`unfiledDays`, ★S2-1b): this session's unfiled
+ *   scenes on its line, by day — S5's `unfiledScenesByDay`, the History
+ *   lens's own grouping, never a second rule;
  * - 🚧 the open scene (live scenes §7): `scenes:openScenes` — its lines so
  *   far and its proposed cast, read fresh on each ask — and the session's
  *   summary mode off the same reply's scene settings.
@@ -44,6 +47,7 @@ import {
 	rowsReadingOnLine,
 	type LineBranch
 } from "$lib/shared/lorebooks/lineReading"
+import { unfiledScenesByDay } from "$lib/client/lorebooks/sections/unfiledScenes"
 import { extendCountsOf } from "$lib/shared/lorebooks/graphBuildScope"
 import {
 	ownClockOf,
@@ -83,6 +87,10 @@ export interface SceneRow {
 	summaryStatus?: string | null
 	/** 🚧 What its applied summary was written from (`scenes:list`, pr-6s2); null or absent: nothing recorded. */
 	loreSources?: Sockets.Scenes.List.SceneLoreSources | null
+	/** 🚧 The story clock the scene opened at; its day for *Not yet compiled*. */
+	openedStoryClockYear?: number | null
+	openedStoryClockMonth?: number | null
+	openedStoryClockDay?: number | null
 }
 
 /**
@@ -97,7 +105,8 @@ export function summaryStatusOf(
 	s: Pick<SceneRow, "summary" | "summaryStatus" | "openedAtMessageId">
 ): "none" | "running" | "review" | "done" | "failed" {
 	const st = s.summaryStatus
-	if (st === "running" || st === "review" || st === "failed" || st === "done") return st
+	if (st === "running" || st === "review" || st === "failed" || st === "done")
+		return st
 	if (st === "none" && s.openedAtMessageId != null) return "none"
 	return s.summary?.trim() ? "done" : "none"
 }
@@ -186,7 +195,13 @@ const sceneStart = (s: SceneRow) =>
  * viewer's zone ("3 Oct, 14:20"); "" when unknown, and Chronicle then draws no line (pr-6s2, I §I-2).
  */
 export function throughLabelOf(throughAt: string | null | undefined): string {
-	return realDateTime(throughAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })
+	return realDateTime(throughAt, {
+		day: "numeric",
+		month: "short",
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false
+	})
 }
 
 /**
@@ -280,7 +295,8 @@ export async function readChronicle(
 	// 🚧 The open scene on the main lane, read fresh (its line count moves
 	// with every line), and the session's summary mode off the same reply.
 	const live = deps.readOpenScenes ? await deps.readOpenScenes() : null
-	const open = live?.scenes.find((o) => (o.channel ?? "main") === "main") ?? null
+	const open =
+		live?.scenes.find((o) => (o.channel ?? "main") === "main") ?? null
 	const openScene: HistoryOpenSceneV1 | null = open
 		? {
 				id: open.id,
@@ -289,12 +305,34 @@ export async function readChronicle(
 				since: open.since ?? "",
 				lineCount: open.lineCount,
 				order: order.get(open.id) ?? order.size,
-				cast: open.cast.map((c) => ({ name: c.name, evidence: c.evidence }))
+				cast: open.cast.map((c) => ({
+					name: c.name,
+					evidence: c.evidence
+				}))
 			}
 		: null
 	const liveLines = new Map(
 		(live?.scenes ?? []).map((o) => [o.id, o.lineCount] as const)
 	)
+	const sceneOf = (s: SceneRow): HistorySceneV1 => ({
+		id: s.id,
+		name: s.name?.trim() ? s.name : null,
+		lineCount: liveLines.get(s.id) ?? s.selectedMessageIds?.length ?? 0,
+		order: order.get(s.id) ?? 0,
+		summarized: !!s.summary?.trim(),
+		graphed: s.graphed === true,
+		summaryStatus: summaryStatusOf(s),
+		...(s.loreSources
+			? {
+					loreSources: {
+						fromMessageId: s.loreSources.fromMessageId,
+						throughMessageId: s.loreSources.throughMessageId,
+						throughLabel: throughLabelOf(s.loreSources.throughAt)
+					}
+				}
+			: {})
+	})
+
 	return {
 		answer: {
 			...empty,
@@ -309,30 +347,21 @@ export async function readChronicle(
 							(a, b) =>
 								(order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
 						)
-						.map(
-							(s): HistorySceneV1 => ({
-								id: s.id,
-								name: s.name?.trim() ? s.name : null,
-								lineCount:
-									liveLines.get(s.id) ??
-									s.selectedMessageIds?.length ??
-									0,
-								order: order.get(s.id) ?? 0,
-								summarized: !!s.summary?.trim(),
-								graphed: s.graphed === true,
-								summaryStatus: summaryStatusOf(s),
-								...(s.loreSources
-									? {
-											loreSources: {
-												fromMessageId: s.loreSources.fromMessageId,
-												throughMessageId: s.loreSources.throughMessageId,
-												throughLabel: throughLabelOf(s.loreSources.throughAt)
-											}
-										}
-									: {})
-							})
-						)
+						.map(sceneOf)
 				: [],
+			unfiledDays: unfiledScenesByDay(scenes, branchId).map((d) => ({
+				date: d.date
+					? {
+							year: d.date.year,
+							...(d.date.month != null
+								? { month: d.date.month }
+								: {}),
+							...(d.date.day != null ? { day: d.date.day } : {})
+						}
+					: null,
+				label: d.date ? formatDate(d.date, calendar) : "",
+				scenes: d.scenes.map((x) => sceneOf(x as SceneRow))
+			})),
 			earlier: onLine.slice(1, 1 + cap).map(entryOf),
 			earlierTotal: Math.max(0, onLine.length - 1),
 			ungraphedScenes: counts.ready + counts.unsummarized

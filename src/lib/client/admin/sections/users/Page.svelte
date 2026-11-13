@@ -15,8 +15,11 @@
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { getInterestContext, useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		getInterestContext,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { notify } from "$lib/client/utils/notify"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
@@ -32,7 +35,9 @@
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 	const userCtx: UserCtx = getContext("userCtx")
 	const selfId = $derived(userCtx?.user?.id ?? null)
-	const accountsOff = $derived(systemSettingsCtx?.settings?.isAccountsEnabled === false)
+	const accountsOff = $derived(
+		systemSettingsCtx?.settings?.isAccountsEnabled === false
+	)
 
 	let rows = $state<SelectUser[]>([])
 	let loading = $state(true)
@@ -54,18 +59,20 @@
 	useInterest<"users:delete">("users:delete", () => {
 		if (!deleting) return
 		if (--deleting === 0) {
-			toaster.success({ title: "Deleted" })
+			notify.success({ title: "Deleted" })
 			socket.emit("users:list", {})
 		}
 	})
 	useInterest<"users:delete:error">("users:delete:error", (res) => {
 		if (!deleting) return
 		deleting--
-		toaster.error({ title: res.error ?? "The account was not deleted." })
+		notify.error({
+			title: res.error ?? "The account was not deleted.",
+			source: "socket:users:delete:error"
+		})
 	})
 
-	const when = (v: string | Date | null | undefined) =>
-		v ? realDate(v) : ""
+	const when = (v: string | Date | null | undefined) => (v ? realDate(v) : "")
 
 	const columns: AdminChangelistColumn<SelectUser>[] = [
 		{
@@ -91,13 +98,15 @@
 			key: "lastLogin",
 			label: "Last sign-in",
 			text: (r) => when(r.lastLoginAt) || "Never",
-			sortValue: (r) => (r.lastLoginAt ? new Date(r.lastLoginAt).getTime() : null)
+			sortValue: (r) =>
+				r.lastLoginAt ? new Date(r.lastLoginAt).getTime() : null
 		},
 		{
 			key: "created",
 			label: "Created",
 			text: (r) => when(r.createdAt),
-			sortValue: (r) => (r.createdAt ? new Date(r.createdAt).getTime() : null),
+			sortValue: (r) =>
+				r.createdAt ? new Date(r.createdAt).getTime() : null,
 			hideWhenStacked: true
 		}
 	]
@@ -114,7 +123,8 @@
 			key: "signedIn",
 			label: "Signed in",
 			values: (r) => (r.lastLoginAt ? "yes" : "never"),
-			optionLabel: (v) => (v === "yes" ? "Has signed in" : "Never signed in"),
+			optionLabel: (v) =>
+				v === "yes" ? "Has signed in" : "Never signed in",
 			order: ["yes", "never"]
 		}
 	]
@@ -127,7 +137,9 @@
 			destructive: true,
 			confirm: (selected) => userDeletion(selected, selfId),
 			run: (selected) => {
-				const ids = selected.filter((u) => u.id !== selfId).map((u) => u.id)
+				const ids = selected
+					.filter((u) => u.id !== selfId)
+					.map((u) => u.id)
 				deleting += ids.length
 				for (const id of ids) socket.emit("users:delete", { id })
 			}
@@ -141,8 +153,13 @@
 		doc={docsHref("users-and-accounts", "the-users-view")}
 		purpose="Accounts on this pub and their roles."
 	/>
-	<p class="text-surface-700-300 flex max-w-[820px] items-center gap-2 text-sm">
-		<span class="bg-surface-500 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
+	<p
+		class="text-surface-700-300 flex max-w-[820px] items-center gap-2 text-sm"
+	>
+		<span
+			class="bg-surface-500 size-2 shrink-0 rounded-full"
+			aria-hidden="true"
+		></span>
 		Accounts are off, so this pub is single-user and has no roster to manage.
 		<a href="/admin/general" class="anchor">Turn accounts on in General</a>
 	</p>
@@ -158,7 +175,8 @@
 		{bulkActions}
 		{loading}
 		noun={USER_NOUN}
-		searchText={(r) => `${r.username} ${r.displayName ?? ""} ${roleWord(r)}`}
+		searchText={(r) =>
+			`${r.username} ${r.displayName ?? ""} ${roleWord(r)}`}
 		rowHref={(r) => `/admin/users/${r.id}`}
 		addHref="/admin/users/new"
 		defaultSort="username"
@@ -166,7 +184,10 @@
 		emptyMessage="No users."
 	>
 		{#snippet headerActions()}
-			<a class="btn btn-sm preset-tonal-surface" href="/admin/users/invites">
+			<a
+				class="btn btn-sm preset-tonal-surface"
+				href="/admin/users/invites"
+			>
 				<Icons.UserPlus size={16} aria-hidden="true" /> Invites
 			</a>
 		{/snippet}

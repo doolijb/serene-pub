@@ -51,8 +51,9 @@
  * A row's date is the date of the history entry it hangs from.
  */
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, max, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { liveMessageWhere } from "$lib/server/messages/liveHistory"
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	forkDateOf,
@@ -60,7 +61,8 @@ import {
 	MAIN_LINE,
 	rowReadsOnLine,
 	uncutLine,
-	type Line
+	type Line,
+	type SessionCut
 } from "$lib/shared/lorebooks/lineReading"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { onLineSql } from "./lineSql"
@@ -79,6 +81,10 @@ export interface LineReading {
 	 * Always given: a branch id alone cannot see a grandparent or a fork cut.
 	 */
 	line: Line
+	/** The session's own book, whose held amendments this reading lays on top; absent for every reading that is not a session's reading of its attached lorebook. */
+	holderBookId?: number
+	/** 🚧 Set when the reading is of the session's own notes, which the session reads alone (no attached book). */
+	onOwnBook?: true
 	/** History entry id → its date, filled as rows are asked about. */
 	dates?: Map<number, StoryDate | null>
 }
@@ -228,46 +234,144 @@ export async function readingOf(
 	return { lorebookId, branchId, moment: pick.moment ?? null, forkedAt, line }
 }
 
-/** The reading a session stands at: its line and its clock, fork cut on. */
+type BranchAncestry = { sessionId: number; mark: number; lineId?: number | null }[] | null | undefined
+
+/**
+ * The session cuts of a session whose ancestry is already read: one per
+ * ancestor, nearest first. One GROUP BY over the session's live lines.
+ */
+async function cutsOfAncestry(db: Db, sessionId: number, ancestry: BranchAncestry): Promise<SessionCut[]> {
+	if (!ancestry?.length) return []
+	const m = schema.sessionMessages
+	const rows = await db
+		.select({ originSessionId: m.originSessionId, through: max(m.originMessageId) })
+		.from(m)
+		.where(
+			and(
+				eq(m.sessionId, sessionId),
+				liveMessageWhere(m.rewindOrdinal),
+				inArray(
+					m.originSessionId,
+					ancestry.map((a) => a.sessionId)
+				)
+			)
+		)
+		.groupBy(m.originSessionId)
+	const through = new Map<number, number | null>()
+	for (const r of rows) if (r.originSessionId != null) through.set(r.originSessionId, r.through ?? null)
+	return ancestry.map((a) => ({
+		sessionId: a.sessionId,
+		through: through.get(a.sessionId) ?? null,
+		mark: a.mark
+	}))
+}
+
+/**
+ * 🚧 A session's **session cuts**, nearest ancestor first (plan §32 §5b): for
+ * each ancestor in `sessions.branch_ancestry`, `through` is the highest
+ * `origin_message_id` among the reader's live lines from that ancestor, so
+ * the branch's own Back lowers it with no write; null when it has none.
+ * `mark` is the ancestry's. A session that is not a branch has none.
+ */
+export async function sessionCutsOf(db: Db, sessionId: number): Promise<SessionCut[]> {
+	const [session] = await db
+		.select({ branchAncestry: schema.sessions.branchAncestry })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return cutsOfAncestry(db, sessionId, session?.branchAncestry)
+}
+
+/**
+ * 🚧 The **overlay chain** a cast read takes (plan §32 §5d): the session's
+ * own book id, then each ancestor's own book id in ancestry order (nearest
+ * first). A session with no own book is skipped.
+ */
+export async function overlayChainOf(db: Db, sessionId: number): Promise<number[]> {
+	const [session] = await db
+		.select({ branchAncestry: schema.sessions.branchAncestry })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	const order = [sessionId, ...(session?.branchAncestry ?? []).map((a) => a.sessionId)]
+	const books = await db
+		.select({ id: schema.lorebooks.id, sessionId: schema.lorebooks.sessionId })
+		.from(schema.lorebooks)
+		.where(inArray(schema.lorebooks.sessionId, order))
+		.orderBy(asc(schema.lorebooks.id))
+	const chain: number[] = []
+	for (const id of order) {
+		const own = books.find((b) => b.sessionId === id)
+		if (own && !chain.includes(own.id)) chain.push(own.id)
+	}
+	return chain
+}
+
+/**
+ * The reading a session stands at: its line and its clock, fork cut on — on
+ * the attached book, or on its own book when none is attached.
+ */
 export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineReading | null> {
 	const [session] = await db
 		.select({
 			lorebookId: schema.sessions.lorebookId,
 			lorebookBranchId: schema.sessions.lorebookBranchId,
+			branchAncestry: schema.sessions.branchAncestry,
 			storyClockYear: schema.sessions.storyClockYear,
 			storyClockMonth: schema.sessions.storyClockMonth,
-			storyClockDay: schema.sessions.storyClockDay
+			storyClockDay: schema.sessions.storyClockDay,
+			// One query on the hot path: the own book rides along as a scalar.
+			ownBookId: sql<number | null>`(select id from lorebooks where session_id = sessions.id limit 1)`
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	// The reading is the line a session reads in its SHARED book. A session
-	// with none has its own book alone, which every union reader adds itself
-	// (`lorebooksReadBy`, `sessionEntriesAsRead`, the places read) — returning
-	// it here as well would read it twice (pr-6 B review).
-	if (!session?.lorebookId) return null
-	const bookId = session.lorebookId
+	// With an attached book the reading is the attached book's, and union
+	// readers add the session's own notes at main's head. With none, the
+	// reading IS the own book's, and union readers must not add it again.
+	if (!session) return null
+	const ownBookId = session.lorebookId ? null : (session.ownBookId ?? null)
+	// An attached session's own book holds its held amendments.
+	const holderBookId = session.lorebookId ? (session.ownBookId ?? null) : null
+	const bookId = session.lorebookId ?? ownBookId
+	if (bookId == null) return null
+	const onOwnBook = ownBookId != null
+	const mark = <T extends LineReading>(r: T): T =>
+		onOwnBook || holderBookId != null
+			? {
+					...r,
+					...(onOwnBook ? { onOwnBook: true as const } : {}),
+					...(holderBookId != null ? { holderBookId } : {})
+				}
+			: r
 	const own = momentOf(session)
+	// A branch session also carries its session cuts (plan §32 §5b); a session
+	// with no ancestry reads exactly as it always did.
+	const withCuts = async (line: Line): Promise<Line> =>
+		session.branchAncestry?.length
+			? { ...line, sessionCuts: await cutsOfAncestry(db, sessionId, session.branchAncestry) }
+			: line
 	try {
 		const reading = await readingOf(db, bookId, {
 			branch: session.lorebookBranchId ?? "main",
 			moment: own
 		})
+		reading.line = await withCuts(reading.line)
 		// Following its line: the line's present when the line sets one.
 		if (!own) reading.moment = await linePresentOf(db, bookId, reading.branchId)
-		return reading
+		return mark(reading)
 	} catch (e) {
 		// A stale branch id (it cannot be another book's: the handler checks,
 		// and deleting a branch moves its sessions to the line it left) reads
 		// main rather than failing a turn.
 		if (e instanceof BranchRefusal)
-			return {
+			return mark({
 				lorebookId: bookId,
 				branchId: null,
 				moment: own ?? (await linePresentOf(db, bookId, null)),
 				forkedAt: null,
-				line: MAIN_LINE
-			}
+				line: await withCuts(MAIN_LINE)
+			})
 		throw e
 	}
 }
@@ -333,6 +437,20 @@ export function historyEntryDate(fields: unknown): StoryDate | null {
 	return { year, month: part(f.month), day: part(f.day) }
 }
 
+/**
+ * Whether history entry `a` wins over `b` as THE entry of a day: the later
+ * date, and of equal dates the lower id. The one rule both pickers use
+ * (`writeDatingAt`, `pickEntryOfDate`). Lowest id because it is the oldest row,
+ * stat datings already hang from it, and a position moves with a drag.
+ */
+export function historyEntryOver(
+	a: { id: number; date: StoryDate },
+	b: { id: number; date: StoryDate }
+): boolean {
+	const order = compareDates(a.date, b.date)
+	return order > 0 || (order === 0 && a.id < b.id)
+}
+
 /** A history entry, and the story date it carries. */
 export interface StoryDating {
 	historyEntryId: number
@@ -385,12 +503,17 @@ export async function writeDatingAt(db: Db, reading: LineReading): Promise<Story
 	for (const row of rows) {
 		const date = historyEntryDate(row.fields)
 		if (!date || !datedOnReading(row, date, reading)) continue
-		if (!best || compareDates(date, best.date) > 0) best = { historyEntryId: row.id, date }
+		if (!best || historyEntryOver({ id: row.id, date }, { id: best.historyEntryId, date: best.date }))
+			best = { historyEntryId: row.id, date }
 	}
 	return best
 }
 
-/** Load (and cache on the reading) the dates of these history entries. */
+/**
+ * Load (and cache on the reading) the dates of these history entries. A branch
+ * reading its own notes also dates rows by its ancestors' own notes, whose
+ * members it reads (★s4-last gap, lane s4-verify).
+ */
 export async function loadEntryDates(
 	db: Db,
 	reading: LineReading,
@@ -409,6 +532,29 @@ export async function loadEntryDates(
 				)
 			))
 			dates.set(e.id, historyEntryDate(e.fields))
+		const stillMissing = missing.filter((id) => !dates.has(id))
+		const cuts = reading.line.sessionCuts
+		if (reading.onOwnBook && cuts?.length && stillMissing.length)
+			for (const e of await db
+				.select({
+					id: schema.lorebookEntries.id,
+					fields: schema.lorebookEntries.fields
+				})
+				.from(schema.lorebookEntries)
+				.innerJoin(
+					schema.lorebooks,
+					eq(schema.lorebooks.id, schema.lorebookEntries.lorebookId)
+				)
+				.where(
+					and(
+						inArray(schema.lorebookEntries.id, stillMissing),
+						inArray(
+							schema.lorebooks.sessionId,
+							cuts.map((c) => c.sessionId)
+						)
+					)
+				))
+				dates.set(e.id, historyEntryDate(e.fields))
 		// An entry of another book, or a deleted one, dates nothing.
 		for (const id of missing) if (!dates.has(id)) dates.set(id, null)
 	}
@@ -425,7 +571,12 @@ export async function loadEntryDates(
  * at the head as much as at a moment.
  */
 export async function rowsOnReading<
-	T extends { branchId?: number | null; historyEntryId?: number | null; sessionId?: number | null }
+	T extends {
+		branchId?: number | null
+		historyEntryId?: number | null
+		sessionId?: number | null
+		validFromMessageId?: number | null
+	}
 >(db: Db, rows: T[], reading: LineReading): Promise<T[]> {
 	const durable = rows.filter((r) => r.sessionId == null)
 	const dates = await loadEntryDates(
@@ -433,9 +584,30 @@ export async function rowsOnReading<
 		reading,
 		durable.map((r) => r.historyEntryId).filter((id): id is number => id != null)
 	)
+	// A branch reading also cuts durable rows tied to a turn of an ancestor
+	// session: kept only up to that cut's `through` (null: none of its turns).
+	const cuts = reading.line.sessionCuts
+	const tied = cuts?.length
+		? [...new Set(durable.map((r) => r.validFromMessageId).filter((id): id is number => id != null))]
+		: []
+	const messageSession = new Map<number, number>()
+	if (cuts?.length && tied.length) {
+		const found = await db
+			.select({ id: schema.sessionMessages.id, sessionId: schema.sessionMessages.sessionId })
+			.from(schema.sessionMessages)
+			.where(inArray(schema.sessionMessages.id, tied))
+		for (const f of found) messageSession.set(f.id, f.sessionId)
+	}
+	const withinCuts = (r: T): boolean => {
+		if (r.sessionId != null || r.validFromMessageId == null || !cuts?.length) return true
+		const cut = cuts.find((c) => c.sessionId === messageSession.get(r.validFromMessageId!))
+		if (!cut) return true
+		return cut.through != null && r.validFromMessageId <= cut.through
+	}
 	return rows.filter(
 		(r) =>
 			r.sessionId != null ||
-			datedOnReading(r, r.historyEntryId != null ? (dates.get(r.historyEntryId) ?? null) : null, reading)
+			(withinCuts(r) &&
+				datedOnReading(r, r.historyEntryId != null ? (dates.get(r.historyEntryId) ?? null) : null, reading))
 	)
 }

@@ -1,16 +1,16 @@
 <script lang="ts">
 	/**
-	 * The way into one widget's settings on the layout editor's Settings tab
-	 * (PLAN 25; ruled 2026-09-09, and 2026-09-27 for the modal).
+	 * The way into one widget's settings on the layout editor's Layouts tab
+	 * (PLAN 25; ruled 2026-09-09).
 	 *
 	 * While the tab is open every widget wears this overlay, invisible until
-	 * you hover or focus it: a scrim with a "Settings" button, which opens
-	 * the widget's settings and style in the app-level modal
-	 * (`WidgetSettingsModal`), and — while the layout editor can make one — a
-	 * "Duplicate" button beside it (brief 7b; QD): a copy of this widget
-	 * beside it, its settings and style copied (`./widgetDuplicate`). The settings themselves are never drawn in here
-	 * any more — a card inside the widget's box was clipped by any cell smaller
-	 * than it, and the owner ruled it into a modal.
+	 * you hover or focus it: a scrim with a "Settings" button, which switches
+	 * the editor to Arrange with this widget's tab chosen, where the inspector
+	 * shows its settings and style (`askSettingsInArrange`), and — while the
+	 * layout editor can make one — a "Duplicate" button beside it (brief 7b;
+	 * QD): a copy of this widget beside it, its settings and style copied
+	 * (`./widgetDuplicate`). The settings themselves are never drawn in here: a
+	 * card inside the widget's box was clipped by any cell smaller than it.
 	 *
 	 * ## Where this lives, and why
 	 *
@@ -24,9 +24,9 @@
 	 * a frame skin lands inside the frame's document and so cannot restyle — or
 	 * hide — the way to take it back off.
 	 *
-	 * ## While the modal is open
+	 * ## While the inspector shows it
 	 *
-	 * The modal arms this widget, which keeps the overlay showing; while its
+	 * The inspector arms this widget, which keeps the overlay showing; while its
 	 * style editor is previewing a draft here, the scrim clears and a ring is
 	 * left so it stays obvious WHICH widget is being styled.
 	 */
@@ -36,9 +36,9 @@
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
 	import {
-		openWidgetSettings,
+		askSettingsInArrange,
 		widgetSettingsTitle
-	} from "./widgetSettingsModal.svelte"
+	} from "./widgetSettingsFlow.svelte"
 	import { widgetDuplicator } from "./widgetDuplicate.svelte"
 
 	interface Props {
@@ -47,8 +47,8 @@
 		/** What to call it on screen (the panel's own title). */
 		label: string
 		/**
-		 * Which kind of widget this overlay is on — handed to the modal, whose
-		 * style editor words the reach of the CSS differently for a frame.
+		 * Which kind of widget this overlay is on: a frame's CSS lands in its
+		 * own document, which the style editor words differently.
 		 */
 		mount?: "remote" | "frame"
 	}
@@ -84,11 +84,8 @@
 		focused = false
 	}
 
-	function open(e: MouseEvent) {
-		openWidgetSettings(
-			{ widgetId, label, mount },
-			e.currentTarget as HTMLElement
-		)
+	function open() {
+		askSettingsInArrange(widgetId)
 	}
 </script>
 
@@ -111,7 +108,6 @@
 			<button
 				type="button"
 				class="ws-open"
-				aria-haspopup="dialog"
 				aria-label="Open {widgetSettingsTitle(label)}"
 				title={widgetSettingsTitle(label)}
 				onclick={open}
@@ -172,7 +168,7 @@
 	.ws-overlay.visible {
 		opacity: 1;
 	}
-	/* While the modal's style editor previews a draft here, the scrim and the
+	/* While the inspector's style editor previews a draft here, the scrim and the
 	   button get out of the way: the point of live-apply is seeing the widget
 	   change. A ring is left so it stays obvious WHICH widget is being styled. */
 	.ws-overlay.editing {

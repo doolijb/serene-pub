@@ -69,7 +69,10 @@ function editorWith(row: Record<string, unknown>) {
 			bindings: [],
 			vectorizationEnabled: false,
 			siblings: []
-		}
+		},
+		context: new Map<string, unknown>([
+			["userSettingsCtx", { settings: { showAdvancedControls: true } }]
+		])
 	})
 	return draft
 }
@@ -84,7 +87,7 @@ function type(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
 
 describe("DerivedEntryEditor", () => {
 	test("draws the list's own fields beside the core ones", async () => {
-		editorWith(rulesListDoor(WEAPONS).newDraft(1))
+		editorWith(rulesListDoor(WEAPONS, 1).newDraft(1))
 		await settle()
 		expect(
 			document
@@ -99,7 +102,7 @@ describe("DerivedEntryEditor", () => {
 	})
 
 	test("a piece field typed is saved into the draft as stored", async () => {
-		const draft = editorWith(rulesListDoor(WEAPONS).newDraft(1))
+		const draft = editorWith(rulesListDoor(WEAPONS, 1).newDraft(1))
 		await settle()
 		type(
 			field("description")!.querySelector("textarea")!,
@@ -120,7 +123,7 @@ describe("DerivedEntryEditor", () => {
 
 	test("the write gate's refusal shows under the field it is about", async () => {
 		editorWith({
-			...rulesListDoor(WEAPONS).newDraft(1),
+			...rulesListDoor(WEAPONS, 1).newDraft(1),
 			name: "Dagger",
 			description: "Short.",
 			category: "simple"
@@ -129,7 +132,7 @@ describe("DerivedEntryEditor", () => {
 		const alert = field("damage")!.querySelector('[role="alert"]')
 		expect(alert?.textContent?.trim()).toBe("Add damage to save this.")
 		// The door's own check says no until it is fixed.
-		const door = rulesListDoor(WEAPONS)
+		const door = rulesListDoor(WEAPONS, 1)
 		expect(
 			door.validate(
 				{ name: "Dagger", description: "Short.", category: "simple" },

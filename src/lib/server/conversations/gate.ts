@@ -16,7 +16,7 @@
  * inside a `db.transaction` (the outer handle deadlocks PGlite). `send` gates
  * BEFORE its transaction and re-checks membership inside it.
  */
-import { and, asc, count, eq, isNotNull, isNull } from "drizzle-orm"
+import { and, asc, count, eq, inArray, isNotNull, isNull, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	canViewCharacter,
@@ -169,15 +169,18 @@ async function sessionCardBody(db: Db, sessionId: number) {
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return null
-	const cast = await db
+	const seats = await db
 		.select({
+			castMemberId: schema.sessionCharacters.castMemberId,
+			id: schema.characters.id,
 			name: schema.characters.name,
 			nickname: schema.characters.nickname,
+			avatarMediaId: schema.characters.avatarMediaId,
 			uuid: schema.files.uuid,
 			rev: schema.files.rev
 		})
 		.from(schema.sessionCharacters)
-		.innerJoin(
+		.leftJoin(
 			schema.characters,
 			eq(schema.characters.id, schema.sessionCharacters.characterId)
 		)
@@ -186,14 +189,69 @@ async function sessionCardBody(db: Db, sessionId: number) {
 			and(
 				eq(schema.sessionCharacters.sessionId, sessionId),
 				isNull(schema.sessionCharacters.removedAt),
-				isNotNull(schema.sessionCharacters.characterId)
+				isNull(schema.sessionCharacters.envoySlug),
+				or(
+					isNotNull(schema.sessionCharacters.characterId),
+					isNotNull(schema.sessionCharacters.castMemberId)
+				)
 			)
 		)
 		.orderBy(asc(schema.sessionCharacters.position))
-	const faces = cast.slice(0, 3).map((c) => ({
-		name: c.nickname || c.name,
-		src: c.uuid ? mediaSrc(c.uuid, c.rev ?? 0, true) : null
-	}))
+	// Each seat reads as the member it seats: their own name, and (while they
+	// are retold) their own face; a seat with no member reads its card.
+	const { seatMembersAsRead } = await import("$lib/server/pipelines/prompt/seatCards")
+	const members = await seatMembersAsRead(
+		db,
+		sessionId,
+		seats.map((s) => ({
+			castMemberId: s.castMemberId,
+			// A card-less seat has no card id: `character` is absent and the
+			// member reads as its own fields.
+			character: s.id != null ? { id: s.id } : undefined
+		})),
+		{ cardless: true }
+	)
+	const cast = seats.map((s, i) => {
+		const member = members[i] ?? null
+		return {
+			name: member ? member.name : (s.name ?? ""),
+			nickname: member ? member.nickname : s.nickname,
+			uuid: s.uuid,
+			rev: s.rev,
+			// A face the member tells in their own words, not the card's avatar.
+			ownFaceId:
+				member && member.faceMediaId !== (s.avatarMediaId ?? null)
+					? member.faceMediaId
+					: undefined
+		}
+	})
+	const shown = cast.slice(0, 3)
+	const ownFaceIds = [
+		...new Set(
+			shown.map((c) => c.ownFaceId).filter((id): id is number => id != null)
+		)
+	]
+	const ownFiles = new Map<number, { uuid: string; rev: number | null }>()
+	if (ownFaceIds.length)
+		for (const f of await db
+			.select({ id: schema.files.id, uuid: schema.files.uuid, rev: schema.files.rev })
+			.from(schema.files)
+			.where(inArray(schema.files.id, ownFaceIds)))
+			ownFiles.set(f.id, { uuid: f.uuid, rev: f.rev })
+	const faces = shown.map((c) => {
+		const file =
+			c.ownFaceId === undefined
+				? c.uuid
+					? { uuid: c.uuid, rev: c.rev }
+					: undefined
+				: c.ownFaceId == null
+					? undefined
+					: ownFiles.get(c.ownFaceId)
+		return {
+			name: c.nickname || c.name,
+			src: file ? mediaSrc(file.uuid, file.rev ?? 0, true) : null
+		}
+	})
 	let genreName: string | null = null
 	try {
 		const { getSessionGenre } = await import(

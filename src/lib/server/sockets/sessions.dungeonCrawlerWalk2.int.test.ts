@@ -344,7 +344,10 @@ async function seatOf(sessionId: number, userId: number) {
 
 async function value(sessionId: number, owner: { kind: string; id: number }, slotId: string) {
 	const { valueOf } = await import("$lib/server/state/resolve")
-	return valueOf(db as any, { sessionId, owner: owner as any, slotId } as any)
+	// ⏳ The owner as it is stored: member form with the switch on (the card's `session_cast` off).
+	const { storedSeatOwner } = await import("$lib/server/state/seatRefs")
+	const stored = (await storedSeatOwner(db as any, sessionId, owner)) ?? owner
+	return valueOf(db as any, { sessionId, owner: stored as any, slotId } as any)
 }
 
 const RESPOND = "core:spec/dungeon-crawler-respond"
@@ -539,8 +542,11 @@ describe("Q0-2: a new character after a persona's death is its own speaker (★2
 		const ref = `character:${maren!.id}`
 		const owner = { kind: "session_cast", id: maren!.id }
 		let attempts = 0
+		// ⏳ The Planner names the seat as its books do: member form with the switch on (`player-seat:<id>`), else the card's.
+		const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+		const seatRef = (await storedSeatRef(db as any, sessionId, ref)) ?? ref
 		while ((await value(sessionId, owner, "core:slot/fate@1")) !== "dead" && attempts++ < 12)
-			await turn(sessionId, ref, "I charge the ogre.", plan({ deltas: [delta({ owner: ref, op: "spend", slot: "hp", value: "99", reason: "the ogre" })] }))
+			await turn(sessionId, ref, "I charge the ogre.", plan({ deltas: [delta({ owner: seatRef, op: "spend", slot: "hp", value: "99", reason: "the ogre" })] }))
 		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("dead")
 		const form = (await formsOn(sessionId, "parley")).find((f) => f.block.referent === "new-character")!
 		const { DUNGEON_CRAWLER_INTERVIEW_ACTION } = await import("@serene-pub/core-catalog")
@@ -552,7 +558,8 @@ describe("Q0-2: a new character after a persona's death is its own speaker (★2
 		const seats = await db.select().from(schema.sessionPersonas).where(eq(schema.sessionPersonas.sessionId, sessionId))
 		const fallen = seats.find((s) => s.personaId === maren!.id)!
 		const ash = seats.find((s) => s.seatName === "Ash Fenwick")!
-		expect(fallen.removedAt).not.toBeNull()
+		// Benched, not removed (owner 2026-11-10, benched seats): a retire benches the old seat.
+		expect(fallen).toMatchObject({ removedAt: null, isActive: false })
 		expect(ash.personaId).toBeNull()
 		expect(ash.removedAt).toBeNull()
 		// A line sent with the card still in the composer (an open page from before): the new seat's, and the round runs.
@@ -669,8 +676,9 @@ describe("Q0-4: Give to… (★4)", () => {
 		expect((await potionsOf(sessionId, rook.owner)).count).toBe(3)
 		expect(await tableRows(sessionId)).toContain("Ann the Bold gives Potion of healing ×2 to Rook.")
 
-		// A guest gives from their own sheet only while Honour mode is on; to the host's seat it is an OFFER.
-		await db.update(schema.sessions).set({ genreFields: { honorMode: true } } as any).where(eq(schema.sessions.id, sessionId))
+		// Moved 2026-11-05 (lane ed, plan §25): a guest's give no longer waits on Honour mode (`honorMode: true`);
+		// the Crawler's players move **their own items** by default (`playerItemMoves: 'own-items'`), so it
+		// is judged as the giver's `take-from` on their own sheet. To the host's seat it is an OFFER.
 		const offered = await give(guestId, sessionId, rook.owner, ann, (await potionsOf(sessionId, rook.owner)).at)
 		expect(offered?.error, offered?.error).toBeUndefined()
 		expect(offered.given).toBe("offered")
@@ -761,7 +769,7 @@ describe("Q1-2: a branch keeps speakers, lanes and progress (★5)", () => {
 		// A seat that retired (a new character after a death), and its line.
 		const [fallen] = await db
 			.insert(schema.sessionPersonas)
-			.values({ sessionId, personaId: maren!.id, userId: ownerId, position: 9, removedAt: new Date() } as any)
+			.values({ sessionId, personaId: maren!.id, userId: ownerId, position: 9, isActive: false } as any)
 			.returning()
 		await db.insert(schema.sessionMessages).values({ sessionId, userId: ownerId, role: "user", personaId: maren!.id, content: "For the drowned king!", channel: "main" } as any)
 		// The owner's layout of the session: the Story tab open.
@@ -780,9 +788,9 @@ describe("Q1-2: a branch keeps speakers, lanes and progress (★5)", () => {
 			if (row.personaId) expect(seats.some((s) => s.personaId === row.personaId)).toBe(true)
 			else expect(seats.some((s) => `player-seat:${s.id}` === speaker && !s.removedAt)).toBe(true)
 		}
-		// The retired seat came across retired, so its line is still Maren's.
+		// The retired seat came across benched, so its line is still Maren's.
 		const retired = seats.find((s) => s.personaId === maren!.id)!
-		expect(retired.removedAt).not.toBeNull()
+		expect(retired).toMatchObject({ removedAt: null, isActive: false })
 		expect(fallen.id).not.toBe(retired.id)
 		const { messageSpeaker } = await import("$lib/client/utils/messageSpeaker")
 		const marenLine = copied.find((r) => r.content === "For the drowned king!")!

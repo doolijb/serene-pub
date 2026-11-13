@@ -20,7 +20,10 @@ import os from "os"
 import path from "path"
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
+import {
+	coreLayoutSeedKey,
+	layoutPresetSeedKey
+} from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -143,6 +146,36 @@ describe("boot seeds every core genre's layouts", () => {
 			// first boot's, so no shipped layout reads as Updated.
 			const byId = new Map(before.map((r) => [r.id, r]))
 			for (const r of after) expect(r).toEqual(byId.get(r.id))
+		},
+		60_000
+	)
+
+	test(
+		"Story's Visual novel layout seeds once, as declared, and a second boot leaves it alone",
+		async () => {
+			const { getGenre } = await import("@serene-pub/sdk")
+			const seedKey = coreLayoutSeedKey("core:genre/story", "visual-novel")
+			const find = () =>
+				testDb
+					.select()
+					.from(schema.sessionLayoutPresets)
+					.where(
+						and(
+							eq(schema.sessionLayoutPresets.seedKey, seedKey),
+							isNull(schema.sessionLayoutPresets.authorUserId)
+						)
+					)
+			await bootSeed()
+			const first = await find()
+			expect(first).toHaveLength(1)
+			expect(first[0].name).toBe("Visual novel")
+			expect(first[0].layout).toEqual(
+				getGenre("core:genre/story")?.layouts?.find((l) => l.slug === "visual-novel")?.preset
+			)
+			await bootSeed()
+			const second = await find()
+			expect(second).toHaveLength(1)
+			expect(second[0]).toEqual(first[0])
 		},
 		60_000
 	)

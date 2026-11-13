@@ -27,6 +27,7 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { makeScriptApplier, scriptExtras } from "./chains"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let db: TestDb
 let sessionId: number
@@ -109,7 +110,10 @@ describe("the hook declares the fact", () => {
 			"$lib/server/pipelines/entities/scripts"
 		)
 		const info = await scriptType(db, TEXT_TRANSFORM)
-		expect(info, "text/transform is not registered on this build").toBeTruthy()
+		expect(
+			info,
+			"text/transform is not registered on this build"
+		).toBeTruthy()
 		// `hookExtras` unions the `extras` of every hook accepting the type,
 		// read from the projected registry rows — so this passing means the
 		// side-character input's declaration actually reached the database that
@@ -249,5 +253,33 @@ describe("the fact reaches the sandbox", () => {
 		expect(extras.speakerName).toBe("Alice")
 		expect("speakerIsKnown" in extras).toBe(false)
 		expect("speakerCharacterId" in extras).toBe(false)
+	}, 60_000)
+})
+
+describe("a member's own name in the book (§0-D)", () => {
+	it("names the speaker and the cast by it, in the session's book", async () => {
+		const [book] = await db
+			.insert(schema.lorebooks)
+			.values({ name: "Own names", userId })
+			.returning()
+		await insertCastMember(db, {
+			lorebookId: book.id,
+			binding: "{{char:own-names}}",
+			characterId: castCharacterId,
+			ownName: "Maren"
+		} as any)
+		const [named] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false, lorebookId: book.id })
+			.returning()
+		await db
+			.insert(schema.sessionCharacters)
+			.values({ sessionId: named.id, characterId: castCharacterId })
+		const extras = await scriptExtras(db, {
+			sessionId: named.id,
+			currentCharacterId: castCharacterId
+		})
+		expect(extras.speakerName).toBe("Maren")
+		expect(extras.castNames).toEqual(["Maren"])
 	}, 60_000)
 })

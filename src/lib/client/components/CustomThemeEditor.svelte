@@ -4,7 +4,7 @@
 	import { v4 as uuid } from "uuid"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { EditorState } from "@codemirror/state"
 	import {
 		EditorView,
@@ -163,7 +163,7 @@
 	function save() {
 		const content = editorView?.state.doc.toString() ?? ""
 		if (!labelField.trim() || !content.trim()) {
-			toaster.error({ title: "Label and CSS are required" })
+			notify.error({ title: "Label and CSS are required" })
 			return
 		}
 		isSaving = true
@@ -205,13 +205,17 @@
 
 	function onSave(msg: Sockets.CustomThemes.Save.Response) {
 		isSaving = false
-		toaster.success({ title: "Theme saved" })
+		notify.success({
+			source: "socket:customThemes:save",
+			title: "Theme saved"
+		})
 		onSaved?.(msg.theme)
 	}
 
 	function onSaveError(msg: Sockets.ErrorResponse) {
 		isSaving = false
-		toaster.error({
+		notify.error({
+			source: "socket:customThemes:save:error",
 			title: "Failed to save theme",
 			description: msg?.error
 		})
@@ -219,24 +223,32 @@
 
 	function onDelete() {
 		isDeleting = false
-		toaster.success({ title: "Theme deleted" })
+		notify.success({
+			source: "socket:customThemes:delete",
+			title: "Theme deleted"
+		})
 		if (theme?.id) onDeleted?.(theme.id)
 	}
 
 	function onDeleteError(msg: Sockets.ErrorResponse) {
 		isDeleting = false
-		toaster.error({
+		notify.error({
+			source: "socket:customThemes:delete:error",
 			title: "Failed to delete theme",
 			description: msg?.error
 		})
 	}
 
 	function onSetPubTheme() {
-		toaster.success({ title: "Pub theme setting updated" })
+		notify.success({
+			source: "socket:customThemes:setPubTheme",
+			title: "Pub theme setting updated"
+		})
 	}
 
 	function onSetPubThemeError(msg: Sockets.ErrorResponse) {
-		toaster.error({
+		notify.error({
+			source: "socket:customThemes:setPubTheme:error",
 			title: "Failed to update",
 			description: msg?.error
 		})
@@ -376,9 +388,7 @@
 						: "Enable for all users"}
 				>
 					<Icons.Globe size={11} />
-					{theme.isPubTheme
-						? "Pub theme"
-						: "Make pub theme"}
+					{theme.isPubTheme ? "Pub theme" : "Make pub theme"}
 				</button>
 			{/if}
 

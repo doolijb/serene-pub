@@ -72,6 +72,18 @@ export function isLocalOnnxType(type: string | null | undefined): boolean {
 	return !!type && LOCAL_ONNX_TYPES.includes(type)
 }
 
+/**
+ * The two local ONNX connections come with Serene Pub: fixed name, no
+ * delete (a person removes a model's files instead), on every device. Where
+ * the runtime can't load, the row reads Unavailable and stays (owner
+ * decision C-4, 2026-11-04).
+ */
+export function connectionComesWithApp(
+	type: string | null | undefined
+): boolean {
+	return isLocalOnnxType(type)
+}
+
 /** Whether the sidebar offers a free-text Add on this endpoint. */
 export function manualAddAllowed(type: string | null | undefined): boolean {
 	if (!type) return false
@@ -117,9 +129,7 @@ const SINGLE_MODEL_TYPES: readonly string[] = [
  * a new listing API hidden behind no tab — would leave its models
  * unselectable, which is the worse failure.
  */
-export function listsAvailableModels(
-	type: string | null | undefined
-): boolean {
+export function listsAvailableModels(type: string | null | undefined): boolean {
 	if (!type) return false
 	return !SINGLE_MODEL_TYPES.includes(type)
 }

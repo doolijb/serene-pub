@@ -44,6 +44,27 @@ import { claimOf } from "./channelClaims"
 import { distinctTitles } from "./widgetInstances"
 import type { SessionLayoutModel } from "./sessionLayoutModel.svelte"
 
+/** The heading for one widget's settings: "Conversation settings". */
+export function widgetSettingsTitle(label: string): string {
+	const name = label.trim() || "Widget"
+	return `${name} settings`
+}
+
+let settingsAsk = $state<{ id: string | null; n: number }>({ id: null, n: 0 })
+
+/** The style overlay's Settings asked for this tab: the editor switches to Arrange with it chosen. */
+export function askSettingsInArrange(instanceId: string): void {
+	settingsAsk = { id: instanceId, n: settingsAsk.n + 1 }
+}
+
+/** Reactive: the last ask (`n` bumps on every ask, so asking for the same tab twice still lands). */
+export function settingsInArrangeAsk(): {
+	readonly id: string | null
+	readonly n: number
+} {
+	return settingsAsk
+}
+
 export interface WidgetSettingsFlowInput {
 	readonly manager: SurfaceManager
 	/** Read lazily: the model reads this flow's `widgetLabel` too. */
@@ -219,7 +240,7 @@ export function createWidgetSettingsFlow(input: WidgetSettingsFlowInput) {
 	 * any half-typed draft, so it ends when the tab changes. */
 	$effect(() => {
 		// The phone editor has no hover and no overlays: its rows open the
-		// settings modal directly, which needs no mode.
+		// settings as a pushed screen inside the editor, which needs no mode.
 		setWidgetStyleMode(
 			input.model.editing && input.model.editTab === "layouts"
 		)

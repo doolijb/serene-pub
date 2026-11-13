@@ -125,7 +125,7 @@ describe("what a node declares", () => {
 		expect(narrator).toContain("narratorName")
 	})
 
-	it("gives the narrator no layout it cannot fill", async () => {
+	it("gives the narrator no variable key it cannot fill", async () => {
 		// `exampleDialogue` is read off the speaking character a narrator does
 		// not have, and `speakerRelationships` is never supplied by the narrate
 		// spec at all. Offering either is a control wired to nothing.
@@ -134,11 +134,11 @@ describe("what a node declares", () => {
 		// variables slot declares `renders`. Asking it for layouts returns an
 		// empty list, which would make every "not.toContain" below pass
 		// without testing anything.
-		const { declarations } = await import(
+		const { declarationsAndVariableKeys } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
-		const layouts = (await declarations(db, narrateVersionId))
-			.filter((d) => d.nodeKey === "context" && d.slot === "variables")
+		const layouts = (await declarationsAndVariableKeys(db, narrateVersionId))
+			.variableKeys.filter((d) => d.nodeKey === "context" && d.slot === "variables")
 			.map((d) => d.path)
 		expect(layouts.length).toBeGreaterThan(0)
 		expect(layouts).not.toContain("exampleDialogue")

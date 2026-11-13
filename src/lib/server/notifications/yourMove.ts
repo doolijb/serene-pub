@@ -16,7 +16,6 @@
 import { eq } from "drizzle-orm"
 import { readTurnOrder, type EventCause } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import {
 	clearNotifications,
 	openNotifications,
@@ -44,7 +43,7 @@ export async function dueUserOf(db: Db, sessionId: number): Promise<DueUser> {
 		.select({
 			userId: schema.sessions.userId,
 			name: schema.sessions.name,
-			annex: schema.sessions.annex
+			turnOrder: schema.sessions.turnOrder
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
@@ -52,7 +51,7 @@ export async function dueUserOf(db: Db, sessionId: number): Promise<DueUser> {
 	if (!session) return { exists: false, userId: null, sessionName: "" }
 	const sessionName = session.name?.trim() || "Untitled session"
 	// The canonical head read (`headTurnEntry`), from the row already in hand.
-	const head = readTurnOrder(coreAnnexIn(session.annex)).order[0]
+	const head = readTurnOrder(session).order[0]
 	if (!head || typeof head.ref !== "string")
 		return { exists: true, userId: null, sessionName }
 	let userId: number | null = null

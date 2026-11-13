@@ -1,20 +1,32 @@
 /**
- * The Arrange tab (PLAN-session-panels-2026-10-14, lane 3 and §10): the
- * canvas's drop targets — the rail strips, the dock zone of a rail-only side,
- * the primary as a place — the divider, the status line (no lock, no toast),
- * and the editor's Done diff rule: an untouched layout is never rewritten.
+ * The Arrange tab over panels v2: the canvas's three plain stacks and their
+ * drop targets, the dividers, Fit · Fill and Priority, the chosen tab, the
+ * inspector pane, the status line (no lock, no toast), and the editor's Done
+ * diff rule: an untouched layout is never rewritten.
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 import * as Icons from "@lucide/svelte"
-import type { PanelLayoutV1 } from "@serene-pub/sdk"
-import ArrangeCanvas, { NARROW_SIDE_PX } from "./ArrangeCanvas.svelte"
+import type { PanelLayoutV2 } from "@serene-pub/sdk"
+import ArrangeCanvas from "./ArrangeCanvas.svelte"
 import SessionLayoutEditor from "./SessionLayoutEditor.svelte"
 import LayoutEditorToolbar from "./LayoutEditorToolbar.svelte"
-import { MIDDLE_EMPTY, addTab, newPanel, removeTab, type ArrangeOutcome } from "./arrangeOps"
-import { PANEL_DRAG_TYPE, TAB_DRAG_TYPE, TRAY_DRAG_TYPE, type ArrangeTarget } from "./editorMembership.svelte"
+import {
+	MIDDLE_EMPTY,
+	addTab,
+	newPanel,
+	removeTab,
+	type ArrangeOutcome
+} from "./arrangeOps"
+import {
+	PANEL_DRAG_TYPE,
+	TAB_DRAG_TYPE,
+	TRAY_DRAG_TYPE,
+	type ArrangeTarget
+} from "./editorMembership.svelte"
 import { createSideRailModel } from "./sideRailModel.svelte"
 import { createSessionLayoutModel } from "./sessionLayoutModel.svelte"
+import { askSettingsInArrange } from "./widgetSettingsFlow.svelte"
 import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 import { coreDefaultWidgets } from "$lib/client/components/sessionPage/coreWidgets"
 
@@ -32,10 +44,10 @@ async function settle() {
 	flushSync()
 }
 
-const LAYOUT: PanelLayoutV1 = {
-	version: 1,
+const LAYOUT: PanelLayoutV2 = {
+	version: 2,
 	left: [],
-	middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+	middle: [{ key: "p1", tabs: ["messages"] }],
 	right: [
 		{ key: "p2", tabs: ["stats"] },
 		{ key: "p3", tabs: ["lore-entries"] }
@@ -56,11 +68,19 @@ function dragEvent(type: string, data: Record<string, string>) {
 	return e
 }
 
-function canvas(start: PanelLayoutV1 = LAYOUT) {
-	const state = $state<{ panels: PanelLayoutV1; armedId: string | null; dragOverZone: string | null }>({
+function canvas(start: PanelLayoutV2 = LAYOUT) {
+	const state = $state<{
+		panels: PanelLayoutV2
+		armedId: string | null
+		dragOverZone: string | null
+		chosen: string | null
+		chose: (string | null)[]
+	}>({
 		panels: start,
 		armedId: null,
-		dragOverZone: null
+		dragOverZone: null,
+		chosen: null,
+		chose: []
 	})
 	const edit = (o: ArrangeOutcome) => {
 		if (!o.layout) return false
@@ -85,20 +105,21 @@ function canvas(start: PanelLayoutV1 = LAYOUT) {
 			edit(
 				"tab" in at
 					? addTab(state.panels, widget, at.tab)
-					: newPanel(state.panels, widget, at.panel, at.rail ? { pinned: false } : {})
+					: newPanel(state.panels, widget, at.panel)
 			)
 				? widget
 				: null,
 		duplicateWidget: () => null,
 		removeWidget: (id: string) => edit(removeTab(state.panels, id)),
-		draggedId: (e: DragEvent) => e.dataTransfer?.getData(TAB_DRAG_TYPE) || null,
-		draggedWidget: (e: DragEvent) => e.dataTransfer?.getData(TRAY_DRAG_TYPE) || null
+		draggedId: (e: DragEvent) =>
+			e.dataTransfer?.getData(TAB_DRAG_TYPE) || null,
+		draggedWidget: (e: DragEvent) =>
+			e.dataTransfer?.getData(TRAY_DRAG_TYPE) || null
 	}
 	const rail = createSideRailModel({
 		inst: () => undefined,
 		iconOf: () => Icons.Box,
-		middleWidgetIcon: () => Icons.Box,
-		widgetLabel: (id) => id
+		middleWidgetIcon: () => Icons.Box
 	})
 	const host = document.createElement("div")
 	document.body.append(host)
@@ -111,10 +132,22 @@ function canvas(start: PanelLayoutV1 = LAYOUT) {
 				},
 				edit,
 				membership,
-				editGeom: { left: 300, centre: 600, right: 300, scale: 1, sideColumns: 1 },
+				editGeom: {
+					left: 300,
+					centre: 600,
+					right: 300,
+					scale: 1,
+					sideColumns: 1
+				},
 				rail,
 				label: (id: string) => id,
-				openSettings: () => {}
+				get chosen() {
+					return state.chosen
+				},
+				onChoose: (id: string | null) => {
+					state.chose.push(id)
+					state.chosen = id
+				}
 			}
 		})
 	)
@@ -131,7 +164,11 @@ describe("the Arrange canvas", () => {
 		await settle()
 		expect(state.panels.right[0].tabs).toEqual(["stats", "chronicle"])
 		// Now a two-tab panel: its strip draws both.
-		expect(document.querySelectorAll('[data-arrange-panel="p2"] [data-arrange-tab]').length).toBe(2)
+		expect(
+			document.querySelectorAll(
+				'[data-arrange-panel="p2"] [data-arrange-tab]'
+			).length
+		).toBe(2)
 	})
 
 	test("dropping between panels makes a new panel there", async () => {
@@ -141,7 +178,11 @@ describe("the Arrange canvas", () => {
 			.querySelector('[data-arrange-gap="right:1"]')!
 			.dispatchEvent(dragEvent("drop", { [TRAY_DRAG_TYPE]: "chronicle" }))
 		await settle()
-		expect(state.panels.right.map((p) => p.tabs)).toEqual([["stats"], ["chronicle"], ["lore-entries"]])
+		expect(state.panels.right.map((p) => p.tabs)).toEqual([
+			["stats"],
+			["chronicle"],
+			["lore-entries"]
+		])
 	})
 
 	test("dragging a placed tab onto another panel's strip moves it there", async () => {
@@ -149,215 +190,292 @@ describe("the Arrange canvas", () => {
 		await settle()
 		document
 			.querySelector('[data-arrange-strip="p2"]')!
-			.dispatchEvent(dragEvent("drop", { [TAB_DRAG_TYPE]: "lore-entries" }))
+			.dispatchEvent(
+				dragEvent("drop", { [TAB_DRAG_TYPE]: "lore-entries" })
+			)
 		await settle()
-		expect(state.panels.right.map((p) => p.tabs)).toEqual([["stats", "lore-entries"]])
+		expect(state.panels.right.map((p) => p.tabs)).toEqual([
+			["stats", "lore-entries"]
+		])
 	})
 
-	test("no lock and no pin toggle: every tab has a plain ×, and the last Messages goes like any tab", async () => {
+	test("no lock and no pin toggle: every tab has a plain ×, and the last Messages goes like any tab once something else is in the middle", async () => {
 		const state = canvas({
 			...LAYOUT,
-			middle: { ...LAYOUT.middle, below: [{ key: "p4", tabs: ["chronicle"] }] }
+			middle: [
+				{ key: "p1", tabs: ["messages"] },
+				{ key: "p4", tabs: ["chronicle"] }
+			]
 		})
 		await settle()
-		expect(document.querySelector("[data-tab-lock]")).toBeNull()
-		expect(document.querySelector("[data-panel-pin]")).toBeNull()
-		;(document.querySelector('[data-tab-remove="messages"]') as HTMLButtonElement).click()
+		expect(document.querySelector("[data-tab-lock]") === null).toBe(true)
+		expect(document.querySelector("[data-panel-pin]") === null).toBe(true)
+		;(
+			document.querySelector(
+				'[data-tab-remove="messages"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		// The nearest middle panel is promoted into the primary.
-		expect(state.panels.middle.primary).toEqual({ key: "p4", tabs: ["chronicle"] })
-		expect(state.panels.middle.below).toEqual([])
+		expect(state.panels.middle).toEqual([
+			{ key: "p4", tabs: ["chronicle"] }
+		])
 	})
 
 	test("tap-to-place: an armed chip offers every strip and gap", async () => {
 		const state = canvas()
 		state.armedId = "chronicle"
 		await settle()
-		;(document.querySelector('[data-place-panel="left:0"]') as HTMLButtonElement).click()
+		;(
+			document.querySelector(
+				'[data-place-panel="left:0"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		expect(state.panels.left.map((p) => p.tabs)).toEqual([["chronicle"]])
 	})
 
-	test("the divider between two docked side panels moves a twelfth with the arrow keys", async () => {
+	test("the middle is drawn like a side: gaps around cards, and a drop in its gap makes a panel there", async () => {
 		const state = canvas()
 		await settle()
-		const divider = document.querySelector<HTMLElement>('[data-arrange-divider="right:1"]')!
-		expect(divider.getAttribute("role")).toBe("separator")
-		divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }))
+		expect(
+			document.querySelectorAll(
+				'[data-arrange-zone="middle"] [data-arrange-gap]'
+			).length
+		).toBe(2)
+		expect(
+			document.querySelectorAll(
+				'[data-arrange-zone="middle"] [data-arrange-panel]'
+			).length
+		).toBe(1)
+		document
+			.querySelector('[data-arrange-gap="middle:1"]')!
+			.dispatchEvent(dragEvent("drop", { [TRAY_DRAG_TYPE]: "chronicle" }))
 		await settle()
-		expect(state.panels.right.map((p) => p.height)).toEqual([{ share: 7 }, { share: 5 }])
+		expect(state.panels.middle.map((p) => p.tabs)).toEqual([
+			["messages"],
+			["chronicle"]
+		])
+	})
+
+	test("an empty zone draws one filling gap that says where to drop", async () => {
+		canvas()
+		await settle()
+		expect(
+			document
+				.querySelector('[data-arrange-zone="left"] .agap-fill')
+				?.textContent?.trim()
+		).toBe("Drop a widget here")
+	})
+
+	test("the hint under the middle says how priority gives way", async () => {
+		canvas()
+		await settle()
+		expect(
+			document
+				.querySelector('[data-arrange-zone="middle"] .azone-note')
+				?.textContent?.replace(/\s+/g, " ")
+				.trim()
+		).toBe(
+			"When a zone runs out of height, Low gives way first, then Normal. High keeps its height longest."
+		)
+	})
+
+	test("the divider between two adjacent fill panels of a side moves a twelfth with the arrow keys", async () => {
+		const state = canvas()
+		await settle()
+		const divider = document.querySelector<HTMLElement>(
+			'[data-arrange-divider="right:1"]'
+		)!
+		expect(divider.getAttribute("role")).toBe("separator")
+		divider.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })
+		)
+		await settle()
+		expect(state.panels.right.map((p) => p.height)).toEqual([
+			{ share: 7 },
+			{ share: 5 }
+		])
+	})
+
+	test("the middle has dividers too: two fill panels, the arrow keys write { share }", async () => {
+		const state = canvas({
+			...LAYOUT,
+			middle: [
+				{ key: "p1", tabs: ["messages"] },
+				{ key: "p4", tabs: ["notes"] }
+			]
+		})
+		await settle()
+		const divider = document.querySelector<HTMLElement>(
+			'[data-arrange-divider="middle:1"]'
+		)!
+		expect(divider === null).toBe(false)
+		divider.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })
+		)
+		await settle()
+		expect(state.panels.middle.map((p) => p.height)).toEqual([
+			{ share: 5 },
+			{ share: 7 }
+		])
+	})
+
+	test("no divider next to a Fit panel (the Composer declares fit)", async () => {
+		canvas({
+			...LAYOUT,
+			middle: [
+				{ key: "p1", tabs: ["messages"] },
+				{ key: "p4", tabs: ["composer"] }
+			]
+		})
+		await settle()
+		expect(
+			document.querySelectorAll(
+				'[data-arrange-zone="middle"] [data-arrange-divider]'
+			).length
+		).toBe(0)
 	})
 
 	test("Fit and Fill set a panel's height", async () => {
-		const state = canvas()
+		const state = canvas({
+			...LAYOUT,
+			right: [{ key: "p2", tabs: ["notes"] }]
+		})
 		await settle()
-		;(document.querySelector('[data-height-fit="p2"]') as HTMLButtonElement).click()
+		;(
+			document.querySelector(
+				'[data-height-fit="p2"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		expect(state.panels.right[0].height).toBe("fit")
-		;(document.querySelector('[data-height-fill="p2"]') as HTMLButtonElement).click()
+		;(
+			document.querySelector(
+				'[data-height-fill="p2"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		expect("height" in state.panels.right[0]).toBe(false)
 	})
-})
 
-const at = (sel: string) => document.querySelector(sel)!
-const drop = (sel: string, data: Record<string, string>) => at(sel).dispatchEvent(dragEvent("drop", data))
-
-describe("the rail strips (§10 R-A, R-C)", () => {
-	test("a panel dropped on a side's rail strip goes in the rail and draws as a rail row", async () => {
-		const state = canvas()
-		await settle()
-		drop('[data-arrange-rail="right"]', { [PANEL_DRAG_TYPE]: "p2" })
-		await settle()
-		expect(state.panels.right.map((p) => [p.key, p.pinned])).toEqual([
-			["p2", false],
-			["p3", undefined]
-		])
-		expect(document.querySelector('[data-arrange-rail-row="p2"]')).not.toBeNull()
-		expect(document.querySelector('[data-arrange-panel="p2"]')).toBeNull()
-		expect(document.querySelector('[data-arrange-panel="p3"]')).not.toBeNull()
-	})
-
-	test("a panel from another place joins the end of that side, in the rail", async () => {
-		const state = canvas()
-		await settle()
-		drop('[data-arrange-rail="left"]', { [PANEL_DRAG_TYPE]: "p3" })
-		await settle()
-		expect(state.panels.left).toEqual([{ key: "p3", tabs: ["lore-entries"], pinned: false }])
-		expect(state.panels.right.map((p) => p.key)).toEqual(["p2"])
-	})
-
-	test("a tab dropped on a rail strip is split out into the rail", async () => {
+	test("Fill on a Composer panel writes height: fill; Fit on it writes nothing", async () => {
 		const state = canvas({
 			...LAYOUT,
-			right: [{ key: "p2", tabs: ["stats", "lore-entries"] }]
-		})
-		await settle()
-		drop('[data-arrange-rail="right"]', { [TAB_DRAG_TYPE]: "lore-entries" })
-		await settle()
-		expect(state.panels.right.map((p) => [p.tabs, p.pinned])).toEqual([
-			[["stats"], undefined],
-			[["lore-entries"], false]
-		])
-	})
-
-	test("a rail row dragged into a gap of the column is docked there", async () => {
-		const state = canvas({
-			...LAYOUT,
-			right: [
-				{ key: "p2", tabs: ["stats"], pinned: false },
-				{ key: "p3", tabs: ["lore-entries"] }
+			middle: [
+				{ key: "p1", tabs: ["messages"] },
+				{ key: "p4", tabs: ["composer"] }
 			]
 		})
 		await settle()
-		// The gap under p3 counts the whole stack (p2 is index 0, p3 index 1).
-		drop('[data-arrange-gap="right:2"]', { [PANEL_DRAG_TYPE]: "p2" })
+		expect(
+			document
+				.querySelector('[data-height-fit="p4"]')
+				?.getAttribute("aria-pressed")
+		).toBe("true")
+		;(
+			document.querySelector(
+				'[data-height-fit="p4"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		expect(state.panels.right).toEqual([
-			{ key: "p3", tabs: ["lore-entries"] },
-			{ key: "p2", tabs: ["stats"] }
-		])
+		expect("height" in state.panels.middle[1]).toBe(false)
+		;(
+			document.querySelector(
+				'[data-height-fill="p4"]'
+			) as HTMLButtonElement
+		).click()
+		await settle()
+		expect(state.panels.middle[1].height).toBe("fill")
 	})
 
-	test("a rail row dropped onto a docked panel's tab strip joins it as a tab", async () => {
+	test("Priority: a Composer panel shows High; Low writes priority: low; High on a High one writes nothing", async () => {
 		const state = canvas({
 			...LAYOUT,
-			right: [
-				{ key: "p2", tabs: ["stats"], pinned: false },
-				{ key: "p3", tabs: ["lore-entries"] }
+			middle: [
+				{ key: "p1", tabs: ["messages"] },
+				{ key: "p4", tabs: ["composer"] }
 			]
 		})
 		await settle()
-		drop('[data-arrange-strip="p3"]', { [PANEL_DRAG_TYPE]: "p2" })
-		await settle()
-		expect(state.panels.right).toEqual([{ key: "p3", tabs: ["lore-entries", "stats"] }])
-	})
-
-	test("a side whose every panel is in the rail draws narrow: the strip and one dock zone", async () => {
-		const state = canvas({
-			...LAYOUT,
-			right: [
-				{ key: "p2", tabs: ["stats"], pinned: false },
-				{ key: "p3", tabs: ["lore-entries", "chronicle"], pinned: false }
-			]
-		})
-		await settle()
-		expect(at('[data-arrange-zone="right"]').hasAttribute("data-rail-only")).toBe(true)
-		expect((at("[data-arrange-canvas]") as HTMLElement).style.gridTemplateColumns).toBe(
-			`300px minmax(0,1fr) ${NARROW_SIDE_PX}px`
+		const group = document.querySelector(
+			'[data-arrange-panel="p4"] [role="group"][aria-label="Priority"]'
 		)
-		expect(at('[data-arrange-dock="right"]').textContent?.trim()).toBe("Drop here to dock")
-		expect(document.querySelectorAll('[data-arrange-zone="right"] [data-arrange-panel]').length).toBe(0)
-		// A two-tab rail panel shows its count.
-		expect(at('[data-arrange-rail-row="p3"] .arail-count').textContent).toBe("2")
-		// An empty side keeps its column, as the session's does.
-		expect(at('[data-arrange-zone="left"]').hasAttribute("data-rail-only")).toBe(false)
-
-		drop('[data-arrange-dock="right"]', { [PANEL_DRAG_TYPE]: "p3" })
-		await settle()
-		expect(state.panels.right.map((p) => [p.key, p.pinned])).toEqual([
-			["p2", false],
-			["p3", undefined]
+		expect(group === null).toBe(false)
+		const pressed = (v: string) =>
+			document
+				.querySelector(`[data-priority-${v}="p4"]`)
+				?.getAttribute("aria-pressed")
+		expect([pressed("high"), pressed("normal"), pressed("low")]).toEqual([
+			"true",
+			"false",
+			"false"
 		])
-		expect(at('[data-arrange-zone="right"]').hasAttribute("data-rail-only")).toBe(false)
-		expect((at("[data-arrange-canvas]") as HTMLElement).style.gridTemplateColumns).toBe(
-			"300px minmax(0,1fr) 300px"
-		)
-	})
-
-	test("a tray widget dropped on a rail-only side's dock zone is a new docked panel", async () => {
-		const state = canvas({ ...LAYOUT, right: [{ key: "p2", tabs: ["stats"], pinned: false }] })
+		;(
+			document.querySelector(
+				'[data-priority-high="p4"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		drop('[data-arrange-dock="right"]', { [TRAY_DRAG_TYPE]: "chronicle" })
+		expect("priority" in state.panels.middle[1]).toBe(false)
+		;(
+			document.querySelector(
+				'[data-priority-low="p4"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		expect(state.panels.right.map((p) => [p.tabs, p.pinned])).toEqual([
-			[["stats"], false],
-			[["chronicle"], undefined]
+		expect(state.panels.middle[1].priority).toBe("low")
+		expect([pressed("high"), pressed("normal"), pressed("low")]).toEqual([
+			"false",
+			"false",
+			"true"
 		])
 	})
 
-	test("tap-to-place lights the rail: an armed chip can go straight into it", async () => {
-		const state = canvas()
-		state.armedId = "chronicle"
-		await settle()
-		const button = at('[data-place-rail="left"]') as HTMLButtonElement
-		expect(button.getAttribute("aria-label")).toBe("Add to the rail")
-		button.click()
-		await settle()
-		expect(state.panels.left).toEqual([{ key: "p4", tabs: ["chronicle"], pinned: false }])
-	})
-})
-
-describe("the primary is a place (§10)", () => {
-	test("a panel dropped on the primary's header becomes the primary; the old one goes to the end of above", async () => {
+	test("clicking a tab's name or its gear chooses it; clicking empty canvas clears the choice", async () => {
 		const state = canvas()
 		await settle()
-		drop('[data-arrange-make-primary="p1"]', { [PANEL_DRAG_TYPE]: "p2" })
+		;(
+			document.querySelector(
+				'[data-arrange-tab="stats"] .atab-name'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		expect(state.panels.middle.primary).toEqual({ key: "p2", tabs: ["stats"] })
-		expect(state.panels.middle.above).toEqual([{ key: "p1", tabs: ["messages"] }])
-		expect(state.panels.right.map((p) => p.key)).toEqual(["p3"])
-	})
-
-	test("a tab dropped on the primary's strip joins it", async () => {
-		const state = canvas()
+		expect(state.chose).toEqual(["stats"])
+		expect(
+			document
+				.querySelector('[data-arrange-panel="p2"]')
+				?.getAttribute("data-chosen")
+		).toBe("stats")
+		expect(
+			document
+				.querySelector('[data-arrange-panel="p3"]')
+				?.hasAttribute("data-chosen")
+		).toBe(false)
+		;(
+			document.querySelector(
+				'[data-tab-settings="lore-entries"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		drop('[data-arrange-strip="p1"]', { [TAB_DRAG_TYPE]: "stats" })
+		expect(state.chose).toEqual(["stats", "lore-entries"])
+		expect(
+			document
+				.querySelector('[data-tab-settings="lore-entries"]')
+				?.hasAttribute("aria-haspopup")
+		).toBe(false)
+		;(
+			document.querySelector("[data-arrange-canvas]") as HTMLElement
+		).click()
 		await settle()
-		expect(state.panels.middle.primary.tabs).toEqual(["messages", "stats"])
-	})
-
-	test("the primary's own grip moves it like any panel; the nearest middle panel is promoted", async () => {
-		const state = canvas({
-			...LAYOUT,
-			middle: { ...LAYOUT.middle, below: [{ key: "p4", tabs: ["chronicle"] }] }
-		})
+		expect(state.chose).toEqual(["stats", "lore-entries", null])
+		// A click inside a card (its tools) is not empty canvas.
+		;(
+			document.querySelector(
+				'[data-height-fit="p2"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
-		expect(at('[data-arrange-grip="p1"]').getAttribute("draggable")).toBe("true")
-		drop('[data-arrange-gap="left:0"]', { [PANEL_DRAG_TYPE]: "p1" })
-		await settle()
-		expect(state.panels.middle.primary).toEqual({ key: "p4", tabs: ["chronicle"] })
-		expect(state.panels.left).toEqual([{ key: "p1", tabs: ["messages"] }])
+		expect(state.chose.length).toBe(3)
 	})
 })
 
@@ -389,13 +507,19 @@ describe("the toolbar", () => {
 		})
 		const host = document.createElement("div")
 		document.body.append(host)
-		apps.push(mount(LayoutEditorToolbar, { target: host, props: props as never }))
+		apps.push(
+			mount(LayoutEditorToolbar, { target: host, props: props as never })
+		)
 		await settle()
-		const tabs = [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent?.trim())
+		const tabs = [...document.querySelectorAll('[role="tab"]')].map((t) =>
+			t.textContent?.trim()
+		)
 		expect(tabs).toEqual(["Layouts", "Arrange"])
-		const labels = [...document.querySelectorAll("button")].map((b) => b.textContent?.trim())
+		const labels = [...document.querySelectorAll("button")].map((b) =>
+			b.textContent?.trim()
+		)
 		expect(labels).not.toContain("Grid")
-		// The Rails lens is gone: the canvas draws each side's rail itself (§10 R-A).
+		// There is no rail: the Rails lens is gone with it.
 		expect(labels).not.toContain("Rails")
 	})
 })
@@ -405,7 +529,7 @@ describe("the editor's Done", () => {
 		const manager = new SurfaceManager()
 		manager.init(
 			1,
-			coreDefaultWidgets(),
+			coreDefaultWidgets(true),
 			{ panels: LAYOUT } as never,
 			() => {}
 		)
@@ -438,12 +562,11 @@ describe("the editor's Done", () => {
 					sessionId: 1,
 					onWorking: () => {},
 					onLayout,
-					onPutAway: () => {},
 					onClose
 				}
 			})
 		)
-		return { setPanels, onLayout, onClose }
+		return { setPanels, onLayout, onClose, model }
 	}
 	const done = () =>
 		[...document.querySelectorAll<HTMLButtonElement>(".tool-btn")].find(
@@ -463,13 +586,24 @@ describe("the editor's Done", () => {
 	test("a refusal is said on the status line, never a toast, and the next kept edit clears it", async () => {
 		const { onLayout } = editor()
 		await settle()
-		const notice = () => document.querySelector("[data-arrange-notice]")?.textContent?.trim()
+		const notice = () =>
+			document.querySelector("[data-arrange-notice]")?.textContent?.trim()
 		expect(notice()).toBe("")
-		;(document.querySelector('[data-tab-remove="messages"]') as HTMLButtonElement).click()
+		;(
+			document.querySelector(
+				'[data-tab-remove="messages"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		expect(notice()).toBe(MIDDLE_EMPTY)
-		expect(document.querySelector('[data-arrange-panel="p1"]')).not.toBeNull()
-		;(document.querySelector('[data-tab-remove="stats"]') as HTMLButtonElement).click()
+		expect(
+			document.querySelector('[data-arrange-panel="p1"]')
+		).not.toBeNull()
+		;(
+			document.querySelector(
+				'[data-tab-remove="stats"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		expect(notice()).toBe("")
 		done().click()
@@ -480,18 +614,125 @@ describe("the editor's Done", () => {
 	test("Done after a change writes the panels; Undo puts the edit back first", async () => {
 		const { onLayout } = editor()
 		await settle()
-		;(document.querySelector('[data-tab-remove="stats"]') as HTMLButtonElement).click()
+		;(
+			document.querySelector(
+				'[data-tab-remove="stats"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		expect(document.querySelector('[data-arrange-panel="p2"]')).toBeNull()
-		;(document.querySelector("[data-editor-undo]") as HTMLButtonElement).click()
+		;(
+			document.querySelector("[data-editor-undo]") as HTMLButtonElement
+		).click()
 		await settle()
-		expect(document.querySelector('[data-arrange-panel="p2"]')).not.toBeNull()
-		;(document.querySelector('[data-tab-remove="lore-entries"]') as HTMLButtonElement).click()
+		expect(
+			document.querySelector('[data-arrange-panel="p2"]')
+		).not.toBeNull()
+		;(
+			document.querySelector(
+				'[data-tab-remove="lore-entries"]'
+			) as HTMLButtonElement
+		).click()
 		await settle()
 		done().click()
 		await settle()
 		expect(onLayout).toHaveBeenCalledOnce()
-		const written = onLayout.mock.calls[0][0].panels as PanelLayoutV1
+		const written = onLayout.mock.calls[0][0].panels as PanelLayoutV2
 		expect(written.right.map((p) => p.tabs)).toEqual([["stats"]])
+	})
+	test("moving the middle's only panel to a side says MIDDLE_EMPTY on the status line", async () => {
+		const { onLayout } = editor()
+		await settle()
+		document
+			.querySelector('[data-arrange-gap="left:0"]')!
+			.dispatchEvent(dragEvent("drop", { [PANEL_DRAG_TYPE]: "p1" }))
+		await settle()
+		expect(
+			document.querySelector("[data-arrange-notice]")?.textContent?.trim()
+		).toBe(MIDDLE_EMPTY)
+		expect(
+			document.querySelector(
+				'[data-arrange-zone="middle"] [data-arrange-panel="p1"]'
+			) === null
+		).toBe(false)
+		expect(onLayout).not.toHaveBeenCalled()
+	})
+
+	const pane = () => document.querySelector(".edit-inspector")
+	const paneTitle = () =>
+		pane()?.querySelector(".ai-title")?.textContent?.trim()
+
+	test("with nothing chosen the pane is Layout settings; choosing a tab shows its title; Escape clears the choice", async () => {
+		editor()
+		await settle()
+		expect(paneTitle()).toBe("Layout settings")
+		;(
+			document.querySelector(
+				'[data-arrange-tab="stats"] .atab-name'
+			) as HTMLButtonElement
+		).click()
+		await settle()
+		expect(paneTitle()).toBe("stats")
+		window.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Escape",
+				bubbles: true,
+				cancelable: true
+			})
+		)
+		await settle()
+		expect(paneTitle()).toBe("Layout settings")
+	})
+
+	test("a Backing change from the pane is one Undo step and is written on Done", async () => {
+		const { onLayout } = editor()
+		await settle()
+		const glass = pane()!.querySelector<HTMLInputElement>(
+			'input[type="radio"][value="glass"]'
+		)!
+		glass.checked = true
+		glass.dispatchEvent(new Event("change", { bubbles: true }))
+		await settle()
+		expect(
+			pane()!.querySelector<HTMLInputElement>(
+				'input[type="radio"][value="glass"]'
+			)!.checked
+		).toBe(true)
+		;(
+			document.querySelector("[data-editor-undo]") as HTMLButtonElement
+		).click()
+		await settle()
+		expect(
+			pane()!.querySelector<HTMLInputElement>(
+				'input[type="radio"][value="card"]'
+			)!.checked
+		).toBe(true)
+		const again = pane()!.querySelector<HTMLInputElement>(
+			'input[type="radio"][value="glass"]'
+		)!
+		again.checked = true
+		again.dispatchEvent(new Event("change", { bubbles: true }))
+		await settle()
+		done().click()
+		await settle()
+		expect(onLayout).toHaveBeenCalledOnce()
+		expect(
+			(onLayout.mock.calls[0][0].panels as PanelLayoutV2).backing
+		).toBe("glass")
+	})
+
+	test("the style overlay's ask (askSettingsInArrange) switches to Arrange and chooses that tab", async () => {
+		const { model } = editor()
+		await settle()
+		model.editTab = "layouts"
+		await settle()
+		askSettingsInArrange("stats")
+		await settle()
+		expect(model.editTab).toBe("arrange")
+		expect(
+			document
+				.querySelector('[data-arrange-panel="p2"]')
+				?.getAttribute("data-chosen")
+		).toBe("stats")
 	})
 })

@@ -20,6 +20,8 @@ import {
 	lensDrawsScope,
 	lensEmptyMessage,
 	lensForKey,
+	lensesShown,
+	lensShown,
 	lensListsPool,
 	lensReason,
 	LORE_LENS_REGISTRY,
@@ -213,7 +215,8 @@ describe("shortcuts — one per lens, heard outside fields", () => {
 		for (const [i, id] of LORE_LENSES.entries())
 			expect(
 				lensForKey(
-					press(`Digit${i + 1}`, { altKey: true, shiftKey: true })
+					press(`Digit${i + 1}`, { altKey: true, shiftKey: true }),
+					true
 				)
 			).toBe(id)
 	})
@@ -221,24 +224,58 @@ describe("shortcuts — one per lens, heard outside fields", () => {
 	it("leaves typing, repeats and keys already claimed alone", () => {
 		const both = { altKey: true, shiftKey: true }
 		const field = { isContentEditable: false, closest: () => ({}) }
-		expect(lensForKey(press("Digit4", both, { target: field }))).toBeNull()
+		expect(
+			lensForKey(press("Digit4", both, { target: field }), true)
+		).toBeNull()
 		expect(
 			lensForKey(
 				press("Digit4", both, {
 					target: { isContentEditable: true, closest: () => null }
-				})
+				}),
+				true
 			)
 		).toBeNull()
 		expect(
-			lensForKey(press("Digit4", both, { defaultPrevented: true }))
+			lensForKey(press("Digit4", both, { defaultPrevented: true }), true)
 		).toBeNull()
-		expect(lensForKey(press("Digit4", both, { repeat: true }))).toBeNull()
-		expect(lensForKey(press("Digit4"))).toBeNull()
+		expect(
+			lensForKey(press("Digit4", both, { repeat: true }), true)
+		).toBeNull()
+		expect(lensForKey(press("Digit4"), true)).toBeNull()
 	})
 
 	it("reads as the platform writes it", () => {
 		expect(shortcutLabel("Alt+Shift+4", false)).toBe("Alt+Shift+4")
 		expect(shortcutLabel("Alt+Shift+4", true)).toBe("⌥⇧4")
+	})
+})
+
+describe("advanced controls — Graph and Lives leave the track", () => {
+	it("shows every lens, in order, when advanced", () => {
+		expect(lensesShown(true).map((d) => d.id)).toEqual([...LORE_LENSES])
+	})
+
+	it("leaves out Graph and Lives, keeping the order, when not", () => {
+		expect(lensesShown(false).map((d) => d.id)).toEqual(
+			LORE_LENSES.filter((id) => id !== "graph" && id !== "lives")
+		)
+	})
+
+	it("draws List for a hidden lens, and the lens itself otherwise", () => {
+		expect(lensShown("graph", false)).toBe("list")
+		expect(lensShown("lives", false)).toBe("list")
+		expect(lensShown("time", false)).toBe("time")
+		for (const id of LORE_LENSES) expect(lensShown(id, true)).toBe(id)
+	})
+
+	it("hears Alt+Shift+4 and 6 only when advanced; the others keep their numbers", () => {
+		const both = { altKey: true, shiftKey: true }
+		expect(lensForKey(press("Digit4", both), false)).toBeNull()
+		expect(lensForKey(press("Digit6", both), false)).toBeNull()
+		expect(lensForKey(press("Digit4", both), true)).toBe("graph")
+		expect(lensForKey(press("Digit6", both), true)).toBe("lives")
+		expect(lensForKey(press("Digit5", both), false)).toBe("time")
+		expect(lensForKey(press("Digit5", both), true)).toBe("time")
 	})
 })
 

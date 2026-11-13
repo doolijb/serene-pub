@@ -48,7 +48,7 @@
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import {
@@ -58,8 +58,14 @@
 		type SaveStep
 	} from "$lib/client/admin/sequentialSave"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-	import { NOTE_MAX_LENGTH, normalizeNote } from "$lib/shared/utils/connectionNotes"
-	import { keyUrlFor, needsCredential } from "$lib/shared/connections/credentials"
+	import {
+		NOTE_MAX_LENGTH,
+		normalizeNote
+	} from "$lib/shared/utils/connectionNotes"
+	import {
+		keyUrlFor,
+		needsCredential
+	} from "$lib/shared/connections/credentials"
 	import { connectionTypeDisabledReason } from "$lib/shared/utils/connectionServiceItems"
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
@@ -67,7 +73,9 @@
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 	import ConnectionTypeForm from "$lib/client/components/connections/ConnectionTypeForm.svelte"
 	import ConnectionStopScripts from "$lib/client/components/connections/ConnectionStopScripts.svelte"
 	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
@@ -84,6 +92,7 @@
 	import AudioCppSettingsTab from "$lib/client/components/audiocppManager/AudioCppSettingsTab.svelte"
 	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
 	import {
+		connectionComesWithApp,
 		endpointKind,
 		isLocalOnnxType,
 		manualAddAllowed,
@@ -120,8 +129,9 @@
 
 	const socket = useTypedSocket()
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
-	const koboldCppSettingsCtx: KoboldCppSettingsCtx | undefined =
-		getContext("koboldCppSettingsCtx")
+	const koboldCppSettingsCtx: KoboldCppSettingsCtx | undefined = getContext(
+		"koboldCppSettingsCtx"
+	)
 	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
 	const userCtx: { user: SelectUser } | undefined = getContext("userCtx")
 
@@ -151,7 +161,9 @@
 				: {
 						...r,
 						models: r.models.map((m) =>
-							m.id === msg.modelId ? { ...m, local: msg.local } : m
+							m.id === msg.modelId
+								? { ...m, local: msg.local }
+								: m
 						)
 					}
 		)
@@ -160,7 +172,10 @@
 		"connections:modelDownloadProgress",
 		handleLocal
 	)
-	useInterest<"connections:downloadModel">("connections:downloadModel", handleLocal)
+	useInterest<"connections:downloadModel">(
+		"connections:downloadModel",
+		handleLocal
+	)
 	useInterest<"connections:cancelModelDownload">(
 		"connections:cancelModelDownload",
 		handleLocal
@@ -216,10 +231,13 @@
 		// `modelsSyncedAt` is the sync's own stamp: it reaches the client as a
 		// string and the update handler writes it back as a timestamp, which
 		// throws (`value.toISOString is not a function`). Not ours to send.
-		const { modelsSyncedAt: _stamp, ...payload } = $state.snapshot(connection)
-		const savedBaseUrl = (edits.saved as { baseUrl?: string | null })?.baseUrl
+		const { modelsSyncedAt: _stamp, ...payload } =
+			$state.snapshot(connection)
+		const savedBaseUrl = (edits.saved as { baseUrl?: string | null })
+			?.baseUrl
 		if ((payload.baseUrl ?? "") !== (savedBaseUrl ?? "")) {
-			const star = systemSettingsCtx.capabilityDefaults?.[EMBEDDING_CAPABILITY]
+			const star =
+				systemSettingsCtx.capabilityDefaults?.[EMBEDDING_CAPABILITY]
 			const model =
 				payload.models?.find?.(
 					(m: { id: number }) => m.id === star?.connectionModelId
@@ -254,7 +272,10 @@
 		pendingIntent = null
 		saving = false
 		if (msg.notice)
-			toaster.warning({ title: "Preset not kept", description: msg.notice })
+			notify.warning({
+				title: "Preset not kept",
+				description: msg.notice
+			})
 		// The host or key may have changed; the models follow the save.
 		requestSync(true)
 		// The model levers go next, and their summary is the Save's: one
@@ -263,7 +284,7 @@
 			void saveModelEdits(mine)
 			return
 		}
-		toaster.success({ title: `Saved ${msg.connection.name}` })
+		notify.success({ title: `Saved ${msg.connection.name}` })
 		land(mine)
 	})
 
@@ -325,20 +346,23 @@
 		const outcome = outcomeInLabels(keyed, plan)
 		if (outcome.refused.length || outcome.skipped.length) {
 			formErrors = saveErrors(outcome)
-			toaster.warning({ title: saveSummary(outcome, title) })
+			notify.warning({ title: saveSummary(outcome, title) })
 			return
 		}
-		toaster.success({ title: saveSummary(outcome, title) })
+		notify.success({ title: saveSummary(outcome, title) })
 		land(intent)
 	}
-	useInterest<"connections:update:error">("connections:update:error", (msg) => {
-		if (!pendingIntent) return
-		pendingIntent = null
-		saving = false
-		const error = msg.error ?? "The connection was not saved."
-		if (/name/i.test(error)) nameError = error
-		else formErrors = [error]
-	})
+	useInterest<"connections:update:error">(
+		"connections:update:error",
+		(msg) => {
+			if (!pendingIntent) return
+			pendingIntent = null
+			saving = false
+			const error = msg.error ?? "The connection was not saved."
+			if (/name/i.test(error)) nameError = error
+			else formErrors = [error]
+		}
+	)
 
 	// ── delete ──────────────────────────────────────────────────────────
 	let deleting = false
@@ -353,10 +377,11 @@
 	useInterest<"connections:delete">("connections:delete", (msg) => {
 		if (msg.id !== id) return
 		if (deleting)
-			for (const event of releasing) socket.emit(event, { enabled: false })
+			for (const event of releasing)
+				socket.emit(event, { enabled: false })
 		releasing = []
 		edits.forget()
-		if (deleting) toaster.success({ title: "Connection deleted" })
+		if (deleting) notify.success({ title: "Connection deleted" })
 		void adminGoto("/admin/connections", { replaceState: true })
 	})
 
@@ -376,18 +401,31 @@
 	let syncing = $state(false)
 	function requestSync(force: boolean) {
 		syncing = true
-		socket.emit("connections:syncModels", { id, ...(force ? { force: true } : {}) })
+		socket.emit("connections:syncModels", {
+			id,
+			...(force ? { force: true } : {})
+		})
 	}
 	useInterest<"connections:syncModels">("connections:syncModels", (msg) => {
 		syncing = false
 		const mine = msg.results.find((r) => r.connectionId === id)
 		if (mine?.error)
-			toaster.warning({ title: "Couldn't list models", description: mine.error })
+			notify.warning({
+				title: "Couldn't list models",
+				description: mine.error,
+				source: "socket:connections:syncModels"
+			})
 	})
-	useInterest<"connections:syncModels:error">("connections:syncModels:error", (msg) => {
-		syncing = false
-		toaster.error({ title: msg.error ?? "Couldn't refresh models" })
-	})
+	useInterest<"connections:syncModels:error">(
+		"connections:syncModels:error",
+		(msg) => {
+			syncing = false
+			notify.error({
+				title: msg.error ?? "Couldn't refresh models",
+				source: "socket:connections:syncModels:error"
+			})
+		}
+	)
 
 	onMount(() => socket.emit("connections:list", {}))
 	$effect(() => {
@@ -408,6 +446,9 @@
 	const defaults = $derived(systemSettingsCtx?.capabilityDefaults ?? {})
 	const kind = $derived(endpointKind(row?.type ?? connection?.type))
 	const isOnnx = $derived(isLocalOnnxType(row?.type ?? connection?.type))
+	const comesWithApp = $derived(
+		connectionComesWithApp(row?.type ?? connection?.type)
+	)
 	/**
 	 * Why a local ONNX endpoint can download nothing on this machine, or null
 	 * when it can. Said once above its models, where Download and Retry give
@@ -432,7 +473,9 @@
 			preset: row?.preset ?? connection?.preset
 		})
 	)
-	const title = $derived(connection?.name?.trim() || row?.name || "Connection")
+	const title = $derived(
+		connection?.name?.trim() || row?.name || "Connection"
+	)
 	const missingCount = $derived(
 		(row?.models ?? []).filter((m) => m.missingSince != null).length
 	)
@@ -458,13 +501,17 @@
 				hasCredential: row.hasCredential
 			})
 	)
-	const keyUrl = $derived(row ? keyUrlFor({ type: row.type, preset: row.preset }) : null)
+	const keyUrl = $derived(
+		row ? keyUrlFor({ type: row.type, preset: row.preset }) : null
+	)
 	/** The models fieldset's own width decides table or rows. */
 	let modelsWidth = $state(0)
 
 	/** The model levers that still differ from what is saved. */
 	const liveEdits = $derived(
-		row ? liveModelEdits(modelEdits, row.models, defaults, id) : noModelEdits()
+		row
+			? liveModelEdits(modelEdits, row.models, defaults, id)
+			: noModelEdits()
 	)
 	const modelDirty = $derived(modelEditCount(liveEdits) > 0)
 	/** What Save would send, in order — also the "Waiting for Save" chips. */
@@ -472,7 +519,9 @@
 		row ? modelEditPlan(liveEdits, row.models, capabilityWord) : []
 	)
 	/** The models as drawn: visibility from the draft. */
-	const shownModels = $derived(row ? modelsWithEdits(row.models, liveEdits) : [])
+	const shownModels = $derived(
+		row ? modelsWithEdits(row.models, liveEdits) : []
+	)
 	/**
 	 * Capability labels per model id, for the table's default marks — the
 	 * saved ones, with every capability a pending Use moves taken from the
@@ -493,17 +542,21 @@
 		const m = row?.models.find((x) => x.id === modelId)
 		if (!m) return
 		const serves = m.satisfiableCapabilities ?? []
-		const capability = serves.includes("text->text") ? "text->text" : serves[0]
+		const capability = serves.includes("text->text")
+			? "text->text"
+			: serves[0]
 		if (!capability) return
 		const current = defaults[capability]
 		const costly =
-			(capability === EMBEDDING_CAPABILITY || capability === NER_CAPABILITY) &&
+			(capability === EMBEDDING_CAPABILITY ||
+				capability === NER_CAPABILITY) &&
 			current?.connectionId != null &&
 			(current.connectionId !== id || current.connectionModelId !== m.id)
 		if (costly) {
-			toaster.info({
+			notify.info({
 				title: `Switching ${capabilityWord(capability)} rebuilds stored work`,
-				description: "Admin › Models › Loadouts shows the cost before it switches."
+				description:
+					"Admin › Models › Loadouts shows the cost before it switches."
 			})
 			void adminGoto("/admin/defaults")
 			return
@@ -539,11 +592,15 @@
 	}
 	function modelAction(model: ListRow["models"][number]) {
 		const action = actionFor(model)
-		if (!action || (localOnnxBlocked && action.verb === "makeActive")) return
+		if (!action || (localOnnxBlocked && action.verb === "makeActive"))
+			return
 		if (action.verb === "download" || action.verb === "retry")
 			socket.emit("connections:downloadModel", { id, modelId: model.id })
 		else if (action.verb === "cancel")
-			socket.emit("connections:cancelModelDownload", { id, modelId: model.id })
+			socket.emit("connections:cancelModelDownload", {
+				id,
+				modelId: model.id
+			})
 		else if (action.verb === "makeActive") useModel(model.id)
 	}
 	let addOpen = $state(false)
@@ -598,8 +655,10 @@
 		errors={formErrors}
 		fieldErrors={{ "connection-admin-name": nameError }}
 		historyHref="/admin/history?type=connection&id={id}"
-		deletion={() => connectionDeletion(row ? [row] : [], defaults)}
-		onDelete={remove}
+		deletion={comesWithApp
+			? undefined
+			: () => connectionDeletion(row ? [row] : [], defaults)}
+		onDelete={comesWithApp ? undefined : remove}
 		onSave={save}
 	>
 		{#snippet headerActions()}
@@ -619,12 +678,18 @@
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
 				<!-- The service chip only where it says what the title has not
 				     (STYLE-GUIDE §6.4: a default name IS the service label). -->
-				{#if service.trim().toLowerCase() !== title.trim().toLowerCase()}
-					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+				{#if service.trim().toLowerCase() !== title
+						.trim()
+						.toLowerCase()}
+					<span
+						class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+					>
 						{service}
 					</span>
 				{/if}
-				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span
+					class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+				>
 					{modalityWord(connection.modality)}
 				</span>
 				{#each held as h (h.capability)}
@@ -657,23 +722,36 @@
 							Needs an API key.
 						</span>
 						<span class="text-surface-600-400">
-							Nothing has failed — put a key in Endpoint and credentials,
-							save, then Test.
+							Nothing has failed — put a key in Endpoint and
+							credentials, save, then Test.
 						</span>
 						{#if keyUrl}
 							<a
 								class="anchor underline underline-offset-2"
 								href={keyUrl}
 								target="_blank"
-								rel="noopener noreferrer">Get a key ↗</a
+								rel="noopener noreferrer"
 							>
+								Get a key ↗
+							</a>
 						{/if}
 					</p>
 				{:else}
-					<p class="flex min-w-0 items-center gap-2 text-sm" aria-live="polite">
-						<span class="size-2 shrink-0 rounded-full {CONNECTION_STATE_DOT[line.dot]}" aria-hidden="true"></span>
+					<p
+						class="flex min-w-0 items-center gap-2 text-sm"
+						aria-live="polite"
+					>
+						<span
+							class="size-2 shrink-0 rounded-full {CONNECTION_STATE_DOT[
+								line.dot
+							]}"
+							aria-hidden="true"
+						></span>
 						<span class="font-medium">{line.word}</span>
-						<span class="text-surface-600-400 min-w-0 truncate text-xs" title={line.sentence}>
+						<span
+							class="text-surface-600-400 min-w-0 truncate text-xs"
+							title={line.sentence}
+						>
 							· {line.sentence}
 						</span>
 					</p>
@@ -684,26 +762,41 @@
 		<!-- ── Identity ───────────────────────────────────────────── -->
 		<AdminFieldset title="Identity">
 			<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
-				<AdminField
-					id="connection-admin-name"
-					label="Name"
-					required
-					error={nameError}
-					help="What pickers and the Connections view call it. Unique across this pub."
-				>
-					<input
+				{#if comesWithApp}
+					<AdminField
 						id="connection-admin-name"
-						class="input"
-						type="text"
-						bind:value={connection.name}
-						aria-invalid={!!nameError}
-						aria-describedby={describedBy("connection-admin-name", !!nameError)}
+						label="Name"
+						value={connection.name}
+						help="What pickers and the Connections view call it. Unique across this pub."
 					/>
-				</AdminField>
+				{:else}
+					<AdminField
+						id="connection-admin-name"
+						label="Name"
+						required
+						error={nameError}
+						help="What pickers and the Connections view call it. Unique across this pub."
+					>
+						<input
+							id="connection-admin-name"
+							class="input"
+							type="text"
+							bind:value={connection.name}
+							aria-invalid={!!nameError}
+							aria-describedby={describedBy(
+								"connection-admin-name",
+								!!nameError
+							)}
+						/>
+					</AdminField>
+				{/if}
 				<AdminField
 					id="connection-admin-service"
 					label="Service"
-					value={serviceLabel({ type: connection.type, preset: row?.preset ?? connection.preset })}
+					value={serviceLabel({
+						type: connection.type,
+						preset: row?.preset ?? connection.preset
+					})}
 				/>
 				<AdminField
 					id="connection-admin-type"
@@ -727,8 +820,12 @@
 					class="textarea"
 					maxlength={NOTE_MAX_LENGTH}
 					bind:value={connection.notes}
-					onblur={() => (connection.notes = normalizeNote(connection.notes))}
-					aria-describedby={describedBy("connection-admin-notes", false)}
+					onblur={() =>
+						(connection.notes = normalizeNote(connection.notes))}
+					aria-describedby={describedBy(
+						"connection-admin-notes",
+						false
+					)}
 				></textarea>
 			</AdminField>
 		</AdminFieldset>
@@ -752,7 +849,8 @@
 				description="The manager's server address, binary and launch settings. These save on their own; start, stop and set up the runtime in the Connections view."
 			>
 				<KoboldCppSettingsTab
-					isManaged={koboldCppSettingsCtx?.settings?.koboldCppManagedMode === "managed"}
+					isManaged={koboldCppSettingsCtx?.settings
+						?.koboldCppManagedMode === "managed"}
 					onUpdateBinary={openConnectionView}
 				/>
 			</AdminFieldset>
@@ -792,7 +890,10 @@
 						Refresh
 					</button>
 				{/snippet}
-				<div class="flex min-w-0 flex-col gap-3" bind:clientWidth={modelsWidth}>
+				<div
+					class="flex min-w-0 flex-col gap-3"
+					bind:clientWidth={modelsWidth}
+				>
 					{#if localOnnxBlocked}
 						<!-- Said once, above the rows, rather than on each: the
 						     reason often quotes the runtime's own error, so it
@@ -811,16 +912,17 @@
 					{#if !row.models.length}
 						<FieldHelp>
 							{#if localOnnxBlocked}
-								Nothing is downloaded to this machine, and nothing can be
-								until it can run local models.
+								Nothing is downloaded to this machine, and
+								nothing can be until it can run local models.
 							{:else if kind === "audiocpp-managed"}
-								No speech models on this machine yet. Get them in the audio.cpp
-								connection's Models tab.
+								No speech models on this machine yet. Get them
+								in the audio.cpp connection's Models tab.
 							{:else if isOnnx || kind === "koboldcpp-managed" || kind === "ollama"}
-								No models on this machine yet. Find and download them in
-								the Models view.
+								No models on this machine yet. Find and download
+								them in the Models view.
 							{:else}
-								The host has listed no models. Refresh, or add one by name.
+								The host has listed no models. Refresh, or add
+								one by name.
 							{/if}
 						</FieldHelp>
 					{:else if isOnnx}
@@ -858,7 +960,8 @@
 							<ModelRow
 								model={m}
 								defaultFor={defaultsByModel[m.id] ?? []}
-								canUse={!!(m.satisfiableCapabilities ?? []).length &&
+								canUse={!!(m.satisfiableCapabilities ?? [])
+									.length &&
 									m.enabled !== false &&
 									!defaultsByModel[m.id]?.length}
 								onOpen={openConnectionView}
@@ -877,10 +980,17 @@
 							aria-label="Model changes waiting for Save"
 							data-model-pending
 						>
-							<span class="text-surface-600-400 text-xs">Waiting for Save:</span>
+							<span class="text-surface-600-400 text-xs">
+								Waiting for Save:
+							</span>
 							{#each pendingSteps as step (step.key)}
-								<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
-									<span class="min-w-0 truncate">{step.label}</span>
+								<Badge
+									size="md"
+									class="text-surface-700-300 flex min-w-0 items-center gap-1"
+								>
+									<span class="min-w-0 truncate">
+										{step.label}
+									</span>
 									<button
 										type="button"
 										class="hover:text-surface-950-50 shrink-0"
@@ -897,7 +1007,9 @@
 
 					{#if manualAddAllowed(connection.type)}
 						{#if addOpen}
-							<div class="border-surface-200-800 flex flex-col gap-3 border-t pt-3">
+							<div
+								class="border-surface-200-800 flex flex-col gap-3 border-t pt-3"
+							>
 								<AdminField
 									id="connection-admin-add-model"
 									label="Model identifier"
@@ -909,10 +1021,16 @@
 										type="text"
 										placeholder="gpt-4o-mini"
 										bind:value={addModel}
-										aria-describedby={describedBy("connection-admin-add-model", false)}
+										aria-describedby={describedBy(
+											"connection-admin-add-model",
+											false
+										)}
 									/>
 								</AdminField>
-								<AdminField id="connection-admin-add-label" label="Shown as (optional)">
+								<AdminField
+									id="connection-admin-add-label"
+									label="Shown as (optional)"
+								>
 									<input
 										id="connection-admin-add-label"
 										class="input"
@@ -959,7 +1077,10 @@
 			description="The default loadouts this connection fills. A connection does nothing until one does."
 		>
 			{#snippet aside()}
-				<a href="/admin/defaults" class="btn btn-sm preset-tonal-surface shrink-0">
+				<a
+					href="/admin/defaults"
+					class="btn btn-sm preset-tonal-surface shrink-0"
+				>
 					<Icons.Target size={14} aria-hidden="true" />
 					Change loadouts
 				</a>
@@ -977,7 +1098,8 @@
 				</ul>
 			{:else}
 				<p class="text-surface-600-400 text-sm">
-					None. Use a model above, or pick this connection in Loadouts.
+					None. Use a model above, or pick this connection in
+					Loadouts.
 				</p>
 			{/if}
 		</AdminFieldset>
@@ -1004,7 +1126,9 @@
 				/>
 			{/if}
 			{#if connection.modality === "ner" && userCtx?.user?.isAdmin}
-				<NerLanePanel isStarred={defaults["text->entities"]?.connectionId === id} />
+				<NerLanePanel
+					isStarred={defaults["text->entities"]?.connectionId === id}
+				/>
 			{/if}
 		</AdminFieldset>
 	</AdminChangeForm>

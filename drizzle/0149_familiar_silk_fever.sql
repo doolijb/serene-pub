@@ -1,0 +1,1 @@
+ALTER TABLE "user_settings" ADD COLUMN "show_advanced_controls" boolean DEFAULT false NOT NULL;

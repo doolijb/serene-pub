@@ -1,0 +1,10 @@
+# REPORT playtest-C — item 20 steps 1–3 and 8: Get a model is a pane of the Models view (2026-11-04)
+
+Saved by the lead from the supervisor's hand-back. 6 files, 60 passed (`scratchpad/playtest-C-1.log`). Client only. Worker briefs `BRIEF-playtest-C-w1/w2.md`.
+
+**Changed.** `sidebars/ModelsSidebar.svelte`: one `pane` state `{kind:"model",…} | {kind:"finder",scope,key} | null` (no `add-by-name` kind: not needed); `{#key pane.key}` remounts the finder so a door pressed while open lands its scope and refocuses the heading; `closePane`; **Open connection** only opens the connection; `openSetupChat` closes a finder pane; the `<Dialog>` block, `finderOpen`, `finderScope`, `Dialog`/`Portal`/`Icons` imports deleted. `connections/ModelFinderView.svelte`: the pane form is the standalone branch with a pinned `PanelNavHeader` and one scroller (padding on an inner wrapper, STYLE-GUIDE §5.2); shared markup in a `finderBody` snippet; on mount focuses `[data-panel-title]`; Back label "Back". `finder.dom.test.svelte.ts` +6 (pane, no visible dialog, focus on heading; Back; desk shows list + finder; Get keeps the pane; each door's scope; axe 0 violations). `finderViews.ssr.test.ts` updated. `docs/connections.md` :34, :67, new :72 paragraph. `STYLE-GUIDE.md` §5.2 one paragraph *A tool in the detail pane*. Lead applied the two queued comment lines (`ModelsListView.svelte:65`, `admin/railDoors.ts:22`). `SetupChatFlow.svelte` unchanged.
+**Decisions in scope:** Back shows at every width (as `ModelDetailView` does); focus set from inside `ModelFinderView`; dialog checks ignore hidden dialogs.
+**Stopped, needs owner:** none; ★20a/★20b unbuilt.
+**Canon rows needed:** §10 :695 **Get a model** — the Models view's detail pane, never a dialog (⚠ not a place of its own; Set up chat still embeds it; the quant picker is still a dialog).
+**Noticed:** `docs/connections.md:880` hunk is lane ST's; Set up chat lines still say "dialog", correctly.
+**Scope review (2026-11-04): no objection.** Lead applied the two notes: §23 Get tab pointer now says pane; docs/connections.md:72 describes the split by width, not by shell mode.

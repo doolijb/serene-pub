@@ -14,7 +14,18 @@
  */
 
 import { lexicalScore, semanticScore } from "./criteria"
-import { judgedEntryRows, readInFacts, type RunExplanation } from "./readIn"
+import {
+	ARCHIVED_REASON,
+	DISABLED_REASON,
+	GATE,
+	judgedEntryRows,
+	readInFacts,
+	offDecisionLine,
+	skipDecisionLine,
+	skippedEntryRow,
+	type RunExplanation
+} from "./readIn"
+import type { MarksHere } from "./teachMarks"
 
 export interface SignalFacts {
 	/** Whether the compiled turn would read this entry in. */
@@ -33,8 +44,8 @@ export interface SignalFacts {
 	budget?: number
 	/** How many more entries the band had room for. */
 	headroom?: number
-	/** Why not, in the run's own words. Never absent on a no. */
-	reason?: string
+	/** The first gate that stopped it, in one sentence. Never absent on a no. */
+	decisionLine?: string
 }
 
 /**
@@ -78,13 +89,29 @@ export function signalRow(
  */
 export function signalFactsFrom(
 	explanation: RunExplanation,
-	opts: { entryId: number; enabled: boolean }
+	opts: {
+		entryId: number
+		/**
+		 * The base row's Off, inverted: false when the entry itself is off. It names the off
+		 * gate's sentence (switched off vs off for a while) and, only while `reading` is unknown
+		 * and the turn is silent on the entry, decides off. A judged row says its own sentence.
+		 */
+		enabled: boolean
+		/**
+		 * The entry as the decision's session reads it: its Off decides the off gate when known;
+		 * null when the session does not read it (archived there, off its line, or dated after
+		 * its clock); undefined while not yet known.
+		 */
+		reading?: MarksHere | null
+	}
 ): SignalFacts {
 	const row = signalRow(explanation, opts.entryId)
-	const facts: SignalFacts = {
-		read: row?.outcome === "included",
-		...readInFacts(opts.entryId, explanation)
-	}
+	// A yes names no gate; a no's gate is decided below.
+	const { decisionLine: judged, ...run } = readInFacts(
+		opts.entryId,
+		explanation
+	)
+	const facts: SignalFacts = { read: row?.outcome === "included", ...run }
 
 	if (row) {
 		const lexical = lexicalScore(row)
@@ -93,15 +120,31 @@ export function signalFactsFrom(
 		if (semantic !== undefined) facts.semantic = semantic
 		const headroom = headroomOf(explanation, row.source)
 		if (headroom !== undefined) facts.headroom = headroom
-		return facts
 	}
+	if (facts.read) return facts
 
-	// No row is a real answer rather than a failure: no mechanism offered the
-	// entry to the ranker and none declined it by name. Which of the three
-	// silences it was is the whole of what this says.
-	facts.reason = !opts.enabled
-		? "it is switched off"
-		: explanation.ranked
+	const skipped = skippedEntryRow(explanation, opts.entryId)
+	const skipReason = skipped?.skipReason || undefined
+	// Off as this session reads the entry: its reading when known; else the turn's own word (a disabled skip);
+	// else, with the reading not yet known and the turn silent on it, the base row.
+	const off = opts.reading
+		? opts.reading.off
+		: skipReason === DISABLED_REASON ||
+			(opts.reading === undefined &&
+				!row &&
+				!skipped &&
+				opts.enabled === false)
+
+	// Server order: archived, then off.
+	if (skipReason === ARCHIVED_REASON) facts.decisionLine = GATE.archived
+	else if (off) facts.decisionLine = offDecisionLine(opts.enabled)
+	else if (opts.reading === null && !row && !skipped)
+		facts.decisionLine = GATE.notReadHere
+	else if (row) facts.decisionLine = judged
+	else if (skipped)
+		facts.decisionLine = skipDecisionLine(skipReason, opts.enabled)
+	else
+		facts.decisionLine = explanation.ranked
 			? "nothing reported on it"
 			: "this turn ranked nothing at all"
 	return facts
@@ -138,7 +181,7 @@ export function signalsResult(facts: SignalFacts): string {
 		)
 	else
 		parts.push(
-			`Would not be read in · ${facts.reason ?? "nothing reported on it"}`
+			`Would not be read in · ${facts.decisionLine ?? "nothing reported on it"}`
 		)
 
 	if (facts.matched)

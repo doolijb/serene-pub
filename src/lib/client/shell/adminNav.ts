@@ -132,9 +132,11 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 				label: "Completion templates",
 				icon: "Brackets"
 			},
+			// How each variable is written out (one choice for the whole
+			// pub); the layouts themselves are made on a variable's page.
 			{
-				href: "/admin/variable-templates",
-				label: "Variable templates",
+				href: "/admin/variable-layouts",
+				label: "Variable layouts",
 				icon: "Braces"
 			}
 		]

@@ -4,10 +4,12 @@
  * A **player seat** (a `session_personas` row) is a person's voice when it
  * carries their card (`persona_id`, the card's owner theirs) or when it is a
  * live card-less seat with a name (`isCardlessPlayerSeat`) that is theirs
- * (`user_id`). The page's send gate, composer and turn controls read it
+ * (`user_id`), and in play (live and not benched, `inPlay`; owner 2026-11-10).
+ * The page's send gate, composer and turn controls read it
  * (`sessionPageData`); the server stamps a card-less line with the same
  * test (`cardlessPlayerSeatOf`).
  */
+import { inPlay } from "./inPlay"
 
 /** The fields every read of a seat carries — the client's and the server's. */
 export interface PlayerSeatLike {
@@ -17,6 +19,7 @@ export interface PlayerSeatLike {
 	userId?: number | null
 	seatName?: string | null
 	removedAt?: unknown
+	isActive?: boolean | null
 }
 
 /**
@@ -24,7 +27,8 @@ export interface PlayerSeatLike {
  * one test every reader of seats makes — a row with neither a card nor a
  * name is a departed card's leftover, and nobody. Reads a row as any read
  * carries it: `personaId` and/or the joined `persona`, `seatName`,
- * `removedAt`.
+ * `removedAt`. A shape test reading `removedAt` only — a benched seat is still
+ * one (sheets, access and names; the speaker tests add `inPlay`).
  */
 export const isCardlessPlayerSeat = (seat: {
 	personaId?: number | null
@@ -36,7 +40,7 @@ export const isCardlessPlayerSeat = (seat: {
 
 /** Whether this seat is `userId`'s voice: their card, or their named card-less seat. */
 export function isOwnPlayerSeat(seat: PlayerSeatLike, userId: number | null | undefined): boolean {
-	if (userId == null || seat.removedAt) return false
+	if (userId == null || !inPlay(seat)) return false
 	if (seat.personaId != null || seat.persona != null)
 		return (seat.persona?.userId ?? seat.userId) === userId
 	return isCardlessPlayerSeat(seat) && seat.userId === userId
@@ -103,9 +107,32 @@ export function offersSeat(opts: {
 export const mayOpenCardlessSeat = (opts: { isOwner: boolean; isPlayer?: boolean | null }): boolean =>
 	opts.isOwner || opts.isPlayer !== false
 
-/** Whether a seat is anyone's voice — a card, or a named card-less seat. */
+/** Whether a seat is anyone's voice — a card, or a named card-less seat, in play. */
 export const isLivePlayerSeat = (seat: PlayerSeatLike): boolean =>
-	!seat.removedAt && (seat.personaId != null || isCardlessPlayerSeat(seat))
+	inPlay(seat) && (seat.personaId != null || isCardlessPlayerSeat(seat))
+
+/**
+ * 🚧 Whether the viewer is benched and nothing else: no player seat of theirs
+ * in play (`isOwnPlayerSeat`) and at least one live seat of theirs on the
+ * bench (`!removedAt && isActive === false`; owner ruling 2026-11-11). Their
+ * page offers no "Join" / "Take a seat" / persona then — the composer closes
+ * with `BENCHED_ONLY_GUEST` / `BENCHED_ONLY_OWNER`.
+ */
+export function benchedOnly(opts: {
+	seats: readonly PlayerSeatLike[] | null | undefined
+	userId: number | null | undefined
+}): boolean {
+	const me = opts.userId
+	if (me == null) return false
+	const seats = opts.seats ?? []
+	if (seats.some((s) => isOwnPlayerSeat(s, me))) return false
+	return seats.some((s) => !s.removedAt && s.isActive === false && (s.userId ?? s.persona?.userId) === me)
+}
+
+/** 🚧 The line a benched-only guest's composer and turn controls close with. */
+export const BENCHED_ONLY_GUEST = "You're on the bench — the owner can bring you back."
+/** 🚧 The same, for the session's owner whose own seat is benched. */
+export const BENCHED_ONLY_OWNER = "You're on the bench — bring yourself back in Participants."
 
 /** `userId`'s own card-less seats, in the order given (position). */
 export const ownCardlessPlayerSeats = <S extends PlayerSeatLike>(

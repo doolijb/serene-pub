@@ -64,6 +64,10 @@ describe("the schedule tick", () => {
 			},
 			opts: { kind: "event", nowMs: Date.parse("2026-10-02T14:00:00.000Z") }
 		})
+		// The tick belongs to no person and no frame: the applet-group reach
+		// (`ctx.annex('user')`, `ctx.storage.user`) is refused to it (C5).
+		expect(calls[0]!.opts.user).toBeUndefined()
+		expect(calls[0]!.opts.frameCause).toBeUndefined()
 
 		await vi.advanceTimersByTimeAsync(HOUR)
 		expect(calls.map((c) => c.input.payload.scheduledFor)).toEqual([

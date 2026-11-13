@@ -59,14 +59,14 @@ afterEach(() => {
 	vi.unstubAllGlobals()
 })
 
-function widget(src: string | null, extra: Record<string, unknown> = {}) {
+function widget(src: string | null, extra: { remountKey?: number } = {}) {
 	const props = $state({
 		widget: { id: `${OWNER}:stats`, title: "Stats" },
 		owner: OWNER,
 		src: src as string | null,
 		session: { id: 42, name: "Real", sessionMessages: [] },
 		eager: true,
-		...extra
+		remountKey: extra.remountKey as number | undefined
 	})
 	const target = document.createElement("div")
 	document.body.appendChild(target)
@@ -263,5 +263,70 @@ describe("an authored owner is never core's", () => {
 		expect(target.querySelector('[role="alert"]')).not.toBeNull()
 		void unmount(app)
 		target.remove()
+	})
+})
+
+describe("Reload widget", () => {
+	const reloadButton = (t: HTMLElement) =>
+		[...t.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reload widget")
+
+	test("ComponentMount: no button without onReload; with it, a fatal shows it and a click calls it once", async () => {
+		const calls: number[] = []
+		for (const withReload of [false, true]) {
+			const target = document.createElement("div")
+			document.body.appendChild(target)
+			const app = mount(ComponentMount, {
+				target,
+				props: { owner: OWNER, src: art(1), title: "Box", ...(withReload ? { onReload: () => calls.push(1) } : {}) }
+			})
+			flushSync()
+			const worker = started.at(-1)!
+			worker.say({ k: "failed", mountId: mountsOf(worker).at(-1)!.mountId, message: "boom" })
+			flushSync()
+			expect(target.querySelector('[role="alert"]') !== null).toBe(true)
+			const button = reloadButton(target)
+			expect(button !== undefined).toBe(withReload)
+			const sentence = (target.querySelector('[role="alert"] p')?.textContent ?? "").replace(/\s+/g, " ")
+			expect(sentence).toContain(
+				withReload
+					? "Reload it to try again — the extension's own message is in the browser console."
+					: "Reload the page to try it again — the extension's own message is in the browser console."
+			)
+			if (button) {
+				button.click()
+				expect(calls.length).toBe(1)
+			}
+			await unmount(app)
+			target.remove()
+		}
+	})
+
+	test("RemoteWidget: the button mounts a new component (old unmounted first) and the overlay goes", async () => {
+		const w = widget(art(1))
+		const worker = started[0]!
+		worker.say({ k: "failed", mountId: mountsOf(worker)[0]!.mountId, message: "boom" })
+		flushSync()
+		reloadButton(w.target)!.click()
+		flushSync()
+		await settle()
+		expect(worker.posted.map((m) => m.k)).toEqual(["mount", "unmount", "mount"])
+		expect(mountsOf(worker)[1]!.mountId !== mountsOf(worker)[0]!.mountId).toBe(true)
+		expect(w.target.querySelector('[role="alert"]') === null).toBe(true)
+		await w.close()
+	})
+
+	test("RemoteWidget: a changed remountKey remounts; the same value does not", async () => {
+		const w = widget(art(1), { remountKey: 1 })
+		const worker = started[0]!
+		expect(mountsOf(worker)).toHaveLength(1)
+		w.props.remountKey = 1
+		flushSync()
+		await settle()
+		expect(mountsOf(worker)).toHaveLength(1)
+		w.props.remountKey = 2
+		flushSync()
+		await settle()
+		expect(mountsOf(worker)).toHaveLength(2)
+		await w.close()
 	})
 })

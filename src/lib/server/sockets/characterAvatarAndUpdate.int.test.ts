@@ -19,9 +19,11 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
+import { cardColumnsOfProfile } from "$lib/server/characters/cardIO"
+import { profileOf } from "$lib/shared/characters/profile"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { Stroke } from "@serene-pub/sdk"
 
@@ -81,6 +83,17 @@ function makeTestPngBuffer(seed = 255): Buffer {
 	png.data[2] = 255
 	png.data[3] = 255
 	return PNG.sync.write(png)
+}
+
+/** A card's content as its CURRENT card version holds it (the row's content columns are frozen), in the columns' shape. */
+async function currentCardColumns(cardId: number) {
+	const [version] = await testDb
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.cardId, cardId))
+		.orderBy(desc(schema.characterVersions.number))
+		.limit(1)
+	return cardColumnsOfProfile(profileOf(version))
 }
 
 async function makeCharacter(userId: number, name = "Char") {
@@ -573,7 +586,9 @@ describe("characters — strokes are the source, prose the compiled cache (DESIG
 			.select()
 			.from(schema.characters)
 			.where(eq(schema.characters.id, created.character.id))
-		expect(row.strokes).toEqual([])
+		expect(
+			(await currentCardColumns(created.character.id)).strokes
+		).toEqual([])
 		expect(row.description).toBe("A tall woman.\n\nEyes: grey")
 		expect(row.personality).toBe("Mood: wry; Fear: the sea")
 	}, 60_000)
@@ -701,7 +716,7 @@ describe("characters — strokes paused (STROKES_ENABLED off)", () => {
 			.where(eq(schema.characters.id, card.id))
 		expect(row.description).toBe("hand edit wins")
 		expect(row.personality).toBe("Mood: wry")
-		expect(row.strokes).toEqual([])
+		expect((await currentCardColumns(card.id)).strokes).toEqual([])
 	}, 60_000)
 
 	test("an update that writes no prose leaves stored strokes alone and ignores sent ones", async () => {
@@ -780,7 +795,7 @@ describe("likeness on characters:create / characters:update", () => {
 			.select()
 			.from(schema.characters)
 			.where(eq(schema.characters.id, card.id))
-		expect(row.extensions).toEqual({
+		expect((await currentCardColumns(card.id)).extensions).toEqual({
 			foreign: { keep: true },
 			serenepub: {
 				likeness: { imageMediaId: media.id, prompt: "red braid", negative: "hat" }
@@ -797,7 +812,10 @@ describe("likeness on characters:create / characters:update", () => {
 			.select()
 			.from(schema.characters)
 			.where(eq(schema.characters.id, card.id))
-		expect((row.extensions as any).serenepub.likeness.prompt).toBe("red braid")
+		expect(
+			((await currentCardColumns(card.id)).extensions as any).serenepub
+				.likeness.prompt
+		).toBe("red braid")
 
 		// Null: removed, foreign keys kept.
 		await charactersUpdate.handler(
@@ -809,7 +827,9 @@ describe("likeness on characters:create / characters:update", () => {
 			.select()
 			.from(schema.characters)
 			.where(eq(schema.characters.id, card.id))
-		expect(row.extensions).toEqual({ foreign: { keep: true } })
+		expect((await currentCardColumns(card.id)).extensions).toEqual({
+			foreign: { keep: true }
+		})
 	}, 60_000)
 
 	test("an image that is someone else's file is dropped; the text is kept", async () => {
@@ -831,7 +851,10 @@ describe("likeness on characters:create / characters:update", () => {
 			.select()
 			.from(schema.characters)
 			.where(eq(schema.characters.id, persona.id))
-		expect((row.extensions as any).serenepub.likeness).toEqual({
+		expect(
+			((await currentCardColumns(persona.id)).extensions as any).serenepub
+				.likeness
+		).toEqual({
 			prompt: "tall"
 		})
 	}, 60_000)

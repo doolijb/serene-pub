@@ -19,6 +19,9 @@
 	const pool = getLorePoolCtx()
 
 	let scenes = $derived(pool.scenesOf(source.id))
+	/** Scenes not yet compiled that a compile of this entry would take in. */
+	let unfiled = $derived(Number(source?.unfiledSceneCount) || 0)
+	let canCompile = $derived(scenes.length > 0 || unfiled > 0)
 	let activity = $derived(
 		// This reading's compile, never another line's of the same entry.
 		pool.compileActivityOf(source.id)
@@ -27,8 +30,8 @@
 
 <button
 	class="btn btn-sm preset-tonal-surface w-full justify-start"
-	disabled={scenes.length === 0}
-	title={scenes.length === 0 ? "Capture scenes first" : undefined}
+	disabled={!canCompile}
+	title={canCompile ? undefined : "Capture scenes first"}
 	onclick={(e) => {
 		e.stopPropagation()
 		close()

@@ -24,10 +24,10 @@ export class KeyboardNavigationManager {
 	}
 
 	handleGlobalKeyDown = (event: KeyboardEvent) => {
-		// Somebody closer to the action already claimed this key. The session's
-		// widget grid binds Alt+[ / Alt+] to "expand every group / send them
-		// all to the rail" and calls preventDefault; the shell must not ALSO
-		// yank focus to the rail on the one page where that binding is taken.
+		// Somebody closer to the action already claimed this key. Alt+[ / Alt+]
+		// are the app's (no session binding claims them), but a
+		// widget or a field may still claim a key and call preventDefault; the
+		// shell must not ALSO act on it.
 		// This works because the listener is on `window` rather than
 		// `document`: keydown bubbles document -> window, so every page-level
 		// handler has already had its say by the time we run.

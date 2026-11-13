@@ -10,6 +10,7 @@
 	 * with none listed, neither New lorebook nor the start form draws the
 	 * choice. Each decides what a pick sends.
 	 */
+	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
 		kitHoldsLine,
@@ -27,12 +28,26 @@
 		kits: Card[] | null
 		/** A pick, after `value` moved. */
 		onpick?: (card: Card) => void
+		/**
+		 * 🚧 A row's rules line in place of _Rules: ‹name›_: the words, a star when the genre recommends
+		 * the rules, a rating word, and `refused` when the row can't be picked (the line is then the
+		 * reason, and the row is disabled). Absent: today's line, nothing disabled.
+		 */
+		rulesLine?: (card: Card) => {
+			text: string
+			recommended?: boolean
+			rating?: string | null
+			refused?: boolean
+		} | null
+		/** 🚧 Drawn under the chosen row, inside it. */
+		under?: Snippet<[Card]>
 	}
 
-	let { value = $bindable(""), labelledby, kits, onpick }: Props = $props()
+	let { value = $bindable(""), labelledby, kits, onpick, rulesLine, under }: Props = $props()
 
 	function choose(card: Card) {
 		if (card.id === value) return
+		if (rulesLine?.(card)?.refused) return
 		value = card.id
 		onpick?.(card)
 	}
@@ -52,13 +67,16 @@
 	>
 		{#each kits as kit (kit.id)}
 			{@const selected = value === kit.id}
+			{@const line = rulesLine?.(kit) ?? null}
 			<li>
 				<button
 					type="button"
 					role="radio"
 					aria-checked={selected}
 					data-starter-kit={kit.id}
-					class="hover:bg-surface-200-800 flex min-h-11 w-full min-w-0 items-start gap-2.5 rounded-base px-2 py-1.5 text-left {selected
+					aria-disabled={line?.refused ? true : undefined}
+					disabled={line?.refused}
+					class="hover:bg-surface-200-800 flex min-h-11 w-full min-w-0 items-start gap-2.5 rounded-base px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 {selected
 						? 'sidebar-row-active'
 						: ''}"
 					onclick={() => choose(kit)}
@@ -73,7 +91,15 @@
 							{kit.name}
 						</span>
 						<span class="text-surface-700-300 block text-xs">
-							Rules: {kit.rulesName}
+							{#if line}
+								{line.text}{#if line.recommended}<Icons.Star
+										size={12}
+										class="text-warning-500 ml-1 inline align-text-top"
+										aria-label="Recommended for this genre"
+									/>{/if}{#if line.rating}{" · "}{line.rating}{/if}
+							{:else}
+								Rules: {kit.rulesName}
+							{/if}
 						</span>
 						{#if kit.description}
 							<span
@@ -94,6 +120,9 @@
 						/>
 					{/if}
 				</button>
+				{#if selected && under}
+					{@render under(kit)}
+				{/if}
 			</li>
 		{/each}
 	</ul>

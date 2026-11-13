@@ -16,7 +16,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import PluginSettingsFields from "./PluginSettingsFields.svelte"
 	import SettingCard from "./SettingCard.svelte"
@@ -44,7 +44,10 @@
 			pending -= 1
 			if (pending === 0) {
 				errors = {}
-				toaster.success({ title: "Settings saved" })
+				notify.success({
+					source: "socket:pluginUserSettings:list",
+					title: "Settings saved"
+				})
 			}
 		}
 	}
@@ -53,7 +56,9 @@
 		pending = Math.max(0, pending - 1)
 	}
 
-	$effect(() => requestWithInterest("pluginUserSettings:list", {}, handleList))
+	$effect(() =>
+		requestWithInterest("pluginUserSettings:list", {}, handleList)
+	)
 	useInterest<"pluginUserSettings:set:error">(
 		"pluginUserSettings:set:error",
 		handleSetError
@@ -106,7 +111,9 @@
 						idPrefix={`user-plugin-setting-${p.pluginId}`}
 						onEdit={(key, value) => edit(p.pluginId, key, value)}
 						note={(key) =>
-							own.has(key) ? null : "Using the default for everyone."}
+							own.has(key)
+								? null
+								: "Using the default for everyone."}
 					/>
 					{#if p.settings.own.length}
 						<div class="flex flex-wrap gap-2">

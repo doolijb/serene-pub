@@ -1,0 +1,9 @@
+# BRIEF cv-sweep — closing server sweep for character versions (after cv-fix3)
+
+Lane-supervisor (fresh, Opus). Read `BRIEF-cv-common.md`, `plans/REPORT-cv-readers-2026-11-06.md`, `plans/REPORT-cv-fix3-2026-11-06.md`, and the cv-readers bullet at the end of the plan (the lead's dispositions). Lane id **cv-sweep**. Two workers at most. Lanes **cv-sdk** (SDK + `host.ts` bindings) and **cv-client** (client files + docs) may run beside you — don't edit theirs. `--maxWorkers=2`.
+1. **Cast tags in versions (★cv-readers-1, restores A16):** a writer in `characters/versions.ts` that rewrites `{{char:N}}` tags in version text on a member merge / delete (and resolves them on undo), registered as a tag site in `utils/castTags.ts`; tests.
+2. **A deleted card's followers (★27-6 governs):** deleting a card (soft or hard) resolves every follower version's followed fields into its own words first (`resolveFollows`) — `sockets/characters.ts` delete, provided-book uninstall, the user cascade path if any; tests that a member keeps the words and its seat plays on.
+3. `sockets/narrativeGraph.ts` ~5946: drop the `castAmendment:` key; drop the ⏳ `CastTagRows.castAmendment` in `utils/castTags.ts`.
+4. Relational whole-card reads (`with: { character: true }` / `with: { persona: true }`, `lorebookBindings: true`) in `sockets/sessions.ts` (~378, 396, 1739, 1758, 1912–1975, 6636, 6775, 7786, 7897), `sockets/pipelines.ts` ~5039, `pipelines/runtime/dispatch.ts` ~422 → card content via `cardsNow` / the member as read (ids and library facts may stay).
+5. `sessions/seatMembers.ts` ~71 and `sockets/amendments.ts`'s last `castOverlaysFor` / `castMemberAt` calls → versions; then `state/entriesOnReading.ts` `castOverlaysFor` / `castMemberAt` have no product caller — mark ⏳ for S5 removal (or remove if nothing calls them).
+Report as `# REPORT cv-sweep (2026-11-06)`.

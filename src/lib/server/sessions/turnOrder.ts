@@ -1,9 +1,9 @@
 /**
  * The turn-order write (PLAN-turn-order §4.2, unit A4; R5): the ONE path
- * that stores `sessions.annex -> 'core' -> 'turnOrder'`
- * (a core runtime key, `coreAnnex.ts`). `core:outlet/set-turn-order@1`
+ * that stores the `sessions.turn_order` column (a core runtime value,
+ * `coreAnnex.ts`). `core:outlet/set-turn-order@1`
  * (A6) calls it and nothing else does — §3's "one write path" invariant is
- * this function being the only writer of that key.
+ * this function being the only writer of that column.
  *
  * ## The write rule
  *
@@ -14,16 +14,16 @@
  *    event must never overwrite one answering a newer one, whichever run
  *    finished first (§3: a stale write is dropped and receipted; the
  *    receipting is the outlet's);
- *  - else `jsonb_set` the one key.
+ *  - else set the column.
  *
  * Equal `basedOnAt` is not stale: two recomputes for the same instant let
  * the later one win, which is the same answer either way.
  *
  * ## Why raw SQL
  *
- * `update sessions set annex = …` as SQL (`coreAnnexSetSql`), never a
- * read-modify-write of the column through the ORM: the row's other
- * annex keys and owners are untouched by construction, `updated_at` does not move
+ * `update sessions set turn_order = …` as SQL, never a
+ * read-modify-write through the ORM: the row's other
+ * columns are untouched by construction, `updated_at` does not move
  * (drizzle's `$onUpdate` never runs), and no `sessions:update` handler is
  * on the path — so the recompute cannot re-trigger itself through
  * `session-updated` (§3, §6). The annex lock serialises the
@@ -31,14 +31,13 @@
  * serialises whole recomputes above it (§4.2), so the lock here is the
  * floor, not the only guard.
  *
- * `annex` is a `jsonb` column: the value is written as one `jsonb` key
- * of the `core` owner's document.
+ * `turn_order` is a nullable `jsonb` column: the value is written whole.
  */
 
 import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
-import { coreAnnexIn, coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
+import { lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 import { EMPTY_TURN_ORDER, readTurnOrder, type TurnOrderV1 } from "@serene-pub/sdk"
 
 /**
@@ -48,11 +47,11 @@ import { EMPTY_TURN_ORDER, readTurnOrder, type TurnOrderV1 } from "@serene-pub/s
  */
 export async function readStoredTurnOrder(db: Db, sessionId: number): Promise<TurnOrderV1> {
 	const [row] = await db
-		.select({ annex: schema.sessions.annex })
+		.select({ turnOrder: schema.sessions.turnOrder })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return row ? readTurnOrder(coreAnnexIn(row.annex)) : EMPTY_TURN_ORDER
+	return row ? readTurnOrder(row) : EMPTY_TURN_ORDER
 }
 
 export async function writeTurnOrder(
@@ -64,7 +63,7 @@ export async function writeTurnOrder(
 		await lockSessionAnnex(tx, sessionId)
 		const [row] = rawRows<{ based_on_at: string | null }>(
 			await tx.execute(sql`
-				select ${coreAnnexKeySql("turnOrder")} ->> 'basedOnAt' as based_on_at
+				select ${sql.identifier("turn_order")} ->> 'basedOnAt' as based_on_at
 				from ${schema.sessions}
 				where ${schema.sessions.id} = ${sessionId}
 			`)
@@ -80,7 +79,7 @@ export async function writeTurnOrder(
 		const written = rawRows<{ id: number }>(
 			await tx.execute(sql`
 				update ${schema.sessions}
-				set ${sql.identifier("annex")} = ${coreAnnexSetSql("turnOrder", sql`${JSON.stringify(next)}::jsonb`)}
+				set ${sql.identifier("turn_order")} = ${JSON.stringify(next)}::jsonb
 				where ${schema.sessions.id} = ${sessionId}
 				returning ${schema.sessions.id} as id
 			`)

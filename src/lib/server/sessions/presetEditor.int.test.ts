@@ -30,10 +30,14 @@ const STORY = "core:genre/story"
 const SWEEP = "every-n-turns→story-sweep"
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-preset-editor-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-preset-editor-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(testDb as any)
 })
 
@@ -52,23 +56,43 @@ async function presetId(seedKey: string): Promise<number> {
 describe("the preset editor's view", () => {
 	test("Minimal: the genre's defaults, its drops, what it runs, the catalogue", async () => {
 		const { presetEditorView } = await import("./presetEditor")
-		const view = await presetEditorView(testDb as any, await presetId("core-story-minimal"))
+		const view = await presetEditorView(
+			testDb as any,
+			await presetId("core-story-minimal")
+		)
 		expect(view?.genreId).toBe(STORY)
 		const defaultKeys = view!.defaults!.map((r) => r.key)
 		expect(defaultKeys).toContain(SWEEP)
 		expect(view!.changes?.drop ?? []).toContain(SWEEP)
 		expect(view!.effective!.map((r) => r.key)).not.toContain(SWEEP)
 		// Every registration names its pipeline in words.
-		expect(view!.defaults!.every((r) => typeof r.pipelineName === "string" && r.pipelineName.length > 0)).toBe(true)
+		expect(
+			view!.defaults!.every(
+				(r) =>
+					typeof r.pipelineName === "string" &&
+					r.pipelineName.length > 0
+			)
+		).toBe(true)
 		// The catalogue the Add picker builds a trigger from.
-		expect(view!.catalogue!.events.some((e) => e.id === eventIdOf(coreEvents.sceneOpened))).toBe(true)
-		expect(view!.catalogue!.cadences.some((c) => c.id === everyNTurns({ n: 1 }).id && "n" in c.options)).toBe(true)
+		expect(
+			view!.catalogue!.events.some(
+				(e) => e.id === eventIdOf(coreEvents.sceneOpened)
+			)
+		).toBe(true)
+		expect(
+			view!.catalogue!.cadences.some(
+				(c) => c.id === everyNTurns({ n: 1 }).id && "n" in c.options
+			)
+		).toBe(true)
 		expect(view!.catalogue!.actions.length).toBeGreaterThan(0)
 	})
 
 	test("settings: the genre's fields and the rules, with each layer's say", async () => {
 		const { presetEditorView } = await import("./presetEditor")
-		const view = await presetEditorView(testDb as any, await presetId("core-story-rule-based"))
+		const view = await presetEditorView(
+			testDb as any,
+			await presetId("core-story-rule-based")
+		)
 		const rigour = view!.settings!.find((s) => s.key === "rigour")
 		expect(rigour?.rules).toBe(true)
 		expect(rigour?.preset).toMatchObject({ value: "scripts", lock: true })
@@ -84,7 +108,10 @@ describe("the preset editor's view", () => {
 describe("the pipeline picker, filtered by fit (R4)", () => {
 	test("a routine trigger: routine pipelines fit, a reply does not — and says why", async () => {
 		const { registrationCandidates } = await import("./presetEditor")
-		const list = await registrationCandidates(testDb as any, { family: "routine", cadence: everyNTurns({ n: 5 }) } as any)
+		const list = await registrationCandidates(
+			testDb as any,
+			{ family: "routine", cadence: everyNTurns({ n: 5 }) } as any
+		)
 		const sweep = list.find((c) => c.slug === "core:spec/story-sweep")
 		expect(sweep?.fits).toBe(true)
 		const reply = list.find((c) => c.slug === "core:spec/story-respond")
@@ -101,7 +128,9 @@ describe("the condition picker (A5)", () => {
 		const { conditionPropsFor } = await import("./presetEditor")
 		const props = await conditionPropsFor(STORY)
 		expect(props.length).toBeGreaterThan(0)
-		expect(props.every((p) => typeof p.path === "string" && p.path.length > 0)).toBe(true)
+		expect(
+			props.every((p) => typeof p.path === "string" && p.path.length > 0)
+		).toBe(true)
 		expect(props.some((p) => p.name.startsWith("world."))).toBe(true)
 		expect(await conditionPropsFor("acme:genre/nothing@1")).toEqual([])
 	})
@@ -114,17 +143,29 @@ describe("a preset's settings", () => {
 			tone: { value: "grim", lock: true },
 			autoAdvance: "off"
 		})
-		expect(ok).toEqual({ ok: true, settings: { tone: { value: "grim", lock: true }, autoAdvance: "off" } })
-		const refused = await normalizePresetSettings(testDb as any, STORY, { nonsense: 1 })
+		expect(ok).toEqual({
+			ok: true,
+			settings: {
+				tone: { value: "grim", lock: true },
+				autoAdvance: "off"
+			}
+		})
+		const refused = await normalizePresetSettings(testDb as any, STORY, {
+			nonsense: 1
+		})
 		expect(refused.ok).toBe(false)
-		expect(await normalizePresetSettings(testDb as any, STORY, null)).toEqual({ ok: true, settings: null })
+		expect(
+			await normalizePresetSettings(testDb as any, STORY, null)
+		).toEqual({ ok: true, settings: null })
 	})
 })
 
 describe("routine purposes for the settings form", () => {
 	test("Chat's Remember things declares what it does", async () => {
 		const { routinePurposes } = await import("./settingsForm")
-		const purposes = await routinePurposes(testDb as any, ["core:spec/assistant-memory"])
+		const purposes = await routinePurposes(testDb as any, [
+			"core:spec/assistant-memory"
+		])
 		expect(purposes.get("core:spec/assistant-memory")).toMatch(/remembers/)
 	})
 })
@@ -132,9 +173,21 @@ describe("routine purposes for the settings form", () => {
 describe("where a pipeline runs (R2, R38)", () => {
 	test("the sweep: Story's defaults register it, Minimal drops it", async () => {
 		const { registeredInOf } = await import("./presetEditor")
-		const places = await registeredInOf(testDb as any, "core:spec/story-sweep")
-		expect(places.some((p) => p.scope === "genre" && p.genreId === STORY && p.key === SWEEP)).toBe(true)
-		const minimal = places.find((p) => p.scope === "preset" && p.presetId != null && p.dropped)
+		const places = await registeredInOf(
+			testDb as any,
+			"core:spec/story-sweep"
+		)
+		expect(
+			places.some(
+				(p) =>
+					p.scope === "genre" &&
+					p.genreId === STORY &&
+					p.key === SWEEP
+			)
+		).toBe(true)
+		const minimal = places.find(
+			(p) => p.scope === "preset" && p.presetId != null && p.dropped
+		)
 		expect(minimal?.key).toBe(SWEEP)
 		expect(places.every((p) => !p.key.startsWith("admin:"))).toBe(true)
 	})

@@ -41,7 +41,6 @@
  *     looked past.
  */
 
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -439,6 +438,13 @@ async function value(sessionId: number, owner: { kind: string; id: number }, slo
 	return valueOf(db as any, { sessionId, owner: owner as any, slotId } as any)
 }
 
+/** The session's story clock (`sessions.story_clock_*`), as "day hour:minute" — null when it has none. */
+async function storyClockOf(sessionId: number) {
+	const [row] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+	if (row!.storyClockHour == null) return null
+	return { day: row!.storyClockDay, hour: row!.storyClockHour, minute: row!.storyClockMinute ?? 0 }
+}
+
 describe("the tavern (create)", () => {
 	it("one row: the Planner's greeting on the owner's lane with the world question; the annex and the rules written; no model", async () => {
 		calls.length = 0
@@ -461,7 +467,9 @@ describe("the tavern (create)", () => {
 		expect(annex["dungeon-crawler-round"]).toBeUndefined()
 		const world = { kind: "session", id: sessionId }
 		expect(await value(sessionId, world, "core:slot/difficulty@1")).toBe("fair")
-		expect(await value(sessionId, world, "core:slot/crawl-time@1")).toBe("1-01-01 08:00")
+		// Moved 2026-11-10 (hist-D1/D2): the crawl keeps no clock slot; create sets the session's story clock to 08:00.
+		expect(await value(sessionId, world, "core:slot/crawl-time@1")).toBeUndefined()
+		expect(await storyClockOf(sessionId)).toMatchObject({ hour: 8, minute: 0 })
 		// Whether dice count is the session's rigour, never a world field the create writes.
 		const [statMode] = await db.select().from(schema.attributeValues).where(and(eq(schema.attributeValues.sessionId, sessionId), eq(schema.attributeValues.slotId, "core:slot/stat-mode@1")))
 		expect(statMode).toBeUndefined()
@@ -764,10 +772,10 @@ describe("the Planner talks in a lane", () => {
 			wait: true
 		})
 		const [row] = await db
-			.select({ annex: schema.sessions.annex })
+			.select({ turnOrder: schema.sessions.turnOrder })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
-		const order = readTurnOrder(coreAnnexIn(row!.annex)).order
+		const order = readTurnOrder(row!).order
 		expect(order).toEqual([expect.objectContaining({ ref: null, channel: "parley" })])
 
 		calls.length = 0
@@ -857,7 +865,8 @@ describe("the story turn", () => {
 		expect(calls[0]).toContain("The table rolls the dice, never you. Propose deltas, never totals")
 		// The sheet, the clock, the journal line, the books.
 		expect(await value(sessionId, seatOwner, "core:slot/hp@1")).toBe(6)
-		expect(await value(sessionId, { kind: "session", id: sessionId }, "core:slot/crawl-time@1")).toBe("1-01-01 08:30")
+		// Moved 2026-11-10 (hist-D1/D2): the turn's 30 minutes move the session's story clock, not a crawl-time slot.
+		expect(await storyClockOf(sessionId)).toMatchObject({ hour: 8, minute: 30 })
 		// The round's `did` line (its other kinds — found, met, changed — are their own rows since §16).
 		const journal = after.filter((r) => r.channel === "travelogue" && (r.metadata as any)?.kind === "did")
 		expect(journal).toHaveLength(1)
@@ -885,7 +894,8 @@ describe("the story turn", () => {
 		// Back to full — the seat's own max — and the retaken turn's Planner read it so.
 		expect(await value(sessionId, seatOwner, "core:slot/hp@1")).toBe(12)
 		expect(calls[0]).toContain("health 12/12")
-		expect(await value(sessionId, { kind: "session", id: sessionId }, "core:slot/crawl-time@1")).toBe("1-01-01 08:10")
+		// Moved 2026-11-10 (hist-D1/D2): the retaken turn's own minutes, on the session's story clock.
+		expect(await storyClockOf(sessionId)).toMatchObject({ hour: 8, minute: 10 })
 		const again = (await rowsOf(sessionId)).filter((r) => r.id > declared!.id)
 		expect(again.filter((r) => r.channel === "main").map((r) => r.content)).toEqual([NARRATION])
 		// The first turn's table row went with its turn; any new one is the new Narrator row's.
@@ -1720,49 +1730,75 @@ describe("the strict-model walk (2026-10-16)", () => {
 })
 
 describe("who edits a sheet by hand (owner ruling 2026-10-16)", () => {
-	it("a player's own sheet waits on Honour mode; the owner always may, and so does a run; `editable` says the same", async () => {
+	// Moved 2026-11-05 (lane ed, plan §25): the player's own sheet waited on Honour mode
+	// (`honorMode`, refused by `setValue` with `PLAYER_SHEET_REFUSAL`); it now waits on
+	// `playerSheetLatitude` (the Crawler's default is `no-edits`, exposed) and is judged by the one
+	// decider (`state/handEdits.ts`) at `state:set`, never by the write itself. The setting that
+	// turns the player's hand back on is `playerSheetLatitude`, set in `genreFields`.
+	it("a player's own sheet waits on the player sheet latitude; a run always may; `editable` and `handLocked` say the same", async () => {
 		const sessionId = await createSession("honour sheets")
 		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId, isPlayer: true } as any)
 		const { writeSeatName } = await import("$lib/server/sessions/seatName")
 		const bo = (await writeSeatName(db as any, { sessionId, userId: guestId, isOwner: false, name: "Bo" }))!
-		const { setValue, applyAutomatic, PLAYER_SHEET_REFUSAL } = await import("$lib/server/state/write")
-		const { stateGet } = await import("./state")
+		const { applyAutomatic } = await import("$lib/server/state/write")
+		const { stateGet, stateSet } = await import("./state")
 		const HP = "core:slot/hp@1"
 		const seat = { kind: "player_seat" as const, id: bo }
-		const byHand = (userId: number, v: number) =>
-			setValue(db as any, { sessionId, updatedBy: "user", userId }, { owner: seat, slotId: HP, value: v })
-		const editable = async (userId: number) => {
-			const got: any = await stateGet.handler(fakeSocket(userId), { sessionId } as any, emit as any)
-			return got.owners.find((o: any) => o.kind === "player_seat" && o.id === bo)?.editable
+		/** A hand edit through the socket: the refusal's sentence, or null when it landed. */
+		const byHand = async (userId: number, v: number): Promise<string | null> => {
+			let refused: string | null = null
+			await stateSet
+				.handler(
+					fakeSocket(userId),
+					{ sessionId, owner: seat, slotId: HP, value: v } as any,
+					((event: string, data: any) => {
+						if (event.endsWith(":error")) refused = data.error
+					}) as any
+				)
+				.catch(() => {})
+			return refused
 		}
+		const seatRow = async (userId: number) => {
+			const got: any = await stateGet.handler(fakeSocket(userId), { sessionId } as any, emit as any)
+			return got.owners.find((o: any) => o.kind === "player_seat" && o.id === bo)
+		}
+		const NO_EDITS =
+			"Players don't edit sheets by hand in this session. The session owner can change that in the session's settings, under Players."
 
-		// Honour mode is off to begin with: the player's own sheet is the Planner's.
-		await expect(byHand(guestId, 7)).rejects.toThrow(PLAYER_SHEET_REFUSAL)
-		expect(PLAYER_SHEET_REFUSAL).toBe(
-			"Sheets are the Planner's to change — ask in the Planner panel, or turn on Honour mode."
-		)
-		expect(await editable(guestId)).toBe(false)
-		// The owner edits it whatever the setting.
-		await expect(byHand(ownerId, 8)).resolves.toBeTypeOf("number")
-		expect(await value(sessionId, seat, HP)).toBe(8)
-		expect(await editable(ownerId)).toBe(true)
+		// The Crawler's players start at `no-edits`: the player's own sheet is the Planner's.
+		expect(await byHand(guestId, 7)).toBe(NO_EDITS)
+		const before = await seatRow(guestId)
+		expect(before.handLocked[HP]).toBe(NO_EDITS)
+		// Vis Itineris marks Health `changedBy: ['rules']`; the Crawler pins the owner at `all-any` (★ed-2, owner
+		// 2026-11-05: the host can always fix a mistake by hand), so the owner's hand passes and nothing is locked
+		// for them. (Was: pinned as-ruled, refused in the rules' words.)
+		expect(await byHand(ownerId, 8)).toBeNull()
+		expect((await seatRow(ownerId)).handLocked?.[HP]).toBeUndefined()
 		// A Planner-lane change goes through the run's writer (`bindings.state`:
 		// no person on the context) and is never held back.
 		await applyAutomatic(db as any, { sessionId, updatedBy: "run:honour-test" }, { owner: seat, slotId: HP, value: 6 } as any)
 		expect(await value(sessionId, seat, HP)).toBe(6)
 
-		// On: the player's hand is back on their own sheet.
-		const [row] = await db
-			.select({ genreFields: schema.sessions.genreFields })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-		await db
-			.update(schema.sessions)
-			.set({ genreFields: { ...((row?.genreFields as object) ?? {}), honorMode: true } } as any)
-			.where(eq(schema.sessions.id, sessionId))
-		await expect(byHand(guestId, 5)).resolves.toBeTypeOf("number")
+		// As the rules say: the player's hand is on their own sheet, but this stat is the rules' alone.
+		const setLevel = async (level: string) => {
+			const [row] = await db
+				.select({ genreFields: schema.sessions.genreFields })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, sessionId))
+			await db
+				.update(schema.sessions)
+				.set({ genreFields: { ...((row?.genreFields as object) ?? {}), playerSheetLatitude: level } } as any)
+				.where(eq(schema.sessions.id, sessionId))
+		}
+		await setLevel("as-ruled")
+		expect(await byHand(guestId, 5)).toBe("Only the game master or the rules change Health.")
+		// Everything on their own characters: `changedBy` is set aside, so the player's hand is on their own sheet.
+		await setLevel("all-own")
+		expect(await byHand(guestId, 5)).toBeNull()
 		expect(await value(sessionId, seat, HP)).toBe(5)
-		expect(await editable(guestId)).toBe(true)
+		const after = await seatRow(guestId)
+		expect(after.editable).toBe(true)
+		expect(after.handLocked?.[HP]).toBeUndefined()
 		await applyAutomatic(db as any, { sessionId, updatedBy: "run:honour-test" }, { owner: seat, slotId: HP, value: 4 } as any)
 		expect(await value(sessionId, seat, HP)).toBe(4)
 	}, 60_000)

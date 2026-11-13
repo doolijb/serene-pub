@@ -4,6 +4,7 @@ import {
 	dateFromValue,
 	dateValue,
 	datesThatDoNotLand,
+	dayOnly,
 	formatDate,
 	formatDateValue,
 	nextStoryDate,
@@ -183,5 +184,33 @@ describe("dateValue — monotone placement for any magnitude", () => {
 			{ year: -7, month: 100, day: null }
 		])
 			expect(dateFromValue(dateValue(date))).toEqual(date)
+	})
+})
+
+describe("dayOnly", () => {
+	it("drops hour and minute", () => {
+		const clock = { year: 4, month: 2, day: 9, hour: 17, minute: 30 }
+		expect(dayOnly(clock)).toEqual({ year: 4, month: 2, day: 9 })
+	})
+	it("drops a day that has no month", () => {
+		expect(dayOnly({ year: 4, month: null, day: 9 })).toEqual({
+			year: 4,
+			month: null,
+			day: null
+		})
+	})
+	it("keeps a month without a day", () => {
+		expect(dayOnly({ year: 4, month: 2, day: null })).toEqual({
+			year: 4,
+			month: 2,
+			day: null
+		})
+	})
+	it("leaves a full date unchanged", () => {
+		expect(dayOnly({ year: 4, month: 2, day: 9 })).toEqual({
+			year: 4,
+			month: 2,
+			day: 9
+		})
 	})
 })

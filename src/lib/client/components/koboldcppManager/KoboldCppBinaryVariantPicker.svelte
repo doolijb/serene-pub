@@ -3,7 +3,7 @@
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { getContext, onMount, untrack } from "svelte"
 	import { useMachineHardware } from "$lib/client/components/connections/useMachineHardware.svelte"
 	import { detectedBuild } from "$lib/client/components/connections/hardwarePicks"
@@ -334,9 +334,7 @@
 	{:else}
 		{#each sortedPlatforms as platform}
 			<div>
-				<p
-					class="text-surface-600-400 mb-2 text-xs"
-				>
+				<p class="text-surface-600-400 mb-2 text-xs">
 					{platformLabel[platform] ?? platform}
 				</p>
 				<div class="flex flex-col gap-1.5">

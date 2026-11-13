@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 import { JSON_INSTRUCTION } from "$lib/server/connections/structuredOutput"
@@ -287,12 +287,22 @@ async function file(w: Lair, messageId: number, text?: string, userId = w.owner.
 	return ack as any
 }
 
+/**
+ * The rooms the sessions attached to `lorebookId` read: the lorebook's and each of
+ * their own books' (Session notes). A room a Lair pipeline files goes to the own book;
+ * only Apply (a scene closing) carries it to the lorebook.
+ */
 async function rooms(lorebookId: number) {
 	const schema = await import("$lib/server/db/schema")
+	const own = await testDb
+		.select({ id: schema.lorebooks.id })
+		.from(schema.lorebooks)
+		.innerJoin(schema.sessions, eq(schema.sessions.id, schema.lorebooks.sessionId))
+		.where(eq(schema.sessions.lorebookId, lorebookId))
 	return testDb
 		.select()
 		.from(schema.lorebookEntries)
-		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
+		.where(inArray(schema.lorebookEntries.lorebookId, [lorebookId, ...own.map((b) => b.id)]))
 		.orderBy(asc(schema.lorebookEntries.id))
 }
 
@@ -442,6 +452,56 @@ describe("R11 · File as a room is offered on the person's rows and the Castella
 		expect(links.map((l) => [l.toEntryId, l.relationshipType])).toEqual([[stair.id, "leads north to"]])
 		// No message was written: the entry is the whole result.
 		expect((await rowsOf(w.session.id)).map((r) => r.id)).toEqual([row])
+	})
+
+	test("a filed room is in the session's own book until a scene closes, then in the lorebook with its links", async () => {
+		const schema = await import("$lib/server/db/schema")
+		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+		const { openScene, closeScene } = await import("$lib/server/scenes/liveScenes")
+		const w = await lair()
+		reset()
+		const row = await line(w, { content: DESCRIBED, by: "castellan" })
+		const ack = await file(w, row, "The Drowned Hall")
+		expect(ack?.parked).toBe(true)
+		await approve(w, (await parkedReview(w.owner.id)).id)
+		const own = (await ownBookOf(testDb as unknown as Db, w.session.id))!
+		const inBook = async (lorebookId: number) => ({
+			rooms: await testDb
+				.select()
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.lorebookId, lorebookId),
+						eq(schema.lorebookEntries.title, "The Drowned Hall")
+					)
+				),
+			links: await testDb
+				.select()
+				.from(schema.narrativeRelationships)
+				.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
+		})
+		// Before: the own book holds the room and its link to The Stair; the lorebook holds neither.
+		const before = await inBook(own.id)
+		expect(before.rooms).toHaveLength(1)
+		expect(before.links).toHaveLength(1)
+		expect(await inBook(w.lorebookId)).toEqual({ rooms: [], links: [] })
+		// A scene covering the room's row closes: Apply runs by itself.
+		const open = await openScene(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.owner.id,
+			channel: "main",
+			atMessageId: row
+		})
+		await closeScene(testDb as unknown as Db, {
+			sceneId: open.scene.id,
+			userId: w.owner.id,
+			atMessageId: row
+		})
+		const after = await inBook(w.lorebookId)
+		expect(after.rooms).toHaveLength(1)
+		expect(after.rooms[0]!.content).toBe(FILED)
+		expect(after.links).toHaveLength(1)
+		expect(await inBook(own.id)).toEqual({ rooms: [], links: [] })
 	})
 
 	test("the same from the person's own narration on main — still reviewed: the row may say more than the room", async () => {

@@ -1,30 +1,29 @@
 /**
  * Variable layouts, end to end.
  *
- * The claim this file exists to hold is the one the feature was asked for:
- * **a layout written while configuring one pipeline is selectable from another.**
- * Everything else here protects that claim from the obvious ways it gets
- * removed — a spec check copied from `prompts.ts`, a picker that stopped
- * narrowing, a delete that ignores the other pipeline still using the row.
+ * The claim this file exists to hold: **a layout is a statement about a
+ * variable, not about a pipeline.** A row written for characters is the pub's
+ * layout for characters in every pipeline that renders them. The per-step
+ * picker is gone (PLAN variable-layouts 2026-11-10), so what remains is the
+ * rows themselves — what ships, what may be edited, what refuses deleting —
+ * and that the run resolves the pub's layout, in every pipeline, from one
+ * choice. Everything else here protects that claim from the obvious ways it
+ * gets removed: a spec check copied from `prompts.ts`, a selection that stopped
+ * being checked against its variable, a delete that ignores who still uses
+ * the row.
  */
 
 import { describe, it, expect, beforeAll } from "vitest"
-import { and, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import {
-	clearOption,
-	namespaceView,
-	writeOption,
-	type ConfigOption,
-	type NamespaceView
-} from "$lib/server/pipelines/config/panel"
 import {
 	createVariableTemplate,
 	deleteVariableTemplate,
 	duplicateVariableTemplate,
 	listVariableTemplates,
 	resolveVariableTemplate,
+	setPubLayout,
 	updateVariableTemplate,
 	VariableTemplateNotUsableError
 } from "$lib/server/pipelines/entities/variableTemplates"
@@ -37,13 +36,10 @@ import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	shippedByKey
 } from "$lib/server/pipelines/entities/variableLayouts"
-import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
-const SECRET = "variable-template-secret"
 const CHARACTERS = "core:var/characters@1"
 
 let db: TestDb
-let adminId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -51,59 +47,7 @@ beforeAll(async () => {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
-
-	const [admin] = await db
-		.insert(schema.users)
-		.values({ username: "layout-admin", isAdmin: true })
-		.returning()
-	adminId = admin.id
-
-	// Global writes land in the selected configuration (the layers as
-	// simplified 2026-08-24), and the shipped default refuses edits — so the
-	// selections below give each pipeline a mutable one, exactly as an admin
-	// would duplicate before tuning.
-	const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-		await import("$lib/server/pipelines/config/named")
-	for (const slug of [STORY_RESPOND_SPEC_ID, STORY_NARRATE_SPEC_ID]) {
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, slug))
-		const shipped = await resolveSelectedConfig(
-			db,
-			spec.id,
-			slug,
-			{}
-		)
-		const copy = await duplicateConfig(
-			db,
-			shipped!.configId,
-			"Layout host"
-		)
-		await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
-	}
 }, 60_000)
-
-const view = (slug: string): Promise<NamespaceView> =>
-	namespaceView(db, SECRET, slug, {
-		userId: adminId,
-		isAdmin: true
-	}) as Promise<NamespaceView>
-
-/** Layout options live under Advanced — they are presentation, not a decision. */
-const layoutOptions = (v: NamespaceView): ConfigOption[] =>
-	v.groups.flatMap((g) =>
-		g.advanced.flatMap((s) =>
-			s.options.filter((o) => o.control === "variable-template-ref")
-		)
-	)
-
-const charactersOption = async (slug: string) => {
-	const v = await view(slug)
-	const o = layoutOptions(v).find((x) => x.label === "Characters")
-	expect(o, `${slug} has no characters layout option`).toBeTruthy()
-	return o!
-}
 
 describe("what ships", () => {
 	it("seeds an immutable layout for every variable the node renders", async () => {
@@ -138,36 +82,6 @@ describe("what ships", () => {
 		expect(rows[1]!.source).not.toContain("Assistant Characters")
 	})
 
-	it("points the shipped config at one, so the picker opens on a choice", async () => {
-		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
-		expect(typeof option.value).toBe("number")
-		expect(option.variableTemplate?.name).toBe("Titled JSON block")
-		expect(option.variableTemplate?.readOnly).toBe(true)
-	})
-
-	it("offers assembly's own layouts on assembly's step, not the context one", async () => {
-		// The three post-budget values are declared on `assemble`, so they group
-		// under *its* step. Worth pinning: they are about lore and history,
-		// which reads like the context builder's business until you remember
-		// that what a layout receives is what actually fit.
-		const v = await view(STORY_RESPOND_SPEC_ID)
-		const stepOf = (label: string) =>
-			v.groups
-				.flatMap((g) => g.advanced)
-				.find((s) =>
-					s.options.some(
-						(o) =>
-							o.control === "variable-template-ref" &&
-							o.label === label
-					)
-				)?.heading
-
-		expect(stepOf("World lore")).toBe("Assemble")
-		expect(stepOf("History entries")).toBe("Assemble")
-		expect(stepOf("Current date")).toBe("Assemble")
-		expect(stepOf("Characters")).toBe("Build template context")
-	})
-
 	it("resolves assembly's layouts to sources at run time", async () => {
 		const world = await buildWorld(db, {
 			specId: STORY_RESPOND_SPEC_ID
@@ -194,79 +108,9 @@ describe("what ships", () => {
 		// the section rather than rendering an empty fenced block.
 		expect(await renderVariable(layouts, "worldLore", undefined)).toBe("")
 	})
-
-	it("back-fills a layout a config predates", async () => {
-		/**
-		 * The upgrade path, which is the only place this breaks.
-		 *
-		 * A reference slot has no author default — the value is a row, not a
-		 * literal — so the reconciler's back-fill found `undefined` and skipped
-		 * it. On a fresh install nothing showed, because `ensureDefaultConfig`
-		 * writes the value. On a database seeded by the *previous* build, the
-		 * setting arrived pointing at nothing: "— Pipeline Default —" above
-		 * output that plainly had a layout. Found by booting the new build
-		 * against an existing database, not by any test that existed.
-		 */
-		const { reconcileConfigs } = await import(
-			"$lib/server/pipelines/config/named"
-		)
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
-			.limit(1)
-
-		const before = await charactersOption(STORY_RESPOND_SPEC_ID)
-		expect(typeof before.value).toBe("number")
-
-		// Rewind: drop every layout value, as an older version's config would
-		// never have written them.
-		const dropped = (
-			await db.select().from(schema.pipelineConfigValues)
-		).filter((v: any) => v.slot === "variables")
-		expect(dropped.length).toBeGreaterThan(0)
-		for (const v of dropped as any[])
-			await db
-				.delete(schema.pipelineConfigValues)
-				.where(eq(schema.pipelineConfigValues.id, v.id))
-
-		await reconcileConfigs(
-			db,
-			spec.id,
-			spec.activeVersionId!,
-			STORY_RESPOND_SPEC_ID
-		)
-
-		const after = await charactersOption(STORY_RESPOND_SPEC_ID)
-		expect(after.value).toBe(before.value)
-		expect(after.variableTemplate?.name).toBe("Titled JSON block")
-	})
-
-	it("never sends the variable id, which is shaped like a node key", async () => {
-		// `core:var/history@1` matches `\bhistory\b`, and `history` is a node key
-		// in the respond spec. The payload is scanned for topology (05 §0a), so
-		// this field is deliberately server-side only.
-		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
-		expect(JSON.stringify(option)).not.toContain("core:var/")
-	})
 })
 
-describe("the picker", () => {
-	it("offers only layouts for this option's own variable", async () => {
-		const foreign = await createVariableTemplate(db, {
-			variableId: "core:var/personas@1",
-			name: "Prose personas",
-			source: "{{#each personas}}{{this.name}}\n{{/each}}"
-		})
-
-		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
-		expect(option.choices?.some((c) => c.id === foreign.id)).toBe(false)
-		// And it does offer the ones that belong to it.
-		const mine = await listVariableTemplates(db, CHARACTERS)
-		for (const row of mine)
-			expect(option.choices?.some((c) => c.id === row.id)).toBe(true)
-	})
-
+describe("selection is by variable", () => {
 	it("refuses a layout written for a different variable", async () => {
 		const { assertSelectable } = await import(
 			"$lib/server/pipelines/entities/variableTemplates"
@@ -277,6 +121,16 @@ describe("the picker", () => {
 		)
 		await expect(
 			assertSelectable(db, CHARACTERS, personas!.id)
+		).rejects.toBeInstanceOf(VariableTemplateNotUsableError)
+	})
+
+	it("refuses another variable's row as the pub's layout", async () => {
+		const [personas] = await listVariableTemplates(
+			db,
+			"core:var/personas@1"
+		)
+		await expect(
+			setPubLayout(db, CHARACTERS, personas!.id)
 		).rejects.toBeInstanceOf(VariableTemplateNotUsableError)
 	})
 })
@@ -311,272 +165,150 @@ describe("editing", () => {
 	})
 })
 
-describe("cross-pipeline reuse", () => {
+describe("one choice reaches every pipeline", () => {
 	/**
-	 * The headline feature, and its only test.
-	 *
-	 * A layout is keyed by the variable it renders, not by the spec it was
-	 * authored in — so a prose rendering written while configuring replies is
-	 * selectable from narration, and both pipelines resolve to the same row. A
-	 * spec check copied from `prompts.ts` would compile, pass review, and remove
-	 * exactly this.
+	 * The headline feature, and its only test. A layout is keyed by the variable
+	 * it renders, not by the spec it was authored in — so the prose rendering an
+	 * admin chose once is what the reply pipeline and the narrator both write
+	 * characters out with. A spec check copied from `prompts.ts` would compile,
+	 * pass review, and remove exactly this.
 	 */
-	it("selects one row from two unrelated pipelines", async () => {
-		const prose = await createVariableTemplate(db, {
-			variableId: CHARACTERS,
-			name: "Prose",
-			source: "{{#each characters}}{{this.name}} — {{this.description}}\n{{/each}}"
-		})
+	const resolvedLayouts = async (slug: string) => {
+		const world = await buildWorld(db, { specId: slug })
+		return (resolveConfig(world, ["context"]).context?.variables ??
+			{}) as any
+	}
+	const cast = [{ name: "Ash", description: "A rider." }]
+	const titled =
+		"Assistant Characters (AI-controlled):\n```json\n" +
+		JSON.stringify(cast, null, 2) +
+		"\n```"
 
-		const respondOption = await charactersOption(STORY_RESPOND_SPEC_ID)
-		const narrateOption = await charactersOption(STORY_NARRATE_SPEC_ID)
-
-		// Both pickers offer it, without it having been written "for" either.
-		expect(respondOption.choices?.some((c) => c.id === prose.id)).toBe(true)
-		expect(narrateOption.choices?.some((c) => c.id === prose.id)).toBe(true)
-
-		for (const [slug, option] of [
-			[STORY_RESPOND_SPEC_ID, respondOption],
-			[STORY_NARRATE_SPEC_ID, narrateOption]
-		] as const)
-			await writeOption(
-				db,
-				SECRET,
-				slug,
-				{ userId: adminId, isAdmin: true },
-				option.id,
-				prose.id
-			)
-
+	it("opens on the package default, in every pipeline", async () => {
 		for (const slug of [STORY_RESPOND_SPEC_ID, STORY_NARRATE_SPEC_ID]) {
-			const after = await charactersOption(slug)
-			expect(after.value).toBe(prose.id)
-			expect(after.variableTemplate?.source).toContain(
-				"{{#each characters}}"
+			const layouts = await resolvedLayouts(slug)
+			expect(layouts.characters).toMatchObject({
+				name: "Titled JSON block",
+				reason: "default"
+			})
+			expect(await renderVariable(layouts, "characters", cast)).toBe(
+				titled
 			)
 		}
 	})
 
-	it("refuses to delete a layout the other pipeline is still using", async () => {
-		const rows = await listVariableTemplates(db, CHARACTERS)
-		const prose = rows.find((r) => r.name === "Prose")!
-
-		// Release only the reply pipeline's selection. The narrator's still
-		// holds the row, and this is the case a per-spec check would miss.
-		const respondOption = await charactersOption(STORY_RESPOND_SPEC_ID)
-		await clearOption(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			{ userId: adminId, isAdmin: true },
-			respondOption.id
-		)
-
-		await expect(
-			deleteVariableTemplate(db, prose.id)
-		).rejects.toThrow(/still in use/)
-	})
-})
-
-describe("the runtime resolves what the panel shows", () => {
-	/**
-	 * The panel and the run must agree, and they are two separate walks of the
-	 * same chain — so this checks the *runtime* side reaches the same row, and
-	 * that what arrives at the node is the template rather than its id.
-	 */
-	const resolvedLayouts = async (slug: string) => {
-		const world = await buildWorld(db, {
-			specId: slug
+	it("writes one pub's layout into two unrelated pipelines", async () => {
+		const prose = await createVariableTemplate(db, {
+			variableId: CHARACTERS,
+			name: "Prose",
+			source: "{{#each characters}}{{this.name}} — {{this.description}}\n{{/each}}",
+			reference: { ownerSlug: "mypub", slug: "prose" }
 		})
-		const config = resolveConfig(world, ["context"])
-		return config.context?.variables ?? {}
-	}
+		await setPubLayout(db, CHARACTERS, prose.id)
 
-	it("hands the node a template source, not a row id", async () => {
-		const layouts = await resolvedLayouts(STORY_NARRATE_SPEC_ID)
-		expect(layouts.characters).toMatchObject({
-			source: expect.stringContaining("{{#each characters}}")
-		})
-		expect(typeof (layouts.characters as any)?.source).toBe("string")
+		for (const slug of [STORY_RESPOND_SPEC_ID, STORY_NARRATE_SPEC_ID]) {
+			const layouts = await resolvedLayouts(slug)
+			// What arrives is the template's source, not the row's id.
+			expect(typeof layouts.characters?.source).toBe("string")
+			expect(layouts.characters).toMatchObject({
+				name: "Prose",
+				reason: "pub"
+			})
+			expect(await renderVariable(layouts, "characters", cast)).toBe(
+				"Ash — A rider.\n"
+			)
+		}
 	})
 
-	it("renders through the selected layout", async () => {
-		const layouts = await resolvedLayouts(STORY_NARRATE_SPEC_ID)
-		const cast = [{ name: "Ash", description: "A rider." }]
-		expect(await renderVariable(layouts as any, "characters", cast)).toBe(
-			"Ash — A rider.\n"
-		)
-	})
-
-	it("falls back to the shipped bytes when the selection is cleared", async () => {
-		// Cleared above for the reply pipeline: with no override, the shipped
-		// layout projected at `defaults` wins, and it renders what the old
-		// TypeScript rendered.
+	it("falls back to the shipped bytes when the pub's layout is cleared", async () => {
+		await setPubLayout(db, CHARACTERS, null)
 		const layouts = await resolvedLayouts(STORY_RESPOND_SPEC_ID)
-		const cast = [{ name: "Ash", description: "A rider." }]
-		expect(await renderVariable(layouts as any, "characters", cast)).toBe(
-			"Assistant Characters (AI-controlled):\n```json\n" +
-				JSON.stringify(cast, null, 2) +
-				"\n```"
-		)
+		expect(layouts.characters.reason).toBe("default")
+		expect(await renderVariable(layouts, "characters", cast)).toBe(titled)
 	})
 
 	it("still renders the shipped bytes when nothing resolves at all", async () => {
 		// A dangling reference drops to undefined rather than erroring, so the
 		// in-code floor is what a deleted row actually costs: a customization,
 		// never a prompt.
-		const cast = [{ name: "Ash", description: "A rider." }]
-		expect(await renderVariable(undefined, "characters", cast)).toBe(
-			"Assistant Characters (AI-controlled):\n```json\n" +
-				JSON.stringify(cast, null, 2) +
-				"\n```"
-		)
+		expect(await renderVariable(undefined, "characters", cast)).toBe(titled)
 	})
 })
 
-describe("the mutation gate", () => {
-	/**
-	 * What stands in for `promptInSpec`, and why it cannot be `promptInSpec`.
-	 *
-	 * Layout ids are small integers a client supplies, so something has to
-	 * refuse a guessed one. It cannot be spec ownership — sharing across
-	 * pipelines is the feature — so the gate is the *option handle*: you may
-	 * edit a layout through a setting this pipeline offers you and you are
-	 * allowed to write.
-	 */
-	const gate = async (viewer: any, id: string) => {
-		const { variableOptionGate } = await import(
+describe("what refuses a delete", () => {
+	const proseId = async () =>
+		(await listVariableTemplates(db, CHARACTERS)).find(
+			(r) => r.name === "Prose"
+		)!.id
+
+	it("refuses while the row is the pub's layout, and says what to do", async () => {
+		const id = await proseId()
+		await setPubLayout(db, CHARACTERS, id)
+		await expect(deleteVariableTemplate(db, id)).rejects.toThrow(
+			/pub's layout/
+		)
+		await setPubLayout(db, CHARACTERS, null)
+	})
+
+	it("refuses while a preset chose it for its sessions", async () => {
+		const id = await proseId()
+		const [preset] = await db
+			.insert(schema.sessionPresets)
+			.values({
+				genreId: "core:genre/story@1",
+				name: "Small models",
+				variableLayouts: { [CHARACTERS]: "mypub/prose@1" }
+			} as any)
+			.returning()
+		await expect(deleteVariableTemplate(db, id)).rejects.toThrow(
+			/Small models/
+		)
+		await db
+			.delete(schema.sessionPresets)
+			.where(eq(schema.sessionPresets.id, preset.id))
+	})
+
+	it("refuses while a step still has it picked (a leftover pick)", async () => {
+		const id = await proseId()
+		const { declarationsAndVariableKeys } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
-		return await variableOptionGate(
-			db,
-			SECRET,
-			STORY_RESPOND_SPEC_ID,
-			viewer,
-			id
-		)
-	}
-
-	it("resolves the option's variable for an admin", async () => {
-		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
-		await expect(
-			gate({ userId: adminId, isAdmin: true }, option.id)
-		).resolves.toEqual({ variableId: CHARACTERS })
-	})
-
-	it("refuses a non-admin, where the panel would not have offered it", async () => {
-		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
-		const [plain] = await db
-			.insert(schema.users)
-			.values({ username: "layout-guesser", isAdmin: false })
-			.returning()
-		// The ids are HMAC handles, not secrets a viewer was granted — hiding
-		// the control is not what protects it, this is.
-		await expect(
-			gate({ userId: plain.id, isAdmin: false }, option.id)
-		).rejects.toThrow(/administrator/)
-	})
-
-	it("refuses an option that does not choose a layout", async () => {
-		const v = await view(STORY_RESPOND_SPEC_ID)
-		const other = groupOptions(v.groups)
-			.find((o) => o.control === "prompts-ref")!
-		await expect(
-			gate({ userId: adminId, isAdmin: true }, other.id)
-		).rejects.toThrow(/does not choose a layout/)
-	})
-
-	it("refuses a handle this install never minted", async () => {
-		await expect(
-			gate({ userId: adminId, isAdmin: true }, "deadbeef".repeat(4))
-		).rejects.toThrow(/not part of this pipeline/)
-	})
-})
-
-describe("who may change a layout", () => {
-	it("is not offered to a non-admin at all", async () => {
-		// Ratified for 0.6: a non-admin sees prompts and nothing else. How
-		// characters are laid out is the instance's configuration — two users
-		// whose prompts render differently are two users whose reports cannot
-		// be compared.
-		const [plain] = await db
-			.insert(schema.users)
-			.values({ username: "layout-plain", isAdmin: false })
-			.returning()
-
-		const v = (await namespaceView(db, SECRET, STORY_RESPOND_SPEC_ID, {
-			userId: plain.id,
-			isAdmin: false
-		})) as NamespaceView
-		expect(layoutOptions(v)).toEqual([])
-	})
-
-	it("lands an admin's global choice in the genre's defaults", async () => {
-		const option = await charactersOption(STORY_RESPOND_SPEC_ID)
-		expect(option.writable).toBe(true)
-
-		// The selections written by the reuse test above live on the genre's
-		// defaults' registrations (PLAN-layering D5) — an administrator's
-		// instance-wide edit of a pipeline registrations run. No override row
-		// exists anywhere.
-		const prose = (await listVariableTemplates(db, CHARACTERS)).find(
-			(r) => r.name === "Prose"
-		)!
-		const { registrationValueRefs } = await import(
-			"$lib/server/pipelines/registrations/values"
-		)
-		const values = (await registrationValueRefs(db, ["variables"])).filter(
-			(v) => v.scopeKind === "genre" && v.value === prose.id
-		)
-		expect(values.length).toBeGreaterThan(0)
-		const overrides = await db
+		const [spec] = await db
 			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(eq(schema.pipelineNodeOverrides.slot, "variables"))
-		expect(overrides).toHaveLength(0)
-	})
-})
-
-/**
- * Last, because it deletes the row the tests above are built on.
- *
- * Two halves of one rule, and the second is what live use found. Deleting from
- * a pipeline that has the row selected must not be blocked *by that selection*
- * — the button sits beside it. But a refusal has to leave the caller's
- * selection exactly where it was: the first version released the caller's rows
- * before attempting the delete, so a *refused* delete reset the setting on its
- * way to failing. For layouts that is the common path, not the exotic one,
- * since another pipeline holding the row is precisely what refuses.
- */
-describe("deleting what you have selected", () => {
-	it("ignores the caller's own rows without releasing them first", async () => {
-		const prose = (await listVariableTemplates(db, CHARACTERS)).find(
-			(r) => r.name === "Prose"
-		)!
-
-		const { registrationValueRefs, refKeyOf } = await import(
-			"$lib/server/pipelines/registrations/values"
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, STORY_RESPOND_SPEC_ID))
+		const { variableKeys } = await declarationsAndVariableKeys(
+			db,
+			spec.activeVersionId!
 		)
-		const ownRefs = async () =>
-			(await registrationValueRefs(db, ["variables"])).filter(
-				(v) => v.value === prose.id
-			)
-		const own = await ownRefs()
-		expect(own.length).toBeGreaterThan(0)
-
-		// Refused while those rows count — and the rows are still there after,
-		// which is the part that regressed.
-		await expect(
-			deleteVariableTemplate(db, prose.id)
-		).rejects.toThrow(/still in use/)
-		expect((await ownRefs()).length).toBe(own.length)
-
-		// Allowed once they are discounted, which is what the socket handler
-		// passes — and only then does it clear them.
-		await expect(
-			deleteVariableTemplate(db, prose.id, {
-				ignoreRegistrationRefs: new Set(own.map(refKeyOf))
+		const key = variableKeys.find((k) => k.variableId === CHARACTERS)!
+		const [held] = await db
+			.insert(schema.pipelineNodeOverrides)
+			.values({
+				specId: spec.id,
+				scopeKind: "session",
+				scopeId: 0,
+				nodeKey: key.nodeKey,
+				slot: key.slot,
+				path: key.path,
+				value: id
 			})
-		).resolves.toBeUndefined()
+			.returning()
+		await expect(deleteVariableTemplate(db, id)).rejects.toThrow(
+			/still in use/
+		)
+		await db
+			.delete(schema.pipelineNodeOverrides)
+			.where(eq(schema.pipelineNodeOverrides.id, held.id))
+	})
+
+	it("deletes once nothing holds it", async () => {
+		const id = await proseId()
+		await expect(deleteVariableTemplate(db, id)).resolves.toBeUndefined()
+		expect(
+			(await listVariableTemplates(db, CHARACTERS)).some(
+				(r) => r.id === id
+			)
+		).toBe(false)
 	})
 })

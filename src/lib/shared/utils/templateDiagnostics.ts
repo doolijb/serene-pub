@@ -12,6 +12,7 @@
 
 import { checkTemplateSourceReport } from "@serene-pub/sdk/template-check"
 import type { TemplateFinding, TemplateScope } from "@serene-pub/sdk"
+import type { TemplateCheckOptions } from "@serene-pub/sdk/template-check"
 import { templateCheckWith } from "$lib/shared/utils/templateCheckOptions"
 
 const LIQUID_ENGINE = "core:template/liquid@1"
@@ -43,6 +44,11 @@ export interface TemplateDiagnosticsOptions {
 	 * picked. Name and path findings become warnings.
 	 */
 	lenient?: boolean
+	/**
+	 * Variable id → the layouts a template may name for it (W5). The caller
+	 * passes the laid-out scope (`laidOutScope`) with it, as the save does.
+	 */
+	variableLayoutOffers?: TemplateCheckOptions["variableLayoutOffers"]
 }
 
 /** 1-based line/column → offset. */
@@ -74,7 +80,16 @@ function quickFix(
 	source: string,
 	f: TemplateFinding
 ): TemplateQuickFix | undefined {
-	if (!f.suggestion || f.start === undefined || f.end === undefined) return undefined
+	if (!f.suggestion || f.start === undefined || f.end === undefined)
+		return undefined
+	// A layout reference is one token (`acme.dice/prose@1`): swap all of it.
+	if (f.kind === "unknown-layout")
+		return {
+			label: `Use "${f.suggestion}"`,
+			start: f.start,
+			end: f.end,
+			text: f.suggestion
+		}
 	const written = source.slice(f.start, f.end)
 	const segs = segmentsOf(written)
 	const target =
@@ -128,12 +143,11 @@ export function templateDiagnostics(
 	scope: TemplateScope,
 	options: TemplateDiagnosticsOptions = {}
 ): { checked: boolean; diagnostics: TemplateDiagnostic[] } {
-	const report = checkTemplateSourceReport(
-		engine,
-		source,
-		scope,
-		templateCheckWith(options.untyped)
-	)
+	const offers = options.variableLayoutOffers
+	const report = checkTemplateSourceReport(engine, source, scope, {
+		...templateCheckWith(options.untyped),
+		...(offers ? { variableLayoutOffers: offers } : {})
+	})
 	if (!report.checked) return { checked: false, diagnostics: [] }
 	const diagnostics = report.findings.map((f): TemplateDiagnostic => {
 		const start = f.start ?? offsetAt(source, f.line, f.column)

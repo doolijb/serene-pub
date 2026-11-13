@@ -47,14 +47,18 @@ import {
 import {
 	HISTORY_TYPE_ID,
 	entriesOfType,
+	entryInsert,
 	toEntryRow
 } from "$lib/server/utils/lorebookEntries"
+import { unfiledScenesByEntry } from "$lib/server/scenes/unfiledScenesByEntry"
 import { buildCharacterCardV3 } from "$lib/server/utils/characterCardParser"
 import { buildPersonaExportCard } from "$lib/server/utils/personaCard"
 import { onLineSql } from "$lib/server/state/lineSql"
 import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
+import { dayOnly } from "$lib/shared/lorebooks/storyDate"
 
 import { clockOf } from "$lib/server/state/storyTime"
+import { BOOK_DEFAULT_RULES } from "$lib/shared/rulesets/rulesOffer"
 
 export async function buildLorebookExportData(
 	lorebookId: number,
@@ -125,6 +129,61 @@ export async function buildLorebookExportData(
 		}
 	})
 
+	// A card goes out as its current version (content, likeness, label), not
+	// as the stale copy on the row.
+	const { ensureCardVersion } = await import("$lib/server/characters/versions")
+	const { cardAsOfVersion } = await import("$lib/server/characters/cardIO")
+	const asCurrentVersion = async <T extends { id: number }>(row: T) => {
+		const current = await ensureCardVersion(db, row.id)
+		return current ? cardAsOfVersion(row, current) : row
+	}
+
+	// The member half carries the book on main without dated changes, so each
+	// member goes out as its BASE version (undated, on main, no life point, no
+	// source session) in the member form's columns — never the frozen binding
+	// columns. One query for every member's base.
+	const { memberColumnsOfVersion } = await import(
+		"$lib/server/lorebooks/retold"
+	)
+	const baseOfMember = new Map<
+		number,
+		ReturnType<typeof memberColumnsOfVersion>
+	>()
+	if (bindingRows.length) {
+		const baseRows = await db
+			.select()
+			.from(schema.characterVersions)
+			.where(
+				and(
+					inArray(
+						schema.characterVersions.castMemberId,
+						bindingRows.map((b) => b.id)
+					),
+					isNull(schema.characterVersions.branchId),
+					isNull(schema.characterVersions.year),
+					isNull(schema.characterVersions.personalPosition),
+					isNull(schema.characterVersions.sourceSessionId)
+				)
+			)
+			.orderBy(asc(schema.characterVersions.id))
+		for (const base of baseRows)
+			if (
+				base.castMemberId != null &&
+				!baseOfMember.has(base.castMemberId)
+			)
+				baseOfMember.set(
+					base.castMemberId,
+					memberColumnsOfVersion(base, {
+						carded: base.parentVersionId != null
+					})
+				)
+	}
+	const withoutBase = bindingRows.filter((b) => !baseOfMember.has(b.id))
+	if (withoutBase.length)
+		console.warn(
+			`Book export: cast member(s) ${withoutBase.map((b) => b.id).join(", ")} have no base version; exported without own names, sprite set or state.`
+		)
+
 	let nextLocalId = 1
 	const characters: ExportedBoundCharacter[] = []
 	const personas: ExportedBoundPersona[] = []
@@ -163,7 +222,7 @@ export async function buildLorebookExportData(
 				// No `lorebook` passed — avoids embedding this character's
 				// own character_book recursively.
 				card: buildCharacterCardV3({
-					...binding.character,
+					...(await asCurrentVersion(binding.character)),
 					tags:
 						binding.character.characterTags?.map(
 							(ct) => ct.tag.name
@@ -175,10 +234,11 @@ export async function buildLorebookExportData(
 			personaLocalId = nextLocalId++
 			personas.push({
 				localId: personaLocalId,
-				card: buildPersonaExportCard(binding.character)
+				card: buildPersonaExportCard(await asCurrentVersion(binding.character))
 			})
 		}
 
+		const own = baseOfMember.get(binding.id)
 		const bindingLocalId = nextLocalId++
 		bindingLocalIdByRealId.set(binding.id, bindingLocalId)
 		bindings.push({
@@ -187,7 +247,12 @@ export async function buildLorebookExportData(
 			kind: asPersona ? "persona" : "character",
 			characterLocalId,
 			personaLocalId,
-			...(binding.spriteSet ? { spriteSet: binding.spriteSet } : {})
+			...(own?.spriteSet ? { spriteSet: own.spriteSet } : {}),
+			...(own?.ownName ? { ownName: own.ownName } : {}),
+			// `""` travels: an own empty nickname means none in this book (★L-3b).
+			...(own?.ownNickname != null
+				? { ownNickname: own.ownNickname }
+				: {})
 		})
 	}
 
@@ -195,8 +260,73 @@ export async function buildLorebookExportData(
 	// top-level array (a scene belongs to exactly one history entry) —
 	// assign each a document-scoped localId here so narrativeGraph nodes/
 	// relationships below can reference one.
-	const historyEntryLocalIdByRealId =
-		assignHistoryEntryLocalIds(historyEntries)
+	// 🚧 §0-B / ★4b: a scene not yet compiled (no history entry) still goes
+	// out, nested under the history entry of its day when the book has one,
+	// else under a dated, empty entry the document carries for it (nothing is
+	// written to the book). The name is the display name, written frozen.
+	const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
+	const shownSceneNames = await sceneDisplayNames(db, lorebook.scenes)
+	const exportedHistoryIds = new Set(historyEntries.map((e) => e.id))
+	const filedUnder = new Map<number, number>()
+	const dayEntries = new Map<string, number>()
+	const syntheticEntries: typeof entries = []
+	let syntheticPosition =
+		historyEntries.reduce((top, e) => Math.max(top, e.position), -1) + 1
+	// The one reading of the date rule, on main (what the export reads); an entry the
+	// export does not carry leaves its scene to the synthetic path below.
+	const filedByRuleOf = new Map<number, number>()
+	for (const [entryId, rows] of await unfiledScenesByEntry(db, { lorebookId: lorebook.id, line: MAIN_LINE }))
+		if (exportedHistoryIds.has(entryId)) for (const r of rows) filedByRuleOf.set(r.id, entryId)
+	for (const scene of lorebook.scenes) {
+		if (scene.historyEntryId != null) continue
+		const s = scene as unknown as Record<string, number | null>
+		const year = s.openedStoryClockYear
+		const date =
+			year != null
+				? dayOnly({
+						year,
+						month: s.openedStoryClockMonth ?? null,
+						day: s.openedStoryClockDay ?? null
+					})
+				: null
+		const month = date?.month ?? null
+		const day = date?.day ?? null
+		const filedByRule = filedByRuleOf.get(scene.id)
+		if (filedByRule !== undefined) {
+			filedUnder.set(scene.id, filedByRule)
+			continue
+		}
+		const dayKey = `${year ?? 1}-${year != null ? month : 1}-${year != null ? day : 1}`
+		let syntheticId = dayEntries.get(dayKey)
+		if (syntheticId === undefined) {
+			syntheticId = -(syntheticEntries.length + 1)
+			dayEntries.set(dayKey, syntheticId)
+			const row = entryInsert({
+				typeId: HISTORY_TYPE_ID,
+				lorebookId: lorebook.id,
+				keys: [],
+				content: "",
+				year: year ?? 1,
+				month: year != null ? month : 1,
+				day: year != null ? day : 1,
+				position: syntheticPosition++
+			} as any)
+			syntheticEntries.push(
+				toEntryRow({
+					...row,
+					id: syntheticId,
+					derivedFrom: null,
+					createdAt: new Date(0),
+					updatedAt: new Date(0)
+				} as any)
+			)
+		}
+		filedUnder.set(scene.id, syntheticId)
+	}
+	const historyEntryLocalIdByRealId = assignHistoryEntryLocalIds([
+		...historyEntries,
+		...entriesOfType(syntheticEntries, HISTORY_TYPE_ID)
+	])
 	const sceneLocalIdByRealId = new Map<number, number>()
 	const scenesByHistoryEntryId = new Map<number, ExportedScene[]>()
 	lorebook.scenes.forEach((scene) => {
@@ -212,6 +342,7 @@ export async function buildLorebookExportData(
 		const mapped = mapSceneForExport(
 			{
 				...scene,
+				name: shownSceneNames.get(scene.id) ?? scene.name,
 				participantCharacters: cast
 					.filter((c: any) => c.role === "participant")
 					.map((c: any) => c.bindingId),
@@ -222,16 +353,19 @@ export async function buildLorebookExportData(
 			localId,
 			bindingLocalIdByRealId
 		)
-		const existing = scenesByHistoryEntryId.get(scene.historyEntryId) ?? []
+		const underId = scene.historyEntryId ?? filedUnder.get(scene.id)!
+		const existing = scenesByHistoryEntryId.get(underId) ?? []
 		existing.push(mapped)
-		scenesByHistoryEntryId.set(scene.historyEntryId, existing)
+		scenesByHistoryEntryId.set(underId, existing)
 	})
 
 	// A `LorebookEntry` satisfies `ExportableEntry` field for field;
 	// TypeScript will not infer the index signature that type needs from an
 	// interface, which is the whole of the mismatch.
-	const exportableEntries =
-		entries as unknown as ExportableEntryWithPosition[]
+	const exportableEntries = [
+		...entries,
+		...syntheticEntries
+	] as unknown as ExportableEntryWithPosition[]
 
 	// The edges are read before the entries are written: an entry is numbered
 	// exactly when the document points at it, and an endpoint is one of the
@@ -309,10 +443,16 @@ export async function buildLorebookExportData(
 			// correctly excluded from characters[]/personas[].
 			const isOwnedOrUnbound =
 				!node.characterId || node.character?.userId === userId
+			const own = baseOfMember.get(node.id)
+			const stated = {
+				...node,
+				nodeState: own?.nodeState ?? ("active" as const),
+				nodeVisibility: own?.nodeVisibility ?? ("normal" as const)
+			}
 			const safeNode = isOwnedOrUnbound
-				? node
+				? stated
 				: {
-						...node,
+						...stated,
 						name: "",
 						aliases: [],
 						absorbedAliases: [],
@@ -382,6 +522,26 @@ export async function buildLorebookExportData(
 						calendar: lorebook.storyCalendar ?? null,
 						clock: storyClock
 					}
+				}
+			}
+		} as typeof specBookWithGraph
+	}
+
+	// The book's rules (★M3b-S5-1, 2026-11-05: "In the book file, beside the
+	// story clock"). Only when not Freeform, so a Freeform book exports the
+	// bytes it always did — import compares them to detect unchanged vs conflict.
+	if (lorebook.primaryRuleset && lorebook.primaryRuleset !== BOOK_DEFAULT_RULES) {
+		const ext = (specBookWithGraph as any).extensions ?? {}
+		specBookWithGraph = {
+			...specBookWithGraph,
+			extensions: {
+				...ext,
+				serenepub: {
+					...ext.serenepub,
+					primaryRuleset: lorebook.primaryRuleset,
+					...(typeof lorebook.rulesetVersion === "string" && lorebook.rulesetVersion
+						? { rulesetVersion: lorebook.rulesetVersion }
+						: {})
 				}
 			}
 		} as typeof specBookWithGraph

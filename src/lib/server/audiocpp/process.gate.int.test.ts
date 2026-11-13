@@ -102,9 +102,8 @@ describe("audio.cpp start gate", () => {
 		expect(mod.getStatus().status).toBe("stopped")
 	})
 
-	test("adoptIfAlreadyRunning is false when the gate refuses; boot orphan check with zero packages spawns nothing", async () => {
+	test("boot orphan sweep with zero packages spawns nothing", async () => {
 		await patch({ enabledPackageIds: [] })
-		expect(await mod.audioCppSupervisor.adoptIfAlreadyRunning()).toBe(false)
 		await mod.checkForOrphanOnBoot()
 		expect(existsSync(marker)).toBe(false)
 	})

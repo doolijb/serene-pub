@@ -718,6 +718,11 @@ function preClean(css: string): string {
 	return filterImageSets(filterUrls(stripComments(stripBreakout(css))))
 }
 
+/** The value-level filter a custom-property value goes through (`varsToStyle`'s, minus the `;{}` strip): breakout, url(), image-set(). */
+export function filterWidgetStyleValue(value: string): string {
+	return filterImageSets(filterUrls(stripBreakout(String(value ?? ""))))
+}
+
 function stripBreakout(css: string): string {
 	return String(css ?? "").replace(/<\/style/gi, "")
 }

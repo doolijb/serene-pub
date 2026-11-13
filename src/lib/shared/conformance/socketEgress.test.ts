@@ -480,6 +480,18 @@ const BARE = SITES.filter((s) => !s.redacting).map((s) => s.subject)
 const REDACTING_EMITTERS: Deliberate[] = [
 	{
 		subject:
+			"src/lib/server/sockets/characterRows.ts :: replyToAsker → socket.emit(<computed>)",
+		reason:
+			"The Characters view's page (`characters:page`) answers the socket " +
+			"that asked and no other: a second tab paging its own list must not " +
+			"receive a sibling's page. The room is that socket and the subject " +
+			"is its own `socket.user`, so recipient and subject are the same " +
+			"person — redacted per socket, as `emitToUser` does per room. The " +
+			"payload is character rows (names, lines, faces, reach counts) and " +
+			"holds no connection."
+	},
+	{
+		subject:
 			"src/lib/server/sockets/connections.ts :: replyToAsker → socket.emit(<computed>)",
 		reason:
 			"The create ack (`connections:create`) answers the socket that asked " +
@@ -607,7 +619,7 @@ describe("§1 socket egress — every in-place projection is written down", () =
 // ── §2 The emits that do not project ────────────────────────────────────────
 
 /**
- * 🚧 The per-user push registries (audio.cpp build, 2026-10-28): five
+ * 🚧 The per-user push registries (audio.cpp build, 2026-10-28): six
  * subjects, one reason.
  */
 const PER_USER_EMITTERS =
@@ -635,6 +647,24 @@ const PER_USER_EMITTERS =
  * the day it is written.
  */
 const UNREDACTED_EMITS: Deliberate[] = [
+	{
+		subject:
+			'src/lib/server/sockets/starterKits.ts :: starterKitsListHandler → socket.emit("starterKits:list")',
+		reason:
+			"🚧 M2e (2026-11-04): an administrator's own request for the starter " +
+			"list WITH disabled primer rows goes back to the asking socket only, " +
+			"so the pickers on the admin's other tabs never receive a disabled " +
+			"row. The payload is kit cards — names, lines, counts, a provided " +
+			"mark — and holds no connection, no secret and no other person's row."
+	},
+	{
+		subject:
+			'src/lib/server/sockets/plugins.ts :: providedBookDisabledHandler → socket.emit("starterKits:list")',
+		reason:
+			"🚧 M2e (2026-11-04): the same list, re-sent to the administrator who " +
+			"just disabled or enabled a starter row, for the same reason and with " +
+			"the same payload as the entry above."
+	},
 	{
 		subject:
 			'src/lib/server/sockets/sessions.ts :: sessionsRemoveGuestHandler.handler → socket.io.to(…).emit("sessions:removedAsGuest")',
@@ -682,6 +712,12 @@ const UNREDACTED_EMITS: Deliberate[] = [
 	{
 		subject:
 			"src/lib/server/koboldcpp/binaryManager.ts :: emitProgress → progressEmitters.emit(<computed>)",
+		reason:
+			PER_USER_EMITTERS
+	},
+	{
+		subject:
+			"src/lib/server/koboldcpp/subprocessManager.ts :: noteCoLoadReason → coLoadEmitters.emit(<computed>)",
 		reason:
 			PER_USER_EMITTERS
 	},

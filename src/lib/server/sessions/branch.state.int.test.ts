@@ -173,7 +173,14 @@ describe("branching carries the state", () => {
 		// "From the beginning" always comes across.
 		await put(w.session.id, "session", w.session.id, WEATHER, "storm", null)
 		// What she carries is an inventory value (phase 3b), copied like any.
-		await put(w.session.id, "session_cast", w.verity.id, "core:slot/inventory@1", [{ entryId: w.key.id }], fork.id)
+		await put(
+			w.session.id,
+			"session_cast",
+			w.verity.id,
+			"core:slot/inventory@1",
+			[{ entryId: w.key.id }],
+			fork.id
+		)
 
 		const { branchSession } = await import("$lib/server/sessions/branch")
 		const branch = await branchSession(db, {
@@ -225,8 +232,12 @@ describe("branching carries the state", () => {
 			})
 		).toBe(3)
 
-		const carried = copied.filter((r) => r.slotId === "core:slot/inventory@1")
-		expect(carried.map((r) => (r.value as any).v)).toEqual([[{ entryId: w.key.id }]])
+		const carried = copied.filter(
+			(r) => r.slotId === "core:slot/inventory@1"
+		)
+		expect(carried.map((r) => (r.value as any).v)).toEqual([
+			[{ entryId: w.key.id }]
+		])
 		expect(branchIds.has(carried[0].validFromMessageId!)).toBe(true)
 	})
 
@@ -275,12 +286,12 @@ describe("branching carries the state", () => {
 		])
 		// The session owner's ID moves; a cast member's is a character id and
 		// does not.
-		expect(
-			rows.find((r) => r.ownerKind === "session")!.ownerId
-		).toBe(branch.id)
-		expect(
-			rows.find((r) => r.ownerKind === "session_cast")!.ownerId
-		).toBe(w.verity.id)
+		expect(rows.find((r) => r.ownerKind === "session")!.ownerId).toBe(
+			branch.id
+		)
+		expect(rows.find((r) => r.ownerKind === "session_cast")!.ownerId).toBe(
+			w.verity.id
+		)
 	})
 
 	test("a pending proposal belongs to the session it was asked in", async () => {
@@ -360,9 +371,11 @@ describe("branching carries the state", () => {
 			.select()
 			.from(schema.attributeValues)
 			.where(eq(schema.attributeValues.sessionId, branch.id))
-		expect(rows.filter((r) => r.ownerKind === "player_seat").map((r) => r.ownerId)).toEqual([
-			copy.id
-		])
+		expect(
+			rows
+				.filter((r) => r.ownerKind === "player_seat")
+				.map((r) => r.ownerId)
+		).toEqual([copy.id])
 	}, 60_000)
 
 	test("a card-less player seat's line names the branch's seat", async () => {

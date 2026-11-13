@@ -45,6 +45,9 @@ export interface LiveSceneRow {
 	summary?: string | null
 	/** 🚧 Its cast's participants, as `scenes:list` projects them (lane E): book members' ids. */
 	participantCharacters?: number[] | null
+	/** 🚧 ★S-4: why it began by itself; why its cast moves (server-derived, 2026-11-04). */
+	openedBecause?: string | null
+	castCause?: string | null
 }
 
 /**
@@ -112,6 +115,8 @@ export function conversationSceneOf(
 			? { summaryStatus: status as NonNullable<ConversationSceneV1["summaryStatus"]> }
 			: {}),
 		hasSummary: !!row.summary?.trim(),
+		...(row.openedBecause ? { openedBecause: row.openedBecause } : {}),
+		...(row.castCause ? { castCause: row.castCause } : {}),
 		...(cast ? { cast } : {})
 	}
 }

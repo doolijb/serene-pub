@@ -214,10 +214,15 @@ describe("kcppPerfLine", () => {
 	test("no answer, no line", () => {
 		expect(kcppPerfLine(null)).toBeNull()
 	})
-	test("idle with nothing generated yet drops the speed rather than printing a zero", () => {
+	test("idle with nothing generated yet drops the speed AND the count rather than printing zeros or pings", () => {
 		expect(
 			kcppPerfLine({ idle: true, avgGenSpeed: 0, totalGens: 0, queue: 0 })
-		).toBe("Idle · 0 generations · queue 0")
+		).toBe("Idle · queue 0")
+		// koboldcpp's own counter ticks for readiness pings (29 on a fresh
+		// install, 2026-11-08); with no speed it has generated nothing real.
+		expect(
+			kcppPerfLine({ idle: true, avgGenSpeed: 0, totalGens: 29, queue: 0 })
+		).toBe("Idle · queue 0")
 	})
 	test("busy names the rate, the count and the queue", () => {
 		expect(
@@ -507,7 +512,6 @@ describe("audio.cpp — the third kind", () => {
 		pid: 4242,
 		startedAt: new Date(Date.now() - 65_000).toISOString(),
 		restartCount: 0,
-		isExternal: false,
 		port: 5002,
 		baseUrl: "http://127.0.0.1:5002",
 		loaded: [],
@@ -592,15 +596,12 @@ describe("audio.cpp — the third kind", () => {
 		).toBe("ready")
 	})
 
-	test("process line: KoboldCPP's five words, external and crash said", () => {
+	test("process line: KoboldCPP's five words, crash said", () => {
 		expect(acppProcessLine(null)).toBe(null)
 		const running = acppProcessLine(status())!
 		expect(running.dot).toBe("ok")
 		expect(running.label).toBe("Running")
 		expect(running.meta).toContain("PID 4242")
-		expect(acppProcessLine(status({ isExternal: true }))!.meta).toBe(
-			"Not started by Serene Pub"
-		)
 		const crashed = acppProcessLine(
 			status({ status: "crashed", pid: null, lastError: "exit 1" })
 		)!

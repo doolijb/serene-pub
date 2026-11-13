@@ -161,7 +161,7 @@ describe("appletApi:librarySessions", () => {
 })
 
 describe("appletApi:updateSession", () => {
-	test("name + a declared field + attach / detach a readable book; the ledger names the extension", async () => {
+	test("name + a declared field + a different book is refused, the same one passes; the ledger names the extension", async () => {
 		const s = await session(a, GENRE, { name: "old" })
 		const [book] = await db.insert(schema.lorebooks).values({ userId: a, name: "Atlas" } as any).returning()
 		ledger.length = 0
@@ -173,12 +173,13 @@ describe("appletApi:updateSession", () => {
 		const updated = ledger.find((l) => l.payload?.changed?.includes("name"))
 		expect(updated.payload.cause).toEqual({ kind: "settings", userId: a, pluginId: "acme.games" })
 
+		const keptId = row.lorebookId
 		const attach = await update(a, { sessionId: s.id, lorebookId: book.id })
-		expect(attach.error?.message).toBeUndefined()
-		expect((await db.select().from(schema.sessions).where(eq(schema.sessions.id, s.id)))[0].lorebookId).toBe(book.id)
-		const detach = await update(a, { sessionId: s.id, lorebookId: null })
-		expect(detach.error?.message).toBeUndefined()
-		expect((await db.select().from(schema.sessions).where(eq(schema.sessions.id, s.id)))[0].lorebookId).toBeNull()
+		expect(attach.error?.message).toBe("A session keeps the lorebook it started with.")
+		expect((await db.select().from(schema.sessions).where(eq(schema.sessions.id, s.id)))[0].lorebookId).toBe(keptId)
+		const same = await update(a, { sessionId: s.id, lorebookId: keptId })
+		expect(same.error?.message).toBeUndefined()
+		expect((await db.select().from(schema.sessions).where(eq(schema.sessions.id, s.id)))[0].lorebookId).toBe(keptId)
 	})
 
 	test("refused: not owner, foreign genre, undeclared field, unreadable book, no lorebooks grant", async () => {

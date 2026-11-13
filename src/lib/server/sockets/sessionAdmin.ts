@@ -730,6 +730,14 @@ async function buildSessionPresets(
 	// 🚧 R56: what each preset needs, and what would make it better.
 	const { presetRecommendations } = await import("$lib/server/pipelines/registrations/unserved")
 	const recommendationsByPreset = await presetRecommendations(db, listed.map((r) => r.id))
+	// 🚧 A preset's variable layouts that name no layout now (a removed
+	// package's), computed beside the stale bindings — no stored row.
+	const { danglingPresetLayouts } = await import("$lib/server/pipelines/config/world")
+	const danglingByPreset = new Map<number, Array<{ variableId: string; reference: string }>>()
+	for (const r of listed) {
+		const dangling = await danglingPresetLayouts(db, r.id)
+		if (dangling.length) danglingByPreset.set(r.id, dangling)
+	}
 	let out = listed.map((r) => {
 		const asks = asksByPreset.get(r.id)
 		const derived = derivedByPreset.get(r.id)
@@ -743,7 +751,8 @@ async function buildSessionPresets(
 			),
 			...(asks?.length ? { asks } : {}),
 			...(derived ? { derived } : {}),
-			...(recommendations ? { recommendations } : {})
+			...(recommendations ? { recommendations } : {}),
+			...(danglingByPreset.has(r.id) ? { danglingVariableLayouts: danglingByPreset.get(r.id) } : {})
 		}
 	})
 	// The picker's cut: a non-admin sees only what they may start.
@@ -950,7 +959,9 @@ export const sessionPresetsCreate: Handler<
 					// 🚧 A clone is one level (R2): the source's settings and cast
 					// floor come along with its registration changes (lane 7).
 					settings: (from as any).settings ?? null,
-					castFloor: (from as any).castFloor ?? null
+					castFloor: (from as any).castFloor ?? null,
+					// 🚧 …and its variable layouts (a clone is one level, R2).
+					variableLayouts: (from as any).variableLayouts ?? {}
 				}
 			}
 		}

@@ -23,7 +23,44 @@ export interface QueryMessage {
 	content?: string | null
 	characterId?: number | null
 	personaId?: number | null
+	/** 🚧 The speaker's cast member — a member id, never a card id. */
+	castMemberId?: number | null
+	/** The speaker reference as the history read carries it. */
+	speaker?: string | null
+	metadata?: { speaker?: unknown } | null
+	isNarratorResponse?: boolean | null
 }
+
+/**
+ * 🚧 The member a card-less CHARACTER line was spoken by, or null when the
+ * line is not one. The rule: an assistant line with no card and no persona,
+ * not narration, whose `metadata.speaker` (or the history read's top-level
+ * `speaker`) is `seated-member:<id>` — or, with NO speaker stamp, whose
+ * `castMemberId` is stamped. A stamp that names anyone else (`player-seat:`,
+ * `user:`, `envoy:`) is never a character seat's line. The caller still
+ * checks the member seats a card-less character seat of this session.
+ */
+export function cardlessLineMemberId(message: any): number | null {
+	if (
+		message?.role !== "assistant" ||
+		message.characterId ||
+		message.personaId ||
+		message.isNarratorResponse
+	)
+		return null
+	const stamp = message.metadata?.speaker ?? message.speaker
+	if (typeof stamp === "string" && stamp.trim()) {
+		const m = /^seated-member:(\d+)$/.exec(stamp.trim())
+		return m ? Number(m[1]) : null
+	}
+	return typeof message.castMemberId === "number"
+		? message.castMemberId
+		: null
+}
+
+/** 🚧 A seat row with no card whose member is `memberId` (a card id never matches). */
+export const isCardlessSeatOf = (cc: any, memberId: number): boolean =>
+	cc?.castMemberId === memberId && !cc.characterId && !cc.character?.id
 
 /**
  * `[Speaker]: text`, with the speaker resolved through removed participants.
@@ -36,8 +73,11 @@ export function formatMessageForQuery(
 	msg: QueryMessage,
 	cast: QueryCast
 ): string {
+	// A card-less seat's `character` has no `id`: `undefined === undefined`
+	// must never match a line that names no card.
 	let char = cast.sessionCharacters?.find(
-		(cc: any) => cc.character?.id === msg.characterId
+		(cc: any) =>
+			msg.characterId != null && cc.character?.id === msg.characterId
 	)?.character
 	let persona = cast.sessionPersonas?.find(
 		(cp: any) => cp.persona?.id === msg.personaId
@@ -59,7 +99,23 @@ export function formatMessageForQuery(
 		removedName ??= removed?.removedName ?? undefined
 	}
 
+	// 🚧 A card-less character seat's line: an assistant line with no card or
+	// persona, not narration, stamped `seated-member:<id>` (or, unstamped, with
+	// a `castMemberId`), named by the seat with no card whose member it is —
+	// the departed ones too. A player's line never is.
+	let cardless: any
+	const memberId = cardlessLineMemberId(msg)
+	if (memberId !== null) {
+		const noCard = (cc: any) => isCardlessSeatOf(cc, memberId)
+		cardless =
+			cast.sessionCharacters?.find(noCard) ??
+			cast.removedSessionCharacters?.find(noCard)
+	}
+
 	const speaker =
+		(cardless?.character as any)?.nickname ||
+		cardless?.character?.name ||
+		cardless?.removedName ||
 		(char as any)?.nickname ||
 		char?.name ||
 		persona?.name ||

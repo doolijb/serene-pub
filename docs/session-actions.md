@@ -46,7 +46,7 @@ Anyone else is refused with *You don't have permission to change this message �
 Some actions don't follow that rule:
 
 - **Stop** belongs to anyone in the session.
-- **Branch from here**, **Narrator Response**, and **Back**, **Forward** and **Regenerate the last turn** (the conversation's history; the three presses sit in the session's header, and Regenerate the last turn is there only in the Lair and the Dungeon Crawler, not in the composer) belong to the session's owner.
+- **Branch from here** (only with [advanced controls](./themes-and-settings.md#show-advanced-controls) on), **Narrator Response**, and **Back**, **Forward** and **Regenerate the last turn** (the conversation's history; the three presses sit in the session's header, and Regenerate the last turn is there only in the Lair and the Dungeon Crawler, not in the composer) belong to the session's owner.
 - **Select for summary** is open to anyone in the session, on any message.
 - **Continue** and **Pick who speaks**: a guest may take the turn at the head of the order, or a turn already lined up for their own character. Taking anyone else's turn out of order is refused with *Only the session owner can take somebody else's turn out of order.*
 
@@ -81,7 +81,7 @@ A slash name belongs to one action. Two pipelines claiming the same name for the
 
 ## Questions put to the cast: forms
 
-Some actions **ask** rather than finish. A pipeline can end a message with a question and a row of choices addressed to one participant: Story's **Ask** puts a question with two to four options to one member of the cast, such as *Will you come to the festival? — Yes · Maybe · No*. That block is a **form**: an action waiting for its answer, which only the person it's addressed to may give.
+Some actions **ask** rather than finish. A pipeline can end a message with a question and a row of choices addressed to one participant: the Lair's **Roll** puts a question with a row of choices to one participant, such as *Roll for the lock? — Roll · Skip*. That block is a **form**: an action waiting for its answer, which only the person it's addressed to may give.
 
 - **A person plays the addressee** (the character is your persona): the buttons are yours. Your answer runs like any action you fired, and the line it writes is yours, under your persona. Everyone else sees *Awaiting an answer* and no buttons. A press from anyone else is refused: *That question was put to Tom, and it is theirs to answer.* The owner is no exception.
 - **The AI plays the addressee**: the genre's answer pipeline answers for them as soon as the question lands. It puts the question to the model as that character, with the options spelled out, and presses the button just as a person would. The answer lands as the character's line, and the run is recorded as a child of the run that asked.
@@ -122,7 +122,7 @@ Hiding a message and going **Back** are the ways to take something out of a stor
 - Delete is offered on a message only when the session's registrations hold an event pipeline on **Deletion asked** (`core:event/message-deletion-asked@1`), registered the way every other event pipeline is, so a preset can drop it.
 - Pressing Delete checks that the message is the session's and yours to change, then raises *Deletion asked* with the message, its channel and who asked. The registered pipeline does the rest. It ends in **Delete message** (`core:outlet/delete-message@1`), which removes that message and takes back everything it changed in one go. It can also put steps of its own around that: a note, a lorebook write, a question to confirm.
 - A deletion pipeline deletes only the message it was asked about. It passes what *Deletion asked* carried, whole, into Delete message's **asked** input (`asked: $.input.main`), and a pipeline that names the message any other way is refused when it's published. Who may change a message still decides who may delete it.
-- In a genre that keeps its turns (the Dungeon Crawler's Honour mode), a deletion pipeline still only reaches the latest turn, and that turn goes whole.
+- In a genre that keeps its turns (the Dungeon Crawler's **Keep every turn**), a deletion pipeline still only reaches the latest turn, and that turn goes whole, and only while Keep every turn is off.
 
 **Back** is no deletion: the turns it takes out are kept until something new is written, and only then deleted. That's the one deletion that is on by default, and it raises nothing.
 
@@ -132,6 +132,9 @@ Hiding a message and going **Back** are the ways to take something out of a stor
 | --- | --- |
 | the messages up to and including the fork, each on its own conversation, with its author and its time | the session's own pipeline choices and setting changes |
 | the active cast, envoys, personas, guests (players and watchers) and tags | the record of edits, deletes and swipes: the branch's first change is the fork itself |
+| characters and player seats with no character card, each still played by whoever seated it | |
+| for a session whose lorebook is its own notes: the line it reads with its entries, and the notes' values, sheets and the links between their entries, as they stood at the fork | in a session's own notes, the links between its people and its entries; a ruleset's ties |
+| for a session that reads a lorebook but keeps its changes in its own notes: the notes' links as they stood at the fork (one that has an end in the lorebook keeps that end), and an entry filed under one of the lorebook's cast keeps that filing | |
 | the genre, preset and genre settings; the scenario; the lorebook, line and story clock, as it stood at the fork (moves made after it are taken off) | |
 | stats and their changes recorded up to the fork, and the story clock's moves up to it | |
 | each person's layout of the session and every panel's settings (tab names, which channel or lane a panel shows, a goal panel's key, the sheet's owners), and the tab they had open | |

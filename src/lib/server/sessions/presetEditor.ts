@@ -405,3 +405,120 @@ export async function registeredInOf(db: Db, slug: string): Promise<Sockets.Pipe
 	}
 	return out
 }
+
+// ── 🚧 a preset's variable layouts (PLAN variable-layouts 2026-11-10, W6) ──
+
+/** A refusal in words, for a person. */
+export class PresetVariableLayoutRefusal extends Error {}
+
+/** A preset written in code — shipped, or a package's — is read-only; copy it to change. */
+const isDeclaredPreset = (p: { seedKey: string | null; ownerPluginId: number | null; isImmutable: boolean }): boolean =>
+	!!p.seedKey || p.ownerPluginId != null || p.isImmutable
+
+/**
+ * **A preset's variable layouts, as the form shows them**: one row per
+ * variable it states a layout for, each with the layout it names (when that
+ * still resolves), and what the pub would use instead — so the difference is
+ * plain. `dangling` lists the entries that name no layout now (a removed
+ * package's): the run skips each and the pub's layout renders.
+ */
+export async function presetVariableLayoutsView(
+	db: Db,
+	presetId: number
+): Promise<Sockets.Pipelines.PresetVariableLayouts.Response | null> {
+	const [preset] = await db.select().from(schema.sessionPresets).where(eq(schema.sessionPresets.id, presetId)).limit(1)
+	if (!preset) return null
+	const { presetVariableLayoutsOf, layoutByReference, pubLayoutOf } = await import(
+		"$lib/server/pipelines/entities/variableTemplates"
+	)
+	const { defaultVariableTemplateFor } = await import("$lib/server/pipelines/boot/seedVariableTemplates")
+	const { getVariable } = await import("@serene-pub/sdk")
+	const stored = await presetVariableLayoutsOf(db, presetId)
+	const nameOf = async (id: number | null) => {
+		if (id == null) return null
+		const [row] = await db
+			.select({ name: schema.pipelineVariableTemplates.name })
+			.from(schema.pipelineVariableTemplates)
+			.where(eq(schema.pipelineVariableTemplates.id, id))
+			.limit(1)
+		return row ? { templateId: id, name: row.name } : null
+	}
+	const rows: Sockets.Pipelines.PresetVariableLayouts.Row[] = []
+	const dangling: Array<{ variableId: string; reference: string }> = []
+	for (const [variableId, reference] of Object.entries(stored)) {
+		const templateId = await layoutByReference(db, variableId, reference)
+		const layout = await nameOf(templateId)
+		if (!layout) dangling.push({ variableId, reference })
+		const pubId = await pubLayoutOf(db, variableId)
+		const pub = pubId != null ? await nameOf(pubId) : await nameOf(await defaultVariableTemplateFor(db, variableId))
+		rows.push({
+			variableId,
+			variableLabel: text(getVariable(variableId)?.i18n?.name, variableId),
+			reference,
+			templateId: layout?.templateId ?? null,
+			layoutName: layout?.name ?? null,
+			pubLayout: pub ? { ...pub, chosen: pubId != null } : null
+		})
+	}
+	// The variables this preset's pipelines render: its effective registrations (its rows over its genre's).
+	const { ensureCoreGenres } = await import("$lib/server/pipelines/registrations/genreDefaults")
+	await ensureCoreGenres()
+	const { genreRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const { presetChangesOfPreset } = await import("$lib/server/pipelines/registrations/presetRows")
+	const { variablesRenderedByPipelines } = await import("$lib/server/pipelines/config/variableLayoutsView")
+	const effective = effectiveRegistrations(
+		(await genreRegistrations(db, preset.genreId)) as RegistrationDecl[],
+		await presetChangesOfPreset(db, presetId)
+	)
+	const candidates = await variablesRenderedByPipelines(db, effective.map((r) => r.pipeline))
+	return { presetId, editable: !isDeclaredPreset(preset as never), rows, dangling, candidates }
+}
+
+/**
+ * **Set or clear one of a preset's variable layouts.** `reference: null`
+ * clears. Refused, in words, on a preset written in code, for a variable this
+ * pub does not know, and for a reference no layout of that variable goes by
+ * (a layout with none must be given one first).
+ */
+export async function setPresetVariableLayout(
+	db: Db,
+	input: { presetId: number; variableId: string; reference: string | null }
+): Promise<void> {
+	const [preset] = await db
+		.select()
+		.from(schema.sessionPresets)
+		.where(eq(schema.sessionPresets.id, input.presetId))
+		.limit(1)
+	if (!preset) throw new PresetVariableLayoutRefusal("There is no such preset.")
+	if (isDeclaredPreset(preset as never))
+		throw new PresetVariableLayoutRefusal(
+			`'${preset.name}' ships ready-made, so its variable layouts stay as they are. Copy it, and change the copy.`
+		)
+	const { presetVariableLayoutsOf, layoutByReference, parseLayoutReference } = await import(
+		"$lib/server/pipelines/entities/variableTemplates"
+	)
+	const stored = await presetVariableLayoutsOf(db, input.presetId)
+	const next = { ...stored }
+	if (input.reference === null) {
+		if (!(input.variableId in stored))
+			throw new PresetVariableLayoutRefusal("This preset has no variable layout of its own for that variable.")
+		delete next[input.variableId]
+	} else {
+		const { getVariable } = await import("@serene-pub/sdk")
+		if (!getVariable(input.variableId))
+			throw new PresetVariableLayoutRefusal(`'${input.variableId}' is not a variable this pub knows.`)
+		if (!parseLayoutReference(input.reference))
+			throw new PresetVariableLayoutRefusal(
+				`'${input.reference}' is not a variable layout reference. It reads <owner>/<name>@<number>, for example 'core/json@1'.`
+			)
+		if ((await layoutByReference(db, input.variableId, input.reference)) == null)
+			throw new PresetVariableLayoutRefusal(
+				`No variable layout of ${input.variableId} goes by '${input.reference}'. A layout with no reference has to be given one first.`
+			)
+		next[input.variableId] = input.reference
+	}
+	await db
+		.update(schema.sessionPresets)
+		.set({ variableLayouts: next })
+		.where(eq(schema.sessionPresets.id, input.presetId))
+}

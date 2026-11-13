@@ -13,7 +13,14 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { and, eq, isNotNull } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { saveDocument, loadDocument } from "$lib/server/pipelines/boot/store"
-import { canonicalHash, type SpecDocument } from "@serene-pub/sdk"
+import {
+	canonicalHash,
+	compile,
+	coreEvents,
+	spec,
+	type SpecDocument
+} from "@serene-pub/sdk"
+import * as C from "@serene-pub/contracts"
 import { lairReplySpec, LAIR_REPLY_SPEC_ID } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
 
@@ -122,5 +129,81 @@ describe("nested clauses round-trip through the store", () => {
 		// Healed in place — the same version row, not a new one.
 		expect(after!.activeVersionId).toBe(spec!.activeVersionId)
 		expect(canonicalHash(await loadActive(doc.id))).toBe(canonicalHash(doc))
+	}, 180_000)
+})
+
+/**
+ * A junction whose branches are declared in `order`: a name starting with
+ * `empty` holds no member, any other holds a presences query.
+ */
+function junctionSpec(id: string, order: string[]) {
+	return compile(
+		spec(id, { version: "1.0.0", taxonomy: { role: "maintenance" } })
+			.inlet("event", C.sessionEvent.v1(), {
+				suits: [coreEvents.roundEnded]
+			})
+			.query("modes", ($) =>
+				C.sessionSettings.v1({ scope: $.event.sessionScope })
+			)
+			.junction("pick", { on: ($) => $.modes.main }, (j) => {
+				let jj = j
+				for (const name of order) {
+					const predicate = { path: "routineModes.x", equals: name }
+					jj = name.startsWith("empty")
+						? jj.when(name, predicate, (e) => e)
+						: jj.when(name, predicate, (c) =>
+								c.query(`present_${name}`, ($) =>
+									C.castPresences.v1({ scope: $.event.sessionScope })
+								)
+							)
+				}
+				return jj
+			})
+			.build()
+	)
+}
+
+describe("a branch with no member survives the store", () => {
+	const cases: [string, string[]][] = [
+		["first", ["empty", "b", "c"]],
+		["in the middle", ["b", "empty", "c"]],
+		["last", ["b", "c", "empty"]],
+		["two, declared out of name order", ["emptyz", "b", "emptya"]]
+	]
+	for (const [label, order] of cases) {
+		it(`an empty branch declared ${label} loads back as compiled`, async () => {
+			const doc = junctionSpec(
+				`test:spec/empty-branch-${label.replace(/[^a-z]+/g, "-")}`,
+				order
+			)
+			const saved = await saveDocument(db, doc, { publish: true })
+			const back = await loadDocument(db, saved.specVersionId)
+			const pick = back.clauses.find((c) => c.id === "pick")!
+			const want = doc.clauses.find((c) => c.id === "pick")!
+			expect(pick.chains).toEqual(want.chains)
+			for (const name of order.filter((n) => n.startsWith("empty")))
+				expect(pick.chains).toContain(name)
+			expect(canonicalHash(back)).toBe(canonicalHash(doc))
+			const again = await saveDocument(db, doc, { publish: true })
+			expect(again.written).toBe(false)
+		}, 60_000)
+	}
+
+	it("a second boot publishes nothing, and a published junction keeps its empty branches", async () => {
+		const { bootstrapPipelines } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
+		await bootstrapPipelines(db as any)
+		const { seedCoreSpecs } = await import("$lib/server/pipelines/boot/seed")
+		const reports = await seedCoreSpecs(db as any)
+		expect(reports.filter((r) => r.action !== "present")).toEqual([])
+
+		// A fixture spec with a junction holding empty branches, published as a spec of its own.
+		const doc = junctionSpec("test:spec/empty-branch-second-boot", ["b", "emptyz", "emptya"])
+		const saved = await saveDocument(db, doc, { publish: true })
+		const back = await loadDocument(db, saved.specVersionId)
+		const pick = back.clauses.find((c) => c.id === "pick")!
+		expect(pick.chains).toEqual(["b", "emptya", "emptyz"])
+		expect(canonicalHash(back)).toBe(canonicalHash(doc))
 	}, 180_000)
 })

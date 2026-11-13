@@ -384,6 +384,63 @@ describe("core's remote Chronicle", () => {
 	)
 
 	test(
+		"Not yet compiled: the unfiled days draw after Scenes, a dated day and an Undated one",
+		{ timeout: 120_000 },
+		async () => {
+			const scene = (id: number, name: string) => ({
+				id,
+				name,
+				lineCount: 2,
+				order: id,
+				summarized: false,
+				graphed: false
+			})
+			const { view } = await mountChronicle({
+				answer: {
+					...ANSWER,
+					unfiledDays: [
+						{
+							date: { year: 412, month: 3, day: 6 },
+							label: "6 March, Year 412",
+							scenes: [
+								scene(10, "The ambush"),
+								scene(11, "The retreat")
+							]
+						},
+						{
+							date: null,
+							label: "",
+							scenes: [scene(12, "The rumour")]
+						}
+					]
+				}
+			})
+			const section = view.query(part("unfiled"))!
+			expect(section).not.toBeNull()
+			expect(
+				view.query(part("scenes"))!.compareDocumentPosition(section) &
+					Node.DOCUMENT_POSITION_FOLLOWING
+			).toBeTruthy()
+			expect(text(section.querySelector(part("heading")))).toBe(
+				"Not yet compiled"
+			)
+			const days = [...section.querySelectorAll(part("unfiled-day"))]
+			expect(
+				days.map((d) => [
+					text(d.querySelector(part("unfiled-date"))),
+					[...d.querySelectorAll(part("scene-name"))].map((n) =>
+						text(n)
+					)
+				])
+			).toEqual([
+				["6 March, Year 412", ["The ambush", "The retreat"]],
+				["Undated", ["The rumour"]]
+			])
+			expect(view.errors).toEqual([])
+		}
+	)
+
+	test(
 		"what the page declines is said in the widget (R77)",
 		{ timeout: 120_000 },
 		async () => {
@@ -402,7 +459,7 @@ describe("core's remote Chronicle", () => {
 	)
 
 	test(
-		"story:moved asks again; with no lorebook it says so in one line",
+		"story:moved asks again; with no lorebook it draws nothing",
 		{ timeout: 120_000 },
 		async () => {
 			let year = 412
@@ -427,17 +484,17 @@ describe("core's remote Chronicle", () => {
 			expect(
 				none.view.query(part("root"))?.getAttribute("data-state")
 			).toBe("no-book")
-			expect(text(none.view.query(part("empty")))).toBe(
-				"This session reads no lorebook."
-			)
-			expect(none.view.query(part("clock"))).toBeNull()
+			// R10: no book draws an empty root — no sentence.
+			expect(none.view.query(part("empty")) === null).toBe(true)
+			expect(text(none.view.query(part("root")))).toBe("")
+			expect(none.view.query(part("clock")) === null).toBe(true)
 		}
 	)
 })
 
 describe("the page mounts Chronicle remote", () => {
 	test("core's own module, served at /core-ui/chronicle, granted 'lore' for its requests", () => {
-		const widget = coreDefaultWidgets().find((p) => p.id === "chronicle")!
+		const widget = coreDefaultWidgets(true).find((p) => p.id === "chronicle")!
 		expect(widget.surface).toEqual({
 			kind: "remote",
 			owner: "core",

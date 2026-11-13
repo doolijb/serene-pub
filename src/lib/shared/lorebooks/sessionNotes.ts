@@ -9,7 +9,8 @@
  * own section "Session notes", never in pickers; Share as a lorebook moves one
  * to the main list." · R-p: "*Share as a lorebook* becomes a DROP-DOWN with two
  * choices when the own book overlays an attached book: (1) **Share to the
- * attached book** … (2) **Clone with changes and attach**".
+ * attached book** … (2) **Clone with changes and attach**". Clone with changes
+ * is replaced by **Merge ‹book› into these notes** (★B-2, 2026-11-08; `FOLD_LABEL`).
  */
 
 /** The Lorebooks view's section of own books. */
@@ -19,9 +20,7 @@ export const SHARE_LABELS = Object.freeze({
 	/** The one verb when the own book overlays nothing. */
 	asLorebook: "Share as a lorebook",
 	/** Verb 1 of the drop-down, named by the attached book. */
-	toAttached: (book: string): string => `Share to ${book}`,
-	/** Verb 2 of the drop-down. */
-	cloneWithChanges: "Clone with changes and attach"
+	toAttached: (book: string): string => `Share to ${book}`
 })
 
 /** Asked before each verb. */
@@ -29,29 +28,54 @@ export const SHARE_CONFIRMS = Object.freeze({
 	asLorebook:
 		"Share this session's notes as a lorebook? They become a lorebook of your own in Lorebooks, the session reads it from now on, and its notes start again empty.",
 	toAttached: (book: string): string =>
-		`Share this session's notes to ${book}? Every change in them is written into ${book} at once.`,
-	cloneWithChanges: (book: string): string =>
-		`Clone ${book} with this session's notes? The copy is a lorebook of your own with every change written in, and the session reads it in place of ${book}. ${book} itself is not changed.`
+		`Share this session's notes to ${book}? Every change in them is written into ${book} at once.`
 })
 
 export const SHARE_REFUSALS = Object.freeze({
 	missing: "Session not found.",
 	notOwner: "Only the session's owner can share its notes.",
 	attached:
-		"This session reads a lorebook, so its notes are shared to that lorebook or with a copy of it.",
-	noBook:
-		"This session reads no lorebook, so there is nothing to clone. Share its notes as a lorebook instead."
+		"This session reads a lorebook, so its notes are shared to that lorebook, or that lorebook is merged into them."
 })
 
 /**
- * The book lock's two refusals (sessions/bookLock.ts re-exports them; pass 11:
- * "refusal offers *Share as a lorebook*"). Said when a session already under way
- * is asked to read another book, or none.
+ * 🚧 **Merge ‹book› into these notes** (★B-2, 2026-11-08; the code says *fold*, `lorebooks/foldInParent.ts`):
+ * the attached book copied into the session's own notes, which the session then reads alone.
  */
-/** No shared book: the session's world is its own book. */
-export const NOTES_KEEP_THE_WORLD =
-	"This story is already under way in its session notes, so it can't start reading a lorebook now. Share its notes as a lorebook to keep building on them."
+export const FOLD_LABEL = (book: string): string =>
+	`Merge ${book} into these notes`
 
-/** A shared book: the session keeps reading it. `bookName` arrives quoted (`'Brackenvale'`) or as "its lorebook". */
-export const bookFixedSentence = (bookName: string): string =>
-	`This story is under way with ${bookName}, so it keeps reading it. Use Share to carry its session notes into ${bookName}, or to clone ${bookName} with them.`
+/** 🚧 Asked before the merge — the ruled sentence (★B-2, 2026-11-08). */
+export const FOLD_CONFIRM = (book: string): string =>
+	`${book}'s entries, cast, lines and dates are copied in, your changes stay on top, and from then on the session reads only its notes. ${book} is not changed.`
+
+/** 🚧 Said once the merge is done (provisional wording). */
+export const FOLD_DONE = (book: string): string =>
+	`Merged ${book} into this session's notes.`
+
+/** 🚧 The merge's refusals (provisional wording, for the owner's copy batch). */
+export const FOLD_REFUSALS = Object.freeze({
+	missing: "Session not found.",
+	notOwner: "Only the session's owner can merge a lorebook into its notes.",
+	/** A second merge, or a session that never read a shared lorebook. */
+	alreadyOwn:
+		"This session already reads only its own notes, so there is nothing to merge.",
+	/** The in-transaction check found a difference; nothing was written. */
+	readsDifferently: (book: string): string =>
+		`Nothing was merged: this session would have read its story differently afterwards. It still reads ${book}; share its notes to ${book} instead.`
+})
+
+/** 🚧 A surfaced book read by a session that is not its own, a branch or a next chapter (★B-3, 2026-11-08). */
+export const SURFACED_BOOK_REFUSAL =
+	"This lorebook is another session's story. Start from a copy of it instead."
+
+/** 🚧 The book lock's one refusal (★B-5, 2026-11-08): server, old clients and the Guide alike. */
+export const BOOK_LOCK_REFUSAL = "A session keeps the lorebook it started with."
+
+/** 🚧 The edit form's read-only Lorebook line, one per book kind (plan §34.3). `book` is the read book's plain name. */
+export const BOOK_LOCK_LINES = Object.freeze({
+	ownBook:
+		"This session's lorebook is its own notes, and a session keeps the lorebook it started with. Share them as a lorebook to build on them in other sessions.",
+	overlay: (book: string): string =>
+		`This session reads ${book} and keeps it. Share its notes to ${book}, or merge ${book} into its notes to make the story its own.`
+})

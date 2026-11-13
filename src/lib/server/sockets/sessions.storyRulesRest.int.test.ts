@@ -9,6 +9,8 @@
  * their own, Story's Rest is offered as it always was.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf } from "$lib/server/state/seatRefs"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -146,7 +148,10 @@ describe("Story's Rest and the rules' own (S3)", () => {
 
 		// The persona's energy, spent down, then the rules' Rest pressed from the composer.
 		const { stateFor } = await import("$lib/server/state/resolve")
-		const energyOf = async () => (((await stateFor(db as any, sessionId)).cast.byId as Record<string, Record<string, unknown>>)[String(persona)] ?? {})["energy"]
+		// ⏳ The cast is keyed by the seat as stored: `player_seat:<id>` with the switch on, else the card id.
+		const seatMap = await loadSeatMap(db as any, sessionId)
+		const castKey = memberFormOn() ? (() => { const o: any = memberFormOf(seatMap, { kind: "session_cast", id: persona }); return o ? `${o.kind}:${o.id}` : String(persona) })() : String(persona)
+		const energyOf = async () => (((await stateFor(db as any, sessionId)).cast.byId as Record<string, Record<string, unknown>>)[castKey] ?? {})["energy"]
 		const { resolveRulesetTurn } = await import("$lib/server/rulesets/resolve")
 		const spent: any = await resolveRulesetTurn(db as any, {
 			scope: { sessionId },

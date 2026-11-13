@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import { and, eq, sql } from "drizzle-orm"
+import { genuineProvidedMarkSql } from "$lib/server/plugins/providedMarks"
 import * as schema from "$lib/server/db/schema"
 import { isFailedQuery, isUniqueViolation } from "$lib/server/db/errors"
 import type { Handler } from "$lib/shared/events"
@@ -44,7 +45,8 @@ async function buildFoldersList(
 		.where(
 			and(
 				eq(schema.characters.userId, userId),
-				eq(schema.characters.isDeleted, false)
+				eq(schema.characters.isDeleted, false),
+				sql`NOT ${genuineProvidedMarkSql()}`
 			)
 		)
 		.groupBy(schema.characters.folderId)

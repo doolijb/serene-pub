@@ -201,6 +201,7 @@ describe("users and sign-in", () => {
 		expect(rows[0].theme).toBe("cerberus")
 		expect(rows[0].background_opacity).toBe(60)
 		expect(rows[0].show_all_character_fields).toBe(true)
+		expect(rows[0].show_advanced_controls).toBe(true)
 	})
 })
 
@@ -505,8 +506,14 @@ describe("sessions", () => {
 		expect(await count("session_guests")).toBe(manifest.counts.chat_guests)
 		const envoys = await one(`SELECT count(*)::int AS n FROM session_characters WHERE envoy_slug IS NOT NULL`)
 		expect(envoys.n).toBe(0)
-		const removed = await one(`SELECT count(*)::int AS n FROM session_characters WHERE session_id = $1 AND removed_at IS NOT NULL`, ids.chats.removed)
-		expect(removed.n).toBe(1)
+		// A seat removed in 0.5.3 that has lines arrives benched (same rule as
+		// data upgrade 0152): off, not removed, its removed name kept.
+		const removed = await q(`SELECT is_active, removed_at, removed_name FROM session_characters WHERE session_id = $1 AND removed_name IS NOT NULL`, ids.chats.removed)
+		expect(removed).toHaveLength(1)
+		expect(removed[0].is_active).toBe(false)
+		expect(removed[0].removed_at).toBeNull()
+		const lines = await one(`SELECT count(*)::int AS n FROM session_messages m JOIN session_characters r ON r.session_id = m.session_id AND r.character_id = m.character_id WHERE r.session_id = $1 AND r.removed_name IS NOT NULL`, ids.chats.removed)
+		expect(lines.n).toBeGreaterThan(0)
 	})
 })
 

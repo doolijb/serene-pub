@@ -55,9 +55,9 @@ The Castellan's plan for the turn appears in the Sanctum as a short list. If the
 - **Places**: the dungeon's rooms from your lorebook. The room the party stand in is marked **Here**, and each room's ways out are listed under it. Click a room to open it, or press **Show the map**. See [Places and maps](./lorebook-places.md).
 - **Castellan's scratchpad**: the Castellan's running notes (see [below](#the-castellans-scratchpad)).
 
-**A player's view.** A friend who joins sees the **Party** layout: the stats, the story (with no tabs), the rooms, and a **Party** panel where your scratchpad would be. The Party panel has two tabs: **Turn order**, whose turn it is and who the turn waits for, and **Who's here**, who has the session open and which delver each plays. Players never see the Sanctum or the scratchpad.
+**A player's view.** A friend who joins sees the **Party** layout: the stats, the story (with no tabs), the rooms, and a **Party** panel under the rooms where your scratchpad would be. The Party panel has two tabs: **Turn order**, whose turn it is and who the turn waits for, and **Who's here**, who has the session open and which delver each plays. Players never see the Sanctum or the scratchpad.
 
-On a phone, each of these is one of the side views in the **Session panels** menu. To arrange your own, see [Session layout](./session-layout.md).
+On a phone, a **Left · Middle · Right** switch under the header shows one zone at a time: the stats on the left, the story in the middle, the rooms on the right. To arrange your own, see [Session layout](./session-layout.md).
 
 ## How a turn runs
 
@@ -157,6 +157,8 @@ Find it under **Edit session › Settings › Routines**. Like every [routine](.
 
 Its **When it runs** is **After each round** (once everyone has had their turn) unless you pick **After each turn**, which keeps the books after every line and costs a model call each time.
 
+🚧 The clock moves each round by the session's **Minutes each round moves the clock** (5 by default; 0 turns it off), in every preset, with no model: the pipeline **Each round moves the clock** does it, at once, whatever **Keep the books** is set to. The setting is under **Lair** in the Lair's settings (**Edit session › Settings**). It moves only a session whose clock is set (its own, or the one set on its lorebook's line); a session with no clock set is left alone and gets no line. The move shows under the line that ended the round, and deleting that line takes it back (see [The story clock](./lorebook-time.md#the-story-clock)). **Keep the books** moves the clock only when its **Move the clock** switch is on and it judges a move; the switch is off in every Lair preset, so the Lair gets no model-judged time unless you switch it on (**Full** applies the move, **Review** holds it for you). If both are on, the clock moves twice a round: set **Minutes each round moves the clock** to 0 so only the routine moves it.
+
 ## Rooms
 
 Rooms are an optional layer: the loop runs without them. The setting **Rooms** (on by default, off and locked under **Words only**) turns them on. Rooms are the lorebook's place entries, and they're yours to approve, never the model's to file on its own.
@@ -167,7 +169,7 @@ When the planner sends the party through a way out to a room nothing describes y
 
 The question has one button, **Describe *the room*…**, which opens a small window:
 
-- **Write the room.** What you write is saved to the lorebook exactly as you wrote it, with no review: they're your own words. You don't need to write the way back. Other ways out can go in an *Exits:* line, such as *Exits: north → the Old Well*.
+- **Write the room.** What you write is saved exactly as you wrote it, with no review: they're your own words. With scenes on Automatic it waits in the session's notes and reaches the lorebook when the scene ends; otherwise it is saved to the lorebook at once. You don't need to write the way back. Other ways out can go in an *Exits:* line, such as *Exits: north → the Old Well*.
 - **Leave it empty.** The Castellan drafts the room, and the draft waits for your review: rename it and edit the text before it's saved. A draft fills in only what the session's rules describe for a place, and nothing they don't.
 
 The room is named after the door the party knocked at. Once saved, it's **linked to the room the party stand in**, both ways (*leads to*), so the next turn's planner sees the way through. Then a line of yours, *The party go on into …*, is added and the story carries on by itself. If you reject the Castellan's draft, nothing is saved and the knock opens again.
@@ -249,11 +251,11 @@ Under **Edit session › Settings**:
 | **What your lines are called** | Your lines' name, *Dungeon Master* when empty. |
 | **Ask before regenerating a turn** | Brings back the dialog you turned off with *Don't ask again*. |
 
-**Rules** and **How strict** are the session's own (see [Rules](./rulesets.md)); **Routines** lists **Keep the books**, **Keep the scratchpad** and **File the current room**. A preset can lock a setting: **Words only** locks How strict and Rooms, and **The rules decide** locks How strict. Neither locks the rules.
+**Rules** and **How strict** are the session's own (see [Rules](./rulesets.md)); **Routines** lists **Keep the books**, **Keep the scratchpad**, **File the current room** and **Find where scenes begin**. A preset can lock a setting: **Words only** locks How strict and Rooms, and **The rules decide** locks How strict. Neither locks the rules.
 
 ## Stats
 
-The Lair declares no stats of its own: what the party carry is the session's **rules'**. Under Vis Itineris, a delver's health, abilities, class and gear; under Freeform, nothing counted, and the sheet says _This session's rules declare no attributes_. The Lair **plays best with** the party's health, what ails them and somewhere to keep what they carry, and the Rules card says which of those your rules tell in words instead.
+The Lair declares no stats of its own: what the party carry is the session's **rules'**. Under Vis Itineris, a delver's health, abilities, class and gear; under Freeform, nothing counted, and the sheet draws nothing. The Lair **plays best with** the party's health, what ails them and somewhere to keep what they carry, and the Rules card says which of those your rules tell in words instead.
 
 Serene Pub keeps the rest itself, and none of it is ever one of the rules' attributes:
 
@@ -265,7 +267,7 @@ Changes wait for you as described in [Keeping the books](#keeping-the-books). Se
 
 ## Scenes
 
-A Lair keeps [scenes](./sessions.md#when-a-new-scene-begins) like any session, with one moment of its own: **The place changes** follows the party's **Location**. When the Castellan moves them into another room (or you change it yourself), a new scene is suggested at the next line, named after the room, such as *Scene 4 · the Crypt*. Switch it off under **Scenes** in the session's settings. Talk in the Sanctum never suggests a scene.
+A Lair keeps [scenes](./sessions.md#when-a-new-scene-begins) like any session, with one moment of its own: **The place changes** follows the party's **Location**. When the Castellan moves them into another room (or you change it yourself), a new scene begins by itself a couple of rounds later, at the line where the party entered the room, named after it, such as *Scene 4 · the Crypt*. Switch it off under **Scenes** in the session's settings, or switch off the routine **Find where scenes begin**. Talk in the Sanctum never begins one.
 
 ## Coming from an older Lair
 

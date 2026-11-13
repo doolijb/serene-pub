@@ -8,7 +8,7 @@
  * affordances leave (`canRerunMessage`).
  */
 import { SvelteSet } from "svelte/reactivity"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
 
 /** The verbs a row reruns by, as their socket events. */
@@ -26,15 +26,17 @@ export function createRerunRefusals(inbox: Pick<SessionPageInbox, "on">) {
 	const pending = new Map<RerunEvent, number>()
 	const refused = new SvelteSet<number>()
 
-	const hear = (event: RerunEvent) => (msg: { error?: string; sessionMessage?: unknown }) => {
-		const id = pending.get(event)
-		// Another tab's press answers here too (`emitToUser`): not ours to say.
-		if (id === undefined) return
-		pending.delete(event)
-		if (!msg?.error) return
-		refused.add(id)
-		toaster.error({ title: msg.error })
-	}
+	const hear =
+		(event: RerunEvent) =>
+		(msg: { error?: string; sessionMessage?: unknown }) => {
+			const id = pending.get(event)
+			// Another tab's press answers here too (`emitToUser`): not ours to say.
+			if (id === undefined) return
+			pending.delete(event)
+			if (!msg?.error) return
+			refused.add(id)
+			notify.error({ source: "sessions:rerunRefusal", title: msg.error })
+		}
 	for (const event of RERUN_EVENTS) inbox.on(event, hear(event) as any)
 
 	return {
@@ -55,7 +57,9 @@ export function createRerunRefusals(inbox: Pick<SessionPageInbox, "on">) {
 export type RerunRefusals = ReturnType<typeof createRerunRefusals>
 
 /** Whether a row carries a form block anywhere in its parts — a question put to somebody. */
-export function rowAsks(msg: { parts?: ReadonlyArray<{ data?: unknown }> | null }): boolean {
+export function rowAsks(msg: {
+	parts?: ReadonlyArray<{ data?: unknown }> | null
+}): boolean {
 	const walk = (blocks: unknown, depth: number): boolean =>
 		Array.isArray(blocks) &&
 		depth < 8 &&
@@ -66,5 +70,7 @@ export function rowAsks(msg: { parts?: ReadonlyArray<{ data?: unknown }> | null 
 				((b as { kind?: unknown }).kind === "form" ||
 					walk((b as { blocks?: unknown }).blocks, depth + 1))
 		)
-	return (msg.parts ?? []).some((p) => walk((p?.data as { blocks?: unknown } | null)?.blocks, 0))
+	return (msg.parts ?? []).some((p) =>
+		walk((p?.data as { blocks?: unknown } | null)?.blocks, 0)
+	)
 }

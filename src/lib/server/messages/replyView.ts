@@ -31,6 +31,9 @@ import {
 	type ReplyPhase
 } from "$lib/shared/utils/reasoningDelimiters"
 import {
+	EMPHASIS,
+	escapeRegExp,
+	labelSpellings,
 	stripOwnLabel,
 	trimAtSpeakerBoundary,
 	type ComposedStops,
@@ -86,21 +89,74 @@ export function replyView(
 				streaming
 			})
 		: { text: stripOwnLabel(split.content, front, { streaming }) }
+	const text = facts?.strayLabels?.length
+		? reanchorOwnLabel(
+				bounded.text,
+				split.content,
+				facts.ownLabels,
+				facts.strayLabels,
+				streaming
+			)
+		: bounded.text
 	// A body that is so far only a held-back label has not started yet.
 	const phase: ReplyPhase =
-		split.phase === "writing" && bounded.text.trim().length === 0
+		split.phase === "writing" && text.trim().length === 0
 			? split.reasoning !== undefined
 				? "reasoning"
 				: "waiting"
 			: split.phase
 	return {
-		content: bounded.text,
+		content: text,
 		reasoning: split.reasoning,
 		phase,
 		...("trimmedAt" in bounded && bounded.trimmedAt
 			? { trimmedAt: bounded.trimmedAt }
 			: {})
 	}
+}
+
+
+/**
+ * The re-anchor rule (owner, 2026-11-04: keep the text, drop both labels): a
+ * reply that OPENED with a stray voice's label (`Narrator: The wind rises.`)
+ * and then hands over to the speaker (`Aria: Hi there.`) loses the speaker's
+ * own label where it opens a later line — first occurrence only, text kept.
+ * A reply with no stray front label is untouched. While streaming, a line
+ * that is so far only the start of the own label is held back until it
+ * resolves.
+ */
+function reanchorOwnLabel(
+	text: string,
+	raw: string,
+	own: readonly string[] | undefined,
+	stray: readonly string[],
+	streaming: boolean
+): string {
+	const names = (own ?? [])
+		.map((n) => n?.trim())
+		.filter((n): n is string => !!n)
+	if (
+		!names.length ||
+		stripOwnLabel(raw, stray, { streaming: false }) === raw
+	)
+		return text
+	const alt = names.map(escapeRegExp).join("|")
+	const label = new RegExp(
+		`(\\n)[ \\t]*${EMPHASIS}(?:${alt})${EMPHASIS}:${EMPHASIS}[ \\t]*`
+	)
+	if (label.test(text)) return text.replace(label, "$1")
+	if (!streaming) return text
+	const at = text.lastIndexOf("\n")
+	if (at < 0) return text
+	const lead = text.slice(at + 1).trimStart()
+	return lead.length > 0 &&
+		names.some((name) =>
+			labelSpellings(name).some(
+				(f) => f.length > lead.length && f.startsWith(lead)
+			)
+		)
+		? text.slice(0, at + 1)
+		: text
 }
 
 /**

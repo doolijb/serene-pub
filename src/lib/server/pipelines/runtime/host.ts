@@ -20,7 +20,21 @@
  */
 
 import { withSeatName } from "$lib/server/sessions/seatName"
-import { and, asc, count, desc, eq, gte, inArray, isNull, sql, type SQL } from "drizzle-orm"
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	gte,
+	inArray,
+	isNotNull,
+	isNull,
+	or,
+	sql,
+	type SQL,
+	getTableColumns
+} from "drizzle-orm"
 import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -84,7 +98,7 @@ import {
 } from "@serene-pub/sdk"
 import { randomUUID } from "node:crypto"
 import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
-import { loreWriteRefusal, libraryWriteRefusal, pluginLibraryRefusal } from "$lib/server/messages/writes"
+import { loreWriteRefusal, libraryWriteRefusal, pluginLibraryRefusal, seatWriteRefusal } from "$lib/server/messages/writes"
 import {
 	checkLoreSources,
 	noteMessagesRead,
@@ -115,10 +129,18 @@ import {
 import { RELATIONSHIP_TEXT_LIMITS } from "$lib/shared/lorebooks/linkVocabulary"
 import type { LineReading } from "$lib/server/state/reading"
 import {
-	applyRetold,
-	retoldByCard,
-	type RetoldMember
-} from "$lib/server/lorebooks/retold"
+	cardsAsSeatsRead,
+	hostSeatRefOf,
+	seatCardAsRead,
+	cardlessSeatCard,
+	seatMembersAsRead
+} from "$lib/server/pipelines/prompt/seatCards"
+import { membersAsRead } from "$lib/server/cast/memberAsRead"
+import { cardsNow, type CardNow } from "$lib/server/cast/seatedCast"
+import { storedSeatRef } from "$lib/server/state/seatRefs"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { parseSeatRef, seatInPlay, seatOf } from "$lib/server/sessions/seats"
+import { inPlay } from "$lib/shared/sessions/inPlay"
 import { SHOW_SPRITE_SPEC_ID } from "@serene-pub/core-catalog"
 import { attachedOrOwnBookOf, ownBookOf } from "$lib/server/lorebooks/ownBook"
 import {
@@ -216,8 +238,20 @@ export interface HostScope {
 	 * may act on the card.
 	 */
 	cardCharacterId?: number
+	/**
+	 * 🚧 The cast member a **card action** runs on, set only by `runCardAction` for a member run
+	 * (then `cardCharacterId` is unset).
+	 */
+	cardActionCastMemberId?: number
 	/** Who triggered the run, for authorship on writes. */
 	userId?: number
+	/**
+	 * 🚧 The applet that draws this session, on a run that came through the
+	 * session's press door (`frameCauseOfRun`). Carried beside `userId` onto each plugin hook
+	 * call this run makes; the library-write node below still asks its own
+	 * `libraryWriteMode`, not this.
+	 */
+	frameCause?: import("$lib/server/sockets/appletCause").FrameCause
 	/**
 	 * A message being composed but not yet stored.
 	 *
@@ -243,6 +277,11 @@ export interface HostScope {
 	 * `generate-text` node has no port for it, and nothing carried it.
 	 */
 	currentCharacterId?: number | null
+	/**
+	 * 🚧 The speaker of a card-less seat; set only when `currentCharacterId`
+	 * is null — a member id, never a card id.
+	 */
+	currentCastMemberId?: number | null
 	/**
 	 * Who portrays each participant this run concerns — resolved once at
 	 * run start by `resolvePortrayals` and pinned on the receipt (R-21 (4)).
@@ -387,6 +426,12 @@ export interface HostScope {
 	 * every session event the run's writes cause, as `cause.auto`.
 	 */
 	auto?: boolean
+	/**
+	 * How this turn was reached — the fired entry's `via` (`runTurn`'s request; `strategy`,
+	 * `script`, `voice`, `pick`, `narrate`, `unprompted`…). Read by the message write, which
+	 * stamps an unprompted narrator line's `turnCause` (★T-1). Absent on a host wired by hand.
+	 */
+	via?: string
 	/**
 	 * The forms this run addressed to a participant the AI portrays (R-15
 	 * *Forms*; U5d), pushed by the message writes when a block's
@@ -595,30 +640,50 @@ async function strategyOfNodes(
 	return producer ? `${producer.definitionId}@${producer.definitionVersion}` : null
 }
 
+/** Whether the run's acting person owns the session — `personMay` write on a session is the owner's alone (★B). */
+async function scopeActorOwnsSession(
+	db: Db,
+	userId: number | null | undefined,
+	sessionId: number
+): Promise<boolean> {
+	if (userId == null) return false
+	const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
+	const person = await actingPersonFor(db, { via: "press", userId })
+	return !!person && (await personMay(db, person, "write", { kind: "session", id: sessionId })).ok
+}
+
 /**
  * Every reference that may hold a turn in this session now: seated
  * characters and personas (a persona is a character row, 0132), and seated
- * envoys that speak in turn. Removed seats and on-action envoys are never
+ * envoys that speak in turn. Seats out of play (removed or benched) and on-action envoys are never
  * in it — the pool's floors, restated where the write happens.
  */
 async function liveCastRefs(db: Db, sessionId: number): Promise<Set<string>> {
 	const [characters, personas, envoys] = await Promise.all([
 		db
-			.select({ characterId: schema.sessionCharacters.characterId })
+			.select({
+				id: schema.sessionCharacters.id,
+				castMemberId: schema.sessionCharacters.castMemberId,
+				characterId: schema.sessionCharacters.characterId
+			})
 			.from(schema.sessionCharacters)
 			.where(
 				and(
 					eq(schema.sessionCharacters.sessionId, sessionId),
-					isNull(schema.sessionCharacters.removedAt)
+					seatInPlay(schema.sessionCharacters)
 				)
 			),
 		db
-			.select({ id: schema.sessionPersonas.id, personaId: schema.sessionPersonas.personaId })
+			.select({
+				id: schema.sessionPersonas.id,
+				castMemberId: schema.sessionPersonas.castMemberId,
+				personaId: schema.sessionPersonas.personaId
+			})
 			.from(schema.sessionPersonas)
 			.where(
 				and(
 					eq(schema.sessionPersonas.sessionId, sessionId),
-					isNull(schema.sessionPersonas.removedAt)
+					seatInPlay(schema.sessionPersonas)
 				)
 			),
 		import("$lib/server/pipelines/entities/envoys").then(({ seatedEnvoys }) =>
@@ -626,11 +691,35 @@ async function liveCastRefs(db: Db, sessionId: number): Promise<Set<string>> {
 		)
 	])
 	const out = new Set<string>()
-	for (const r of characters) if (r.characterId != null) out.add(`character:${r.characterId}`)
-	// A persona seat is its card; 🚧 a card-less player seat is `player-seat:<id>`
-	// (2026-10-14) — the pool admits it as it admits a persona.
-	for (const r of personas)
-		out.add(r.personaId != null ? `character:${r.personaId}` : `player-seat:${r.id}`)
+	if (memberFormOn()) {
+		// ⏳ (S4) Switch on: each seat as a turn entry carries it — its
+		// `hostSeatRefOf` (`seated-member:<id>`, ⏳ its card while it stores no
+		// member; every player seat `player-seat:<id>`).
+		for (const r of characters) {
+			const ref = hostSeatRefOf({
+				kind: "character",
+				seatId: r.id,
+				castMemberId: r.castMemberId,
+				cardId: r.characterId
+			})
+			if (ref) out.add(ref)
+		}
+		for (const r of personas)
+			out.add(
+				hostSeatRefOf({
+					kind: "player",
+					seatId: r.id,
+					castMemberId: r.castMemberId,
+					cardId: r.personaId
+				})!
+			)
+	} else {
+		for (const r of characters) if (r.characterId != null) out.add(`character:${r.characterId}`)
+		// A persona seat is its card; 🚧 a card-less player seat is `player-seat:<id>`
+		// (2026-10-14) — the pool admits it as it admits a persona.
+		for (const r of personas)
+			out.add(r.personaId != null ? `character:${r.personaId}` : `player-seat:${r.id}`)
+	}
 	for (const e of envoys as Array<{ slug: string; speaks?: string; removedAt?: unknown }>)
 		if (e.removedAt == null && e.speaks !== "on-action") out.add(`envoy:${e.slug}`)
 	return out
@@ -847,14 +936,72 @@ const NO_SUCH_CHARACTER = -1
 const speakerIsWired = (q: Record<string, any>): boolean =>
 	q.speaker !== undefined && q.speaker !== null && q.speaker !== ""
 
-const loreVisibilitySubject = (q: Record<string, any>): number | null => {
+const loreVisibilitySubject = (
+	q: Record<string, any>,
+	/** A wired `seated-member:` ref the caller found to be a card-less seat's: its member id. */
+	cardlessMemberId: number | null = null
+): { card: number | null; member: number | null } => {
 	const ref = q.speaker
 	// Unwired: the scope decides as it always did.
-	if (!speakerIsWired(q)) return q.currentCharacterId ?? null
-	if (!isParticipantRef(ref)) return NO_SUCH_CHARACTER
+	if (!speakerIsWired(q))
+		return {
+			card: q.currentCharacterId ?? null,
+			member: q.currentCastMemberId ?? null
+		}
+	// 🚧 A card-less seat's speaker: no card, its member (never a card id).
+	if (cardlessMemberId !== null) return { card: null, member: cardlessMemberId }
+	const none = { card: NO_SUCH_CHARACTER, member: null }
+	if (!isParticipantRef(ref)) return none
 	const parsed = parseParticipantRef(ref)
-	if (parsed.kind !== "character") return NO_SUCH_CHARACTER
-	return participantRowId(parsed.id) ?? NO_SUCH_CHARACTER
+	// 🚧 A `seated-member:` ref reaching here was not translated by the
+	// caller (`storedSeatRef` — seat-cast S3): it names no character.
+	if (parsed.kind !== "character") return none
+	return { card: participantRowId(parsed.id) ?? NO_SUCH_CHARACTER, member: null }
+}
+
+/**
+ * 🚧 A list of participant refs (an audience, a speaker list) as it is
+ * stored: each ref through the door (`storedSeatRef`, seat-cast S3): a
+ * `seated-member:<memberId>` into its seat's card form, any other ref
+ * unchanged; ⏳ (S4) with the member-form switch on, a `character:<cardId>`
+ * into its seat's member form. A member
+ * who sits in no seat of this session is dropped — the card form of nobody
+ * is not a ref to store, and the raw `seated-member:` string is never
+ * stored. Call it before a transaction opens, never inside one.
+ */
+const storedRefsOf = async (
+	db: Db,
+	sessionId: number,
+	refs: readonly string[] | undefined
+): Promise<string[]> => {
+	const out: string[] = []
+	for (const ref of refs ?? []) {
+		const stored = await storedSeatRef(db, sessionId, ref)
+		if (stored !== null) out.push(stored)
+	}
+	return out
+}
+
+/**
+ * ⏳ (S4) A ref the door (`storedSeatRef`) answered, read as the card form the
+ * callers below parse a card id from. Off: unchanged. On the door answers
+ * member form (`seated-member:` / `player-seat:`): read through `seatOf` as
+ * `character:<cardId>` (a seat with a card — a carded player seat is its card)
+ * or a card-less player seat's own `player-seat:<seatId>`; null when no seat
+ * answers or the seat has neither. A `character:` ref is already card form.
+ */
+const cardFormOfStored = async (
+	db: Db,
+	sessionId: number,
+	ref: string | null
+): Promise<string | null> => {
+	if (ref === null || !memberFormOn()) return ref
+	const form = parseSeatRef(ref)?.form
+	if (form !== "seated-member" && form !== "player-seat") return ref
+	const seat = await seatOf(db, sessionId, ref)
+	if (!seat) return null
+	if (seat.cardId != null) return `character:${seat.cardId}`
+	return seat.kind === "player" ? `player-seat:${seat.seatId}` : null
 }
 
 const connectionDescriptorModelId = (v: unknown): number | null =>
@@ -1258,6 +1405,16 @@ const linkEndId = (raw: unknown): number | null => {
  * neither and the row carries one `lorebook_id`, so a cross-book end is
  * refused exactly as the socket handlers refuse one — held again here because
  * a pipeline does not come through them.
+ *
+ * That holds for every write that lands in the book it reads (the attached
+ * lorebook on Full, a session's notes alone). **Two books, one row** is the one
+ * exception, and it is a session whose own notes take the write while it reads
+ * an attached lorebook (`then`): the row is kept in the notes, and an end may
+ * be an entry of either book — an id is found in the notes, else in the
+ * lorebook as the session reads it; a name is looked up in the notes first, and
+ * only when none answers in the lorebook (a tie refuses within its own book).
+ * An id in neither book is refused with its own sentence rather than "Both ends
+ * of a link live in one book".
  */
 async function resolveLoreLinkEnd(
 	tx: Db,
@@ -1267,18 +1424,39 @@ async function resolveLoreLinkEnd(
 	/** The session's reading: its line's chain, fork cuts and moment. */
 	reading: LineReading,
 	/** What the entry is wanted for — the sentences say so (🚧 `update-lore-entry@1` changes one). */
-	purpose: "link" | "change" = "link"
+	purpose: "link" | "change" = "link",
+	/**
+	 * Which entries answer: absent, the book's, on the reading. `update-lore-entry@1`
+	 * of a session with an attached lorebook passes what the session reads — the
+	 * attached book's, then its own book's (`sessionEntriesAsRead`).
+	 */
+	readEntries?: (entryIds?: readonly number[]) => Promise<import("$lib/server/state/entriesOnReading").EntryAsRead[]>,
+	/**
+	 * 🚧 The attached lorebook a session reads beside its own notes (`LoreWriteLine.alsoReads`):
+	 * `lorebookId` and `reading` are then the notes'.
+	 */
+	then?: { lorebookId: number; reading: LineReading }
 ): Promise<number> {
 	const { entriesAsRead, entryNamed } = await import(
 		"$lib/server/state/entriesOnReading"
 	)
+	const read =
+		readEntries ??
+		((ids?: readonly number[]) => entriesAsRead(tx, lorebookId, reading, "session", null, ids))
+	const readThen = then
+		? (ids?: readonly number[]) => entriesAsRead(tx, then.lorebookId, then.reading, "session", null, ids)
+		: null
 	const { unseenSentence } = await import("$lib/shared/lorebooks/placeSight")
 	const id = linkEndId(raw)
 	if (id !== null) {
-		const [row] = await entriesAsRead(tx, lorebookId, reading, "session", null, [id])
+		let [row] = await read([id])
+		if (!row && readThen) [row] = await readThen([id])
 		if (!row)
 			throw new HostScopeError(
-				purpose === "change"
+				then && purpose === "link"
+					? // 🚧 Provisional copy: the owner has not seen this sentence.
+						`${where}: entry ${id} is not in this session's lorebook or its notes, so there is nothing here to link it to.`
+					: purpose === "change"
 					? `${where}: entry ${id} is not in this session's lorebook, so it is not this session's to change.`
 					: `${where}: entry ${id} is not in this session's lorebook, so there is nothing here to link it to. Both ends of a link live in one book.`
 			)
@@ -1293,10 +1471,9 @@ async function resolveLoreLinkEnd(
 		throw new HostScopeError(
 			`${where}: there is nothing to ${purpose} — wire an entry id, the write result of the entry that made it, or the name of an entry in this session's lorebook.`
 		)
-	const hit = entryNamed(
-		name,
-		await entriesAsRead(tx, lorebookId, reading, "session", null)
-	)
+	let hit = entryNamed(name, await read())
+	// Only when the notes answer to nothing is the lorebook asked.
+	if (hit.kind === "none" && readThen) hit = entryNamed(name, await readThen())
 	if (hit.kind === "one") return hit.entryId
 	if (hit.kind === "tie")
 		throw new HostScopeError(
@@ -1390,6 +1567,14 @@ interface LoreWriteLine {
 	 * whether the session already reads that link.
 	 */
 	reading: LineReading
+	/**
+	 * 🚧 Set only on the own-book route of a session that reads an attached
+	 * lorebook: the lorebook, and the session's reading of it. Rows are still
+	 * written to the own book (`reading` above is the own book's main head); this
+	 * is what a match, a bind, a link's end, an Exits line and a history date
+	 * look at after the own book (`findLoreMatch`'s `then`).
+	 */
+	alsoReads?: { lorebookId: number; reading: LineReading }
 }
 
 /**
@@ -1422,10 +1607,29 @@ async function loreWriteLineOf(
 }
 
 /**
+ * 🚧 (sense-b4) The book a session's lorebook-annex write lands in: the route's
+ * own answer (`loreWriteTargetFor`), the attached book or the session's own
+ * book by the write setting, as it was before the scenes rule. A lorebook
+ * annex is none of the entry, place, history day or link writes, so the rule
+ * does not reach it.
+ */
+async function annexWriteBookOf(
+	db: Db,
+	sessionId: number,
+	anchorMessageId?: number
+): Promise<number> {
+	const { loreWriteTargetFor } = await import("$lib/server/lorebooks/ownBook")
+	return (await loreWriteTargetFor(db, sessionId, { anchorMessageId, fork: false })).lorebookId
+}
+
+/**
  * 🚧 Where a session's lore write lands (PLAN-rulesets §26): the attached
  * book on the session's line when the session may write it, else the
- * session's own notes on their main line, every row there stamped with the
- * message that wrote it (`loreWriteTargetFor`).
+ * session's own notes — every row there stamped with the message that wrote it
+ * (`loreWriteTargetFor`). 🚧 (sense-b4) A session whose scenes end by themselves
+ * (`scenesEndByThemselves`) always writes its own book, whatever the lorebook's
+ * write setting, with `opts.notes` or without, and carries the two-book reading
+ * (`alsoReads`); `scenesEndByThemselves` on the result says so.
  */
 async function sessionLoreWriteTo(
 	db: Db,
@@ -1436,7 +1640,8 @@ async function sessionLoreWriteTo(
 	 * 🚧 Into the session's own notes whatever the book allows (lane 2): a
 	 * filing tool on *Remember things*' Review — the lore write mode's own
 	 * Review, where the person carries a note into their book. Host-internal:
-	 * no declared port sets it.
+	 * no declared port sets it. Moot for a session whose scenes end by
+	 * themselves: its writes are all the own book's.
 	 */
 	opts: { notes?: boolean } = {}
 ): Promise<{
@@ -1444,38 +1649,170 @@ async function sessionLoreWriteTo(
 	lorebookId: number
 	line: LoreWriteLine
 	sourceMessageId: number | null
+	/** 🚧 Host-internal: the session's scenes end by themselves (false on the `book` route). */
+	scenesEndByThemselves: boolean
 }> {
-	const { loreWriteTargetFor, ownBookFor, turnAnchorOf } = await import("$lib/server/lorebooks/ownBook")
-	const target = opts.notes
-		? {
-				route: "own-book" as const,
-				lorebookId: (await ownBookFor(db, sessionId)).id,
-				sourceMessageId: await turnAnchorOf(db, sessionId, anchorMessageId)
-			}
-		: await loreWriteTargetFor(db, sessionId, { anchorMessageId })
+	const { loreWriteTargetFor, ownBookFor, turnAnchorOf, scenesEndByThemselves } = await import(
+		"$lib/server/lorebooks/ownBook"
+	)
+	const endsByThemselves = await scenesEndByThemselves(db, sessionId)
+	const target =
+		opts.notes || endsByThemselves
+			? {
+					route: "own-book" as const,
+					lorebookId: (await ownBookFor(db, sessionId)).id,
+					sourceMessageId: await turnAnchorOf(db, sessionId, anchorMessageId)
+				}
+			: // Routed only: the line forks inside the write's own transaction
+				// (`forkedLoreLine`), after its checks, so a refused write forks nothing.
+				await loreWriteTargetFor(db, sessionId, { anchorMessageId, fork: false })
 	if (target.route === "book")
 		return {
 			route: "book",
 			lorebookId: target.lorebookId,
 			line: await loreWriteLineOf(db, sessionId, target.lorebookId),
-			sourceMessageId: null
+			sourceMessageId: null,
+			scenesEndByThemselves: false
 		}
+	// The notes of a session that reads them alone on a line: the write lands
+	// where the session reads, dated as an attached book's write is.
+	const { sessionReadingOf } = await import("$lib/server/state/reading")
+	const own = await sessionReadingOf(db, sessionId)
+	if (own?.onOwnBook === true && own.branchId != null && own.lorebookId === target.lorebookId)
+		return {
+			route: "own-book",
+			lorebookId: target.lorebookId,
+			line: await loreWriteLineOf(db, sessionId, target.lorebookId),
+			sourceMessageId: target.sourceMessageId,
+			scenesEndByThemselves: endsByThemselves
+		}
+	// 🚧 A session that reads an attached lorebook carries that reading with the
+	// write, and dates a row by the newest history day of the two books.
+	// Not for a filing tool's write into the notes (`opts.notes`), unless the session's
+	// scenes end by themselves: then every write on the route carries it.
+	const reads = (!opts.notes || endsByThemselves) && own?.holderBookId != null ? own : null
+	const counted = reads ? await ownBookDaysCounted(db, sessionId) : null
 	return {
 		route: "own-book",
 		lorebookId: target.lorebookId,
 		line: {
 			branchId: null,
-			historyEntryId: null,
+			historyEntryId: counted?.dating?.historyEntryId ?? null,
 			reading: {
 				lorebookId: target.lorebookId,
 				branchId: null,
 				moment: null,
 				forkedAt: null,
 				line: MAIN_LINE
-			}
+			},
+			...(reads ? { alsoReads: { lorebookId: reads.lorebookId, reading: reads } } : {})
 		},
-		sourceMessageId: target.sourceMessageId
+		sourceMessageId: target.sourceMessageId,
+		scenesEndByThemselves: endsByThemselves
 	}
+}
+
+/**
+ * 🚧 The story days a session that reads an attached lorebook counts when its
+ * own notes hold history days too: the newest history day of the lorebook and of
+ * the notes (the notes' at or before the reading's moment, when it has one).
+ * `dating` is the day a row the notes take is dated by — the newest, the
+ * lorebook's on equal dates. `now` is the session's story now with the notes'
+ * newest day counted: its clock when it has one (`session`, `clock`), else the
+ * newer of its line's newest history day and the notes'. Null when the session
+ * reads no attached lorebook or has no own book. `writeDatingAt` and
+ * `sessionStoryNowOf` are not changed: stat values, the timeline and cast
+ * versions date by the lorebook alone.
+ */
+async function ownBookDaysCounted(
+	db: Db,
+	sessionId: number
+): Promise<{
+	dating: import("$lib/server/state/reading").StoryDating | null
+	now: import("$lib/server/state/storyTime").StoryNow | null
+} | null> {
+	const { sessionReadingOf, writeDatingAt } = await import("$lib/server/state/reading")
+	const { sessionStoryNowOf, bookCalendarOf } = await import("$lib/server/state/storyTime")
+	const { compareDates, formatDate } = await import("$lib/shared/lorebooks/storyDate")
+	const reading = await sessionReadingOf(db, sessionId)
+	if (!reading || reading.holderBookId == null) return null
+	const ownDay = await writeDatingAt(db, {
+		lorebookId: reading.holderBookId,
+		branchId: null,
+		moment: reading.moment,
+		forkedAt: null,
+		line: MAIN_LINE
+	})
+	const loreDay = await writeDatingAt(db, reading)
+	const dating =
+		ownDay && (!loreDay || compareDates(ownDay.date, loreDay.date) > 0) ? ownDay : loreDay
+	let now = await sessionStoryNowOf(db, sessionId)
+	if (
+		ownDay &&
+		(!now ||
+			(now.from === "history" &&
+				compareDates(ownDay.date, { year: now.year, month: now.month ?? null, day: now.day ?? null }) > 0))
+	) {
+		now = { year: ownDay.date.year, from: "history" }
+		if (ownDay.date.month != null) now.month = ownDay.date.month
+		if (ownDay.date.day != null) now.day = ownDay.date.day
+		const calendar = await bookCalendarOf(db, reading.lorebookId)
+		if (calendar) now.label = formatDate(now, calendar)
+	}
+	return { dating, now }
+}
+
+/**
+ * 🚧 The line a lore write lands on, after the session's first write forked
+ * it: call on the write's transaction handle, after the book's lock, before
+ * the insert. A session still riding its parent's line forks its own here
+ * (`ensureSessionLine`), inside the transaction, so a refusal that rolls the
+ * transaction back forks nothing and two first writers cannot both fork. A
+ * write to the session's notes (`own-book`) forks nothing: the notes are
+ * main, or the line the session already reads them on. 🚧 (sense-b4) A session
+ * whose scenes end by themselves always has the `own-book` route, so it forks
+ * nothing here.
+ */
+async function forkedLoreLine(
+	tx: Db,
+	sessionId: number,
+	target: { route: "book" | "own-book"; lorebookId: number; line: LoreWriteLine }
+): Promise<LoreWriteLine> {
+	if (target.route !== "book") return target.line
+	const { ensureSessionLine } = await import("$lib/server/lorebooks/sessionLine")
+	await ensureSessionLine(tx, sessionId)
+	return loreWriteLineOf(tx, sessionId, target.lorebookId)
+}
+
+/**
+ * The session's own book when it reads an attached lorebook: whose held
+ * amendments give that lorebook's entries their names for this session alone
+ * (`loadVocabulary`'s `holderBookId`). Undefined with no attached lorebook.
+ */
+async function holderBookOf(db: Db, sessionId: number): Promise<number | undefined> {
+	const { sessionReadingOf } = await import("$lib/server/state/reading")
+	return (await sessionReadingOf(db, sessionId))?.holderBookId
+}
+
+/**
+ * Whether the session's next write to this book forks its own line first
+ * (`line_on_first_write`). 🚧 (sense-b4) Inert for a session whose scenes end
+ * by themselves: its writes carry the own book's id, never `sessions.lorebook_id`.
+ */
+async function pendingLineFork(
+	db: Db,
+	sessionId: number,
+	lorebookId: number
+): Promise<boolean> {
+	const [row] = await db
+		.select({
+			flag: schema.sessions.lineOnFirstWrite,
+			lorebookId: schema.sessions.lorebookId
+		})
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return !!row?.flag && row.lorebookId === lorebookId
 }
 
 /** What `writeLoreLink` did: the row's id, and whether this call made it. */
@@ -1491,6 +1828,8 @@ interface LoreLinkWrite {
 	 * mirror): the id is the standing row's, and nothing was written.
 	 */
 	written: boolean
+	/** 🚧 The book of the row, when it is not the book the write was for (the lorebook's own row, found beside the notes'). */
+	lorebookId?: number
 }
 
 /** A lore link that shares words with one the session reads, but not all of them. */
@@ -1546,7 +1885,10 @@ async function writeLoreLink(
 		lorebookId,
 		req.to,
 		where,
-		line.reading
+		line.reading,
+		"link",
+		undefined,
+		line.alsoReads
 	)
 	const ends = { fromNodeId: null, fromEntryId, toNodeId: null, toEntryId }
 	const linkType =
@@ -1571,16 +1913,26 @@ async function writeLoreLink(
 	// linked to itself — a room whose way out names the room. Judged before
 	// the standing-row lookup, so a self-link is refused, never "found".
 	await assertRelationshipWrite(tx, { op: "create", ends, where })
-	const held = await linksOnReadingThatWay(tx, ends, saying, line.reading)
+	const held = await linksOnReadingThatWay(tx, ends, saying, line.reading, line.alsoReads)
 	const whole =
 		held.find((link) => link.saysAll && link.standing) ??
 		held.find((link) => link.saysAll)
-	if (whole?.standing)
+	if (whole?.standing) {
+		// 🚧 Standing in either book: the answer names the book of the row.
+		const [stands] = line.alsoReads
+			? await tx
+					.select({ lorebookId: schema.narrativeRelationships.lorebookId })
+					.from(schema.narrativeRelationships)
+					.where(eq(schema.narrativeRelationships.id, whole.id))
+					.limit(1)
+			: []
 		return {
 			id: whole.id,
 			fromEntryId: whole.fromEntryId ?? fromEntryId,
-			written: false
+			written: false,
+			...(stands && stands.lorebookId !== lorebookId ? { lorebookId: stands.lorebookId } : {})
 		}
+	}
 	if (whole)
 		throw new HostScopeError(
 			`${where}: ${LINKED_THAT_WAY} ${linkNotStanding(whole)}`
@@ -1676,6 +2028,11 @@ async function exitsLineLinks(
 	if (!signposts.length) return []
 	const { entriesAsRead, entryNamed } = await import("$lib/server/state/entriesOnReading")
 	const places = await entriesAsRead(tx, at.lorebookId, at.line.reading, "session", [LOCATION_TYPE_ID])
+	// 🚧 A session that reads an attached lorebook beside its own notes: a way
+	// out the notes' places do not answer to is looked for among the lorebook's.
+	const lorePlaces = at.line.alsoReads
+		? await entriesAsRead(tx, at.line.alsoReads.lorebookId, at.line.alsoReads.reading, "session", [LOCATION_TYPE_ID])
+		: null
 	const reached = new Set<number>([at.entryId])
 	if (at.reached.length)
 		for (const r of await tx
@@ -1686,14 +2043,27 @@ async function exitsLineLinks(
 	const made: number[] = []
 	for (const signpost of signposts) {
 		let place: number | null = null
+		let stopped = false
 		for (const name of [...signpost.longerNames, signpost.to]) {
 			const hit = entryNamed(name, places)
 			if (hit.kind === "one") {
 				place = hit.entryId
 				break
 			}
-			if (hit.kind !== "none") break
+			if (hit.kind !== "none") {
+				stopped = true
+				break
+			}
 		}
+		if (place === null && !stopped && lorePlaces)
+			for (const name of [...signpost.longerNames, signpost.to]) {
+				const hit = entryNamed(name, lorePlaces)
+				if (hit.kind === "one") {
+					place = hit.entryId
+					break
+				}
+				if (hit.kind !== "none") break
+			}
 		if (place === null || reached.has(place)) continue
 		reached.add(place)
 		const wrote = await writeLoreLink(
@@ -1786,6 +2156,20 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		const { imprintAnchorFor } = await import("$lib/server/lorebooks/imprints")
 		return imprintAnchorFor(db, sessionId, { turnMessageId: turn ?? null, runId: scope.runId ?? null })
 	}
+	/**
+	 * 🚧 The anchor a link the notes took is imprinted with when `imprintAnchor`
+	 * gave none (a press-started run, no turn message): the newest message the
+	 * write's own rows anchor to, as an entry does. Only on the own-book route of
+	 * a session that reads an attached lorebook, and only with a message.
+	 */
+	const linkAnchorOf = (
+		sessionId: number,
+		anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null,
+		target: { line: LoreWriteLine; sourceMessageId: number | null }
+	): import("$lib/server/lorebooks/imprints").ImprintAnchor | null =>
+		anchor === null && target.line.alsoReads && target.sourceMessageId !== null
+			? { sessionId, messageId: target.sourceMessageId, runId: scope.runId ?? null }
+			: null
 	const racesLiveRow = (nodeKey: string, raw: unknown): string | null => {
 		if (liveChannel === undefined) return null
 		const channel = canonicalChannel(raw)
@@ -1794,13 +2178,79 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			: null
 	}
 	/**
+	 * 🚧 A session's change to an entry of its attached lorebook, held: one
+	 * held amendment in the session's own book (`base` set), the lorebook
+	 * untouched — no update, no imprint, no vector delete, no line fork. `data`
+	 * is the change in the wire row's words (`name`, `content`, declared fields
+	 * flat). Only the keys that differ from what the session reads now are kept,
+	 * each with that value as `base` (what the session read when it wrote). Takes
+	 * the advisory lock on the own book; `at` is the caller's open transaction.
+	 */
+	const holdLoreEntryChange = async (
+		a: {
+			nodeKey: string
+			sessionId: number
+			stored: typeof schema.lorebookEntries.$inferSelect
+			data: Record<string, unknown>
+		},
+		at?: Db
+	): Promise<boolean> => {
+		const { nodeKey, sessionId, stored, data } = a
+		if (!Object.keys(data).length) return false
+		const { ownBookFor, turnAnchorOf } = await import("$lib/server/lorebooks/ownBook")
+		const { sessionReadingOf } = await import("$lib/server/state/reading")
+		const { entryOverlaysFor, entryAt, MAIN_HEAD } = await import("$lib/server/state/entriesOnReading")
+		const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
+		const { wrap, sameValue } = await import("$lib/server/lorebooks/imprints")
+		const { NEVER_AMENDED } = await import("$lib/shared/lorebooks/amendments")
+		const { dayOnly } = await import("$lib/shared/lorebooks/storyDate")
+		const { turnMessageOf } = await import("$lib/server/pipelines/runtime/runTurnMessage")
+		const own = await ownBookFor(at ?? db, sessionId)
+		const hold = async (tx: Db): Promise<boolean> => {
+			await tx.execute(sql`select pg_advisory_xact_lock(${own.id})`)
+			// The session's reading carries its own book as holder, so an earlier
+			// held amendment of this session is part of what it read.
+			const reading = (await sessionReadingOf(tx, sessionId)) ?? {
+				...MAIN_HEAD,
+				holderBookId: own.id
+			}
+			const overlays = await entryOverlaysFor(tx, stored.lorebookId, reading, [stored.id])
+			const read = entryAt(toEntryRow(stored), overlays, reading) as unknown as Record<string, unknown>
+			const kept = Object.keys(data).filter((k) => !sameValue(data[k], read[k]))
+			if (!kept.length) return false
+			if (kept.some((k) => NEVER_AMENDED.has(k)))
+				// 🚧 Provisional copy: the owner has not seen this sentence.
+				throw new HostScopeError(
+					`${nodeKey}: '${stored.title ?? `entry ${stored.id}`}' keeps its date in the lorebook, and a session's change cannot move it — change it in the lorebook.`
+				)
+			const day = reading.moment ? dayOnly(reading.moment) : null
+			await tx.insert(schema.entryAmendments).values({
+				lorebookId: own.id,
+				entryId: stored.id,
+				branchId: null,
+				year: day?.year ?? null,
+				month: day?.month ?? null,
+				day: day?.day ?? null,
+				fields: Object.fromEntries(kept.map((k) => [k, data[k]])),
+				base: Object.fromEntries(kept.map((k) => [k, wrap(read[k])])),
+				sourceMessageId: await turnAnchorOf(tx, sessionId, turnMessageId ?? turnMessageOf(scope.runId))
+			})
+			return true
+		}
+		return at
+			? hold(at)
+			: db.transaction(async (tx) => hold(tx as unknown as Db))
+	}
+	/**
 	 * 🚧 The write `update-lore-entry@1` makes, and `create-lore-entry@1` makes
 	 * when its `match` finds the entry (pass 8, R-h): the name, the content
 	 * and the typed-field patch onto a stored entry of the session's line,
 	 * each changed field imprinted with what it held. `at` is the caller's
 	 * open transaction with the book's lock held (the match path); absent,
 	 * this opens its own and takes the lock, and only when something changes.
-	 * Returns whether anything changed — the caller records it.
+	 * A stored entry that is not in the session's own book is the attached
+	 * lorebook's: that change is held (`holdLoreEntryChange`), in every lore
+	 * write mode. Returns whether anything changed — the caller records it.
 	 */
 	const changeLoreEntry = async (
 		a: {
@@ -1813,13 +2263,27 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			name: unknown
 			content: unknown
 			anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null
+			/** 🚧 History days are filed through: never held (see `fileOntoHistoryDay`). */
+			writeThrough?: true
 		},
 		at?: Db
 	): Promise<boolean> => {
 		const { nodeKey, lorebookId, line, stored, patch, anchor } = a
 		const entryId = stored.id
 		const typeId = stored.typeId
-		if ((stored.branchId ?? null) !== (line.branchId ?? null))
+		if (!a.writeThrough && stored.lorebookId !== (await ownBookOf(at ?? db, a.sessionId))?.id) {
+			const held: Record<string, unknown> = { ...patch }
+			if (typeof a.name === "string" && a.name.trim()) held.name = a.name.trim()
+			if (typeof a.content === "string") held.content = a.content
+			return holdLoreEntryChange({ nodeKey, sessionId: a.sessionId, stored, data: held }, at)
+		}
+		// A session about to fork its line stands on no line of its own yet, so
+		// no stored row is on the line this write would land on: refused here,
+		// before anything forks.
+		if (
+			(stored.branchId ?? null) !== (line.branchId ?? null) ||
+			(await pendingLineFork(at ?? db, a.sessionId, lorebookId))
+		)
 			throw new HostScopeError(
 				`${nodeKey}: '${stored.title ?? `entry ${entryId}`}' was written on another line of the book than the one this session plays, and a change to it there is an amendment — change it in the lorebook.`
 			)
@@ -1881,6 +2345,155 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				)
 		}
 		return true
+	}
+	/**
+	 * 🚧 The write `create-lore-entry@1` makes for a history entry: history
+	 * has one entry per day, so a second write for a date is filed onto the
+	 * day's entry (a paragraph after what it holds), never a second row. The
+	 * date is the write's own `fields` year, else the session's story now;
+	 * with neither it is refused (never Year 1 by default). Inside the caller's
+	 * transaction, which holds the book's lock; the content change is
+	 * `changeLoreEntry`'s, imprinted, and a day entry this made is imprinted
+	 * as made first, so a retake removes it after reverting its content.
+	 */
+	const fileOntoHistoryDay = async (
+		tx: Db,
+		a: {
+			nodeKey: string
+			sessionId: number
+			lorebookId: number
+			line: LoreWriteLine
+			fields: Record<string, unknown>
+			content: string
+			sourceMessageId: number | null
+			anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null
+		}
+	): Promise<{
+		row: typeof schema.lorebookEntries.$inferSelect
+		created: boolean
+		changed: boolean
+		note: string | null
+	}> => {
+		const { nodeKey, lorebookId, line, fields, anchor } = a
+		const { assertDateLands, bookCalendarOf, sessionStoryNowOf } = await import(
+			"$lib/server/state/storyTime"
+		)
+		const { historyEntryOfDate, historyDayOwnerRefusal } = await import(
+			"$lib/server/scenes/historyEntryOfDate"
+		)
+		const { imprintMade } = await import("$lib/server/lorebooks/imprints")
+		const { formatDate, dayOnly } = await import("$lib/shared/lorebooks/storyDate")
+		const { BranchRefusal } = await import("$lib/server/state/reading")
+		const part = (v: unknown) => (typeof v === "number" ? v : null)
+		if (
+			typeof fields.year !== "number" &&
+			(part(fields.month) !== null || part(fields.day) !== null)
+		)
+			// 🚧 Provisional copy: the owner has not seen this sentence.
+			throw new HostScopeError(
+				`${nodeKey}: a history date needs a year. Give this write a year in its fields, or leave the date out to use the story's day.`
+			)
+		// 🚧 On the own-book route of a session that reads an attached lorebook:
+		// the default day counts the notes' own history days too, and a date is
+		// checked against the lorebook's calendar, never the notes' own.
+		const calendarBookId = line.alsoReads?.lorebookId ?? lorebookId
+		const storyNow =
+			typeof fields.year === "number"
+				? null
+				: line.alsoReads
+					? ((await ownBookDaysCounted(tx, a.sessionId))?.now ?? (await sessionStoryNowOf(tx, a.sessionId)))
+					: await sessionStoryNowOf(tx, a.sessionId)
+		const date =
+			typeof fields.year === "number"
+				? { year: fields.year, month: part(fields.month), day: part(fields.day) }
+				: storyNow
+					? {
+							year: storyNow.year,
+							month: storyNow.month ?? null,
+							day: storyNow.month != null ? (storyNow.day ?? null) : null
+						}
+					: null
+		if (!date)
+			// 🚧 Provisional copy: the owner has not seen this sentence.
+			throw new HostScopeError(
+				`${nodeKey}: history needs a date. Give this write a year in its fields, or give the story a dated history entry first.`
+			)
+		let day: Awaited<ReturnType<typeof historyEntryOfDate>>
+		try {
+			await assertDateLands(tx, calendarBookId, date)
+			const refusal = await historyDayOwnerRefusal(tx, {
+				lorebookId,
+				branchId: line.branchId,
+				date
+			})
+			if (refusal) throw new Error(refusal)
+			day = await historyEntryOfDate(
+				tx,
+				{ lorebookId, branchId: line.branchId, date },
+				{ create: true, calendarBookId }
+			)
+		} catch (e) {
+			// Only refusals are worded: the asserts throw plain `Error`s, a foreign
+			// branch a `BranchRefusal`; a database fault passes through unchanged.
+			if (e instanceof Error && (e.constructor === Error || e instanceof BranchRefusal))
+				throw new HostScopeError(`${nodeKey}: ${e.message}`, { cause: e })
+			throw e
+		}
+		if (day.created)
+			await tx
+				.update(schema.lorebookEntries)
+				.set({ provenance: "pipeline", sourceMessageId: a.sourceMessageId })
+				.where(eq(schema.lorebookEntries.id, day.historyEntryId))
+		const [stored] = await tx
+			.select()
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, day.historyEntryId))
+			.limit(1)
+		if (!stored)
+			throw new HostScopeError(`${nodeKey}: entry ${day.historyEntryId} is no longer in this session's lorebook.`)
+		if (day.created && anchor)
+			await imprintMade(tx, anchor, {
+				lorebookId,
+				subject: "entry",
+				subjectId: stored.id
+			})
+		const held = stored.content ?? ""
+		const content = !a.content.trim()
+			? held
+			: !held.trim()
+				? a.content
+				: `${held.trimEnd()}\n\n${a.content}`
+		const {
+			year: _year,
+			month: _month,
+			day: _day,
+			...patch
+		} = fields
+		const changed = await changeLoreEntry(
+			{
+				nodeKey,
+				sessionId: a.sessionId,
+				lorebookId,
+				line,
+				stored,
+				patch,
+				name: undefined,
+				content,
+				anchor,
+				// History days stay written through (a later Stage B lane's).
+				writeThrough: true
+			},
+			tx
+		)
+		const [row] = await tx
+			.select()
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, stored.id))
+			.limit(1)
+		const note = day.created
+			? null
+			: `filed onto ${formatDate(dayOnly(day.date), await bookCalendarOf(tx, calendarBookId))}'s entry`
+		return { row: row ?? stored, created: day.created, changed, note }
 	}
 	/**
 	 * 🚧 After a generated lore write's transaction committed: tell the room
@@ -2024,13 +2637,31 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		// lookup — keyed canonically — finds it.
 		const canonical = (refs: readonly string[] | undefined) =>
 			[...new Set((refs ?? []).map((r) => canonicalParticipantRef(r)))].sort()
+		// 🚧 seat-cast S3: an audience is stored in the card form — each
+		// `seated-member:<memberId>` ref goes through the door first, before
+		// the transaction opens; a member no seat of this session holds is
+		// dropped from the stored audience (never stored raw).
+		const seatedAudienceOf: Record<string, readonly string[]> = {}
+		for (const key of Object.keys(value))
+			seatedAudienceOf[key] = await storedRefsOf(db, sessionId, audienceOf[key])
 		// 🚧 pr-6 (A4, B5): the change is anchored to the turn — read before the
 		// transaction opens (only `tx` inside it).
-		const anchor = await imprintAnchor(sessionId)
+		// A person's press that opened no row anchors to the session's newest
+		// message, as own-book lore writes do (`turnAnchorOf`) — except the
+		// person's own value set through an annex field's action, which stands.
+		const { ANNEX_FIELD_SPEC_ID } = await import("@serene-pub/sdk")
+		const anchor =
+			(await imprintAnchor(sessionId)) ??
+			(scope.specId === ANNEX_FIELD_SPEC_ID
+				? null
+				: await (await import("$lib/server/lorebooks/imprints")).imprintAnchorFor(db, sessionId, {
+						turnMessageId: null,
+						runId: scope.runId ?? null
+					}))
 		const { ownerVersionOf } = await import("$lib/server/plugins/annexMigrate")
 		const ownerVersion = await ownerVersionOf(db, owner)
-		const { recordAnnexDelta } = await import("$lib/server/sessions/annexChanges")
-		const { ownerDocForPipelines } = await import("$lib/server/sessions/coreAnnex")
+		const { isTimelessAnnexKey } = await import("$lib/server/sessions/annexChanges")
+		const { fileSessionImprint, annexImprintKey } = await import("$lib/server/sessions/sessionImprints")
 		const { annexVersionOf, bumpedAnnexVersionsSql } = await import("$lib/server/sessions/annexVersions")
 		const annex = await db.transaction(async (tx) => {
 			await tx.execute(
@@ -2070,7 +2701,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						Object.entries(heldAudiences).filter(([k]) => !declared.has(k))
 					)
 			for (const key of Object.keys(value)) {
-				const see = canonical(audienceOf[key])
+				const see = canonical(seatedAudienceOf[key])
 				if (see.length) nextAudiences[key] = see
 				else delete nextAudiences[key]
 			}
@@ -2103,19 +2734,27 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				set ${sql.identifier("annex_versions")} = ${bumpedAnnexVersionsSql(schema.sessions.annexVersions, owner)}
 				where ${schema.sessions.id} = ${sessionId}
 			`)
-			const heldAll = (current.audiences ?? {}) as Record<string, unknown>
-			await recordAnnexDelta(tx as unknown as Db, {
-				sessionId,
-				messageId: anchor?.messageId ?? null,
-				owner,
-				ownerVersion,
-				before: {
-					document: Object.hasOwn(held, owner) ? previous : null,
-					audiences: Object.hasOwn(heldAll, owner) ? heldAudiences : null
-				},
-				after: { document: next, audiences: nextAudiences },
-				runId: scope.runId ?? null
-			})
+			// ST3: one imprint row per key whose value or audience moved.
+			for (const k of new Set([
+				...Object.keys(previous),
+				...Object.keys(next),
+				...Object.keys(heldAudiences),
+				...Object.keys(nextAudiences)
+			])) {
+				if (isTimelessAnnexKey(owner, k)) continue
+				await fileSessionImprint(
+					tx as unknown as Db,
+					{ sessionId, messageId: anchor?.messageId ?? null, runId: scope.runId ?? null },
+					{ kind: "annex", key: annexImprintKey(owner, k) },
+					previous[k],
+					next[k],
+					{
+						ownerVersion,
+						audienceBefore: heldAudiences[k] ?? null,
+						audienceAfter: nextAudiences[k] ?? null
+					}
+				)
+			}
 			return { previous, next, changed: true, seen, stale: false, version: version + 1 }
 		})
 		if (annex === null)
@@ -2130,7 +2769,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				stale: true,
 				sessionId,
 				owner,
-				annex: ownerDocForPipelines(owner, annex.previous),
+				annex: annex.previous,
 				version: annex.version,
 				notes: [
 					`not written: the annex of '${owner}' moved since this run read it (version ${base}, now ${annex.version}) — the fresh document is on the annex port`
@@ -2173,7 +2812,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			written: annex.changed,
 			sessionId,
 			owner,
-			annex: ownerDocForPipelines(owner, annex.next),
+			annex: annex.next,
 			version: annex.version
 		}
 	}
@@ -2210,16 +2849,24 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		if (sessionId !== undefined) {
 			const noLore = await loreWriteRefusal(db, sessionId)
 			if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
-			lorebookId = (await sessionLoreWriteTo(db, sessionId, turnMessageId)).lorebookId
+			lorebookId = await annexWriteBookOf(db, sessionId, turnMessageId)
 			anchor = await imprintAnchor(sessionId)
 		} else lorebookId = at.lorebookId!
 		const { writeLorebookAnnex, pushLorebookAnnexViews } = await import("$lib/server/lorebooks/annex")
+		// 🚧 seat-cast S3: in a session, each `seated-member:<memberId>` in an
+		// audience goes through the door into the card form it is stored in (a
+		// member no seat holds is dropped). A book-level run has no session to
+		// seat a member in, so its audience is stored as declared.
+		const seatedAudienceOf: Record<string, readonly string[]> = {}
+		for (const [key, refs] of Object.entries(audienceOf))
+			seatedAudienceOf[key] =
+				sessionId !== undefined ? await storedRefsOf(db, sessionId, refs) : refs
 		const done = await writeLorebookAnnex(db, {
 			lorebookId,
 			owner,
 			value,
 			merge,
-			audienceOf,
+			audienceOf: seatedAudienceOf,
 			declared,
 			anchor,
 			...(base !== undefined ? { base } : {})
@@ -2321,8 +2968,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	}
 
 	/**
-	 * 🚧 (M2c, path B) The four **library** outlets (`create-character`,
-	 * `update-character`, `create-lorebook`, `attach-lorebook`): the genre must
+	 * 🚧 (M2c, path B) The three **library** outlets (`create-character`,
+	 * `update-character`, `create-lorebook`): the genre must
 	 * declare the write (`writes.library`, absent is off), the ACTING PERSON
 	 * (`actingPersonFor` — a press or a send by `scope.userId`, a routine by
 	 * the session's owner) must be allowed it (`personMay`), and their library
@@ -2342,30 +2989,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				`${node.key} has no session to act in — the run was started without a session scope`
 			)
 		const input: Record<string, unknown> = {}
-		let target = sessionId
 		if (op === "create-character") input.card = p.card
 		else if (op === "update-character") {
 			input.characterId = p.characterId
 			input.changes = p.changes
-		} else if (op === "create-lorebook") input.lorebook = p.lorebook
-		else {
-			input.lorebookId = p.lorebookId
-			if (p.sessionId != null && p.sessionId !== "") {
-				const n = Number(p.sessionId)
-				if (!Number.isSafeInteger(n) || n <= 0)
-					return { halt: `${node.key}: sessionId names no session.` }
-				target = n
-			}
-			input.sessionId = target
-		}
+		} else input.lorebook = p.lorebook
 		const needs: import("$lib/server/messages/writes").LibraryNeed[] =
-			op === "create-character" || op === "update-character"
-				? ["characters"]
-				: op === "create-lorebook"
-					? ["lorebooks"]
-					: target === sessionId
-						? ["lorebooks-into-sessions"]
-						: ["lorebooks-into-sessions", "sessions"]
+			op === "create-character" || op === "update-character" ? ["characters"] : ["lorebooks"]
 		// 🚧 (ruling b1') a plugin's pipeline, or a plugin genre's session, writes nothing to anyone's library yet
 		const pluginNo = await pluginLibraryRefusal(db, sessionId, scope.ownerPluginId)
 		if (pluginNo) throw new HostScopeError(`${node.key}: ${pluginNo}`)
@@ -2425,12 +3055,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			const kind: RunArtifact["kind"] =
 				op === "create-character" || op === "update-character" ? "character" : "lorebook"
 			const id = applied.result.characterId ?? applied.result.lorebookId
-			record(
-				node,
-				kind,
-				id,
-				op === "update-character" ? "updated" : op === "attach-lorebook" ? "attached" : "created"
-			)
+			record(node, kind, id, op === "update-character" ? "updated" : "created")
 			return made(applied)
 		} catch (e) {
 			if (e instanceof lib.LibraryWriteRefusal) return { halt: `${node.key}: ${e.message}` }
@@ -2549,7 +3174,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		if (p.row != null || refId(p.characterId) != null)
 			refuse("a person's message is a new row, spoken through `speaker` — not a claimed row or a cast row")
 		if (!speaker) return { personaId: null, seatRef: null }
-		const parsed = parseParticipantRef(speaker)
+		// 🚧 A `seated-member:<memberId>` speaker is read as its seat's card
+		// form first (seat-cast S3); a member nobody is seated as is refused as
+		// a persona the person does not own, as an unknown card is.
+		// ⏳ (S4) With the switch on the door answers member form; the checks
+		// below read the card (or card-less seat) it names (`cardFormOfStored`).
+		const storedSpeaker = await cardFormOfStored(
+			db,
+			sessionId,
+			await storedSeatRef(db, sessionId, speaker)
+		)
+		if (storedSpeaker === null)
+			refuse("You can only send messages with personas you own.")
+		const parsed = parseParticipantRef(storedSpeaker!)
 		if (parsed.kind === "user") {
 			if (participantRowId(parsed.id) !== scope.userId)
 				refuse("a person's message is written as the person who sent it")
@@ -2732,7 +3369,30 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					findings.map((f) => `${f.path}: ${f.message} (${f.fix})`).join("; ")
 			)
 		const spec = { id: scope.specId ?? "", contributes: scope.contributes }
-		let blocks = raw as MessageBlock[]
+		// 🚧 seat-cast S3: a form's `addressee` given as `seated-member:<memberId>`
+		// is stored in its seat's card form, like every addressee (the answer,
+		// the portrayal and the press all compare that form). A member no seat of
+		// this session holds is refused by name — never stored raw.
+		const seatedAddressees = async (list: MessageBlock[]): Promise<MessageBlock[]> => {
+			const out: MessageBlock[] = []
+			for (const b of list) {
+				if (b.kind === "group") {
+					out.push({ ...b, blocks: await seatedAddressees(b.blocks) })
+				} else if (
+					(b.kind === "choices" || b.kind === "form" || b.kind === "roll") &&
+					typeof b.addressee === "string"
+				) {
+					const stored = await storedSeatRef(db, row.sessionId, b.addressee)
+					if (stored === null)
+						throw new HostScopeError(
+							`${node.key}: the form is addressed to ${JSON.stringify(b.addressee)}, who is not seated in this session`
+						)
+					out.push(stored === b.addressee ? b : { ...b, addressee: stored as typeof b.addressee })
+				} else out.push(b)
+			}
+			return out
+		}
+		let blocks = await seatedAddressees(raw as MessageBlock[])
 		if (scope.specId !== undefined) {
 			const undeclared = undeclaredBlockFunctions(blocks, spec)
 			if (undeclared.length)
@@ -3289,8 +3949,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const sessionId = q.sessionId ?? scope.sessionId
 					assertScoped(node, q.sessionId, scope.sessionId)
 					if (sessionId === undefined) return []
+					// Core's runtime columns never leave the server: read marks
+					// are every member's, and a deck's state gives away the
+					// next card (the same four `sockets/sessions.ts` leaves out).
+					const {
+						turnOrder: _turnOrder,
+						turnTally: _turnTally,
+						laneReads: _laneReads,
+						rulesetDecks: _rulesetDecks,
+						...sessionColumns
+					} = getTableColumns(schema.sessions)
 					return await db
-						.select()
+						.select(sessionColumns)
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
@@ -3405,17 +4075,22 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						doc && typeof doc === "object" && !Array.isArray(doc)
 							? (doc as Record<string, unknown>)
 							: {}
-					if (q.view !== "ai") {
-						const { ownerDocForPipelines } = await import("$lib/server/sessions/coreAnnex")
-						return ownerDocForPipelines(owner, whole)
-					}
+					if (q.view !== "ai") return whole
 					// The AI's view (R57): only what the model's context may
 					// carry — for this speaker, when the prompt has one.
 					const { aiHolds, visibleTo } = await import("@serene-pub/sdk")
 					const { isParticipantRef, canonicalParticipantRef } = await import("@serene-pub/sdk")
-					const speaker =
+					// 🚧 A `seated-member:<memberId>` speaker is read as its seat's card
+					// form first (seat-cast S3): `aiHolds` compares canonical strings,
+					// and the audiences hold the card form. A member nobody is seated
+					// as holds nothing a named audience carries, as an unknown card.
+					const askedSpeaker =
 						typeof q.speaker === "string" && isParticipantRef(q.speaker)
-							? canonicalParticipantRef(q.speaker)
+							? await storedSeatRef(db, sessionId, q.speaker)
+							: null
+					const speaker =
+						askedSpeaker !== null && isParticipantRef(askedSpeaker)
+							? canonicalParticipantRef(askedSpeaker)
 							: null
 					// Who may see each key is the owner's declaration's to say
 					// (ruling 2026-09-26): a key none covers — legacy data a
@@ -3423,7 +4098,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { declaredAudiences, sessionGenreOf } = await import(
 						"$lib/server/sessions/annexFields"
 					)
-					const audiences = await declaredAudiences(db, await sessionGenreOf(db, sessionId))
+					const declaredBy = await declaredAudiences(db, await sessionGenreOf(db, sessionId))
+					// 🚧 A declared audience naming `seated-member:<memberId>` is read in
+					// the card form too (seat-cast S3), so it meets the translated speaker.
+					const audiences: typeof declaredBy = {}
+					for (const [audienceOwner, keys] of Object.entries(declaredBy)) {
+						audiences[audienceOwner] = {}
+						for (const [key, refs] of Object.entries(keys))
+							audiences[audienceOwner][key] = (await storedRefsOf(
+								db,
+								sessionId,
+								refs
+							)) as typeof refs
+					}
 					return (
 						visibleTo({ [owner]: whole }, audiences, (refs) =>
 							aiHolds(refs, speaker as never)
@@ -3632,22 +4319,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								.map((m) => Number(m.personaId))
 						)
 					]
-					const characters = charIds.length
-						? await db
-								.select()
-								.from(schema.characters)
-								.where(inArray(schema.characters.id, charIds))
-						: []
-					const personas = personaIds.length
-						? await db
-								.select()
-								.from(schema.characters)
-								.where(
-									inArray(schema.characters.id, personaIds)
-								)
-						: []
+					// The cards as their current card version has them (never the ⏳ copies).
+					const characters = [
+						...(await cardsNow(db, charIds)).values()
+					]
+					const personas = [
+						...(await cardsNow(db, personaIds)).values()
+					]
+					// The cast member's own name wins over the card's (§0-D, 2026-11-04; seat-cast S2).
+					const read = await cardsAsSeatsRead(db, sessionId, characters)
 					const characterName = new Map(
-						characters.map((c) => [c.id, c.name])
+						// The plain name (the member's own when it gives one), as the card read before — never nickname-first here.
+						read.map((c) => [c.id, c.name])
 					)
 					const personaName = new Map(
 						personas.map((p) => [p.id, resolvePersonaName(p)])
@@ -3962,13 +4645,41 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						entryOnReadingSql,
 						entryOverlaysFor
 					} = await import("$lib/server/state/entriesOnReading")
-					// The attached book at the session's reading; the notes are
-					// never branched as a book, so they read at their head.
-					const sessionReading =
-						books.attachedId != null
-							? ((await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD)
-							: MAIN_HEAD
-					const speaker = loreVisibilitySubject(q)
+					// The session's reading: of the attached book, or of its own
+					// notes when it reads them alone (a fold can leave it on a line
+					// of them). Beside an attached book the notes read at their head.
+					const readingOrNone = await sessionReadingOf(db, sessionId)
+					const sessionReading = readingOrNone ?? MAIN_HEAD
+					// 🚧 `seated-member:<memberId>` is accepted (seat-cast S2) and
+					// answered in the card form the subject reads. A member nobody
+					// is seated as stays as written, which is no character today.
+					// 🚧 A wired speaker that is a card-less seat's `seated-member:`
+					// ref is that member's turn (`member`), never a card's.
+					const wiredStored =
+						typeof q.speaker === "string"
+							? await storedSeatRef(db, sessionId, q.speaker)
+							: null
+					const cardlessSeat =
+						wiredStored !== null &&
+						parseSeatRef(wiredStored)?.form === "seated-member"
+							? await seatOf(db, sessionId, wiredStored)
+							: null
+					const speaker = loreVisibilitySubject(
+						typeof q.speaker === "string"
+							? {
+									...q,
+									speaker:
+										(await cardFormOfStored(
+											db,
+											sessionId,
+											wiredStored
+										)) ?? q.speaker
+								}
+							: q,
+						cardlessSeat && cardlessSeat.cardId == null
+							? (cardlessSeat.castMemberId ?? null)
+							: null
+					)
 					const readBook = async (bookId: number, reading: any) => {
 					/**
 					 * **The book is read once per run** (plan C4). A respond turn asks
@@ -4052,7 +4763,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							 * legacy split happens; it does not get rewritten.
 							 */
 							const bindings = await db
-								.select()
+								.select({
+									id: schema.lorebookBindings.id,
+									lorebookId: schema.lorebookBindings.lorebookId,
+									binding: schema.lorebookBindings.binding,
+									characterId:
+										schema.lorebookBindings.characterId,
+									name: schema.lorebookBindings.name
+								})
 								.from(schema.lorebookBindings)
 								.where(
 									eq(
@@ -4076,31 +4794,48 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							)
 							/**
 							 * Each member as the session's reading has them (plan A19):
-							 * a cast amendment by then renames them, and a tag reads
-							 * as the card the reading draws them with — a dated
-							 * Unlink, Link or Change card included, as the editor's
-							 * chip does — else as that name. `characterId` stays the
-							 * member's own: it is the key a seat holds, and the
-							 * private-lore gate below reads it.
+							 * a cast version by then renames them (`membersAsRead`), and
+							 * a tag reads as the member's name as read — nickname first —
+							 * else the card their version in force draws them with
+							 * (`character`). `characterId` stays the member's own: it is
+							 * the key a seat holds, and the private-lore gate below
+							 * reads it.
 							 */
-							const { castOverlaysFor, castMemberAt } = await import(
-								"$lib/server/state/entriesOnReading"
-							)
-							const castOverlays = await castOverlaysFor(
+							const memberReads = await membersAsRead(
 								db,
-								bookId,
-								reading
+								bindings.map((b) => b.id),
+								{ reading }
 							)
-							const atReading = bindings.map((b) =>
-								castMemberAt(b, castOverlays, reading)
-							)
+							const atReading = bindings.map((b) => {
+								const read = memberReads.get(b.id)
+								return {
+									id: b.id,
+									lorebookId: b.lorebookId,
+									binding: b.binding,
+									name: read?.name ?? b.name ?? null,
+									shownName: read?.shownName ?? null,
+									characterId: read?.activeCardId ?? null
+								}
+							})
 							const hydrated = (await hydrateBindings(db, atReading)).map(
-								(m, i) => ({
-									...m,
-									name: m.name ?? null,
-									characterId: bindings[i].characterId,
-									memberCards: cardsOf.get(m.id) ?? []
-								})
+								(m, i) => {
+									// A deleted card is nobody in a lorebook (plan A25): a
+									// member who read the card's words reads as their own
+									// name on the book's row instead.
+									const goneCard =
+										m.characterId != null && m.character == null
+									const read = memberReads.get(m.id)
+									return {
+										...m,
+										name:
+											goneCard && read?.follows.includes("name")
+												? (bindings[i].name ?? null)
+												: (m.name ?? null),
+										shownName: goneCard ? null : m.shownName,
+										characterId: bindings[i].characterId,
+										memberCards: cardsOf.get(m.id) ?? []
+									}
+								}
 							)
 							/**
 							 * Which character each binding names, for character lore's
@@ -4116,34 +4851,57 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							 * (plan A25) — the signal asks whether that card spoke, and
 							 * a seat holding the keeper's card speaks as it — else the
 							 * linked card. The linked card wins when both are seated.
+							 * 🚧 A seat that seats the member by id (seat-cast S2) is
+							 * found first, whatever card mapping says; the card
+							 * mapping answers for a seat that seats nobody yet.
 							 */
-							const seated = new Set(
-								(
-									await db
-										.select({
-											characterId:
-												schema.sessionCharacters.characterId
-										})
-										.from(schema.sessionCharacters)
-										.where(
-											eq(
-												schema.sessionCharacters.sessionId,
-												sessionId
-											)
-										)
-								).map((r) => r.characterId)
-							)
+							const seatRows = await db
+								.select({
+									characterId:
+										schema.sessionCharacters.characterId,
+									castMemberId:
+										schema.sessionCharacters.castMemberId,
+									removedAt: schema.sessionCharacters.removedAt,
+									isActive: schema.sessionCharacters.isActive
+								})
+								.from(schema.sessionCharacters)
+								.where(
+									eq(
+										schema.sessionCharacters.sessionId,
+										sessionId
+									)
+								)
+								.orderBy(
+									asc(schema.sessionCharacters.position),
+									asc(schema.sessionCharacters.id)
+								)
+							const seated = new Set(seatRows.map((r) => r.characterId))
 							const bindingCharacter = new Map<number, number | null>(
-								bindings.map((b) => [
-									b.id,
-									b.characterId != null && seated.has(b.characterId)
-										? b.characterId
-										: ((cardsOf.get(b.id) ?? []).find((c) =>
-												seated.has(c)
-											) ??
-											b.characterId ??
-											null)
-								])
+								bindings.map((b) => {
+									const held = seatRows
+										.filter(
+											(r) =>
+												r.castMemberId === b.id &&
+												r.characterId != null
+										)
+										.map((r) => r.characterId)
+									return [
+										b.id,
+										held.length
+											? b.characterId != null &&
+												held.includes(b.characterId)
+												? b.characterId
+												: held[0]
+											: b.characterId != null &&
+												  seated.has(b.characterId)
+												? b.characterId
+												: ((cardsOf.get(b.id) ?? []).find((c) =>
+														seated.has(c)
+													) ??
+													b.characterId ??
+													null)
+									]
+								})
 							)
 							const boundCharacterOf = (e: any) =>
 								e?.lorebookBindingId != null
@@ -4163,8 +4921,47 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									lorebookBindings: hydrated
 								},
 								sessionPersonas: sessionPersonas.map((cp) => ({
-									persona: { id: cp.personaId }
-								}))
+									persona: { id: cp.personaId },
+									castMemberId: cp.castMemberId,
+									removedAt: cp.removedAt,
+									isActive: cp.isActive
+								})),
+								// ★4: seated = a seat in play of either table holds the
+								// member (benched reads as background, owner 2026-11-10);
+								// the gate reads background as "not seated".
+								// A seat that names no member (an older, member-less seat)
+								// still seats the member whose card it holds — linked, or
+								// one a dated change draws them with (`memberCards`).
+								seatedMemberIds: (() => {
+									const liveCards = new Set<number>(
+										[
+											...seatRows
+												.filter((r) => inPlay(r))
+												.map((r) => r.characterId),
+											...sessionPersonas
+												.filter((cp) => inPlay(cp))
+												.map((cp) => cp.personaId)
+										].filter((id): id is number => id != null)
+									)
+									return [
+										...seatRows
+											.filter((r) => inPlay(r))
+											.map((r) => r.castMemberId),
+										...sessionPersonas
+											.filter((cp) => inPlay(cp))
+											.map((cp) => cp.castMemberId),
+										...bindings
+											.filter(
+												(b) =>
+													(b.characterId != null &&
+														liveCards.has(b.characterId)) ||
+													(cardsOf.get(b.id) ?? []).some((c) =>
+														liveCards.has(c)
+													)
+											)
+											.map((b) => b.id)
+									].filter((id): id is number => id != null)
+								})()
 							} as any
 
 							const {
@@ -4459,7 +5256,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * leak the port exists to close.
 					 */
 					const visible = (e: any) =>
-						isCharacterLoreEntryVisible(e, asSession, speaker)
+						isCharacterLoreEntryVisible(
+							e,
+							asSession,
+							speaker.card,
+							speaker.member
+						)
 
 					// Tagged with their source rather than returned as three lists,
 					// because every consumer downstream — scoring, budgeting, the
@@ -4526,7 +5328,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							bookId,
 							await readBook(
 								bookId,
-								bookId === books.attachedId ? sessionReading : MAIN_HEAD
+								bookId === readingOrNone?.lorebookId ? sessionReading : MAIN_HEAD
 							)
 						)
 					/**
@@ -4610,7 +5412,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							: []
 						const farSubject = speakerIsWired(q)
 							? speaker
-							: NO_SUCH_CHARACTER
+							: { card: NO_SUCH_CHARACTER, member: null }
 						for (const row of farRows) {
 							const gated =
 								entryDeclaration(row.typeId)?.roles.anchor
@@ -4627,7 +5429,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								own.isCharacterLoreEntryVisible(
 									own.entryOf(row),
 									own.asSession,
-									farSubject
+									farSubject.card,
+									farSubject.member
 								)
 							)
 								seen.add(row.id)
@@ -4656,8 +5459,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * and no error anywhere.
 					 *
 					 * ⚠ **Every seat, switched off or not** (2026-09-27): a seat
-					 * the cast list switched off (`session_characters.is_active`)
-					 * is still a seat, and goes out with `enabled: false` so a
+					 * the cast list switched off (`session_characters.is_active`,
+					 * and a player seat's `session_personas.is_active` since
+					 * 2026-11-10) is still a seat, and goes out with `enabled: false` so a
 					 * pipeline or a widget can filter on it. Every reader that
 					 * must not see one filters on `enabled` itself — the turn
 					 * pool, the rotation, the prompt's `characterNames`, the
@@ -4682,7 +5486,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// strategies (19 §5): the rotation is ordered by position and
 					// must not seat a soft-removed participant. Inert to the
 					// prompt path — `resolveContextInput` picks fields by name.
-					const [sessionCharacters, sessionPersonas] =
+					const [characterSeatRows, personaSeatRows] =
 						await Promise.all([
 							db
 								.select({
@@ -4693,20 +5497,47 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									position: schema.sessionCharacters.position,
 									removedAt:
 										schema.sessionCharacters.removedAt,
-									character: schema.characters
+									// 🚧 The seat and the member it seats ride
+									// along (seat-cast S2): the character is read
+									// as that member below.
+									castMemberId:
+										schema.sessionCharacters.castMemberId,
+									seatId: schema.sessionCharacters.id,
+									// 🚧 Who seated it (owner 2026-11-05, ★S2b-1
+									// "Still theo"): the person acting for a card-less
+									// seat, never `characters.user_id`.
+									seatedByUserId:
+										schema.sessionCharacters.seatedByUserId,
+									// The card the seat holds, null for a card-less
+									// seat; its row is read below as its current
+									// card version.
+									cardId: schema.characters.id
 								})
 								.from(schema.sessionCharacters)
-								.innerJoin(
+								.leftJoin(
 									schema.characters,
 									eq(
 										schema.sessionCharacters.characterId,
 										schema.characters.id
 									)
 								)
+								// The seat filter: not an envoy, and has a member
+								// or a card.
 								.where(
-									eq(
-										schema.sessionCharacters.sessionId,
-										sessionId
+									and(
+										eq(
+											schema.sessionCharacters.sessionId,
+											sessionId
+										),
+										isNull(schema.sessionCharacters.envoySlug),
+										or(
+											isNotNull(
+												schema.sessionCharacters.characterId
+											),
+											isNotNull(
+												schema.sessionCharacters.castMemberId
+											)
+										)
 									)
 								),
 							// 🚧 Left-joined (2026-10-14): a seat need not
@@ -4715,10 +5546,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							// card's leftover row (neither) is dropped below.
 							db
 								.select({
-									persona: schema.characters,
+									cardId: schema.characters.id,
+									// `is_active` → `enabled` at this seam, as the
+									// character select above (R5): the bench.
+									enabled: schema.sessionPersonas.isActive,
 									position: schema.sessionPersonas.position,
 									removedAt: schema.sessionPersonas.removedAt,
 									seatId: schema.sessionPersonas.id,
+									castMemberId:
+										schema.sessionPersonas.castMemberId,
 									seatName: schema.sessionPersonas.seatName,
 									seatUserId: schema.sessionPersonas.userId
 								})
@@ -4737,6 +5573,151 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									)
 								)
 						])
+
+					// 🚧 The held cards as their CURRENT CARD VERSION has them
+					// (`cardsNow`, never the ⏳ copies or the frozen columns): the
+					// `characters` row shape with the version's profile in its
+					// column names. A character seat whose card is gone is dropped
+					// (the inner join's meaning); a player seat without a card
+					// rides with `persona: null`.
+					const heldCards = await cardsNow(db, [
+						...characterSeatRows.flatMap((r) =>
+							r.cardId != null ? [r.cardId] : []
+						),
+						...personaSeatRows.flatMap((r) =>
+							r.cardId != null ? [r.cardId] : []
+						)
+					])
+					// A card-less seat (no card, a stored member) has no card row
+					// here: `character` is null until the member read below fills
+					// it, and a card-less seat whose member does not read is dropped
+					// after it.
+					const seatsHeld = characterSeatRows.flatMap(
+						({ cardId, ...row }) => {
+							if (cardId == null)
+								return [{ ...row, character: null as CardNow | null }]
+							const character = heldCards.get(cardId)
+							return character ? [{ ...row, character }] : []
+						}
+					)
+					const sessionPersonas = personaSeatRows.map(
+						({ cardId, ...row }) => ({
+							...row,
+							persona:
+								(cardId != null ? heldCards.get(cardId) : undefined) ??
+								null
+						})
+					)
+
+					/**
+					 * 🚧 Each character seat read as the cast member it seats
+					 * (seat-cast S2): the member's own name and nickname and each
+					 * retold field, over the member's active card — every seat,
+					 * live, departed or switched off, in the session's own book
+					 * as in an attached one. A seat whose member is not stored
+					 * yet reads the one the seat writer would find, so today's
+					 * data reads as it did. Player seats read their member the
+					 * same way (★pT-1, 2026-11-05: "Everything in session is cast
+					 * -> active card"); a seat name then wins over the member's
+					 * name (`withSeatName` below).
+					 */
+					// One member read per seat set (`seatMembersAsRead`), shared by
+					// the card filled from the member and the host-filled `cardId`.
+					const seatReads = await seatMembersAsRead(
+						db,
+						sessionId,
+						seatsHeld,
+						{ cardless: true }
+					)
+					// A card-less seat reads its stored member (trusted when it lives
+					// in the session's books) as a card-shaped object with no `id`;
+					// one whose member does not read is dropped. `sessionCharacters`,
+					// `castReads` and `castRows` are all built from this one
+					// filtered list, so they stay index-aligned (the output reads
+					// them by `i`).
+					const keptSeats = seatsHeld.flatMap((row, i) => {
+						const asRead = seatReads[i]
+						if (row.character) return [{ row, asRead }]
+						return asRead
+							? [
+									{
+										row: {
+											...row,
+											character: cardlessSeatCard(asRead) as unknown as CardNow
+										},
+										asRead
+									}
+								]
+							: []
+					})
+					const sessionCharacters = keptSeats.map((k) => k.row)
+					const castReads = keptSeats.map((k) => k.asRead)
+					const castRows = sessionCharacters.map((row, i) => {
+						const asRead = castReads[i]
+						if (!asRead || !row.character) return row
+						// A card-less seat's card is already its member as read.
+						if ((row.character as { cardless?: boolean }).cardless)
+							return row
+						const character = seatCardAsRead(row.character, asRead)
+						return character === row.character ? row : { ...row, character }
+					})
+					const personaSeats = sessionPersonas.map((cp) => ({
+						...cp,
+						character: cp.persona
+					}))
+					const personaReads = await seatMembersAsRead(
+						db,
+						sessionId,
+						personaSeats
+					)
+					// 🚧 A card-less player seat holds no card for `seatMembersAsRead`
+					// to read through, but may store a member: those are read in
+					// one batch, for the host-filled `cardId` alone.
+					const cardlessReads = await membersAsRead(
+						db,
+						personaSeats.flatMap((cp) =>
+							cp.character == null && cp.castMemberId != null
+								? [cp.castMemberId]
+								: []
+						),
+						{ sessionId }
+					)
+					const personaRows = personaSeats.map((cp, i) => {
+						const asRead = personaReads[i]
+						const { character, ...rest } = cp
+						const filled =
+							asRead && character
+								? seatCardAsRead(character, asRead)
+								: character
+						return {
+							...rest,
+							persona: filled as typeof cp.persona,
+							// 🚧 A card-less player seat's description is its
+							// member's as read (`SessionPersonaRow.memberDescription`).
+							memberDescription:
+								character == null && cp.castMemberId != null
+									? (cardlessReads.get(cp.castMemberId)?.description ??
+										null)
+									: null,
+							// 🚧 Host-filled identity (seat-cast S3): the seat's
+							// ref (`hostSeatRefOf`: `player-seat:<id>` with the
+							// member-form switch on, else the card's / a card-less
+							// seat's); `cardId` is the member's active card on the
+							// timeline.
+							ref: hostSeatRefOf({
+								kind: "player",
+								seatId: cp.seatId,
+								castMemberId: cp.castMemberId,
+								cardId: character?.id ?? null
+							}),
+							cardId: asRead
+								? asRead.activeCardId
+								: cp.castMemberId != null &&
+									  cardlessReads.has(cp.castMemberId)
+									? cardlessReads.get(cp.castMemberId)!.activeCardId
+									: (character?.id ?? null)
+						}
+					})
 
 					/**
 					 * The other half of the alias union, per cast member.
@@ -4782,48 +5763,34 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * for the same reason `absorbedAliases` is.
 					 */
 					let lorebookBindings: Array<{
+						/** `lorebook_bindings.id`: the member's own id (a member with no live card is `cast_member:<id>` to retrieval). */
+						id: number
 						characterId: number | null
+						/** The linked card is soft-deleted; null without a card. */
+						cardDeleted: boolean | null
 						name: string | null
 						aliases: string[]
 						absorbedAliases: string[]
 					}> = []
-					/**
-					 * Card → the member who retells it (PLAN-cast-retold-
-					 * fields): a seat whose card is a member of the session's
-					 * book reads the member's retold fields in place of the
-					 * card's. Empty when nobody retells — every member until
-					 * someone toggles a field — so the cast is the rows it was.
-					 */
-					let retoldCards = new Map<number, RetoldMember>()
 					if (session.lorebookId) {
 						const stored = await db
 							.select({
 								id: schema.lorebookBindings.id,
 								characterId:
 									schema.lorebookBindings.characterId,
+								cardDeleted: schema.characters.isDeleted,
 								name: schema.lorebookBindings.name,
-								aliases: schema.lorebookBindings.aliases,
 								absorbedAliases:
-									schema.lorebookBindings.absorbedAliases,
-								// The retold columns (PLAN-cast-retold-fields):
-								// what a member tells in their own words, read
-								// over the seat's card below.
-								description:
-									schema.lorebookBindings.description,
-								personality:
-									schema.lorebookBindings.personality,
-								scenario: schema.lorebookBindings.scenario,
-								firstMessage:
-									schema.lorebookBindings.firstMessage,
-								alternateGreetings:
-									schema.lorebookBindings.alternateGreetings,
-								exampleDialogues:
-									schema.lorebookBindings.exampleDialogues,
-								faceMediaId:
-									schema.lorebookBindings.faceMediaId,
-								retold: schema.lorebookBindings.retold
+									schema.lorebookBindings.absorbedAliases
 							})
 							.from(schema.lorebookBindings)
+							.leftJoin(
+								schema.characters,
+								eq(
+									schema.characters.id,
+									schema.lorebookBindings.characterId
+								)
+							)
 							.where(
 								eq(
 									schema.lorebookBindings.lorebookId,
@@ -4836,36 +5803,26 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							.orderBy(asc(schema.lorebookBindings.id))
 						/**
 						 * Each member as the session's reading sees them
-						 * (findings #38/#144): a name or an alias a cast
-						 * amendment set by the session's clock is what the
-						 * story calls them now. The card stays the member's
+						 * (findings #38/#144): a name or an alias a cast version
+						 * set by the session's clock is what the story calls them
+						 * now (`membersAsRead`). The card stays the member's
 						 * own — it is the key a seat holds.
 						 */
-						const { sessionReadingOf } = await import(
-							"$lib/server/state/reading"
-						)
-						const { MAIN_HEAD, castOverlaysFor, castMemberAt } =
-							await import("$lib/server/state/entriesOnReading")
-						const castReading =
-							(await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
-						const castOverlays = await castOverlaysFor(
+						const memberReads = await membersAsRead(
 							db,
-							session.lorebookId,
-							castReading
+							stored.map((b) => b.id),
+							{ sessionId }
 						)
-						const bindings = stored.map(({ id: _id, ...b }) => {
-							const m = castMemberAt(
-								{ id: _id, ...b },
-								castOverlays,
-								castReading,
-								{ keepCard: true }
-							)
+						const bindings = stored.map((b) => {
+							const m = memberReads.get(b.id)
 							return {
+								id: b.id,
 								characterId: b.characterId,
-								name: m.name ?? null,
-								aliases: Array.isArray(m.aliases) ? m.aliases : [],
-								absorbedAliases: Array.isArray(m.absorbedAliases)
-									? m.absorbedAliases
+								cardDeleted: b.cardDeleted ?? null,
+								name: m?.name ?? b.name ?? null,
+								aliases: m?.aliases ?? [],
+								absorbedAliases: Array.isArray(b.absorbedAliases)
+									? b.absorbedAliases
 									: []
 							}
 						})
@@ -4876,16 +5833,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						const { castMemberCards } = await import(
 							"$lib/server/utils/castMemberCards"
 						)
-						const { cardsOf, memberOf } = await castMemberCards(
+						const { cardsOf } = await castMemberCards(
 							db,
 							session.lorebookId
-						)
-						retoldCards = retoldByCard(
-							stored,
-							castOverlays,
-							castReading,
-							memberOf,
-							castMemberAt
 						)
 						for (const [i, b] of bindings.entries()) {
 							const names = Array.isArray(b.absorbedAliases)
@@ -5028,7 +5978,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const storyTime =
 						storyBook != null
 							? {
-									now: await sessionStoryNowOf(db, sessionId),
+									// 🚧 A session that reads an attached lorebook counts
+									// its own notes' history days too (`ownBookDaysCounted`).
+									now: session.lorebookId
+										? ((await ownBookDaysCounted(db, sessionId))?.now ??
+											(await sessionStoryNowOf(db, sessionId)))
+										: await sessionStoryNowOf(db, sessionId),
 									calendar: await bookCalendarOf(db, storyBook)
 								}
 							: null
@@ -5103,31 +6058,43 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							? { characterDetail }
 							: {}),
 						...(replyCount !== undefined ? { replyCount } : {}),
-						sessionCharacters: sessionCharacters.map((cc) => ({
+						sessionCharacters: castRows.map((cc, i) => ({
 							...cc,
-							...(cc.character &&
-							retoldCards.has(cc.character.id)
-								? {
-										character: applyRetold(
-											cc.character,
-											retoldCards.get(cc.character.id)!
-										)
-									}
-								: {}),
+							// 🚧 Host-filled identity (seat-cast S3): `castMemberId`
+							// is the seat's own (already on the row); `ref` is the seat's
+							// (`hostSeatRefOf`: `seated-member:<id>` with the member-form
+							// switch on, ⏳ its card while it stores no member, else the
+							// card's); `cardId` is the member's active card on the
+							// timeline, else the held card.
+							ref: hostSeatRefOf({
+								kind: "character",
+								seatId: cc.seatId,
+								castMemberId: cc.castMemberId,
+								cardId: sessionCharacters[i].character?.id ?? null
+							}),
+							// No card-id fallback for a card-less seat (a member id
+							// is never a card id).
+							cardId:
+								castReads[i]?.activeCardId ??
+								sessionCharacters[i].character?.id ??
+								null,
 							enabled: cc.enabled !== false,
 							absorbedAliases:
-								absorbedByCharacter.get(cc.character?.id) ?? []
+								(cc.character?.id != null
+									? absorbedByCharacter.get(cc.character.id)
+									: undefined) ?? []
 						})),
-						sessionPersonas: sessionPersonas
+						sessionPersonas: personaRows
 							.filter((cp) => cp.persona || cp.seatName)
 							.map((cp) => ({
 							...cp,
 							// 🚧 A seat name wins over the card's name; the
 							// card still supplies the rest (`promptFields`).
 							persona: withSeatName(cp.persona, cp.seatName),
-							// A persona seat has no switch; it is always
-							// taking part. Said, so one filter serves both.
-							enabled: true,
+							// 🚧 A player seat carries the bench too (owner
+							// 2026-11-10): `enabled: false` is benched. Said, so
+							// one filter serves both tables.
+							enabled: cp.enabled !== false,
 							absorbedAliases:
 								(cp.persona && absorbedByPersona.get(cp.persona.id)) ?? []
 						})),
@@ -5427,6 +6394,29 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					)
 					// 🚧 `atHour` (M0, SHAPES L3): a clock target; unwired, the present hour.
 					return await presencesOnReading(db, sessionId, q.atHour ?? null)
+				}
+
+				case "cast_member": {
+					/**
+					 * 🚧 One cast member as the session reads it
+					 * (`core:query/cast-member@1`); the run's own session.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to read a cast member in — the run was started without a session scope`
+						)
+					const { readCastMember, CastMemberRefusal } = await import(
+						"$lib/server/pipelines/runtime/castMember"
+					)
+					try {
+						return await readCastMember(db, sessionId, q.member)
+					} catch (err) {
+						if (err instanceof CastMemberRefusal)
+							throw new HostScopeError(`${node.key}: ${err.message}`)
+						throw err
+					}
 				}
 
 				case "likeness_images": {
@@ -5810,7 +6800,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
 					const vocabBook = session.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
 
-					const vocabulary = await loadVocabulary(db, vocabBook)
+					const vocabulary = await loadVocabulary(db, vocabBook, { holderBookId: await holderBookOf(db, sessionId) })
 
 					const entryIds: number[] = Array.isArray(q.entryIds)
 						? q.entryIds.map(Number).filter(Number.isFinite)
@@ -6045,7 +7035,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { loadVocabulary, EMPTY_VOCABULARY } = await import(
 						"$lib/server/annotations"
 					)
-					const vocabulary = await loadVocabulary(db, linkBook)
+					const vocabulary = await loadVocabulary(db, linkBook, { holderBookId: await holderBookOf(db, sessionId) })
 					// 🚧 pr-6 (§B-3a): the session's own book with nothing in it is
 					// nothing to link a description to — skipped, no embed (the cost
 					// of a session that reads no book).
@@ -6176,7 +7166,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						await import("$lib/server/embedding/entityVectors")
 					const entityBook =
 						session.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
-					const vocabulary = await loadVocabulary(db, entityBook)
+					const vocabulary = await loadVocabulary(db, entityBook, { holderBookId: await holderBookOf(db, sessionId) })
 
 					const pass = await ensureEntityVectors(db, {
 						lorebookId: entityBook,
@@ -6311,8 +7301,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * out of the speaker's recent faces.
 					 *
 					 * The set is decided in `spriteChoicesFor` — the spec's
-					 * `set`, then the override, the amendment, the card's
-					 * default — and `decidedBy` rides out on the receipt.
+					 * `set`, then the override, the amendment, the default
+					 * (the seated cast member's own sets when it has any,
+					 * else the card's) — and `decidedBy` rides out on the
+					 * receipt.
 					 */
 					const sessionId = p.sessionId ?? scope.sessionId
 					assertScoped(node, p.sessionId, scope.sessionId)
@@ -6320,13 +7312,20 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						throw new HostScopeError(
 							`${node.key} has no session to choose a sprite in — wire 'scope' from the inlet.`
 						)
-					const characterId = Number(p.characterId)
+					// 🚧 A card-less seat's speaker arrives as `castMemberId` (a
+					// member id), never as `characterId` (a card id): exactly one.
+					const castMemberId =
+						p.castMemberId != null ? Number(p.castMemberId) : undefined
+					const characterId =
+						castMemberId === undefined ? Number(p.characterId) : undefined
 					const { spriteChoicesFor } = await import(
 						"$lib/server/sprites/choices"
 					)
 					const choices = await spriteChoicesFor(db, {
 						sessionId,
-						characterId,
+						...(castMemberId !== undefined
+							? { castMemberId }
+							: { characterId }),
 						set: p.set,
 						excludeMessageId:
 							typeof run.liveRow === "number" ? run.liveRow : undefined
@@ -6454,6 +7453,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								p.currentCharacterId ??
 								scope.currentCharacterId ??
 								null,
+							// 🚧 A card-less seat's speaker, only when no card speaks.
+							currentCastMemberId:
+								(p.currentCharacterId ??
+									scope.currentCharacterId ??
+									null) === null
+									? (scope.currentCastMemberId ?? null)
+									: null,
 							generatingMessageMetadata:
 								p.generatingMessageMetadata ?? {},
 							// The `attachments` in-port: media REFERENCES, in the
@@ -6966,6 +7972,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									scope.userId != null
 										? String(scope.userId)
 										: undefined,
+								frameCause: scope.frameCause,
 								runId: scope.runId,
 								// A tool called from another package's pipeline —
 								// or a person's — runs with only the secrets its
@@ -7138,10 +8145,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * by this reference. A well-formed reference only; anything
 					 * else is not stored rather than stored as noise.
 					 */
-					const namedRef =
+					// 🚧 A `seated-member:<memberId>` speaker is stored in its seat's
+					// card form (`metadata.speaker` stays `character:<cardId>` /
+					// `player-seat:<seatId>`; seat-cast S3). A member no seat of
+					// this session holds is refused by name — never stored raw,
+					// and never quietly handed to the unclaimed-line fallback.
+					const askedRef =
 						typeof p.speaker === "string" && isParticipantRef(p.speaker)
 							? p.speaker
 							: null
+					const namedRef =
+						askedRef === null
+							? null
+							: await storedSeatRef(db, sessionId, askedRef)
+					if (askedRef !== null && namedRef === null)
+						throw new HostScopeError(
+							`${node.key}: ${JSON.stringify(askedRef)} is not seated in this session — name a seat (player-seat:<id>, seated-member:<id>, character:<id>) or an envoy`
+						)
 					/**
 					 * Everyone has a name (ruled 2026-09-26). An envoy named
 					 * here must be one this session declares — refused by
@@ -7283,7 +8303,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// `answersForm` is the host's fact (U5f): a spec's or a
 					// client's copy is dropped, and the run's own — the form
 					// `fireAction` was fired for — is stamped in its place.
-					const { answersForm: _claimed, ...givenMetadata } =
+					// `turnCause` is the host's fact too: a spec's or a client's
+					// copy is dropped.
+					const { answersForm: _claimed, turnCause: _cause, ...givenMetadata } =
 						(p.metadata ?? {}) as Record<string, unknown>
 					const metadata: Record<string, unknown> = {
 						...givenMetadata,
@@ -7315,12 +8337,38 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							: {})
 					}
 					if (sections?.length) metadata.sections = sections
+					// ★T-1 The narrator's unprompted line says why it spoke. Only
+					// this: a side-cast pick shares the `via` but is a character's
+					// reply (`currentCharacterId` is set on its turn); a claimed row
+					// keeps the stamp it has; and the cause is written only for a
+					// setting that is ON — a line that still lands after the owner
+					// switched it off, or from a plugin's own turn order, says nothing
+					// rather than something false (P1).
+					const stampRow =
+						typeof p.row === "number" ||
+						(typeof p.row === "string" && /^\d+$/.test(p.row))
+					if (
+						scope.via === "unprompted" &&
+						narration &&
+						!personLine &&
+						!speakerRef &&
+						!sideCharacter &&
+						scope.currentCharacterId == null &&
+						!stampRow
+					) {
+						const { genreFieldsFor } = await import("$lib/server/pipelines/entities/sessionGenres")
+						const { narratorCadenceKey } = await import("$lib/shared/sessions/narratorCadence")
+						const key = narratorCadenceKey((await genreFieldsFor(db, sessionId)).narratorInterjections)
+						const every =
+							key === "every-round" ? 1 : key === "every-2nd-round" ? 2 : key === "every-3rd-round" ? 3 : null
+						if (every !== null) metadata.turnCause = { via: "unprompted", every }
+					}
 					// 🚧 An outcome row's result in words, no number in it (Lair
 					// rewrite D3; any check method since 2026-10-22): what a
 					// prompt reads while Show outcomes is off.
 					{
 						const { outcomeWordsOf, DICE_WORDS_KEY } = await import("$lib/server/messages/diceWords")
-						const words = await outcomeWordsOf(db, p.blocks)
+						const words = await outcomeWordsOf(db, p.blocks, sessionId)
 						if (words) metadata[DICE_WORDS_KEY] = words
 					}
 					// 🚧 A row's kind (2026-10-17): one word, when wired.
@@ -7481,8 +8529,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						 * way has said it the other (lair pass B16: a delver's
 						 * row carries the reference its context resolved).
 						 */
+						// ⏳ (S4) `speakerRef` is stored in member form with the switch
+						// on; its card row is the card its seat holds.
 						const namedRow = speakerRef
-							? parseParticipantRef(speakerRef)
+							? parseParticipantRef(
+									(await cardFormOfStored(db, sessionId, speakerRef)) ??
+										speakerRef
+								)
 							: null
 						const speakerRow =
 							namedRow?.kind === "character"
@@ -7532,9 +8585,25 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							!scope.lineage &&
 							!generating &&
 							scope.userId != null
-						const presence =
+						// ⏳ (S4) The pinned portrayals are keyed by the ref as asked
+						// (`turnRefs`): switch on, the seat's member form — the stored
+						// speaker when it is one, else the seat holding the card.
+						const presenceKey =
 							ownPress && characterId !== null
-								? scope.portrayals?.[`character:${characterId}`]
+								? memberFormOn()
+									? parseSeatRef(speakerRef ?? "")?.form === "seated-member" ||
+										parseSeatRef(speakerRef ?? "")?.form === "player-seat"
+										? speakerRef!
+										: ((await storedSeatRef(
+												db,
+												sessionId,
+												`character:${characterId}`
+											)) ?? `character:${characterId}`)
+									: `character:${characterId}`
+								: null
+						const presence =
+							presenceKey !== null
+								? scope.portrayals?.[presenceKey as ParticipantRef]
 								: undefined
 						const asPersona =
 							presence?.by === "person" &&
@@ -8057,8 +9126,22 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						throw new HostScopeError(
 							`${node.key} has no session to write a turn order for — the run was started without a session scope`
 						)
+					// 🚧 A `seated-member:<memberId>` ref is accepted (seat-cast S2)
+					// and stored in the card form the order is keyed by; a member
+					// nobody is seated as stays as written, so it is not admitted.
+					const asCardRef = async (ref: unknown): Promise<unknown> =>
+						typeof ref === "string"
+							? ((await storedSeatRef(db, scope.sessionId!, ref)) ?? ref)
+							: ref
 					const candidates = Array.isArray(p.candidates)
-						? (p.candidates as Array<Record<string, unknown>>)
+						? await Promise.all(
+								(p.candidates as Array<Record<string, unknown>>).map(
+									async (c) =>
+										c && typeof c === "object" && "ref" in c
+											? { ...c, ref: await asCardRef(c.ref) }
+											: c
+								)
+							)
 						: []
 					// Candidates as the pool published them, held to the live cast
 					// (M4 review): the pool node is swappable and contributable, so
@@ -8091,6 +9174,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					for (const raw of Array.isArray(p.order) ? p.order : []) {
 						if (!raw || typeof raw !== "object") continue
 						const entry = raw as Record<string, unknown>
+						if (typeof entry.ref === "string")
+							entry.ref = await asCardRef(entry.ref)
 						if (entry.ref !== null && !admitted.has(String(entry.ref))) {
 							notes.push(
 								`dropped ${String(entry.ref)}: not a candidate this recompute pooled`
@@ -8365,6 +9450,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * model's words; the scene mode decides from there (Suggested:
 					 * the chip; Automatic: placed, unless `ask`). The commit is
 					 * `proposeJudgedSceneCue` (`scenes/boundaryWatcher.ts`); a cue it skips or refuses is a note, never a halt.
+					 * With a `trigger` (the scenes routine's), the cue is for that boundary trigger at `at`, not `judged`.
 					 */
 					const sessionId = scope.sessionId
 					if (sessionId === undefined)
@@ -8378,11 +9464,57 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					if (!reason) return { halt: `${node.key}: a scene cue says why — reason is empty.` }
 					const channel = typeof p.channel === "string" && p.channel.trim() ? p.channel.trim() : "main"
 					const ask = (p.params as { ask?: unknown } | undefined)?.ask === true
+					const trigger = typeof p.trigger === "string" && p.trigger.trim() ? p.trigger.trim() : undefined
 					const { proposeJudgedSceneCue } = await import("$lib/server/scenes/boundaryWatcher")
-					const cue = await proposeJudgedSceneCue(db, { sessionId, channel, atMessageId: at, reason, ask, io: scope.io })
+					const cue = await proposeJudgedSceneCue(db, { sessionId, channel, atMessageId: at, reason, ask, trigger, io: scope.io })
 					const written = cue.outcome === "suggested" || cue.outcome === "placed"
 					if (written) record(node, "session", sessionId, "updated")
 					return { written, sessionId, cue }
+				}
+
+				case "core:outlet/note-scene": {
+					/**
+					 * 🚧 **Note it in the scene** (`core:outlet/note-scene@1`, ★S4
+					 * 2026-11-10): scenes first — the note is appended to `scene`,
+					 * else the run's lane's open scene, by `appendSceneNote`
+					 * (`scenes/liveScenes.ts`). Never writes history or messages.
+					 * Refused (as a `HostScopeError`) when the text is blank, the
+					 * genre keeps no scenes, lore writes are Off, the scene is not
+					 * there or is another session's, or none is open.
+					 * A retake, Back or delete of the message takes the note back
+					 * (`takeSceneNotesAt`); Forward restores it.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to note a scene in — the run was started without a session scope`
+						)
+					const { appendSceneNote, SceneBoundaryRefusal } = await import(
+						"$lib/server/scenes/liveScenes"
+					)
+					const { turnMessageOf } = await import(
+						"$lib/server/pipelines/runtime/runTurnMessage"
+					)
+					const channel =
+						typeof scope.channel === "string" && scope.channel.trim() ? scope.channel : "main"
+					try {
+						const out = await db.transaction(async (tx) =>
+							appendSceneNote(tx as unknown as Db, {
+								sessionId,
+								sceneId: p.scene,
+								channel,
+								text: typeof p.text === "string" ? p.text : "",
+								runId: scope.runId != null ? String(scope.runId) : null,
+								messageId: turnMessageId ?? turnMessageOf(scope.runId) ?? null
+							})
+						)
+						record(node, "session", sessionId, "updated")
+						return { written: true, sessionId, sceneId: out.sceneId }
+					} catch (err) {
+						if (err instanceof SceneBoundaryRefusal)
+							throw new HostScopeError(`${node.key}: ${err.message}`)
+						throw err
+					}
 				}
 
 				case "core:outlet/set-seat-name": {
@@ -8423,9 +9555,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 */
 					let retireSeatId: number | null = null
 					if (typeof p.retire === "string" && p.retire.trim()) {
-						const ref = p.retire.trim()
+						// 🚧 `seated-member:<memberId>` is accepted (seat-cast S2),
+						// read as the card form it is seated under.
+						const ref =
+							(await storedSeatRef(db, sessionId, p.retire.trim())) ??
+							p.retire.trim()
 						const seatRef = /^player-seat:(\d+)$/.exec(ref)
 						const cardRef = /^character:(\d+)$/.exec(ref)
+						// ⏳ (S4) Switch on, the door answers a character seat's member
+						// as `seated-member:<id>`: a seat of the AI's, holding no player seat.
+						if (memberFormOn() && /^seated-member:\d+$/.test(ref))
+							return { halt: `${ref} holds no seat at this table, so no seat was retired` }
 						if (seatRef) retireSeatId = Number(seatRef[1])
 						else if (cardRef) {
 							const [held] = await db
@@ -8441,7 +9581,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								.limit(1)
 							if (!held) return { halt: `${ref} holds no seat at this table, so no seat was retired` }
 							retireSeatId = held.id
-						} else return { halt: `'${ref}' is not a seat (player-seat:<id> or character:<id>), so no seat was retired` }
+						} else return { halt: `'${ref}' is not a seat (player-seat:<id>, seated-member:<id> or character:<id>), so no seat was retired` }
 					}
 					let seatId: number | null
 					try {
@@ -8469,14 +9609,108 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 					}
 					const [row] = await db
-						.select({ personaId: schema.sessionPersonas.personaId })
+						.select({
+							personaId: schema.sessionPersonas.personaId,
+							castMemberId: schema.sessionPersonas.castMemberId
+						})
 						.from(schema.sessionPersonas)
 						.where(eq(schema.sessionPersonas.id, seatId))
 						.limit(1)
-					// A seat with a card is its card (`character:<id>`); the
-					// seat's own reference names only a card-less one.
+					// The seat's reference (`hostSeatRefOf`): a seat with a card is its
+					// card (`character:<id>`), the seat's own reference names a
+					// card-less one; ⏳ (S4) with the member-form switch on, every
+					// player seat is `player-seat:<id>`.
 					const seat =
-						row?.personaId != null ? `character:${row.personaId}` : `player-seat:${seatId}`
+						hostSeatRefOf({
+							kind: "player",
+							seatId,
+							castMemberId: row?.castMemberId ?? null,
+							cardId: row?.personaId ?? null
+						}) ?? `player-seat:${seatId}`
+					return { written: true, sessionId, seat }
+				}
+
+				case "core:outlet/set-seat-bench": {
+					/**
+					 * 🚧 A seat benched or brought back by a pipeline (owner ruling
+					 * 2026-11-10: "seat to benched is something managed by the
+					 * genre/pipelines, not automatically by core"). Opt-in: only a
+					 * genre that declares `writes.seats: true` may (absent = off, P1);
+					 * core never benches on its own. The write is `setSeatBench`, the
+					 * one writer. Tied to the turn: when the run has a turn message the
+					 * bench is filed under it (a `seat-bench` session imprint), so Back,
+					 * regenerate and delete of that message put the seat back. A
+					 * person's later bench or drag wins: the undo is a no-op on a seat
+					 * that reads other than what the pipeline set. Announced after the
+					 * commit as `cast-changed` `enabled`.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to bench a seat in — the run was started without a session scope`
+						)
+					if (typeof p.benched !== "boolean")
+						return { halt: "there was no benched true or false, so no seat was benched" }
+					const refusal = await seatWriteRefusal(db, sessionId)
+					if (refusal !== null) return { halt: refusal }
+					const given = typeof p.seat === "string" ? p.seat.trim() : ""
+					const benched = p.benched
+					const { seatOf, setSeatBench, announceSeatChanges } = await import(
+						"$lib/server/sessions/seats"
+					)
+					const { turnMessageOf } = await import(
+						"$lib/server/pipelines/runtime/runTurnMessage"
+					)
+					const { fileSessionImprint, seatBenchKey } = await import(
+						"$lib/server/sessions/sessionImprints"
+					)
+					const anchor = turnMessageId ?? turnMessageOf(scope.runId)
+					const outcome = await db.transaction(async (tx) => {
+						const resolved = await seatOf(tx, sessionId, given)
+						if (!resolved)
+							return {
+								halt: `'${given}' is not a seat in this session, so nothing was benched`
+							}
+						const done = await setSeatBench(tx, {
+							sessionId,
+							kind: resolved.kind,
+							seatId: resolved.seatId,
+							benched
+						})
+						if (!done.ok) return { halt: done.refusal }
+						if (done.changes.length > 0)
+							await fileSessionImprint(
+								tx,
+								{ sessionId, messageId: anchor ?? null, runId: scope.runId ?? null },
+								{ kind: "seat-bench", key: seatBenchKey(resolved.kind, resolved.seatId) },
+								!benched,
+								benched
+							)
+						return { resolved, changes: done.changes }
+					})
+					if ("halt" in outcome) return { halt: outcome.halt }
+					const { resolved, changes } = outcome
+					record(node, "session", sessionId, "updated")
+					if (scope.io && changes.length > 0) {
+						let userId = scope.userId
+						if (userId === undefined) {
+							const [owner] = await db
+								.select({ userId: schema.sessions.userId })
+								.from(schema.sessions)
+								.where(eq(schema.sessions.id, sessionId))
+								.limit(1)
+							userId = owner?.userId
+						}
+						if (userId !== undefined)
+							await announceSeatChanges(db, scope.io, { sessionId, userId }, changes)
+					}
+					const seat =
+						hostSeatRefOf({
+							kind: resolved.kind,
+							seatId: resolved.seatId,
+							castMemberId: resolved.castMemberId,
+							cardId: resolved.cardId
+						}) ?? given
 					return { written: true, sessionId, seat }
 				}
 
@@ -8486,7 +9720,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * 2026-10-15): `{ owner, slot, config }` — the document a
 					 * card or session editor sends too — through
 					 * `setStatConfig`, the writer `state:configure` takes. The
-					 * owner is a seat (`player-seat:<id>`, `character:<id>`)
+					 * owner is a seat (`player-seat:<id>`, `seated-member:<id>`,
+					 * `character:<id>`)
 					 * or `world`; `worldRow`, as on `set-state@1`, files a
 					 * seat's or the world's row at a message this run wrote,
 					 * so a retake or swipe of it takes the row back. A refusal
@@ -8498,14 +9733,29 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key} has no session to configure a stat in — the run was started without a session scope`
 						)
 					const { castOwnerOfRef } = await import("./bindings.state")
+					// 🚧 `seated-member:<memberId>` is accepted (seat-cast S2)
+					// through `storedSeatRef`, which gives the seat's stored ref;
+					// a member nobody is seated as is not an owner.
+					const { storedSeatRef } = await import("$lib/server/state/seatRefs")
 					const ref = typeof p.owner === "string" ? p.owner.trim() : ""
+					// ⏳ (S4) Switch on, the door answers member form
+					// (`seated-member:<id>` / `player-seat:<id>`): the owner is the
+					// seat's `seated_member` / `player_seat` (`castOwnerOfRef` reads
+					// card forms only).
+					const stored = ref === "world" ? "" : ((await storedSeatRef(db, sessionId, ref)) ?? "")
+					const memberOwner = memberFormOn() ? /^(seated-member|player-seat):(\d+)$/.exec(stored) : null
 					const owner =
 						ref === "world"
 							? ({ kind: "session", id: sessionId } as const)
-							: castOwnerOfRef(ref)
+							: memberOwner
+								? ({
+										kind: memberOwner[1] === "seated-member" ? "seated_member" : "player_seat",
+										id: Number(memberOwner[2])
+									} as unknown as ReturnType<typeof castOwnerOfRef>)
+								: castOwnerOfRef(stored)
 					if (!owner)
 						return {
-							halt: `${JSON.stringify(p.owner ?? null)} is not an owner here — name a seat (player-seat:<id>, character:<id>) or world`
+							halt: `${JSON.stringify(p.owner ?? null)} is not an owner here — name a seat (player-seat:<id>, seated-member:<id>, character:<id>) or world`
 						}
 					const slotId = typeof p.slot === "string" ? p.slot.trim() : ""
 					const row = p.worldRow as { ids?: { id?: unknown }; id?: unknown } | number | null | undefined
@@ -8522,7 +9772,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							{
 								sessionId,
 								updatedBy: `run:${scope.runId ?? "unknown"}`,
-								...(worldRow !== undefined && owner.kind !== "session_cast"
+								// ⏳ (S4) a cast owner is a `session_cast`; with the switch
+								// on, a `seated_member` / `player_seat` holding a card is one
+								// too (it anchors to the card's turn); a card-less seat keeps
+								// the world's turn, so it pins the row like the world.
+								...(worldRow !== undefined &&
+								owner.kind !== "session_cast" &&
+								!(
+									memberFormOn() &&
+									((owner.kind as string) === "seated_member" ||
+										(owner.kind as string) === "player_seat") &&
+									(await seatOf(db, sessionId, stored))?.cardId != null
+								)
 									? { messageId: worldRow, ownAnchor: true }
 									: {})
 							},
@@ -8855,17 +10116,21 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// One transaction: everything the message changed goes
 					// first by the one retraction rule (RF fix 4) — values,
 					// configurations, proposals, every clock move it carried
-					// (its tick too: the row is gone, not replaced), zone
-					// snapshots, its lorebook writes, the notes' entries —
+					// (its round's tick too: the row leaves, "leaves"), scene
+					// boundaries, zone snapshots, its lorebook writes, the notes' entries —
 					// then both worlds of the row (the store owns the mirror,
 					// and the rows anchored to it). `taken` says what went.
 					let clockMoved = false
 					let taken: ReturnType<typeof takenSummaryOf> | null = null
+					const seatChanges: Array<
+						Awaited<ReturnType<typeof retractStateAnchoredTo>>["seatChanges"][number]
+					> = []
 					try {
 						const out = await db.transaction(async (tx) => {
 							const t = tx as unknown as Db
-							const retracted = await retractStateAnchoredTo(t, id, { ticks: "take" })
-							await deleteLegacy(t, id)
+							const retracted = await retractStateAnchoredTo(t, id, "leaves")
+							seatChanges.push(...retracted.seatChanges)
+							await deleteLegacy(t, id, { seatChanges })
 							return retracted
 						})
 						clockMoved = out.clockMoved
@@ -8878,6 +10143,26 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						throw e
 					}
 					record(node, "message", id, "deleted")
+					// The seats the turn benched are back; tell the open pages (after commit).
+					if (scope.io && seatChanges.length > 0) {
+						const { announceSeatChanges } = await import("$lib/server/sessions/seats")
+						let userId = scope.userId
+						if (userId === undefined) {
+							const [owner] = await db
+								.select({ userId: schema.sessions.userId })
+								.from(schema.sessions)
+								.where(eq(schema.sessions.id, current.sessionId))
+								.limit(1)
+							userId = owner?.userId
+						}
+						if (userId !== undefined)
+							await announceSeatChanges(
+								db,
+								scope.io,
+								{ sessionId: current.sessionId, userId },
+								seatChanges
+							)
+					}
 					if (clockMoved && scope.io) {
 						const { broadcastSessionRow } = await import(
 							"$lib/server/sessions/rowPush"
@@ -8961,6 +10246,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							: (params.unit ?? "hours")
 					const {
 						clockSkipReason,
+						droppedKeeperMoveSentence,
+						handMovedThisTurn,
 						readClockMoveCause,
 						recordClockMove
 					} = await import("$lib/server/state/clockMoves")
@@ -8982,6 +10269,24 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						by: by as number,
 						unit: unit as import("$lib/shared/lorebooks/storyDate").StoryTimeUnit
 					}
+					// 🚧 The model's own move after a *Time passes…* press this
+					// turn is dropped: no row, no write; the receipt carries it.
+					// A malformed step is never "dropped": it falls through to the
+					// refusal the normal path raises, so the spec's mistake shows.
+					const { clockStepRefusal } = await import("@serene-pub/sdk")
+					if (
+						cause === "keeper" &&
+						(target ? true : clockStepRefusal(step) === null) &&
+						(await handMovedThisTurn(db, sessionId))
+					)
+						return {
+							id: sessionId,
+							sessionId,
+							clock: null,
+							label: "",
+							skipped: droppedKeeperMoveSentence(target ? null : step),
+							moved: 0
+						}
 					let moved: Awaited<ReturnType<typeof advanceSessionStoryClock>>
 					try {
 						moved = await db.transaction(async (tx) => {
@@ -9161,17 +10466,28 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 
 				case "core:outlet/offer-media": {
 					/**
-					 * 🚧 Put each picture in the card's gallery
+					 * 🚧 Put each picture in the card's (or cast member's) gallery
 					 * (DESIGN-image-generation §6.2; I8) —
-					 * `characters/portrait.ts` holds the rule. About a CARD:
-					 * writes no session row; nothing is chosen for the
-					 * person. Refused unless the run's person owns the card
-					 * or is an admin.
+					 * `characters/portrait.ts` holds the rule. About a CARD or
+					 * a cast member: writes no session row; nothing is chosen
+					 * for the person. Refused unless the run's person owns the
+					 * card or is an admin — on a member's run (★7), unless they
+					 * may edit the member's lorebook.
 					 */
-					const characterId = Number(
-						Array.isArray(p.characterId) ? p.characterId[0] : p.characterId
+					const castMemberId = scope.cardActionCastMemberId ?? null
+					const wired = Array.isArray(p.characterId)
+						? p.characterId[0]
+						: p.characterId
+					if (castMemberId != null && wired != null && wired !== "")
+						throw new HostScopeError(
+							`${node.key} runs on a cast member — leave 'characterId' unwired; the pictures go to the member.`
+						)
+					const characterId =
+						castMemberId != null ? null : Number(wired)
+					if (
+						characterId !== null &&
+						(!Number.isSafeInteger(characterId) || characterId <= 0)
 					)
-					if (!Number.isSafeInteger(characterId) || characterId <= 0)
 						throw new HostScopeError(
 							`${node.key} was given no card — wire 'characterId' from the card action.`
 						)
@@ -9185,7 +10501,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					let result: Awaited<ReturnType<typeof offerMediaToGallery>>
 					try {
 						result = await offerMediaToGallery(db, {
-							characterId,
+							...(castMemberId != null
+								? { castMemberId }
+								: { characterId: characterId as number }),
 							media: p.media,
 							userId: scope.userId
 						})
@@ -9199,28 +10517,41 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// Nothing placed is no write: the executor causes no
 					// `media-offered`.
 					if (!result.offered.length)
-						return { written: false, characterId, offered: [] }
+						return { written: false, characterId, castMemberId, offered: [] }
 					return {
-						id: characterId,
+						id: castMemberId ?? characterId,
 						characterId,
+						castMemberId,
 						offered: result.offered
 					}
 				}
 
 				case "core:outlet/attach-sprite": {
 					/**
-					 * 🚧 File each keyed picture as a card's sprite
+					 * 🚧 File each keyed picture as a card's (or, on a member's
+					 * run, ★7, the cast member's own) sprite
 					 * (DESIGN-image-generation §6.3; I5) — `sprites/attach.ts`
-					 * holds the rule. About a CARD: runs with or without a
-					 * session, writes no session row, and its event is
-					 * recorded on the receipt by the executor (it has no
+					 * holds the rule. About a CARD or a member: runs with or
+					 * without a session, writes no session row, and its event
+					 * is recorded on the receipt by the executor (it has no
 					 * session to be a session change of). Refused unless the
-					 * run's person owns the card or is an admin.
+					 * run's person owns the card or is an admin — for a
+					 * member, unless they may edit the member's lorebook.
 					 */
-					const characterId = Number(
-						Array.isArray(p.characterId) ? p.characterId[0] : p.characterId
+					const castMemberId = scope.cardActionCastMemberId ?? null
+					const wired = Array.isArray(p.characterId)
+						? p.characterId[0]
+						: p.characterId
+					if (castMemberId != null && wired != null && wired !== "")
+						throw new HostScopeError(
+							`${node.key} runs on a cast member — leave 'characterId' unwired; the pictures go to the member.`
+						)
+					const characterId =
+						castMemberId != null ? null : Number(wired)
+					if (
+						characterId !== null &&
+						(!Number.isSafeInteger(characterId) || characterId <= 0)
 					)
-					if (!Number.isSafeInteger(characterId) || characterId <= 0)
 						throw new HostScopeError(
 							`${node.key} was given no card — wire 'characterId' from the card action.`
 						)
@@ -9234,7 +10565,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					let result: Awaited<ReturnType<typeof attachGeneratedSprites>>
 					try {
 						result = await attachGeneratedSprites(db, {
-							characterId,
+							...(castMemberId != null
+								? { castMemberId }
+								: { characterId: characterId as number }),
 							setName: typeof p.setName === "string" ? p.setName : null,
 							media: p.media,
 							series: p.series,
@@ -9257,6 +10590,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						return {
 							written: false,
 							characterId,
+							castMemberId,
 							setId: result.setId,
 							attached,
 							missing: result.missing
@@ -9264,6 +10598,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return {
 						id: result.setId,
 						characterId,
+						castMemberId,
 						setId: result.setId,
 						setName: result.setName,
 						attached,
@@ -9632,18 +10967,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// by any rate limit, and a guest must not grow the owner's
 					// storage with sessions the owner never asked for.
 					{
-						const { sessionAccessFor } = await import(
-							"$lib/server/messages/permissions"
-						)
-						const access =
-							scope.userId != null
-								? await sessionAccessFor(
-										db,
-										sessionId,
-										scope.userId
-									)
-								: null
-						if (!access?.isOwner)
+						if (!(await scopeActorOwnsSession(db, scope.userId, sessionId)))
 							throw new HostScopeError(
 								`${node.key}: only the session's owner may branch it.`
 							)
@@ -9689,14 +11013,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 					const to = typeof p.to === "string" ? p.to.trim() : ""
 					{
-						const { sessionAccessFor } = await import(
-							"$lib/server/messages/permissions"
-						)
-						const access =
-							scope.userId != null
-								? await sessionAccessFor(db, sessionId, scope.userId)
-								: null
-						if (!access?.isOwner)
+						if (!(await scopeActorOwnsSession(db, scope.userId, sessionId)))
 							return { halt: "Only the session's owner can change its rules." }
 					}
 					const { convertSessionRuleset } = await import(
@@ -9775,9 +11092,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 					const messageId = refId(p.messageId)
 					const blockId = typeof p.blockId === "string" ? p.blockId : null
+					// 🚧 A `seated-member:<memberId>` addressee is read as its seat's
+					// card form first (seat-cast S3) — the form's addressee is stored
+					// in the card form. A member nobody is seated as stays as written,
+					// which no stored addressee equals, so the form halts as addressed
+					// to somebody else; it is never stored.
 					const addressee =
 						typeof p.addressee === "string" && isParticipantRef(p.addressee)
-							? p.addressee
+							? ((await storedSeatRef(db, sessionId, p.addressee)) ??
+								p.addressee)
 							: null
 					if (messageId === null || !blockId || !addressee)
 						throw new HostScopeError(
@@ -9804,7 +11127,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.where(eq(schema.sessionMessages.id, messageId))
 						.limit(1)
 					assertScoped(node, subject?.sessionId, scope.sessionId)
-					if (block.addressee !== addressee)
+					// ⏳ (S4) A stored addressee of an older write may still be in card
+					// form; the door reads it in the form `addressee` is in.
+					const storedAddressee =
+						typeof block.addressee === "string"
+							? ((await storedSeatRef(db, sessionId, block.addressee)) ??
+								block.addressee)
+							: block.addressee
+					if (storedAddressee !== addressee)
 						return halted(
 							`the form '${blockId}' is addressed to ${block.addressee ?? "nobody"}, not ${addressee}`
 						)
@@ -9873,7 +11203,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						messageId,
 						blockId,
 						payload: fire.payload,
-						as: addressee
+						as: addressee as ParticipantRef
 					}
 					// The cycle caps, asked at the door (01 §8; W1): a refusal
 					// halts this run on the cap, and the would-be child's row —
@@ -10099,8 +11429,6 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return await libraryOutlet(node, "update-character", p)
 				case "core:outlet/create-lorebook":
 					return await libraryOutlet(node, "create-lorebook", p)
-				case "core:outlet/attach-lorebook":
-					return await libraryOutlet(node, "attach-lorebook", p)
 
 				case "core:outlet/create-lore-entry": {
 					/**
@@ -10171,6 +11499,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const typeId =
 						String(p.params?.entryType ?? "").trim() ||
 						WORLD_LORE_TYPE_ID
+					const { HISTORY_TYPE_ID } = await import("$lib/shared/entries/types")
 					if (!isDeclaredEntryType(typeId))
 						throw new HostScopeError(
 							`${node.key}: '${typeId}' is not a declared entry type, so there is nothing to file this under. The declared types are ${entryDeclarations().map((d) => d.typeId).join(", ")}.`
@@ -10205,7 +11534,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// resolved before the transaction.
 					const anchorBindingId =
 						p.bind !== undefined
-							? await resolveBind(db, { lorebookId, typeId }, p.bind, node.key)
+							? await resolveBind(db, { lorebookId, typeId }, p.bind, node.key, target.line.alsoReads)
 							: undefined
 					/**
 					 * The links, in the SAME transaction as the row (L2).
@@ -10219,36 +11548,70 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * refusal is raised inside the transaction.
 					 */
 					const links = loreLinkRequests(p.links)
-					// The session's line, read before the transaction (only
-					// `tx` inside it): the entry and its links are that
+					// The session's line is read inside the transaction, after the
+					// fork (`forkedLoreLine`): the entry and its links are that
 					// line's own, never main's by omission (finding #0).
-					const line = target.line
 					// 🚧 RF fix 4: the entry and the links it made, imprinted in the same transaction.
 					const anchor = await imprintAnchor(sessionId)
+					const linkAnchor = linkAnchorOf(sessionId, anchor, target)
 					const { imprintMade } = await import("$lib/server/lorebooks/imprints")
 					let settled: Awaited<ReturnType<typeof settleThrough>> | null = null
-					const { row, entryId, matched, changed, linkIds, madeLinkIds } = await db.transaction(
+					const { row, entryId, matched, changed, linkIds, madeLinkIds, dayNote, heldIn } = await db.transaction(
 						async (tx) => {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(${lorebookId})`
 							)
 							// 🚧 `match` (R-h): the entry this would duplicate,
-							// found under the book's lock. One → it is updated,
-							// by the code `update-lore-entry@1` runs.
-							const matchedId =
-								p.match !== undefined
+							// found under the book's lock, on what the session reads
+							// now (`target.line.reading`, before any fork). One → it is
+							// changed, by the code `update-lore-entry@1` runs: an
+							// attached lorebook's entry is held, so a match forks
+							// nothing; the line forks only for an insert or a history day.
+							// History is filed onto the day's one entry: the date is
+							// the match (`fileOntoHistoryDay`), and `match` is not read.
+							const foundId =
+								typeId !== HISTORY_TYPE_ID && p.match !== undefined
 									? await findLoreMatch(
 											tx as unknown as Db,
-											{ lorebookId, typeId, reading: line.reading },
+											{ lorebookId, typeId, reading: target.line.reading },
 											p.match,
-											node.key
+											node.key,
+											target.line.alsoReads
 										)
 									: null
+							// A write that names links writes rows to the book: it forks too.
+							const line =
+								foundId === null || links.length
+									? await forkedLoreLine(tx as unknown as Db, sessionId, target)
+									: target.line
+							const historyDay =
+								typeId === HISTORY_TYPE_ID
+									? await fileOntoHistoryDay(tx as unknown as Db, {
+											nodeKey: node.key,
+											sessionId,
+											lorebookId,
+											line,
+											fields,
+											content,
+											sourceMessageId: target.sourceMessageId,
+											anchor
+										})
+									: null
+							const matchedId = historyDay
+								? historyDay.created
+									? null
+									: historyDay.row.id
+								: foundId
 							let created:
 								| typeof schema.lorebookEntries.$inferSelect
 								| undefined
 							let changed = false
-							if (matchedId !== null) {
+							// The attached lorebook an entry's change was held against (a match).
+							let heldIn: number | null = null
+							if (historyDay) {
+								changed = historyDay.changed
+								if (historyDay.created) created = historyDay.row
+							} else if (matchedId !== null) {
 								const [stored] = await tx
 									.select()
 									.from(schema.lorebookEntries)
@@ -10256,6 +11619,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									.limit(1)
 								if (!stored)
 									throw new HostScopeError(`${node.key}: entry ${matchedId} is no longer in this session's lorebook.`)
+								if (stored.lorebookId !== (await ownBookOf(tx as unknown as Db, sessionId))?.id)
+									heldIn = stored.lorebookId
 								changed = await changeLoreEntry(
 									{
 										nodeKey: node.key,
@@ -10351,11 +11716,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							if (anchor) {
 								const t = tx as unknown as Db
 								// A matched entry's changes were imprinted as changes.
-								if (created)
+								if (created && !historyDay)
 									await imprintMade(t, anchor, { lorebookId, subject: "entry", subjectId: entryId })
 								for (const id of made)
 									await imprintMade(t, anchor, { lorebookId, subject: "relationship", subjectId: id })
-							}
+							} else if (linkAnchor)
+								// 🚧 A press-started run with no turn message: a link the notes took
+								// is imprinted at the newest message, as an entry anchors there.
+								for (const id of made)
+									await imprintMade(tx as unknown as Db, linkAnchor, { lorebookId, subject: "relationship", subjectId: id })
 							if (checked) {
 								const t = tx as unknown as Db
 								const base = { sessionId, runId: scope.runId ?? null, lorebookId, ids: checked.ids }
@@ -10363,10 +11732,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									await recordLoreSources(t, { ...base, subjectKind: "entry", subjectId: entryId })
 								for (const id of made)
 									await recordLoreSources(t, { ...base, subjectKind: "relationship", subjectId: id })
-								settled = await settleThrough(t, sessionId, Math.max(...checked.ids), {
-									runId: scope.runId,
-									userId: scope.userId
-								})
+								// 🚧 (sense-b4) A session whose scenes end by themselves does not settle by
+								// `sources`: its write is the own book's, kept as provenance only.
+								if (!target.scenesEndByThemselves)
+									settled = await settleThrough(t, sessionId, Math.max(...checked.ids), {
+										runId: scope.runId,
+										userId: scope.userId
+									})
 							}
 							return {
 								row: created ?? null,
@@ -10374,7 +11746,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								matched: matchedId !== null,
 								changed,
 								linkIds: ids,
-								madeLinkIds: made
+								madeLinkIds: made,
+								dayNote: historyDay?.note ?? null,
+								heldIn
 							}
 						}
 					)
@@ -10388,15 +11762,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					else if (changed) record(node, "lore_entry", entryId, "updated")
 					for (const id of madeLinkIds)
 						record(node, "lore_link", id, "created")
-					const noted = checked?.notes.length ? { notes: checked.notes } : {}
+					const allNotes = [...(checked?.notes ?? []), ...(dayNote ? [dayNote] : [])]
+					const noted = allNotes.length ? { notes: allNotes } : {}
 					// `linkIds` is one id per requested link, in order: a
 					// repeated link names the row it repeated.
 					if (matched)
 						return {
 							id: entryId,
 							entryId,
-							lorebookId,
-							route: target.route,
+							lorebookId: heldIn ?? lorebookId,
+							route: heldIn !== null ? ("own-book" as const) : target.route,
 							matched: true,
 							written: false,
 							...(linkIds.length ? { linkIds } : {}),
@@ -10440,14 +11815,28 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							? await checkLoreSources(db, scope, node.key, p.sources)
 							: null
 					const target = await sessionLoreWriteTo(db, sessionId, turnMessageId)
-					const { lorebookId, line } = target
+					// 🚧 `entry` is resolved over what the session reads: its attached
+					// lorebook's entries, then its own book's (one name rule over both).
+					// Where the write would have gone to the lorebook itself, only the
+					// lorebook's entries are named, as before held changes existed.
+					const { lorebooksReadBy, sessionEntriesAsRead } = await import(
+						"$lib/server/lorebooks/ownBook"
+					)
 					const entryId = await resolveLoreLinkEnd(
 						db,
-						lorebookId,
+						target.lorebookId,
 						p.entry,
 						node.key,
-						line.reading,
-						"change"
+						target.line.reading,
+						"change",
+						target.route !== "book" &&
+							!target.scenesEndByThemselves &&
+							(await lorebooksReadBy(db, sessionId)).attachedId != null
+							? (ids) => sessionEntriesAsRead(db, sessionId, "session", null, ids)
+							: undefined,
+						// 🚧 (sense-b4) Scenes end by themselves: the own book first, then the
+						// lorebook as the session reads it, as the rest of the route does.
+						target.scenesEndByThemselves ? target.line.alsoReads : undefined
 					)
 					const [stored] = await db
 						.select()
@@ -10456,6 +11845,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.limit(1)
 					if (!stored)
 						throw new HostScopeError(`${node.key}: entry ${entryId} is no longer in this session's lorebook.`)
+					// 🚧 Where the change lands: an entry of the attached lorebook is held
+					// as an amendment in the session's own book (`changeLoreEntry`; the
+					// result names the entry's lorebook and `own-book`, where the write
+					// went); an entry of the own book is written as it always was.
+					const ownBook = await ownBookOf(db, sessionId)
+					const held = stored.lorebookId !== ownBook?.id
+					const landing = held
+						? { route: "own-book" as const, lorebookId: stored.lorebookId, line: target.line }
+						: target.route === "book"
+							? await sessionLoreWriteTo(db, sessionId, turnMessageId, { notes: true })
+							: target
+					const { lorebookId, line } = landing
 					const patch = typedFieldsOf(node.key, stored.typeId, p.fields, { partial: true })
 					const change = {
 						nodeKey: node.key,
@@ -10468,13 +11869,57 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						content: p.content,
 						anchor: await imprintAnchor(sessionId)
 					}
+					// 🚧 A history entry moved to another day: the date checks the
+					// socket's update runs, in the change's one transaction. A save
+					// that resends the stored date runs none (a doubled date stays
+					// editable).
+					const { HISTORY_TYPE_ID } = await import("$lib/shared/entries/types")
+					let moved: import("$lib/shared/lorebooks/storyDate").StoryDate | null = null
+					if (
+						!held &&
+						stored.typeId === HISTORY_TYPE_ID &&
+						["year", "month", "day"].some((k) => Object.prototype.hasOwnProperty.call(patch, k))
+					) {
+						const { historyEntryDate } = await import("$lib/server/state/reading")
+						const { compareDates, dayOnly } = await import("$lib/shared/lorebooks/storyDate")
+						const was = historyEntryDate(stored.fields)
+						const pick = (k: "year" | "month" | "day") =>
+							Object.prototype.hasOwnProperty.call(patch, k) ? patch[k] : was?.[k]
+						const year = pick("year")
+						if (typeof year === "number") {
+							const to = {
+								year,
+								month: typeof pick("month") === "number" ? (pick("month") as number) : null,
+								day: typeof pick("day") === "number" ? (pick("day") as number) : null
+							}
+							if (!was || compareDates(dayOnly(was), dayOnly(to)) !== 0) moved = to
+						}
+					}
 					let changed: boolean
 					let settled: Awaited<ReturnType<typeof settleThrough>> | null = null
-					if (checked) {
+					if (checked || moved) {
 						changed = await db.transaction(async (tx) => {
 							await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
+							if (moved) {
+								const { assertDateLands } = await import("$lib/server/state/storyTime")
+								const { assertHistoryDateFree } = await import("$lib/server/scenes/historyEntryOfDate")
+								const { assertRedateKeepsLines } = await import("$lib/server/utils/forkHistory")
+								try {
+									await assertDateLands(tx as unknown as Db, lorebookId, moved)
+									await assertHistoryDateFree(tx as unknown as Db, {
+										lorebookId,
+										branchId: stored.branchId ?? null,
+										date: moved,
+										exceptId: entryId
+									})
+									await assertRedateKeepsLines(tx as unknown as Db, entryId, moved)
+								} catch (e) {
+									if (e instanceof HostScopeError || !(e instanceof Error)) throw e
+									throw new HostScopeError(`${node.key}: ${e.message}`)
+								}
+							}
 							const did = await changeLoreEntry(change, tx as unknown as Db)
-							if (did)
+							if (did && checked)
 								await recordLoreSources(tx as unknown as Db, {
 									sessionId,
 									runId: scope.runId ?? null,
@@ -10483,12 +11928,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									subjectId: entryId,
 									ids: checked.ids
 								})
-							settled = await settleThrough(
-								tx as unknown as Db,
-								sessionId,
-								Math.max(...checked.ids),
-								{ runId: scope.runId, userId: scope.userId }
-							)
+							// 🚧 (sense-b4) A session whose scenes end by themselves does not settle by `sources`.
+							if (checked && !target.scenesEndByThemselves)
+								settled = await settleThrough(
+									tx as unknown as Db,
+									sessionId,
+									Math.max(...checked.ids),
+									{ runId: scope.runId, userId: scope.userId }
+								)
 							return did
 						})
 						await announceSettled(sessionId, settled)
@@ -10501,8 +11948,44 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						id: entryId,
 						entryId,
 						lorebookId,
-						route: target.route,
+						route: landing.route,
 						...(checked?.notes.length ? { notes: checked.notes } : {})
+					}
+				}
+
+				case "core:outlet/update-cast-member": {
+					/**
+					 * 🚧 **Change a cast member** (`core:outlet/update-cast-member@1`):
+					 * a story write through the one cast-version writer,
+					 * gated by `writes.lore` and routed by the lore write
+					 * mode; anchored to the turn, so Back takes it. No run
+					 * artifact kind is kept for it.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to change a cast member in — the run was started without a session scope`
+						)
+					const { writeCastMember, CastMemberRefusal } = await import(
+						"$lib/server/pipelines/runtime/castMember"
+					)
+					const { turnMessageOf } = await import(
+						"$lib/server/pipelines/runtime/runTurnMessage"
+					)
+					try {
+						const out = await writeCastMember(db, {
+							sessionId,
+							member: p.member,
+							changes: p.changes,
+							runId: scope.runId,
+							messageId: turnMessageId ?? turnMessageOf(scope.runId)
+						})
+						lorebookReads.clear()
+						return out
+					} catch (err) {
+						if (err instanceof CastMemberRefusal)
+							throw new HostScopeError(`${node.key}: ${err.message}`)
+						throw err
 					}
 				}
 
@@ -10540,9 +12023,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 
 					const target = await sessionLoreWriteTo(db, sessionId, turnMessageId)
 					const lorebookId = target.lorebookId
-					const line = target.line
 					// 🚧 RF fix 4: a link this write made is imprinted with it.
-					const anchor = await imprintAnchor(sessionId)
+					const anchor = (await imprintAnchor(sessionId)) ?? linkAnchorOf(sessionId, null, target)
 					const { imprintMade } = await import("$lib/server/lorebooks/imprints")
 					// Both ends under the book's own lock, for the reason the
 					// entry write takes it: an end resolved by name must not be
@@ -10554,12 +12036,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(${lorebookId})`
 							)
+							const line = await forkedLoreLine(tx as unknown as Db, sessionId, target)
 							const from = await resolveLoreLinkEnd(
 								tx,
 								lorebookId,
 								p.from,
 								node.key,
-								line.reading
+								line.reading,
+								"link",
+								undefined,
+								line.alsoReads
 							)
 							const wrote = await writeLoreLink(
 								tx,
@@ -10591,12 +12077,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 										subjectId: wrote.id,
 										ids: checked.ids
 									})
-								settled = await settleThrough(
-									tx as unknown as Db,
-									sessionId,
-									Math.max(...checked.ids),
-									{ runId: scope.runId, userId: scope.userId }
-								)
+								// 🚧 (sense-b4) A session whose scenes end by themselves does not settle by `sources`.
+								if (!target.scenesEndByThemselves)
+									settled = await settleThrough(
+										tx as unknown as Db,
+										sessionId,
+										Math.max(...checked.ids),
+										{ runId: scope.runId, userId: scope.userId }
+									)
 							}
 							return { fromId: from, link: wrote }
 						}
@@ -10614,7 +12102,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						return {
 							id: link.id,
 							fromEntryId: link.fromEntryId,
-							lorebookId,
+							lorebookId: link.lorebookId ?? lorebookId,
 							written: false,
 							...noted
 						}
@@ -10838,6 +12326,10 @@ function toMessage(r: any, shaping?: ChannelShaping | null) {
 		content: r.content,
 		characterId: r.characterId ?? null,
 		personaId: r.personaId ?? null,
+		// 🚧 The speaker's cast member (seat-cast S3, ★S3-3): what the
+		// turn-order readers' `refOfMember` lookup names a row by. Only when
+		// stamped, so an unstamped row reads exactly as it did.
+		...(r.castMemberId != null ? { castMemberId: r.castMemberId } : {}),
 		isNarratorResponse: r.isNarratorResponse,
 		// Who voiced it, when a row says so by reference (`envoy:<slug>`) —
 		// the turn rules read it (an envoy's reply has no character id). Only
@@ -10904,19 +12396,12 @@ async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
 		...new Set(bindings.map((b) => b.characterId).filter(Boolean))
 	]
 
-	const characters = characterIds.length
-		? await db
-				.select()
-				.from(schema.characters)
-				.where(
-					and(
-						inArray(schema.characters.id, characterIds),
-						eq(schema.characters.isDeleted, false)
-					)
-				)
-		: []
-
-	const byCharacter = new Map(characters.map((c) => [c.id, c]))
+	// The cards as their current version has them; a deleted card is nobody.
+	const byCharacter = new Map(
+		[...(await cardsNow(db, characterIds)).entries()].filter(
+			([, c]) => !c.isDeleted
+		)
+	)
 
 	return bindings.map((b) => ({
 		...b,

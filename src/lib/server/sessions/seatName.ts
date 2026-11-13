@@ -15,6 +15,32 @@ import * as schema from "$lib/server/db/schema"
 
 export { isCardlessPlayerSeat } from "$lib/shared/sessions/playerSeat"
 import { ownCardlessPlayerSeats } from "$lib/shared/sessions/playerSeat"
+import { inPlay } from "$lib/shared/sessions/inPlay"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import type { SeatChange } from "$lib/server/sessions/seats"
+
+/**
+ * 🚧 Whose card a seat is (plan §27 S2; owner ruling 2026-11-05: "Everything
+ * in session is cast -> active card"): the owner of its cast member's active
+ * card on the session's reading, else the card as the seat's row joins it (a
+ * seat with no member yet, or a card-less member, reads that).
+ */
+async function seatCardOwner(
+	db: Db,
+	sessionId: number,
+	seat: { personaId: number | null; castMemberId: number | null; cardUserId: number | null }
+): Promise<number | null> {
+	if (seat.castMemberId == null || seat.personaId == null) return seat.cardUserId
+	const read = await memberAsRead(db, seat.castMemberId, { sessionId })
+	if (read?.activeCardId == null || read.activeCardId === seat.personaId) return seat.cardUserId
+	const [card] = await db
+		.select({ userId: schema.characters.userId })
+		.from(schema.characters)
+		.where(eq(schema.characters.id, read.activeCardId))
+		.limit(1)
+	return card?.userId ?? null
+}
 
 /**
  * 🚧 A seat's card as the prompt reads it: a seat name wins over the card's
@@ -28,6 +54,35 @@ export const withSeatName = <P extends { name?: string } | null | undefined>(
 
 /** Thrown with the sentence the caller shows. */
 export class SeatNameRefusal extends Error {}
+
+/**
+ * 🚧 ★6 (owner 2026-11-08): a named seat opens through `seatPlayer`, which mints
+ * a card-less member named by it; its refusal reaches the caller in its words.
+ */
+async function seatNamed(
+	tx: Db,
+	sessionId: number,
+	userId: number,
+	name: string,
+	position: number,
+	changes?: SeatChange[]
+): Promise<number> {
+	try {
+		const { seatPlayer } = await import("$lib/server/sessions/seats")
+		const seated = await seatPlayer(tx, {
+			sessionId,
+			personaId: null,
+			userId,
+			seatName: name,
+			position,
+			mintCardless: true
+		})
+		changes?.push(...seated.changes)
+		return seated.seatId
+	} catch (e) {
+		throw new SeatNameRefusal(e instanceof Error ? e.message : String(e))
+	}
+}
 
 /**
  * Set (trimmed, non-blank) or clear (blank or null) a seat's name.
@@ -53,23 +108,30 @@ export async function writeSeatName(
 		name: string | null
 		/**
 		 * 🚧 One of the person's own live seats this name replaces (a new
-		 * character after a death, owner ruling 2026-10-18): it leaves the
-		 * table — `removed_at` set, its row and so its lines' name kept — and
-		 * the name opens a NEW card-less seat for them.
+		 * character after a death, owner ruling 2026-10-18): it leaves play —
+		 * benched, its row and its lines' name kept — and the name opens a NEW
+		 * card-less seat for them.
 		 */
 		retireSeatId?: number | null
+		/** 🚧 Collects what the seats written changed (a retired seat is benched, a named one joins); the caller announces them after. */
+		changes?: SeatChange[]
 	}
 ): Promise<number | null> {
 	const { sessionId, userId, isOwner } = params
 	const name = params.name?.trim() || null
 	if (params.retireSeatId != null) {
 		if (!name) throw new SeatNameRefusal("A new character needs a name.")
-		return await db.transaction(async (tx) => {
+		// Collected inside the transaction, handed on only once it commits.
+		const collected: SeatChange[] = []
+		const seatId = await db.transaction(async (tx) => {
 			const t = tx as unknown as Db
+			const { setSeatBench } = await import("$lib/server/sessions/seats")
 			const [old] = await t
 				.select({
 					id: schema.sessionPersonas.id,
 					userId: schema.sessionPersonas.userId,
+					personaId: schema.sessionPersonas.personaId,
+					castMemberId: schema.sessionPersonas.castMemberId,
 					cardUserId: schema.characters.userId,
 					removedAt: schema.sessionPersonas.removedAt
 				})
@@ -83,30 +145,26 @@ export async function writeSeatName(
 				)
 				.limit(1)
 			if (!old || old.removedAt) throw new SeatNameRefusal("That seat is not at this table any more.")
-			if ((old.userId ?? old.cardUserId) !== userId)
+			if ((old.userId ?? (await seatCardOwner(t, sessionId, old))) !== userId)
 				throw new SeatNameRefusal("Only your own character's seat can make way for a new one.")
-			await t
-				.update(schema.sessionPersonas)
-				.set({ removedAt: new Date() })
-				.where(eq(schema.sessionPersonas.id, old.id))
+			const benched = await setSeatBench(t, {
+				sessionId,
+				kind: "player",
+				seatId: old.id,
+				benched: true
+			})
+			if (!benched.ok) throw new SeatNameRefusal(benched.refusal)
+			collected.push(...benched.changes)
 			const [last] = await t
 				.select({ position: schema.sessionPersonas.position })
 				.from(schema.sessionPersonas)
 				.where(eq(schema.sessionPersonas.sessionId, sessionId))
 				.orderBy(desc(schema.sessionPersonas.position))
 				.limit(1)
-			const [created] = await t
-				.insert(schema.sessionPersonas)
-				.values({
-					sessionId,
-					personaId: null,
-					userId,
-					seatName: name,
-					position: (last?.position ?? -1) + 1
-				})
-				.returning({ id: schema.sessionPersonas.id })
-			return created.id
+			return await seatNamed(t, sessionId, userId, name, (last?.position ?? -1) + 1, collected)
 		})
+		params.changes?.push(...collected)
+		return seatId
 	}
 
 	const seats = await db
@@ -114,8 +172,10 @@ export async function writeSeatName(
 			id: schema.sessionPersonas.id,
 			personaId: schema.sessionPersonas.personaId,
 			userId: schema.sessionPersonas.userId,
+			castMemberId: schema.sessionPersonas.castMemberId,
 			cardUserId: schema.characters.userId,
-			position: schema.sessionPersonas.position
+			position: schema.sessionPersonas.position,
+			isActive: schema.sessionPersonas.isActive
 		})
 		.from(schema.sessionPersonas)
 		.leftJoin(
@@ -128,7 +188,10 @@ export async function writeSeatName(
 				isNull(schema.sessionPersonas.removedAt)
 			)
 		)
-	const whose = (s: (typeof seats)[number]) => s.userId ?? s.cardUserId
+	// 🚧 Each seat's card owner, read through its cast member (see `seatCardOwner`).
+	const cardOwners = new Map<number, number | null>()
+	for (const s of seats) cardOwners.set(s.id, await seatCardOwner(db, sessionId, s))
+	const whose = (s: (typeof seats)[number]) => s.userId ?? cardOwners.get(s.id) ?? null
 
 	let seat: (typeof seats)[number] | undefined
 	if (params.playerSeatId != null) {
@@ -137,8 +200,10 @@ export async function writeSeatName(
 		if (!isOwner && whose(seat) !== userId)
 			throw new SeatNameRefusal("You can only name your own seat.")
 	} else {
+		// A benched seat is never picked (owner 2026-11-10); naming one by
+		// `playerSeatId` above is a names read and still finds it.
 		const mine = seats
-			.filter((s) => whose(s) === userId)
+			.filter((s) => inPlay(s) && whose(s) === userId)
 			.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
 		seat = mine.find((s) => s.personaId === null) ?? mine[0]
 	}
@@ -172,23 +237,19 @@ export async function writeSeatName(
 		if (!guest?.isPlayer)
 			throw new SeatNameRefusal("Only a player of this session can take a seat.")
 	}
-	const [last] = await db
-		.select({ position: schema.sessionPersonas.position })
-		.from(schema.sessionPersonas)
-		.where(eq(schema.sessionPersonas.sessionId, sessionId))
-		.orderBy(desc(schema.sessionPersonas.position))
-		.limit(1)
-	const [created] = await db
-		.insert(schema.sessionPersonas)
-		.values({
-			sessionId,
-			personaId: null,
-			userId,
-			seatName: name,
-			position: (last?.position ?? -1) + 1
-		})
-		.returning({ id: schema.sessionPersonas.id })
-	return created.id
+	const collected: SeatChange[] = []
+	const seatId = await db.transaction(async (tx) => {
+		const t = tx as unknown as Db
+		const [last] = await t
+			.select({ position: schema.sessionPersonas.position })
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, sessionId))
+			.orderBy(desc(schema.sessionPersonas.position))
+			.limit(1)
+		return await seatNamed(t, sessionId, userId, name, (last?.position ?? -1) + 1, collected)
+	})
+	params.changes?.push(...collected)
+	return seatId
 }
 
 /**
@@ -208,7 +269,8 @@ export async function cardlessPlayerSeatOf(
 			personaId: schema.sessionPersonas.personaId,
 			userId: schema.sessionPersonas.userId,
 			seatName: schema.sessionPersonas.seatName,
-			removedAt: schema.sessionPersonas.removedAt
+			removedAt: schema.sessionPersonas.removedAt,
+			isActive: schema.sessionPersonas.isActive
 		})
 		.from(schema.sessionPersonas)
 		.where(
@@ -235,12 +297,20 @@ export function playerSeatIdOfSpeaker(speaker: unknown): number | null {
 /**
  * 🚧 Give a card-less player seat a card: when the card's owner has a card-less
  * seat in this session (`cardlessPlayerSeatOf`) and the card has no row here yet,
- * that seat takes the card — its `persona_id` filled, its `player_seat` stat rows
- * moved to the card's session layer (`session_cast`) with its pending
- * proposals, and the lines it sent restamped as the card's — so the seat keeps its
- * name, its place and its stats, and its reference becomes the card's
- * (`character:<id>`). Returns whether a seat took it; on false the caller
- * seats the card on a row of its own, as before.
+ * that seat takes the card — its `persona_id` filled.
+ *
+ * Card form (flip off, `memberForm.ts`): its `player_seat` stat rows are moved
+ * to the card's session layer (`session_cast`) with its pending proposals, and
+ * the lines it sent restamped as the card's — so the seat keeps its name, its
+ * place and its stats, and its reference becomes the card's (`character:<id>`).
+ *
+ * 🚧 ⏳ Member form (flip on): a carded player seat is still a `player_seat`, so
+ * only `persona_id` is filled — its stat rows, configs, sheets and pending
+ * proposals stay under `player_seat:<seatId>` and its lines keep the
+ * `player-seat:<id>` stamp. Nothing is rekeyed.
+ *
+ * Returns whether a seat took it; on false the caller seats the card on a row
+ * of its own, as before.
  */
 export async function givePlayerSeatACard(
 	db: Db,
@@ -271,6 +341,7 @@ export async function givePlayerSeatACard(
 			.update(schema.sessionPersonas)
 			.set({ personaId })
 			.where(eq(schema.sessionPersonas.id, seatId))
+		if (memberFormOn()) return
 		for (const table of [schema.attributeValues, schema.attributeConfigs, schema.ownerSheets])
 			await tx
 				.update(table)
@@ -321,11 +392,13 @@ export async function givePlayerSeatACard(
 
 /**
  * 🚧 Edit Session's card-less player seats: each renamed (a non-blank
- * `seatName`) or removed (`remove`: soft, `removed_at` and `removed_name`,
- * so its lines keep their name). The session's owner may edit any seat;
- * anyone else only their own (`user_id`). Refuses a seat that is not a live
- * card-less player seat of this session — a seat with a card is edited as
- * its card. Returns the ids removed, for the caller's `member-removed`.
+ * `seatName`) or removed (`remove`: a first remove benches the seat, so it
+ * stays in Benched and its lines keep their name; only an unused benched
+ * seat is removed, `removed_at` and `removed_name`). The session's owner may
+ * edit any seat; anyone else only their own (`user_id`). Refuses a seat that
+ * is not a live card-less player seat of this session — a seat with a card
+ * is edited as its card. Returns the ids removed, benched ones included, for
+ * the caller's `member-removed`.
  */
 export async function editCardlessPlayerSeats(
 	db: Db,
@@ -334,6 +407,8 @@ export async function editCardlessPlayerSeats(
 		userId: number
 		isOwner: boolean
 		changes: ReadonlyArray<{ playerSeatId: number; seatName?: string; remove?: boolean }>
+		/** 🚧 Collects the seats benched or removed, for the caller to announce. */
+		seatChanges?: SeatChange[]
 	}
 ): Promise<number[]> {
 	const { sessionId, userId, isOwner } = params
@@ -356,10 +431,20 @@ export async function editCardlessPlayerSeats(
 		if (!isOwner && seat.userId !== userId)
 			throw new SeatNameRefusal("You can only change your own seat.")
 		if (change.remove) {
-			await db
-				.update(schema.sessionPersonas)
-				.set({ removedAt: new Date(), removedName: seat.seatName })
-				.where(eq(schema.sessionPersonas.id, seat.id))
+			const { unseat } = await import("$lib/server/sessions/seats")
+			try {
+				params.seatChanges?.push(
+					...(await unseat(db, {
+						sessionId,
+						kind: "player",
+						seatId: seat.id,
+						removedName: seat.seatName
+					}))
+				)
+			} catch (e) {
+				if (e instanceof SeatNameRefusal || !(e instanceof Error)) throw e
+				throw new SeatNameRefusal(e.message)
+			}
 			removed.push(seat.id)
 			continue
 		}

@@ -2,8 +2,7 @@
 	import {
 		Dialog,
 		Portal,
-		SegmentedControl,
-		Switch
+		SegmentedControl
 	} from "@skeletonlabs/skeleton-svelte"
 	import { z } from "zod"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
@@ -26,10 +25,8 @@
 	interface Props {
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
-		/** `attachToSession` is meaningless unless the switch was offered. */
 		onConfirm: (details: {
 			name: string
-			attachToSession: boolean
 			/** The ruleset id picked; the server's default when unset. */
 			primaryRuleset?: string
 			/** 🚧 The kit to copy in; its Rules win over `primaryRuleset`. */
@@ -42,10 +39,6 @@
 		 * step): the offer is not drawn.
 		 */
 		onImportInstead?: () => void
-		/** Hidden rather than disabled when the switch would do nothing. */
-		canOfferAttachToSession?: boolean
-		/** What the session the book would be read into is called. */
-		sessionName?: string | null
 		/** A refusal from the server, shown under the name. */
 		error?: string
 	}
@@ -56,8 +49,6 @@
 		onConfirm,
 		onCancel,
 		onImportInstead,
-		canOfferAttachToSession = false,
-		sessionName = null,
 		error
 	}: Props = $props()
 
@@ -66,7 +57,6 @@
 	})
 
 	let name = $state("")
-	let attachToSession = $state(true)
 	/** Empty until the picker seeds it with the default. */
 	let primaryRuleset = $state("")
 	let inputRef: HTMLInputElement | null = $state(null)
@@ -113,7 +103,6 @@
 	$effect(() => {
 		if (open) {
 			name = ""
-			attachToSession = true
 			primaryRuleset = ""
 			validationErrors = {}
 			way = "blank"
@@ -155,7 +144,6 @@
 		if (way === "kit" && !starterKit) return
 		onConfirm({
 			name: name.trim(),
-			attachToSession: attachToSession && canOfferAttachToSession,
 			...(starterKit
 				? { starterKit }
 				: primaryRuleset
@@ -302,28 +290,6 @@
 								You can change them later in Book settings.
 							</p>
 						</div>
-					{/if}
-
-					{#if canOfferAttachToSession}
-						<Switch
-							name="new-lorebook-attach"
-							checked={attachToSession}
-							onCheckedChange={(e) =>
-								(attachToSession = e.checked)}
-							class="flex items-center gap-2"
-						>
-							<Switch.Control
-								class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-							>
-								<Switch.Thumb />
-							</Switch.Control>
-							<Switch.HiddenInput />
-							<Switch.Label class="text-sm">
-								{sessionName
-									? `Read it into ${sessionName}`
-									: "Read it into this session"}
-							</Switch.Label>
-						</Switch>
 					{/if}
 
 					{#if onImportInstead}

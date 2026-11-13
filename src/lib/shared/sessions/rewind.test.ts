@@ -61,6 +61,62 @@ describe("the strip's state off the session", () => {
 		expect(rewindStateWith(of(null), [{ role: "user", channel: "parley:2" }])?.regenerate).toBe(REWIND_REFUSALS.empty)
 	})
 
+	test("Back's words: an old host's shape reads as it was; a table's lines and the one message are kept; a malformed one is dropped alone", () => {
+		const of = (backTakes: unknown) =>
+			rewindStateOf({
+				rewind: { ahead: 0, back: null, forward: null, backTakes }
+			})?.backTakes
+		const old = { count: 2, names: ["Ash"], throughId: 9 }
+		expect(of(old)).toEqual(old)
+		const newest = { author: "Ash", yours: false, filed: 1 }
+		expect(of({ ...old, personLines: 2, newestMessage: newest })).toEqual({
+			...old,
+			personLines: 2,
+			newestMessage: newest
+		})
+		expect(
+			of({ ...old, newestMessage: { author: 4, yours: true, filed: 0 } })
+		).toEqual({
+			...old,
+			newestMessage: { author: null, yours: true, filed: 0 }
+		})
+		expect(
+			of({
+				...old,
+				personLines: -1,
+				newestMessage: { author: "Ash", yours: "no", filed: 1 }
+			})
+		).toEqual(old)
+		expect(
+			of({
+				...old,
+				personLines: 2.5,
+				newestMessage: { author: "Ash", yours: false, filed: -1 }
+			})
+		).toEqual(old)
+		const session = {
+			rewind: {
+				ahead: 0,
+				back: null,
+				forward: null,
+				backTakes: { ...old, personLines: 3, newestMessage: newest }
+			}
+		}
+		expect(
+			rewindStateWith(session, [{ id: 9, role: "user", channel: "main" }])
+				?.backTakes
+		).toEqual({
+			...old,
+			personLines: 3,
+			newestMessage: newest
+		})
+		expect(
+			rewindStateWith(session, [
+				{ id: 10, role: "user", channel: "main" }
+			])?.backTakes
+		).toBeUndefined()
+	})
+
 	test("withStackReplaced empties what is ahead and keeps the rest", () => {
 		expect(withStackReplaced({ ahead: 2, back: "b", forward: null, regenerate: "r" })).toEqual({
 			ahead: 0,

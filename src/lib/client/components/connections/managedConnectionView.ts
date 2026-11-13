@@ -309,14 +309,22 @@ export interface KcppPerfFacts {
  * The speed clause is dropped rather than printed as a dash: koboldcpp reports
  * 0 until it has generated anything, and "0.0 tok/s" reads as a fault on a
  * process that is simply idle.
+ *
+ * The generations clause waits for the same sign (owner ruling 2026-11-08):
+ * `total_gens` is koboldcpp's own counter and it ticks for this app's
+ * readiness pings, so a fresh install read "Idle · 29 generations" having
+ * drawn and written nothing. A positive average speed is the first proof
+ * something was really generated; until then the count says nothing true.
  */
 export function kcppPerfLine(
 	perf: KcppPerfFacts | null | undefined
 ): string | null {
 	if (!perf) return null
-	const speed =
-		perf.avgGenSpeed > 0 ? `${perf.avgGenSpeed.toFixed(1)} tok/s` : null
-	const gens = `${perf.totalGens} ${perf.totalGens === 1 ? "generation" : "generations"}`
+	const generated = perf.avgGenSpeed > 0
+	const speed = generated ? `${perf.avgGenSpeed.toFixed(1)} tok/s` : null
+	const gens = generated
+		? `${perf.totalGens} ${perf.totalGens === 1 ? "generation" : "generations"}`
+		: null
 	return [perf.idle ? "Idle" : "Busy", speed, gens, `queue ${perf.queue}`]
 		.filter(Boolean)
 		.join(" · ")
@@ -568,8 +576,6 @@ export function acppProcessLine(
 		now
 	)
 	if (!base) return null
-	if (status.isExternal)
-		return { ...base, meta: "Not started by Serene Pub" }
 	if (status.status === "crashed" && status.lastError)
 		return { ...base, meta: status.lastError }
 	return base

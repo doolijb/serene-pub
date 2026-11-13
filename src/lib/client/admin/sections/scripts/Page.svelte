@@ -41,7 +41,7 @@
 		useFacets,
 		type UseFacet
 	} from "./scriptsAdmin"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
@@ -58,16 +58,30 @@
 
 	const typeName = (r: Script) => types.get(r.typeId)?.name ?? r.typeId
 	const scopeOf = (r: Script) => types.get(r.typeId)?.content ?? ""
-	const scopeLabel = (c: string) => (c ? c.charAt(0).toUpperCase() + c.slice(1) : "—")
+	const scopeLabel = (c: string) =>
+		c ? c.charAt(0).toUpperCase() + c.slice(1) : "—"
 
 	const columns: AdminChangelistColumn<Script>[] = [
-		{ key: "name", label: "Name", primary: true, text: (r) => r.name, sortValue: (r) => r.name },
+		{
+			key: "name",
+			label: "Name",
+			primary: true,
+			text: (r) => r.name,
+			sortValue: (r) => r.name
+		},
 		{ key: "type", label: "Type", text: typeName, sortValue: typeName },
-		{ key: "scope", label: "Scope", text: (r) => scopeLabel(scopeOf(r)), sortValue: scopeOf },
+		{
+			key: "scope",
+			label: "Scope",
+			text: (r) => scopeLabel(scopeOf(r)),
+			sortValue: scopeOf
+		},
 		{
 			key: "status",
 			label: "Status",
-			text: (r) => (r.enabled ? "Enabled" : "Disabled") + (r.isImmutable ? " · built-in" : ""),
+			text: (r) =>
+				(r.enabled ? "Enabled" : "Disabled") +
+				(r.isImmutable ? " · built-in" : ""),
 			sortValue: (r) => (r.enabled ? 0 : 1)
 		},
 		{
@@ -98,8 +112,18 @@
 		},
 		{ key: "step", label: "Step", values: (r) => r.fits?.steps ?? [] },
 		{ key: "seam", label: "Seam", values: (r) => r.fits?.at ?? [] },
-		{ key: "type", label: "Type", values: (r) => r.typeId, optionLabel: (v) => types.get(v)?.name ?? v },
-		{ key: "scope", label: "Scope", values: scopeOf, optionLabel: scopeLabel },
+		{
+			key: "type",
+			label: "Type",
+			values: (r) => r.typeId,
+			optionLabel: (v) => types.get(v)?.name ?? v
+		},
+		{
+			key: "scope",
+			label: "Scope",
+			values: scopeOf,
+			optionLabel: scopeLabel
+		},
 		{
 			key: "status",
 			label: "Status",
@@ -138,20 +162,28 @@
 			destructive: true,
 			confirm: (selected) => scriptDeletion(selected),
 			run: (selected) => {
-				const ids = selected.filter((r) => !r.isImmutable && !r.usedBy.length).map((r) => r.id)
+				const ids = selected
+					.filter((r) => !r.isImmutable && !r.usedBy.length)
+					.map((r) => r.id)
 				deleting += ids.length
-				for (const id of ids) socket.emit("pipelines:deleteScript", { id })
+				for (const id of ids)
+					socket.emit("pipelines:deleteScript", { id })
 			}
 		}
 	]
 
 	function handleDeleteScript(res: Sockets.Pipelines.ScriptWrite.Response) {
 		if (res.scripts) view = res.scripts
-		if (deleting > 0 && --deleting === 0) toaster.success({ title: "Deleted" })
+		if (deleting > 0 && --deleting === 0)
+			notify.success({ title: "Deleted" })
 	}
 	function handleDeleteScriptError(res: { error?: string }) {
 		if (deleting > 0) deleting--
-		if (res.error) toaster.error({ title: res.error })
+		if (res.error)
+			notify.error({
+				title: res.error,
+				source: "socket:pipelines:deleteScript:error"
+			})
 	}
 
 	const exportIds = (ids: number[]) =>
@@ -259,7 +291,11 @@
 	}
 
 	function handlePipelinesScriptsError(res: { error?: string }) {
-		if (res.error) toaster.error({ title: res.error })
+		if (res.error)
+			notify.error({
+				title: res.error,
+				source: "socket:pipelines:scripts:error"
+			})
 		loading = false
 	}
 
@@ -271,7 +307,11 @@
 	}
 
 	function handlePipelinesExportScriptsError(res: { error?: string }) {
-		if (res.error) toaster.error({ title: res.error })
+		if (res.error)
+			notify.error({
+				title: res.error,
+				source: "socket:pipelines:exportScripts:error"
+			})
 	}
 
 	function handlePipelinesImportScripts(
@@ -282,7 +322,7 @@
 		const skippedForReal = (res.report?.skipped ?? []).filter(
 			(s) => s.reason !== "not selected"
 		)
-		toaster.success({
+		notify.success({
 			title: `Imported ${res.report?.imported.length ?? 0} script${
 				(res.report?.imported.length ?? 0) === 1 ? "" : "s"
 			}`,
@@ -297,7 +337,11 @@
 	}
 
 	function handlePipelinesImportScriptsError(res: { error?: string }) {
-		if (res.error) toaster.error({ title: res.error })
+		if (res.error)
+			notify.error({
+				title: res.error,
+				source: "socket:pipelines:importScripts:error"
+			})
 	}
 
 	onMount(() => {
@@ -366,7 +410,8 @@
 	{bulkActions}
 	{loading}
 	noun={SCRIPT_NOUN}
-	searchText={(r) => `${r.name} ${typeName(r)} ${r.typeId} ${r.usedBy.join(" ")}`}
+	searchText={(r) =>
+		`${r.name} ${typeName(r)} ${r.typeId} ${r.usedBy.join(" ")}`}
 	rowHref={(r) => `/admin/scripts/${r.id}`}
 	addHref="/admin/scripts/new"
 	defaultSort="name"
@@ -374,7 +419,11 @@
 	emptyMessage="No scripts authored yet. Add one, or import a pack."
 >
 	{#snippet headerActions()}
-		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openImport}>
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface"
+			onclick={openImport}
+		>
 			<Icons.Upload size={16} aria-hidden="true" /> Import
 		</button>
 		{#if rows.length}
@@ -452,7 +501,9 @@
 				{:else}
 					<div class="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
 						{#each importItems as item, i (i)}
-							<div class="border-surface-200-800 rounded-lg border p-2">
+							<div
+								class="border-surface-200-800 rounded-lg border p-2"
+							>
 								<label class="flex items-center gap-2">
 									<input
 										type="checkbox"
@@ -460,22 +511,27 @@
 										bind:checked={item.checked}
 										disabled={!item.known}
 									/>
-									<span class="min-w-0 flex-1 truncate font-medium"
-										>{item.name}</span
+									<span
+										class="min-w-0 flex-1 truncate font-medium"
 									>
-									<span class="text-surface-600-400 text-xs"
-										>{item.typeName}</span
-									>
+										{item.name}
+									</span>
+									<span class="text-surface-600-400 text-xs">
+										{item.typeName}
+									</span>
 									{#if item.known}
-										<Badge tone="warning" size="sm">{item.blastRadius}</Badge>
+										<Badge tone="warning" size="sm">
+											{item.blastRadius}
+										</Badge>
 									{:else}
-										<Badge tone="error" size="sm">unknown type</Badge>
+										<Badge tone="error" size="sm">
+											unknown type
+										</Badge>
 									{/if}
 								</label>
 								<p class="text-surface-600-400 mt-1 text-xs">
-									reads {item.reads.join(", ") || "—"} · writes {item.writes.join(
-										", "
-									) || "—"}
+									reads {item.reads.join(", ") || "—"} · writes
+									{item.writes.join(", ") || "—"}
 								</p>
 								<pre
 									class="bg-surface-200-800 mt-1 max-h-32 overflow-auto rounded p-2 font-mono text-xs">{item.source}</pre>

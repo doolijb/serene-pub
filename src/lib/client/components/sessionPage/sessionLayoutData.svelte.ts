@@ -7,7 +7,7 @@
  * (`sessions:panelLayout:get`) have landed.
  */
 import { onDestroy } from "svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { onConnect } from "$lib/client/sockets/interest.svelte"
 import { coreDefaultWidgets } from "$lib/client/components/sessionPage/coreWidgets"
 import {
@@ -39,6 +39,40 @@ export interface SessionLayoutDataDeps {
 	surfaceManager: SurfaceManager
 	/** The session view (its panels), the session's genre and its name. */
 	data: SessionPageData
+	/** Whether the person is an administrator — read when the tray is built; core's admin-only widgets are offered to no one else. */
+	isAdmin(): boolean
+}
+
+type WidgetSettingsMap = Record<string, Record<string, unknown>>
+
+/**
+ * What changed in widget settings while a layout copy was pending (`base` →
+ * `next`), laid over the copy's own answer (`landed`). Per widget id, per
+ * key: a key whose value differs between the two is set to `next`'s, a key
+ * in `base` and gone from `next` is removed, a widget left with no keys is
+ * dropped. Everything else keeps the copy's value. Returns a new map.
+ */
+export function replayHeldWidgetSettings(
+	base: WidgetSettingsMap,
+	next: WidgetSettingsMap,
+	landed: WidgetSettingsMap
+): WidgetSettingsMap {
+	const out: WidgetSettingsMap = {}
+	for (const [id, v] of Object.entries(landed)) out[id] = { ...v }
+	const same = (a: unknown, b: unknown) =>
+		JSON.stringify(a) === JSON.stringify(b)
+	for (const id of new Set([...Object.keys(base), ...Object.keys(next)])) {
+		const was = base[id] ?? {}
+		const now = next[id] ?? {}
+		for (const key of new Set([...Object.keys(was), ...Object.keys(now)])) {
+			if (key in now) {
+				if (key in was && same(was[key], now[key])) continue
+				;(out[id] ??= {})[key] = now[key]
+			} else if (out[id]) delete out[id][key]
+		}
+		if (out[id] && !Object.keys(out[id]).length) delete out[id]
+	}
+	return out
 }
 
 /** The page's session layout. Registers its listeners on the inbox at once. */
@@ -90,20 +124,54 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	 * so the writer here needs nothing but the current blob. They are this
 	 * person's own values and nothing else: a layout's own `widgetSettings`
 	 * were copied into them when the session started from it.
+	 *
+	 * While a copy this tab asked for is pending, a change shows at once but
+	 * nothing is sent (the blob held is the OLD arrangement, item 15); the
+	 * answer sends it: as it was if the copy is refused, replayed over the
+	 * copy's own values if it landed.
 	 */
 	$effect(() => {
 		setWidgetSettingValues(widgetSettings)
 	})
+	// A settings write made while a copy this tab asked for is pending: the
+	// arrangement this tab holds is the OLD one, so nothing is sent yet.
+	let held: { base: WidgetSettingsMap; next: WidgetSettingsMap } | null = null
+	function sendWidgetSettings(id: number, next: WidgetSettingsMap) {
+		socket.emit("sessions:panelLayout:set", {
+			sessionId: id,
+			layout: surfaceManager.toBlob() as Record<string, unknown>,
+			widgetSettings: next
+		})
+	}
+	/** The copy is answered: a refusal sends the held write as it would have gone; a landing replays it. */
+	function releaseHeldWidgetSettings(
+		landed: boolean,
+		answer?: WidgetSettingsMap
+	) {
+		const h = held
+		if (!h || layoutCopyAsks.pending > 0) return
+		held = null
+		if (sessionId == null) return
+		if (!landed) {
+			sendWidgetSettings(sessionId, h.next)
+			return
+		}
+		const merged = replayHeldWidgetSettings(h.base, h.next, answer ?? {})
+		if (JSON.stringify(merged) === JSON.stringify(answer ?? {})) return
+		widgetSettings = merged
+		sendWidgetSettings(sessionId, merged)
+	}
 	$effect(() => {
 		const id = sessionId
 		if (id == null) return
 		setWidgetSettingsWriter((next) => {
+			const base = held?.base ?? $state.snapshot(widgetSettings)
 			widgetSettings = next
-			socket.emit("sessions:panelLayout:set", {
-				sessionId: id,
-				layout: surfaceManager.toBlob() as Record<string, unknown>,
-				widgetSettings: next
-			})
+			if (layoutCopyAsks.pending > 0) {
+				held = { base, next: $state.snapshot(next) }
+				return
+			}
+			sendWidgetSettings(id, next)
 		})
 		return () => setWidgetSettingsWriter(null)
 	})
@@ -123,15 +191,6 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 			layoutSettings: next
 		})
 	}
-
-	/**
-	 * Core's default widgets for the standard chat — the widgets beside the
-	 * conversation, from one table (`sessionPage/coreWidgets.ts`), each core's
-	 * own remote component (R79). A custom mode's own widgets arrive via
-	 * `sessions:view.modePanels` and are merged on top (mode wins by id).
-	 */
-	const CORE_DEFAULT_PANELS: Sockets.Sessions.View.ModePanel[] =
-		coreDefaultWidgets()
 
 	function persistPanelLayout(blob: LayoutBlob) {
 		if (sessionId == null) return
@@ -160,12 +219,16 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	 * back over it. If the copy is refused, that save is sent after all
 	 * (`settleLayoutCopy`), so a drag made just before is not lost.
 	 */
-	function startLayoutFrom(layoutPresetId: number | null): Promise<boolean> {
+	function startLayoutFrom(
+		layoutPresetId: number | null,
+		opts?: { clearPlacedWidgets?: boolean }
+	): Promise<boolean> {
 		if (sessionId == null) return Promise.resolve(false)
 		const landed = layoutCopyAsks.ask(surfaceManager.cancelPendingSave())
 		socket.emit("sessions:panelLayout:startFrom", {
 			sessionId,
-			layoutPresetId
+			layoutPresetId,
+			...(opts?.clearPlacedWidgets ? { clearPlacedWidgets: true } : {})
 		})
 		return landed
 	}
@@ -177,7 +240,11 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	 * for nothing (another tab's answer).
 	 */
 	function settleLayoutCopy(landed: boolean): boolean {
-		return layoutCopyAsks.settle(landed, () => surfaceManager.persistNow())
+		const asked = layoutCopyAsks.settle(landed, () =>
+			surfaceManager.persistNow()
+		)
+		if (!landed) releaseHeldWidgetSettings(false)
+		return asked
 	}
 
 	/**
@@ -283,7 +350,12 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 		const byId = new Map<string, Sockets.Sessions.View.ModePanel>()
 		// What the genre withholds (R71) is not offered — core's included.
 		const omit = new Set(sessionFrames?.omitWidgets ?? [])
-		for (const p of CORE_DEFAULT_PANELS)
+		// Core's default widgets for the standard chat — the widgets beside
+		// the conversation, from one table (`sessionPage/coreWidgets.ts`), each
+		// core's own remote component (R79). A custom mode's own widgets arrive
+		// via `sessions:view.modePanels` and are merged on top (mode wins by
+		// id). Built here, not once: what is offered depends on who is asking.
+		for (const p of coreDefaultWidgets(d.isAdmin()))
 			if (!omit.has(p.id)) byId.set(p.id, p)
 		for (const p of sessionFrames?.modePanels ?? []) byId.set(p.id, p) // mode wins
 		surfaceManager.init(
@@ -334,13 +406,16 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 		if (res.sessionId !== sessionId) return
 		if (!res.ok) {
 			if (settleLayoutCopy(false))
-				toaster.error({
+				notify.error({
+					source: "socket:sessions:panelLayout:startFrom",
 					title: res.error ?? "Could not change the layout"
 				})
 			return
 		}
 		adoptPanelLayout(res)
+		surfaceManager.noteCopyLanded()
 		settleLayoutCopy(true)
+		releaseHeldWidgetSettings(true, res.widgetSettings ?? {})
 	}
 
 	/**
@@ -357,7 +432,10 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	) {
 		if (res.sessionId !== sessionId) return
 		if (!res.ok) {
-			toaster.error({ title: res.error ?? "Could not save that layout" })
+			notify.error({
+				source: "socket:sessions:layoutPreset:save",
+				title: res.error ?? "Could not save that layout"
+			})
 			return
 		}
 		layoutPresets = res.presets ?? layoutPresets
@@ -388,7 +466,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 		res: Sockets.Sessions.PanelLayout.Rename.Response
 	) {
 		if (!res.ok) {
-			toaster.error({
+			notify.error({
+				source: "socket:sessions:layoutPreset:rename",
 				title: res.error ?? "Could not rename that layout"
 			})
 			return
@@ -402,7 +481,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	) {
 		layoutPresetUsage = null
 		if (!res.ok) {
-			toaster.error({
+			notify.error({
+				source: "socket:sessions:layoutPreset:delete",
 				title: res.error ?? "Could not delete that layout"
 			})
 			return
@@ -429,7 +509,10 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 				newSessionLayoutUsers: 0,
 				unknown: true
 			}
-			toaster.error({ title: res.error ?? "Could not read that layout" })
+			notify.error({
+				source: "socket:sessions:layoutPreset:usage",
+				title: res.error ?? "Could not read that layout"
+			})
 			return
 		}
 		layoutPresetUsage = {
@@ -455,7 +538,7 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	 * not this person's to act on any more (unshared or deleted elsewhere).
 	 */
 	function refusedLayoutAsk(error: string | undefined, fallback: string) {
-		toaster.error({ title: error ?? fallback })
+		notify.error({ title: error ?? fallback })
 		askStartedFrom()
 	}
 
@@ -470,11 +553,13 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 		}
 		const name = quotedLayoutName(res.preset?.name ?? nameOf(res.id))
 		if (res.preset?.visibility === "shared")
-			toaster.success({
+			notify.success({
+				source: "socket:sessions:layoutPreset:share",
 				title: `Shared ${name} with everyone on this pub.`
 			})
 		else
-			toaster.success({
+			notify.success({
+				source: "socket:sessions:layoutPreset:share",
 				title: `${name} is private again.`,
 				description: "Sessions that copied it keep their layout."
 			})
@@ -489,7 +574,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 			refusedLayoutAsk(res.error, "Could not copy that layout")
 			return
 		}
-		toaster.success({
+		notify.success({
+			source: "socket:sessions:layoutPreset:clone",
 			title: `Made a copy: ${quotedLayoutName(res.preset?.name ?? "")}.`,
 			description: "It's under Your layouts."
 		})
@@ -520,7 +606,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 			refusedLayoutAsk(res.error, "Could not save changes to that layout")
 			return
 		}
-		toaster.success({
+		notify.success({
+			source: "socket:sessions:layoutPreset:update",
 			title: `Saved changes to ${quotedLayoutName(res.preset?.name ?? nameOf(res.id))}.`
 		})
 	}
@@ -538,7 +625,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 			)
 			return
 		}
-		toaster.success({
+		notify.success({
+			source: "socket:sessions:layoutPreset:setNewSessionLayout",
 			title:
 				res.layoutPresetId != null
 					? `${newSessionsOfGenre()} will start from ${quotedLayoutName(nameOf(res.layoutPresetId))}.`
@@ -659,7 +747,10 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 	d.inbox.on("sessions:recordedEvent", handleRecordedEvent)
 	// An authored component this page offers changed: its widgets retarget.
 	d.inbox.on("components:changed", (res) => {
-		const panels = [...(sessionFrames?.modePanels ?? []), ...surfaceManager.instances]
+		const panels = [
+			...(sessionFrames?.modePanels ?? []),
+			...surfaceManager.instances
+		]
 		retargetAuthoredSrc(panels, res)
 		// An admin's review: the mount re-posts the grants and withdraws a revoked section.
 		retargetAuthoredGrants(panels, res)
@@ -710,6 +801,8 @@ export function createSessionLayoutData(d: SessionLayoutDataDeps) {
 			layoutCopiedAt = null
 			layoutSettings = {}
 			widgetSettings = {}
+			held = null
+			layoutCopyAsks.abandon()
 			layoutPresetUsage = null
 		}
 	}

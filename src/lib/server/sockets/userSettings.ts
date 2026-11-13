@@ -169,7 +169,8 @@ export async function buildUserSettingsGet(
 				darkMode: true,
 				showHomePageBanner: true,
 				enableEasyCharacterCreation: true,
-				showAllCharacterFields: false
+				showAllCharacterFields: false,
+				showAdvancedControls: false
 			})
 			.onConflictDoNothing()
 
@@ -197,6 +198,7 @@ export async function buildUserSettingsGet(
 			enableEasyCharacterCreation:
 				settings.enableEasyCharacterCreation,
 			showAllCharacterFields: settings.showAllCharacterFields,
+			showAdvancedControls: settings.showAdvancedControls,
 			// One field on the wire, two columns behind it (28): an
 			// uploaded background is a `/media/{id}` proxy, a shipped
 			// default is its static path. The client only ever
@@ -223,7 +225,7 @@ export async function buildUserSettingsGet(
 			// its own option. `effectiveLoreWriteMode` is the answer.
 			loreWriteMode: isLoreWriteMode(settings.loreWriteMode) ? settings.loreWriteMode : null,
 			effectiveLoreWriteMode: await loreWriteModeFor(db, userId),
-			// 🚧 As stored; null reads Review (M2c).
+			// 🚧 As stored; null reads Full (M2c).
 			libraryWriteMode: isLibraryWriteMode(settings.libraryWriteMode) ? settings.libraryWriteMode : null,
 			routineCaps: await routineCapsView(settings)
 		}
@@ -501,6 +503,46 @@ export const userSettingsUpdateShowAllCharacterFields: Handler<
 			console.error("Update show all character fields error:", error)
 			emitToUser("userSettings:updateShowAllCharacterFields:error", {
 				error: "Failed to update show all character fields setting"
+			})
+			throw error
+		}
+	}
+}
+
+export const userSettingsUpdateShowAdvancedControls: Handler<
+	Sockets.UserSettings.UpdateShowAdvancedControls.Params,
+	Sockets.UserSettings.UpdateShowAdvancedControls.Response
+> = {
+	event: "userSettings:updateShowAdvancedControls",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			if (!userId) {
+				throw new Error("User not authenticated")
+			}
+
+			await db
+				.update(schema.userSettings)
+				.set({
+					showAdvancedControls: params.enabled
+				})
+				.where(eq(schema.userSettings.userId, userId))
+
+			const res: Sockets.UserSettings.UpdateShowAdvancedControls.Response =
+				{
+					success: true,
+					enabled: params.enabled
+				}
+			emitToUser("userSettings:updateShowAdvancedControls", res)
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
+			return res
+		} catch (error: any) {
+			console.error("Update show advanced controls error:", error)
+			emitToUser("userSettings:updateShowAdvancedControls:error", {
+				error: "Failed to update show advanced controls setting"
 			})
 			throw error
 		}
@@ -846,6 +888,7 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsUpdateRoutineCaps, emitToUser)
 	register(socket, userSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, userSettingsUpdateShowAllCharacterFields, emitToUser)
+	register(socket, userSettingsUpdateShowAdvancedControls, emitToUser)
 	register(socket, userSettingsUpdateSpokenPlayback, emitToUser)
 	register(socket, userSettingsUpdateTheme, emitToUser)
 	register(socket, userSettingsUpdateDarkMode, emitToUser)

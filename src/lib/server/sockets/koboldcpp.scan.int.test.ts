@@ -101,3 +101,43 @@ test("forgets a GGUF whose file is gone, keeps ONNX and matting rows", async () 
 	expect((await row("Xenova/all-MiniLM-L6-v2"))?.status).toBe("complete")
 	expect((await row(MATTING_MODEL_ID))?.modality).toBe(MATTING_MODALITY)
 }, 60_000)
+
+test("a GGUF found in the text folder, then moved to the image folder, is still one row", async () => {
+	const imageDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-koboldcpp-scan-image-dir-")
+	)
+	try {
+		await testDb
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppImageModelsDir: imageDir })
+			.where(eq(schema.koboldCppSettings.id, 1))
+		const name = "moved-between-folders.gguf"
+		await fs.writeFile(path.join(modelsDir, name), Buffer.alloc(32))
+		const { buildKoboldCppListModels } = await import("./koboldcpp")
+		await buildKoboldCppListModels()
+		expect(
+			await testDb
+				.select()
+				.from(schema.localModels)
+				.where(eq(schema.localModels.filename, name))
+		).toHaveLength(1)
+
+		await fs.rename(path.join(modelsDir, name), path.join(imageDir, name))
+		await buildKoboldCppListModels()
+		expect(
+			await testDb
+				.select()
+				.from(schema.localModels)
+				.where(eq(schema.localModels.filename, name))
+		).toHaveLength(1)
+	} finally {
+		await testDb
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppImageModelsDir: null })
+			.where(eq(schema.koboldCppSettings.id, 1))
+		await fs.rm(imageDir, { recursive: true, force: true })
+		await fs.rm(path.join(modelsDir, "moved-between-folders.gguf"), {
+			force: true
+		})
+	}
+}, 60_000)

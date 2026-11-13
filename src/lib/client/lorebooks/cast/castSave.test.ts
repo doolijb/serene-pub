@@ -22,6 +22,9 @@ import {
 	deletedMemberToast,
 	fileCastAmendment,
 	isOurCastAmendment,
+	laterVersionCount,
+	laterVersionsLine,
+	laterVersionsToast,
 	undoMergeToast
 } from "./castSave"
 
@@ -43,6 +46,7 @@ function list(
 			month: null,
 			day: null,
 			fields: {},
+			columns: {} as Sockets.Lorebooks.CastVersionColumns,
 			historyEntryId: null,
 			createdAt: "",
 			updatedAt: "",
@@ -58,7 +62,10 @@ beforeEach(() => handlers.clear())
 describe("castAmendmentParams — a cast amendment names its line (#105)", () => {
 	test("carries the branch being read, and main as null", () => {
 		expect(
-			castAmendmentParams(target, { year: 3, fields: { nodeState: "missing" } })
+			castAmendmentParams(target, {
+				year: 3,
+				fields: { nodeState: "missing" }
+			})
 		).toEqual({
 			lorebookId: 4,
 			castId: 9,
@@ -95,7 +102,9 @@ describe("isOurCastAmendment", () => {
 
 	test("a row already seen, or on another line, is not", () => {
 		const row = { id: 2, fields: { nodeState: "missing" } }
-		expect(isOurCastAmendment(list([row]), params, new Set([2]))).toBe(false)
+		expect(isOurCastAmendment(list([row]), params, new Set([2]))).toBe(
+			false
+		)
 		expect(
 			isOurCastAmendment(
 				list([{ ...row, branchId: null }]),
@@ -119,7 +128,9 @@ describe("isOurCastAmendment", () => {
 describe("fileCastAmendment", () => {
 	test("emits on the line being read and waits for its own row", async () => {
 		const emits: any[] = []
-		const socket = { emit: (event: string, p: any) => emits.push({ event, p }) }
+		const socket = {
+			emit: (event: string, p: any) => emits.push({ event, p })
+		}
 		const done = fileCastAmendment(
 			socket as any,
 			target,
@@ -153,8 +164,14 @@ describe("fileCastAmendment", () => {
 describe("castMaskedWarning — a base save an amendment still overrides (#113)", () => {
 	test("names the field and the amendment's date", () => {
 		const w = castMaskedWarning([
-			{ field: "nodeState", amendment: { year: 20, month: null, day: null } },
-			{ field: "summary", amendment: { year: 20, month: null, day: null } }
+			{
+				field: "nodeState",
+				amendment: { year: 20, month: null, day: null }
+			},
+			{
+				field: "summary",
+				amendment: { year: 20, month: null, day: null }
+			}
 		])
 		expect(w?.title).toMatch(/amendment still wins/)
 		expect(w?.description).toMatch(/still sets the state and the summary/)
@@ -166,9 +183,18 @@ describe("castMaskedWarning — a base save an amendment still overrides (#113)"
 	})
 	test("names retold fields and the face in words", () => {
 		const w = castMaskedWarning([
-			{ field: "retold", amendment: { year: 20, month: null, day: null } },
-			{ field: "faceMediaId", amendment: { year: 20, month: null, day: null } },
-			{ field: "firstMessage", amendment: { year: 20, month: null, day: null } }
+			{
+				field: "retold",
+				amendment: { year: 20, month: null, day: null }
+			},
+			{
+				field: "faceMediaId",
+				amendment: { year: 20, month: null, day: null }
+			},
+			{
+				field: "firstMessage",
+				amendment: { year: 20, month: null, day: null }
+			}
 		])
 		expect(w?.description).toMatch(
 			/what is retold here, the face and the first message/
@@ -210,8 +236,12 @@ describe("deleteMemberCopy — ruling 4: the dialog asks", () => {
 		expect(copy.lore?.lead).toBe(
 			"Maren has 3 lore entries private to them, and 1 archived."
 		)
-		expect(copy.lore?.keepDetail).toMatch(/unassigned, and the narrator can see/)
-		expect(copy.lore?.removeDetail).toMatch(/all 4 entries, the archived ones/)
+		expect(copy.lore?.keepDetail).toMatch(
+			/unassigned, and the narrator can see/
+		)
+		expect(copy.lore?.removeDetail).toMatch(
+			/all 4 entries, the archived ones/
+		)
 	})
 
 	test("archived-only lore is still asked about", () => {
@@ -330,5 +360,116 @@ describe("undoMergeToast — what an undo could not put back", () => {
 		expect(t.description).toMatch(
 			/2 pieces of lore edited since the merge still name the member they were merged into/
 		)
+	})
+})
+
+describe("later versions (CV-13)", () => {
+	const rows = [
+		{ id: 11, year: 2, branchId: null },
+		{ id: 12, year: 5, month: 3, branchId: null },
+		{ id: 13, year: 9, branchId: null },
+		{ id: 14, year: 6, branchId: 7 },
+		{ id: 15, year: 8, branchId: 7 }
+	]
+
+	test("a base save counts every row on main, and none on a fork", () => {
+		expect(laterVersionCount(rows, { kind: "base" })).toBe(3)
+		expect(laterVersionCount([], { kind: "base" })).toBe(0)
+	})
+
+	test("a base save counts the main rows after the shown version", () => {
+		// The base version (no row has that id) is before every row.
+		expect(
+			laterVersionCount(rows, { kind: "base", shownVersionId: 99 })
+		).toBe(3)
+		expect(
+			laterVersionCount(rows, { kind: "base", shownVersionId: null })
+		).toBe(3)
+		// A shown Changes row: only the main rows dated after it.
+		expect(
+			laterVersionCount(rows, { kind: "base", shownVersionId: 12 })
+		).toBe(1)
+		expect(
+			laterVersionCount(rows, { kind: "base", shownVersionId: 13 })
+		).toBe(0)
+		// A fork's row is never counted by a base save.
+		expect(
+			laterVersionCount(rows, { kind: "base", shownVersionId: 14 })
+		).toBe(3)
+	})
+
+	test("on one date the higher id is later", () => {
+		const same = [
+			{ id: 1, year: 4, branchId: null },
+			{ id: 2, year: 4, branchId: null },
+			{ id: 3, year: 4, branchId: null }
+		]
+		expect(
+			laterVersionCount(same, { kind: "base", shownVersionId: 2 })
+		).toBe(1)
+	})
+
+	test("a Save as of counts the line being read, dated after the moment", () => {
+		expect(
+			laterVersionCount(rows, {
+				kind: "amend",
+				branchId: null,
+				moment: { year: 5, month: 3 }
+			})
+		).toBe(1)
+		expect(
+			laterVersionCount(rows, {
+				kind: "amend",
+				branchId: null,
+				moment: { year: 5 }
+			})
+		).toBe(2)
+		expect(
+			laterVersionCount(rows, {
+				kind: "amend",
+				branchId: 7,
+				moment: { year: 6 }
+			})
+		).toBe(1)
+	})
+
+	test("the line says one or many, and nothing for none", () => {
+		expect(laterVersionsLine(0)).toBeNull()
+		expect(laterVersionsLine(1)).toBe(
+			"1 later version keeps its own words."
+		)
+		expect(laterVersionsLine(2)).toBe(
+			"2 later versions keep their own words."
+		)
+	})
+
+	test("the toast sentence says what changed and what kept its words", () => {
+		expect(laterVersionsToast(undefined)).toBeNull()
+		expect(laterVersionsToast({ changed: 0, kept: 0 })).toBeNull()
+		expect(laterVersionsToast({ changed: 2, kept: 0 })).toBe(
+			"2 later versions changed too."
+		)
+		expect(laterVersionsToast({ changed: 1, kept: 0 })).toBe(
+			"1 later version changed too."
+		)
+		expect(laterVersionsToast({ changed: 0, kept: 1 })).toBe(
+			"1 later version keeps its own words."
+		)
+		expect(laterVersionsToast({ changed: 2, kept: 3 })).toBe(
+			"2 later versions changed too. 3 later versions keep their own words."
+		)
+	})
+
+	test("the create carries the flag only when it is on", () => {
+		const planned = { year: 3, fields: { summary: "x" } }
+		expect(castAmendmentParams(target, planned)).not.toHaveProperty(
+			"changeLaterVersions"
+		)
+		expect(
+			castAmendmentParams(target, {
+				...planned,
+				changeLaterVersions: true
+			})
+		).toMatchObject({ changeLaterVersions: true })
 	})
 })

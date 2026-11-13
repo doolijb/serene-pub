@@ -20,6 +20,7 @@ import { getImageAdapter } from "$lib/server/utils/getImageAdapter"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { createMedia, readMedia } from "$lib/server/media"
 import { listSpriteSets, placeSpriteFile } from "$lib/server/sprites"
+import { canEditCastMember } from "$lib/server/cast/memberAccess"
 import { mayFillSprites } from "$lib/server/sprites/attach"
 import { resolvedSteps } from "$lib/server/sprites/fillAction"
 import { normalizeSpriteName } from "$lib/shared/sprites"
@@ -88,7 +89,10 @@ export interface ReexpressResult {
 export async function reexpressSprite(
 	db: Db,
 	req: {
-		characterId: number
+		/** The card — name this or `castMemberId`, never both. */
+		characterId?: number
+		/** 🚧 The cast member — name this or `characterId`, never both. */
+		castMemberId?: number
 		/** The set; omitted = the default set. */
 		setId?: number | null
 		label: string
@@ -97,7 +101,20 @@ export async function reexpressSprite(
 		signal?: AbortSignal
 	}
 ): Promise<ReexpressResult> {
-	if (!(await mayFillSprites(db, req.userId, req.characterId)))
+	if ((req.characterId == null) === (req.castMemberId == null))
+		throw new ReexpressRefusal(
+			"Name a character or a cast member, not both."
+		)
+	const member =
+		req.castMemberId != null
+			? await canEditCastMember(db, req.castMemberId, req.userId)
+			: null
+	if (req.castMemberId != null) {
+		if (!member)
+			throw new ReexpressRefusal(
+				"Only someone who can edit this cast member's lorebook can redraw its sprites."
+			)
+	} else if (!(await mayFillSprites(db, req.userId, req.characterId!)))
 		throw new ReexpressRefusal(
 			"Only the card's owner or an admin can redraw its sprites."
 		)
@@ -108,7 +125,10 @@ export async function reexpressSprite(
 			"Pick a label other than neutral to re-express."
 		)
 
-	const sets = await listSpriteSets(db, req.characterId)
+	const sets = await listSpriteSets(
+		db,
+		member ? { castMemberId: member.id } : { characterId: req.characterId! }
+	)
 	const set =
 		(req.setId != null
 			? sets.find((s) => s.id === req.setId)
@@ -116,7 +136,11 @@ export async function reexpressSprite(
 		sets.find((s) => s.isDefault) ??
 		sets[0]
 	if (!set)
-		throw new ReexpressRefusal("This character has no sprite set yet.")
+		throw new ReexpressRefusal(
+			member
+				? "This cast member has no sprite set yet."
+				: "This character has no sprite set yet."
+		)
 	const neutral = set.sprites
 		.filter((s) => s.label === NEUTRAL_SPRITE_LABEL && s.media)
 		.sort((a, b) => a.position - b.position)[0]
@@ -206,17 +230,20 @@ export async function reexpressSprite(
 		}
 
 	const { file } = await createMedia(db, {
-		userId: req.userId,
-		characterId: req.characterId,
+		// A member's picture is its book owner's file, the book its provenance.
+		userId: member ? member.bookOwnerId : req.userId,
+		...(member
+			? { lorebookId: member.lorebookId }
+			: { characterId: req.characterId! }),
 		bytes: Buffer.from(picture.base64, "base64"),
 		filename: `${label}.png`,
 		meta: { ...(picture.meta ?? {}), reexpressedFrom: neutral.media.uuid }
 	})
 	// Provenance, as `attach-sprite` does: the picture is the card's file.
-	if (file.characterId == null)
+	if (!member && file.characterId == null)
 		await db
 			.update(schema.files)
-			.set({ characterId: req.characterId })
+			.set({ characterId: req.characterId! })
 			.where(eq(schema.files.id, file.id))
 	const row = await placeSpriteFile(db, set.id, label, file.id, "generated")
 	return {

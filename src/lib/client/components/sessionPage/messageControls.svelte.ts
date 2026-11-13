@@ -5,7 +5,8 @@
  * viewers a line opens — the avatar gallery and the media lightbox.
  */
 import { goto } from "$app/navigation"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
+import { castNameOf } from "./projections/characters"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	canSwipeRight as swipeRightAllowed,
@@ -15,6 +16,7 @@ import {
 	lightboxStateOf,
 	type LightboxState
 } from "$lib/client/components/sessionPage/mediaLightbox"
+import { pendingReplyRunOf } from "$lib/client/components/sessionPage/pendingReply"
 import type { ViewImageGallery } from "$lib/client/components/sessionPage/requests/viewImage"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
@@ -78,7 +80,11 @@ export function createMessageControls(d: MessageControlsDeps) {
 		})
 	}
 	d.inbox.on("sessions:revisionNotice", (res) => {
-		if (res.sessionId !== sessionId || res.messageId !== deleteSessionMessage?.id) return
+		if (
+			res.sessionId !== sessionId ||
+			res.messageId !== deleteSessionMessage?.id
+		)
+			return
 		deleteRevision = res.revision?.sentence ?? null
 	})
 
@@ -99,7 +105,12 @@ export function createMessageControls(d: MessageControlsDeps) {
 	d.inbox.on("sessionMessages:delete", (res) => {
 		if (deleteAsked === null || res.id !== deleteAsked) return
 		deleteAsked = null
-		if (res.error) toaster.error({ title: "Not deleted", description: res.error })
+		if (res.error)
+			notify.error({
+				source: "socket:sessionMessages:delete",
+				title: "Not deleted",
+				description: res.error
+			})
 	})
 
 	function onDeleteMessageConfirm() {
@@ -164,6 +175,11 @@ export function createMessageControls(d: MessageControlsDeps) {
 
 	function handleAbortMessage(e: Event, msg: SelectSessionMessage) {
 		e.stopPropagation()
+		const runId = pendingReplyRunOf(msg)
+		if (runId) {
+			socket.emit("pipelines:cancelRun", { runId })
+			return
+		}
 		socket.emit("sessionMessages:cancel", { id: msg.id, sessionId })
 	}
 
@@ -220,13 +236,14 @@ export function createMessageControls(d: MessageControlsDeps) {
 
 	function handleSessionsBranch(msg: Sockets.Sessions.Branch.Response) {
 		if (msg.session) {
-			toaster.success({
+			notify.success({
+				source: "socket:sessions:branch",
 				title: "Session branched successfully"
 			})
 			// Navigate to the new branched session
 			goto(`/sessions/${msg.session.id}`)
 		} else if (msg.error) {
-			toaster.error({ title: msg.error })
+			notify.error({ source: "socket:sessions:branch", title: msg.error })
 		}
 	}
 
@@ -242,10 +259,15 @@ export function createMessageControls(d: MessageControlsDeps) {
 			// nickname is commonly stored as "" rather than null, and ""
 			// isn't nullish, so `??` wouldn't fall through to the character's
 			// real name, leaving the modal title empty.
-			name: resolveCharacterName(char, ""),
+			name: isPersona
+				? resolveCharacterName(char, "")
+				: castNameOf(session ?? {}, char.id, char, ""),
 			// The id, not a resolved URL: the modal shows this large, and a
 			// pre-resolved thumbnail URL is not something it can undo.
-			avatarMediaId: char.avatarMediaId ?? null
+			avatarMediaId:
+				(isPersona ? null : session?.castFaces?.[char.id]) ??
+				char.avatarMediaId ??
+				null
 		}
 		showAvatarModal = true
 	}

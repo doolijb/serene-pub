@@ -227,27 +227,33 @@ beforeAll(async () => {
 	card.amara = await character("Amara")
 	card.kiran = await character("Kiran")
 
-	const [verity, brask, amara, kiran] = await db
-		.insert(schema.lorebookBindings)
-		.values([
-			// Background members: no linked card, so the narrator reads their lore.
-			{ lorebookId: book.id, binding: "{{char:1}}", name: "Verity" },
-			{ lorebookId: book.id, binding: "{{char:2}}", name: "Brask" },
-			// Carded members: the relationship read's speakers.
-			{
-				lorebookId: book.id,
-				binding: "{{char:3}}",
-				name: "Amara",
-				characterId: card.amara
-			},
-			{
-				lorebookId: book.id,
-				binding: "{{char:4}}",
-				name: "Kiran",
-				characterId: card.kiran
-			}
-		])
-		.returning()
+	const { insertCastMember } = await import("$lib/server/characters/versions")
+	const mk = async (values: typeof schema.lorebookBindings.$inferInsert) =>
+		(await insertCastMember(db as any, values)).member
+	// Background members: no linked card, so the narrator reads their lore.
+	const verity = await mk({
+		lorebookId: book.id,
+		binding: "{{char:1}}",
+		name: "Verity"
+	})
+	const brask = await mk({
+		lorebookId: book.id,
+		binding: "{{char:2}}",
+		name: "Brask"
+	})
+	// Carded members: the relationship read's speakers.
+	const amara = await mk({
+		lorebookId: book.id,
+		binding: "{{char:3}}",
+		name: "Amara",
+		characterId: card.amara
+	})
+	const kiran = await mk({
+		lorebookId: book.id,
+		binding: "{{char:4}}",
+		name: "Kiran",
+		characterId: card.kiran
+	})
 	member.verity = verity!.id
 	member.brask = brask!.id
 	member.amara = amara!.id

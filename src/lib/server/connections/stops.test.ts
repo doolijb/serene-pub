@@ -697,3 +697,57 @@ describe("trimAtSpeakerBoundary — a label in markdown emphasis (lair fix 2)", 
 		expect(trimAtSpeakerBoundary(prose, stops).text).toBe(prose)
 	})
 })
+
+/**
+ * Playtest item 11: the narrator's name is a non-cast label. A character's
+ * reply that opens or runs on as "Narrator:" is somebody else's line; the
+ * narrator's own turn is not stopped on its own label.
+ */
+describe("composeStops — the narrator's name (playtest item 11)", () => {
+	const aria = [{ id: 1, name: "Aria Vance", nickname: "Aria" }] as any[]
+	const transcript = [
+		{ role: "system", content: "You are Aria." },
+		{ role: "assistant", content: "Narrator: The wind rises." },
+		{ role: "user", content: "Pip: I wait." }
+	]
+
+	test("a character's turn stops on Narrator:, newline-prefixed like the other participants'", () => {
+		const { sent } = composeStops({
+			template: CUSTOM,
+			characters: aria,
+			personas: [],
+			currentCharacterId: 1,
+			nonCastLabels: ["Narrator"],
+			wire: "chat",
+			messages: transcript
+		})
+		expect(valuesOf(sent)).toEqual(["\nNarrator:"])
+	})
+
+	test("a narrate turn does not stop on its own label", () => {
+		const { sent } = composeStops({
+			template: CUSTOM,
+			characters: aria,
+			personas: [],
+			currentCharacterId: null,
+			nonCastLabels: ["Narrator"],
+			ownLabels: ["Narrator"],
+			wire: "chat",
+			messages: transcript
+		})
+		expect(valuesOf(sent)).not.toContain("\nNarrator:")
+		expect(valuesOf(sent)).not.toContain("Narrator:")
+	})
+
+	test("a character's reply is cut at a later Narrator: line", () => {
+		const stops = composeStops({
+			template: CUSTOM,
+			characters: aria,
+			personas: [],
+			currentCharacterId: 1,
+			nonCastLabels: ["Narrator"],
+			wire: "completion"
+		})
+		expect(trimAtSpeakerBoundary("I nod.\nNarrator: The door opens.", stops).text).toBe("I nod.")
+	})
+})

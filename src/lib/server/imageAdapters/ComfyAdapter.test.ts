@@ -245,3 +245,34 @@ describe("ComfyAdapter packing", () => {
 		expect(ComfyExports.sheetFor!({ type: "comfyui" }).payload).toBe("template")
 	})
 })
+
+describe("ComfyAdapter and a stored key", () => {
+	// A stored connection carries its key encrypted at rest. The adapter has to
+	// read it itself: three callers used to hand it the envelope, and a keyed
+	// proxy then got a request with no auth header at all.
+	const headersSeen = async (extraJson: Record<string, unknown>) => {
+		let seen: Record<string, string> = {}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init?: RequestInit) => {
+				seen = { ...((init?.headers ?? {}) as Record<string, string>) }
+				return json({ system: {}, devices: [] })
+			})
+		)
+		await ComfyExports.testConnection({ type: "comfyui", baseUrl: "http://comfy.test", extraJson } as any)
+		return seen
+	}
+
+	it("sends the key when the row holds it encrypted", async () => {
+		const { encryptApiKeyField } = await import("$lib/server/utils/tokenCrypto")
+		expect(await headersSeen({ apiKey: encryptApiKeyField("s3cret") })).toEqual({ Authorization: "Bearer s3cret" })
+	})
+
+	it("sends the key when a draft holds it plain, under the profile's header name", async () => {
+		expect(await headersSeen({ apiKey: "s3cret", profile: { authHeader: "X-Key" } })).toEqual({ "X-Key": "s3cret" })
+	})
+
+	it("sends no auth header when no key is set", async () => {
+		expect(await headersSeen({})).toEqual({})
+	})
+})

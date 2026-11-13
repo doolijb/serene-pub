@@ -21,6 +21,7 @@
  * | `run-owner`      | `person` — the run owner, always.                                                                                                                                                                                                                           |
  * | `character:<id>` | `person` if the character is a member's **own presence** — a live `session_personas` row for it whose `characters.user_id` is a member (the persona ownership rule, `checkPersonaOwnership`); else `ai` if it is in the session's cast (a live `session_characters` row — `is_active` is a rotation property, not a membership, so a benched character is still the AI's) **or is the turn's `speaker`** (a side character speaks through the model for exactly this turn, and joins nothing); else `none`. |
  * | `player-seat:<id>`      | 🚧 `person` (the seat's player — its `user_id`, else its card's owner) for a live `session_personas` row of this session whose player is a member; else `none`. Never `ai`: a seat is a person's. |
+ * | `seated-member:<id>` | ⏳ (switch on, `state/memberForm.ts`) `ai` for a live character seat of that member (or the turn's `speaker`); else the seat is a person's, as `player-seat:`. `player-seat:<id>` then answers for a carded seat too (`person`: its card's owner, else its `user_id`). |
  * | `envoy:<slug>`   | `ai` if the session's genre or an installed action **declares** the slug (`declaredEnvoys`, U5g) — seated or not: an action's envoy speaks the moment its action posts, and a genre's may be named as the speaker before its seat exists; else `none`. An envoy is never a person's. |
  * | `item`           | `none` — the per-message ownership rule is evaluated at the venue, against a message (`messages/permissions.ts` `canActOnMessage`), and a run has no message to evaluate it against.                                                                             |
  *
@@ -43,8 +44,12 @@
  */
 
 import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
+import { storedSeatRef } from "$lib/server/state/seatRefs"
+import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { hostSeatRefOf } from "$lib/server/pipelines/prompt/seatCards"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, eq, inArray, isNull, isNotNull } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, isNotNull, or } from "drizzle-orm"
 import { sessionDeclaredEnvoys } from "$lib/server/pipelines/entities/envoys"
 import {
 	formatParticipantRef,
@@ -129,7 +134,31 @@ export async function resolvePortrayals(
 
 	// The character references, answered from two reads rather than one per
 	// reference. Only well-formed integer ids reach the database.
-	const parsed = refs.map((ref) => parseParticipantRef(ref))
+	// 🚧 A `seated-member:<memberId>` ref (S2; an SDK form since S3) is
+	// answered as its seat's card form, under the ref as asked; one nobody is
+	// seated as is `none`. The loop below only ever parses card forms.
+	// ⏳ (S4) With the member-form switch on, a `seated-member:` /
+	// `player-seat:` ref is answered from its seat directly (`seatPortrayal`
+	// below), as asked — never translated to a card form.
+	const seatedAsked = new Map<string, ParticipantRef | null>()
+	// ⚠ Braces kept: with the switch on the build folds the `if` away, and an
+	// empty loop body left behind fails the bundler's transpile.
+	for (const ref of refs) {
+		if (
+			!memberFormOn() &&
+			parseSeatRef(ref)?.form === "seated-member" &&
+			!seatedAsked.has(ref)
+		)
+			seatedAsked.set(
+				ref,
+				(await storedSeatRef(db, sessionId, ref)) as ParticipantRef | null
+			)
+	}
+	const parsed = refs.flatMap((ref) => {
+		if (!seatedAsked.has(ref)) return [parseParticipantRef(ref)]
+		const card = seatedAsked.get(ref)
+		return card ? [parseParticipantRef(card)] : []
+	})
 	const characterIds = [
 		...new Set(
 			parsed
@@ -220,9 +249,51 @@ export async function resolvePortrayals(
 	const runOwnerIsMember = members.has(runOwnerUserId)
 	// The speaker under its canonical spelling, so `character:12` given as
 	// the speaker matches ` character:12 ` asked about.
-	const speakerKey = speaker
-		? formatParticipantRef(parseParticipantRef(speaker))
+	const speakerCard =
+		speaker && parseSeatRef(speaker)?.form === "seated-member"
+			? ((await storedSeatRef(db, sessionId, speaker)) as ParticipantRef | null)
+			: (speaker ?? null)
+	const speakerKey = speakerCard
+		? formatParticipantRef(parseParticipantRef(speakerCard))
 		: null
+	// ⏳ (S4) With the switch on the speaker is one seat, spelt either way:
+	// as given, and as the door stores it (`character:<cardId>` of a seated
+	// card is its member form); a seat ref asked matches either.
+	const speakerKeys = new Set<string>(speakerKey ? [speakerKey] : [])
+	if (memberFormOn() && speaker) {
+		const stored = (await storedSeatRef(db, sessionId, speaker)) as ParticipantRef | null
+		if (stored) speakerKeys.add(formatParticipantRef(parseParticipantRef(stored)))
+	}
+	// 🚧 ⏳ (S4, switch on) A `seated-member:` / `player-seat:` ref is one seat,
+	// resolved through `seatOf`, answered under the ref as asked: a character
+	// seat is the AI's cast while it is live (or when it is the turn's
+	// speaker); a player seat — carded or not — is the person who holds it. Two
+	// seats of one member and one card (★K-2) each answer their own ref.
+	const seatPortrayal = new Map<string, Portrayal>()
+	if (memberFormOn())
+		for (const p of parsed) {
+			if (p.kind !== "seated-member" && p.kind !== "player-seat") continue
+			const key = formatParticipantRef(p)
+			if (seatPortrayal.has(key)) continue
+			const id = participantRowId(p.id)
+			const seat = id !== null ? await seatOf(db, sessionId, key) : null
+			let answer: Portrayal = NONE
+			if (seat && seat.kind === "character") {
+				answer = !seat.departed || speakerKeys.has(key) ? AI : NONE
+			} else if (seat && !seat.departed) {
+				const [card] =
+					seat.cardId != null
+						? await db
+								.select({ userId: schema.characters.userId })
+								.from(schema.characters)
+								.where(eq(schema.characters.id, seat.cardId))
+								.limit(1)
+						: []
+				const uid = card?.userId ?? seat.actingUserId
+				if (uid != null && members.has(uid)) answer = PERSON(uid)
+			}
+			seatPortrayal.set(key, answer)
+		}
 	const portrayals: Portrayals = {}
 	for (const p of parsed) {
 		// Keyed by the canonical spelling: `parse(format(x))` is `x`, so a
@@ -262,7 +333,7 @@ export async function resolvePortrayals(
 				portrayal =
 					owner !== undefined
 						? PERSON(owner)
-						: id !== null && (cast.has(id) || key === speakerKey)
+						: id !== null && (cast.has(id) || speakerKeys.has(key))
 							? AI
 							: NONE
 				break
@@ -270,7 +341,11 @@ export async function resolvePortrayals(
 			case "player-seat": {
 				const id = participantRowId(p.id)
 				const player = id !== null ? seatPlayer.get(id) : undefined
-				portrayal = player !== undefined ? PERSON(player) : NONE
+				portrayal = memberFormOn()
+					? (seatPortrayal.get(key) ?? NONE)
+					: player !== undefined
+						? PERSON(player)
+						: NONE
 				break
 			}
 			case "envoy":
@@ -285,9 +360,34 @@ export async function resolvePortrayals(
 				// the per-message rule (`canActOnMessage`).
 				portrayal = NONE
 				break
+			case "seated-member":
+				// 🚧 Switch off: asked `seated-member:` refs were translated to
+				// their seat's card form above (`storedSeatRef`) and are answered
+				// after this loop; one reaching here names nobody seated. Switch
+				// on: answered from its seat (`seatPortrayal`).
+				portrayal = memberFormOn() ? (seatPortrayal.get(key) ?? NONE) : NONE
+				break
 		}
 		portrayals[key] = portrayal
 	}
+	// The card's own key is dropped again unless it was asked directly: the
+	// result answers the refs asked, not the form they were translated to.
+	const askedDirectly = new Set<string>(
+		refs
+			.filter((ref) => !seatedAsked.has(ref))
+			.map((ref) => formatParticipantRef(parseParticipantRef(ref)))
+	)
+	const answered = portrayals as Record<string, Portrayal | undefined>
+	const cardKeys = new Set<string>()
+	for (const [asked, card] of seatedAsked) {
+		const cardKey = card
+			? formatParticipantRef(parseParticipantRef(card))
+			: null
+		answered[asked] = cardKey ? answered[cardKey] : NONE
+		if (cardKey) cardKeys.add(cardKey)
+	}
+	for (const cardKey of cardKeys)
+		if (!askedDirectly.has(cardKey)) delete answered[cardKey]
 	return portrayals
 }
 
@@ -345,19 +445,28 @@ export async function turnRefs(
 ): Promise<ParticipantRef[]> {
 	const [cast, presences, envoys] = await Promise.all([
 		db
-			.select({ characterId: schema.sessionCharacters.characterId })
+			.select({
+				seatId: schema.sessionCharacters.id,
+				castMemberId: schema.sessionCharacters.castMemberId,
+				characterId: schema.sessionCharacters.characterId
+			})
 			.from(schema.sessionCharacters)
 			.where(
 				and(
 					eq(schema.sessionCharacters.sessionId, sessionId),
 					isNull(schema.sessionCharacters.removedAt),
-					isNotNull(schema.sessionCharacters.characterId)
+					isNull(schema.sessionCharacters.envoySlug),
+					or(
+						isNotNull(schema.sessionCharacters.characterId),
+						isNotNull(schema.sessionCharacters.castMemberId)
+					)
 				)
 			),
 		db
 			.select({
 				seatId: schema.sessionPersonas.id,
 				characterId: schema.sessionPersonas.personaId,
+				castMemberId: schema.sessionPersonas.castMemberId,
 				seatName: schema.sessionPersonas.seatName
 			})
 			.from(schema.sessionPersonas)
@@ -380,6 +489,31 @@ export async function turnRefs(
 	])
 	const refs = new Set<ParticipantRef>(["owner", "run-owner"])
 	if (speaker) refs.add(speaker)
+	// ⏳ (S4) Switch on: every seat is asked by its member form
+	// (`hostSeatRefOf`) — a character seat `seated-member:<id>` (⏳ its card
+	// while it stores no member), every player seat `player-seat:<id>`.
+	if (memberFormOn()) {
+		for (const c of cast) {
+			const ref = hostSeatRefOf({
+				kind: "character",
+				seatId: c.seatId,
+				castMemberId: c.castMemberId,
+				cardId: c.characterId
+			})
+			if (ref) refs.add(ref as ParticipantRef)
+		}
+		for (const p of presences)
+			refs.add(
+				hostSeatRefOf({
+					kind: "player",
+					seatId: p.seatId,
+					castMemberId: p.castMemberId,
+					cardId: p.characterId
+				}) as ParticipantRef
+			)
+		for (const e of envoys) if (e.envoySlug) refs.add(`envoy:${e.envoySlug}`)
+		return [...refs]
+	}
 	for (const c of cast)
 		if (c.characterId !== null) refs.add(`character:${c.characterId}`)
 	// A presence by its card, else 🚧 as its seat (a participant is

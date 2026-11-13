@@ -26,6 +26,12 @@ import type {
 let testDb: TestDb
 let dataDir: string
 
+/** A card with its v1 (the card version the jump reads), never a raw row. */
+async function addCard(values: typeof schema.characters.$inferInsert) {
+	const { insertCard } = await import("$lib/server/characters/versions")
+	return (await insertCard(testDb as unknown as Db, values)).card
+}
+
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	const db = await createTestDb()
@@ -58,23 +64,20 @@ beforeAll(async () => {
 		.where(eq(schema.users.id, admin.id))
 
 	// ── Alice's world ────────────────────────────────────────────────────
-	;[aliceCharacter] = await testDb
-		.insert(schema.characters)
-		.values({
-			userId: alice.id,
-			name: "Brother Alder",
-			description: "A hedge-priest of the river shrine."
-		})
-		.returning()
+	aliceCharacter = await addCard({
+		userId: alice.id,
+		name: "Brother Alder",
+		description: "A hedge-priest of the river shrine."
+	})
 	// A soft-deleted character that would otherwise match — characters:list
 	// excludes it, so this must too.
-	await testDb.insert(schema.characters).values({
+	await addCard({
 		userId: alice.id,
 		name: "Alder the Forgotten",
 		description: "Deleted.",
 		isDeleted: true
 	})
-	await testDb.insert(schema.characters).values({
+	await addCard({
 		userId: alice.id,
 		name: "Alder's apprentice",
 		description: "Carries the bell.",
@@ -112,7 +115,7 @@ beforeAll(async () => {
 		.returning()
 
 	// ── Bob's world: nothing that matches "alder" ────────────────────────
-	await testDb.insert(schema.characters).values({
+	await addCard({
 		userId: bob.id,
 		name: "Someone Else",
 		description: "Nothing to do with it."
@@ -331,14 +334,11 @@ describe("jump:search — query semantics", () => {
 				sessionType: SessionTypes.ROLEPLAY
 			})
 			.returning()
-		const [bystander] = await testDb
-			.insert(schema.characters)
-			.values({
-				userId: alice.id,
-				name: "Sister Wren",
-				description: "Unrelated."
-			})
-			.returning()
+		const bystander = await addCard({
+			userId: alice.id,
+			name: "Sister Wren",
+			description: "Unrelated."
+		})
 		await insertSessionCharacterRow(testDb, other.id, bystander.id)
 
 		const res = await jump(fakeSocket(alice.id), { query: "brother" })
@@ -525,5 +525,147 @@ describe("jump:search — supersession", () => {
 		expect(await first).toBeUndefined()
 		expect(emitted.map((e) => e.data.query)).toEqual(["alder"])
 		expect(emitted.some((e) => e.event === "jump:search:error")).toBe(false)
+	})
+})
+
+// Owner ruling 2026-11-05 (★client-2): "search matches the shown name" — a
+// session is found by the own name or own nickname of a seat's cast member.
+describe("jump:search — a seat's member's shown name", () => {
+	async function worldWith(seat: "character" | "player") {
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const owner = await createTestUser(
+			testDb,
+			`jump-member-${seat}-${socketSeq++}`
+		)
+		const card = await addCard({
+			userId: owner.id,
+			name: "Plain Card",
+			description: "",
+			isPersona: seat === "player"
+		})
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: owner.id, name: "Member Book" })
+			.returning()
+		// The own names are the member's base version's (its columns are frozen).
+		const { insertCastMember } = await import(
+			"$lib/server/characters/versions"
+		)
+		const { member } = await insertCastMember(
+			testDb as unknown as Db,
+			{
+				lorebookId: book.id,
+				characterId: card.id,
+				binding: `{{char:${socketSeq++}}}`,
+				name: "member",
+				ownName: "Quillon Vex",
+				ownNickname: "Sparrowhawk"
+			} as any
+		)
+		await testDb
+			.update(schema.lorebookBindings)
+			.set({ ownName: "Frozen Zed" })
+			.where(eq(schema.lorebookBindings.id, member.id))
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: owner.id,
+				name: "Nothing alike",
+				isGroup: false,
+				sessionType: SessionTypes.ROLEPLAY
+			})
+			.returning()
+		if (seat === "character")
+			await testDb.insert(schema.sessionCharacters).values({
+				sessionId: session.id,
+				characterId: card.id,
+				castMemberId: member.id
+			} as any)
+		else
+			await testDb.insert(schema.sessionPersonas).values({
+				sessionId: session.id,
+				personaId: card.id,
+				castMemberId: member.id
+			} as any)
+		return { owner, session }
+	}
+
+	for (const seat of ["character", "player"] as const)
+		test(`a ${seat} seat's member is found by own name and by own nickname, not by an unrelated word`, async () => {
+			const w = await worldWith(seat)
+			for (const query of ["quillon", "sparrowhawk"]) {
+				const res = await jump(fakeSocket(w.owner.id), { query })
+				expect(
+					group(res, "session")?.hits.map((h) => h.id),
+					query
+				).toEqual([w.session.id])
+			}
+			// The card's name still matches, as before.
+			const byCard = await jump(fakeSocket(w.owner.id), { query: "plain card" })
+			expect(group(byCard, "session")?.hits.map((h) => h.id)).toEqual([
+				w.session.id
+			])
+			const none = await jump(fakeSocket(w.owner.id), { query: "nonexistent" })
+			expect(group(none, "session")).toBeUndefined()
+			// The frozen column holds another name; nothing reads it.
+			const frozen = await jump(fakeSocket(w.owner.id), {
+				query: "frozen zed"
+			})
+			expect(group(frozen, "session")).toBeUndefined()
+		})
+})
+
+describe("jump:search — a card's current version names it", () => {
+	test("a session is found by its seated card's current-version name, and a character by the same", async () => {
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const owner = await createTestUser(testDb, `jump-version-${socketSeq++}`)
+		const card = await addCard({
+			userId: owner.id,
+			name: "Isolde Wren",
+			description: "Before the rename."
+		})
+		const { newCardVersion, ensureCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const { profileOf } = await import("$lib/shared/characters/profile")
+		const v1 = await ensureCardVersion(testDb as unknown as Db, card.id)
+		await newCardVersion(testDb as unknown as Db, card.id, {
+			...profileOf(v1!),
+			name: "Isolde Marrowgate",
+			description: "After the rename: a ferrywoman."
+		})
+		// A frozen copy that still says the old name; nothing reads it.
+		await testDb
+			.update(schema.characters)
+			.set({ name: "Isolde Wren" })
+			.where(eq(schema.characters.id, card.id))
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: owner.id,
+				name: "Nothing alike",
+				isGroup: false,
+				sessionType: SessionTypes.ROLEPLAY
+			})
+			.returning()
+		await testDb.insert(schema.sessionCharacters).values({
+			sessionId: session.id,
+			characterId: card.id
+		} as any)
+
+		const bySession = await jump(fakeSocket(owner.id), {
+			query: "marrowgate"
+		})
+		expect(group(bySession, "session")?.hits.map((h) => h.id)).toEqual([
+			session.id
+		])
+		const oldName = await jump(fakeSocket(owner.id), { query: "isolde wren" })
+		expect(group(oldName, "session")).toBeUndefined()
+		expect(group(oldName, "character")).toBeUndefined()
+
+		const byCard = await jump(fakeSocket(owner.id), { query: "ferrywoman" })
+		const hit = group(byCard, "character")!.hits[0]
+		expect(hit.id).toBe(card.id)
+		expect(hit.title).toBe("Isolde Marrowgate")
 	})
 })

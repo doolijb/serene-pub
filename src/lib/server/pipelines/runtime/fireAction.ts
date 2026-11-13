@@ -81,7 +81,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { and, eq, isNull } from "drizzle-orm"
+import { and, asc, eq, isNull } from "drizzle-orm"
 import type {
 	EnabledWhen,
 	FormAnswered,
@@ -122,6 +122,14 @@ import {
 	recordFormSuperseded,
 	type FormFacts
 } from "$lib/server/messages/blocks"
+import {
+	cardsNowAsSeatsRead,
+	hostSeatRefOf
+} from "$lib/server/pipelines/prompt/seatCards"
+import { storedSeatRef } from "$lib/server/state/seatRefs"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 import { stalenessHead } from "$lib/server/messages/channels"
 import { answerStanding } from "$lib/server/pipelines/runtime/reviewGate"
 import { NARRATE_ACTION, NARRATE_CHARACTER_ACTION } from "$lib/shared/actions/identity"
@@ -171,6 +179,15 @@ export interface FireActionRequest {
 	 * the run as `input.clockStep`. Ignored for any other action.
 	 */
 	clockStep?: unknown
+	/**
+	 * 🚧 (M2e) This fire arrived over the session's press door
+	 * (`sessions:fireAction`) — a person's press or the session view's own
+	 * fire; never set by core's own fires (auto-advance, read-aloud, a run's
+	 * child fire). The applet's frame-origin cause derives from it
+	 * (`frameCauseOfRun`). Not the person gate's *person's press*, not
+	 * `automatic`, not `ActingVia`.
+	 */
+	fromPressDoor?: boolean
 	actor: { userId: number; as?: ParticipantRef }
 	runId?: string
 	io?: SessionIo
@@ -276,13 +293,61 @@ export type FireActionSettled =
 const BESPOKE = new Set([NARRATE_ACTION, NARRATE_CHARACTER_ACTION])
 
 /**
+ * ⏳ (S4) The card id a member-form seat ref (`seated-member:` /
+ * `player-seat:`) holds, read through `seatOf`. Null with the switch off, for
+ * a card form (the callers parse that themselves) and for a seat with no card.
+ */
+async function cardOfSeatRef(db: Db, sessionId: number, ref: string): Promise<number | null> {
+	if (!memberFormOn()) return null
+	const form = parseSeatRef(ref)?.form
+	if (form !== "seated-member" && form !== "player-seat") return null
+	return (await seatOf(db, sessionId, ref))?.cardId ?? null
+}
+
+/**
+ * A person's own presence (`ownPresence`'s card) as the participant ref it
+ * speaks under: `character:<cardId>` — ⏳ with the member-form switch on, the
+ * player seat holding that card, `player-seat:<id>`.
+ */
+async function presenceRef(db: Db, sessionId: number, cardId: number): Promise<ParticipantRef> {
+	if (memberFormOn()) {
+		const [seat] = await db
+			.select({
+				id: schema.sessionPersonas.id,
+				castMemberId: schema.sessionPersonas.castMemberId
+			})
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					eq(schema.sessionPersonas.personaId, cardId),
+					isNull(schema.sessionPersonas.removedAt)
+				)
+			)
+			.orderBy(asc(schema.sessionPersonas.position), asc(schema.sessionPersonas.id))
+			.limit(1)
+		const ref = seat
+			? hostSeatRefOf({ kind: "player", seatId: seat.id, castMemberId: seat.castMemberId, cardId })
+			: null
+		if (ref) return ref as ParticipantRef
+	}
+	return `character:${cardId}`
+}
+
+/**
  * The session's **enabled seats** (lair pass R3): the cast members a press
  * may collect as recipients — seated, not removed, and enabled — as
- * `character:<id>` references.
+ * participant references: `character:<id>`, ⏳ with the member-form switch on
+ * each seat's `hostSeatRefOf` (`seated-member:<id>`, ⏳ its card while it
+ * stores no member).
  */
 export async function enabledSeats(db: Db, sessionId: number): Promise<Set<string>> {
 	const rows = await db
-		.select({ characterId: schema.sessionCharacters.characterId })
+		.select({
+			seatId: schema.sessionCharacters.id,
+			castMemberId: schema.sessionCharacters.castMemberId,
+			characterId: schema.sessionCharacters.characterId
+		})
 		.from(schema.sessionCharacters)
 		.where(
 			and(
@@ -291,6 +356,19 @@ export async function enabledSeats(db: Db, sessionId: number): Promise<Set<strin
 				isNull(schema.sessionCharacters.removedAt)
 			)
 		)
+	if (memberFormOn()) {
+		const out = new Set<string>()
+		for (const r of rows) {
+			const ref = hostSeatRefOf({
+				kind: "character",
+				seatId: r.seatId,
+				castMemberId: r.castMemberId,
+				cardId: r.characterId
+			})
+			if (ref) out.add(ref)
+		}
+		return out
+	}
 	return new Set(rows.map((r) => `character:${r.characterId}`))
 }
 
@@ -332,23 +410,47 @@ export async function fireAction(
 	const composerPress = pressed.messageId == null && !pressed.blockId
 	let req = pressed
 
-	const { checkSessionAccess } = await import("$lib/server/utils/sessionAccess")
-	const access = await checkSessionAccess(req.sessionId, req.actor.userId)
-	if (!access.hasAccess) return refused("Session not found.")
-	// 🚧 (M2b) The acting person's own rights, beside the check above: it can
-	// only narrow. A "no" where the check said yes is the convergence signal.
+	// The acting person's own rights decide the press (★B): one decider, `personMay`.
+	const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
+	const person = await actingPersonFor(db, { via: "press", userId: req.actor.userId })
+	const sessionThing = { kind: "session", id: req.sessionId } as const
+	const opened = person
+		? await personMay(db, person, "read", sessionThing)
+		: ({ ok: false, reason: "Session not found." } as const)
+	if (!opened.ok) return refused(opened.reason)
+
+	// 🚧 Refs in (S2): a `seated-member:<memberId>` ref — the client's "act as",
+	// a press's recipients — is translated once, here, to the form every
+	// key below uses (`storedSeatRef`: the card form; ⏳ member form with the
+	// switch on). One nobody is seated as stays as sent, and the
+	// checks below refuse it in their own words ("That question was put to …,
+	// not to …" for an "act as"; "… is not one" for a recipient).
 	{
-		const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
-		const person = await actingPersonFor(db, { via: "press", userId: req.actor.userId })
-		const answer = person
-			? await personMay(db, person, "read", { kind: "session", id: req.sessionId })
-			: ({ ok: false, reason: "Session not found." } as const)
-		if (!answer.ok) {
-			console.warn(
-				`[acting-person] diverges: user ${req.actor.userId} may open session ${req.sessionId} by checkSessionAccess but not by personMay (${answer.reason})`
-			)
-			return refused(answer.reason)
-		}
+		const as = req.actor.as
+		const recipients = req.recipients
+		const asCard =
+			typeof as === "string"
+				? ((await storedSeatRef(db, req.sessionId, as)) as ParticipantRef | null)
+				: null
+		const recipientCards = Array.isArray(recipients)
+			? await Promise.all(
+					recipients.map(async (r) =>
+						typeof r === "string"
+							? ((await storedSeatRef(db, req.sessionId, r)) ?? r)
+							: r
+					)
+				)
+			: recipients
+		if (
+			(asCard !== null && asCard !== as) ||
+			(Array.isArray(recipients) &&
+				recipientCards!.some((r, i) => r !== recipients[i]))
+		)
+			req = {
+				...req,
+				actor: asCard !== null ? { ...req.actor, as: asCard } : req.actor,
+				recipients: recipientCards
+			}
 	}
 
 	const { parseActionIdentity, isCoreActionIdentity, actionIdentity } = await import(
@@ -456,7 +558,7 @@ export async function fireAction(
 		// Answered once (W7): the row says who already did.
 		if (block.answered)
 			return refused(
-				`That question was already answered by ${await answererName(db, block.answered)}.`
+				`That question was already answered by ${await answererName(db, block.answered, req.sessionId)}.`
 			)
 		// Overtaken (U5f): the channel head has moved past the form's. The
 		// head is read here, at the door, from the one definition
@@ -612,10 +714,19 @@ export async function fireAction(
 				// Nobody portrays the addressee — a removed cast member, a
 				// reference naming no one (W4): the block waits, and the
 				// owner may answer it (docs/sessions.md, *forms*).
-				if (!access.isOwner)
+				if (!(await personMay(db, person!, "write", sessionThing)).ok)
 					return refused(
 						`That question was put to ${block.addressee}, whom nobody here portrays — ` +
 							`it is the owner's to answer.`
+					)
+			} else if (who.by === "ai" && !(await modelAnswersFormsHere(db, req.sessionId))) {
+				// The AI portrays the addressee, but this genre does not opt
+				// into AI form answers (`forms.modelAnswers`, owner 2026-11-04):
+				// nothing will answer it, so it is the owner's, as for nobody.
+				if (!(await personMay(db, person!, "write", sessionThing)).ok)
+					return refused(
+						`That question was put to ${block.addressee}, whom the AI portrays here — ` +
+							`this genre lets no AI answer a form, so it is the owner's to answer.`
 					)
 			} else if (!(who.by === "person" && who.userId === String(req.actor.userId)))
 				return refused(
@@ -626,8 +737,17 @@ export async function fireAction(
 		} else if (req.actor.as)
 			return refused("That question was put to nobody in particular; there is no one to answer as.")
 		if (block.addressee) {
-			const parsed = parseParticipantRef(block.addressee)
-			form.characterId = parsed.kind === "character" ? participantRowId(parsed.id) : null
+			// 🚧 A stored addressee is already in the stored form (seat-cast S3
+			// stores it translated: card form; ⏳ member form with the switch on);
+			// read through the door all the same. A member-form one names its
+			// card through its seat (`cardOfSeatRef`).
+			const addressee =
+				(await storedSeatRef(db, req.sessionId, block.addressee)) ?? block.addressee
+			const parsed = parseParticipantRef(addressee)
+			form.characterId =
+				parsed.kind === "character"
+					? participantRowId(parsed.id)
+					: await cardOfSeatRef(db, req.sessionId, addressee)
 		} else {
 			/**
 			 * A question put to nobody in particular, pressed by a person:
@@ -644,7 +764,10 @@ export async function fireAction(
 			 * spoken as.
 			 */
 			const own = await ownPresence(db, req.sessionId, req.actor.userId)
-			form.addressee = own !== null ? `character:${own}` : `user:${req.actor.userId}`
+			form.addressee =
+				own !== null
+					? await presenceRef(db, req.sessionId, own)
+					: `user:${req.actor.userId}`
 			form.characterId = own
 		}
 	}
@@ -897,7 +1020,9 @@ export async function fireAction(
 		const { RULES_ACTION_SPEC, rulesActionInput } = await import("$lib/server/rulesets/rulesActions")
 		if (specId === RULES_ACTION_SPEC) {
 			const own = await ownPresence(db, req.sessionId, req.actor.userId)
-			const actor: ParticipantRef = req.actor.as ?? (own !== null ? `character:${own}` : `user:${req.actor.userId}`)
+			const actor: ParticipantRef =
+				req.actor.as ??
+				(own !== null ? await presenceRef(db, req.sessionId, own) : `user:${req.actor.userId}`)
 			rulesInput = await rulesActionInput(db, req.sessionId, actionId, { actor, payload })
 			if (!rulesInput) return refused(`'${chosen.name}' is no action of this session's rules any more.`)
 		}
@@ -995,7 +1120,7 @@ export async function fireAction(
 	const presser: ParticipantRef =
 		req.actor.as ??
 		(presserPresence !== null
-			? `character:${presserPresence}`
+			? await presenceRef(db, req.sessionId, presserPresence)
 			: `user:${req.actor.userId}`)
 
 	// The run's tree is held from before the run until after `form-answered`
@@ -1029,6 +1154,7 @@ export async function fireAction(
 				signal: handle.controller.signal,
 				cancelSignal: () => runRegistry.cancellation(handle),
 				lineage: req.lineage,
+				...(req.fromPressDoor ? { fromPressDoor: true } : {}),
 				// The form this run answers (U5f): the commit stamps it on the
 				// answer's row so the row is an answer, not the conversation
 				// moving on from the form's row.
@@ -1236,17 +1362,27 @@ async function announceAnswered(db: Db, io: SessionIo, messageId: number): Promi
  * Who answered, for the refusal's sentence: a character's name, an envoy's
  * slug, a user's name — never a bare reference where a person reads it.
  */
-async function answererName(db: Db, answered: FormAnswered): Promise<string> {
-	const ref = parseParticipantRef(answered.by)
-	if (ref.kind === "character") {
-		const id = participantRowId(ref.id)
+async function answererName(
+	db: Db,
+	answered: FormAnswered,
+	sessionId: number
+): Promise<string> {
+	// 🚧 A `seated-member:` ref (S2) is the SDK's parse to refuse: answer it as its card.
+	// ⏳ (S4) With the switch on the door answers null for a card form no member
+	// stands behind (a member-less character seat): the card names itself.
+	const byCard =
+		(await storedSeatRef(db, sessionId, answered.by)) ??
+		(memberFormOn() && parseSeatRef(answered.by)?.form === "character" ? answered.by : null)
+	if (byCard === null) return answered.by
+	const ref = parseParticipantRef(byCard)
+	// ⏳ (S4) A member-form ref names its card through its seat.
+	const seatCard = ref.kind === "character" ? null : await cardOfSeatRef(db, sessionId, byCard)
+	if (ref.kind === "character" || seatCard !== null) {
+		const id = ref.kind === "character" ? participantRowId(ref.id) : seatCard
 		if (id !== null) {
-			const [c] = await db
-				.select({ name: schema.characters.name, nickname: schema.characters.nickname })
-				.from(schema.characters)
-				.where(eq(schema.characters.id, id))
-				.limit(1)
-			if (c) return c.nickname?.trim() || c.name
+			// The name the member is shown under, read through the seat holding the card.
+			const filled = (await cardsNowAsSeatsRead(db, sessionId, [id])).get(id)
+			if (filled) return memberShownName(undefined, filled, "")
 		}
 	} else if (ref.kind === "user") {
 		const id = participantRowId(ref.id)
@@ -1260,4 +1396,10 @@ async function answererName(db: Db, answered: FormAnswered): Promise<string> {
 		}
 	} else if (ref.kind === "envoy") return ref.slug
 	return answered.by
+}
+
+/** 🚧 Does this session's genre opt into AI form answers (`shape.forms.modelAnswers`)? Off in core (P1). */
+async function modelAnswersFormsHere(db: Db, sessionId: number): Promise<boolean> {
+	const { sessionModelAnswersForms } = await import("$lib/server/pipelines/runtime/runTurn")
+	return sessionModelAnswersForms(db, sessionId)
 }

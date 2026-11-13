@@ -17,6 +17,9 @@ import { seedCoreLoadouts, seedLoadoutDecls } from "$lib/server/loadouts/seed"
 import { moveConnectionDefaultsToLoadouts } from "$lib/server/loadouts/fromConnectionDefaults"
 import {
 	capabilityDefault,
+	capabilityDefaults,
+	resolvedCapabilityDefault,
+	resolvedCapabilityDefaults,
 	setCapabilityDefault
 } from "$lib/server/connections/capabilityDefaults"
 
@@ -39,7 +42,7 @@ async function connectionWithModel(name: string) {
 beforeAll(async () => {
 	db = await createTestDb()
 	// The sampling presets the core set names, by seed key.
-	for (const seedKey of ["sampling-default", "sampling-extraction", "sampling-image-default"])
+	for (const seedKey of ["sampling-default", "sampling-reply", "sampling-extraction", "sampling-image-default"])
 		await db
 			.insert(schema.samplingConfigs)
 			.values({ seedKey, name: seedKey, shape: seedKey.includes("image") ? "core:shape/image-gen@1" : "core:shape/text-gen@1" } as any)
@@ -69,11 +72,13 @@ describe("seeding", () => {
 		const again = await seedCoreLoadouts(db as any)
 		expect(again.inserted).toBe(0)
 		// 13 since O12 (2026-10-21): + Transcription and Spoken reply.
-		expect(again.refreshed).toBe(13)
+		// 14 since 2026-11-10: + Vision (owner ruling, the job where a picture
+		// is mandatory input had no row a fresh install could fill).
+		expect(again.refreshed).toBe(14)
 		expect((await byId("core:loadout/extraction@1")).samplingConfigId).toBeNull()
 		expect(
 			(await db.select().from(schema.loadouts)).filter((r) => r.owner === "core")
-		).toHaveLength(13)
+		).toHaveLength(14)
 		// 🚧 O12: both arrive unfilled, on their own transforms.
 		expect(await byId("core:loadout/transcription@1")).toMatchObject({
 			name: "Transcription",
@@ -85,6 +90,34 @@ describe("seeding", () => {
 			transform: "text->text+audio",
 			connectionId: null
 		})
+	})
+
+	it("Reply's sampling resolves on INSERT only: a fresh install gets sampling-reply, an existing one keeps its pick (★47)", async () => {
+		const sampling = async (seedKey: string) =>
+			(
+				await db
+					.select()
+					.from(schema.samplingConfigs)
+					.where(eq(schema.samplingConfigs.seedKey, seedKey))
+			)[0]!
+		const reply = await byId("core:loadout/reply@1")
+		expect(reply.samplingConfigId).toBe((await sampling("sampling-reply")).id)
+		// Only Reply: Tool calling keeps the default.
+		expect((await byId("core:loadout/tool-calling@1")).samplingConfigId).toBe(
+			(await sampling("sampling-default")).id
+		)
+		// An existing install's choice survives a re-seed.
+		const mine = (await sampling("sampling-default")).id
+		await db
+			.update(schema.loadouts)
+			.set({ samplingConfigId: mine })
+			.where(eq(schema.loadouts.id, reply.id))
+		await seedCoreLoadouts(db as any)
+		expect((await byId("core:loadout/reply@1")).samplingConfigId).toBe(mine)
+		await db
+			.update(schema.loadouts)
+			.set({ samplingConfigId: (await sampling("sampling-reply")).id })
+			.where(eq(schema.loadouts.id, reply.id))
 	})
 
 	it("a plugin's declaration arrives unfilled and unmerged; a foreign namespace is refused", async () => {
@@ -139,7 +172,7 @@ describe("the default claim and the one-shot", () => {
 		await db.insert(schema.connectionDefaults).values([
 			// Images: core's declared default.
 			{ input: "text", output: "image", connectionId: c.id, connectionModelId: m.id },
-			// Vision: no core loadout — a pub one named after the transform.
+			// Vision: core's declared default since 2026-11-10 (was a minted pub row).
 			{ input: "text,image", output: "text", connectionId: c.id, connectionModelId: m.id },
 			// Already has a default (claimed above): kept, row dropped.
 			{ input: "text", output: "text", connectionId: null }
@@ -157,7 +190,7 @@ describe("the default claim and the one-shot", () => {
 			.select()
 			.from(schema.loadouts)
 			.where(eq(schema.loadouts.transform, "text+image->text"))
-		expect(vision[0]).toMatchObject({ owner: "pub", name: "Vision", defaultForInput: "text,image" })
+		expect(vision[0]).toMatchObject({ owner: "core", seedKey: "core:loadout/vision@1", name: "Vision", defaultForInput: "text,image" })
 		// The reply default was not overwritten by the stale row.
 		expect((await capabilityDefault(db as any, "text->text"))?.connectionId).not.toBeNull()
 		// Run twice: nothing left to move.
@@ -166,6 +199,63 @@ describe("the default claim and the one-shot", () => {
 			kept: 0,
 			dropped: 0
 		})
+	})
+})
+
+describe("★B — Vision falls back to Reply when Reply sees (owner ruling 2026-11-10)", () => {
+	const VISION = "text+image->text"
+	/** A pair whose endpoint grades say it does / does not read pictures. */
+	async function replyPair(name: string, sees: boolean) {
+		const [c] = await db
+			.insert(schema.connections)
+			.values({
+				name,
+				type: "openai",
+				baseUrl: "http://x",
+				// The admin's own switch is an ANSWER the resolver keeps; a seeded
+				// `resolved` set is rewritten from the type's manifest on write.
+				capabilities: { overrides: { [VISION]: sees ? "native" : false } }
+			} as any)
+			.returning()
+		const [m] = await db
+			.insert(schema.connectionModels)
+			.values({ connectionId: c!.id, model: `${name}-model`, name: `${name} model` } as any)
+			.returning()
+		return { c: c!, m: m! }
+	}
+
+	it("a Reply model that does not see leaves Vision unfilled — nothing is guessed", async () => {
+		// The one-shot above filled Vision; empty it so the fallback is what answers.
+		await db.update(schema.loadouts).set({ connectionId: null, connectionModelId: null }).where(eq(schema.loadouts.seedKey, "core:loadout/vision@1"))
+		const blind = await replyPair("blind", false)
+		await setCapabilityDefault(db as any, "text->text", { connectionId: blind.c.id, connectionModelId: blind.m.id })
+		expect((await resolvedCapabilityDefault(db as any, VISION))?.connectionId ?? null).toBeNull()
+		expect((await resolvedCapabilityDefaults(db as any))[VISION]?.connectionId ?? null).toBeNull()
+	})
+
+	it("a Reply model that sees serves Vision for a RUN — the same pair, read from Reply", async () => {
+		const seeing = await replyPair("seeing", true)
+		await setCapabilityDefault(db as any, "text->text", { connectionId: seeing.c.id, connectionModelId: seeing.m.id })
+		expect(await resolvedCapabilityDefault(db as any, VISION)).toMatchObject({
+			connectionId: seeing.c.id,
+			connectionModelId: seeing.m.id
+		})
+		expect((await resolvedCapabilityDefaults(db as any))[VISION]).toMatchObject({ connectionId: seeing.c.id })
+		// What is REGISTERED says unfilled: the Defaults matrix, the modality
+		// refusal and every write read this, so the fallback never looks like a
+		// fill and switching Reply's reads to text is never refused for it.
+		expect((await capabilityDefault(db as any, VISION))?.connectionId ?? null).toBeNull()
+		expect((await capabilityDefaults(db as any))[VISION]?.connectionId ?? null).toBeNull()
+	})
+
+	it("a Vision loadout somebody filled wins over the fallback", async () => {
+		const own = await replyPair("own-vision", true)
+		await setCapabilityDefault(db as any, VISION, { connectionId: own.c.id, connectionModelId: own.m.id })
+		expect(await capabilityDefault(db as any, VISION)).toMatchObject({ connectionId: own.c.id })
+		expect(await resolvedCapabilityDefault(db as any, VISION)).toMatchObject({ connectionId: own.c.id })
+		// And it claimed core's Vision row, not a minted pub one.
+		const vision = await byId("core:loadout/vision@1")
+		expect(vision).toMatchObject({ connectionId: own.c.id, defaultForInput: "text,image" })
 	})
 })
 
@@ -215,8 +305,10 @@ describe("resolution", () => {
 	})
 
 	it("a pub id finds its row by owner and slug", async () => {
-		const vision = await findLoadout(db as any, "pub:loadout/vision")
-		expect(vision?.transform).toBe("text+image->text")
+		// Vision is core's now; a pub row minted the old way stands in.
+		await db.insert(schema.loadouts).values({ owner: "pub", slug: "scratch", name: "Scratch", transform: "text->text" } as any).onConflictDoNothing()
+		const scratch = await findLoadout(db as any, "pub:loadout/scratch")
+		expect(scratch?.transform).toBe("text->text")
 		expect(await findLoadout(db as any, { id: "core:loadout/reply@1" })).not.toBeNull()
 		expect(await findLoadout(db as any, "core:loadout/nope@1")).toBeNull()
 	})

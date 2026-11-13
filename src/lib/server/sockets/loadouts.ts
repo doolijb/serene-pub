@@ -168,6 +168,21 @@ export async function buildLoadoutsList(): Promise<Sockets.Loadouts.List.Respons
 		}
 		return at
 	}
+	// ★B: Vision with no filled default of its own falls back to Reply when
+	// Reply's pair sees — the list says so the way it says "falls back to
+	// Reply" for Extraction, from the same judge the run uses.
+	{
+		const VISION = "text+image->text"
+		const vision = defaults.get(VISION)
+		const reply = defaults.get("text->text")
+		if (reply && (!vision || rootOf(vision).connectionId == null)) {
+			const { capabilityDefault, visionFallback } = await import(
+				"$lib/server/connections/capabilityDefaults"
+			)
+			if (await visionFallback(db, await capabilityDefault(db, "text->text")))
+				defaults.set(VISION, reply)
+		}
+	}
 
 	const voiceNames = new Map(
 		(

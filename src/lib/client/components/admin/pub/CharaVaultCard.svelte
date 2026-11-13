@@ -12,7 +12,7 @@
 	import { getContext } from "svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
@@ -74,13 +74,17 @@
 			if (message.success) {
 				emailField = ""
 				tokenField = ""
-				toaster.success({ title: "CharaVault account connected" })
+				notify.success({
+					source: "socket:cardSources:charaVault:connect",
+					title: "CharaVault account connected"
+				})
 				socket?.emit("cardSources:charaVault:status", {})
 			}
 		}
 		const handleConnectError = (message: { error?: string }) => {
 			isConnecting = false
-			toaster.error({
+			notify.error({
+				source: "socket:cardSources:charaVault:connect:error",
 				title: "Failed to connect CharaVault account",
 				description: message.error
 			})
@@ -92,12 +96,16 @@
 			if (message.success) {
 				connected = false
 				connectedEmail = null
-				toaster.success({ title: "CharaVault account disconnected" })
+				notify.success({
+					source: "socket:cardSources:charaVault:disconnect",
+					title: "CharaVault account disconnected"
+				})
 			}
 		}
 		const handleDisconnectError = (message: { error?: string }) => {
 			isDisconnecting = false
-			toaster.error({
+			notify.error({
+				source: "socket:cardSources:charaVault:disconnect:error",
 				title: "Failed to disconnect CharaVault account",
 				description: message.error
 			})
@@ -150,10 +158,12 @@
 	help="One CharaVault account, shared by everyone on this pub, lets the Library browse charavault.net at its higher search limit."
 	layout="stack"
 >
-
 	{#if connected}
 		<div class="flex flex-wrap items-center gap-2">
-			<span class="bg-success-500 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
+			<span
+				class="bg-success-500 size-2 shrink-0 rounded-full"
+				aria-hidden="true"
+			></span>
 			<span class="min-w-0 text-sm break-words">
 				Connected{#if connectedEmail}
 					as <span class="font-medium">{connectedEmail}</span>{/if}
@@ -195,7 +205,9 @@
 				type="button"
 				class="btn preset-filled-primary-500 shrink-0"
 				onclick={connect}
-				disabled={isConnecting || !emailField.trim() || !tokenField.trim()}
+				disabled={isConnecting ||
+					!emailField.trim() ||
+					!tokenField.trim()}
 			>
 				{#if isConnecting}
 					<Icons.Loader2 size={16} class="animate-spin" />

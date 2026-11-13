@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		useTypedSocket,
 		refreshAuthAfterLogin
@@ -102,7 +102,7 @@
 			const data = await response.json()
 
 			if (!response.ok) {
-				toaster.error({
+				notify.error({
 					title: "Sign-in failed",
 					description: data.error || "Invalid username or passphrase"
 				})
@@ -110,7 +110,7 @@
 				return
 			}
 
-			toaster.success({
+			notify.success({
 				title: "Signed in",
 				description: "Welcome back."
 			})
@@ -127,7 +127,7 @@
 			refreshAuthAfterLogin()
 		} catch (error) {
 			console.error("Login error:", error)
-			toaster.error({
+			notify.error({
 				title: "Sign-in error",
 				description: "An unexpected error occurred. Please try again."
 			})
@@ -188,7 +188,10 @@
 			</p>
 		</div>
 		{#if signedOutWhy}
-			<p class="preset-tonal-primary rounded-md px-3 py-2 text-chip" role="status">
+			<p
+				class="preset-tonal-primary text-chip rounded-md px-3 py-2"
+				role="status"
+			>
 				{signedOutWhy}
 			</p>
 		{/if}

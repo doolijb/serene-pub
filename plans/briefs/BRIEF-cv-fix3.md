@@ -1,0 +1,6 @@
+# BRIEF cv-fix3 — two owner rulings on card moves (2026-11-06)
+
+Lane-supervisor (fresh, Opus). Read `BRIEF-cv-common.md`, `plans/REPORT-cv-fix2-2026-11-06.md` (★cv-fix2-1 and ★cv-fix2-2 and the names built), and the owner's rulings at the end of the plan. Lane id **cv-fix3**. One worker. Lane cv-readers runs beside you in session-path files — stay in `characters/versions.ts`, `sockets/amendments.ts`, `sockets/lorebooks.ts` (`writeMemberEdit`'s unlink), their tests. `--maxWorkers=2`.
+1. **Unlink from the member page applies from the book's present** (owner: "Yes, from the book's present"): the same carrier + `reparentCastVersions({ cardId: null, from })` as the link; versions from the present on become card-less, keeping the card's words as their own; earlier versions stay on the card; no present → every version (as today).
+2. **A new dated card change stops at the next card change** on its line (owner: "Stop at the next card change"): the create path (`writeCastChange` → `moveCardFrom`) and the re-date + fields path bound the move with `onCard` = the card in force before it and `until` = the next card change, as the undo does.
+Tests for both. §25 row if a name changes. Report as `# REPORT cv-fix3 (2026-11-06)`.

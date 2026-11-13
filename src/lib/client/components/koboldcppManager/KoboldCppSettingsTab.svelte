@@ -6,7 +6,9 @@
 		declareInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
+	import { useMachineHardware } from "$lib/client/components/connections/useMachineHardware.svelte"
+	import { coLoadUnmeasured } from "./coLoadReading"
 
 	interface Props {
 		isManaged?: boolean
@@ -43,6 +45,7 @@
 	 */
 	let savingDirKind = $state<Sockets.KoboldCPP.ModelKindFilter | null>(null)
 	let baseUrlField = $state("")
+	const hardware = useMachineHardware()
 	let modelsDirField = $state("")
 	let imageModelsDirField = $state("")
 
@@ -129,26 +132,6 @@
 		seeded = next
 	})
 
-	// In Managed mode, everything (health checks, capability display,
-	// generation) talks to koboldCppManagerBaseUrl — but the subprocess Serene
-	// Pub actually spawns/owns always listens on koboldCppManagedPort. These
-	// are normally kept in sync automatically, but koboldCppManagerBaseUrl can
-	// also be edited independently (the Server URL field in this card, or
-	// Document View's system settings), silently pointing
-	// the whole app at a different instance than the one it's managing.
-	let portMismatch = $derived.by(() => {
-		if (!isManaged) return false
-		const managedPort = koboldCppSettingsCtx.settings?.koboldCppManagedPort
-		const baseUrl = koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl
-		if (!managedPort || !baseUrl) return false
-		try {
-			const urlPort = Number(new URL(baseUrl).port) || 80
-			return urlPort !== managedPort
-		} catch {
-			return false
-		}
-	})
-
 	function checkVersion() {
 		isCheckingVersion = true
 		versionCheckFailed = false
@@ -163,7 +146,7 @@
 
 	function saveBaseUrl() {
 		if (!baseUrlField.trim()) {
-			toaster.error({ title: "Base URL cannot be empty" })
+			notify.error({ title: "Base URL cannot be empty" })
 			return
 		}
 		isSavingBaseUrl = true
@@ -192,6 +175,18 @@
 		socket.emit("koboldcpp:setModelTtl", { ttlSecs: v })
 	}
 
+	let savingCoLoad = $state(false)
+	let coLoadOn = $derived(
+		koboldCppSettingsCtx.settings?.koboldCppManagedCoLoad ?? true
+	)
+	function setCoLoad(enabled: boolean) {
+		savingCoLoad = true
+		socket.emit("koboldcpp:setCoLoad", { enabled })
+	}
+	function handleSetCoLoad() {
+		savingCoLoad = false
+	}
+
 	function saveSubprocessTimeout() {
 		const v = parseInt(subprocessTimeoutDraft)
 		if (isNaN(v) || v < 0) return
@@ -215,7 +210,7 @@
 
 	function saveAdminPassword() {
 		if (!adminPasswordField.trim()) {
-			toaster.error({ title: "Admin password cannot be empty" })
+			notify.error({ title: "Admin password cannot be empty" })
 			return
 		}
 		savingAdminPassword = true
@@ -265,8 +260,15 @@
 	function handleSetBaseUrl(message: Sockets.KoboldCPP.SetBaseUrl.Response) {
 		isSavingBaseUrl = false
 		if (message.success)
-			toaster.success({ title: "KoboldCPP URL updated" })
-		else toaster.error({ title: "Failed to update KoboldCPP URL" })
+			notify.success({
+				source: "socket:koboldcpp:setBaseUrl",
+				title: "KoboldCPP URL updated"
+			})
+		else
+			notify.error({
+				source: "socket:koboldcpp:setBaseUrl",
+				title: "Failed to update KoboldCPP URL"
+			})
 	}
 
 	function handleSetModelsDir(
@@ -277,23 +279,40 @@
 				? "Image models directory"
 				: "Models directory"
 		savingDirKind = null
-		if (message.success) toaster.success({ title: `${what} saved` })
-		else toaster.error({ title: `Failed to save ${what.toLowerCase()}` })
+		if (message.success)
+			notify.success({
+				source: "socket:koboldcpp:setModelsDir",
+				title: `${what} saved`
+			})
+		else
+			notify.error({
+				source: "socket:koboldcpp:setModelsDir",
+				title: `Failed to save ${what.toLowerCase()}`
+			})
 	}
 
 	function handleSetModelTtl() {
 		savingTtl = false
-		toaster.success({ title: "TTL updated" })
+		notify.success({
+			source: "socket:koboldcpp:setModelTtl",
+			title: "TTL updated"
+		})
 	}
 
 	function handleSetSubprocessTimeout() {
 		savingSubprocessTimeout = false
-		toaster.success({ title: "Startup timeout updated" })
+		notify.success({
+			source: "socket:koboldcpp:setSubprocessTimeout",
+			title: "Startup timeout updated"
+		})
 	}
 
 	function handleSetManagedPort() {
 		savingPort = false
-		toaster.success({ title: "Port updated — restart required" })
+		notify.success({
+			source: "socket:koboldcpp:setManagedPort",
+			title: "Port updated — restart required"
+		})
 	}
 
 	function handleCheckManagedBinaryUpdate(
@@ -314,8 +333,16 @@
 		message: Sockets.KoboldCPP.SetManagedBinaryDir.Response
 	) {
 		savingAdminDir = false
-		if (message.success) toaster.success({ title: "Admin directory saved" })
-		else toaster.error({ title: "Failed to save admin directory" })
+		if (message.success)
+			notify.success({
+				source: "socket:koboldcpp:setManagedBinaryDir",
+				title: "Admin directory saved"
+			})
+		else
+			notify.error({
+				source: "socket:koboldcpp:setManagedBinaryDir",
+				title: "Failed to save admin directory"
+			})
 	}
 
 	function handleSetManagedAdminPassword(
@@ -323,12 +350,18 @@
 	) {
 		savingAdminPassword = false
 		if (message.success) {
-			toaster.success({ title: "Admin password saved" })
+			notify.success({
+				source: "socket:koboldcpp:setManagedAdminPassword",
+				title: "Admin password saved"
+			})
 			// Never leave the just-typed password sitting in the field — the
 			// placeholder will show bullets now that it's stored.
 			adminPasswordField = ""
 		} else {
-			toaster.error({ title: "Failed to save admin password" })
+			notify.error({
+				source: "socket:koboldcpp:setManagedAdminPassword",
+				title: "Failed to save admin password"
+			})
 		}
 	}
 
@@ -352,7 +385,10 @@
 		"koboldcpp:isUpdateAvailable:error",
 		handleIsUpdateAvailableError
 	)
-	useInterest<"koboldcpp:setBaseUrl">("koboldcpp:setBaseUrl", handleSetBaseUrl)
+	useInterest<"koboldcpp:setBaseUrl">(
+		"koboldcpp:setBaseUrl",
+		handleSetBaseUrl
+	)
 	useInterest<"koboldcpp:setModelsDir">(
 		"koboldcpp:setModelsDir",
 		handleSetModelsDir
@@ -373,6 +409,10 @@
 					declareInterest<"koboldcpp:setSubprocessTimeout">(
 						"koboldcpp:setSubprocessTimeout",
 						handleSetSubprocessTimeout
+					),
+					declareInterest<"koboldcpp:setCoLoad">(
+						"koboldcpp:setCoLoad",
+						handleSetCoLoad
 					),
 					declareInterest<"koboldcpp:setManagedPort">(
 						"koboldcpp:setManagedPort",
@@ -593,10 +633,7 @@
 			<h3 class="text-sm font-medium">Managed settings</h3>
 
 			<div>
-				<label
-					class="text-surface-600-400 mb-2 text-xs"
-					for="ttlInput"
-				>
+				<label class="text-surface-600-400 mb-2 text-xs" for="ttlInput">
 					Model unload timer
 				</label>
 				<div class="panel-actions">
@@ -626,6 +663,34 @@
 						? "Model stays loaded until manually unloaded."
 						: `Unload model after ${ttlDraft}s of inactivity.`}
 				</p>
+			</div>
+
+			<div>
+				<label class="flex items-start gap-2 text-sm">
+					<input
+						type="checkbox"
+						class="checkbox mt-0.5"
+						checked={coLoadOn}
+						disabled={savingCoLoad}
+						onchange={(e) => setCoLoad(e.currentTarget.checked)}
+					/>
+					<span>
+						<span class="block">Keep the text and the image model loaded together</span>
+						<span class="text-surface-700-300 block text-xs">
+							When the graphics card has room — measured each time, from
+							the free memory and what the other model needs — a picture
+							no longer unloads the chat model, and the next reply no
+							longer unloads the picture model. Off: one model at a time,
+							the two swap. Which models are loaded shows under Details.
+						</span>
+						{#if coLoadUnmeasured(hardware.current)}
+							<span class="text-surface-700-300 block text-xs">
+								This machine gives no free graphics-memory reading, so
+								the two models always swap.
+							</span>
+						{/if}
+					</span>
+				</label>
 			</div>
 
 			<div>
@@ -666,40 +731,18 @@
 			</div>
 
 			<div>
-				<label
-					class="text-surface-600-400 mb-2 text-xs"
-					for="managedServerUrl"
-				>
+				<span class="text-surface-600-400 mb-2 block text-xs">
 					Server URL
-				</label>
-				<div class="panel-actions">
-					<input
-						id="managedServerUrl"
-						name="managedServerUrl"
-						type="url"
-						class="input min-w-0 flex-1 text-sm"
-						placeholder="http://127.0.0.1:{portDraft || 5001}"
-						aria-describedby="managedServerUrlHint"
-						bind:value={baseUrlField}
-					/>
-					<button
-						class="btn btn-sm preset-filled-primary-500 text-xs"
-						onclick={saveBaseUrl}
-						disabled={isSavingBaseUrl}
-					>
-						{#if isSavingBaseUrl}<Icons.Loader2
-								size={12}
-								class="animate-spin"
-							/>{:else}Save{/if}
-					</button>
-				</div>
+				</span>
+				<p class="text-sm" aria-describedby="managedServerUrlHint">
+					{koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ??
+						""}
+				</p>
 				<p
 					id="managedServerUrlHint"
 					class="text-surface-700-300 mt-1 text-xs"
 				>
-					Where Serene Pub reaches KoboldCPP. Usually
-					http://127.0.0.1:{koboldCppSettingsCtx.settings
-						?.koboldCppManagedPort ?? 5001}.
+					Follows the port below.
 				</p>
 			</div>
 
@@ -734,25 +777,6 @@
 				<p class="text-surface-700-300 mt-1 text-xs">
 					Requires restart to take effect.
 				</p>
-				{#if portMismatch}
-					<div
-						class="border-warning-500 bg-warning-500/10 mt-2 flex items-start gap-2 rounded-lg border p-3"
-					>
-						<Icons.AlertTriangle
-							size={16}
-							class="text-warning-700-300 mt-0.5 shrink-0"
-						/>
-						<p class="text-warning-700-300 text-sm">
-							This port doesn't match the server URL above
-							({koboldCppSettingsCtx.settings
-								?.koboldCppManagerBaseUrl}). Health checks, the
-							model list and generation all use that URL, not this
-							port, so the subprocess running here may be
-							orphaned. Change the port or the server URL so they
-							match.
-						</p>
-					</div>
-				{/if}
 			</div>
 		</div>
 	{/if}

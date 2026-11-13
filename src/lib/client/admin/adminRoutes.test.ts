@@ -33,4 +33,31 @@ describe("admin routes", () => {
 		expect(sectionHrefFor("/admin/pipelines/events", hrefs)).toBe("/admin/pipelines/events")
 		expect(sectionHrefFor("/admin/defaults", hrefs)).toBeNull()
 	})
+
+	it("sends the old Variable templates addresses to Variable layouts", () => {
+		expect(resolveAdminAlias("/admin/variable-templates")).toBe(
+			"/admin/variable-layouts"
+		)
+		expect(resolveAdminAlias("/admin/variable-templates/new?x=1")).toBe(
+			"/admin/variable-layouts?x=1"
+		)
+		expect(matchAdminRoute("/admin/variable-templates/7").pattern).toBe(
+			"/admin/variable-templates/:id"
+		)
+	})
+
+	it("matches a variable's pages, its encoded id as one segment", () => {
+		const id = "core%3Avar%2Fcharacters%401"
+		const view = matchAdminRoute(`/admin/variable-layouts/${id}`)
+		expect(view.pattern).toBe("/admin/variable-layouts/:variable")
+		expect(view.params.variable).toBe("core:var/characters@1")
+		const add = matchAdminRoute(`/admin/variable-layouts/${id}/new`)
+		expect(add.pattern).toBe("/admin/variable-layouts/:variable/new")
+		const change = matchAdminRoute(`/admin/variable-layouts/${id}/7`)
+		expect(change.pattern).toBe("/admin/variable-layouts/:variable/:id")
+		expect(change.params).toEqual({
+			variable: "core:var/characters@1",
+			id: "7"
+		})
+	})
 })

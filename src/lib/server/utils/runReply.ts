@@ -93,6 +93,12 @@ export type ReplyTurn =
 	 */
 	| { kind: "respond"; characterId: number; speaker?: undefined }
 	| { kind: "respond"; characterId?: null; speaker: EnvoyRef }
+	/** A card-less character seat's turn, by its member-form reference (`seated-member:<castMemberId>`). */
+	| {
+			kind: "respond"
+			characterId?: null
+			speaker: `seated-member:${number}`
+	  }
 	/**
 	 * Nobody named: the pipeline's own voice — a narrator entry
 	 * (`{ ref: null }`, PLAN-turn-order §4.4). The spec's prompts say whose
@@ -200,7 +206,8 @@ async function routeFor(
 	speaker: SideCharacterFact | null
 	/**
 	 * The turn's speaker as a participant reference, when it is one no id
-	 * can carry — an envoy's (`envoy:<slug>`). Absent on every other road,
+	 * can carry — an envoy's (`envoy:<slug>`) or a card-less seat's
+	 * (`seated-member:<id>`). Absent on every other road,
 	 * where `runTurn` derives `character:<id>` from `currentCharacterId`.
 	 */
 	speakerRef?: ParticipantRef
@@ -257,6 +264,14 @@ async function routeFor(
 	// An envoy's row carries its reference and no `characterId` (U5g): the
 	// verb re-drives it as the envoy's turn, which nothing else could say.
 	const envoySlug = envoySlugOfRef((existing?.metadata as any)?.speaker)
+	// …and so does a card-less seat's row (`seated-member:<id>`, no `characterId`).
+	const storedSpeaker = (existing?.metadata as any)?.speaker
+	const seatedMemberRef =
+		existing?.characterId == null &&
+		typeof storedSpeaker === "string" &&
+		/^seated-member:\d+$/.test(storedSpeaker)
+			? (storedSpeaker as `seated-member:${number}`)
+			: null
 	if (narration)
 		return speaker
 			? {
@@ -281,7 +296,11 @@ async function routeFor(
 		floorSpecId: STORY_RESPOND_SPEC_ID,
 		currentCharacterId: existing?.characterId ?? null,
 		speaker: null,
-		...(envoySlug ? { speakerRef: `envoy:${envoySlug}` as EnvoyRef } : {}),
+		...(envoySlug
+			? { speakerRef: `envoy:${envoySlug}` as EnvoyRef }
+			: seatedMemberRef
+				? { speakerRef: seatedMemberRef }
+				: {}),
 		narration
 	}
 }

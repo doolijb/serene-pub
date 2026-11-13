@@ -2,10 +2,11 @@
 	import InlineError from "$lib/client/components/InlineError.svelte"
 	/**
 	 * The change-form half of the template admin: one dedicated page per
-	 * template (Django's change form, built on `AdminChangeForm`), shared by
-	 * context templates and variable templates. `id` absent means add mode,
-	 * which additionally asks for the pool (the step or variable this
-	 * template renders for). Fieldsets: Template (name, pool), Source,
+	 * context template (Django's change form, built on `AdminChangeForm`).
+	 * Variable layouts have their own form in
+	 * `admin/sections/variable-layouts/`. `id` absent means add mode,
+	 * which additionally asks for the pool (the step this template renders
+	 * for). Fieldsets: Template (name, pool), Source,
 	 * Preview, and the pipelines using it inline; the save row is Django's.
 	 *
 	 * Editing reuses the library's exact write events — every mutation answers
@@ -29,19 +30,22 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
-	import { getVariable } from "@serene-pub/sdk"
+	import {
+		requestTemplateVariableLayouts,
+		templateVariableLayoutsOf
+	} from "$lib/client/components/pipelines/templateVariableLayouts.svelte"
 	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
 	import {
 		CORE_TEMPLATE_ENGINE,
 		splitPoolKey
 	} from "$lib/shared/pipelines/poolKey"
 
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	type Template = Sockets.Pipelines.Library.LibraryTemplate
 
 	interface Props {
-		kind: "context" | "variable"
+		kind: "context"
 		/** Route base, e.g. `/admin/context-templates`. */
 		basePath: string
 		/** The row to edit; absent = create mode. */
@@ -50,9 +54,7 @@
 	let { kind, basePath, id }: Props = $props()
 
 	/** The changelist's name: the breadcrumb and the save row's words. */
-	const sectionLabel = $derived(
-		kind === "context" ? "Context templates" : "Variable templates"
-	)
+	const sectionLabel = "Context templates"
 	const noun = { singular: "template", plural: "templates" }
 
 	const socket = useTypedSocket()
@@ -75,21 +77,24 @@
 	let poolId = $state("")
 	let seeded = $state(false)
 
-	let rows = $derived(
-		(kind === "context"
-			? (view.contextTemplates ?? [])
-			: (view.variableTemplates ?? [])) as Template[]
-	)
+	let rows = $derived((view.contextTemplates ?? []) as Template[])
 	let row = $derived(id != null ? rows.find((r) => r.id === id) : undefined)
 	let pools = $derived(
-		(kind === "context"
-			? (view.contextPools ?? [])
-			: (view.variablePools ?? [])) as Array<{
+		(view.contextPools ?? []) as Array<{
 			id: string
 			label: string
 		}>
 	)
 	let readonly = $derived(!!row?.isImmutable)
+
+	/** The step type this template belongs to: what its laid-out keys are asked by. */
+	const nodeType = $derived(
+		poolId ? splitPoolKey(poolId, CORE_TEMPLATE_ENGINE).poolId : ""
+	)
+	$effect(() => {
+		const t = nodeType
+		if (t) untrack(() => requestTemplateVariableLayouts({ nodeType: t }))
+	})
 
 	/**
 	 * Unsaved edits against the row as last pushed. Every push of the
@@ -137,19 +142,9 @@
 
 	/**
 	 * What this template may reference: a context template sees the whole
-	 * vocabulary; a variable layout sees only what its variable declares. A
-	 * plugin's variable isn't in this bundle, so the editor simply offers no
-	 * assistance rather than the wrong assistance.
-	 *
-	 * Split first: in create mode `poolId` is the composite `(variable)#(engine)`
-	 * key, and a variable id with an engine glued to it matches no declaration.
+	 * vocabulary.
 	 */
-	let scope = $derived(
-		kind === "context"
-			? contextTemplateScope()
-			: getVariable(splitPoolKey(poolId, CORE_TEMPLATE_ENGINE).poolId)
-					?.scope
-	)
+	let scope = $derived(contextTemplateScope())
 
 	function handleLibrary(res: Sockets.Pipelines.Library.Response) {
 		view = res
@@ -169,7 +164,7 @@
 	}) {
 		if (res.library) view = res.library
 		for (const w of res.warnings ?? [])
-			toaster.warning({
+			notify.warning({
 				title: w.line ? `Line ${w.line}: ${w.message}` : w.message
 			})
 	}
@@ -181,7 +176,10 @@
 		if (ev === "pipelines:libraryDeleteTemplate" && deleting) {
 			deleting = false
 			edits.forget()
-			toaster.success({ title: "Template deleted" })
+			notify.success({
+				source: "pipelines:library:write",
+				title: "Template deleted"
+			})
 			void goto(basePath, { replaceState: true })
 			return
 		}
@@ -193,7 +191,10 @@
 		pendingIntent = null
 		saving = false
 		edits.forget()
-		toaster.success({ title: id != null ? "Template saved" : "Template added" })
+		notify.success({
+			source: "pipelines:library:write",
+			title: id != null ? "Template saved" : "Template added"
+		})
 		if (id != null) edits.markSaved()
 		if (intent === "save") void goto(basePath)
 		else if (intent === "another") void goto(`${basePath}/new`)
@@ -208,7 +209,10 @@
 			formErrors = [res.error ?? "The library refused the edit."]
 			return
 		}
-		toaster.error({ title: res.error ?? "The library refused the edit." })
+		notify.error({
+			source: "pipelines:library:refusal",
+			title: res.error ?? "The library refused the edit."
+		})
 	}
 
 	// ── preview ─────────────────────────────────────────────────────
@@ -281,7 +285,7 @@
 			socket.emit("pipelines:libraryUpdateTemplate", { kind, id, name, source, engine })
 		} else {
 			if (!poolId) {
-				formErrors = [kind === "context" ? "Pick the step it renders for." : "Pick the variable it lays out."]
+				formErrors = ["Pick the step it renders for."]
 				return
 			}
 			const split = splitPoolKey(poolId, CORE_TEMPLATE_ENGINE)
@@ -300,7 +304,7 @@
 	function clone() {
 		if (id == null) return
 		socket.emit("pipelines:libraryCloneTemplate", { kind, id })
-		toaster.success({ title: "Template duplicated" })
+		notify.success({ title: "Template duplicated" })
 		void goto(basePath)
 	}
 
@@ -396,12 +400,12 @@
 					     control for the same fact could disagree with it. -->
 					<AdminField
 						id="template-admin-pool"
-						label={kind === "context" ? "Step (pool)" : "Variable"}
+						label="Step (pool)"
 						required
 						help="Fixed once made: storing text under another language does not translate it."
 					>
 						<Select
-							label={kind === "context" ? "Step (pool)" : "Variable"}
+							label="Step (pool)"
 							labelHidden
 							options={pools.map((p) => ({ value: p.id, label: p.label }))}
 							bind:value={poolId}
@@ -411,7 +415,7 @@
 				{:else}
 					<AdminField
 						id="template-admin-pool"
-						label={kind === "context" ? "Step (pool)" : "Variable"}
+						label="Step (pool)"
 						value={row?.poolLabel ?? poolId}
 					/>
 				{/if}
@@ -429,6 +433,9 @@
 				{scope}
 				{engine}
 				{readonly}
+				variableLayouts={nodeType
+					? templateVariableLayoutsOf({ nodeType })?.keys
+					: undefined}
 				rows={16}
 				oninput={(v) => (source = v)}
 			/>

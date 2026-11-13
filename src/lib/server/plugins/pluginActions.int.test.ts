@@ -14,10 +14,23 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let db: TestDb
 vi.mock("$lib/server/plugins", () => ({ getManager: () => ({}) }))
 
+// The genres the pub offers: the real registry, but `getSessionGenre` / `listOfferedGenres` answer from here.
+const APPLET_GENRE = "acme.x:genre/sim"
+let offered: any[] = []
+vi.mock("$lib/server/pipelines/entities/sessionGenres", async (importOriginal) => {
+	const orig: any = await importOriginal()
+	return {
+		...orig,
+		listOfferedGenres: async () => offered,
+		getSessionGenre: async (d: any, id: string) => offered.find((g) => g.genreId === id) ?? orig.getSessionGenre(d, id)
+	}
+})
+
 const ID = "acme.x"
 const HANDLER = "acme.x:outlet/world-save@1"
 const manifest = {
 	permissions: ["storage"],
+	surfaces: { "session-view": { entry: "ui/session.html" } },
 	pluginActions: {
 		"world.save": { params: { title: { type: "string", required: true } }, handler: HANDLER },
 		"img.pick": { params: {}, handler: HANDLER },
@@ -86,6 +99,8 @@ describe("invokePluginAction", () => {
 		expect(input).toEqual({ title: "World" })
 		expect(opts.kind).toBe("outlet")
 		expect(opts.user).toBe("7")
+		// No applet mount named: no frame-origin cause (C5).
+		expect(opts.frameCause).toBeUndefined()
 	})
 
 	it("returns the handler's value", async () => {
@@ -131,5 +146,48 @@ describe("invokePluginAction", () => {
 		await expect(run({}, m)).rejects.toThrow(
 			"'Acme' is not running. An administrator can switch it on under Admin › Plugins."
 		)
+	})
+})
+
+describe("the frame-origin cause at the invoke door", () => {
+	let owner: number, other: number, ordinary: number, appletSession: number
+	beforeAll(async () => {
+		;[{ id: owner }, { id: other }] = await db
+			.insert(schema.users)
+			.values([{ username: "fc-owner" }, { username: "fc-other" }])
+			.returning({ id: schema.users.id })
+		const mk = async (genreId: string) =>
+			(await db.insert(schema.sessions).values({ userId: owner, isGroup: false, genreId } as any).returning())[0].id
+		ordinary = await mk("core:genre/story")
+		appletSession = await mk(APPLET_GENRE)
+	})
+	beforeEach(() => {
+		offered = [{ genreId: APPLET_GENRE, name: "Sim", shape: { applet: true, view: ID } }]
+	})
+	const cause = async (fromApplet: unknown, userId = owner) => {
+		const m = fake()
+		await run({ userId, fromApplet }, m)
+		return m.calls[0][3].frameCause
+	}
+
+	it("a widget's invoke on an ordinary session gets none", async () => {
+		expect(await cause({ pluginId: ID, sessionId: ordinary })).toBeUndefined()
+	})
+	it("the launcher's door gets the cause", async () => {
+		expect(await cause({ pluginId: ID })).toEqual({ pluginId: ID })
+	})
+	it("the session view of the person's own applet session gets the cause", async () => {
+		expect(await cause({ pluginId: ID, sessionId: appletSession })).toEqual({ pluginId: ID })
+	})
+	it("another user with no access gets none", async () => {
+		expect(await cause({ pluginId: ID, sessionId: appletSession }, other)).toBeUndefined()
+	})
+	it("a mount naming another plugin gets none", async () => {
+		expect(await cause({ pluginId: "acme.other" })).toBeUndefined()
+		expect(await cause({ pluginId: "acme.other", sessionId: appletSession })).toBeUndefined()
+	})
+	it("the launcher of a plugin with no applet genre gets none", async () => {
+		offered = []
+		expect(await cause({ pluginId: ID })).toBeUndefined()
 	})
 })

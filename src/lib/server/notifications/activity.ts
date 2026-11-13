@@ -43,6 +43,8 @@ export function activityJob(activity: Activity): string {
 	switch (activity.kind) {
 		case "graph_build":
 			return "Graph build"
+		case "lorebook_indexing":
+			return "Indexing"
 		case "scene_summarize":
 			return "Scene summary"
 		case "compile_history_entry":
@@ -59,6 +61,7 @@ export function activitySubject(activity: Activity): string {
 	const parts: (string | undefined)[] = []
 	switch (activity.kind) {
 		case "graph_build":
+		case "lorebook_indexing":
 			parts.push(activity.lorebookLabel)
 			break
 		case "scene_summarize":
@@ -122,6 +125,8 @@ export function activityHref(activity: Activity): string {
 				...(activity.branchId != null ? { branch: activity.branchId } : {}),
 				...(activity.moment ? { moment: momentKey(activity.moment) } : {})
 			})
+		case "lorebook_indexing":
+			return loreHref({ lorebookId: activity.lorebookId, scope: "all" })
 		case "session_summarize":
 			return sessionHref(activity.sessionId)
 	}

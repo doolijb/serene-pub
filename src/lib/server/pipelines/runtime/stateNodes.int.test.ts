@@ -256,7 +256,7 @@ describe("core:task/set-state@1", () => {
 		expect(written.validFromMessageId).toBe(press.id)
 
 		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-		await retractStateAnchoredTo(testDb as unknown as Db, press.id)
+		await retractStateAnchoredTo(testDb as unknown as Db, press.id, "replaced")
 		const { valueOf } = await import("$lib/server/state/resolve")
 		expect(
 			await valueOf(testDb as unknown as Db, {

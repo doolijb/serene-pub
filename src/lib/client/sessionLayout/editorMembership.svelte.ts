@@ -5,7 +5,7 @@
  * places, as opposed to where they sit.
  *
  * Over panels (PLAN-session-panels-2026-10-14): the editor holds ONE working
- * `PanelLayoutV1`, and every edit here is one of ./arrangeOps' pure ops
+ * `PanelLayoutV2`, and every edit here is one of ./arrangeOps' pure ops
  * applied to it through `input.edit` — the editor keeps the result (or says
  * the refusal). Membership is `placedIds(panels)`, nothing else. Nothing is
  * written to the session until Done. There is no lock (§10 R-B): a removal
@@ -53,15 +53,14 @@ import {
 	widgetStylePins
 } from "$lib/client/stores/widgetStyles.svelte"
 import { CORE_WIDGETS } from "$lib/shared/widgets/types"
-import { type PanelLayoutV1, widgetOfInstance } from "@serene-pub/sdk"
+import { type PanelLayoutV2, widgetOfInstance } from "@serene-pub/sdk"
 import type { SessionLayoutModel } from "./sessionLayoutModel.svelte"
 
 /**
  * Where a widget lands: as a tab of a panel, or as a new panel of its own at
- * a slot of one stack (a side, or the middle's strips) — `rail` puts a new
- * side panel straight in the rail (dropped on a side's rail strip, §10 R-C).
+ * a slot of one stack (a side or the middle: all three are plain stacks).
  */
-export type ArrangeTarget = { tab: TabSlot } | { panel: PanelSlot; rail?: boolean }
+export type ArrangeTarget = { tab: TabSlot } | { panel: PanelSlot }
 
 /** A tray chip's drag carries a WIDGET id under this type; a placed tab's, an instance id. */
 export const TRAY_DRAG_TYPE = "text/sp-tray-widget"
@@ -73,7 +72,7 @@ export interface EditorMembershipInput {
 	readonly manager: SurfaceManager
 	readonly sessionId: number | null
 	/** The editor's working panels. */
-	readonly panels: PanelLayoutV1
+	readonly panels: PanelLayoutV2
 	/** Apply one op's outcome: keep its layout, or say its refusal. Answers whether it was kept. */
 	edit(outcome: ArrangeOutcome): boolean
 }
@@ -137,7 +136,7 @@ export function createEditorMembership(input: EditorMembershipInput) {
 		const outcome =
 			"tab" in at
 				? addTab(input.panels, id, at.tab)
-				: newPanel(input.panels, id, at.panel, at.rail ? { pinned: false } : {})
+				: newPanel(input.panels, id, at.panel)
 		return input.edit(outcome)
 	}
 	/**
@@ -196,7 +195,11 @@ export function createEditorMembership(input: EditorMembershipInput) {
 			fresh: true
 		})
 		const index = holder.panel.tabs.indexOf(sourceId) + 1
-		if (!input.edit(addTab(input.panels, id, { panelKey: holder.panel.key, index })))
+		if (
+			!input.edit(
+				addTab(input.panels, id, { panelKey: holder.panel.key, index })
+			)
+		)
 			return null
 		forgetViewState(id)
 		const carry = duplicateValues(

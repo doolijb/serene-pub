@@ -39,8 +39,7 @@ const ENTRY_TYPES: Readonly<Record<string, string>> = Object.freeze({
 	person: "core:entry/character-lore",
 	character: "core:entry/character-lore",
 	place: "core:entry/location",
-	location: "core:entry/location",
-	history: "core:entry/history"
+	location: "core:entry/location"
 })
 
 const filedSentence = (what: string, filed: { held: boolean; where: string }) =>
@@ -76,6 +75,8 @@ export const writeEntry: CoreTool = {
 		const content = strArg(args, "content", "text", "body")
 		if (!name || !content) throw new ToolError("write_entry needs a name and what the entry says.")
 		const kind = strArg(args, "kind", "type").toLowerCase()
+		if (kind === "history")
+			throw new ToolError("History comes from scenes: capture the moment and compile it, or write world lore.")
 		const filed = await fileThrough(ctx, { name, content, entryType: ENTRY_TYPES[kind] ?? ENTRY_TYPES.lore })
 		return { ...filed, message: filedSentence(`The entry '${name}'`, filed) }
 	}

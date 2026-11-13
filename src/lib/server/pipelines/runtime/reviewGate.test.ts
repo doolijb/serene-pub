@@ -25,6 +25,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest"
 import {
+	sentAsOf,
 	createReviewer,
 	pendingReviewsFor,
 	resolveReview,
@@ -324,5 +325,31 @@ describe("whatIsReviewed — the card says what it is asking about", () => {
 		expect(card.whatIsReviewed).toMatch(/placeholder/)
 		expect(pushed.at(-1)?.whatIsReviewed).toBe(card.whatIsReviewed)
 		resolveReview(card.id, userId, "reject")
+	})
+})
+
+describe("sentAsOf — a picture step's fields as they will be sent (2026-11-08)", () => {
+	it("hands the card the prompt rows that wrap the reviewed fields", () => {
+		expect(
+			sentAsOf({
+				definitionId: "core:oracle/generate-image@1",
+				payload: {
+					prompt: "red hair, green coat",
+					negative: "hat",
+					prompts: {
+						positive: "{{prompt}}, portrait, head and shoulders, looking at viewer, detailed face",
+						negative: "{{negative}}, text, watermark"
+					}
+				}
+			})
+		).toEqual({
+			prompt: "{{prompt}}, portrait, head and shoulders, looking at viewer, detailed face",
+			negative: "{{negative}}, text, watermark"
+		})
+	})
+	it("says nothing for a step with no row, or any other step", () => {
+		expect(sentAsOf({ definitionId: "core:oracle/generate-image@1", payload: { prompt: "x" } })).toBeUndefined()
+		expect(sentAsOf({ definitionId: "core:oracle/generate-image@1", payload: { prompts: { positive: "" } } })).toBeUndefined()
+		expect(sentAsOf({ definitionId: "core:outlet/create-message@1", payload: { prompts: { positive: "{{prompt}}" } } })).toBeUndefined()
 	})
 })

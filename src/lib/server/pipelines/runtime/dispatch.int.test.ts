@@ -422,6 +422,15 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 })
 let sessionRow = true
 
+// 🚧 `loadAdapterSession` reads each card as its current card version
+// (`cardsNow`); this file's fixture cards are plain rows with no versions, so
+// the read finds none and a card reads as it is. The read itself is pinned on
+// a real database in `dispatch.cardsNow.int.test.ts`.
+vi.mock("$lib/server/cast/seatedCast", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/cast/seatedCast")>()),
+	cardsNow: async () => new Map()
+}))
+
 /**
  * The database, handed in rather than imported.
  *
@@ -430,6 +439,10 @@ let sessionRow = true
  * read from the other one. Passing it makes both tests possible.
  */
 const fakeDb = {
+	// 🚧 The seat rows are read as their cast members (S2, `seatCardsAsRead`):
+	// this session's seats have none stored and its book has none, so the
+	// member lookup finds nothing and the cards read as they are.
+	select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
 	query: {
 		sessions: {
 			findFirst: async () =>

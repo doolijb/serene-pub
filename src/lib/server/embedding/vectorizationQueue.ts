@@ -767,10 +767,20 @@ export const messageEmbedText = sql<string>`${schema.sessionMessages.content}`
 
 /**
  * What a character (a persona is a character) embeds: its name, a newline and
- * its description. Nothing else on the card — so a folder move, an avatar, the
- * persona flags and a soft delete change nothing here.
+ * its description, as its **current card version** has them (the highest
+ * `number` in `character_versions`) — nothing else on the card, so a folder
+ * move, an avatar, the persona flags and a soft delete change nothing here,
+ * and a new card version that changes the name or description does.
+ *
+ * ⚠ A card with no version yet (inserted raw, before `ensureCardVersion`) has
+ * no version to read: it falls back to the row's own name and description,
+ * which is what its v1 will hold. Because the text lives on another table it
+ * cannot be a generated column: the character store's current hash is this
+ * expression hashed where it is read (`CHARACTER_STORE`), as the relationship
+ * store's is. (Spelled with qualified names: drizzle leaves a single-table
+ * select's columns bare, which would bind inside the subquery.) `characters.embed_text_hash` is not read.
  */
-export const characterEmbedText = sql<string>`(${schema.characters.name} || chr(10) || ${schema.characters.description})`
+export const characterEmbedText = sql<string>`coalesce((SELECT coalesce("cv"."name", '') || chr(10) || coalesce("cv"."description", '') FROM "character_versions" AS "cv" WHERE "cv"."card_id" = "characters"."id" ORDER BY "cv"."number" DESC LIMIT 1), "characters"."name" || chr(10) || "characters"."description")`
 
 /**
  * What a cast member (`lorebook_bindings`) embeds: its name, and its summary
@@ -851,7 +861,7 @@ const MESSAGE_STORE: ColumnStore = {
 const CHARACTER_STORE: ColumnStore = {
 	table: schema.characters,
 	embedText: characterEmbedText,
-	embedTextHash: schema.characters.embedTextHash
+	embedTextHash: textDigest(characterEmbedText)
 }
 const BINDING_STORE: ColumnStore = {
 	table: schema.lorebookBindings,

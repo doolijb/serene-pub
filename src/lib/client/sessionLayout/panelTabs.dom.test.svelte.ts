@@ -2,11 +2,12 @@
  * A panel in the live session (./PanelTabs; PLAN-session-panels-2026-10-14
  * §1.3): a tab strip only when it holds two or more widgets, roving arrow
  * keys across it, every tab mounted (the inactive hidden), a switch that
- * writes the panel's `open` at once, and a pin named for what it does.
+ * writes the panel's `open` at once, and the panel's backing on its root.
+ * No pin and no gear (PLAN 2026-11-05).
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { createRawSnippet, flushSync, mount, unmount } from "svelte"
-import { resolveDrawn, type DrawnPanel, type PanelV1 } from "@serene-pub/sdk"
+import { resolveDrawn, type DrawnPanel, type PanelV2 } from "@serene-pub/sdk"
 import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 import PanelTabs from "./PanelTabs.svelte"
 
@@ -17,15 +18,15 @@ afterEach(() => {
 	vi.useRealTimers()
 })
 
-/** A right-side panel as the SDK draws it. */
-function drawnPanel(p: PanelV1): DrawnPanel {
+/** A right-zone panel as the SDK draws it (layout version 2). */
+function drawnPanel(p: PanelV2): DrawnPanel {
 	return resolveDrawn(
 		{
 			panels: {
-				version: 1,
+				version: 2,
 				left: [],
-				right: [p],
-				middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] }
+				middle: [{ key: "p1", tabs: ["messages"] }],
+				right: [p]
 			}
 		},
 		{ inline: 1300 }
@@ -45,10 +46,7 @@ function render(
 	const props = $state<Record<string, any>>({
 		panel,
 		label,
-		pinnable: true,
 		onSelect,
-		onPin: vi.fn(),
-		onSettings: vi.fn(),
 		pane,
 		...over
 	})
@@ -60,18 +58,16 @@ const tabs = () => [...document.querySelectorAll<HTMLButtonElement>('[role="tab"
 const panes = () => [...document.querySelectorAll<HTMLElement>(".wtab-pane")]
 
 describe("PanelTabs — a strip only when the panel holds two or more tabs", () => {
-	test("one tab: no tablist — the widget's own chrome, controls in the corner overlay", () => {
+	test("one tab: no tablist and no controls — the widget alone", () => {
 		render(drawnPanel({ key: "r1", tabs: ["stats"] }))
-		expect(document.querySelector('[role="tablist"]')).toBeNull()
+		expect(document.querySelector('[role="tablist"]') === null).toBe(true)
 		expect(panes().length).toBe(1)
-		expect(document.querySelector(".ptabs-hover")).not.toBeNull()
-		expect(document.querySelector('.ptabs-hover button[aria-label="Move to the rail"]')).not.toBeNull()
-		expect(document.querySelector('.ptabs-hover button[aria-label="Stats settings"]')).not.toBeNull()
+		expect(document.querySelectorAll("button").length).toBe(0)
 	})
 
 	test("two tabs: a tablist, every tab mounted, the inactive hidden", () => {
 		render(drawnPanel({ key: "r1", tabs: ["stats", "places"], open: "places" }))
-		expect(document.querySelector('[role="tablist"]')).not.toBeNull()
+		expect(document.querySelector('[role="tablist"]') === null).toBe(false)
 		expect(tabs().map((t) => [t.textContent?.trim(), t.getAttribute("aria-selected")])).toEqual([
 			["Stats", "false"],
 			["Places", "true"]
@@ -82,8 +78,7 @@ describe("PanelTabs — a strip only when the panel holds two or more tabs", () 
 		// Each pane is labelled by its tab.
 		const [first] = panes()
 		expect(first.getAttribute("role")).toBe("tabpanel")
-		expect(document.getElementById(first.getAttribute("aria-labelledby")!)).toBe(tabs()[0])
-		expect(document.querySelector(".ptabs-hover")).toBeNull()
+		expect(document.getElementById(first.getAttribute("aria-labelledby")!) === tabs()[0]).toBe(true)
 	})
 
 	test("only the selected tab is in the tab order", () => {
@@ -104,7 +99,7 @@ describe("PanelTabs — roving keys", () => {
 		tabs()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }))
 		flushSync()
 		expect(onSelect).toHaveBeenLastCalledWith("places")
-		expect(document.activeElement).toBe(tabs()[1])
+		expect(document.activeElement === tabs()[1]).toBe(true)
 		expect(tabs()[1].getAttribute("aria-selected")).toBe("true")
 		tabs()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
 		flushSync()
@@ -119,7 +114,7 @@ describe("PanelTabs — roving keys", () => {
 		tabs()[2].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }))
 		flushSync()
 		expect(onSelect).toHaveBeenLastCalledWith("stats")
-		expect(document.activeElement).toBe(tabs()[0])
+		expect(document.activeElement === tabs()[0]).toBe(true)
 	})
 
 	test("choosing the tab already shown writes nothing", () => {
@@ -134,16 +129,16 @@ describe("PanelTabs — a switch writes `open` to the session's layout", () => {
 		vi.useFakeTimers()
 		const save = vi.fn()
 		const manager = new SurfaceManager()
-		const stored: PanelV1 = { key: "r1", tabs: ["stats", "places"] }
+		const stored: PanelV2 = { key: "r1", tabs: ["stats", "places"] }
 		manager.init(
 			1,
 			[],
 			{
 				panels: {
-					version: 1,
+					version: 2,
 					left: [],
-					right: [stored],
-					middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] }
+					middle: [{ key: "p1", tabs: ["messages"] }],
+					right: [stored]
 				}
 			},
 			save
@@ -169,39 +164,25 @@ describe("PanelTabs — a switch writes `open` to the session's layout", () => {
 	})
 })
 
-describe("PanelTabs — the pin and the gear", () => {
-	test("a docked panel's pin is 'Move to the rail'; a rail panel's is 'Dock'", () => {
-		const onPin = vi.fn()
-		const { props } = render(drawnPanel({ key: "r1", tabs: ["stats", "places"] }), { onPin })
-		const pin = () =>
-			document.querySelector<HTMLButtonElement>('.ptabs-tools button[aria-pressed]')!
-		expect(pin().getAttribute("aria-label")).toBe("Move to the rail")
-		pin().click()
-		expect(onPin).toHaveBeenLastCalledWith(false)
-		props.panel = drawnPanel({ key: "r1", tabs: ["stats", "places"], pinned: false })
-		flushSync()
-		expect(pin().getAttribute("aria-label")).toBe("Dock")
-		pin().click()
-		expect(onPin).toHaveBeenLastCalledWith(true)
+describe("PanelTabs — the panel is the card", () => {
+	test("boxStyle lands on the root and data-backing names the backing", () => {
+		render(drawnPanel({ key: "r1", tabs: ["stats"] }), {
+			boxStyle: "--sp-widget-radius: 8px",
+			backing: "glass"
+		})
+		const root = document.querySelector<HTMLElement>(".ptabs")!
+		expect(root.getAttribute("style")?.includes("--sp-widget-radius: 8px")).toBe(true)
+		expect(root.getAttribute("data-backing")).toBe("glass")
 	})
 
-	test("a strip never pins: no pin control", () => {
-		render(drawnPanel({ key: "r1", tabs: ["stats", "places"] }), { pinnable: false })
-		expect(document.querySelector('button[aria-label="Move to the rail"]')).toBeNull()
-		expect(document.querySelector('button[aria-label="Dock"]')).toBeNull()
+	test("no backing is the default", () => {
+		render(drawnPanel({ key: "r1", tabs: ["stats"] }))
+		expect(document.querySelector(".ptabs")!.getAttribute("data-backing")).toBe("none")
 	})
 
-	test("the gear opens the ACTIVE tab's settings", () => {
-		const onSettings = vi.fn()
-		render(drawnPanel({ key: "r1", tabs: ["stats", "places"], open: "places" }), { onSettings })
-		const gear = document.querySelector<HTMLButtonElement>('button[aria-label="Places settings"]')!
-		gear.click()
-		expect(onSettings).toHaveBeenCalledWith("places", gear)
-	})
-
-	test("no controls while the editor is open", () => {
-		render(drawnPanel({ key: "r1", tabs: ["stats", "places"] }), { controls: false })
-		expect(document.querySelector(".ptabs-tools")).toBeNull()
-		expect(document.querySelector('[role="tablist"]')).not.toBeNull()
+	test("a strip holds tabs and nothing else: no pin, no gear", () => {
+		render(drawnPanel({ key: "r1", tabs: ["stats", "places"] }))
+		expect(document.querySelectorAll("button").length).toBe(2)
+		expect(tabs().length).toBe(2)
 	})
 })

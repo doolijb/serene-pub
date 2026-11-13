@@ -42,7 +42,7 @@
 	 * Admin-only, checked here and again in every handler. The check here is for
 	 * the person; the check in the handler is the one that matters.
 	 */
-	import { getContext, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -53,13 +53,17 @@
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
+	import {
+		requestTemplateVariableLayouts,
+		templateVariableLayoutsOf
+	} from "$lib/client/components/pipelines/templateVariableLayouts.svelte"
 	import { getVariable } from "@serene-pub/sdk"
 	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
 	import {
 		CORE_TEMPLATE_ENGINE,
 		splitPoolKey
 	} from "$lib/shared/pipelines/poolKey"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -461,9 +465,9 @@
 	async function copyArchived(text: string) {
 		try {
 			await navigator.clipboard.writeText(text)
-			toaster.success({ title: "Copied to the clipboard" })
+			notify.success({ title: "Copied to the clipboard" })
 		} catch {
-			toaster.error({
+			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})
 		}
@@ -488,14 +492,18 @@
 		// after the fact rather than as a confirmation dialog, because the
 		// template is valid and the person may well mean it.
 		for (const w of res.warnings ?? [])
-			toaster.warning({
+			notify.warning({
 				title: w.line ? `Line ${w.line}: ${w.message}` : w.message
 			})
 	}
 	// The server's refusals are written for a person — "'Grim tone' is still
 	// selected somewhere" — so they are shown rather than replaced by a status.
 	const onRefusal = (res: { error?: string }) => {
-		if (res.error) toaster.error({ title: res.error })
+		if (res.error)
+			notify.error({
+				source: "pipelines:library:refusal",
+				title: res.error
+			})
 	}
 
 	const WRITES = [
@@ -564,6 +572,22 @@
 	})
 
 	const templates = $derived(view.contextTemplates ?? [])
+	/** The step types whose templates are on show: their laid-out keys are worth asking for. */
+	const templateNodeTypes = $derived(
+		userCtx.user?.isAdmin && tab === "templates"
+			? [
+					...new Set(templates.map((r) => splitPool(r.poolId).poolId))
+				].join("\u0000")
+			: ""
+	)
+	$effect(() => {
+		const types = templateNodeTypes
+		if (!types) return
+		untrack(() => {
+			for (const nodeType of types.split("\u0000"))
+				requestTemplateVariableLayouts({ nodeType })
+		})
+	})
 	const layouts = $derived(view.variableTemplates ?? [])
 </script>
 
@@ -997,6 +1021,13 @@
 											readonly={row.isImmutable}
 											value={d.source}
 											scope={scopeFor(tab, poolId, pools)}
+											variableLayouts={tab === "templates"
+												? templateVariableLayoutsOf({
+														nodeType:
+															splitPool(poolId)
+																.poolId
+													})?.keys
+												: undefined}
 											lenient={tab === "templates"}
 											scopeNote={tab === "templates"
 												? "This step type's own names. Checked against every step that uses it when you pick it."

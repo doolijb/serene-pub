@@ -16,6 +16,13 @@
  *  4. **Off refuses what a person saves from a review screen**, in a
  *     sentence that says where the setting lives; and a person's own choice
  *     overrides the pub's until they reset it.
+ *
+ * (sense-b4) A pipeline's new entry, place, history day or link goes to the
+ * session's own book (whatever the mode, Full included) only for a session
+ * whose scenes end by themselves; the link case below has its twin. Stat values
+ * and the timeline recording are unchanged for such a session (twin in "the
+ * mode decides what an automatic write does"). The predicate is switched per
+ * session.
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -35,6 +42,12 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 let testDb: TestDb
 let dataDir: string
+
+const scenesEnd = vi.hoisted(() => new Set<number>())
+vi.mock("$lib/server/lorebooks/ownBook", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/lorebooks/ownBook")>()),
+	scenesEndByThemselves: async (_db: unknown, sessionId: number) => scenesEnd.has(sessionId)
+}))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -238,6 +251,43 @@ describe("the mode decides what an automatic write does", () => {
 		expect(out.value.proposed).toHaveLength(0)
 		expect(await bookRows(w)).toHaveLength(1)
 		expect(await proposalsOf(w)).toHaveLength(0)
+	})
+
+	test("Full writes it, unchanged for a session whose scenes end by themselves: a stat value is not moved to its own book", async () => {
+		const w = await world()
+		await setOwnMode(w.user.id, "full")
+		scenesEnd.add(w.session.id)
+		const out = await run(w)
+		expect(out.value.applied).toHaveLength(2)
+		expect(out.value.proposed).toHaveLength(0)
+		expect(await bookRows(w)).toHaveLength(1)
+	})
+
+	test("★ accepted: while a new history day waits in the session's own book, a stat value is still dated by the lorebook's day", async () => {
+		// What the same write gives with no day waiting.
+		const control = await world()
+		await setOwnMode(control.user.id, "full")
+		scenesEnd.add(control.session.id)
+		const controlOut = await run(control)
+		const controlRow = (await bookRows(control)).find((r) => r.id === controlOut.value.applied[0])!
+
+		const w = await world()
+		await setOwnMode(w.user.id, "full")
+		scenesEnd.add(w.session.id)
+		// Year 20: after every history day the lorebook holds on this line (newest is the Fork's Year 9).
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const h = await createHost(testDb as any, { sessionId: w.session.id })
+		const filed: any = await h.commit!(
+			{ content: "A new day.", params: { entryType: HISTORY_TYPE_ID }, fields: { year: 20, month: 1, day: 1 } },
+			{ key: "day", definitionId: "core:outlet/create-lore-entry" } as any
+		)
+		expect(filed.route).toBe("own-book")
+
+		const out = await run(w)
+		const row = (await bookRows(w)).find((r) => r.id === out.value.applied[0])!
+		expect(controlRow.historyEntryId).toBe(control.forkY3.id)
+		expect(row.historyEntryId).toBe(w.forkY3.id)
+		expect(row.historyEntryId).not.toBe(filed.id)
 	})
 
 	test("Review changes files a proposal carrying the line and the dating, and writes nothing", async () => {
@@ -622,7 +672,7 @@ describe("the review round", () => {
 		expect(await read(atSeven!.id)).toBe("storm")
 	})
 
-	test("a lore link a session draws is dated where it stands, on its line", async () => {
+	test("(scenes do not end by themselves) a lore link a session draws is dated where it stands, on its line", async () => {
 		const w = await world()
 		await setOwnMode(w.user.id, "full")
 		const place = async (title: string) =>
@@ -647,6 +697,38 @@ describe("the review round", () => {
 		// The Fork's Year 3: the latest on its line at or before Year 7 — a
 		// session at Year 2 on the Fork has not reached it.
 		expect(row).toMatchObject({ branchId: w.fork.id, historyEntryId: w.forkY3.id })
+	})
+
+	test("a lore link a session whose scenes end by themselves draws goes to its own book; no line is forked", async () => {
+		const w = await world()
+		await setOwnMode(w.user.id, "full")
+		scenesEnd.add(w.session.id)
+		const place = async (title: string) =>
+			(
+				await testDb
+					.insert(schema.lorebookEntries)
+					.values({ lorebookId: w.book.id, typeId: WORLD_LORE_TYPE_ID, typeVersion: 1, position: 1000 + ++n, title, content: "…" })
+					.returning()
+			)[0]!.id
+		const hall = await place(`Hall ${n}`)
+		const cellar = await place(`Cellar ${n}`)
+		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+		const own = await ownBookFor(testDb as unknown as Db, w.session.id)
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const h = await createHost(testDb as any, { sessionId: w.session.id })
+		const res = (await h.commit!(
+			{ from: hall, to: cellar },
+			{ key: "link", definitionId: "core:outlet/link-lore-entries" } as any
+		)) as { id: number }
+		const R = schema.narrativeRelationships
+		const [row] = await testDb.select().from(R).where(eq(R.id, res.id))
+		expect(row!.lorebookId).toBe(own.id)
+		expect(await testDb.select().from(R).where(eq(R.lorebookId, w.book.id))).toEqual([])
+		const [s] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		expect(s!.lorebookBranchId).toBe(w.fork.id)
+		expect(
+			await testDb.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, w.book.id))
+		).toHaveLength(2)
 	})
 
 	test("under Review changes, the same change asked again while it waits is not filed twice", async () => {

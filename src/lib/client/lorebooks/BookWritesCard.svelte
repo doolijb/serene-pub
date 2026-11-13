@@ -16,7 +16,7 @@
 	import LoreWriteModePicker from "$lib/client/components/inputs/LoreWriteModePicker.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		BOOK_LORE_WRITE_MODE_CHOICES,
 		LORE_WRITE_MODE_CHOICES,
@@ -35,7 +35,9 @@
 	let { lorebookId, current }: Props = $props()
 
 	const socket = useTypedSocket()
-	const userSettingsCtx = getContext<UserSettingsCtx | undefined>("userSettingsCtx")
+	const userSettingsCtx = getContext<UserSettingsCtx | undefined>(
+		"userSettingsCtx"
+	)
 	const systemSettingsCtx = getContext<SystemSettingsCtx | undefined>(
 		"systemSettingsCtx"
 	)
@@ -45,7 +47,9 @@
 	let pending = $state<LoreWriteMode | null>(null)
 	let error = $state("")
 
-	const stored = $derived<LoreWriteMode>(isLoreWriteMode(current) ? current : "full")
+	const stored = $derived<LoreWriteMode>(
+		isLoreWriteMode(current) ? current : "full"
+	)
 	const shown = $derived(pending ?? stored)
 	const personal = $derived(
 		effectiveLoreWriteMode(
@@ -64,14 +68,19 @@
 			await awaitReply({
 				socket,
 				event: "lorebooks:update",
-				params: { lorebook: { id: lorebookId }, loreWriteMode: mode, requestId },
+				params: {
+					lorebook: { id: lorebookId },
+					loreWriteMode: mode,
+					requestId
+				},
 				errorEvent: "lorebooks:update:error",
 				fallbackError: "Writes from sessions could not be changed.",
 				match: (data) => data?.requestId === requestId,
 				matchError: (data) =>
-					(data as { requestId?: string } | undefined)?.requestId === requestId
+					(data as { requestId?: string } | undefined)?.requestId ===
+					requestId
 			})
-			toaster.success({
+			notify.success({
 				title: "Writes from sessions changed",
 				description: `${BOOK_LORE_WRITE_MODE_CHOICES[mode].label} for this book.`
 			})
@@ -126,11 +135,15 @@
 			role="note"
 			data-lore-book-writes-limited
 		>
-			<Icons.Info size={16} class="text-warning-500 mt-0.5 shrink-0" aria-hidden="true" />
+			<Icons.Info
+				size={16}
+				class="text-warning-500 mt-0.5 shrink-0"
+				aria-hidden="true"
+			/>
 			<div class="flex min-w-0 flex-col items-start gap-2">
+				<!-- prettier-ignore -->
 				<span>
-					Your own setting is <strong>{LORE_WRITE_MODE_CHOICES[personal].label}</strong>,
-					which is stricter, so sessions write to this book as
+					Your own setting is <strong>{LORE_WRITE_MODE_CHOICES[personal].label}</strong>, which is stricter, so sessions write to this book as
 					<strong>{LORE_WRITE_MODE_CHOICES[limit.mode].label}</strong>.
 				</span>
 				{#if panelsCtx}

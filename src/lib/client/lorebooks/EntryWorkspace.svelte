@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import ResizableSplit from "$lib/client/components/panels/ResizableSplit.svelte"
 	import { LORE_SPLIT_KEY } from "./layoutMode"
+	import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 	import { getContext, onDestroy, onMount, tick, untrack } from "svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -12,7 +13,7 @@
 		rowsReadingOnLine,
 		type Line
 	} from "$lib/shared/lorebooks/lineReading"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
@@ -667,6 +668,8 @@
 	let scenesByEntryId = $derived.by(() => {
 		const map = new Map<number, Sockets.Scenes.SceneWithMeta[]>()
 		for (const scene of scenesOnLine) {
+			// A scene not yet compiled has no entry to sit under (0142).
+			if (scene.historyEntryId === null) continue
 			const list = map.get(scene.historyEntryId) ?? []
 			list.push(scene)
 			map.set(scene.historyEntryId, list)
@@ -692,10 +695,7 @@
 		for (const b of bindings)
 			map.set(
 				b.binding,
-				b.character?.nickname ||
-					b.character?.name ||
-					b.name ||
-					b.binding
+				memberShownName(b, b.character) || b.name || b.binding
 			)
 		return map
 	})
@@ -785,7 +785,7 @@
 				data.entry.typeId === LOCATION_TYPE_ID &&
 				trimmed(data.entry.name) === wanted
 		})
-		toaster.success({ title: `Place created: ${wanted}` })
+		notify.success({ title: `Place created: ${wanted}` })
 		return { id: created.entry.id, name: created.entry.name ?? wanted }
 	}
 
@@ -1000,7 +1000,7 @@
 			pristineDraft ?? {}
 		)
 		if (!Object.keys(fields).length) {
-			toaster.error({ title: "Nothing has changed" })
+			notify.error({ title: "Nothing has changed" })
 			return null
 		}
 		return fields
@@ -1023,7 +1023,7 @@
 	 */
 	function reportUnanswered(err: unknown, title: string) {
 		if (isReplyTimeout(err))
-			toaster.error({
+			notify.error({
 				title,
 				description:
 					"The server did not answer in time. Your changes are still here."
@@ -1057,7 +1057,7 @@
 		if (!fields) return
 		const dated = amendmentDateToast(fields)
 		if (dated) {
-			toaster.error(dated)
+			notify.error(dated)
 			return
 		}
 		const entryId = selectedSource.id
@@ -1082,7 +1082,7 @@
 		}
 		saving = false
 		const line = lineName(reply, branchId)
-		toaster.success({
+		notify.success({
 			title: `Amended as of ${formatDate(date)}${line ? ` on ${line}` : ""}`
 		})
 		settleDraft(key, sent)
@@ -1160,7 +1160,7 @@
 		}
 		saving = false
 		const line = lineName(reply, branchId)
-		toaster.success({
+		notify.success({
 			title:
 				(until
 					? "Switched off for that period"
@@ -1265,7 +1265,7 @@
 				return
 			}
 			saving = false
-			toaster.success({ title: `${door.label} created` })
+			notify.success({ title: `${door.label} created` })
 			// Still the create the author sent? Then open what it became. An
 			// author who has since closed it or started another is left be.
 			if (awaitingSave !== pendingKey) return
@@ -1311,8 +1311,8 @@
 			saving = false
 			// The draft itself is settled by the channel's `onUpdated`, which
 			// hears the same reply; this only says how it went.
-			if (warning) toaster.warning(warning)
-			else toaster.success({ title: `${door.label} saved` })
+			if (warning) notify.warning(warning)
+			else notify.success({ title: `${door.label} saved` })
 			await savedThen(id)
 		}
 	}
@@ -1518,7 +1518,7 @@
 		if (awaitingSave !== key) return
 		awaitingSave = null
 		// Said once the scene is saved, never before.
-		toaster.success({ title: "Scene updated" })
+		notify.success({ title: "Scene updated" })
 		if (draftKey === key) {
 			const held = sceneList.find((s) => s.id === msg.scene.id)
 			draft = (descriptorForKind(SCENE_KIND) ?? descriptor).toDraft(
@@ -1584,12 +1584,12 @@
 						// Only the delete this workspace asked for is news here.
 						onDeleted: (_id, askedHere) => {
 							if (askedHere)
-								toaster.success({
+								notify.success({
 									title: `${door.label} deleted`
 								})
 						},
 						onReordered: () =>
-							toaster.success({ title: "Entries reordered" })
+							notify.success({ title: "Entries reordered" })
 					}
 				})
 			)
@@ -1721,6 +1721,12 @@
 			{#snippet newControl()}
 				{@render newButton()}
 			{/snippet}
+			{#snippet listHead()}
+				{#if descriptor.listHead}
+					{@const Head = descriptor.listHead}
+					<Head sources={rowsByKind[descriptor.kind ?? ""] ?? []} />
+				{/if}
+			{/snippet}
 			{#snippet toolbarExtra()}
 				{#if descriptor.listActions && !readOnly}
 					{@const Actions = descriptor.listActions}
@@ -1841,7 +1847,7 @@
 	>
 		<Icon size={14} aria-hidden="true" />
 		<span>{label}</span>
-		<span class="ml-auto text-meta font-normal opacity-75">{hint}</span>
+		<span class="text-meta ml-auto font-normal opacity-75">{hint}</span>
 		<Icons.Check
 			size={14}
 			class="shrink-0 {on ? '' : 'invisible'}"

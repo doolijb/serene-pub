@@ -174,6 +174,7 @@ async function render(presets: unknown[] = PRESETS) {
 	document.body.append(host)
 	app = mount(StartSessionForm, {
 		target: host,
+		context: new Map([["userSettingsCtx", { settings: { showAdvancedControls: true } }]]),
 		props: { onCreated: () => {}, onCancel: () => {} }
 	})
 	await settle()
@@ -287,6 +288,7 @@ describe("Start a session › the genre list and the Preset row", () => {
 		document.body.append(host)
 		app = mount(StartSessionForm, {
 			target: host,
+			context: new Map([["userSettingsCtx", { settings: { showAdvancedControls: true } }]]),
 			props: { onCreated: () => {}, onCancel: () => {} }
 		})
 		await settle()

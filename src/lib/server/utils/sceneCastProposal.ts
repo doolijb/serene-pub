@@ -79,17 +79,15 @@
  * erasure — and both are exactly the rows whose evidence line reads `roster`
  * alone, which is why the evidence is shown rather than summarised.
  *
- * ## ⚠ A recall limit that is structural, stated rather than discovered
+ * ## ⚠ A recall limit that is narrower now, stated rather than discovered
  *
- * `annotations/loadVocabulary` contributes a gazetteer name only for a binding
- * that names a **character or a persona**. An unbound "background" binding — the
- * kind the narrative graph mints for an NPC — has no row to resolve *to*, so its
- * name never enters the gazetteer and can never be a resolved hit here. Such a
- * name still reaches the proposal through the **open tier**, as a *suggested new
- * character*, and `resolveOrCreateBindingByName` collapses it onto the existing
- * binding at save time. The cost is that it arrives looking new when it is not.
- * That is a limit of the vocabulary, not of this file, and it narrows as the
- * recognition-vocabulary lane widens what resolves.
+ * `annotations/loadVocabulary` resolves a member with no live card — the kind
+ * the narrative graph mints for an NPC — to a `cast_member:<id>` ref, so a
+ * *named* card-less member is a resolved hit here and is proposed under that
+ * key. Only a name with **no member at all** still reaches the proposal
+ * through the **open tier**, as a *suggested new character*, which
+ * `resolveOrCreateBindingByName` collapses onto an existing binding at save
+ * time. A member with no name has no string to match and stays unseen.
  *
  * ## Where this is going
  *
@@ -606,6 +604,31 @@ export function renderEvidence(evidence: readonly CastEvidence[]): string {
 			e.turns.length ? `${e.kind}@${e.turns.join(",")}` : e.kind
 		)
 		.join(" + ")
+}
+
+/**
+ * The evidence in words, for a person reading a name's tooltip (the SDK's
+ * `OpenSceneV1.cast[].evidence`: "spoke 4 times", "named twice") —
+ * {@link renderEvidence} is the review screen's turn-cited form, never shown
+ * as prose (2026-11-06: Chronicle's Open scene card printed
+ * `sender@1,3,5 + roster` beside each name).
+ */
+export function evidenceWords(evidence: readonly CastEvidence[]): string {
+	const times = (n: number) => (n === 1 ? "once" : n === 2 ? "twice" : `${n} times`)
+	let spoke = 0
+	let named = 0
+	let roster = false
+	for (const e of evidence) {
+		if (e.kind === "sender") spoke += e.turns.length
+		else if (e.kind === "roster") roster = true
+		else named += e.turns.length
+	}
+	const parts: string[] = []
+	if (spoke) parts.push(`spoke ${times(spoke)}`)
+	if (named) parts.push(`named ${times(named)}`)
+	if (roster) parts.push("in the session's cast")
+	const line = parts.join(" · ")
+	return line ? line[0]!.toUpperCase() + line.slice(1) : ""
 }
 
 /** Convenience for callers holding ids rather than keys. Re-exported so they need one import. */

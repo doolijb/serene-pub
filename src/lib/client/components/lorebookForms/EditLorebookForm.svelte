@@ -7,7 +7,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { v4 as uuid } from "uuid"
 	import { z } from "zod"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
@@ -31,10 +31,7 @@
 		hasUnsavedChanges?: boolean
 	}
 
-	let {
-		lorebookId,
-		hasUnsavedChanges = $bindable(false)
-	}: Props = $props()
+	let { lorebookId, hasUnsavedChanges = $bindable(false) }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -211,7 +208,9 @@
 			// A re-read while edits are open keeps them: the row underneath
 			// moves, the three fields being typed in do not.
 			const held = isDirty ? editedFields(editLorebook) : null
-			editLorebook = held ? { ...msg.lorebook, ...held } : { ...msg.lorebook }
+			editLorebook = held
+				? { ...msg.lorebook, ...held }
+				: { ...msg.lorebook }
 			originalLorebook = { ...msg.lorebook }
 			isLoading = false
 			loadError = ""
@@ -250,7 +249,8 @@
 			resetCover()
 			editLorebook = kept
 			originalLorebook = { ...kept }
-			toaster.success({
+			notify.success({
+				source: "socket:lorebooks:update",
 				title: "Lorebook updated",
 				description: `Lorebook "${msg.lorebook.name}" updated successfully.`
 			})
@@ -368,9 +368,7 @@
 				bind:cropPending={coverCropPending}
 			/>
 			<div class="min-w-0 flex-1">
-				<label class="font-semibold" for="lorebookName">
-					Name*
-				</label>
+				<label class="font-semibold" for="lorebookName">Name*</label>
 				<input
 					id="lorebookName"
 					class="input input-lg w-full {validationErrors.name
@@ -426,7 +424,7 @@
 				<!-- Tag suggestions dropdown -->
 				{#if showTagSuggestions && filteredTags.length > 0}
 					<div
-						class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto panel-edge rounded-lg border shadow-lg"
+						class="bg-surface-100-900 panel-edge absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-lg"
 					>
 						{#each filteredTags as tag}
 							<button
@@ -441,9 +439,7 @@
 									{tag.name}
 								</span>
 								{#if tag.description}
-									<span
-										class="text-surface-600-400 text-sm"
-									>
+									<span class="text-surface-600-400 text-sm">
 										- {tag.description}
 									</span>
 								{/if}
@@ -457,9 +453,7 @@
 			{#if editLorebook.tags && editLorebook.tags.length > 0}
 				<div class="mt-2 flex flex-wrap gap-2">
 					{#each editLorebook.tags as tagName}
-						{@const tag = tagsList.find(
-							(t) => t.name === tagName
-						)}
+						{@const tag = tagsList.find((t) => t.name === tagName)}
 						<button
 							type="button"
 							class="chip {tag?.colorPreset ||

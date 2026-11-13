@@ -176,6 +176,10 @@ async function mountMember(castId: number, entryId?: number) {
 	document.body.append(target)
 	app = mount(CastWorkspaceFixture, {
 		target,
+		// The lore editor's tuning fold shows only with advanced controls on.
+		context: new Map<string, unknown>([
+			["userSettingsCtx", { settings: { showAdvancedControls: true } }]
+		]),
 		props: {
 			store,
 			data: staticBookData(() => ({
@@ -199,7 +203,7 @@ async function mountMember(castId: number, entryId?: number) {
 
 const tabs = () => [
 	...document.querySelectorAll<HTMLButtonElement>(
-		'[data-cast-member-page] [role="tab"]'
+		'[data-cast-member-page] [role="tablist"][aria-label$="\'s page"] [role="tab"]'
 	)
 ]
 const text = (el: Element | null | undefined) =>
@@ -223,17 +227,25 @@ async function pick(label: RegExp) {
 }
 
 describe("the Cast member page's tabs", () => {
-	test("four tabs, with the lore and relationship counts, and one panel on show", async () => {
+	test("six tabs, with the lore and relationship counts, and one panel on show", async () => {
 		await mountMember(VERITY)
 		await pick(/^Member/)
 		expect(tabs().map(text)).toEqual([
 			"Member",
 			"Lore 1",
 			"Relationships 0",
-			"Timeline"
+			"Timeline",
+			"Sprites",
+			"Gallery"
 		])
 		expect(panel("member").hidden).toBe(false)
-		for (const other of ["lore", "relationships", "timeline"])
+		for (const other of [
+			"lore",
+			"relationships",
+			"timeline",
+			"sprites",
+			"gallery"
+		])
 			expect(panel(other).hidden, other).toBe(true)
 	})
 

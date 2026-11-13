@@ -49,6 +49,7 @@
  * binding", exactly like any other unregistered type.
  */
 
+import type { FrameCause } from "$lib/server/sockets/appletCause"
 import { pluginRuleRef } from "@serene-pub/sdk"
 import { and, eq, isNotNull, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -187,6 +188,8 @@ export interface PluginBindingOptions {
 	nowMs: number
 	runId?: string
 	user?: string
+	/** The applet that draws the run's session, on a run that came through the session's press door (`frameCauseOfRun`); beside `user` on each hook call. */
+	frameCause?: FrameCause
 	/**
 	 * The running pipeline's owning package (its slug), or undefined for core's
 	 * and a person's own pipelines. A plugin's private node runs only in its own
@@ -379,6 +382,7 @@ export async function pluginNodeBindings(
 					nowMs: opts.nowMs,
 					runId: opts.runId,
 					user: opts.user,
+					frameCause: opts.frameCause,
 					// Another package's pipeline, or a person's: only the
 					// secrets this plugin lends reach the fetch bridge (R63).
 					foreignPipeline: owner.pluginId !== opts.specOwner

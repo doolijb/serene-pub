@@ -7,16 +7,22 @@
 	 * form "Save and continue editing" lands on.
 	 */
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { adminGoto, adminPage, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
+	import {
+		adminGoto,
+		adminPage,
+		adminUnsavedEdits
+	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { refreshCompletionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 
 	const socket = useTypedSocket()
 	const interest = getInterestContext()
@@ -38,29 +44,43 @@
 
 	$effect(() => {
 		const releases = [
-			interest.requestWithInterest("completionTemplates:list", {}, (res) => {
-				rows = res.completionTemplatesList
-				if (!loaded) {
-					loaded = true
-					const want = adminPage.url.searchParams.get("from")
-					if (want && rows.some((r) => String(r.id) === want)) from = want
+			interest.requestWithInterest(
+				"completionTemplates:list",
+				{},
+				(res) => {
+					rows = res.completionTemplatesList
+					if (!loaded) {
+						loaded = true
+						const want = adminPage.url.searchParams.get("from")
+						if (want && rows.some((r) => String(r.id) === want))
+							from = want
+					}
 				}
-			}),
-			interest.declareInterest<"completionTemplates:create">("completionTemplates:create", (res) => {
-				const intent = pendingIntent
-				if (!intent) return
-				pendingIntent = null
-				saving = false
-				refreshCompletionTemplateOptions()
-				toaster.success({ title: `Added ${res.completionTemplate.name}` })
-				name = ""
-				key = ""
-				if (intent === "save") void adminGoto("/admin/completion-templates")
-				else if (intent === "continue")
-					void adminGoto(`/admin/completion-templates/${res.completionTemplate.id}`, {
-						replaceState: true
+			),
+			interest.declareInterest<"completionTemplates:create">(
+				"completionTemplates:create",
+				(res) => {
+					const intent = pendingIntent
+					if (!intent) return
+					pendingIntent = null
+					saving = false
+					refreshCompletionTemplateOptions()
+					notify.success({
+						title: `Added ${res.completionTemplate.name}`
 					})
-			}),
+					name = ""
+					key = ""
+					if (intent === "save")
+						void adminGoto("/admin/completion-templates")
+					else if (intent === "continue")
+						void adminGoto(
+							`/admin/completion-templates/${res.completionTemplate.id}`,
+							{
+								replaceState: true
+							}
+						)
+				}
+			),
 			interest.declareInterest<"completionTemplates:create:error">(
 				"completionTemplates:create:error",
 				(res) => {
@@ -100,8 +120,15 @@
 				// for every role is refused on save.
 				roles: src
 					? src.roles
-					: Object.fromEntries(ROLES.map((r) => [r, { prefix: `### ${r}\n`, suffix: "\n" }])),
-				fallbackRole: src ? src.fallbackRole : { prefix: "### user\n", suffix: "\n" },
+					: Object.fromEntries(
+							ROLES.map((r) => [
+								r,
+								{ prefix: `### ${r}\n`, suffix: "\n" }
+							])
+						),
+				fallbackRole: src
+					? src.fallbackRole
+					: { prefix: "### user\n", suffix: "\n" },
 				stopStrings: src ? src.stopStrings : [],
 				isSelectable: true
 			} as any
@@ -124,7 +151,12 @@
 >
 	<AdminFieldset title="Template">
 		<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
-			<AdminField id="ct-new-name" label="Name" required error={nameError}>
+			<AdminField
+				id="ct-new-name"
+				label="Name"
+				required
+				error={nameError}
+			>
 				<input
 					id="ct-new-name"
 					class="input"
@@ -150,13 +182,20 @@
 					aria-describedby={describedBy("ct-new-key", !!keyError)}
 				/>
 			</AdminField>
-			<AdminField id="ct-new-from" label="Start from" help="The delimiters and stop strings are copied.">
+			<AdminField
+				id="ct-new-from"
+				label="Start from"
+				help="The delimiters and stop strings are copied."
+			>
 				<Select
 					label="Start from"
 					labelHidden
 					options={[
 						{ value: "", label: "Plain ### role framing" },
-						...rows.map((r) => ({ value: String(r.id), label: r.name }))
+						...rows.map((r) => ({
+							value: String(r.id),
+							label: r.name
+						}))
 					]}
 					bind:value={from}
 					describedBy={describedBy("ct-new-from", false)}

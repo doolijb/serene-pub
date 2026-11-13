@@ -2,16 +2,17 @@
  * The Read in? test, said as one sentence.
  *
  * The test answers about one entry against one conversation, so the sentence
- * states the verdict first and the arithmetic after it — and every clause of
+ * states the decision line first and the arithmetic after it — and every clause of
  * that arithmetic is optional, because the answer carries the figures the run
  * recorded and no others. A clause with nothing behind it is left out rather
  * than written as a zero.
  */
 import { describe, expect, it } from "vitest"
+import { GATE, readInFacts } from "./readIn"
 import { signalFactsFrom, signalsResult } from "./signals"
 
 describe("signalsResult — would be read in", () => {
-	it("states the verdict, the match, the scores and the budget", () => {
+	it("states the decision line, the match, the scores and the budget", () => {
 		expect(
 			signalsResult({
 				read: true,
@@ -32,7 +33,7 @@ describe("signalsResult — would be read in", () => {
 		)
 	})
 
-	it("says only the verdict when the run recorded nothing else", () => {
+	it("says only the decision line when the run recorded nothing else", () => {
 		expect(signalsResult({ read: true })).toBe("Would be read in")
 	})
 
@@ -52,7 +53,7 @@ describe("signalsResult — would be read in", () => {
 describe("signalsResult — would not be read in", () => {
 	it("always arrives with a reason", () => {
 		expect(
-			signalsResult({ read: false, reason: "it is switched off" })
+			signalsResult({ read: false, decisionLine: "it is switched off" })
 		).toBe("Would not be read in · it is switched off")
 	})
 
@@ -61,7 +62,7 @@ describe("signalsResult — would not be read in", () => {
 			signalsResult({
 				read: false,
 				lexical: 0.12,
-				reason: "the budget was full before it got there"
+				decisionLine: "the budget was full before it got there"
 			})
 		).toBe(
 			"Would not be read in · the budget was full before it got there · " +
@@ -163,7 +164,9 @@ describe("signalFactsFrom — the turn, as facts", () => {
 			{ entryId: 4, enabled: true }
 		)
 		expect(facts.read).toBe(false)
-		expect(facts.reason).toBe("The budget was full before it got there.")
+		expect(facts.decisionLine).toBe(
+			"The budget was full before it got there."
+		)
 	})
 
 	it("separates the two scores by what the criterion measured", () => {
@@ -228,22 +231,204 @@ describe("signalFactsFrom — the turn, as facts", () => {
 		).toBeUndefined()
 	})
 
-	it("says a switched-off entry is switched off rather than unranked", () => {
+	const skipped = (reason: string, enabled?: boolean) =>
+		row({
+			outcome: "skipped",
+			verdict: `Never reached the ranker — ${reason}.`,
+			skipReason: reason,
+			...(enabled === undefined
+				? {}
+				: {
+						entry: {
+							enabled
+						} as Sockets.Pipelines.RetrievalRow["entry"]
+					})
+		})
+	const lineOf = (
+		explanationIn: Explanation,
+		opts: {
+			enabled?: boolean
+			reading?: { off: boolean; pinned: boolean } | null
+		} = {}
+	) =>
+		signalFactsFrom(explanationIn, { entryId: 4, enabled: true, ...opts })
+			.decisionLine
+
+	it("G1: a switched-off entry says so rather than unranked", () => {
+		expect(lineOf(explanation(), { enabled: false })).toBe(
+			"it is switched off"
+		)
+	})
+
+	it("G2: archived", () => {
 		expect(
-			signalFactsFrom(explanation(), { entryId: 4, enabled: false })
-				.reason
+			lineOf(explanation({ rows: [skipped("entry is archived")] }))
+		).toBe("it is archived")
+	})
+
+	it("G3: off for a while, by the session's reading", () => {
+		expect(
+			lineOf(explanation(), { reading: { off: true, pinned: false } })
+		).toBe("it is off for a while at this point in the story")
+	})
+
+	it("G3: off for a while, by a disabled skip with the base row on", () => {
+		expect(
+			lineOf(explanation({ rows: [skipped("entry is disabled")] }))
+		).toBe("it is off for a while at this point in the story")
+	})
+
+	it("G4: a null reading names what null means", () => {
+		const line = lineOf(explanation(), { reading: null })
+		expect(line).toBe(GATE.notReadHere)
+		expect(line).toContain("archived")
+		// The line, clock and archived gates come before off.
+		expect(lineOf(explanation(), { reading: null, enabled: false })).toBe(
+			GATE.notReadHere
+		)
+	})
+
+	it("off for a while: base on, reading off; switched off: base off, reading off", () => {
+		const reading = { off: true, pinned: false }
+		expect(lineOf(explanation(), { reading, enabled: true })).toBe(
+			GATE.offForAWhile
+		)
+		expect(lineOf(explanation(), { reading, enabled: false })).toBe(
+			GATE.off
+		)
+	})
+
+	it("base off but on at the reading: the judged budget sentence stands", () => {
+		const judged = explanation({
+			rows: [
+				row({
+					outcome: "excluded",
+					reason: "excluded_budget",
+					verdict: "The budget was full before it got there."
+				})
+			]
+		})
+		for (const reading of [{ off: false, pinned: false }, undefined])
+			expect(lineOf(judged, { enabled: false, reading })).toBe(
+				"The budget was full before it got there."
+			)
+	})
+
+	it("archived and off: archived comes first", () => {
+		const ex = explanation({ rows: [skipped("entry is archived")] })
+		expect(lineOf(ex, { enabled: false })).toBe("it is archived")
+		expect(
+			lineOf(ex, {
+				enabled: false,
+				reading: { off: true, pinned: false }
+			})
+		).toBe("it is archived")
+	})
+
+	it("reads the raw reason from the row, not from the verdict's wording", () => {
+		const archived = row({
+			outcome: "skipped",
+			verdict: "Declined early: whatever.",
+			skipReason: "entry is archived"
+		})
+		expect(lineOf(explanation({ rows: [archived] }))).toBe("it is archived")
+		expect(
+			readInFacts(4, explanation({ rows: [archived] })).decisionLine
+		).toBe("it is archived")
+		const old = row({
+			outcome: "skipped",
+			verdict: "Never reached the ranker — entry is archived."
+		})
+		expect(lineOf(explanation({ rows: [old] }))).toBeUndefined()
+	})
+
+	it("the line and the tab say the same sentence for one skipped row", () => {
+		const cases: [string, boolean][] = [
+			["entry is archived", true],
+			["entry is disabled", true],
+			["entry is disabled", false],
+			["not visible to the current speaker", true],
+			["no key matched in the last 4 messages", true]
+		]
+		for (const [reason, enabled] of cases) {
+			const ex = explanation({ rows: [skipped(reason, enabled)] })
+			expect(readInFacts(4, ex).decisionLine).toBe(
+				signalFactsFrom(ex, { entryId: 4, enabled }).decisionLine
+			)
+		}
+		expect(
+			readInFacts(
+				4,
+				explanation({ rows: [skipped("entry is disabled")] })
+			).decisionLine
 		).toBe("it is switched off")
 	})
 
-	it("distinguishes a turn that ranked nothing from an entry nobody offered", () => {
+	it("G5a: another speaker's character lore", () => {
 		expect(
-			signalFactsFrom(explanation(), { entryId: 4, enabled: true }).reason
+			lineOf(
+				explanation({
+					rows: [skipped("not visible to the current speaker")]
+				})
+			)
+		).toBe("it is another speaker's character lore")
+	})
+
+	it("G5b: already shown in a slot of its own", () => {
+		expect(
+			lineOf(
+				explanation({
+					rows: [
+						row({
+							outcome: "excluded",
+							reason: "excluded_ineligible",
+							why: ["Already in the prompt in a slot of its own."]
+						})
+					]
+				})
+			)
+		).toBe("Already in the prompt in a slot of its own")
+	})
+
+	it("G6: a miss reason verbatim", () => {
+		const reason = "no key matched in the last 4 messages"
+		expect(lineOf(explanation({ rows: [skipped(reason)] }))).toBe(reason)
+	})
+
+	it("G7: a judged budget row keeps its verdict", () => {
+		expect(
+			lineOf(
+				explanation({
+					rows: [
+						row({
+							outcome: "excluded",
+							reason: "excluded_budget",
+							verdict: "The budget was full before it got there."
+						})
+					]
+				})
+			)
+		).toBe("The budget was full before it got there.")
+	})
+
+	it("says a turn that ranked nothing ranked nothing", () => {
+		expect(lineOf(explanation({ ranked: false }))).toBe(
+			"this turn ranked nothing at all"
+		)
+	})
+
+	it("catch-all: no row, and the session's reading unknown or on", () => {
+		expect(lineOf(explanation())).toBe("nothing reported on it")
+		expect(
+			lineOf(explanation(), { reading: { off: false, pinned: false } })
 		).toBe("nothing reported on it")
+	})
+
+	it("names no gate for an entry that would be read in", () => {
 		expect(
-			signalFactsFrom(explanation({ ranked: false }), {
-				entryId: 4,
-				enabled: true
-			}).reason
-		).toBe("this turn ranked nothing at all")
+			lineOf(explanation({ rows: [row({})] }), {
+				reading: { off: true, pinned: false }
+			})
+		).toBeUndefined()
 	})
 })

@@ -87,9 +87,10 @@ describe("a withdrawn capability cannot be revived by a stale cache", () => {
 				tools: 1,
 				"text->image": 1,
 				"text->embedding": 1,
-				// Undeclared for KoboldCPP: the endpoint reports the flag over
-				// /api/extra/version, but nothing implements synthesizeSpeech.
-				"text->audio": 1
+				// Undeclared for KoboldCPP: the endpoint reports the `transcribe`
+				// flag over /api/extra/version, but nothing implements
+				// transcribeAudio against it.
+				"audio->text": 1
 			})
 		)
 		expect(have).toEqual({

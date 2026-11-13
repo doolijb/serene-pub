@@ -1,0 +1,3 @@
+ALTER TABLE "local_models" DROP CONSTRAINT "local_models_filename_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "local_models_filename_idx" ON "local_models" USING btree ("filename") WHERE "local_models"."format" <> 'onnx';--> statement-breakpoint
+CREATE UNIQUE INDEX "local_models_onnx_filename_modality_idx" ON "local_models" USING btree ("filename","modality") WHERE "local_models"."format" = 'onnx';

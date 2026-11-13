@@ -40,6 +40,7 @@
 	} from "$lib/shared/widgets/context"
 	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	import type { WireInputs } from "$lib/client/components/frames/widgetWire.svelte"
+	import { sessionBackdropSrc } from "./backdropSrc"
 
 	interface Props {
 		/** The widget's id (its skin and settings key) and its title. */
@@ -87,11 +88,6 @@
 			blockId?: string
 		) => void
 		class?: string
-		/**
-		 * The message backing the host draws behind this widget (note 18;
-		 * `$lib/shared/widgets/messageBacking`) — core's conversation only.
-		 */
-		backing?: "card" | "glass" | "none"
 		/** Mount at once, shown or not — the conversation. Otherwise on first show. */
 		eager?: boolean
 		/**
@@ -102,6 +98,11 @@
 		pageIds?: boolean
 		/** The component failed or threw at runtime (`ComponentMount`). */
 		onRuntimeError?: ComponentProps<typeof ComponentMount>["onRuntimeError"]
+		/**
+		 * A value whose change mounts the component again — the page passes the
+		 * layout's seed count, so a layout copy landing remounts the widget.
+		 */
+		remountKey?: number
 	}
 
 	let {
@@ -122,11 +123,14 @@
 		suspended = false,
 		onAction,
 		class: klass,
-		backing,
 		eager = false,
 		pageIds = false,
-		onRuntimeError
+		onRuntimeError,
+		remountKey
 	}: Props = $props()
+
+	/** Bumped by the stopped overlay's _Reload widget_: mounts the component again. */
+	let reloads = $state(0)
 
 	/** Drawn at least once (or `eager`): mounted from then on, never again unmounted by hiding. */
 	// svelte-ignore state_referenced_locally
@@ -145,14 +149,13 @@
 			? {
 					id: session.id,
 					name: session.name ?? null,
-					// 🚧 The backdrop's `fitted` address (DESIGN-image-generation
-					// §6.4): the by-id form, which redirects to the uuid one.
-					backdrop: session.backdropMediaId
-						? {
-								mediaId: session.backdropMediaId,
-								src: `/media/${session.backdropMediaId}?v=fitted`
-							}
-						: null,
+					// 🚧 The backdrop's `fitted` address (./backdropSrc).
+					backdrop: (() => {
+						const src = sessionBackdropSrc(session.backdropMediaId)
+						return src && session.backdropMediaId
+							? { mediaId: session.backdropMediaId, src }
+							: null
+					})(),
 					// 🚧 Which lorebook it reads, null for none — said only
 					// when the page's session carries the key, so a page that
 					// never loaded it reads as "unknown", not as "none".
@@ -214,8 +217,10 @@
 		<!-- A new module is a new mount, in the same worker (C6 P5). So is a
 		     change of which conversation copy holds the page's ids (brief 7b):
 		     a box's ids are fixed when it mounts, and the copy that gave the
-		     ids up must take its prefix, or one id would be on the page twice. -->
-		{#key pageIds ? `${src} page-ids` : src}
+		     ids up must take its prefix, or one id would be on the page twice.
+		     A reload (the stopped overlay's button) and a changed `remountKey`
+		     (a layout copy landing) mount it afresh too. -->
+		{#key `${pageIds ? `${src} page-ids` : src} ${reloads} ${remountKey ?? 0}`}
 			<ComponentMount
 				{owner}
 				{src}
@@ -237,7 +242,7 @@
 				{pageIds}
 				{onAction}
 				{onRuntimeError}
-				{backing}
+				onReload={() => reloads++}
 				class={klass}
 			/>
 		{/key}

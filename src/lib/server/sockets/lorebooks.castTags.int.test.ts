@@ -25,6 +25,7 @@ import {
 } from "$lib/server/utils/lorebookEntries"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -114,23 +115,17 @@ async function bookWithTwo() {
 		.insert(schema.characters)
 		.values({ userId: user.id, name: "Maren", description: "" })
 		.returning()
-	const [maren] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+	const maren = (await insertCastMember(testDb, {
 			lorebookId: book.id,
 			characterId: card.id,
 			binding: "{{char:1}}",
 			name: "Maren"
-		})
-		.returning()
-	const [stranger] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+		})).member
+	const stranger = (await insertCastMember(testDb, {
 			lorebookId: book.id,
 			binding: "{{char:2}}",
 			name: "The Stranger"
-		})
-		.returning()
+		})).member
 	const entry = await addEntry(book.id, {
 		name: "The forge",
 		content: "{{char:1}} met {{char:2}} at the forge."
@@ -194,14 +189,11 @@ async function bookWithThree(content: string) {
 		.update(schema.lorebooks)
 		.set({ nextBindingNumber: 4 })
 		.where(eq(schema.lorebooks.id, two.book.id))
-	const [ferryman] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+	const ferryman = (await insertCastMember(testDb, {
 			lorebookId: two.book.id,
 			binding: "{{char:3}}",
 			name: "Ferryman"
-		})
-		.returning()
+		})).member
 	await testDb
 		.update(schema.lorebookEntries)
 		.set({ content })
@@ -285,9 +277,7 @@ describe("the next cast number", () => {
 			.insert(schema.lorebooks)
 			.values({ name: "Ten", userId: user.id, nextBindingNumber: 4 })
 			.returning()
-		await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, binding: "{{char:1000000005}}" })
+		await insertCastMember(testDb, { lorebookId: book.id, binding: "{{char:1000000005}}" })
 		const { deriveNextBindingToken } = await import(
 			"$lib/server/utils/lorebookBindingToken"
 		)
@@ -303,9 +293,7 @@ describe("the next cast number", () => {
 			.insert(schema.lorebooks)
 			.values({ name: "Full", userId: user.id, nextBindingNumber: 4 })
 			.returning()
-		await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, binding: "{{char:2147483646}}" })
+		await insertCastMember(testDb, { lorebookId: book.id, binding: "{{char:2147483646}}" })
 		const { deriveNextBindingToken } = await import(
 			"$lib/server/utils/lorebookBindingToken"
 		)
@@ -362,15 +350,6 @@ describe("merge rewrites the absorbed member's tags", () => {
 				fields: { content: "Later, {{char:2}} left." }
 			})
 			.returning()
-		const [castAmendment] = await testDb
-			.insert(schema.castAmendments)
-			.values({
-				lorebookId: book.id,
-				lorebookBindingId: maren.id,
-				year: 1,
-				fields: { summary: "Owes {{char:2}} a blade." }
-			})
-			.returning()
 		const [presence] = await testDb
 			.insert(schema.castPresences)
 			.values({
@@ -395,15 +374,12 @@ describe("merge rewrites the absorbed member's tags", () => {
 				summary: "{{char:1}} greets {{char:2}}."
 			})
 			.returning()
-		const [innkeeper] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+		const innkeeper = (await insertCastMember(testDb, {
 				lorebookId: book.id,
 				binding: "{{char:3}}",
 				name: "Innkeeper",
 				summary: "Distrusts {{char:2}}."
-			})
-			.returning()
+			})).member
 		const [link] = await testDb
 			.insert(schema.narrativeRelationships)
 			.values({
@@ -436,13 +412,6 @@ describe("merge rewrites the absorbed member's tags", () => {
 			.where(eq(schema.entryAmendments.id, amendment.id))
 		expect(amendmentAfter.fields).toEqual({
 			content: "Later, {{char:1}} left."
-		})
-		const [castAmendmentAfter] = await testDb
-			.select()
-			.from(schema.castAmendments)
-			.where(eq(schema.castAmendments.id, castAmendment.id))
-		expect(castAmendmentAfter.fields).toEqual({
-			summary: "Owes {{char:1}} a blade."
 		})
 		const [presenceAfter] = await testDb
 			.select()
@@ -528,10 +497,7 @@ describe("undoMerge puts the tags back", () => {
 		const { user, book, maren, stranger, entry } = await bookWithTwo()
 		await merge(user.id, stranger.id, maren.id)
 		// A blank member on the absorbed tag, as the pre-A16 save minted.
-		const [blank] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, binding: "{{char:2}}" })
-			.returning()
+		const blank = (await insertCastMember(testDb, { lorebookId: book.id, binding: "{{char:2}}" })).member
 
 		const res = await undoLastMerge(user.id, book.id)
 
@@ -552,10 +518,7 @@ describe("undoMerge puts the tags back", () => {
 	test("a blank member on the old tag that something links to steps aside to a new number", async () => {
 		const { user, book, maren, stranger, entry } = await bookWithTwo()
 		await merge(user.id, stranger.id, maren.id)
-		const [blank] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, binding: "{{char:2}}" })
-			.returning()
+		const blank = (await insertCastMember(testDb, { lorebookId: book.id, binding: "{{char:2}}" })).member
 		// Somebody drew a tie to it: the tie keeps its end.
 		const [tie] = await testDb
 			.insert(schema.narrativeRelationships)
@@ -588,10 +551,7 @@ describe("undoMerge puts the tags back", () => {
 		for (const pointAt of ["sheet", "proposal"] as const) {
 			const { user, book, maren, stranger } = await bookWithTwo()
 			await merge(user.id, stranger.id, maren.id)
-			const [blank] = await testDb
-				.insert(schema.lorebookBindings)
-				.values({ lorebookId: book.id, binding: "{{char:2}}" })
-				.returning()
+			const blank = (await insertCastMember(testDb, { lorebookId: book.id, binding: "{{char:2}}" })).member
 			if (pointAt === "sheet") {
 				await testDb
 					.insert(schema.attributeSheets)
@@ -632,15 +592,12 @@ describe("undoMerge puts the tags back", () => {
 	test("a member with only a sprite set or a state is not blank: it keeps the tag, and the member comes back under a new one", async () => {
 		const { user, book, maren, stranger, entry } = await bookWithTwo()
 		await merge(user.id, stranger.id, maren.id)
-		const [hooded] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+		const hooded = (await insertCastMember(testDb, {
 				lorebookId: book.id,
 				binding: "{{char:2}}",
 				spriteSet: "hooded-figure",
 				nodeState: "deceased"
-			})
-			.returning()
+			})).member
 
 		const res = await undoLastMerge(user.id, book.id)
 
@@ -672,10 +629,7 @@ describe("undoMerge puts the tags back", () => {
 			.update(schema.lorebookEntries)
 			.set({ content: "{{char:1}} met {{char:2}} at the forge." })
 			.where(eq(schema.lorebookEntries.id, entry.id))
-		const [blank] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, binding: "{{char:2}}", name: "" })
-			.returning()
+		const blank = (await insertCastMember(testDb, { lorebookId: book.id, binding: "{{char:2}}", name: "" })).member
 
 		const res = await undoMerge(user.id, log.id)
 
@@ -852,9 +806,7 @@ describe("one member per tag, enforced", () => {
 			.insert(schema.lorebooks)
 			.values({ name: "Other", userId: book.userId })
 			.returning()
-		await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: other.id, binding: "{{char:2}}" })
+		await insertCastMember(testDb, { lorebookId: other.id, binding: "{{char:2}}" })
 		const rows = await testDb
 			.select()
 			.from(schema.lorebookBindings)

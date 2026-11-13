@@ -26,8 +26,9 @@
  *    draw one again).
  *
  * The row is the page's alone: a negative id no server row has, never sent
- * anywhere. Stop on it is the session's Stop (`sessionMessages:cancel`),
- * which also stops a reply run that has no row yet (`runRegistry.cancelSession`).
+ * anywhere. Stop on it is `pipelines:cancelRun { runId }` — the run it stands
+ * for (`pendingReplyRunOf`). The session's Stop (`sessionMessages:cancel`)
+ * stops only a reply run with no row yet, and skips an action's (an Ask, a Rest).
  */
 import { isSameChannel, type StatusText } from "@serene-pub/sdk"
 
@@ -66,6 +67,16 @@ export function isPendingReplyRow(row: {
 		typeof row.metadata === "object" &&
 		PENDING_REPLY_KEY in (row.metadata as object)
 	)
+}
+
+/** The run a waiting row stands for; null for any other row. */
+export function pendingReplyRunOf(row: {
+	id: number
+	metadata?: unknown
+}): string | null {
+	if (!isPendingReplyRow(row)) return null
+	const runId = (row.metadata as Record<string, unknown>)[PENDING_REPLY_KEY]
+	return typeof runId === "string" && runId ? runId : null
 }
 
 /**

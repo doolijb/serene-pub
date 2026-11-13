@@ -293,12 +293,13 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			characterDetail: "full",
 			difficulty: "normal",
 			tone: "grounded",
+			roundWorth: 5,
 			turnMode: "rules",
 			// 🚧 The voices, genre settings since the tasks retired
 			// (PLAN-layering §4, 2026-10-20). Rest's apply-or-propose follows
 			// the reckoning's mode (R55, 2026-10-21) — no field.
 			sideCast: false,
-			narratorInterjections: false
+			narratorInterjections: "off"
 		})
 	})
 })

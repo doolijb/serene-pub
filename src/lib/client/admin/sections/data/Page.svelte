@@ -13,6 +13,7 @@
 	import SpokenLinesRow from "$lib/client/components/media/SpokenLinesRow.svelte"
 	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import DataSettingsTab from "$lib/client/components/settingsTabs/DataSettingsTab.svelte"
+	import CastUpgradeCard from "./CastUpgradeCard.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
@@ -39,6 +40,7 @@
 				<SpokenLinesRow />
 			</SettingCard>
 			<DataSettingsTab />
+			<CastUpgradeCard />
 		</div>
 	{:else}
 		<p class="text-surface-600-400 text-sm">Loading…</p>

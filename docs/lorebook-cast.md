@@ -19,7 +19,7 @@ The Cast list shows each member's face (their card's picture, or their initial f
 - **Name one in an entry.** **Cast**, above an entry's content, inserts a reference such as `{{char:1}}`. The editor shows it as a chip with the member's name, and the prompt gets their name. Typing a reference to a number the book hasn't given out yet adds a new member for it.
 - **Build the graph** from your scenes (see [Building the graph from your scenes](#building-the-graph-from-your-scenes)), which suggests new members for you to accept.
 
-A member with no character card is a **background** member: a name, a summary and some lore, like the innkeeper everyone mentions but nobody plays. Removing a character from a session keeps their cast member, since lore may be about them.
+A member that no seat in play holds in a session is a **background** member there (a benched seat's member counts as background): a name, a summary and some lore, like the innkeeper everyone mentions but nobody plays. It depends on the session, not on the card: seat a member, with a character card or without one, and they speak for themselves in that session, while staying background in any session that doesn't seat them or has them benched. Serene Pub recognises background members by name just like members with a card: lore and earlier lines that name them are found by name, a scene that names them counts them, and **Suggestions** doesn't offer them as new members. Removing a character from a session keeps their cast member, since lore may be about them.
 
 :::tip Character vs. cast member
 A **character card** is a starter: it gives enough to begin, and the same card can appear in many books. A **cast member** is that person in *this* story, with this story's lore, relationships and stats, and anything the story retells about them in its own words. Editing the cast member never changes the card. Editing the card changes every member that still reads that part from the card.
@@ -27,45 +27,58 @@ A **character card** is a starter: it gives enough to begin, and the same card c
 
 ## A member's page
 
-Select a member in the Cast list to open their page. It has four tabs, and the tab you pick stays picked as you move from one member to the next:
+Select a member in the Cast list to open their page. It has six tabs, and the tab you pick stays picked as you move from one member to the next.
 
-- **Member**: who they are in this story.
-  - **Status in world**: active, deceased, missing or departed.
-  - **Also known as**: other names they answer to. A member with a card takes their name from the card, and the card's names are added to these.
-  - **Summary**: a short description used by the graph and the prompt.
-  - **Character card**: the card that represents them, with **Change** to swap it, **Unlink card**, or **Link character** for a member with none.
-  - **Sprite set**, when the card has more than one: which set of expressions this member is drawn with.
-  - **When they are here**: their presences (see [When a cast member is in the world](#when-a-cast-member-is-in-the-world)).
-  - **Amendments**, once there are any: the dated changes filed on them (see [Changing a member over time](#changing-a-member-over-time)).
+The page shows the member as they are at the book's present (its story clock, or else its newest dated history entry): the change in force there, or who they were from the start when no change has happened yet. **Save** changes that, in place. A book with no present yet shows their newest change. While you read as of a date, the page shows them as they were then (see [Changing a member over time](#changing-a-member-over-time)).
+
+- **Member**: who they are in this story. At the top, their **Name**, **Nickname** and **Face**; under them, the same tabs as a character card's edit form (**Profile**, **Voice**, **Notes**, **Likeness**, **Speech**), with the same fields drawn the same way. A member has no **Stats** tab. **Save** sits under the tabs and keeps every tab's changes at once. A tab with a field that needs fixing is marked with a dot.
+  - **Name**, **Nickname** and **Face**: a member with no card has their own name. A member with a card shows the card's name, nickname and picture until you give them their own here: shown in this book only, and the card keeps its own. Name and Nickname each have a **Use from card** switch. On, the field shows the card's value and follows the card. Off, the field is this book's own. Someone shown in one word is shown by their nickname, so a new name alone still shows the card's nickname: give them a nickname too, or switch Nickname off and leave it empty for no nickname in this book. A name can't be left empty; switch **Use from card** back on instead. A lorebook that comes with the pub or a plugin keeps its cast's names and faces; clone it to change them.
+  - **Profile**: **Summary**, a short description used by the graph and the prompt; **Description** (see [What the member tells in their own words](#what-the-member-tells-in-their-own-words)); **Also known as**, other names they answer to (the card's names are added to these, so a member renamed in this book still answers to them); **Status in world**: active, deceased, missing or departed; and **Character card**: the card that represents them, with **Change** to swap it, **Unlink card**, or **Link character** for a member with none. When the card has a newer version than the one the member reads, a line says so (_On card v1.0; the card is on v1.1._) with **Update ‹name› to card v1.1**, which moves the member onto the card's current version; the parts they retell stay their own.
+  - **Voice**: **Personality**, **Scenario**, **Greetings** and **Example dialogues**, then **Post-history instructions**.
+  - **Notes**: **Creator notes**. A member's own notes also have a **Language** and **Other languages**, as on a card.
+  - **Likeness**: how pictures of them are drawn, then the **Sprite set**, when there is more than one to choose from: which set of expressions this member is drawn with. It lists the member's own sets (the **Sprites** tab) when any of them holds an image, and the card's sets otherwise.
+  - **Speech**: their **Voice**, how their lines sound when read aloud. A member with a card has a **Use from card** switch. On, they sound as the card does and follow it. The section then says _Uses the card's voice._ Off, the voice is this member's own in this book, used instead of the card's, set with the same fields as the card's Speech tab, and **Save** keeps it. A member with no card has the voice fields directly: their own voice.
+  - Under the tabs, **When they are here**: their presences (see [When a cast member is in the world](#when-a-cast-member-is-in-the-world)); and **Amendments**, once there are any: the dated changes filed on them (see [Changing a member over time](#changing-a-member-over-time)).
 - **Lore**, with a count: their private entries (see below), and **Add lore**. Selecting one opens it for editing in the same tab, and the back arrow returns to the list. The lore editor's **⋯** holds **Pinned** and **Off**, as the entry editor's does.
-- **Relationships**, with a count: their ties to other members and lore, with where each came from, and **See in graph**.
+- **Relationships**, with a count: their ties to other members and lore, with where each came from, and **See in graph** (with [advanced controls](./themes-and-settings.md#show-advanced-controls) on).
 - **Timeline**: the scenes they're in on the line you're reading, oldest first, each dated by the history entry it was compiled into. A scene dated after the moment you're reading is dimmed and marked *later*. Selecting one opens it under **Scenes**.
+- **Sprites**: the member's own sprite sets, edited the same way as on a character card's Sprites tab: sets, uploads, the standard set, labels, order and **Try a line**. A member's own sets come before their card's: while any of them holds an image, the member is drawn from their own sets and the card's are not used; with none, they draw from the card's. While the card's sets draw them, the tab shows those sets read-only under _From the card: ‹name› is drawn with these until they have sprites of their own._, and whoever can edit the lorebook can upload images or start from the standard set there to give them their own. A member whose own sets have no pictures yet shows those sets with _Until these have pictures, ‹name› is drawn with the card's sprites._ Changes are saved as you make them, not with **Save**. Anyone who can open the page can read the sets, and whoever can edit the lorebook can change them. **Fill empty sprites** and **Re-express from neutral** work on a member's own sets too, for whoever can edit the lorebook, when an image model is set up.
+- **Gallery**: the member's own pictures, in the same grid as a character card's Gallery tab. Whoever can edit the lorebook can **Upload**, **Generate portrait**, drag to reorder and **Delete**; anyone who can open the page can look. Deleting a picture takes it out of the member's gallery; the file itself goes only when nothing else uses it. A member's gallery has no **Set as avatar** or **Use as likeness image**: those are the card's.
+
+Every cast member is also listed in **Characters** on the rail. A member with a character card shares that card's row (the row wears **Card**, and its line says which lorebooks use it). A member with no card has a row of its own under **Only in lorebooks**, and members kept only in a session's notes show once **In my stories** is on in the filters. Click the row to open the member here, or use **Copy to my characters** in its **⋯** menu to make a character card of your own from it.
+
+**Copy to my characters**, at the top of the Member tab, makes a character card of your own from the member. It is there for everyone who can open the page, including a reader of a shared lorebook, and it stays available when the page is read-only. The copy opens in Characters. See [Copy a cast member to your characters](./characters.md#copy-a-cast-member-to-your-characters).
 
 ## What the member tells in their own words
 
 A card's description, personality, scenario, greetings and example dialogues were written for every story the card might ever be in. When this story has changed someone, the member can tell those parts in their own words, and the card stays as it was.
 
-On the **Member** tab, after the summary, the **From the card** block has a row for each of these parts. Each row has a toggle:
+On the **Member** tab, a member with a card has a row for each of these parts: **Description** on **Profile**, the others on **Voice**, each tab opening with a **From the card** note that explains the switch. **Greetings** is one row: the greeting a new session opens with comes first, then the others (the swipes), in one list with **Add a greeting**; empty greetings are kept. While the member has their own greetings, each one has **Group sessions only**, as on a card: a group session uses the marked ones, when there are any, and the marked ones are listed after the others. Each row has a **Use from card** switch:
 
-- **From the card**: the member reads the card's text. This is where every member starts.
-- **Retold here**: the member's own text replaces the card's. Switching a row to **Retold here** while its field is empty fills it with the card's text first, so you edit from where the card left off.
+- **On**: the member reads the card's text, shown dimmed and read-only (or _The card has none._). This is where every member starts. When the member has words of their own set aside, a line under the field says so.
+- **Off**: the member's own text replaces the card's, and you edit it here. Switching **Use from card** off while the field is empty fills it with the card's text first, so you edit from where the card left off.
 
-**Take from card** copies the card's current text into the member's field, for when the card has moved on and you want to start again from it. Switching a row back to **From the card** keeps what you wrote; it is only set aside, and switching back brings it back.
+While **Use from card** is off, **Take from card** beside the switch copies the card's current text into the member's field, for when the card has moved on and you want to start again from it. Switching **Use from card** back on keeps what you wrote; it is only set aside, and switching it off again brings it back.
 
-The member's **face** works the same way. **Change face**, in the header of their page, picks a picture from the card's gallery or from **This book's pictures**. **Upload a picture** adds one to the book's pictures, not to the card, and picks it. **Use the card's picture** goes back to the card's own. Like the text, a new face is kept when you save.
+**Post-history instructions** (on **Voice**), **Creator notes** (on **Notes**) and **Likeness** (on **Likeness**) have the same **Use from card** switch: on, they use the card's; off, they have their own, and switching back on keeps what you wrote. They have no **Take from card**.
 
-These are part of the member like their name and summary, so while you read as of a date (see [Changing a member over time](#changing-a-member-over-time)), saving them files a dated change: the young keeper can tell her description one way and the old keeper another. A face is dated the same way, whichever picture you picked.
+A member with no card has no switches: **Description**, **Personality**, **Scenario**, **Greetings** (with **Group sessions only**) and **Example dialogues**, and the three above, are simply their own fields, in the same tabs. A member who lost their card when it was deleted keeps the card's words in them, ready to edit. A member's own creator notes have a **Language** and **Other languages**, as on a card; naming one language twice marks the **Notes** tab and stops the save until it's fixed.
+
+The member's **face** works the same way. **Change face**, under their name and nickname on their page, picks a picture from the card's gallery or from **This book's pictures**. **Upload a picture** adds one to the book's pictures, not to the card, and picks it. **Use the card's picture** goes back to the card's own. Like the text, a new face is kept when you save.
+
+The description, personality, scenario, greetings, example dialogues, post-history instructions, creator notes, likeness and face are part of the member like their name and summary, so while you read as of a date (see [Changing a member over time](#changing-a-member-over-time)), saving them files a dated change: the young keeper can tell her description one way and the old keeper another. A face is dated the same way, whichever picture you picked.
 
 ### What a session reads
 
-In a session reading this book, a retold part replaces the card's for that member: in the prompt, wherever the card's text would go, and in the faces the session draws. Retold greetings are what a **new** session on the book opens with; a session already under way keeps the greeting it started with. Parts left **From the card** read the card as it is now, so editing the card still reaches them.
+In a session reading this book, a retold part replaces the card's for that member: in the prompt, wherever the card's text would go, and in the faces the session draws. Retold greetings are what a **new** session on the book opens with; a session already under way keeps the greeting it started with. Parts left on **Use from card** read the version of the card the member is on, so editing that version still reaches them; a new version of the card doesn't change them (see [Card versions](./characters.md#card-versions)).
 
 ## Lore only one character knows
 
 Lore written on a member's **Lore** tab, or an entry anchored to a member, is **private** to them. When it's read in, it reaches the prompt as **Character lore**, with the member's name beside each entry:
 
-- A character's own turn gets their own private lore, plus that of any character a person plays. Never another character's.
-- The narrator gets the lore of background members, and lore anchored to nobody.
+- A character's own turn gets their own private lore, plus that of any character a person plays. Never another character's. A cast member seated without a character card is a character here too.
+- The narrator gets the lore of background members (anyone no seat in play holds, card or not, a benched seat's member included), and lore anchored to nobody. Never a seated member's.
+- A member whose **Status in world** is **deceased**, but whose seat is still in play, is read as seated: their own turns get their lore and the narrator doesn't. Only benching the seat moves their lore to the narrator.
 
 Character lore is placed by the session's context template, through `{{{characterLore}}}`. The built-in templates already place it; if you write your own template, include `{{{characterLore}}}` or character lore won't reach the model. See [Context templates](./context-templates.md#the-default-template-and-available-variables).
 
@@ -99,6 +112,8 @@ Links between other lore, such as the ways between places, aren't written into t
 
 ## The graph
 
+The graph, like **Lives**, is there only with [advanced controls](./themes-and-settings.md#show-advanced-controls) on; with them off, **Show as** has no **Graph** and an address naming it opens **List**.
+
 **Show as › Graph** draws the book as a web: cast members as circles, entries with links as squares, and every relationship as a labelled arrow. Zoomed out, the links between two nodes fold into one arrow with a count; zoom in or click a node to see them one by one.
 
 - Click a node, or **Tab** to it and press **Enter**, to select it. The details beside the canvas list its relationships, and **Open entry** opens its editor (**Open cast member** for a member).
@@ -111,7 +126,7 @@ Drawing a link never rearranges the canvas.
 
 ## Building the graph from your scenes
 
-Instead of drawing every relationship by hand, you can have the model read your story and propose them. It reads **summarized scenes** and **compiled history entries**, so first capture and summarize some scenes (see [Summarization](./summarization.md)).
+Instead of drawing every relationship by hand, you can have the model read your story and propose them. With [advanced controls](./themes-and-settings.md#show-advanced-controls) off, a lorebook offers no way to build a graph: **Build graph** and **Extend graph** live in **Show as › Graph**, and the scene buttons are hidden. The **Chronicle** widget's **Extend graph** in a session is unchanged. It reads **summarized scenes** and **compiled history entries**, so first capture and summarize some scenes (see [Summarization](./summarization.md)).
 
 - **Build**, on a book with no graph yet, reads its scenes and history and proposes the whole web. The empty graph offers the same as **Build a graph**.
 - **Extend graph**, in **Show as › Graph**, reads every scene and history entry on the line you're reading that hasn't been read yet.
@@ -132,6 +147,12 @@ That last one is how one person can look different at different points of their 
 
 Cards themselves are never amended, because a card is shared between books. While reading as of a date, changing, linking or unlinking the member's card is dated too; the save menu also offers **Change the card everywhere** (and the same for linking and unlinking) for every moment at once.
 
+When you save and later dated changes exist after the one the page shows, the save row says so (_2 later versions keep their own words._). Press **Change later versions too** before saving to write the same fields onto those later changes as well; it is off again after every save. A change a session wrote always keeps its own words, and the message after **Save** says how many changed and how many kept their own.
+
+Linking a card to a member, switching their card, or unlinking it, from the member's page, applies from the book's present: the change at the present and every later one read the new card for the parts not retold here, and a later change keeps the words it has of its own; an unlink leaves them with the card's words as their own. Earlier changes stay as they were. A book with no present yet applies it to all of them. An unlink also gives the member copies of the card's sprite sets, gallery pictures and stats, so they look and play as they did; a stat the member already had stays theirs.
+
+Changing the card at a date works the same from that date on, up to the next card change: when the member had no card, the parts not retold follow the card from that date; later changes on another card stay as they are. The **Amendments** list on their page lists every dated change, each saying what it changes from the one before. Click a date to move a change; the card switch moves with it, and the change keeps its history entry. **Delete** removes it; when it changed the card, the changes after it go back on the card they had before, up to the next card change.
+
 The member's lore isn't dated from their page. To file a dated change to a piece of their lore, open the entry from the list while reading as of the date.
 
 ## When a cast member is in the world
@@ -146,7 +167,7 @@ Presences change what a session reads. Lore about a member who isn't in the worl
 
 Two presences that overlap are **two of them at once**: her at 34 and her at 50, in the same room. That's what presences are for, so the form tells you and lets you through.
 
-On the **Cast** view, the button beside the view's name and count says who is in the world at the moment you're reading; press it for the list, and a name to open that member. **Show as › Lives** draws the same over time: a lane per placed member, a bar per presence, marked where two overlap. Like amendments, a presence belongs to the line it was placed on.
+On the **Cast** view, the button beside the view's name and count says who is in the world at the moment you're reading; press it for the list, and a name to open that member. **Show as › Lives** (with advanced controls on) draws the same over time: a lane per placed member, a bar per presence, marked where two overlap. Like amendments, a presence belongs to the line it was placed on.
 
 ## Merging and deleting
 
@@ -156,4 +177,4 @@ When the same person has ended up in the cast twice, merge them. **Suggestions**
 
 **Delete**, on a member's page, says what goes with them: their relationships, dated changes, places in scenes and stats. If they have private lore, it asks whether to **Keep their lore** (it becomes lore anchored to nobody, which the narrator can see) or **Delete their lore too**. Wherever the book mentions them, their name is written in as plain text so the lore still reads. Their character card isn't touched.
 
-Deleting a character card removes it from your lorebooks too: its member keeps their name, lore and relationships, but no longer has a card.
+Deleting a character card removes it from your lorebooks too: its member keeps their name, lore and relationships, but no longer has a card. They keep what they read from it: its words, sprite sets, gallery pictures and stats become their own, in every lorebook the card was in, other people's included. Removing a plugin that deletes its books does the same for its cards. A session that seats the card keeps its seat: a seat with no cast member yet is given the card's member from the session's lorebook or its notes, or a new member made from the card, before the card goes. A seat of a card deleted in an earlier version, with no cast member anywhere, is given one made from the card the next time Serene Pub starts, and a member still linked to such a card becomes card-less the same way, keeping what it read from the card.

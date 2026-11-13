@@ -49,6 +49,7 @@ import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { GraphBuilderScene } from "$lib/server/utils/graphBuilder"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -76,7 +77,9 @@ vi.mock("$lib/server/db", async () => {
  */
 const capturedScenes: GraphBuilderScene[][] = []
 /** The seed members handed beside them, in call order. */
-const capturedSeeds: Array<Array<{ id: number; name: string; summary: string | null }>> = []
+const capturedSeeds: Array<
+	Array<{ id: number; name: string; summary: string | null }>
+> = []
 
 vi.mock("$lib/server/utils/graphBuilder", async (importOriginal) => {
 	const actual =
@@ -85,7 +88,11 @@ vi.mock("$lib/server/utils/graphBuilder", async (importOriginal) => {
 		...actual,
 		buildGraphFromScenes: async (opts: {
 			scenes: GraphBuilderScene[]
-			seedNodes?: Array<{ id: number; name: string; summary: string | null }>
+			seedNodes?: Array<{
+				id: number
+				name: string
+				summary: string | null
+			}>
 		}) => {
 			capturedScenes.push(opts.scenes)
 			capturedSeeds.push(opts.seedNodes ?? [])
@@ -166,14 +173,13 @@ async function seedLorebook(label: string) {
 
 	const bindings = []
 	for (const [i, name] of ["Aria", "Bram", "Cole"].entries()) {
-		const [b] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+		const b = (
+			await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				binding: `{{char:${i + 1}}}`,
 				name
 			})
-			.returning()
+		).member
 		bindings.push(b)
 	}
 
@@ -209,6 +215,35 @@ async function runBuild(
 		noopEmit as any
 	)
 }
+
+describe("the graph names a carded member as the book does (§0-D)", () => {
+	test("a scene's binding token reads the member's own name", async () => {
+		const { user, lorebook, scene } = await seedLorebook("own-name")
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: user.id,
+				name: "Verity Hale",
+				description: "d"
+			} as any)
+			.returning()
+		await insertCastMember(testDb, {
+			lorebookId: lorebook.id,
+			binding: "{{char:own-name}}",
+			characterId: card.id,
+			ownName: "Maren"
+		} as any)
+		await testDb
+			.update(schema.scenes)
+			.set({ summary: "{{char:own-name}} met Aria." })
+			.where(eq(schema.scenes.id, scene.id))
+
+		await runBuild(user.id, lorebook.id)
+
+		const built = capturedScenes[0].find((s) => s.id === scene.id)
+		expect(built!.summary).toBe("Maren met Aria.")
+	})
+})
 
 describe("the graph build reads cast from scene_characters", () => {
 	test("a scene's stored cast reaches the builder as binding ids", async () => {
@@ -346,10 +381,13 @@ describe("the graph build reads cast from scene_characters", () => {
 
 describe("a cast tag reads as its member in what the build reads (plan A19)", () => {
 	test("a member with no card is named by their own name", async () => {
-		const { user, lorebook, bindings, scene } = await seedLorebook("cardless-tag")
+		const { user, lorebook, bindings, scene } =
+			await seedLorebook("cardless-tag")
 		await testDb
 			.update(schema.scenes)
-			.set({ summary: `${bindings[1].binding} met ${bindings[2].binding}.` })
+			.set({
+				summary: `${bindings[1].binding} met ${bindings[2].binding}.`
+			})
 			.where(eq(schema.scenes.id, scene.id))
 
 		await runBuild(user.id, lorebook.id)
@@ -361,7 +399,8 @@ describe("a cast tag reads as its member in what the build reads (plan A19)", ()
 
 describe("a deleted card seeds nothing (plan A25)", () => {
 	test("its member is seeded by their own name and summary, never the card's words", async () => {
-		const { user, lorebook, bindings, scene } = await seedLorebook("deleted-card")
+		const { user, lorebook, bindings, scene } =
+			await seedLorebook("deleted-card")
 		const [gone] = await testDb
 			.insert(schema.characters)
 			.values({

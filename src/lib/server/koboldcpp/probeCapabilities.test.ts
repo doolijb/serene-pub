@@ -97,21 +97,21 @@ describe("the probe against the manifest — the Phase 4 gate", () => {
 
 	test("the flags this app cannot yet act on are still recorded, and still discarded", () => {
 		// ⚠ Two assertions that look contradictory and are not, which is why they
-		// share a test: the probe MUST keep answering for speech and
-		// transcription, and resolution MUST ignore both.
+		// share a test: the probe MUST keep answering for transcription, and
+		// resolution MUST ignore it.
 		//
-		// The manifest declares neither for either KoboldCPP type, because
-		// nothing implements `synthesizeSpeech` or `transcribeAudio` and the key
+		// The manifest declares no `audio->text` for either KoboldCPP type,
+		// because nothing implements `transcribeAudio` against it and the key
 		// space is derived from which actions exist. `resolveCapabilities`
 		// iterates `supports` only, so an answer to a question nobody asked cannot
 		// grant anything — which is correct, and is what stops a capability being
 		// switchable and uncallable.
 		//
 		// The mapping stays anyway, because the probe records what the SERVER said
-		// and that outlives what this app can do with it: the day one of those
-		// actions lands, the key returns and every already-tested connection
-		// resolves it with no re-test — see the embeddings test below, which is
-		// that day for `text->embedding`.
+		// and that outlives what this app can do with it: the day the action
+		// lands, the key returns and every already-tested connection resolves it
+		// with no re-test. `text->embedding` (2026-09-26) and `text->audio`
+		// (speech, 2026-10-31) were that day for their keys — asserted below.
 		const found = capabilitiesFromFlags(
 			flagsFrom({ tts: true, transcribe: true, embeddings: true })
 		)
@@ -124,8 +124,12 @@ describe("the probe against the manifest — the Phase 4 gate", () => {
 		const resolved = resolveFor(
 			flagsFrom({ tts: true, transcribe: true, embeddings: true })
 		)
-		for (const id of ["text->audio", "audio->text"] as const)
-			expect(satisfies({ requires: [id] }, resolved).ok).toBe(false)
+		expect(satisfies({ requires: ["audio->text"] }, resolved).ok).toBe(false)
+		expect(satisfies({ requires: ["text->audio"] }, resolved).ok).toBe(true)
+		// And a KoboldCPP without a speech model loaded cannot speak.
+		expect(
+			satisfies({ requires: ["text->audio"] }, resolveFor(flagsFrom({ tts: false }))).ok
+		).toBe(false)
 	})
 
 	test("the embeddings flag, recorded all along, resolves now that embedText exists", () => {

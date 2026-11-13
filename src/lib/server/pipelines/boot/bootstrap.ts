@@ -161,6 +161,8 @@ export interface BootstrapReport {
 	registrationFit?: import("$lib/server/pipelines/registrations/fit").RefitReport
 	/** Named-config values for `embed-text`'s retired connection slot, removed quietly. */
 	embedTextConnectionDropped?: number
+	/** ⏳ Story's retired reply tick: its stored settings, removed quietly. */
+	replyTickDropped?: import("$lib/server/pipelines/boot/replyTickDrop").ReplyTickDropReport
 	/**
 	 * What the attribute registry loaded from this install's rows, and what it
 	 * mirrored back as last-seen (R1, R4).
@@ -426,6 +428,12 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		"$lib/server/pipelines/boot/embedTextConnectionDrop"
 	)
 	report.embedTextConnectionDropped = await dropEmbedTextConnectionValues(db)
+	// ⏳ Story's reply tick is gone (owner, 2026-11-11): its stored settings
+	// leave before the seed's reconcile and the refit would refuse or cull them.
+	const { dropReplyTickSettings } = await import(
+		"$lib/server/pipelines/boot/replyTickDrop"
+	)
+	report.replyTickDropped = await dropReplyTickSettings(db)
 	// ⏳ And a sampling config's legacy `{ id: bias }` logit bias becomes
 	// entries the editor can show (plan logit-bias L2).
 	await (

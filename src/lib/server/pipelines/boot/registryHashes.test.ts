@@ -370,7 +370,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// a card action's inlet (no session), one image series item per sprite
 	// label, and the write filing each keyed picture as a card's sprite. New
 	// types: no migration.
-	"core:inlet/card-action@1": "147a570827e0e6",
+	// Moved 2026-11-08 (lane s4-sdk2, ★7): widened in place with a `castMemberId`
+	// port and entity (a card action pressed on a cast member). (was "147a570827e0e6")
+	"core:inlet/card-action@1": "e51d2173ba112",
 	"core:task/build-sprite-series@1": "111d91580ffc0c",
 	// The script step (PLAN-pipeline-canvas-and-genre-authoring P3, 2026-10-12): a
 	// pass-through task whose out:main seam takes data/transform scripts. A new
@@ -1050,6 +1052,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// session reads them — its line, and `at` its story clock. A new type.
 	// E M0 2026-10-28: the `atHour` in-port and `placements` out-port (lane T3/T4, SHAPES L3). (was "68689a20c23d4")
 	"core:query/cast-presences@1": "b8400a3942873",
+	// New 2026-11-06 (cv-sdk, character versions wave 3): one cast member as the session reads it.
+	"core:query/cast-member@1": "2a6634b9c55be",
 	// The third retrieval mechanism (design §13.5), added 2026-09-06 — retrieval by
 	// the names a scene is using, over annotations written in the background. A
 	// **new** type id, so the registry inserts it and nothing conflicts: no
@@ -1587,7 +1591,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:task/reply-duties@1": "95072a19b7e5b",
 	"core:task/reckoning-duties@1": "1ff656be4784e3",
 	// Moved 2026-10-25 (sprint 2 lane I2, pass 7 / R-i): the duty *Notice when the scene moves on* (`sceneMovedOn`, mode key `scene-moved-on`) and the out-port `sceneCheck`. Edited in place. (was "1c9d02b72a380e")
-	"core:task/sweep-duties@1": "1eb9149e0bda84",
+	// Moved 2026-11-04 (playtest §0-B): the `summary` duty retired from the sweep. (was "1eb9149e0bda84")
+	"core:task/sweep-duties@1": "3f6880c7be729",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
 	// dead `strategy` and `dedup` parameters are gone — the binding read
 	// neither, `strategy` was 0.5's engine choice that wiring replaced, and
@@ -1820,9 +1825,13 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// pipeline — the seat-name door's pipeline outlet. 🚧
 	// Moved 2026-10-18 (owner ruling ★6, P3-1): the `retire` in-port — a new character after a death is a NEW seat, the fallen's retired. `@1` evolves in place. (was "8f8583a68b71d")
 	"core:outlet/set-seat-name@1": "15bb5329e236d5",
+	// 🚧 NEW 2026-11-11 (bench-L3, benched seats): a seat benched or brought back by an opted-in genre (`writes.seats`), tied to the turn.
+	"core:outlet/set-seat-bench@1": "17498bd512c7d2",
 	"core:outlet/set-composer-state@1": "18ea9105b85500",
 	// 🚧 Sprint 2 Phase 0 (supervisor I, 2026-10-25): new — the judged scene check's outlet (pass 7, R-i).
-	"core:outlet/propose-scene-cue@1": "7db9f1b5dab36",
+	"core:outlet/propose-scene-cue@1": "19c4d81108b06" /* (was "7db9f1b5dab36") — lead, sense-scn 2026-11-12: the optional `trigger` in-port */,
+	// 🚧 New 2026-11-10 (hist-C, ★S4): a note added to a scene — never history, never messages.
+	"core:outlet/note-scene@1": "bae05ec5a543a",
 	// NEW (2026-10-15, owner ruling): a stat configured by a pipeline — one
 	// owner's { owner, slot, config } through `setStatConfig`. 🚧
 	"core:outlet/set-stat-config@1": "a7ec91e849f91",
@@ -1836,12 +1845,16 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:outlet/set-lorebook-annex@1": "164fa2ca90211b",
 	// New 2026-10-31 (M2c; pinned by E): the plugin-storage query (P) — the running plugin's own pub/me file, read-only, 4 MiB cap.
 	"core:query/plugin-storage@1": "15cf634ca965a9",
+	// 🚧 NEW 2026-11-11 (sense-clk2, owner ruling): how many story minutes one round is worth — the session's `roundWorth` genre field, as a number and a clock step.
+	"core:query/round-worth@1": "17f5045d5976ed",
+	"core:query/scene-boundaries@1": "12e77a18036ca5" /* new — lead, sense-scn 2026-11-12 */,
 	// New 2026-10-31 (M2c path B; pinned by E): the Guide's draft reader (T) and the four library outlets (T), each with review.fields.
 	"core:task/read-library-draft@1": "143fcc2d9e0fb7",
 	"core:outlet/create-character@1": "11cab3736ed8b5",
 	"core:outlet/update-character@1": "17f8558f4845b3",
+	// New 2026-11-06 (cv-sdk): a session's story write to one cast member (review on `changes`).
+	"core:outlet/update-cast-member@1": "b14c341a7644",
 	"core:outlet/create-lorebook@1": "5c69133a08a97",
-	"core:outlet/attach-lorebook@1": "f1ea74dec6786",
 	"core:outlet/set-lorebook-annex-field@1": "44910c1fc9bad",
 	// 2026-10-28 (E-fix T-1): convert-ruleset declares `review: { fields: [] }`, so its pin moved.
 	"core:outlet/convert-ruleset@1": "10aa7d8fcd40b7",

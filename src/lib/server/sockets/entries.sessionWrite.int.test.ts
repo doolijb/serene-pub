@@ -172,7 +172,9 @@ describe("entries:create from a session writes on the session's line", () => {
 
 		// Main's Year 5 is after north's fork and south's Year 9 is a
 		// sibling's, so north's newest is main's Year 1, Month 6, Day 1.
-		expect(entry.branchId).toBe(w.north.id)
+		// ...and Year 1 is at or before north's fork (Year 3), so that day is
+		// main's to own (rule C): the empty entry is made on main.
+		expect(entry.branchId).toBeNull()
 		expect([entry.year, entry.month, entry.day]).toEqual([1, 6, 2])
 	})
 

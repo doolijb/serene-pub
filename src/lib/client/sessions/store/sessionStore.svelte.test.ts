@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSessionStore } from "./sessionStore.svelte"
+import { seatCardAsShown } from "$lib/client/components/sessionPage/projections/characters"
 
 const card = (id: number, extra: Record<string, unknown> = {}) => ({ id, name: `C${id}`, ...extra }) as any
 const row = (id: number, extra: Record<string, unknown> = {}) =>
@@ -94,6 +95,16 @@ describe("merge", () => {
 		)
 		expect(s.castOf(1)?.sessionCharacters.map((c) => c.characterId)).toEqual([12])
 		expect(s.castOf(1)?.sessionPersonas).toHaveLength(1)
+	})
+
+	it("a refresh carrying castNames renames the seated card as shown", () => {
+		const s = createSessionStore()
+		s.open(1)
+		s.load(payload(1, [row(1)], { castNames: {} }), pag)
+		const seated = card(10)
+		expect(seatCardAsShown(s.session(1) as any, seated).name).toBe("C10")
+		s.merge({ id: 1, castNames: { 10: { ownName: "Renamed" } } } as any, null)
+		expect(seatCardAsShown(s.session(1) as any, seated).name).toBe("Renamed")
 	})
 
 	it("does nothing for a session not held", () => {

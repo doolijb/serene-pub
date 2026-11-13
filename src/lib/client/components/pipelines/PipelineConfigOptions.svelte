@@ -27,9 +27,9 @@
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { getContext, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
 	import StrengthBars from "$lib/client/components/pipelines/StrengthBars.svelte"
@@ -42,6 +42,12 @@
 	} from "$lib/shared/connections/slotRef"
 	import { languageOf } from "$lib/shared/pipelines/templateEngines"
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
+	import StepVariableLayouts from "$lib/client/components/pipelines/StepVariableLayouts.svelte"
+	import { useLeftoverPicks } from "$lib/client/components/pipelines/leftoverPicks.svelte"
+	import {
+		requestTemplateVariableLayouts,
+		templateVariableLayoutsOf
+	} from "$lib/client/components/pipelines/templateVariableLayouts.svelte"
 	import type { ScopeDeclarer } from "$lib/shared/utils/templateAssist"
 	// The value-decl controls (24 T6c): the simple editors live in
 	// @serene-pub/controls now — one component per value-type id, the render
@@ -114,7 +120,7 @@
 		 * Draft mode (22 §2.1): value edits go to the host's pending map
 		 * instead of the database — every `set`/`clear` becomes a callback,
 		 * and nothing writes until the host's explicit Save. The prompt/
-		 * template/layout sub-editors keep their own explicit Save flows (they
+		 * template sub-editors keep their own explicit Save flows (they
 		 * edit shared entity rows, not this configuration) — but the *selection*
 		 * a clone makes rides the draft like any other value.
 		 */
@@ -153,11 +159,70 @@
 	const panelsCtx: PanelsCtx | undefined = getContext("panelsCtx")
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 	/**
-	 * The inline editors (prompt, template and layout wording, create and
+	 * The inline editors (prompt and template wording, create and
 	 * duplicate) belong to the Pipelines view and the builder. A session's
 	 * settings choose among rows; the wording is edited where it lives.
 	 */
 	const editors = $derived(mode !== "session")
+
+	/**
+	 * ⏳ Leftover per-step layout picks (variable layouts, W4) — admin-only.
+	 * Declared here, at initialisation, ahead of the panel's `onMount`.
+	 */
+	const leftovers = useLeftoverPicks({
+		slug: () => slug,
+		sessionId: () => sessionId,
+		enabled: () => isAdmin,
+		onMoved: () => {
+			socket.emit("pipelines:get", { slug, sessionId })
+			// A move can give a layout its reference: the offers changed.
+			layoutsEpoch++
+		}
+	})
+	/** Every context-template option in the view, not just the `stepKey` one. */
+	const templateOptions = $derived(
+		detail
+			? optionsOf(detail.groups).filter(
+					(o) => o.control === "context-template-ref"
+				)
+			: []
+	)
+	/**
+	 * The leftover steps shown under a template option, as the server pairs
+	 * them: a step whose `stepKey` is the option's step (first such option
+	 * only), and a step with no template option of its own goes to the
+	 * pipeline's only one (the builder's picks show under the respond step's
+	 * template).
+	 */
+	function leftoverStepsFor(option: Sockets.Pipelines.Option) {
+		const first = (key: string) =>
+			templateOptions.find((o) => o.step.key === key)
+		const only = templateOptions.length === 1 ? templateOptions[0] : null
+		return leftovers.steps.filter((st) => {
+			const own = first(st.stepKey)
+			return own ? own.id === option.id : only?.id === option.id
+		})
+	}
+	/** Bumped when the editors' layout offers may have changed (a move). */
+	let layoutsEpoch = $state(0)
+	/** The template options whose laid-out keys are worth asking for. */
+	const layoutTargetKeys = $derived(
+		isAdmin
+			? templateOptions
+					.filter((o) => o.contextTemplate)
+					.map((o) => o.step.key)
+					.join("\u0000")
+			: ""
+	)
+	$effect(() => {
+		const keys = layoutTargetKeys
+		void layoutsEpoch
+		if (!keys) return
+		untrack(() => {
+			for (const stepKey of keys.split("\u0000"))
+				requestTemplateVariableLayouts({ specSlug: slug, stepKey })
+		})
+	})
 
 	/**
 	 * The value being edited, keyed by option id. Text areas commit on blur;
@@ -191,31 +256,17 @@
 		>
 	>({})
 	/**
-	 * The layout editor's in-flight source, keyed by option id.
-	 *
-	 * Same shape and same rules as `promptDrafts` — always-on editor, no
-	 * editing flag, and the draft records which row it belongs to so text
-	 * typed against one layout is never saved onto another after the
-	 * selection changes underneath it.
-	 */
-	let layoutDrafts = $state<
-		Record<string, { id: number; name: string; source: string }>
-	>({})
-	/**
 	 * The context-template editor's in-flight source, keyed by option id.
 	 *
-	 * Same shape and same rules as the two above. Kept separate rather than
-	 * folded into `layoutDrafts` because the two editors sit on the same step
-	 * and one shared map would let a story string be saved onto a layout after
-	 * a selection changed underneath it — which is the exact bug the
-	 * row-id-in-the-draft rule exists to make impossible.
+	 * Same shape and same rules as the prompt drafts above: the draft records
+	 * which row it belongs to, so text typed against one template is never
+	 * saved onto another after a selection changed underneath it.
 	 */
 	let templateDrafts = $state<
 		Record<string, { id: number; name: string; source: string }>
 	>({})
 	/** The option a clone was requested from, so the copy can be selected. */
 	let cloningFor: string | null = null
-	let cloningLayoutFor: string | null = null
 	let cloningTemplateFor: string | null = null
 
 	/**
@@ -230,7 +281,9 @@
 				detail.scope.readOnlyBecause ??
 				"Changes here apply to this session only, and save as you make them."
 			)
-		const lead = sessionDoesNotRun ? "This session does not run this pipeline. " : ""
+		const lead = sessionDoesNotRun
+			? "This session does not run this pipeline. "
+			: ""
 		// 🚧 Named configurations are retired (R38; lane 7): outside a session
 		// a change is the genre's defaults of each genre that runs it.
 		if (isAdmin)
@@ -243,7 +296,9 @@
 	 * creation pipeline once it is created (owner ruling 2026-09-30).
 	 */
 	const readOnlyBecause = $derived(
-		detail?.scope.kind === "session" ? detail.scope.readOnlyBecause : undefined
+		detail?.scope.kind === "session"
+			? detail.scope.readOnlyBecause
+			: undefined
 	)
 
 	/** The scope a view must carry for this panel to take it. */
@@ -450,8 +505,7 @@
 	 * "does this belong to this spec" has no true answer for one, and the slug
 	 * alone can no longer authorize the write. The option handle proves the
 	 * caller is operating a control this pipeline actually offers them, and the
-	 * setting's pool is what the target row has to match. Exactly the move the
-	 * layout mutations made when layouts became shared.
+	 * setting's pool is what the target row has to match.
 	 */
 	function createPrompt(option: Sockets.Pipelines.Option) {
 		cloningFor = option.id
@@ -542,11 +596,11 @@
 	async function copyArchived(text: string) {
 		try {
 			await navigator.clipboard.writeText(text)
-			toaster.success({ title: "Copied to the clipboard" })
+			notify.success({ title: "Copied to the clipboard" })
 		} catch {
 			// A denied clipboard permission is not an error worth a red toast —
 			// the text is on screen and selectable, which is the fallback.
-			toaster.error({
+			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})
 		}
@@ -604,98 +658,6 @@
 			slug,
 			optionId: option.id,
 			promptId: option.prompt.id,
-			sessionId
-		})
-	}
-
-	/* --- layout clone / edit / delete -------------------------------- */
-
-	function cloneLayout(option: Sockets.Pipelines.Option) {
-		if (!option.variableTemplate) return
-		cloningLayoutFor = option.id
-		socket.emit("pipelines:cloneVariableTemplate", {
-			slug,
-			optionId: option.id,
-			templateId: option.variableTemplate.id,
-			sessionId
-		})
-	}
-
-	function layoutDraftOf(option: Sockets.Pipelines.Option) {
-		const d = layoutDrafts[option.id]
-		return d &&
-			option.variableTemplate &&
-			d.id === option.variableTemplate.id
-			? d
-			: undefined
-	}
-
-	const layoutSource = (option: Sockets.Pipelines.Option) =>
-		layoutDraftOf(option)?.source ?? option.variableTemplate?.source ?? ""
-
-	const layoutName = (option: Sockets.Pipelines.Option) =>
-		layoutDraftOf(option)?.name ?? option.variableTemplate?.name ?? ""
-
-	function startLayoutDraft(option: Sockets.Pipelines.Option) {
-		const existing = layoutDraftOf(option)
-		if (existing) return existing
-		const row = option.variableTemplate!
-		layoutDrafts[option.id] = {
-			id: row.id,
-			name: row.name,
-			source: row.source
-		}
-		return layoutDrafts[option.id]!
-	}
-
-	function editLayout(
-		option: Sockets.Pipelines.Option,
-		patch: { name?: string; source?: string }
-	) {
-		const draft = startLayoutDraft(option)
-		if (patch.name !== undefined) draft.name = patch.name
-		if (patch.source !== undefined) draft.source = patch.source
-	}
-
-	function layoutDirty(option: Sockets.Pipelines.Option) {
-		const d = layoutDraftOf(option)
-		if (!d || !option.variableTemplate) return false
-		return (
-			d.name !== option.variableTemplate.name ||
-			d.source !== option.variableTemplate.source
-		)
-	}
-
-	function saveLayout(option: Sockets.Pipelines.Option) {
-		const draft = layoutDraftOf(option)
-		if (!draft) return
-		socket.emit("pipelines:updateVariableTemplate", {
-			slug,
-			optionId: option.id,
-			templateId: draft.id,
-			name: draft.name,
-			source: draft.source,
-			sessionId
-		})
-		delete layoutDrafts[option.id]
-	}
-
-	function deleteLayout(option: Sockets.Pipelines.Option) {
-		if (!option.variableTemplate) return
-		if (
-			!confirm(
-				`Delete the layout '${option.variableTemplate.name}'? Your ` +
-					`selection here goes back to what it inherits. Layouts are ` +
-					`shared between pipelines, so if another one still uses this ` +
-					`the server refuses.`
-			)
-		)
-			return
-		delete layoutDrafts[option.id]
-		socket.emit("pipelines:deleteVariableTemplate", {
-			slug,
-			optionId: option.id,
-			templateId: option.variableTemplate.id,
 			sessionId
 		})
 	}
@@ -831,7 +793,7 @@
 	// argument-less `off` would deafen whichever one survives.
 	const onGet = (res: Sockets.Pipelines.Get.Response) => {
 		if (res.error) {
-			toaster.error({ title: res.error })
+			notify.error({ source: "socket:pipelines:get", title: res.error })
 			return
 		}
 		// A shared channel: another panel's pipeline, or this pipeline at
@@ -840,6 +802,7 @@
 		detail = res.pipeline
 		drafts = {}
 		onLoaded?.(res.pipeline)
+		leftovers.refresh()
 	}
 	// A clone answers with the copy's id: select it for this option and open
 	// the editor — clone-and-edit is one gesture, not three.
@@ -861,22 +824,6 @@
 		// always on screen, and the refreshed view carries the copy's row —
 		// so the boxes fill themselves and stay clean until someone types.
 		delete promptDrafts[optionId]
-	}
-	// The layout clone answers the same way, and selects the copy for this
-	// option so "duplicate and rewrite it as prose" is one gesture.
-	const onLayoutCloned = (
-		res: Sockets.Pipelines.CloneVariableTemplate.Response
-	) => {
-		if (res.error) return
-		if (!res.pipeline || res.pipeline.slug !== slug) return
-		const optionId = cloningLayoutFor
-		cloningLayoutFor = null
-		if (!optionId || res.templateId == null) return
-		const opt = optionsOf(res.pipeline.groups).find(
-			(o) => o.id === optionId
-		)
-		if (opt) set(opt, res.templateId)
-		delete layoutDrafts[optionId]
 	}
 	// Create and clone answer the same way, and select the new row for this
 	// option so "start from this and rewrite it" is one gesture.
@@ -900,7 +847,8 @@
 	// with the administrator so credentials and compute do" — so they are
 	// shown, not replaced with a status.
 	const showRefusal = (res: { error?: string }) => {
-		if (res?.error) toaster.error({ title: res.error })
+		if (res?.error)
+			notify.error({ source: "pipelines:refusal", title: res.error })
 	}
 
 	/**
@@ -936,10 +884,6 @@
 	useInterest<"pipelines:cloneContextTemplate">(
 		"pipelines:cloneContextTemplate",
 		onTemplateCloned
-	)
-	useInterest<"pipelines:cloneVariableTemplate">(
-		"pipelines:cloneVariableTemplate",
-		onLayoutCloned
 	)
 	// The refusals. Never gated (plan ruling 2 — an error is not an output to
 	// skip), but the registry is the only listener path, so they are declared
@@ -984,23 +928,12 @@
 		"pipelines:deleteContextTemplate:error",
 		showRefusal
 	)
-	useInterest<"pipelines:cloneVariableTemplate:error">(
-		"pipelines:cloneVariableTemplate:error",
-		showRefusal
-	)
-	useInterest<"pipelines:updateVariableTemplate:error">(
-		"pipelines:updateVariableTemplate:error",
-		showRefusal
-	)
-	useInterest<"pipelines:deleteVariableTemplate:error">(
-		"pipelines:deleteVariableTemplate:error",
-		showRefusal
-	)
 
 	onMount(() => {
 		// The key above is already held; the typed `emit` flushes its interest
 		// sync ahead of this packet on the same socket (plan ruling 3).
 		socket.emit("pipelines:get", { slug, sessionId })
+		leftovers.refresh()
 	})
 
 	/**
@@ -1071,7 +1004,8 @@
 	 * The block to move focus to for a Model row that is another group's
 	 * pointer, and the id each block's heading carries for it.
 	 */
-	const headingId = (groupKey: string) => `grp-${slug}-${groupKey}`.replace(/[^\w-]/g, "-")
+	const headingId = (groupKey: string) =>
+		`grp-${slug}-${groupKey}`.replace(/[^\w-]/g, "-")
 
 	/**
 	 * A row's provenance line: the server's for a Model or Sampling row;
@@ -1106,7 +1040,10 @@
 	/** 🚧 Every option of the same step — what `workflow-ref` reads its pair from. */
 	const stepSiblings = (o: Sockets.Pipelines.Option) =>
 		groups
-			.flatMap((g) => [...g.front, ...g.advanced.flatMap((st) => st.options)])
+			.flatMap((g) => [
+				...g.front,
+				...g.advanced.flatMap((st) => st.options)
+			])
 			.filter((x) => x.step.key === o.step.key && x.id !== o.id)
 
 	/** The model-call choices every group fronts under fixed labels. */
@@ -1160,8 +1097,13 @@
 	 * row is only ever "Prompt"; the card's title names the pipeline, and a
 	 * card with several model calls heads each one.
 	 */
-	function wordingTitleOf(option: Sockets.Pipelines.Option, fallback: string) {
-		const group = groups.find((g) => g.front.some((o) => o.id === option.id))
+	function wordingTitleOf(
+		option: Sockets.Pipelines.Option,
+		fallback: string
+	) {
+		const group = groups.find((g) =>
+			g.front.some((o) => o.id === option.id)
+		)
 		const parts = [title, group?.heading].filter(
 			(x): x is string => !!x && x.trim() !== ""
 		)
@@ -1199,7 +1141,12 @@
 				/>
 			{/if}
 			{#if draftMode && isPending(option.id)}
-				<Badge tone="warning" size="sm" class="shrink-0 font-semibold" title="Unsaved — lands with Save">
+				<Badge
+					tone="warning"
+					size="sm"
+					class="shrink-0 font-semibold"
+					title="Unsaved — lands with Save"
+				>
 					pending
 				</Badge>
 			{/if}
@@ -1232,15 +1179,16 @@
 						onclick={() =>
 							(wordingRow = {
 								option,
-								label: wordingTitleOf(option, labelOverride ?? rowLabelOf(option))
+								label: wordingTitleOf(
+									option,
+									labelOverride ?? rowLabelOf(option)
+								)
 							})}
 					>
 						Read the wording
 					</button>
 				{/if}
-				<p
-					class="text-surface-600-400 flex flex-wrap gap-x-2 text-xs"
-				>
+				<p class="text-surface-600-400 flex flex-wrap gap-x-2 text-xs">
 					{#if option.provenance && option.provenance.label !== readonlyValue(option)}
 						<span>{option.provenance.label}</span>
 					{/if}
@@ -1412,11 +1360,16 @@
 						{ value: "", label: "Pipeline default" },
 						...promptGroups.flatMap((g) =>
 							(option.choices ?? [])
-								.filter((c: any) => (c.group ?? "alsoFits") === g.key)
+								.filter(
+									(c: any) =>
+										(c.group ?? "alsoFits") === g.key
+								)
 								.map((choice: any) => ({
 									value: String(choice.id),
 									label: `${choice.label}${
-										choice.description ? ` — ${choice.description}` : ""
+										choice.description
+											? ` — ${choice.description}`
+											: ""
 									}`,
 									group: g.label
 								}))
@@ -1432,11 +1385,17 @@
 					type="button"
 					class="btn btn-sm preset-tonal-surface shrink-0"
 					title="Read the prompts this step offers"
-					aria-label="Read the prompts for {wordingTitleOf(option, labelOverride ?? rowLabelOf(option))}"
+					aria-label="Read the prompts for {wordingTitleOf(
+						option,
+						labelOverride ?? rowLabelOf(option)
+					)}"
 					onclick={() =>
 						(wordingRow = {
 							option,
-							label: wordingTitleOf(option, labelOverride ?? rowLabelOf(option))
+							label: wordingTitleOf(
+								option,
+								labelOverride ?? rowLabelOf(option)
+							)
 						})}
 				>
 					<Icons.Eye size={14} />
@@ -1482,7 +1441,7 @@
 
 			{#if option.prompt && editors}
 				{@const readOnly = option.prompt.readOnly}
-				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-base p-3">
+				<div class="bg-surface-50-950 rounded-base mt-1 space-y-3 p-3">
 					{#if readOnly}
 						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
@@ -1621,8 +1580,8 @@
 				</div>
 			{/if}
 		{:else if option.control === "context-template-ref"}
-			<!-- The story string. Same swappable-entity pattern as a prompt or
-			     a layout, with one difference that shows on screen: the rows
+			<!-- The story string. Same swappable-entity pattern as a prompt,
+			     with one difference that shows on screen: the rows
 			     are pooled by the *kind of step* that renders them rather than
 			     by pipeline, so the list is grouped — this pipeline's own
 			     first, then the ones Serene Pub ships, then everything else
@@ -1649,11 +1608,16 @@
 						{ value: "", label: "Pipeline default" },
 						...groups.flatMap((g) =>
 							(option.choices ?? [])
-								.filter((c: any) => (c.group ?? "alsoFits") === g.key)
+								.filter(
+									(c: any) =>
+										(c.group ?? "alsoFits") === g.key
+								)
 								.map((choice: any) => ({
 									value: String(choice.id),
 									label: `${choice.label}${
-										choice.description ? ` — ${choice.description}` : ""
+										choice.description
+											? ` — ${choice.description}`
+											: ""
 									}`,
 									group: g.label,
 									disabled: !!choice.disabled,
@@ -1716,9 +1680,22 @@
 				{/if}
 			</div>
 
+			{#if isAdmin}
+				<StepVariableLayouts
+					href="/admin/variable-layouts?step={encodeURIComponent(
+						`${slug}:${option.step.key}`
+					)}"
+					steps={leftoverStepsFor(option)}
+					stateOf={leftovers.stateOf}
+					onclear={leftovers.clear}
+					onmove={leftovers.move}
+					templateUnsaved={templateDirty(option)}
+				/>
+			{/if}
+
 			{#if option.contextTemplate && editors}
 				{@const readOnly = option.contextTemplate.readOnly}
-				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-base p-3">
+				<div class="bg-surface-50-950 rounded-base mt-1 space-y-3 p-3">
 					{#if readOnly}
 						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
@@ -1768,16 +1745,26 @@
 							untyped={option.scopeUntyped?.map((u) => u.label)}
 							engine={option.contextTemplate.engine}
 							scopeNote="What this step supplies. A name outside it renders as nothing."
-							oninput={(source) => editTemplate(option, { source })}
+							variableLayouts={templateVariableLayoutsOf({
+								specSlug: slug,
+								stepKey: option.step.key
+							})?.keys}
+							oninput={(source) =>
+								editTemplate(option, { source })}
 						/>
 					</div>
+					{#if isAdmin && templateVariableLayoutsOf( { specSlug: slug, stepKey: option.step.key } )?.error}
+						<p class="text-surface-600-400 text-xs">
+							{templateVariableLayoutsOf({
+								specSlug: slug,
+								stepKey: option.step.key
+							})?.error}
+						</p>
+					{/if}
 					<p class="text-surface-600-400 text-xs">
-						Message blocks, placement and loops. How
-						each value is written out — headings, fences, JSON or
-						prose — is a <strong>layout</strong>
-						, set per variable below. Read variables with
+						Message blocks, placement and loops.
 						<code>&#123;&#123;&#123;x&#125;&#125;&#125;</code>
-						; a double brace escapes the fences a layout writes.
+						reads a variable.
 					</p>
 
 					{#if templateDirty(option)}
@@ -1798,131 +1785,6 @@
 								type="button"
 								class="btn btn-sm preset-filled-primary-500"
 								onclick={() => saveTemplate(option)}
-							>
-								<Icons.Save size={14} /> Save
-							</button>
-						</div>
-					{/if}
-				</div>
-			{/if}
-		{:else if option.control === "variable-template-ref"}
-			<!-- A layout is the same swappable-entity pattern as a prompt: the
-			     dropdown selects the row, the editor below edits that row, and
-			     a shipped one is duplicated rather than edited. The difference
-			     worth knowing is that these rows are **shared between
-			     pipelines** — a layout written here is offered anywhere the
-			     same value is rendered, which is why the copy says so. -->
-			<div class="flex items-center gap-1">
-				<Select
-					label={labelOverride ?? rowLabelOf(option)}
-					labelHidden
-					class="min-w-0 flex-1"
-					options={[
-						// Unset still renders: the step falls back to the layout Serene
-						// Pub ships, so the prompt is never missing a section because a
-						// selection went away.
-						{ value: "", label: "Pipeline default" },
-						...(option.choices ?? []).map((choice) => ({
-							value: String(choice.id),
-							label: choice.label
-						}))
-					]}
-					value={option.value == null ? "" : String(option.value)}
-					onValueChange={(raw) => {
-						if (raw === "") return clear(option)
-						set(option, Number(raw))
-					}}
-				/>
-				{#if option.variableTemplate && editors}
-					<button
-						type="button"
-						class="btn btn-sm preset-tonal-surface shrink-0"
-						title="Duplicate this layout and edit the copy"
-						aria-label="Duplicate this layout and edit the copy"
-						onclick={() => cloneLayout(option)}
-					>
-						<Icons.Copy size={14} />
-					</button>
-					{#if !option.variableTemplate.readOnly}
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal-surface shrink-0"
-							title="Delete this layout"
-							aria-label="Delete this layout"
-							onclick={() => deleteLayout(option)}
-						>
-							<Icons.Trash2 size={14} />
-						</button>
-					{/if}
-				{/if}
-			</div>
-
-			{#if option.variableTemplate && editors}
-				{@const readOnly = option.variableTemplate.readOnly}
-				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-base p-3">
-					{#if readOnly}
-						<p class="text-surface-600-400 text-xs">
-							<Icons.Lock size={11} class="inline" />
-							One of the layouts Serene Pub ships. Duplicate it to
-							make it yours.
-						</p>
-					{:else}
-						<label class="flex flex-col gap-1 text-xs font-medium">
-							Name
-							<input
-								type="text"
-								class="input w-full"
-								value={layoutName(option)}
-								oninput={(e) =>
-									editLayout(option, {
-										name: e.currentTarget.value
-									})}
-							/>
-						</label>
-					{/if}
-
-					<label class="flex flex-col gap-1 text-xs font-medium">
-						Layout
-						<textarea
-							class="textarea w-full font-mono text-xs"
-							rows={readOnly ? 3 : 8}
-							readonly={readOnly}
-							spellcheck="false"
-							value={layoutSource(option)}
-							oninput={(e) =>
-								editLayout(option, {
-									source: e.currentTarget.value
-								})}
-						></textarea>
-					</label>
-					<p class="text-surface-600-400 text-xs">
-						Handlebars. <code>
-							&#123;&#123;&#123;json x 2&#125;&#125;&#125;
-						</code>
-						renders
-						<code>x</code>
-						as indented JSON; loop with
-						<code>&#123;&#123;#each&#125;&#125;</code>
-						to write prose instead. Layouts are shared — changing this
-						one changes it in every pipeline that uses it.
-					</p>
-
-					{#if layoutDirty(option)}
-						<div class="flex items-center justify-end gap-2">
-							<span class="text-surface-600-400 mr-auto text-xs">
-								Unsaved changes
-							</span>
-							<button
-								type="button"
-								class="btn btn-sm preset-tonal-surface"
-								onclick={() => delete layoutDrafts[option.id]}
-							>
-								Cancel
-							</button>
-							<button
-								type="button"
-								class="btn btn-sm preset-filled-primary-500"
-								onclick={() => saveLayout(option)}
 							>
 								<Icons.Save size={14} /> Save
 							</button>
@@ -1954,7 +1816,10 @@
 					</p>
 				{/if}
 				{#if option.acceptsLabels?.length}
-					<div class="flex flex-wrap gap-1" aria-label="Script kinds accepted here">
+					<div
+						class="flex flex-wrap gap-1"
+						aria-label="Script kinds accepted here"
+					>
 						{#each option.acceptsLabels as kind (kind)}
 							<Badge size="sm">
 								{kind}
@@ -1969,10 +1834,10 @@
 					     skips it (or halts, for a stop guard). -->
 					<p class="text-surface-600-400 text-xs" data-unplaced-note>
 						<Icons.Archive size={11} class="inline" />
-						No longer here — this step no longer has this place for
-						scripts. They are skipped; a stop script here stops the
-						reply from running. Remove them, or attach them where the
-						step still takes scripts.
+						No longer here — this step no longer has this place for scripts.
+						They are skipped; a stop script here stops the reply from
+						running. Remove them, or attach them where the step still
+						takes scripts.
 					</p>
 				{/if}
 				{#if !chain.length}
@@ -1985,7 +1850,7 @@
 						class="border-surface-200-800 flex items-center gap-1.5 rounded-lg border px-2 py-1"
 					>
 						<span
-							class="text-surface-600-400 w-4 shrink-0 text-right font-mono text-meta"
+							class="text-surface-600-400 text-meta w-4 shrink-0 text-right font-mono"
 						>
 							{i + 1}
 						</span>
@@ -2007,39 +1872,44 @@
 						{:else}
 							{#if !entry.enabled}
 								<span
-									class="text-surface-600-400 shrink-0 text-meta"
+									class="text-surface-600-400 text-meta shrink-0"
 									title="Disabled on the scripts page — keeps its place, does nothing."
 								>
 									off
 								</span>
 							{/if}
 							{#if entry.blastRadius}
-								<Badge tone="warning" size="sm" class="shrink-0" title="{entry.typeLabel} — what a script of this type is able to do">
+								<Badge
+									tone="warning"
+									size="sm"
+									class="shrink-0"
+									title="{entry.typeLabel} — what a script of this type is able to do"
+								>
 									{entry.blastRadius}
 								</Badge>
 							{/if}
 						{/if}
 						{#if !option.unplaced}
-						<button
-							type="button"
-							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
-							title="Move up"
-							aria-label="Move up"
-							disabled={i === 0}
-							onclick={() => chainMove(option, i, -1)}
-						>
-							<Icons.ChevronUp size={12} />
-						</button>
-						<button
-							type="button"
-							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
-							title="Move down"
-							aria-label="Move down"
-							disabled={i === chain.length - 1}
-							onclick={() => chainMove(option, i, 1)}
-						>
-							<Icons.ChevronDown size={12} />
-						</button>
+							<button
+								type="button"
+								class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								title="Move up"
+								aria-label="Move up"
+								disabled={i === 0}
+								onclick={() => chainMove(option, i, -1)}
+							>
+								<Icons.ChevronUp size={12} />
+							</button>
+							<button
+								type="button"
+								class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								title="Move down"
+								aria-label="Move down"
+								disabled={i === chain.length - 1}
+								onclick={() => chainMove(option, i, 1)}
+							>
+								<Icons.ChevronDown size={12} />
+							</button>
 						{/if}
 						<button
 							type="button"
@@ -2065,7 +1935,9 @@
 							.map((choice) => ({
 								value: String(choice.id),
 								label: `${choice.label}${
-									choice.description ? ` · ${choice.description}` : ""
+									choice.description
+										? ` · ${choice.description}`
+										: ""
 								}`
 							}))}
 						bind:value={addPicks[option.id]}
@@ -2110,7 +1982,9 @@
 									{s.name}
 								</span>
 								{#if !s.enabled}
-									<span class="text-surface-600-400 text-meta">
+									<span
+										class="text-surface-600-400 text-meta"
+									>
 										off
 									</span>
 								{/if}
@@ -2155,7 +2029,9 @@
 				value={selected ? String(selected.id) : ""}
 				onValueChange={(raw) => {
 					if (raw === "") return set(option, null)
-					const choice = option.choices?.find((c) => String(c.id) === raw)
+					const choice = option.choices?.find(
+						(c) => String(c.id) === raw
+					)
 					if (choice?.loadoutId) set(option, { id: choice.loadoutId })
 				}}
 			/>
@@ -2169,7 +2045,10 @@
 						<button
 							type="button"
 							class="min-h-11 underline pointer-fine:min-h-0"
-							onclick={() => openInLoadouts(panelsCtx, { loadoutId: selected.id })}
+							onclick={() =>
+								openInLoadouts(panelsCtx, {
+									loadoutId: selected.id
+								})}
 						>
 							Change…
 						</button>
@@ -2182,13 +2061,16 @@
 					data-loadout-needs
 				>
 					{#if needs.length}
-						<span><span class="font-medium">Needs</span> {needs.join(" · ")}</span>
+						<span>
+							<span class="font-medium">Needs</span>
+							{needs.join(" · ")}
+						</span>
 					{/if}
 					{#if bestWith.length}
-						<span
-							><span class="font-medium">Best with</span>
-							{bestWith.join(" · ")}</span
-						>
+						<span>
+							<span class="font-medium">Best with</span>
+							{bestWith.join(" · ")}
+						</span>
 					{/if}
 				</p>
 			{/if}
@@ -2269,8 +2151,8 @@
 				<p class="text-warning-700-300 flex items-center gap-1 text-xs">
 					<Icons.TriangleAlert size={12} aria-hidden="true" />
 					This model is no longer listed by its host, so this call will
-					refuse to run. Pick another, or refresh the connection once
-					the host serves it again.
+					refuse to run. Pick another, or refresh the connection once the
+					host serves it again.
 				</p>
 			{:else if chosenModel && !chosenModel.enabled}
 				<p class="text-warning-700-300 flex items-center gap-1 text-xs">
@@ -2369,7 +2251,7 @@
 							}}
 						>
 							<span
-								class="text-surface-600-400 w-4 shrink-0 cursor-grab text-right font-mono text-meta"
+								class="text-surface-600-400 text-meta w-4 shrink-0 cursor-grab text-right font-mono"
 								aria-hidden="true"
 							>
 								{i + 1}
@@ -2384,7 +2266,7 @@
 							{#each option.item?.fields ?? [] as field (field.key)}
 								{#if field.control === "boolean"}
 									<label
-										class="flex shrink-0 items-center gap-1 text-meta"
+										class="text-meta flex shrink-0 items-center gap-1"
 										title={field.label}
 									>
 										<input
@@ -2668,7 +2550,7 @@
 				<div class="mt-2 flex flex-col gap-3">
 					{#each group.advanced as st (st.key)}
 						<fieldset
-							class="border-surface-200-800 flex min-w-0 flex-col gap-3 rounded-base border p-3"
+							class="border-surface-200-800 rounded-base flex min-w-0 flex-col gap-3 border p-3"
 						>
 							<legend class="px-1 text-xs font-medium">
 								{st.heading}
@@ -2716,7 +2598,9 @@
 						{title ?? detail.name}
 					</span>
 					{#if cardSummary}
-						<span class="text-surface-600-400 min-w-0 truncate text-xs">
+						<span
+							class="text-surface-600-400 min-w-0 truncate text-xs"
+						>
 							{cardSummary}
 						</span>
 					{/if}
@@ -2766,7 +2650,6 @@
 		<p class="text-surface-600-400 mb-3 text-xs" data-scope-note>
 			{scopeNote}
 		</p>
-
 	{/if}
 
 	{@render groupList()}

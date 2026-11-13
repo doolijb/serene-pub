@@ -21,7 +21,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, desc, eq } from "drizzle-orm"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf, type SeatMap } from "$lib/server/state/seatRefs"
+import { and, desc, eq, isNotNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -108,7 +110,15 @@ let s: {
 	pierId: number
 }
 
-const key = (c: { id: number }) => `character:${c.id}`
+let seatMap: SeatMap | null = null
+/** ⏳ A seat's key as it is stored: member form with the switch on, else the card's. */
+const key = (c: { id: number }): string =>
+	memberFormOn() && seatMap ? (memberFormOf(seatMap, `character:${c.id}`) ?? `character:${c.id}`) : `character:${c.id}`
+/** ⏳ A seat's state owner as it is stored: member form with the switch on, else the card's `session_cast`. */
+const ownerOf = (c: { id: number }): { kind: string; id: number } => {
+	const card = { kind: "session_cast", id: c.id }
+	return memberFormOn() && seatMap ? (memberFormOf(seatMap, card) ?? card) : card
+}
 const affectionTo = (value: number) => ({
 	owner: "Mara",
 	changes: "entry",
@@ -160,13 +170,21 @@ async function swipe(id: number, reply: string) {
 }
 async function maraSide() {
 	const { zonesFor } = await import("$lib/server/rulesets/zones")
-	const zones = await zonesFor(db, s.sessionId, ROMANCE, [s.wren, s.mara].map((c) => ({ key: key(c), owner: { kind: "session_cast", id: c.id } })) as any)
+	const zones = await zonesFor(db, s.sessionId, ROMANCE, [s.wren, s.mara].map((c) => ({ key: key(c), owner: ownerOf(c) })) as any)
 	return zones[key(s.mara)]?.bonds?.[0]?.fields
 }
 const maraRow = async () =>
 	(await db.select().from(schema.narrativeRelationships).where(eq(schema.narrativeRelationships.id, s.maraRowId)))[0]!
-const pierCategory = async () =>
-	((await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId)))[0]!.fields as any).category
+/** The pier's category as the session reads it: a run's change to it is held in the session's own book (`entryAt` over the session's reading). */
+const pierCategory = async () => {
+	const { sessionReadingOf } = await import("$lib/server/state/reading")
+	const { entryOverlaysFor, entryAt } = await import("$lib/server/state/entriesOnReading")
+	const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
+	const [row] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId))
+	const reading = (await sessionReadingOf(db as any, s.sessionId))!
+	const overlays = await entryOverlaysFor(db as any, row!.lorebookId, reading, [row!.id])
+	return (entryAt(toEntryRow(row!), overlays, reading) as any).category
+}
 const notesNamed = async (title: string) => {
 	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
 	const notes = await ownBookOf(db as any, s.sessionId)
@@ -182,10 +200,30 @@ const notesNamed = async (title: string) => {
  * note in the session's own notes — through the outlets a reply's run uses,
  * as that run, anchored where its writes anchor (the run's live row).
  */
-async function alsoWrote(runId: string, category: string, note: string) {
+async function alsoWrote(runId: string, category: string, note: string, opts: { onBook?: number } = {}) {
 	const { createHost } = await import("$lib/server/pipelines/runtime/host")
 	const host = createHost(db as any, { sessionId: s.sessionId, userId: ownerId, runId })
-	await host.commit!({ entry: s.pierId, fields: { category } }, { key: "change", definitionId: "core:outlet/update-lore-entry" } as any)
+	if (opts.onBook !== undefined) {
+		// A change written into the real book, as the write-through made it, with its lore
+		// imprint: a session's own change to an attached entry is held now, so the
+		// kept-and-Revert rule is tested on the imprint writer itself.
+		const { imprintChanges, entryFieldAddress } = await import("$lib/server/lorebooks/imprints")
+		const [was] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId))
+		const [wrote] = await db
+			.update(schema.lorebookEntries)
+			.set({ fields: { ...(was!.fields as object), category }, updatedAt: new Date() })
+			.where(eq(schema.lorebookEntries.id, s.pierId))
+			.returning()
+		await imprintChanges(
+			db as any,
+			{ sessionId: s.sessionId, messageId: opts.onBook, runId },
+			{ lorebookId: was!.lorebookId, subject: "entry", subjectId: s.pierId },
+			was as Record<string, unknown>,
+			wrote as Record<string, unknown>,
+			[entryFieldAddress("category")]
+		)
+	} else
+		await host.commit!({ entry: s.pierId, fields: { category } }, { key: "change", definitionId: "core:outlet/update-lore-entry" } as any)
 	await host.commit!(
 		{ name: note, content: "Seen from the pier.", params: { entryType: LOCATION_TYPE_ID }, toNotes: true },
 		{ key: "file", definitionId: "core:outlet/create-lore-entry" } as any
@@ -258,10 +296,11 @@ beforeAll(async () => {
 		.update(schema.sessions)
 		.set({ lorebookId: book!.id, primaryRuleset: ROMANCE, rigour: "mechanics", genreFields: { ...((made?.genreFields ?? {}) as object), autoAdvance: "next" } })
 		.where(eq(schema.sessions.id, sessionId))
+	seatMap = await loadSeatMap(db as any, sessionId)
 	const side = (who: { id: number }, other: { id: number; name: string }, row: { id: number }, fields: Record<string, unknown>) => ({
 		sessionId,
-		ownerKind: "session_cast",
-		ownerId: who.id,
+		ownerKind: ownerOf(who).kind,
+		ownerId: ownerOf(who).id,
 		rulesetId: ROMANCE,
 		zoneType: "bonds",
 		entries: [{ entryId: null, entryType: "bond", name: other.name, sideOwner: key(who), fields: { towards: key(other), edge: String(row.id), ...fields } }]
@@ -292,11 +331,15 @@ describe("🚧 RF fix 4: what a message changed goes with it", () => {
 		const firstRun = first.rulesRunId!
 		await alsoWrote(firstRun, "Harbour", "A gull")
 		expect(await pierCategory()).toBe("Harbour")
+		// Held in the session's own book: the lorebook's own row is never written.
+		const [pierRow] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId))
+		expect((pierRow!.fields as any).category).toBe("Docks")
 		expect(await notesNamed("A gull")).toHaveLength(1)
 		const { imprintsOf } = await import("$lib/server/lorebooks/imprints")
 		const filed = await imprintsOf(db as any, s.sessionId)
 		expect(new Set(filed.map((i) => i.messageId))).toEqual(new Set([reply.id]))
 		expect(new Set(filed.map((i) => i.runId))).toEqual(new Set([firstRun]))
+		expect(await db.select().from(schema.entryAmendments).where(and(isNotNull(schema.entryAmendments.base), eq(schema.entryAmendments.sourceMessageId, reply.id)))).toHaveLength(1)
 
 		const res: any = await swipe(reply.id, answer(6))
 		expect(res?.error, res?.error).toBeUndefined()
@@ -314,7 +357,7 @@ describe("🚧 RF fix 4: what a message changed goes with it", () => {
 	it("a field someone changed since stays, the place says so, and Revert puts it back", async () => {
 		const reply = await newestReply()
 		const run = (await maraRow()).rulesRunId!
-		await alsoWrote(run, "Harbour", "A heron")
+		await alsoWrote(run, "Harbour", "A heron", { onBook: reply.id })
 		const { updateEntryHandler, listEntryRows, settleImprintHandler } = await import("./entries")
 		await updateEntryHandler.handler(fakeSocket(ownerId), { entry: { id: s.pierId, typeId: LOCATION_TYPE_ID, category: "Wharf" } } as any, emit)
 		expect(await pierCategory()).toBe("Wharf")

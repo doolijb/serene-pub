@@ -18,6 +18,8 @@
 		AdminChangelistColumn,
 		AdminChangelistFilter
 	} from "$lib/client/components/admin/changelist"
+	import RulesFitLine from "$lib/client/lorebooks/RulesFitLine.svelte"
+	import { rulesFitLine } from "$lib/client/lorebooks/rulesFitWords"
 	import { rigourLabel } from "$lib/shared/rulesets/rigourLabels"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import { originLabel, playedByText, stateLabel, STATE_ORDER } from "./rulesetLabels"
@@ -57,6 +59,7 @@
 		},
 		{ key: "version", label: "Version", text: (r) => r.version ?? "", sortValue: (r) => r.version ?? "" },
 		{ key: "plays", label: "Plays", text: plays, sortValue: (r) => (r.decides ? 1 : 0) },
+		{ key: "fit", label: "Genre fit", custom: true, text: (r) => rulesFitLine(r.rulesetFitByGenre) },
 		{ key: "played", label: "Played by", text: (r) => playedByText(r.playedBy), sortValue: played },
 		{
 			key: "id",
@@ -103,4 +106,12 @@
 	defaultSort="name"
 	emptyIcon={Icons.Scale}
 	emptyMessage="No rulesets: Serene Pub registers Freeform at startup, so an empty list means the startup failed."
-/>
+>
+	{#snippet cell(row, col)}
+		{#if col.key === "fit"}
+			<RulesFitLine fits={row.rulesetFitByGenre} />
+		{:else}
+			{col.text?.(row)}
+		{/if}
+	{/snippet}
+</AdminChangelist>

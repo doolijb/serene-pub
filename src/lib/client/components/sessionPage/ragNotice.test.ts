@@ -3,7 +3,7 @@
  * concept (Search by meaning · indexed · needs re-indexing), and the press it
  * offers is the one its sentence names.
  */
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
 	markNoticeRead,
 	noticeRead,
@@ -12,6 +12,7 @@ import {
 	ragNoticeSentence,
 	ragNoticeVariant,
 	SEARCH_BY_MEANING_SETUP_HREF,
+	statusAsker,
 	type RagNoticeVariant
 } from "./ragNotice"
 
@@ -22,12 +23,7 @@ const counts = (total: number, nullCount: number, staleCount = 0) => ({
 	readyCount: total - nullCount - staleCount
 })
 
-const facts = {
-	modelName: "bge-small",
-	readyCount: 12,
-	total: 40,
-	queueRunning: true
-}
+const facts = { modelName: "bge-small" }
 
 describe("ragNoticeVariant", () => {
 	it("has nothing to say without a lorebook, over an empty one, or once all is indexed", () => {
@@ -36,22 +32,20 @@ describe("ragNoticeVariant", () => {
 		expect(ragNoticeVariant(counts(5, 0))).toBeNull()
 	})
 
-	it("reads not indexed, needs re-indexing and part way", () => {
+	it("reads not indexed and needs re-indexing, and is silent part way (Activity shows that progress)", () => {
 		expect(ragNoticeVariant(counts(4, 4))).toBe("none")
 		expect(ragNoticeVariant(counts(5, 0, 5))).toBe("stale")
 		expect(ragNoticeVariant(counts(5, 0, 2))).toBe("stale")
-		expect(ragNoticeVariant(counts(40, 28))).toBe("processing")
-		expect(ragNoticeVariant(counts(6, 2, 2))).toBe("processing")
+		expect(ragNoticeVariant(counts(40, 28))).toBeNull()
+		expect(ragNoticeVariant(counts(6, 2, 2))).toBeNull()
 	})
 })
 
 describe("ragNoticeSentence", () => {
 	it("says indexed, never vectors, embedded or RAG", () => {
-		for (const variant of ["none", "stale", "processing"] as const) {
-			for (const queueRunning of [true, false]) {
-				const s = ragNoticeSentence(variant, { ...facts, queueRunning })
-				expect(s).not.toMatch(/vector|embedd|\bRAG\b/i)
-			}
+		for (const variant of ["none", "stale"] as const) {
+			const s = ragNoticeSentence(variant, facts)
+			expect(s).not.toMatch(/vector|embedd|\bRAG\b|processing/i)
 		}
 	})
 
@@ -62,17 +56,6 @@ describe("ragNoticeSentence", () => {
 		expect(
 			ragNoticeSentence("stale", { ...facts, modelName: null })
 		).toMatch(/with the current model\.$/)
-	})
-
-	it("counts while indexing, and says the rest are waiting when the queue is idle", () => {
-		expect(ragNoticeSentence("processing", facts)).toBe(
-			"Indexing 12 of 40 lorebook entries."
-		)
-		expect(
-			ragNoticeSentence("processing", { ...facts, queueRunning: false })
-		).toBe(
-			"12 of 40 lorebook entries are indexed. The rest are waiting to be indexed."
-		)
 	})
 
 	it("says Search by meaning can't find entries that aren't indexed", () => {
@@ -99,18 +82,8 @@ describe("ragNoticeActions", () => {
 		expect(SEARCH_BY_MEANING_SETUP_HREF).toBe("/admin/defaults")
 	})
 
-	it("offers Prioritize in queue while indexing is part way", () => {
-		expect(
-			ragNoticeActions("processing", true).map((a) => a.label)
-		).toEqual(["Prioritize in queue"])
-	})
-
 	it("offers a member nothing to press: the queue and Admin are an administrator's", () => {
-		for (const variant of [
-			"none",
-			"stale",
-			"processing"
-		] as RagNoticeVariant[])
+		for (const variant of ["none", "stale"] as RagNoticeVariant[])
 			expect(ragNoticeActions(variant, false)).toEqual([])
 	})
 })
@@ -160,5 +133,75 @@ describe("the notice's read mark", () => {
 		expect(() => markNoticeRead(7, broken)).not.toThrow()
 		expect(noticeRead(7, null)).toBe(false)
 		expect(() => markNoticeRead(7, null)).not.toThrow()
+	})
+})
+
+describe("statusAsker", () => {
+	function make() {
+		const send = vi.fn()
+		const timers: Array<{ fn: () => void; ms: number; live: boolean }> = []
+		const asker = statusAsker(send, {
+			throttleMs: 100,
+			setTimer: (fn, ms) => {
+				const t = { fn, ms, live: true }
+				timers.push(t)
+				return t
+			},
+			clearTimer: (t) => {
+				;(t as { live: boolean }).live = false
+			}
+		})
+		const fire = () => {
+			for (const t of timers) if (t.live) ((t.live = false), t.fn())
+		}
+		return { send, asker, timers, fire }
+	}
+
+	it("sends at once, and not again while an ask is in flight", () => {
+		const { send, asker } = make()
+		asker.now()
+		asker.now()
+		expect(send).toHaveBeenCalledTimes(1)
+		asker.answered()
+		expect(send).toHaveBeenCalledTimes(2)
+		asker.answered()
+		expect(send).toHaveBeenCalledTimes(2)
+	})
+
+	it("coalesces several triggers in flight into one re-ask", () => {
+		const { send, asker, fire } = make()
+		asker.now()
+		asker.now()
+		asker.soon()
+		fire()
+		asker.now()
+		expect(send).toHaveBeenCalledTimes(1)
+		asker.answered()
+		expect(send).toHaveBeenCalledTimes(2)
+	})
+
+	it("soon() sends once at the end of the window", () => {
+		const { send, asker, timers, fire } = make()
+		asker.soon()
+		asker.soon()
+		asker.soon()
+		expect(timers).toHaveLength(1)
+		expect(timers[0].ms).toBe(100)
+		expect(send).not.toHaveBeenCalled()
+		fire()
+		expect(send).toHaveBeenCalledTimes(1)
+	})
+
+	it("reset() drops in-flight, dirty and a pending timer, sending nothing", () => {
+		const { send, asker, fire } = make()
+		asker.now()
+		asker.now()
+		asker.soon()
+		asker.reset()
+		fire()
+		asker.answered()
+		expect(send).toHaveBeenCalledTimes(1)
+		asker.now()
+		expect(send).toHaveBeenCalledTimes(2)
 	})
 })

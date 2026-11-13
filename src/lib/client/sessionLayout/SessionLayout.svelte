@@ -15,8 +15,8 @@
 	 *   arrangement it emits, and the bridge to the header's Layout button;
 	 * - it PERSISTS the editor's arrangement: the editor emits the panels it
 	 *   commits (`panels`, PLAN-session-panels-2026-10-14), and this writes
-	 *   them to the manager (`persist`). A panel's own controls in the live
-	 *   view (its tab, its pin) write through the manager themselves;
+	 *   them to the manager (`persist`). A panel's own control in the live
+	 *   view (its tab) writes through the manager itself;
 	 * - it renders the live session (./SessionLayoutRender) once, always, and
 	 *   the editor (./SessionLayoutEditor) over it while it is open. The two
 	 *   never share state: what crosses between them goes through here.
@@ -36,12 +36,15 @@
 	// lands outside Tailwind's cascade layers. The looks themselves are widget
 	// styles now — see messageLayouts.css.
 	import "./messageLayouts.css"
-	// The header's "Layout" button is the one way into the editor, and while
-	// the desktop editor is open the shell hands its top band to the toolbar.
+	// The header's "Layout" button is one of the ways into the editor, with
+	// the menus' *Customize layout*; while the desktop editor is open the
+	// shell hands its top band to the toolbar.
 	// Header and this component are siblings under <main>, so a module
 	// singleton is the bridge — see layoutEditor.svelte.ts.
 	import { layoutEditor } from "./layoutEditor.svelte"
-	import { mobileSidePanels } from "./mobileSidePanels.svelte"
+	import { sessionZones } from "./sessionZones.svelte"
+	import { clearShownChannels } from "$lib/client/components/sessionPage/requests/showChannel"
+	import { clearConversationStyleSources } from "./conversationStyles"
 	import {
 		createSessionLayoutModel,
 		type PanelsCtx
@@ -49,10 +52,6 @@
 	import { createWidgetSettingsFlow } from "./widgetSettingsFlow.svelte"
 	import SessionLayoutRender from "./SessionLayoutRender.svelte"
 	import SessionLayoutEditor from "./SessionLayoutEditor.svelte"
-	// A widget's settings and style open in ONE app-level modal (owner ruling
-	// 2026-09-27); every entry point calls `openWidgetSettings`, and this file
-	// mounts the modal once.
-	import WidgetSettingsModal from "./WidgetSettingsModal.svelte"
 
 	/** The page's contract. The Start from pane's half is ./startFrom's. */
 	interface Props extends StartFromProps {
@@ -280,12 +279,12 @@
 			mq.removeEventListener("change", onMq)
 			window.removeEventListener("resize", onWin)
 			window.removeEventListener("scroll", onWin, true)
-			// The header's panels button is app-wide state; leaving the session
-			// has to retract it, or it would follow the user onto every other
-			// page — the menu it opens with it.
-			mobileSidePanels.setSides(false, 0, 0)
-			mobileSidePanels.setGroups([])
-			mobileSidePanels.menuOpen = false
+			// The zone switch and the shown channels are app-wide state; leaving
+			// the session has to retract them, or the header's switch would
+			// follow the user onto every other page.
+			sessionZones.reset()
+			clearShownChannels()
+			clearConversationStyleSources()
 			// Same reason: leaving the session while editing has to give the
 			// shell its session header and Jump pill back.
 			layoutEditor.open = false
@@ -345,7 +344,6 @@
 			{isAdmin}
 			onWorking={(next: unknown) => (working = next)}
 			onLayout={persist}
-			onPutAway={(zoneId) => render?.putAway(zoneId)}
 			onClose={closeEditor}
 		/>
 	{/if}
@@ -362,9 +360,6 @@
 	/>
 </div>
 
-<!-- Portalled to the body: no widget box, zone or flyout can clip it. -->
-<WidgetSettingsModal />
-
 <style>
 	.session-layout {
 		position: relative;
@@ -373,11 +368,5 @@
 		block-size: 100%;
 		inline-size: 100%;
 		min-block-size: 0;
-	}
-	/* Full screen (the model's `fullscreen`): marked, never unmounted — the mount
-	   stays and an iframe under it keeps running. `!important` because a side's
-	   slot and a flyout set their own `display` by class. */
-	.session-layout :global([data-stage-hidden]) {
-		display: none !important;
 	}
 </style>

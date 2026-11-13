@@ -14,17 +14,30 @@ import * as Icons from "@lucide/svelte"
 import LayoutEditorToolbar from "./LayoutEditorToolbar.svelte"
 import MobileLayoutEditor from "./MobileLayoutEditor.svelte"
 import type { TrayWidget } from "./widgetInstances"
-import type { PanelLayoutV1 } from "@serene-pub/sdk"
+import type { PanelLayoutV2 } from "@serene-pub/sdk"
 import { UNKNOWN_PANEL } from "./arrangeOps"
 
 const TRAY: TrayWidget[] = [
-	{ id: "messages", title: "Messages", icon: "MessagesSquare", placed: 2, full: null },
+	{
+		id: "messages",
+		title: "Messages",
+		icon: "MessagesSquare",
+		placed: 2,
+		full: null
+	},
 	{ id: "stats", title: "Stats", icon: "Gauge", placed: 1, full: null },
 	{ id: "world-state", title: "World state", placed: 0, full: null },
-	{ id: "acme.audio:player", title: "Player", placed: 1, full: "Only one per layout" }
+	{
+		id: "acme.audio:player",
+		title: "Player",
+		placed: 1,
+		full: "Only one per layout"
+	}
 ]
 
-const picture = createRawSnippet(() => ({ render: () => `<span class="pv"></span>` }))
+const picture = createRawSnippet(() => ({
+	render: () => `<span class="pv"></span>`
+}))
 const apps: ReturnType<typeof mount>[] = []
 afterEach(() => {
 	for (const app of apps.splice(0)) unmount(app)
@@ -36,8 +49,10 @@ async function settle() {
 	await new Promise((r) => setTimeout(r, 0))
 	flushSync()
 }
-const text = (el: Element | null | undefined) => el?.textContent?.replace(/\s+/g, " ").trim() ?? ""
-const chip = (id: string) => document.querySelector<HTMLButtonElement>(`[data-tray-widget="${id}"]`)
+const text = (el: Element | null | undefined) =>
+	el?.textContent?.replace(/\s+/g, " ").trim() ?? ""
+const chip = (id: string) =>
+	document.querySelector<HTMLButtonElement>(`[data-tray-widget="${id}"]`)
 
 function toolbar(over: Record<string, unknown> = {}) {
 	const props = $state<Record<string, unknown>>({
@@ -104,21 +119,25 @@ describe("desktop: the tray offers every widget kind every time", () => {
 		await settle()
 		expect(props.armedId).toBeNull()
 	})
-	test("the tray line says a widget can go into a side's rail (§10 R-C), and so does an armed chip's hint", async () => {
+	test("the tray line says where a widget can go, and so does an armed chip's hint", async () => {
 		const props = toolbar()
 		await settle()
-		expect(text(document.querySelector(".palette-tip"))).toContain("onto a side's rail to put it in the rail")
+		expect(text(document.querySelector(".palette-tip"))).toContain(
+			"Drag onto a panel's tabs or between panels"
+		)
 		props.armedId = "stats"
 		await settle()
-		expect(text(document.querySelector(".palette-hint"))).toBe("tap a panel's tabs, a gap, or a rail to place")
+		expect(text(document.querySelector(".palette-hint"))).toBe(
+			"tap a panel's tabs or a gap to place"
+		)
 	})
 })
 
 /** Messages in the middle, Stats then World state in one right panel. */
-const PANELS = (): PanelLayoutV1 => ({
-	version: 1,
+const PANELS = (): PanelLayoutV2 => ({
+	version: 2,
 	left: [],
-	middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+	middle: [{ key: "p1", tabs: ["messages"] }],
 	right: [{ key: "p2", tabs: ["stats", "world-state"] }]
 })
 function phone(over: Record<string, unknown> = {}) {
@@ -152,12 +171,13 @@ function phone(over: Record<string, unknown> = {}) {
 	return props
 }
 const panels = (props: Record<string, unknown>) =>
-	$state.snapshot(props.editPanels) as PanelLayoutV1
+	$state.snapshot(props.editPanels) as PanelLayoutV2
 const addButtonOf = (zone: string) =>
 	[...document.querySelectorAll<HTMLButtonElement>(".medit-zone")]
 		.find((z) => text(z.querySelector(".medit-zone-head")).startsWith(zone))
 		?.querySelector<HTMLButtonElement>(".medit-zone-head button")
-const named = (label: string) => document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)
+const named = (label: string) =>
+	document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)
 
 describe("phone: the Add sheet and Duplicate", () => {
 	test("the sheet lists every kind, placed ones with their count, a full one disabled", async () => {
@@ -182,7 +202,10 @@ describe("phone: the Add sheet and Duplicate", () => {
 		await settle()
 		chip("stats")!.click()
 		await settle()
-		expect(panels(props).right.map((p) => p.tabs)).toEqual([["stats", "world-state"], ["stats#2"]])
+		expect(panels(props).right.map((p) => p.tabs)).toEqual([
+			["stats", "world-state"],
+			["stats#2"]
+		])
 		expect(props.onMinted).toHaveBeenLastCalledWith("stats#2", null)
 
 		named("Add a tab to stats · world-state")!.click()
@@ -203,7 +226,9 @@ describe("phone: the Add sheet and Duplicate", () => {
 		expect(dup).toBeTruthy()
 		dup!.click()
 		await settle()
-		expect(panels(props).right.map((p) => p.tabs)).toEqual([["stats", "stats#2", "world-state"]])
+		expect(panels(props).right.map((p) => p.tabs)).toEqual([
+			["stats", "stats#2", "world-state"]
+		])
 		expect(props.onMinted).toHaveBeenCalledWith("stats#2", "stats")
 	})
 
@@ -213,13 +238,15 @@ describe("phone: the Add sheet and Duplicate", () => {
 		named("Add a tab to stats · world-state")!.click()
 		await settle()
 		// The panel leaves the layout while the sheet is open.
-		const without: PanelLayoutV1 = { ...PANELS(), right: [] }
+		const without: PanelLayoutV2 = { ...PANELS(), right: [] }
 		props.editPanels = without
 		await settle()
 		chip("world-state")!.click()
 		await settle()
 		expect(panels(props)).toEqual(without)
 		expect(props.onMinted).not.toHaveBeenCalled()
-		expect(text(document.querySelector("[data-medit-notice]"))).toBe(UNKNOWN_PANEL)
+		expect(text(document.querySelector("[data-medit-notice]"))).toBe(
+			UNKNOWN_PANEL
+		)
 	})
 })

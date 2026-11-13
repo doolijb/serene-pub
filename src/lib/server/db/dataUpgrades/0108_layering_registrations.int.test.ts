@@ -193,7 +193,6 @@ describe("0108 layering registrations", () => {
 			[
 				"story-advance-time#advance-time→story-advance-time",
 				"story-answer#answer→story-answer",
-				"story-ask#ask→story-ask",
 				"story-generate-image#generate-image→story-generate-image",
 				"story-illustrate-scene#illustrate-scene→story-illustrate-scene",
 				"story-look#look→story-look",

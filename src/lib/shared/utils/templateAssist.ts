@@ -40,6 +40,7 @@ import {
 	enterHandlebarsBlock,
 	handlebarsPath,
 	nearestName,
+	variableLayoutOffersFor,
 	resolveHandlebarsPath,
 	rootHandlebarsReach,
 	typeOfHandlebarsPath
@@ -55,6 +56,7 @@ import {
 	CONTEXT_LIQUID_BLOCK_TAGS,
 	CONTEXT_LIQUID_REFUSED_TAGS
 } from "$lib/shared/utils/templateCheckOptions"
+import type { TemplateCheckOptions } from "@serene-pub/sdk/template-check"
 import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 
 const LIQUID_ENGINE = "core:template/liquid@1"
@@ -91,10 +93,28 @@ export const HANDLEBARS_HELPER_DOCS: Readonly<
 	ne: { signature: "ne a b", description: "True when a does not equal b." },
 	and: { signature: "and a b", description: "True when both are truthy." },
 	or: { signature: "or a b", description: "True when either is truthy." },
-	pad: { signature: "pad n width", description: "A number as a zero-padded string." },
-	isSet: { signature: "isSet value", description: "Present, as distinct from falsy — for `{{#if (isSet x)}}`." },
-	json: { signature: "json value [indent]", description: "The value as JSON." },
-	jsonValue: { signature: "jsonValue value [offset] indent= offset=", description: "One value as JSON, indented as if nested." },
+	pad: {
+		signature: "pad n width",
+		description: "A number as a zero-padded string."
+	},
+	isSet: {
+		signature: "isSet value",
+		description:
+			"Present, as distinct from falsy — for `{{#if (isSet x)}}`."
+	},
+	layout: {
+		signature: 'layout variable "reference"',
+		description:
+			"The variable written out by the named layout, in this template only."
+	},
+	json: {
+		signature: "json value [indent]",
+		description: "The value as JSON."
+	},
+	jsonValue: {
+		signature: "jsonValue value [offset] indent= offset=",
+		description: "One value as JSON, indented as if nested."
+	},
 	// Strokes paused (`STROKES_ENABLED` off): still registered, not offered.
 	...(STROKES_ENABLED
 		? { strokeList: { signature: "strokeList strokes kind", description: "A card's strokes of one kind as a list — labelled ones as { Label: text }; nothing when there are none." } }
@@ -125,6 +145,11 @@ export interface AssistOptions {
 	engine?: string
 	/** Root name → who supplies it. */
 	declarers?: Readonly<Record<string, ScopeDeclarer>>
+	/**
+	 * Variable id → the layouts a template may name for it. The caller passes
+	 * the laid-out scope with it; it fills the reference inside the quotes.
+	 */
+	layoutOffers?: TemplateCheckOptions["variableLayoutOffers"]
 }
 
 export type CompletionKind =
@@ -428,6 +453,43 @@ function innermostContextBlock(blocks: OpenBlock[]): OpenBlock | undefined {
 }
 
 /**
+ * Inside the quotes of `layout <key> "…` (Handlebars, also in a
+ * subexpression) or `<key> | layout: "…` (Liquid): the layouts that key may
+ * name, and nothing else. `null` = the caret is not there.
+ */
+function layoutReferenceCompletions(
+	source: string,
+	offset: number,
+	scope: TemplateScope,
+	options: AssistOptions
+): Completion[] | null {
+	const liquid = options.engine === LIQUID_ENGINE
+	const tag = liquid
+		? openLiquidTagAt(source, offset)
+		: openTagAt(source, offset)
+	if (!tag) return null
+	const m = liquid
+		? /(?:^|[\s(])([^\s|"'()]+)\s*\|\s*layout\s*:\s*(["'])([^"']*)$/.exec(
+				tag.inner
+			)
+		: /(?:^|[\s(~])layout\s+([^\s"'()]+)\s+(["'])([^"']*)$/.exec(tag.inner)
+	if (!m) return null
+	const typed = m[3]!
+	const offers = variableLayoutOffersFor(scope, m[1]!, options.layoutOffers)
+	return rank(
+		offers.map((o) => ({
+			label: o.reference,
+			insert: o.reference,
+			kind: "placeholder" as const,
+			detail: o.label,
+			start: offset - typed.length,
+			end: offset
+		})),
+		typed
+	)
+}
+
+/**
  * Completions at a cursor.
  *
  * Offered only inside a `{{ … }}` (or `{% … %}` for Liquid) — a completion
@@ -440,6 +502,8 @@ export function completionsAt(
 	scope: TemplateScope,
 	options: AssistOptions = {}
 ): Completion[] {
+	const reference = layoutReferenceCompletions(source, offset, scope, options)
+	if (reference) return reference
 	if (options.engine === LIQUID_ENGINE)
 		return liquidCompletionsAt(source, offset, scope, options)
 
@@ -876,6 +940,7 @@ const LIQUID_TAGS: LiquidTagSnippet[] = [
 /** Liquid's filters: core's (`CONTEXT_LIQUID_FILTERS`) and the standard set. */
 export const LIQUID_FILTER_DOCS: Readonly<Record<string, string>> = {
 	pad: "pad: width — a number, zero-padded",
+	layout: 'layout: "reference" — the variable written out by the named layout, in this template only',
 	json: "json: indent — the value as JSON",
 	jsonValue: "jsonValue: offset — one value as JSON, indented as if nested",
 	// Strokes paused (`STROKES_ENABLED` off): still registered, not offered.

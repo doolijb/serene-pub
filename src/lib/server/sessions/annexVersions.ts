@@ -8,7 +8,7 @@
  * annex reads give it as `version`.
  *
  * ⚠ Not the **owner version** (`ownerVersionOf`: the writing package's semver an
- * annex delta carries), not a message **revision**.
+ * `annex` session imprint carries), not a message **revision**.
  *
  * A leaf module: drizzle only.
  */

@@ -42,9 +42,12 @@
 import { bridgesFor, getRuleset, i18nText, RIGOURS, type Rigour, type RulesetDecl, type RulesetTime, type SlotListItem } from "@serene-pub/sdk"
 import { and, eq, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { stateFor, valueOf } from "$lib/server/state/resolve"
-import { hoursCrossed, noteHourlyWaitsForClock, usesHourlyRecurring } from "./clockHours"
-import { coreAnnexIn, coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
+import { sessionLinks, stateFor, valueOf, valueStampsOf } from "$lib/server/state/resolve"
+import { isSeatedMemberOwner, storedSeatOwner, storedSeatRef } from "$lib/server/state/seatRefs"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { hoursCrossed, minutesBetween, noteHourlyWaitsForClock, usesHourlyRecurring } from "./clockHours"
+import { lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
+import { fileSessionImprint } from "$lib/server/sessions/sessionImprints"
 import { minutesPer } from "./common"
 import { conventionsOf, earlyPhases, runApply, runApplyAsync, runResolve } from "./engine"
 import { conventionsFor, presetOf, settingValues } from "./conventions"
@@ -63,6 +66,7 @@ import {
 import {
 	deciderUses,
 	functionUsesOf,
+	runsModules,
 	modulesAt,
 	newLedger,
 	runCheckFunctions,
@@ -184,12 +188,42 @@ export interface RulesetResolveDeps {
  * shuffle count and how many cards are drawn.
  */
 
+/**
+ * 🚧 How long ago each owner's stat values were written (lane sense-age2):
+ * story minutes from the row's story-clock stamp to the session's clock now,
+ * real seconds from the row's write to one real instant taken here.
+ */
+async function writtenAgoOf(
+	db: Db,
+	sessionId: number,
+	owners: readonly OwnerView[],
+	now: Awaited<ReturnType<typeof storyClockOf>>
+): Promise<Pick<EngineInput, "writtenAgo" | "realNow">> {
+	const realNow = Date.now()
+	const links = await sessionLinks(db, sessionId)
+	const writtenAgo: Record<string, Record<string, { minutes: number | null; realSeconds: number | null }>> = {}
+	for (const o of owners) {
+		const stamps = await valueStampsOf(db, sessionId, o.owner, o.stats.map((s) => s.slotId), { links })
+		const per: Record<string, { minutes: number | null; realSeconds: number | null }> = {}
+		for (const s of o.stats) {
+			const stamp = stamps.get(s.slotId) ?? null
+			const gap = stamp?.clock && now ? minutesBetween(stamp.clock as never, now.now as never, now.calendar) : undefined
+			per[s.slotId] = {
+				minutes: gap === undefined || gap < 0 ? null : gap,
+				realSeconds: stamp ? Math.max(0, Math.floor((realNow - stamp.writtenAt.getTime()) / 1000)) : null
+			}
+		}
+		writtenAgo[o.key] = per
+	}
+	return { writtenAgo, realNow }
+}
+
 /** 🚧 The session's decks and open scene, for a ruleset with a `card-draw` method; nothing otherwise. */
 async function decksFor(db: Db, sessionId: number, input: EngineInput): Promise<Pick<EngineInput, "decks" | "scene" | "deckSeed">> {
 	const draws = Object.values(conventionsOf(input).methods).some((m) => m?.kind === "card-draw")
 	if (!draws) return {}
-	const [row] = await db.select({ annex: schema.sessions.annex }).from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1)
-	const stored = coreAnnexIn(row?.annex).rulesetDecks
+	const [row] = await db.select({ rulesetDecks: schema.sessions.rulesetDecks }).from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1)
+	const stored = row?.rulesetDecks
 	const decks: Record<string, DeckState> = {}
 	if (stored && typeof stored === "object" && !Array.isArray(stored))
 		for (const [k, v] of Object.entries(stored as Record<string, unknown>)) {
@@ -202,19 +236,48 @@ async function decksFor(db: Db, sessionId: number, input: EngineInput): Promise<
 	return { decks, scene: open.length ? Math.max(...open) : null, deckSeed: `deck:${sessionId}` }
 }
 
-/** 🚧 Store the decks a moment drew from, key by key — the `core` annex document's other keys untouched. */
-async function writeDecks(db: Db, sessionId: number, decks: Record<string, DeckState> | undefined): Promise<void> {
+/**
+ * 🚧 Store the decks a moment drew from, key by key, in the `ruleset_decks`
+ * column, and file one `deck` session imprint per key written (before: the
+ * stored state or absent; after: the new one). The imprint is anchored to the
+ * turn in every mode, propose included, so a regenerated turn never spends its
+ * cards twice (`turnAnchorOf`: none, none filed).
+ */
+async function writeDecks(
+	db: Db,
+	sessionId: number,
+	decks: Record<string, DeckState> | undefined,
+	turn: { turnMessageId: number | null; runId: string | null }
+): Promise<void> {
 	if (!decks || !Object.keys(decks).length) return
 	await db.transaction(async (tx: Db) => {
 		await lockSessionAnnex(tx, sessionId)
+		const [row] = await tx
+			.select({ decks: schema.sessions.rulesetDecks })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		const held =
+			row?.decks && typeof row.decks === "object" && !Array.isArray(row.decks)
+				? (row.decks as Record<string, unknown>)
+				: {}
 		await tx.execute(sql`
 			update ${schema.sessions}
-			set ${sql.identifier("annex")} = ${coreAnnexSetSql(
-				"rulesetDecks",
-				sql`coalesce(${coreAnnexKeySql("rulesetDecks")}, '{}'::jsonb) || ${JSON.stringify(decks)}::jsonb`
-			)}
+			set ${sql.identifier("ruleset_decks")} = coalesce(${sql.identifier("ruleset_decks")}, '{}'::jsonb) || ${JSON.stringify(decks)}::jsonb
 			where ${schema.sessions.id} = ${sessionId}
 		`)
+		const messageId =
+			turn.turnMessageId != null
+				? await (await import("$lib/server/lorebooks/ownBook")).turnAnchorOf(tx, sessionId, turn.turnMessageId)
+				: null
+		for (const [key, after] of Object.entries(decks))
+			await fileSessionImprint(
+				tx,
+				{ sessionId, messageId: messageId ?? null, runId: turn.runId },
+				{ kind: "deck", key },
+				held[key],
+				after
+			)
 	})
 }
 
@@ -231,15 +294,62 @@ export type RulesetResolveResult = { ok: RulesetResolveOut } | { halt: string }
 
 const MODES: readonly RulesetMode[] = ["resolve", "apply", "advance", "propose"]
 
+/**
+ * 🚧 A participant ref or owner a request names, with a `seated-member:<id>`
+ * ref / `{ kind: "seated_member", id }` owner read as its seat's stored key
+ * (plan §27 S2: refs in, refs out) — the door every raw ref of a request
+ * passes, so `ownerRefOf` and the engine behind it see stored keys alone. A
+ * member with no seat comes back as it was: `ownerRefOf` reads nothing of it,
+ * and the turn reports it among `unknownOwners` like any unknown owner.
+ */
+async function storedRefOf(db: Db, sessionId: number, raw: unknown): Promise<unknown> {
+	// 🚧 ⏳ Flip on (`memberForm.ts`): the door runs the other way too — a `character:<cardId>` ref / `session_cast` owner reads as its seat's member form; a member-less seat (the doors answer null) keeps its card form.
+	if (memberFormOn()) {
+		if (typeof raw === "string") return /^(character|seated-member):\d+$/.test(raw.trim()) ? ((await storedSeatRef(db, sessionId, raw)) ?? raw) : raw
+		if (isSeatedMemberOwner(raw) || (raw && typeof raw === "object" && (raw as { kind?: unknown }).kind === "session_cast"))
+			return (await storedSeatOwner(db, sessionId, raw as { kind: unknown; id: unknown })) ?? raw
+		return raw
+	}
+	if (typeof raw === "string") return raw.trim().startsWith("seated-member:") ? ((await storedSeatRef(db, sessionId, raw)) ?? raw) : raw
+	if (isSeatedMemberOwner(raw)) return (await storedSeatOwner(db, sessionId, raw)) ?? raw
+	return raw
+}
+
+/**
+ * 🚧 A zone ask with its refs read as stored keys — its owner, where it moves
+ * to, and (an entry or a tie field) whom a tie side is towards — so the
+ * planner behind it, which reads keys alone, finds the same owner the card's
+ * ref would (plan §27 S2). An ask naming a member with no seat comes back as it was.
+ */
+async function storedZoneOp(db: Db, sessionId: number, op: ZoneOp): Promise<ZoneOp> {
+	const key = async (v: unknown): Promise<unknown> => (typeof v === "string" ? storedRefOf(db, sessionId, v) : v)
+	const entry = op.entry as Record<string, unknown> | null
+	let nextEntry: unknown = op.entry
+	if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+		const fields = entry.fields as Record<string, unknown> | undefined
+		const towards = await key(entry.towards)
+		const fieldTowards = fields && typeof fields === "object" ? await key(fields.towards) : undefined
+		if (towards !== entry.towards || (fields && fieldTowards !== fields.towards))
+			nextEntry = {
+				...entry,
+				...(towards !== entry.towards ? { towards } : {}),
+				...(fields && fieldTowards !== fields.towards ? { fields: { ...fields, towards: fieldTowards } } : {})
+			}
+	}
+	const owner = (await key(op.owner)) as string
+	const toOwner = (await key(op.toOwner)) as string | undefined
+	return owner === op.owner && toOwner === op.toOwner && nextEntry === op.entry ? op : { ...op, owner, ...(op.toOwner !== undefined ? { toOwner } : {}), entry: nextEntry }
+}
+
 /** `actions`: one text for everybody, or texts by owner key. */
-function actionsOf(raw: unknown, sessionId: number): Record<string, string> {
+async function actionsOf(db: Db, raw: unknown, sessionId: number): Promise<Record<string, string>> {
 	if (typeof raw === "string") return raw.trim() ? { "*": raw } : {}
 	if (Array.isArray(raw)) {
 		const out: Record<string, string> = {}
 		for (const a of raw) {
 			if (typeof a === "string") out["*"] = `${out["*"] ?? ""} ${a}`.trim()
 			else if (a && typeof a === "object") {
-				const ref = ownerRefOf((a as { owner?: unknown }).owner, sessionId)
+				const ref = ownerRefOf(await storedRefOf(db, sessionId, (a as { owner?: unknown }).owner), sessionId)
 				const text = (a as { text?: unknown; action?: unknown }).text ?? (a as { action?: unknown }).action
 				if (typeof text === "string") {
 					const key = ref?.key ?? "*"
@@ -253,7 +363,8 @@ function actionsOf(raw: unknown, sessionId: number): Record<string, string> {
 		const out: Record<string, string> = {}
 		for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
 			if (typeof v !== "string") continue
-			const key = k === "*" ? "*" : ownerRefOf(k, sessionId)?.key ?? k
+			const stored = k === "*" ? k : await storedRefOf(db, sessionId, k)
+			const key = k === "*" ? "*" : ownerRefOf(stored, sessionId)?.key ?? (stored as string)
 			out[key] = v
 		}
 		return out
@@ -413,8 +524,12 @@ async function buildEngineInput(
 
 	const refs: OwnerRef[] = []
 	const unknownOwners: unknown[] = []
-	const invoked = invokeOf(req)
+	const invokedRaw = invokeOf(req)
+	const invoked = invokedRaw
+		? { ...invokedRaw, actor: await storedRefOf(db, sessionId, invokedRaw.actor), aimedAt: await storedRefOf(db, sessionId, invokedRaw.aimedAt) }
+		: null
 	const ownersAsked = Array.isArray(req.owners) ? [...req.owners] : req.owners === undefined ? [] : [req.owners]
+	for (let i = 0; i < ownersAsked.length; i++) ownersAsked[i] = await storedRefOf(db, sessionId, ownersAsked[i])
 	// 🚧 D6: who invokes is among the owners the moment reads.
 	if (invoked?.actor != null) ownersAsked.push(invoked.actor)
 	for (const raw of ownersAsked) {
@@ -431,6 +546,13 @@ async function buildEngineInput(
 	const writes = mode !== "resolve"
 	const asked: Record<string, unknown>[] =
 		(mode === "apply" || mode === "propose") && Array.isArray(req.deltas) ? (req.deltas.filter((d) => d && typeof d === "object") as Record<string, unknown>[]) : []
+	// 🚧 A delta names its owner and whom it is aimed at: a seated member's ref reads as its seat's stored key.
+	for (let i = 0; i < asked.length; i++) {
+		const d = asked[i]!
+		const owner = "owner" in d ? await storedRefOf(db, sessionId, d.owner) : undefined
+		const aimedAt = "aimedAt" in d ? await storedRefOf(db, sessionId, d.aimedAt) : undefined
+		if (owner !== d.owner || aimedAt !== d.aimedAt) asked[i] = { ...d, ...("owner" in d ? { owner } : {}), ...("aimedAt" in d ? { aimedAt } : {}) }
+	}
 	// 🚧 D7: a JSON reply's changes name an attribute or an entry type — read through the ruleset.
 	const isReplyChange = (d: Record<string, unknown>) => (typeof d.attribute === "string" && d.attribute !== "") || (typeof d.entryType === "string" && d.entryType !== "")
 	// An entry type an owner keeps in a list slot takes its pieces there; any other, its carried zone.
@@ -440,7 +562,8 @@ async function buildEngineInput(
 	const settings = settingValues(ruleset, { values: req.settings ?? session.rulesetSettings[ruleset.id] ?? {} })
 	const conventions = conventionsFor(ruleset, settings)
 	const elapsed = elapsedInUnits(req.elapsed, conventions.time)
-	const viewer = typeof req.viewer === "string" && req.viewer.trim() ? req.viewer.trim() : null
+	const viewerAsked = typeof req.viewer === "string" && req.viewer.trim() ? req.viewer.trim() : null
+	const viewer = viewerAsked ? ((await storedRefOf(db, sessionId, viewerAsked)) as string) : null
 	// 🚧 *End what runs out* and *Track conditions* — the duties of the
 	// session's reckoning routine (lane 6, PLAN-layering R37), at its mode —
 	// decide whether timed pieces count down and leave. A session with no
@@ -454,15 +577,17 @@ async function buildEngineInput(
 				)) ?? {}
 			)
 		: undefined
+	// 🚧 One story-now and one real instant per moment (lane sense-age2); the clock is read once.
+	const storyNow = writes || runsModules(ruleset) ? await storyClockOf(db, session) : null
 	const input: EngineInput = {
 		ruleset,
 		rigour,
 		owners,
-		actions: invoked && req.invoke === undefined ? {} : actionsOf(req.actions, sessionId),
+		actions: invoked && req.invoke === undefined ? {} : await actionsOf(db, req.actions, sessionId),
 		deltas,
 		elapsed: elapsed.units,
 		ties: writes ? [] : await tiesBetween(db, session, owners),
-		clock: writes ? await storyClockOf(db, session) : null,
+		clock: writes ? storyNow : null,
 		turn: writes ? await roundOf(db, sessionId) : 0,
 		random: deps.random,
 		conventions,
@@ -474,12 +599,13 @@ async function buildEngineInput(
 		...(viewer ? { viewer: viewer === "gm" ? "gm" : (ownerRefOf(viewer, sessionId)?.key ?? viewer) } : {})
 	}
 	// 🚧 A `card-draw` method draws from the session's deck for the open scene (2026-10-22).
+	if (runsModules(ruleset)) Object.assign(input, await writtenAgoOf(db, sessionId, owners, storyNow))
 	if (writes) Object.assign(input, await decksFor(db, sessionId, input))
 	// 🚧 D5: what the owners' zones hold, for a ruleset that keeps zones in the store.
 	if (keepsStoredZones(ruleset)) input.zones = await zonesFor(db, sessionId, ruleset.id, owners)
 	const keyOf = (raw: unknown): string | null => (raw == null ? null : (ownerRefOf(raw, sessionId)?.key ?? (typeof raw === "string" ? raw : null)))
 	// 🚧 Hourly steps wait for a clock: a clockless session's ledger says so, once.
-	if (writes && usesHourlyRecurring(ruleset) && !(await storyClockOf(db, session))) await noteHourlyWaitsForClock(db, sessionId)
+	if (writes && usesHourlyRecurring(ruleset) && !storyNow) await noteHourlyWaitsForClock(db, sessionId)
 	const event = await withClockHours(db, session, eventOf(req.event))
 	return {
 		built: {
@@ -529,13 +655,13 @@ async function withClockHours(
 async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<string, unknown> | undefined> {
 	try {
 		const [row] = await db
-			.select({ annex: schema.sessions.annex })
+			.select({ turnTally: schema.sessions.turnTally })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		if (!row) return undefined
 		const { publishedTurns } = await import("$lib/server/pipelines/routines/turnTally")
-		return { ...(publishedTurns(coreAnnexIn(row.annex)) ?? {}), asleep: await sessionAsleep(db, sessionId) }
+		return { ...(publishedTurns(row) ?? {}), asleep: await sessionAsleep(db, sessionId) }
 	} catch {
 		return undefined
 	}
@@ -741,6 +867,10 @@ async function run(db: Db, built: Built, deps: RulesetResolveDeps, seed: string)
 		// D5: the zone asks, planned against the zone types (written by the outlet).
 		// 🚧 ★7: a tie's far end the moment does not read is resolved by its key, its zones read beside the moment's.
 		let farEnds: OwnerView[] = []
+		const storeZoneOps = async () => {
+			for (let i = 0; i < ledger.zoneOps.length; i++) ledger.zoneOps[i] = await storedZoneOp(db, built.sessionId, ledger.zoneOps[i]!)
+		}
+		await storeZoneOps()
 		if (writes && ledger.zoneOps.length) {
 			const far = await farEndsOf(db, built.sessionId, input, ledger.zoneOps)
 			if (far.owners.length) {
@@ -753,7 +883,10 @@ async function run(db: Db, built: Built, deps: RulesetResolveDeps, seed: string)
 		if (writes && fieldUses) {
 			const asked = ledger.zoneOps.length
 			await runEntryFieldFunctions({ ...input, owners: [...input.owners, ...farEnds], zones: zonesAfter(input.zones, zones) }, fdeps, ledger)
-			if (ledger.zoneOps.length > asked) zones = planZoneOps(input, ledger.zoneOps, { farEnds })
+			if (ledger.zoneOps.length > asked) {
+				await storeZoneOps()
+				zones = planZoneOps(input, ledger.zoneOps, { farEnds })
+			}
 		}
 		if (zones && writes) out.changes.push(...zones.changes)
 		const rendered = await renderBlocks(db, input, out.blocks, out.outcomes, scriptDeps)
@@ -817,8 +950,11 @@ async function run(db: Db, built: Built, deps: RulesetResolveDeps, seed: string)
 						.map((u) => ({ key: u.key, findings: u.findings }))
 				: []
 		if (ledger.ran.length || ledger.failed.length || ledger.asks.length || ledger.emits.length || zones || unresolved.length) {
+			// 🚧 The instant every `realSeconds` was measured against, when a function counts real time.
+			const countsReal = functionUsesOf(input.ruleset).some((u) => u.body?.form === "module" && (u.decl?.countsTime === "real" || u.decl?.countsTime === "both"))
 			out.facts.functions = {
 				ran: ledger.ran,
+				...(countsReal && input.realNow !== undefined ? { realNow: new Date(input.realNow).toISOString() } : {}),
 				...(unresolved.length ? { unresolved } : {}),
 				...(ledger.failed.length ? { failed: ledger.failed } : {}),
 				...(ledger.lines.length ? { lines: ledger.lines } : {}),
@@ -853,7 +989,21 @@ async function writeOutcome(db: Db, sessionId: number, out: EngineOutput, deps: 
 			? await (await import("$lib/server/lorebooks/ownBook")).turnAnchorOf(db, sessionId, deps.turnMessageId)
 			: null
 	const anchored = turnRow != null ? { ...ctx, messageId: turnRow, ownAnchor: true } : ctx
-	const ctxFor = (c: EngineChange) => (c.owner.kind === "session_cast" ? ctx : anchored)
+	// 🚧 ⏳ S4, flip on: a carded player seat's values live under `player_seat` where they were `session_cast`, so it files with the session context as that did; a card-less seat keeps the anchor. Read once per outcome.
+	const cardedSeats = new Set<number>()
+	if (memberFormOn() && [...out.changes, ...out.reviewable.map((r) => r.change)].some((c) => c.owner.kind === "player_seat")) {
+		const rows = await db
+			.select({ id: schema.sessionPersonas.id })
+			.from(schema.sessionPersonas)
+			.where(and(eq(schema.sessionPersonas.sessionId, sessionId), sql`${schema.sessionPersonas.personaId} is not null`))
+		for (const r of rows) cardedSeats.add(r.id)
+	}
+	const ctxFor = (c: EngineChange) =>
+		c.owner.kind === "session_cast" ||
+		c.owner.kind === "seated_member" ||
+		(c.owner.kind === "player_seat" && cardedSeats.has(c.owner.id))
+			? ctx
+			: anchored
 	if (out.changes.length) {
 		const applied: unknown[] = []
 		const proposed: unknown[] = []
@@ -926,7 +1076,7 @@ export async function resolveRulesetTurn(
 	if (invokeRefused) return { halt: invokeRefused }
 	if (built.mode !== "resolve") {
 		await writeOutcome(db, built.sessionId, out, deps, built.mode)
-		await writeDecks(db, built.sessionId, out.decks)
+		await writeDecks(db, built.sessionId, out.decks, { turnMessageId: deps.turnMessageId ?? null, runId: deps.runId ?? null })
 		const turnRow =
 			built.mode === "propose"
 				? null

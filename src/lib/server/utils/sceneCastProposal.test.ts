@@ -40,7 +40,8 @@ import {
 	quotedRanges,
 	renderEvidence,
 	type CastTurn,
-	type RosterMember
+	type RosterMember,
+	evidenceWords
 } from "$lib/server/utils/sceneCastProposal"
 
 // ── the hollow fixture ──────────────────────────────────────────────────────
@@ -728,5 +729,42 @@ describe("withheld names are diagnostic, not a control", () => {
 		const proposed = new Set(proposal.participants.map((m) => m.key))
 		for (const w of proposal.withheld)
 			expect(proposed.has(w.key)).toBe(false)
+	})
+})
+
+describe("evidenceWords — the tooltip's words, never the turn-cited label (2026-11-06)", () => {
+	it("counts speech and naming in words and says when the roster put them there", () => {
+		expect(evidenceWords([{ kind: "sender", turns: [1, 3, 5] }, { kind: "roster", turns: [] }])).toBe(
+			"Spoke 3 times · in the session's cast"
+		)
+		expect(evidenceWords([{ kind: "speech-tag", turns: [4] }, { kind: "vocative", turns: [9] }])).toBe("Named twice")
+		expect(evidenceWords([{ kind: "sender", turns: [2] }])).toBe("Spoke once")
+		expect(evidenceWords([{ kind: "roster", turns: [] }])).toBe("In the session's cast")
+	})
+	it("never spells a turn number or an evidence kind", () => {
+		const words = evidenceWords([{ kind: "sender", turns: [1, 3, 5, 7] }, { kind: "speech-tag", turns: [12] }])
+		expect(words).not.toMatch(/sender|speech-tag|@|\d,\d/)
+	})
+})
+
+describe("a card-less cast member in the gazetteer", () => {
+	it("is proposed under its cast_member key, carrying its ref", () => {
+		const gazetteer = buildGazetteer([
+			{ name: "Grust", ref: { kind: "cast_member", id: 77 } }
+		])
+		const proposal = proposeSceneCast(
+			[
+				{
+					index: 1,
+					senderKey: null,
+					content: 'Grust poured two. "Two it is," Grust said.'
+				}
+			],
+			{ gazetteer }
+		)
+		const grust = proposal.participants.find((p) => p.key === "cast_member:77")
+		expect(grust).toBeDefined()
+		expect(grust?.ref).toEqual({ kind: "cast_member", id: 77 })
+		expect(proposal.participants.map((p) => p.key)).not.toContain("open:grust")
 	})
 })

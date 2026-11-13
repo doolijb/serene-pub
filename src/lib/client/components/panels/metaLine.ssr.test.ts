@@ -58,6 +58,22 @@ describe("MetaLine", () => {
 		expect(html).toMatch(/class="text-xs whitespace-nowrap shrink-0"/)
 	})
 
+	test("leadLines 2: the lead clamps at two lines and the facts follow under it, no leading separator", () => {
+		const html = render(MetaLine, {
+			props: {
+				items: ["Solitaire", "Rummy"],
+				leadLines: 2,
+				children: createRawSnippet(() => ({
+					render: () => "<span>A long blurb.</span>"
+				}))
+			}
+		}).body
+		expect(text(html)).toBe("A long blurb. Solitaire · Rummy")
+		expect(html).toContain("line-clamp-2")
+		expect(html).not.toContain("truncate text-chip")
+		expect(html).toContain("flex-col")
+	})
+
 	test("a lead and nothing else draws no separator", () => {
 		const html = render(MetaLine, {
 			props: {

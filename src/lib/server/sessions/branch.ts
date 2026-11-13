@@ -24,6 +24,20 @@ import { canonicalChannel } from "$lib/server/messages/channels"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 import { playerSeatIdOfSpeaker, playerSeatSpeaker } from "$lib/server/sessions/seatName"
 import { annexAt, annexWithoutPoints } from "$lib/server/sessions/annexChanges"
+import {
+	copySessionImprintsToBranch,
+	sessionImprintsAfter
+} from "$lib/server/sessions/sessionImprints"
+import { unwrap } from "$lib/server/lorebooks/imprints"
+import {
+	seatCast,
+	seatPlayer,
+	seatOf,
+	setSeatBench,
+	settleSeats,
+	syncMintedSeatMembers,
+	type MintedSeatMember
+} from "$lib/server/sessions/seats"
 
 export class BranchError extends Error {}
 
@@ -89,7 +103,57 @@ export async function branchSession(
 		return anchor !== null && anchor <= fromMessageId
 	})
 
-	return await db.transaction(async (tx) => {
+	const seatedMinted: MintedSeatMember[] = []
+	const branch = await db.transaction(async (tx) => {
+		// 🚧 The fork's **mark** (plan §32 §4, §5b): the parent's lock first, so
+		// no in-flight write straddles the fork, then the sequence — every
+		// write order drawn before this point is at or below the mark, a
+		// retire mark drawn just before it included.
+		const { lockStateVersion } = await import("$lib/server/state/write")
+		await lockStateVersion(tx as unknown as Db, sessionId)
+		const { nextWriteOrder } = await import("$lib/server/characters/versions")
+		const mark = (await nextWriteOrder(tx as unknown as Db)) - 1
+		// The parent's entry names the line it reads its own notes on at the
+		// fork (★s4-fold2-1), only when it reads them alone; a missing
+		// `lineId` reads that book at its main.
+		const ancestry: { sessionId: number; mark: number; lineId?: number }[] = [
+			{
+				sessionId: original.id,
+				mark,
+				...(original.lorebookId == null && original.lorebookBranchId != null
+					? { lineId: original.lorebookBranchId }
+					: {})
+			},
+			...(original.branchAncestry ?? [])
+		]
+		// 🚧 ST3, a branch is the session as of the fork: the parent's session imprints
+		// after the fork are folded backwards, newest first, onto the values a branch
+		// inherits (`ruleset_decks`, `ruleset_version`; the seat bench flags below, as
+		// `annexAt` does for the annex).
+		const afterFork = await sessionImprintsAfter(tx as unknown as Db, original.id, fromMessageId)
+		const [parentNow] = await tx
+			.select({
+				rulesetDecks: schema.sessions.rulesetDecks,
+				rulesetVersion: schema.sessions.rulesetVersion
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, original.id))
+			.limit(1)
+		let rulesetVersion = parentNow?.rulesetVersion ?? original.rulesetVersion
+		let rulesetDecks: Record<string, Record<string, unknown>> | null = parentNow?.rulesetDecks
+			? structuredClone(parentNow.rulesetDecks)
+			: null
+		for (const row of afterFork) {
+			if (row.subjectKind === "deck") {
+				const before = unwrap(row.before) as Record<string, unknown> | undefined
+				rulesetDecks ??= {}
+				if (before === undefined) delete rulesetDecks[row.subjectKey]
+				else rulesetDecks[row.subjectKey] = before
+			} else if (row.subjectKind === "ruleset-conversion") {
+				const before = unwrap(row.before)
+				rulesetVersion = typeof before === "string" ? before : null
+			}
+		}
 		const [created] = await tx
 			.insert(schema.sessions)
 			.values({
@@ -109,7 +173,15 @@ export async function branchSession(
 				// on from where its parent read — then keeps its own clock.
 				// 🚧 Stepped back below to the fork (live scenes §15 G15):
 				// the parent's clock NOW less every move made after the fork.
-				lorebookBranchId: original.lorebookBranchId,
+				// 🚧 A session on its own notes alone has no line of the attached
+				// book to ride: its line is the copy made below (`notes.lineId`).
+				lorebookBranchId: original.lorebookId != null ? original.lorebookBranchId : null,
+				// 🚧 Its ancestors, nearest first, each with the mark taken at
+				// its fork; a grandchild keeps the parent's marks for the older
+				// ones. It rides the parent's line and forks its own at its
+				// first book write (`ensureSessionLine`; plan §32 §5a).
+				branchAncestry: ancestry,
+				lineOnFirstWrite: original.lorebookId != null,
 				storyClockYear: original.storyClockYear,
 				storyClockMonth: original.storyClockMonth,
 				storyClockDay: original.storyClockDay,
@@ -143,7 +215,13 @@ export async function branchSession(
 				// 🚧 The rules it plays by and how it revises come along
 				// (PLAN-rulesets §23: a branch keeps its session's pin).
 				primaryRuleset: original.primaryRuleset,
-				rulesetVersion: original.rulesetVersion,
+				rulesetVersion,
+				rulesetDecks,
+				// Bookkeeping copies as it stands (never recorded, never taken); the tally is
+				// replayed below, not copied as it stands.
+				turnOrder: structuredClone(original.turnOrder ?? null),
+				laneReads: structuredClone(original.laneReads ?? null),
+				turnTally: structuredClone(original.turnTally ?? null),
 				rigour: original.rigour,
 				onRevision: original.onRevision,
 				// 🚧 Whose composer the genre closed, and why, comes along with
@@ -154,9 +232,10 @@ export async function branchSession(
 
 		// Removed participants aren't copied into the branch at all — a
 		// soft-removed row resurrecting as active in the new session would
-		// undo the whole point of removing them. Nor is a seat with neither
-		// a character nor an envoy: that is a departed character whose row
-		// the global delete nulled, kept only for its `removedName`.
+		// undo the whole point of removing them. Nor is a seat with no card, no
+		// envoy and no member: that is a departed character whose row the
+		// global delete nulled, kept only for its `removedName`. A card-less
+		// seat that still holds its member is live, and the branch keeps it.
 		//
 		// A seat is a character's OR an envoy's (U5g; the CHECK on the
 		// table says so), and the branch keeps both: a guide session's
@@ -164,18 +243,46 @@ export async function branchSession(
 		// the copy would have silently changed who is in the room (U5g
 		// review, C2).
 		const sessionCharacters = (original as any).sessionCharacters.filter(
-			(cc: any) => !cc.removedAt && (cc.characterId || cc.envoySlug)
+			(cc: any) =>
+				!cc.removedAt && (cc.characterId || cc.envoySlug || cc.castMemberId)
 		)
-		if (sessionCharacters.length > 0)
-			await tx.insert(schema.sessionCharacters).values(
-				sessionCharacters.map((sc: any) => ({
+		// 🚧 Seated through the one seat writer (S1), each without its member:
+		// the branch's own book is copied below, and a member resolved now
+		// would make an own book first and break that copy. `settleSeats`
+		// fills the members once the copy is in.
+		// 🚧 The branch's seats keep the parent's seater (acting rights follow
+		// the seater; owner 2026-11-05).
+		const characterSeatRemap = new Map<number, number>()
+		for (const sc of sessionCharacters) {
+			if (!sc.characterId && !sc.envoySlug) {
+				// A card-less seat is seated by its member (the parent's own-book
+				// people resolve through `branchAncestry`). A card-less seat always
+				// has a seater; the session owner stands in if the row lost it.
+				const seated = await seatCast(tx as unknown as Db, {
 					sessionId: created.id,
-					characterId: sc.characterId ?? null,
-					envoySlug: sc.envoySlug ?? null,
+					castMemberId: sc.castMemberId,
 					position: sc.position,
-					isActive: sc.isActive
-				}))
-			)
+					isActive: sc.isActive,
+					onExisting: "keep",
+					seatedBy: sc.seatedByUserId ?? original.userId
+				})
+				if (!seated.ok) throw new BranchError(seated.refusal)
+				characterSeatRemap.set(sc.id, seated.seatId)
+				continue
+			}
+			const seatedCard = await seatCast(tx as unknown as Db, {
+				sessionId: created.id,
+				...(sc.characterId
+					? { cardId: sc.characterId }
+					: { envoySlug: sc.envoySlug }),
+				position: sc.position,
+				isActive: sc.isActive,
+				onExisting: "keep",
+				deferMember: true,
+				seatedBy: sc.seatedByUserId ?? undefined
+			})
+			if (seatedCard.ok) characterSeatRemap.set(sc.id, seatedCard.seatId)
+		}
 
 		/**
 		 * 🚧 A seat that retired (a new character after a death) comes across
@@ -195,26 +302,40 @@ export async function branchSession(
 		// as the same player character.
 		const seatRemap = new Map<number, number>()
 		if (sessionPersonas.length > 0) {
-			const seats = await tx
-				.insert(schema.sessionPersonas)
-				.values(
-					sessionPersonas.map((sp: any) => ({
-						sessionId: created.id,
-						personaId: sp.personaId,
-						position: sp.position,
-						seatName: sp.seatName ?? null,
-						userId: sp.userId ?? null,
-						// 🚧 Its portrait, and — retired — when and under what name.
-						portraitMediaId: sp.portraitMediaId ?? null,
-						removedAt: sp.removedAt ?? null,
-						removedName: sp.removedName ?? null
-					}))
-				)
-				.returning({ id: schema.sessionPersonas.id })
-			// One INSERT returns its rows in the order given.
-			sessionPersonas.forEach((sp: any, i: number) => {
-				if (seats[i]) seatRemap.set(sp.id, seats[i].id)
-			})
+			// One seat per call, in the order given; its own id is the remap.
+			// Without a member for now, as the character seats (settled below).
+			for (const sp of sessionPersonas) {
+				// A card-less seat comes across with its member; the member form
+				// throws its refusal sentence, which the branch passes on.
+				const cardless = sp.personaId == null && sp.castMemberId != null
+				const seatInput = {
+					sessionId: created.id,
+					personaId: sp.personaId,
+					position: sp.position,
+					seatName: sp.seatName ?? null,
+					userId: sp.userId ?? null,
+					// 🚧 Its portrait, and — retired — when and under what name.
+					portraitMediaId: sp.portraitMediaId ?? null,
+					removedAt: sp.removedAt ?? null,
+					removedName: sp.removedName ?? null,
+					isActive: sp.isActive ?? true,
+					onExisting: "insert" as const,
+					deferMember: true
+				}
+				const seat = await seatPlayer(tx as unknown as Db, {
+					...seatInput,
+					...(cardless ? { castMemberId: sp.castMemberId } : {})
+				}).catch(async (e: unknown) => {
+					if (!(cardless && e instanceof Error)) throw e
+					// A retired seat is nobody now and its lines are named by
+					// `removedName`, so a member that fails the seat check must not
+					// block the branch: it is seated again by name only.
+					if (sp.removedAt != null)
+						return seatPlayer(tx as unknown as Db, seatInput)
+					throw new BranchError(e.message)
+				})
+				seatRemap.set(sp.id, seat.seatId)
+			}
 			for (const sp of sessionPersonas)
 				if (sp.personaId != null) await markCharacterAsPersona(sp.personaId, tx)
 		}
@@ -316,6 +437,10 @@ export async function branchSession(
 							// is one, and a write path that trusts that is a
 							// write path that stops being true later.
 							channel: canonicalChannel((message as any).channel),
+							// 🚧 Where the line was first played — the root play,
+							// through any copy of a copy (plan §32 §1).
+							originSessionId: message.originSessionId ?? sessionId,
+							originMessageId: message.originMessageId ?? message.id,
 							content: message.content,
 							// The copy's text is the original's, so the vector
 							// computed over it is the copy's too: carried with
@@ -398,6 +523,59 @@ export async function branchSession(
 			forkMessageId: fromMessageId,
 			remap
 		})
+		// 🚧 …on the copy of the line its parent read its notes on, if any.
+		if (notes.lineId != null)
+			await tx
+				.update(schema.sessions)
+				.set({ lorebookBranchId: notes.lineId })
+				.where(eq(schema.sessions.id, created.id))
+		// 🚧 …and now the branch has its own book: every seat gets its member
+		// (fill-only: a seat that is doubled stays seated), as a seat made on a
+		// session does.
+		// 🚧 ★CV-14: a seat points at the member the parent's seat holds —
+		// the parent's own-book people included — never a new one.
+		const parentSeatMembers = new Map<number, number>()
+		for (const sc of sessionCharacters)
+			if (sc.characterId != null && sc.castMemberId != null && !sc.removedAt)
+				parentSeatMembers.set(sc.characterId, sc.castMemberId)
+		for (const sp of sessionPersonas)
+			if (sp.personaId != null && sp.castMemberId != null && !sp.removedAt)
+				if (!parentSeatMembers.has(sp.personaId))
+					parentSeatMembers.set(sp.personaId, sp.castMemberId)
+		seatedMinted.push(
+			...(
+				await settleSeats(tx as unknown as Db, created.id, {
+					seatMembers: parentSeatMembers
+				})
+			).mintedMembers
+		)
+
+		// 🚧 The copied lines name their speakers' members (S2, speaker
+		// stamp): the seats have theirs now, so each copy takes the member of
+		// the branch's seat that its card holds — per card, never per member
+		// (two live seats can share one until the next boot). A line of a
+		// card-less player seat has no member to name; narration has no seat.
+		// (A seat is found by its card here, so this reads the same in card form
+		// and member form: a carded player seat is a seat of that card either way.)
+		const speakerCards = new Set<number>()
+		for (const row of copied) {
+			const card = row.personaId ?? row.characterId
+			if (card != null) speakerCards.add(card)
+		}
+		for (const cardId of speakerCards) {
+			const castMemberId =
+				(await seatOf(tx as unknown as Db, created.id, `character:${cardId}`))
+					?.castMemberId ?? null
+			if (castMemberId === null) continue
+			await updateLegacyWhere(
+				tx,
+				and(
+					eq(schema.sessionMessages.sessionId, created.id),
+					sql`coalesce(${schema.sessionMessages.personaId}, ${schema.sessionMessages.characterId}) = ${cardId}`
+				),
+				{ castMemberId }
+			)
+		}
 
 		await copyStateRows(tx, {
 			sessionId,
@@ -406,6 +584,32 @@ export async function branchSession(
 			remap,
 			seatRemap,
 			entryRemap: notes.entryRemap
+		})
+
+		// 🚧 ST3: each parent seat bench after the fork, newest first, puts the branch's
+		// corresponding seat back to its flag before it (the one writer); a seat with no
+		// counterpart is skipped. Then the parent's imprints up to the fork come across
+		// under the copied messages and the branch's seats.
+		const seatRemaps = { character: characterSeatRemap, player: seatRemap }
+		for (const row of afterFork) {
+			if (row.subjectKind !== "seat-bench") continue
+			const [kind, id] = row.subjectKey.split(":")
+			if (kind !== "character" && kind !== "player") continue
+			const seatId = seatRemaps[kind].get(Number(id))
+			if (seatId === undefined) continue
+			await setSeatBench(tx as unknown as Db, {
+				sessionId: created.id,
+				kind,
+				seatId,
+				benched: unwrap(row.before) === true
+			})
+		}
+		await copySessionImprintsToBranch(tx as unknown as Db, {
+			fromSessionId: original.id,
+			toSessionId: created.id,
+			forkMessageId: fromMessageId,
+			messageRemap: remap,
+			seatRemap: seatRemaps
 		})
 
 		// 🚧 The clock as of the fork message (live scenes §15 G15): its
@@ -428,12 +632,20 @@ export async function branchSession(
 			throw e
 		}
 
+		// 🚧 The story lane's tally replayed over the branch's own history (Back's rule:
+		// the other lanes' tallies stand as copied).
+		const { retallyStoryLane } = await import("$lib/server/sessions/rewind")
+		await retallyStoryLane(tx as unknown as Db, created.id)
+
 		const [settled] = await tx
 			.select()
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, created.id))
 		return settled ?? created
 	})
+	// Committed: the members just made are named from their cards.
+	await syncMintedSeatMembers(db, seatedMinted)
+	return branch
 }
 
 /**
@@ -563,11 +775,15 @@ async function copyStateRows(
 	 * come across. Ids that name a row OF this session move with it — the
 	 * `session` owner is the session, a `player_seat` owner one of its seats — while
 	 * a `session_cast` / `session_location` owner names a character or entry
-	 * the branch shares, and stays.
+	 * the branch shares, and stays. 🚧 ⏳ So does a `seated_member` owner (flip on,
+	 * `memberForm.ts`): a branch rides the parent's people — each seat points at
+	 * the member the parent's seat holds (★CV-14) — so the member id is the
+	 * same one in the branch.
 	 */
 	const ownerIdFor = (kind: string, id: number): number | undefined => {
 		if (kind === "session") return id === sessionId ? created : id
 		if (kind === "player_seat") return seatRemap.get(id)
+		if (kind === "seated_member") return id
 		// 🚧 A place in the session's own notes is copied with the notes, so
 		// it is the copy the branch's row names (DC walk 6: "Ways out → Iron
 		// Door" with no place). A place in the attached book is shared.
@@ -590,7 +806,7 @@ async function copyStateRows(
 		if (at === undefined) continue
 		const ownerId = ownerIdFor(row.ownerKind, row.ownerId)
 		if (ownerId === undefined) continue
-		const { id: _id, createdAt: _createdAt, ...rest } = row
+		const { id: _id, ...rest } = row
 		await tx.insert(schema.attributeValues).values({
 			...rest,
 			value: remapEntryRefs(rest.value, entryRemap) as typeof rest.value,

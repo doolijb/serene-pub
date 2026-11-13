@@ -30,12 +30,15 @@
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
 	import AdminField from "$lib/client/components/admin/AdminField.svelte"
 	import { deletionFor } from "$lib/client/components/admin/changelist"
-	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
+	import {
+		adminGoto as goto,
+		adminUnsavedEdits
+	} from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 	import {
 		BLOCK_ROLES,
@@ -191,7 +194,10 @@
 	function handleGetError(res: { error?: string }) {
 		loading = false
 		missing = true
-		toaster.error({ title: res.error ?? "Completion template not found." })
+		notify.error({
+			title: res.error ?? "Completion template not found.",
+			source: "socket:completionTemplates:get:error"
+		})
 	}
 	function handleUpdate(res: Sockets.CompletionTemplates.Update.Response) {
 		if (res.completionTemplate?.id !== id) return
@@ -207,20 +213,21 @@
 		pendingIntent = null
 		saving = false
 		edits.markSaved()
-		toaster.success({ title: `Saved ${res.completionTemplate.name}` })
+		notify.success({ title: `Saved ${res.completionTemplate.name}` })
 		if (intent === "save") goto("/admin/completion-templates")
-		else if (intent === "another") goto(`/admin/completion-templates/new?from=${id}`)
+		else if (intent === "another")
+			goto(`/admin/completion-templates/new?from=${id}`)
 	}
 	function handleClone(res: Sockets.CompletionTemplates.Clone.Response) {
 		refreshCompletionTemplateOptions()
-		toaster.success({ title: "Template cloned" })
+		notify.success({ title: "Template cloned" })
 		goto(`/admin/completion-templates/${res.completionTemplate.id}`)
 	}
 	function handleDelete(res: { success?: string }) {
 		if (!deleting) return
 		deleting = false
 		refreshCompletionTemplateOptions()
-		if (res.success) toaster.success({ title: res.success })
+		if (res.success) notify.success({ title: res.success })
 		edits.forget()
 		goto("/admin/completion-templates", { replaceState: true })
 	}
@@ -232,7 +239,10 @@
 			formErrors = [res.error ?? "The server refused the edit."]
 			return
 		}
-		toaster.error({ title: res.error ?? "The server refused the edit." })
+		notify.error({
+			source: "admin:completion-templates:refusal",
+			title: res.error ?? "The server refused the edit."
+		})
 	}
 
 	/**
@@ -331,7 +341,8 @@
 		formErrors = []
 		if (!dirty) {
 			if (intent === "save") goto("/admin/completion-templates")
-			else if (intent === "another") goto(`/admin/completion-templates/new?from=${id}`)
+			else if (intent === "another")
+				goto(`/admin/completion-templates/new?from=${id}`)
 			return
 		}
 		saving = true
@@ -357,7 +368,10 @@
 	}
 	const deletion = () =>
 		deletionFor([row!], {
-			noun: { singular: "completion template", plural: "completion templates" },
+			noun: {
+				singular: "completion template",
+				plural: "completion templates"
+			},
 			label: (r) => r.name,
 			consequence: () =>
 				"Any connection using it loses its format and renders with the default until one is chosen again"
@@ -365,14 +379,22 @@
 </script>
 
 {#if loading}
-	<div class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm" role="status">
+	<div
+		class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm"
+		role="status"
+	>
 		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
 		Loading completion template…
 	</div>
 {:else if missing || !row}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
-		<p class="text-surface-600-400 text-sm">There is no completion template {id}.</p>
-		<a href="/admin/completion-templates" class="btn btn-sm preset-tonal-surface">
+		<p class="text-surface-600-400 text-sm">
+			There is no completion template {id}.
+		</p>
+		<a
+			href="/admin/completion-templates"
+			class="btn btn-sm preset-tonal-surface"
+		>
 			All completion templates
 		</a>
 	</div>
@@ -395,13 +417,19 @@
 		onSave={save}
 	>
 		{#snippet headerActions()}
-			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={clone}>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={clone}
+			>
 				<Icons.Copy size={16} aria-hidden="true" /> Duplicate
 			</button>
 		{/snippet}
 		{#snippet headerExtra()}
 			{#if readonly}
-				<span class="border-surface-200-800 text-surface-600-400 self-start rounded-full border px-2 py-0.5 text-xs">
+				<span
+					class="border-surface-200-800 text-surface-600-400 self-start rounded-full border px-2 py-0.5 text-xs"
+				>
 					Built-in
 				</span>
 			{/if}
@@ -412,10 +440,23 @@
 				<AdminFieldset title="Template">
 					<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
 						{#if readonly}
-							<AdminField id="ct-admin-name" label="Name" value={name} />
+							<AdminField
+								id="ct-admin-name"
+								label="Name"
+								value={name}
+							/>
 						{:else}
-							<AdminField id="ct-admin-name" label="Name" required>
-								<input id="ct-admin-name" class="input" type="text" bind:value={name} />
+							<AdminField
+								id="ct-admin-name"
+								label="Name"
+								required
+							>
+								<input
+									id="ct-admin-name"
+									class="input"
+									type="text"
+									bind:value={name}
+								/>
 							</AdminField>
 						{/if}
 						<!-- Always readonly, on every row: it is the target of
@@ -440,88 +481,93 @@
 					</label>
 				</AdminFieldset>
 
-				<AdminFieldset title="Framing" description="What opens and closes each role's block.">
-				<FieldHelp>
-					<strong>Escapes, not characters.</strong>
-					Type
-					<code>\n</code>
-					for a newline and
-					<code>\t</code>
-					 for a tab — a marker's trailing newline is the byte that separates
-					one turn from the next, and no text field shows it otherwise.
-				</FieldHelp>
+				<AdminFieldset
+					title="Framing"
+					description="What opens and closes each role's block."
+				>
+					<FieldHelp>
+						<strong>Escapes, not characters.</strong>
+						Type
+						<code>\n</code>
+						for a newline and
+						<code>\t</code>
+						for a tab — a marker's trailing newline is the byte that
+						separates one turn from the next, and no text field shows
+						it otherwise.
+					</FieldHelp>
 
-				<div class="framing-grid text-sm">
-					<span class="text-surface-600-400 text-xs font-medium">
-						Role
-					</span>
-					<span class="text-surface-600-400 text-xs font-medium">
-						Opens with
-					</span>
-					<span class="text-surface-600-400 text-xs font-medium">
-						Closes with
-					</span>
-					{#each BLOCK_ROLES as role (role)}
-						<span class="self-center font-mono text-xs">
-							{role}
+					<div class="framing-grid text-sm">
+						<span class="text-surface-600-400 text-xs font-medium">
+							Role
+						</span>
+						<span class="text-surface-600-400 text-xs font-medium">
+							Opens with
+						</span>
+						<span class="text-surface-600-400 text-xs font-medium">
+							Closes with
+						</span>
+						{#each BLOCK_ROLES as role (role)}
+							<span class="self-center font-mono text-xs">
+								{role}
+							</span>
+							<input
+								class="input font-mono text-xs"
+								aria-label="{role} opening"
+								bind:value={roles[role].prefix}
+								{readonly}
+								spellcheck="false"
+							/>
+							<input
+								class="input font-mono text-xs"
+								aria-label="{role} closing"
+								bind:value={roles[role].suffix}
+								{readonly}
+								spellcheck="false"
+							/>
+						{/each}
+						<span
+							class="self-center font-mono text-xs"
+							title="Used only for a role outside the six above — reachable from an untyped caller."
+						>
+							fallback
 						</span>
 						<input
 							class="input font-mono text-xs"
-							aria-label="{role} opening"
-							bind:value={roles[role].prefix}
+							aria-label="fallback opening"
+							bind:value={fallback.prefix}
 							{readonly}
 							spellcheck="false"
 						/>
 						<input
 							class="input font-mono text-xs"
-							aria-label="{role} closing"
-							bind:value={roles[role].suffix}
+							aria-label="fallback closing"
+							bind:value={fallback.suffix}
 							{readonly}
 							spellcheck="false"
 						/>
-					{/each}
-					<span
-						class="self-center font-mono text-xs"
-						title="Used only for a role outside the six above — reachable from an untyped caller."
-					>
-						fallback
-					</span>
-					<input
-						class="input font-mono text-xs"
-						aria-label="fallback opening"
-						bind:value={fallback.prefix}
-						{readonly}
-						spellcheck="false"
-					/>
-					<input
-						class="input font-mono text-xs"
-						aria-label="fallback closing"
-						bind:value={fallback.suffix}
-						{readonly}
-						spellcheck="false"
-					/>
-				</div>
+					</div>
 				</AdminFieldset>
 
 				<AdminFieldset title="Stop strings">
-				<code class="text-surface-700-300 text-xs break-all">
-					{(row.stopStrings ?? []).length
-						? (row.stopStrings as string[]).join("  ·  ")
-						: "—"}
-				</code>
-				<!-- ⚠ Read-only, and said plainly rather than offered as a
+					<code class="text-surface-700-300 text-xs break-all">
+						{(row.stopStrings ?? []).length
+							? (row.stopStrings as string[]).join("  ·  ")
+							: "—"}
+					</code>
+					<!-- ⚠ Read-only, and said plainly rather than offered as a
 				     control that would not do anything. The send path reads the
 				     resolved ROW, and `connections/stops.ts` composes from it
 				     (ruling 2026-09-10) — so this list is what a
 				     completion-wire request stops on. Only the editor is
 				     missing. -->
-				<span class="text-surface-600-400 text-xs">
-					Shown as the row carries them. These are what a request in
-					text-completion mode stops on, alongside the speaker labels
-					for the scene and any stop sequences set on the step; in
-					chat mode they are held back, because a chat request
-					contains none of these markers. Not editable here yet.
-				</span>
+					<span class="text-surface-600-400 text-xs">
+						Shown as the row carries them. These are what a request
+						in text-completion mode stops on, alongside the speaker
+						labels for the scene and any stop sequences set on the
+						step; in chat mode they are held back, because a chat
+						request contains none of these markers. Not editable
+						here yet.
+					</span>
 				</AdminFieldset>
 			</div>
 
@@ -530,7 +576,7 @@
 				description="Three blocks, wrapped by this draft through the same formatter the prompt renderer uses. Unsaved edits show here immediately."
 			>
 				<pre
-					class="bg-surface-50-950 max-h-[28rem] overflow-auto rounded-base p-2 font-mono text-xs whitespace-pre-wrap">{preview}</pre>
+					class="bg-surface-50-950 rounded-base max-h-[28rem] overflow-auto p-2 font-mono text-xs whitespace-pre-wrap">{preview}</pre>
 			</AdminFieldset>
 		</div>
 	</AdminChangeForm>

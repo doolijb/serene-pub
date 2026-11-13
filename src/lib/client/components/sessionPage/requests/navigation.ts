@@ -1,8 +1,10 @@
 import type { WidgetRequests } from "@serene-pub/sdk"
+import { CREATE_SESSION_PERSONA_DESCRIPTION_MAX, CREATE_SESSION_PERSONA_NAME_MAX } from "@serene-pub/sdk"
 import { awaitReply } from "$lib/client/utils/awaitReply"
 import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 import { openSessionPage } from "$lib/client/shell/openJumpHit"
 import { interestKey } from "$lib/shared/sockets/interest"
+import { declaredFieldRefusal } from "$lib/shared/sessions/declaredFieldRefusal"
 
 /**
  * 🚧 M2c: the four navigation requests an applet makes. `open-session` and
@@ -11,6 +13,8 @@ import { interestKey } from "$lib/shared/sockets/interest"
  * person cannot open, or a genre the asking package does not own, is refused.
  * The app keeps the last word: a create is shown for the person to press Start,
  * a delete is confirmed by the Sessions view's own dialog.
+ * 🚧 M3b: a `create-session` may carry a `persona`, a draft the start form offers
+ * as a new persona; nothing is made until the person's Start.
  */
 type PanelsLike = {
 	digest: Record<string, any>
@@ -32,6 +36,8 @@ export interface NavigationDeps {
 	readSession?: (id: number) => Promise<SessionRead | null>
 	/** Every offered genre id (`sessions:genres`). */
 	readGenreIds?: () => Promise<string[]>
+	/** 🚧 M2d (★48): the field keys one genre declares (`sessions:genres`); null when the genre is not in the list. */
+	readGenreFieldKeys?: (genreId: string) => Promise<string[] | null>
 }
 
 type From = { owner: string }
@@ -65,6 +71,19 @@ async function readGenreIdsOverSocket(): Promise<string[]> {
 		timeoutMs: 15_000
 	})
 	return (res.genres ?? []).map((g: any) => g.genreId as string)
+}
+
+async function readGenreFieldKeysOverSocket(genreId: string): Promise<string[] | null> {
+	const res = await awaitReply({
+		socket: useTypedSocket(),
+		event: "sessions:genres",
+		errorEvent: "sessions:genres:error" as never,
+		params: {} as never,
+		match: () => true,
+		timeoutMs: 15_000
+	})
+	const row = (res.genres ?? []).find((g: any) => g.genreId === genreId) as any
+	return row ? Object.keys(row.shape?.fields ?? {}) : null
 }
 
 function ownsGenre(owner: string, genreId: string): boolean {
@@ -120,6 +139,31 @@ export async function answerOpenSessions(
 	deps.panelsCtx.openPanel({ key: "sessions", toggle: false })
 }
 
+/** The persona draft a `create-session` carries, checked and trimmed; undefined when absent. Refuses in words. */
+function personaDraft(raw: unknown): { name: string; description?: string } | undefined {
+	if (raw === undefined) return undefined
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+		throw new Error("The persona must be an object with a name.")
+	try {
+		JSON.stringify(raw)
+	} catch {
+		throw new Error("The persona must be plain JSON.")
+	}
+	const { name, description } = raw as { name?: unknown; description?: unknown }
+	const trimmedName = typeof name === "string" ? name.trim() : ""
+	if (!trimmedName) throw new Error("The persona needs a name.")
+	if (trimmedName.length > CREATE_SESSION_PERSONA_NAME_MAX)
+		throw new Error(`The persona's name is longer than ${CREATE_SESSION_PERSONA_NAME_MAX} characters.`)
+	if (description !== undefined && typeof description !== "string")
+		throw new Error("The persona's description must be text.")
+	const trimmedDescription = description?.trim()
+	if (trimmedDescription && trimmedDescription.length > CREATE_SESSION_PERSONA_DESCRIPTION_MAX)
+		throw new Error(
+			`The persona's description is longer than ${CREATE_SESSION_PERSONA_DESCRIPTION_MAX.toLocaleString("en")} characters.`
+		)
+	return trimmedDescription ? { name: trimmedName, description: trimmedDescription } : { name: trimmedName }
+}
+
 export async function answerCreateSession(
 	params: WidgetRequests["create-session"]["params"],
 	from: From,
@@ -137,14 +181,24 @@ export async function answerCreateSession(
 			throw new Error("The session's fields must be plain JSON.")
 		}
 		if (size > MAX_FIELDS_BYTES) throw new Error("The session's fields are too large.")
+		// 🚧 M2d (★48): refused here, at the request, not only at Start, in the server's own sentence — one source,
+		// `declaredFieldRefusal` (`src/lib/shared/sessions`, M2e). A genre not in the list refuses its first key the same way.
+		// A failed read is not caught: the error propagates (the reply's own words), as it does for `open-sessions`.
+		if (Object.keys(fields).length > 0) {
+			const declared = await (deps.readGenreFieldKeys ?? readGenreFieldKeysOverSocket)(genreId)
+			const refusal = declaredFieldRefusal(fields, declared, genreId)
+			if (refusal) throw new Error(refusal)
+		}
 	}
 	const lorebookId = params?.lorebookId
 	if (lorebookId != null && !Number.isInteger(lorebookId))
 		throw new Error("That lorebook cannot be used.")
+	const persona = personaDraft(params?.persona)
 	deps.panelsCtx.digest.createSession = {
 		genreId,
 		fields: fields as Record<string, unknown> | undefined,
 		lorebookId: lorebookId ?? undefined,
+		...(persona ? { persona } : {}),
 		fromApplet: from.owner
 	}
 	deps.panelsCtx.openPanel({ key: "sessions", toggle: false })

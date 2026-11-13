@@ -81,6 +81,11 @@
 		defaultFor?: readonly string[]
 		/** Shown in place of Use — a download state, an "on disk". */
 		note?: string | null
+		/**
+		 * Words that close the meta line after the facts or the note — the
+		 * Models list's *lives in Ollama*.
+		 */
+		metaTail?: string | null
 		/** Offer the quiet Use button. */
 		canUse?: boolean
 		useLabel?: string
@@ -117,6 +122,7 @@
 		model,
 		defaultFor = [],
 		note = null,
+		metaTail = null,
 		canUse = false,
 		useLabel = "Use",
 		useShortLabel = "Use",
@@ -172,6 +178,11 @@
 		if (context) parts.push(`${context} context`)
 		return parts.join(" · ")
 	})
+
+	/** The meta line: the note or the facts, then the tail, joined once. */
+	const metaLine = $derived(
+		[note ?? factLine, metaTail].filter(Boolean).join(" · ")
+	)
 </script>
 
 <div
@@ -191,12 +202,12 @@
 	>
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="min-w-0 truncate text-lead font-medium">
+				<span class="text-lead min-w-0 truncate font-medium">
 					{display.name}
 				</span>
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-ink flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-meta font-bold"
+						class="preset-tonal-primary text-primary-ink text-meta flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-bold"
 					>
 						<Icons.Star
 							size={9}
@@ -208,7 +219,7 @@
 				{/each}
 				{#if missing}
 					<span
-						class="border-surface-200-800 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-meta font-medium"
+						class="border-surface-200-800 text-surface-600-400 text-meta shrink-0 rounded border px-1.5 py-0.5 font-medium"
 					>
 						No longer listed
 					</span>
@@ -217,22 +228,22 @@
 			{#if chip}
 				<span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
 					<span
-						class="bg-surface-200-800 text-surface-700-300 max-w-[50%] shrink-0 truncate rounded px-1.5 py-0.5 text-meta font-medium"
+						class="bg-surface-200-800 text-surface-700-300 text-meta max-w-[50%] shrink-0 truncate rounded px-1.5 py-0.5 font-medium"
 						title={chip.title ?? chip.label}
 					>
 						{chip.label}
 					</span>
-					{#if factLine || note}
+					{#if metaLine}
 						<span class="text-surface-600-400 min-w-0 truncate">
-							{note ?? factLine}
+							{metaLine}
 						</span>
 					{/if}
 				</span>
-			{:else if factLine || note}
+			{:else if metaLine}
 				<span
 					class="text-surface-600-400 mt-0.5 block truncate text-xs"
 				>
-					{note ?? factLine}
+					{metaLine}
 				</span>
 			{/if}
 		</span>
@@ -245,7 +256,7 @@
 		     width so a settled list is a settled list. -->
 		<button
 			type="button"
-			class="btn btn-sm preset-tonal-surface mr-0.5 shrink-0 text-meta font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100"
+			class="btn btn-sm preset-tonal-surface text-meta mr-0.5 shrink-0 font-semibold opacity-100 disabled:cursor-not-allowed @min-[900px]/view:opacity-0 @min-[900px]/view:group-focus-within:opacity-100 @min-[900px]/view:group-hover:opacity-100"
 			onclick={() => onUse?.()}
 			disabled={!!useDisabledReason}
 			aria-label={useDisabledReason

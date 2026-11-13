@@ -161,3 +161,55 @@ describe("🚧 a role is never handed what it does not take (RF fix 6, 2026-10-2
 		])
 	}, 60_000)
 })
+
+describe("🚧 how long ago a value was written (lane sense-age2)", () => {
+	const reader = (id: string, countsTime?: FunctionDecl["countsTime"]) =>
+		mod(id, {
+			bindings: { what: { to: "attribute", label: { en: "The value" } } },
+			prose: "{{what}} is read.",
+			phases: ["effects"],
+			...(countsTime ? { countsTime } : {}),
+			body: "export function effects(ctx) { return { lines: [JSON.stringify(ctx.bindings.what.writtenAgo)] } }"
+		})
+	const fns = [reader("test:function/wa-plain@1"), reader("test:function/wa-story@1", "story"), reader("test:function/wa-real@1", "real"), reader("test:function/wa-both@1", "both")]
+	const r = defineRuleset("test:ruleset/wa-unit@1", {
+		name: { en: "Written ago" },
+		attributes: [{ id: "sleep", name: { en: "Sleep" }, kind: "tally", prose: "How rested they are." }],
+		functions: fns.map((m) => ({ ref: m.id, module: m, bindings: { what: "sleep" } }))
+	})
+	const slot = rulesetAttributeSlotId(r.id, "sleep")
+	const ownerOf = (key: string): OwnerView => ({
+		key,
+		owner: { kind: "character", id: 1 } as never,
+		name: key,
+		stats: [{ slotId: slot, selector: "sleep", type: "integer", value: 3, label: "Sleep" }] as never,
+		repertoires: [],
+		custom: [],
+		bag: {}
+	})
+	const run = async (writtenAgo: EngineInput["writtenAgo"], owners: OwnerView[]) => {
+		const input = { ruleset: r, rigour: "mechanics", owners, actions: {}, deltas: [], elapsed: 0, ties: [], turn: 1, writtenAgo, realNow: 1_000 } as unknown as EngineInput
+		const ledger = newLedger()
+		await withRulesSandbox({}, (sandbox) =>
+			runEffectsFunctions(input, { sandbox, seed: "wa" }, ledger, (o) => Object.fromEntries(o.stats.map((x) => [x.selector, x.value])) as never)
+		)
+		return ledger.lines.filter((l) => l.owner === owners[0]!.key || l.owner === undefined).map((l) => JSON.parse(l.text) as Record<string, unknown>)
+	}
+
+	it("minutes always; real seconds only where the declaration counts real time, the same for every function", async () => {
+		const lines = await run({ "character:1": { [slot]: { minutes: 90, realSeconds: 12 } } }, [ownerOf("character:1")])
+		expect(lines).toEqual([
+			{ sleep: { minutes: 90 } },
+			{ sleep: { minutes: 90 } },
+			{ sleep: { minutes: 90, realSeconds: 12 } },
+			{ sleep: { minutes: 90, realSeconds: 12 } }
+		])
+		expect("realSeconds" in (lines[0]!.sleep as object)).toBe(false)
+		expect("realSeconds" in (lines[1]!.sleep as object)).toBe(false)
+	}, 60_000)
+
+	it("no entry for the owner: minutes null, and null real seconds where opted in", async () => {
+		const lines = await run({}, [ownerOf("character:1")])
+		expect(lines).toEqual([{ sleep: { minutes: null } }, { sleep: { minutes: null } }, { sleep: { minutes: null, realSeconds: null } }, { sleep: { minutes: null, realSeconds: null } }])
+	}, 60_000)
+})

@@ -335,21 +335,14 @@ describe("recording what a run did", () => {
 			// text and speaker, then the outlet. A card with no sprites runs
 			// both — the picker picks nothing and the outlet writes nothing.
 			reply.spritePick,
-			reply.spriteShow,
-			// 🚧 The reply tick (live scenes §6, 2026-10-13): *Each reply
-			// advances the clock by …*, last, after the line and its face.
-			// It runs on every reply; the clock junction behind it does not
-			// at the shipped By 0 — asserted below.
-			"tick"
+			reply.spriteShow
 		])
 		expect(found!.nodes.every((n: any) => n.result === "ok")).toBe(true)
 
-		// The tick decided "nothing" (By 0 = off), so *Advance story clock*
-		// never ran: no `clock` junction or outlet line in the trail.
-		const tickRow = found!.nodes.find((n: any) => n.nodeKey === "tick")
-		expect(tickRow!.definitionId).toBe("core:task/clock-step@1")
-		const tick = receipt.nodes.find((n: any) => n.nodeKey === "tick")
-		expect(tick!.output).toMatchObject({ moves: false, by: 0 })
+		// Story's clock is the round tick's (its own run on round-ended), never
+		// the reply's: no `tick`, no `clock` junction, no *Advance story clock*
+		// outlet in the trail.
+		expect(found!.nodes.some((n: any) => n.nodeKey === "tick")).toBe(false)
 		expect(
 			found!.nodes.filter((n: any) => /^clock(\.|$)/.test(n.nodeKey))
 		).toEqual([])

@@ -22,7 +22,34 @@ const cast: SessionCharactersV1 = {
 			spriteSet: null,
 			canChangeSpriteSet: false,
 			benched: true
-		}
+		},
+		{
+			ref: "seated-member:7",
+			cardId: null,
+			castMemberId: 7,
+			isPersona: false,
+			mine: false,
+			name: "Bo",
+			face: null,
+			sprite: null,
+			spriteSets: [],
+			spriteSet: null,
+			canChangeSpriteSet: false
+		} as never,
+		{
+			ref: "character:9",
+			characterId: 9,
+			cardId: 9,
+			castMemberId: 8,
+			isPersona: false,
+			mine: false,
+			name: "Cy",
+			face: null,
+			sprite: null,
+			spriteSets: [],
+			spriteSet: null,
+			canChangeSpriteSet: false
+		} as never
 	],
 	sceneImages: { left: null, right: null }
 }
@@ -105,5 +132,67 @@ describe("answerCharacterImages", () => {
 				}
 			)
 		).rejects.toThrow("Failed to list gallery.")
+	})
+
+	it("a card-less member is answered through readMemberGallery", async () => {
+		const readMember = vi.fn(async () => [file(5), file(6, "video")])
+		const readCard = vi.fn(async () => [])
+		await expect(
+			answerCharacterImages(
+				{ castMemberId: 7 },
+				{
+					characters: () => cast,
+					readCharacterGallery: readCard,
+					readMemberGallery: readMember
+				}
+			)
+		).resolves.toEqual({ images: [{ ref: "u-5", src: "/media/u-5?r=1" }] })
+		expect(readMember).toHaveBeenCalledWith(7)
+		expect(readCard).not.toHaveBeenCalled()
+	})
+
+	it("a carded member is still answered through readCharacterGallery", async () => {
+		const readMember = vi.fn(async () => [])
+		const readCard = vi.fn(async () => [file(1)])
+		await expect(
+			answerCharacterImages(
+				{ characterId: 9 },
+				{
+					characters: () => cast,
+					readCharacterGallery: readCard,
+					readMemberGallery: readMember
+				}
+			)
+		).resolves.toEqual({ images: [{ ref: "u-1", src: "/media/u-1?r=1" }] })
+		expect(readCard).toHaveBeenCalledWith(9)
+		expect(readMember).not.toHaveBeenCalled()
+	})
+
+	it("refuses both ids, neither, and a cast member not in the session", async () => {
+		const read = vi.fn(async () => [file(1)])
+		const deps = {
+			characters: () => cast,
+			readCharacterGallery: read,
+			readMemberGallery: read
+		}
+		await expect(
+			answerCharacterImages({ characterId: 3, castMemberId: 7 }, deps)
+		).rejects.toThrow("Name a character or a cast member, not both.")
+		await expect(answerCharacterImages({}, deps)).rejects.toThrow(
+			"Name a character or a cast member, not both."
+		)
+		await expect(
+			answerCharacterImages({ castMemberId: 99 }, deps)
+		).rejects.toThrow("that cast member is not in this session")
+		expect(read).not.toHaveBeenCalled()
+	})
+
+	it("says so when the page did not wire readMemberGallery", async () => {
+		await expect(
+			answerCharacterImages(
+				{ castMemberId: 7 },
+				{ characters: () => cast, readCharacterGallery: async () => [] }
+			)
+		).rejects.toThrow("that cast member's images could not be read")
 	})
 })

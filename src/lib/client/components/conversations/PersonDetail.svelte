@@ -75,7 +75,7 @@
 		},
 		{
 			value: "character",
-			label: "Characters",
+			label: "Character cards",
 			icon: Icons.UsersRound,
 			count: detail?.characters.length
 		},
@@ -179,7 +179,7 @@
 							message="Nothing of {name}'s is shared with you."
 						/>
 					{:else}
-						<div role="list" aria-label="Characters" class="flex flex-col gap-1">
+						<div role="list" aria-label="Character cards" class="flex flex-col gap-1">
 							{#each detail.characters as c (c.id)}
 								<SidebarListItem
 									itemType={c.isPersona ? "Persona" : "Character"}

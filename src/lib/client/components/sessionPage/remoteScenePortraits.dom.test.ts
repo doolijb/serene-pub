@@ -244,10 +244,8 @@ const NATIVE_DREW = {
 		["As the story has it", "false"]
 	],
 	noSprites: { faces: [face("character:3", "Ada", F(1)), face("character:4", "Bo", null)], pins: [], empty: null },
-	sceneEmpty: {
-		...NO_FACES,
-		empty: "Nobody is in this scene yet. Add a character to the session and they show up here."
-	},
+	/** R10: nobody seated draws nothing — no sentence. */
+	sceneEmpty: NO_FACES,
 	/** A guest (user 30): the switch for everyone, and the first persona listed — not theirs. */
 	guest: {
 		faces: [

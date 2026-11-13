@@ -22,17 +22,41 @@ export async function closeOutSession(opts: {
 	sessionId: number
 	userId: number
 	emitToUser: (event: string, data: any) => void | Promise<void>
+	/** The Socket.IO server, when the caller has one; else the global server serves the room push. */
+	io?: unknown
 }): Promise<{ sceneIds: number[] } | { refused: string }> {
 	const { sessionId, userId, emitToUser } = opts
 	const handle = db as unknown as Db
 	const access = await checkSessionAccess(sessionId, userId)
 	if (!access.hasAccess) return { refused: CLOSE_OUT_REFUSALS.missing }
 	if (!access.isOwner) return { refused: CLOSE_OUT_REFUSALS.notOwner }
+	// Held changes apply at Close out (never fails it). Where it files no scene,
+	// everything left applies. Where it does, only what came before the closing
+	// stretch applies now: the stretch's own changes wait for the summaries this
+	// starts — saving one applies them, a dismissed or failed one releases them.
+	const { applyHeldAutomaticallyAndTell } = await import("./sessions")
+	const applyHeld = (before?: number) =>
+		applyHeldAutomaticallyAndTell(handle, {
+			sessionId,
+			automatic: "close-out",
+			io: opts.io,
+			...(before != null ? { before } : {})
+		})
 	const reg = await closeOutRegistrationOf(handle, sessionId)
-	if (!reg) return { refused: CLOSE_OUT_REFUSALS.notRegistered }
-	if (await sessionBusy(handle, sessionId)) return { refused: CLOSE_OUT_REFUSALS.busy }
+	if (!reg) {
+		await applyHeld()
+		return { refused: CLOSE_OUT_REFUSALS.notRegistered }
+	}
+	if (await sessionBusy(handle, sessionId)) {
+		await applyHeld()
+		return { refused: CLOSE_OUT_REFUSALS.busy }
+	}
 	const stretch = await closeOutStretchOf(handle, sessionId)
-	if (!stretch) return { refused: CLOSE_OUT_REFUSALS.nothing }
+	if (!stretch) {
+		await applyHeld()
+		return { refused: CLOSE_OUT_REFUSALS.nothing }
+	}
+	await applyHeld(stretch.fromMessageId)
 	const sceneIds = await fileClosingScenes(
 		userId,
 		{ sessionId, fromMessageId: stretch.fromMessageId, throughMessageId: stretch.throughMessageId },
@@ -93,7 +117,7 @@ export const sessionsArchiveHandler: Handler<
 		// The close-out runs once; a refusal (nothing to close out, none registered) never fails the archive.
 		let closeOut: { sceneIds: number[] } | null = null
 		try {
-			const done = await closeOutSession({ sessionId, userId, emitToUser })
+			const done = await closeOutSession({ sessionId, userId, emitToUser, io: socket.io })
 			closeOut = "sceneIds" in done ? done : null
 		} catch (err) {
 			console.warn("[archive] the close-out did not run:", err)
@@ -139,7 +163,7 @@ export const sessionsCloseOutHandler: Handler<
 	async (socket, params: Sockets.Sessions.CloseOut.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const sessionId = Number(params?.sessionId)
-		const done = await closeOutSession({ sessionId, userId, emitToUser })
+		const done = await closeOutSession({ sessionId, userId, emitToUser, io: socket.io })
 		if ("refused" in done) throw new Error(done.refused)
 		const res: Sockets.Sessions.CloseOut.Response = { sessionId, sceneIds: done.sceneIds }
 		emitToUser("sessions:closeOut", res)

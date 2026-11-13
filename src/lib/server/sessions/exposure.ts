@@ -73,6 +73,7 @@ export function rulesFieldsOf(genreId: string): Record<string, FieldDecl> {
 			label: { en: "Rules" },
 			description: { en: "The ruleset this session plays. Chosen when the session starts." },
 			...(rulesetDefault ? { default: rulesetDefault } : {}),
+			group: "Rules",
 			reach: "owner",
 			fixedAtStart: true
 		} as FieldDecl,
@@ -85,6 +86,7 @@ export function rulesFieldsOf(genreId: string): Record<string, FieldDecl> {
 			default: g.rigour?.default ?? "prose",
 			// Not fixed at start: it may change mid-session unless a layer
 			// locks it (PLAN-rulesets §21; main-session ruling 2026-10-20).
+			group: "Rules",
 			reach: "owner"
 		} as unknown as FieldDecl
 	}

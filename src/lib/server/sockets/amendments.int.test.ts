@@ -14,13 +14,10 @@ import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
 import { WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
-import {
-	castAsOf,
-	entryAsOf,
-	type Amendment
-} from "$lib/shared/lorebooks/amendments"
+import { entryAsOf, type Amendment } from "$lib/shared/lorebooks/amendments"
 import { lineOf, MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -91,15 +88,12 @@ async function makeCastMember(
 	name: string,
 	characterId?: number
 ) {
-	const [member] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId,
-			name,
-			binding: `{{char:${characterId ?? 0}}}`,
-			characterId: characterId ?? null
-		} as any)
-		.returning()
+	const { member } = await insertCastMember(testDb as unknown as Db, {
+		lorebookId,
+		name,
+		binding: `{{char:${characterId ?? 0}}}`,
+		characterId: characterId ?? null
+	})
 	return member
 }
 
@@ -211,13 +205,15 @@ describe("the round trip", () => {
 		expect(list.cast[0]).toMatchObject({
 			castId: member.id,
 			lorebookId: book.id,
-			year: 5
+			year: 5,
+			// A cast version, listed as what changed from the one before it.
+			fields: { summary: "Keeper of the marrow." }
 		})
 	})
 
-	test("the CARD a member is represented by is amendable", async () => {
-		// Ruled 2026-09-23: different cards for different lifecycles, with no
-		// mechanism of its own — `characterId` is just a column to overlay.
+	test("the CARD a member is drawn with changes at a date: the change is listed with the new card", async () => {
+		// Ruled 2026-09-23 as a plain overlay; a cast version re-parented onto
+		// the new card (the full cases are in amendments.castVersions).
 		const { amendmentsCreateHandler, amendmentsListHandler } =
 			await handlers()
 		const user = await makeUser("amend-card-swap")
@@ -241,15 +237,10 @@ describe("the round trip", () => {
 			{ lorebookId: book.id },
 			noopEmit
 		)
-		const overlays = list.cast as unknown as Amendment[]
-		const base = { id: member.id, characterId: young.id }
-		expect(
-			castAsOf(base, overlays, { moment: { year: 19 } }).characterId
-		).toBe(young.id)
-		expect(
-			castAsOf(base, overlays, { moment: { year: 20 } }).characterId
-		).toBe(old.id)
-	})
+		expect(list.cast).toHaveLength(1)
+		expect(list.cast[0]).toMatchObject({ year: 20 })
+		expect(list.cast[0].fields).toMatchObject({ characterId: old.id })
+	}, 60_000)
 })
 
 describe("an amendment is a date", () => {
@@ -905,11 +896,21 @@ describe("re-dating, validation, placements and nested forks (2026-09-28)", () =
 		).rejects.toThrow(/not one this cast member can be drawn with/)
 		const ok = await m.amendmentsCreateHandler.handler(
 			fakeSocket(owner.id),
-			{ lorebookId: book.id, castId: member.id, year: 20, personalPosition: 40, fields: { characterId: mine.id } },
+			{
+				lorebookId: book.id,
+				castId: member.id,
+				year: 20,
+				personalPosition: 40,
+				// Their own card again is no card change; the summary is the change.
+				fields: { characterId: mine.id, summary: "Keeper of the marrow." }
+			},
 			noopEmit
 		)
 		// The personal axis rides on the list, so the workspace can narrow by it.
-		expect(ok.cast[0]).toMatchObject({ personalPosition: 40, fields: { characterId: mine.id } })
+		expect(ok.cast[0]).toMatchObject({
+			personalPosition: 40,
+			fields: { summary: "Keeper of the marrow." }
+		})
 	}, 60_000)
 
 	test("the event must be a history entry of this book; the position a whole number", async () => {

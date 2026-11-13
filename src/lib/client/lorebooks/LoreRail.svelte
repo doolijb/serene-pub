@@ -97,6 +97,11 @@
 		 * draws no group.
 		 */
 		rulesGroup?: { label: string; facets: ScopeFacet[] } | null
+		/**
+		 * 🚧 ★50 Groups for lists of OTHER rules the book holds entries of,
+		 * drawn after `rulesGroup`, each under its own rules' name.
+		 */
+		otherRulesGroups?: { label: string; facets: ScopeFacet[] }[]
 	}
 
 	let {
@@ -114,7 +119,8 @@
 		onSearch,
 		onOpenSettings,
 		settingsOpen = false,
-		rulesGroup = null
+		rulesGroup = null,
+		otherRulesGroups = []
 	}: Props = $props()
 
 	const groups = $derived<SectionGroup[]>([
@@ -140,6 +146,15 @@
 					}
 				]
 			: []),
+		...otherRulesGroups.map((group) => ({
+			label: group.label,
+			items: group.facets.map((facet) => ({
+				key: facet.id,
+				label: facet.label,
+				icon: scopeIcon(facet.id),
+				count: facet.count
+			}))
+		})),
 		{
 			label: "Saved",
 			items: SAVED_SCOPES.map((s) => ({

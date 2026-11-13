@@ -87,7 +87,7 @@ export function endOnUserTurn(
 
 	const end = out[out.length - 1]!
 	if (end.role === "assistant" && !opts.prefill) {
-		const name = speakerOf(end) ?? opts.seedLabel ?? null
+		const name = opts.seedLabel ?? speakerOf(end) ?? null
 		out.push({ role: "user", content: name ? speakerCue(name) : "[Your turn]" })
 		repairs.push("the prompt ended on the model's own line, so the handoff turn was added")
 	} else if (end.role === "system" && opts.seedLabel) {

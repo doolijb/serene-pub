@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	interface Props {
 		onChooseManaged: () => void
@@ -28,12 +28,19 @@
 		msg: Sockets.KoboldCPP.SetManagedMode.Response
 	) {
 		saving = false
-		if (!msg.success) toaster.error({ title: "Failed to save mode" })
+		if (!msg.success)
+			notify.error({
+				source: "socket:koboldcpp:setManagedMode",
+				title: "Failed to save mode"
+			})
 	}
 
 	function handleSetManagedModeError() {
 		saving = false
-		toaster.error({ title: "Failed to save mode" })
+		notify.error({
+			source: "socket:koboldcpp:setManagedMode:error",
+			title: "Failed to save mode"
+		})
 	}
 
 	// Both keys BARE — nothing in `koboldcpp:` carries an interest scope — and
@@ -67,9 +74,7 @@
 			}}
 			disabled={saving}
 		>
-			<div
-				class="bg-primary-100-900 text-primary-ink rounded-lg p-2.5"
-			>
+			<div class="bg-primary-100-900 text-primary-ink rounded-lg p-2.5">
 				<Icons.Bot size={22} />
 			</div>
 			<div>

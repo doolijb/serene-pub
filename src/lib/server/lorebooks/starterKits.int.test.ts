@@ -12,6 +12,7 @@ import { and, eq, inArray, isNotNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { BOOK_LOCK_REFUSAL } from "$lib/shared/lorebooks/sessionNotes"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 
@@ -100,14 +101,13 @@ async function bookWithCast(userId: number) {
 		.insert(schema.characters)
 		.values({ userId, name: `Ivo ${n}`, description: "A ferryman." })
 		.returning()
-	await testDb
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId: book.id,
-			characterId: card.id,
-			binding: "{{char:1}}",
-			name: card.name
-		})
+	const { insertCastMember } = await import("$lib/server/characters/versions")
+	await insertCastMember(db(), {
+		lorebookId: book.id,
+		characterId: card.id,
+		binding: "{{char:1}}",
+		name: card.name
+	})
 	await testDb.insert(schema.lorebookEntries).values({
 		lorebookId: book.id,
 		typeId: "core:entry/world-lore",
@@ -144,7 +144,7 @@ describe("writePrimerInto", () => {
 			.insert(schema.lorebooks)
 			.values({ userId: member, name: "Kit target" })
 			.returning()
-		const { characterIds } = await testDb.transaction((tx) =>
+		const { entryIds } = await testDb.transaction((tx) =>
 			writePrimerInto(tx as unknown as Db, {
 				lorebookId: book.id,
 				userId: member,
@@ -182,17 +182,21 @@ describe("writePrimerInto", () => {
 		expect(members.map((m) => m.name).sort()).toEqual(
 			c.cast.map((m) => m.name).sort()
 		)
-		expect(characterIds.length).toBe(c.cast.length)
-		const cards = await testDb
-			.select()
-			.from(schema.characters)
-			.where(
-				inArray(
-					schema.characters.id,
-					members.map((m) => m.characterId!)
-				)
-			)
-		expect(cards.every((card) => card.userId === member)).toBe(true)
+		expect(Object.keys(entryIds).length).toBeGreaterThan(0)
+		// Card-less members (S4, plan §34.2): the primer's name and description are the member's own.
+		expect(members.every((m) => m.characterId === null)).toBe(true)
+		for (const m of members) {
+			const decl = c.cast.find((x) => x.name === m.name)!
+			expect(m.description).toBe(decl.description)
+		}
+		expect(
+			(
+				await testDb
+					.select()
+					.from(schema.characters)
+					.where(eq(schema.characters.userId, member))
+			).length
+		).toBe(0)
 
 		// Each way out is a lore link.
 		const links = await testDb
@@ -305,7 +309,7 @@ describe("starting a lorebook from a kit", () => {
 			).rejects.toThrow(STARTER_KIT_SENTENCES.unknown)
 	})
 
-	test("from another admin's kit: the cast's cards are copied to the asker", async () => {
+	test("from another admin's kit: the cast is copied card-less", async () => {
 		const { starterKitsSaveFromBookHandler } = await import(
 			"$lib/server/sockets/starterKits"
 		)
@@ -330,6 +334,12 @@ describe("starting a lorebook from a kit", () => {
 			userId: adminA
 		})
 
+		const cardsBefore = (
+			await testDb
+				.select()
+				.from(schema.characters)
+				.where(eq(schema.characters.userId, member))
+		).length
 		const made: any = await lorebooksCreateHandler.handler(
 			socket(member),
 			{ name: "From the kit", starterKit: { lorebookId: kitId } },
@@ -339,16 +349,21 @@ describe("starting a lorebook from a kit", () => {
 			.select()
 			.from(schema.lorebookBindings)
 			.where(eq(schema.lorebookBindings.lorebookId, made.lorebook.id))
-		expect(m.characterId).not.toBe(card.id)
-		const [copy] = await testDb
-			.select()
-			.from(schema.characters)
-			.where(eq(schema.characters.id, m.characterId!))
-		expect(copy).toMatchObject({
-			userId: member,
+		expect(m.characterId).toBeNull()
+		expect(m.name).toBe(card.name)
+		const { memberAsRead } = await import("$lib/server/cast/memberAsRead")
+		expect(await memberAsRead(db(), m.id)).toMatchObject({
 			name: card.name,
 			description: card.description
 		})
+		expect(
+			(
+				await testDb
+					.select()
+					.from(schema.characters)
+					.where(eq(schema.characters.userId, member))
+			).length
+		).toBe(cardsBefore)
 		expect(await bookRow(made.lorebook.id)).toMatchObject({
 			kind: "book",
 			userId: member,
@@ -371,7 +386,7 @@ describe("starting a lorebook from a kit", () => {
 })
 
 describe("a session from a kit", () => {
-	test("the kit lands in the session's notes with its Rules, and in no lorebook", async () => {
+	test("the kit lands in the session's notes with its Rules (the session's own lorebook link stays empty)", async () => {
 		const { sessionsCreateHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
@@ -547,6 +562,27 @@ describe("starterKits:list and the admin verbs", () => {
 		expect(res).toEqual({ lorebookId: kitId, id: `book:${kitId}` })
 		expect(await bookRow(kitId)).toBeUndefined()
 	})
+
+	test("a kit row carrying a provided mark is never deleted here (M2e)", async () => {
+		const h = await import("$lib/server/sockets/starterKits")
+		const { STARTER_KIT_SENTENCES } = await import("./starterKits")
+		const [kit] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: `Provided kit ${++n}`, userId: adminA, kind: "starter_kit" } as any)
+			.returning()
+		await testDb
+			.update(schema.lorebooks)
+			.set({
+				extraJson: {
+					provided: { plugin: "core", slug: "core:primer/x@1", version: "1", sha256: "", uuid: kit.uuid, entries: {} }
+				}
+			})
+			.where(eq(schema.lorebooks.id, kit.id))
+		await expect(
+			h.starterKitsDeleteHandler.handler(socket(adminB, true), { lorebookId: kit.id }, quiet)
+		).rejects.toThrow(STARTER_KIT_SENTENCES.shippedKeep)
+		expect(await bookRow(kit.id)).toBeDefined()
+	})
 })
 
 describe("a kit is never read, written by a session, shared or shelved as a book", () => {
@@ -565,14 +601,11 @@ describe("a kit is never read, written by a session, shared or shelved as a book
 		}
 	}
 
-	test("sessions:create, sessions:setLorebook and sessions:update refuse a kit, even its owner's", async () => {
+	test("sessions:create refuses a kit, even its owner's, and sessions:update never moves a session onto one (the book lock)", async () => {
 		const { kitIsNotReadSentence } = await import("./starterKits")
 		const kit = await adminKit()
 		const { sessionsCreateHandler, sessionsUpdateHandler } = await import(
 			"$lib/server/sockets/sessions"
-		)
-		const { sessionsSetLorebookHandler } = await import(
-			"$lib/server/sockets/summarize"
 		)
 		const created: any = await sessionsCreateHandler.handler(
 			socket(adminA, true),
@@ -594,19 +627,12 @@ describe("a kit is never read, written by a session, shared or shelved as a book
 			.values({ userId: adminA, isGroup: false, name: "Plain run" })
 			.returning()
 		await expect(
-			sessionsSetLorebookHandler.handler(
-				socket(adminA, true),
-				{ sessionId: session.id, lorebookId: kit.id },
-				quiet
-			)
-		).rejects.toThrow(kitIsNotReadSentence(kit.name))
-		await expect(
 			sessionsUpdateHandler.handler(
 				socket(adminA, true),
 				{ session: { id: session.id, lorebookId: kit.id } } as any,
 				quiet
 			)
-		).rejects.toThrow(kitIsNotReadSentence(kit.name))
+		).rejects.toThrow(BOOK_LOCK_REFUSAL)
 	})
 
 	test("lorebooks:share refuses a kit", async () => {
@@ -645,8 +671,9 @@ describe("a kit is never read, written by a session, shared or shelved as a book
 		expect(theirs.lorebookList.some((b: any) => b.id === kit.id)).toBe(
 			false
 		)
-		expect(theirs.lorebookList.every((b: any) => b.kind === "book")).toBe(
-			true
-		)
+		// ★M3-1 "Pub wide": a live provided primer row is every person's to read; no other kit is.
+		expect(
+			theirs.lorebookList.every((b: any) => b.kind === "book" || b.provided)
+		).toBe(true)
 	})
 })

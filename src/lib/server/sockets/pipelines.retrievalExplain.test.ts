@@ -710,6 +710,33 @@ describe("explainRetrieval — what never reached the ranker", () => {
 		)
 	})
 
+	it("hands the mechanism's raw reason over as data, only on a skipped row that had one", async () => {
+		const out = await explain(receipt())
+		const skipped = out.rows.find((r) => r.key === "skip:worldLore:2")!
+		expect(skipped.skipReason).toBe(
+			"no key matched in the last 10 messages"
+		)
+
+		const judged = out.rows.filter((r) => r.outcome !== "skipped")
+		expect(judged.length).toBeGreaterThan(0)
+		for (const r of judged) expect(r).not.toHaveProperty("skipReason")
+
+		const bare = await explain(
+			receipt({
+				nodes: [
+					{
+						nodeKey: "lore-world",
+						seq: 1,
+						output: { skipped: [{ id: 2, source: "worldLore" }] }
+					}
+				]
+			})
+		)
+		const row = bare.rows.find((r) => r.outcome === "skipped")!
+		expect(row.verdict).toBe("Never reached the ranker.")
+		expect(row).not.toHaveProperty("skipReason")
+	})
+
 	it("does not report a decline for an entry another mechanism's ranker judged", async () => {
 		// The mechanisms are independent and both run on every turn, so an entry the
 		// keyword scan never matched is routinely one the vector mechanism finds and

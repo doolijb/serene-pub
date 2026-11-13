@@ -115,10 +115,12 @@ async function fixture(tag: string) {
 			fields: { name: "Watch Room" }
 		}
 	] as any)
-	const [verity] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({ lorebookId: book!.id, binding: "{{char:1}}", name: "Verity" })
-		.returning()
+	const { insertCastMember } = await import("$lib/server/characters/versions")
+	const { member: verity } = await insertCastMember(testDb as any, {
+		lorebookId: book!.id,
+		binding: "{{char:1}}",
+		name: "Verity"
+	})
 	const rel = (values: Record<string, unknown>) =>
 		testDb
 			.insert(schema.narrativeRelationships)

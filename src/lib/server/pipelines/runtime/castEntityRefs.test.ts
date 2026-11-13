@@ -51,6 +51,8 @@ const seated = (
 
 const bound = (
 	row: Partial<{
+		id: number | null
+		cardDeleted: boolean | null
 		characterId: number | null
 		name: string
 		aliases: unknown
@@ -140,17 +142,53 @@ describe("the vocabulary reaches the whole book, not only the room", () => {
 	})
 
 	/**
-	 * A background NPC the graph minted binds nothing, and there is no row for
-	 * it to resolve *to* — `EntityRef` names a character or an entry.
-	 * `loadVocabulary` drops it for the same reason, and inventing a third kind
-	 * is a schema decision neither seam should make alone. Its name still
-	 * reaches the open tier as a string.
+	 * A binding with no live card — a background NPC the graph minted, or a
+	 * member whose card was soft-deleted — is the member itself,
+	 * `cast_member:<binding id>`, as `loadVocabulary` keys it (★s4-ner-2). A
+	 * binding the read gave no id for names nobody the matcher could resolve to.
 	 */
-	it("drops a binding that names neither a character nor a persona", () => {
+	it("drops a binding that names neither a card nor a member id", () => {
 		const out = castEntityRefs({
 			lorebookBindings: [bound({ name: "the man in the doorway" })]
 		})
 		expect(out).toEqual([])
+	})
+
+	it("names a card-less member by its binding id", () => {
+		const out = castEntityRefs({
+			lorebookBindings: [
+				bound({ id: 31, name: "the man in the doorway", aliases: ["the stranger"] })
+			]
+		})
+		expect(out).toEqual([
+			{ name: "the man in the doorway", ref: { kind: "cast_member", id: 31 } },
+			{ name: "the stranger", ref: { kind: "cast_member", id: 31 } }
+		])
+	})
+
+	it("names a member whose card is soft-deleted by its binding id, and a carded member by its card", () => {
+		const out = castEntityRefs({
+			lorebookBindings: [
+				bound({ id: 31, characterId: 3, cardDeleted: true, name: "Ceyla" }),
+				bound({ id: 32, characterId: 4, cardDeleted: false, name: "Warren" })
+			]
+		})
+		expect(out).toEqual([
+			{ name: "Warren", ref: { kind: "character", id: 4 } },
+			{ name: "Ceyla", ref: { kind: "cast_member", id: 31 } }
+		])
+	})
+
+	it("lets a carded member keep a name a card-less member shares", () => {
+		const g = buildGazetteer(
+			castEntityRefs({
+				lorebookBindings: [
+					bound({ id: 31, name: "Vell" }),
+					bound({ id: 32, characterId: 4, name: "Vell" })
+				]
+			})
+		)
+		expect(g.byName.get("vell")).toEqual({ kind: "character", id: 4 })
 	})
 
 	it("survives a session that no longer exists", () => {

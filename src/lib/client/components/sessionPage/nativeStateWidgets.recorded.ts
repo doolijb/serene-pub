@@ -6,6 +6,8 @@
  * sheet redesign (PLAN-sheet-widget-redesign: the card head's face, read-only
  * rows as words, World State as Stats' module) — a regression snapshot since.
  * Re-recorded 2026-10-19 (PLAN-dc-after-walk2 Q3-6: an empty stat reads _none_).
+ * Edited 2026-11-06 (R10: a state widget with nothing to show draws no sentence, so the
+ * empty cases read ""; the names-mismatch cause line is kept).
  * Regenerate with `SP_RECORD_DREW=<json> npx vitest run …remoteStateWidgets.dom.test.ts`.
  * Test data only.
  */
@@ -231,7 +233,7 @@ export const NATIVE_DREW: Record<string, unknown> = {
 		"alerts": [],
 		"cards": [],
 		"slots": [],
-		"empty": "This session's rules declare no attributes."
+		"empty": ""
 	},
 	"stats {\"slots\":[]}": {
 		"widget": "stats",
@@ -239,7 +241,7 @@ export const NATIVE_DREW: Record<string, unknown> = {
 		"alerts": [],
 		"cards": [],
 		"slots": [],
-		"empty": "This session's rules declare no attributes."
+		"empty": ""
 	},
 	"stats {\"castValues\":false}": {
 		"widget": "stats",
@@ -247,7 +249,7 @@ export const NATIVE_DREW: Record<string, unknown> = {
 		"alerts": [],
 		"cards": [],
 		"slots": [],
-		"empty": "No one in the cast has a stat in play yet. Set one on a cast member's page, or let the story change one."
+		"empty": ""
 	},
 	"world-state no world owner": {
 		"widget": "world-state",
@@ -255,7 +257,7 @@ export const NATIVE_DREW: Record<string, unknown> = {
 		"alerts": [],
 		"cards": [],
 		"slots": [],
-		"empty": "This session's world declares no stats to show here."
+		"empty": ""
 	},
 	"world-state failed read": {
 		"widget": "world-state",

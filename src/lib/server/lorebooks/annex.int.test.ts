@@ -148,7 +148,7 @@ const imprints = async (sessionId: number) => {
 }
 const swipe = async (messageId: number) => {
 	const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-	return retractStateAnchoredTo(db(), messageId)
+	return retractStateAnchoredTo(db(), messageId, "replaced")
 }
 
 describe("a session's lorebook-annex write", () => {

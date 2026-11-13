@@ -111,6 +111,7 @@ async function pushNow(
 				"main",
 				{
 					member: true,
+					withRewind: true,
 					...(opts.starting ? { starting: true } : {})
 				}
 			)

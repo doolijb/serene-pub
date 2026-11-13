@@ -63,7 +63,11 @@ class FakeAdapter {
 			throw new Error("the model fell over")
 		}
 		return {
-			compiledPrompt: { prompt: "p", messages: undefined, meta: {} as any },
+			compiledPrompt: {
+				prompt: "p",
+				messages: undefined,
+				meta: {} as any
+			},
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				onContent(REPLY)
@@ -87,7 +91,9 @@ const fakeSocket = (uid: number) =>
 const emit = (_event: string, _data: any) => {}
 
 const settle = async () =>
-	(await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+	(
+		await import("$lib/server/pipelines/runtime/sessionEvents")
+	).settleSessionEvents()
 
 const completedOf = async (sessionId: number) => {
 	await settle()
@@ -155,10 +161,14 @@ const userRows = async (sessionId: number) =>
 	).filter((m) => m.role === "user")
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-composer-states-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-composer-states-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db)
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -171,12 +181,24 @@ beforeAll(async () => {
 	characterId = character.id
 	const [persona] = await db
 		.insert(schema.characters)
-		.values({ userId, name: "Bram", description: "", isPersona: true, aliases: [] } as any)
+		.values({
+			userId,
+			name: "Bram",
+			description: "",
+			isPersona: true,
+			aliases: []
+		} as any)
 		.returning()
 	personaId = persona.id
 	const [others] = await db
 		.insert(schema.characters)
-		.values({ userId: otherUserId, name: "Cass", description: "", isPersona: true, aliases: [] } as any)
+		.values({
+			userId: otherUserId,
+			name: "Cass",
+			description: "",
+			isPersona: true,
+			aliases: []
+		} as any)
 		.returning()
 	othersPersonaId = others.id
 
@@ -184,18 +206,30 @@ beforeAll(async () => {
 		.insert(schema.connections)
 		.values({ name: "Text", type: "koboldcpp", baseUrl: "http://text" })
 		.returning()
-	const { ensureConnectionModel } = await import("$lib/server/connections/models")
-	const modelId = (await ensureConnectionModel(db, textConn.id, "default-7b"))!.id
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const modelId = (await ensureConnectionModel(
+		db,
+		textConn.id,
+		"default-7b"
+	))!.id
 	const [sampling] = await db
 		.insert(schema.samplingConfigs)
 		.values({
 			name: "Default",
 			isImmutable: false,
-			values: { contextTokens: 8192, responseTokens: 200, temperature: 0.5 },
+			values: {
+				contextTokens: 8192,
+				responseTokens: 200,
+				temperature: 0.5
+			},
 			enabled: ["contextTokens", "responseTokens", "temperature"]
 		} as any)
 		.returning()
-	const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: textConn.id,
 		connectionModelId: modelId,
@@ -207,11 +241,22 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-
 const closeVia = async (sessionId: number, input: Record<string, unknown>) => {
 	const { createHost } = await import("$lib/server/pipelines/runtime/host")
-	const host = createHost(db as any, { sessionId, userId, specId: "test:spec/composer", runId: `run-${Math.random()}` } as any)
-	const node = { key: "composer", definitionId: "core:outlet/set-composer-state", definitionVersion: 1 } as any
+	const host = createHost(
+		db as any,
+		{
+			sessionId,
+			userId,
+			specId: "test:spec/composer",
+			runId: `run-${Math.random()}`
+		} as any
+	)
+	const node = {
+		key: "composer",
+		definitionId: "core:outlet/set-composer-state",
+		definitionVersion: 1
+	} as any
 	return (await host.commit!(input, node)) as any
 }
 const statesOf = async (sessionId: number) =>
@@ -230,45 +275,95 @@ describe("composer states", () => {
 
 	it("closed by the outlet: the send is refused with its reason, nothing written; opened: the send lands", async () => {
 		const sessionId = await makeSession("close")
-		const out = await closeVia(sessionId, { channel: "main", open: false, reason: "Make your character first." })
+		const out = await closeVia(sessionId, {
+			channel: "main",
+			open: false,
+			reason: "Make your character first."
+		})
 		expect(out.written).toBe(true)
-		expect(out.states).toEqual({ main: { "*": { open: false, reason: "Make your character first." } } })
+		expect(out.states).toEqual({
+			main: { "*": { open: false, reason: "Make your character first." } }
+		})
 		expect(await statesOf(sessionId)).toEqual(out.states)
 
-		const refused = await send(userId, { sessionId, personaId: null, content: "Hello?" })
+		const refused = await send(userId, {
+			sessionId,
+			personaId: null,
+			content: "Hello?"
+		})
 		// The owner is closed too: the genre decides.
-		expect(refused.refused).toBe("You can't send here yet. Make your character first. Your text was kept.")
+		expect(refused.refused).toBe(
+			"You can't send here yet. Make your character first. Your text was kept."
+		)
 		expect(refused.accepted).toBeUndefined()
 		expect(await userRows(sessionId)).toHaveLength(0)
 
 		await closeVia(sessionId, { channel: "main", open: true })
 		expect(await statesOf(sessionId)).toEqual({})
-		const landed = await send(userId, { sessionId, personaId: null, content: "Hello?" })
+		const landed = await send(userId, {
+			sessionId,
+			personaId: null,
+			content: "Hello?"
+		})
 		expect(landed.refused).toBeUndefined()
 		expect(landed.accepted).toBe(true)
-		expect((await userRows(sessionId)).map((r) => r.content)).toEqual(["Hello?"])
+		expect((await userRows(sessionId)).map((r) => r.content)).toEqual([
+			"Hello?"
+		])
 	})
 
 	it("closed for one person: theirs is refused (no reason: the plain sentence); another member's lands", async () => {
 		const sessionId = await makeSession("one person")
-		await db.insert(schema.sessionGuests).values({ sessionId, userId: otherUserId, isPlayer: true } as any)
-		await closeVia(sessionId, { channel: "main", open: false, person: `user:${userId}` })
-		const mine = await send(userId, { sessionId, personaId: null, content: "Me first." })
-		expect(mine.refused).toBe("You can't send here yet. Your text was kept.")
-		const theirs = await send(otherUserId, { sessionId, personaId: othersPersonaId, content: "Me then." })
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: otherUserId, isPlayer: true } as any)
+		await closeVia(sessionId, {
+			channel: "main",
+			open: false,
+			person: `user:${userId}`
+		})
+		const mine = await send(userId, {
+			sessionId,
+			personaId: null,
+			content: "Me first."
+		})
+		expect(mine.refused).toBe(
+			"You can't send here yet. Your text was kept."
+		)
+		const theirs = await send(otherUserId, {
+			sessionId,
+			personaId: othersPersonaId,
+			content: "Me then."
+		})
 		expect(theirs.refused, theirs.refused).toBeUndefined()
-		expect((await userRows(sessionId)).map((r) => r.content)).toEqual(["Me then."])
+		expect((await userRows(sessionId)).map((r) => r.content)).toEqual([
+			"Me then."
+		])
 	})
 
 	it("per lane: closing parley:2 closes that lane alone; * closes every channel", async () => {
 		const sessionId = await makeSession("lanes")
-		const { composerRefusal } = await import("$lib/server/sessions/composerStates")
-		await closeVia(sessionId, { channel: "parley:2", open: false, reason: "Wait for the Planner." })
-		expect(await composerRefusal(db as any, sessionId, "parley:2", userId)).toBe("You can't send here yet. Wait for the Planner.")
-		expect(await composerRefusal(db as any, sessionId, "parley", userId)).toBeNull()
-		expect(await composerRefusal(db as any, sessionId, "main", userId)).toBeNull()
+		const { composerRefusal } = await import(
+			"$lib/server/sessions/composerStates"
+		)
+		await closeVia(sessionId, {
+			channel: "parley:2",
+			open: false,
+			reason: "Wait for the Planner."
+		})
+		expect(
+			await composerRefusal(db as any, sessionId, "parley:2", userId)
+		).toBe("You can't send here yet. Wait for the Planner.")
+		expect(
+			await composerRefusal(db as any, sessionId, "parley", userId)
+		).toBeNull()
+		expect(
+			await composerRefusal(db as any, sessionId, "main", userId)
+		).toBeNull()
 		await closeVia(sessionId, { channel: "*", open: false })
-		expect(await composerRefusal(db as any, sessionId, "main", otherUserId)).toBe("You can't send here yet.")
+		expect(
+			await composerRefusal(db as any, sessionId, "main", otherUserId)
+		).toBe("You can't send here yet.")
 		// Opening everything clears every closure.
 		await closeVia(sessionId, { channel: "*", open: true })
 		expect(await statesOf(sessionId)).toEqual({})
@@ -276,14 +371,36 @@ describe("composer states", () => {
 
 	it("the outlet halts on a value it cannot read; a run's settings document carries the states when something is closed", async () => {
 		const sessionId = await makeSession("halts")
-		expect((await closeVia(sessionId, { channel: "main", open: "maybe" })).halt).toMatch(/neither open/)
-		expect((await closeVia(sessionId, { channel: "main", open: false, person: "character:3" })).halt).toMatch(/not a person/)
-		expect((await closeVia(sessionId, { open: false })).halt).toMatch(/no channel/)
+		expect(
+			(await closeVia(sessionId, { channel: "main", open: "maybe" })).halt
+		).toMatch(/neither open/)
+		expect(
+			(
+				await closeVia(sessionId, {
+					channel: "main",
+					open: false,
+					person: "character:3"
+				})
+			).halt
+		).toMatch(/not a person/)
+		expect((await closeVia(sessionId, { open: false })).halt).toMatch(
+			/no channel/
+		)
 		expect(await statesOf(sessionId)).toEqual({})
-		const { resolveSessionSettings } = await import("$lib/server/sessions/settings")
-		expect((await resolveSessionSettings(db as any, sessionId))?.composerStates).toBeUndefined()
-		await closeVia(sessionId, { channel: "main", open: false, person: `user:${userId}` })
-		expect((await resolveSessionSettings(db as any, sessionId))?.composerStates).toEqual({
+		const { resolveSessionSettings } = await import(
+			"$lib/server/sessions/settings"
+		)
+		expect(
+			(await resolveSessionSettings(db as any, sessionId))?.composerStates
+		).toBeUndefined()
+		await closeVia(sessionId, {
+			channel: "main",
+			open: false,
+			person: `user:${userId}`
+		})
+		expect(
+			(await resolveSessionSettings(db as any, sessionId))?.composerStates
+		).toEqual({
 			main: { [`user:${userId}`]: { open: false } }
 		})
 	})

@@ -14,8 +14,11 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { notify } from "$lib/client/utils/notify"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
@@ -23,7 +26,12 @@
 		AdminChangelistColumn,
 		AdminChangelistFilter
 	} from "$lib/client/components/admin/changelist"
-	import { PROMPT_NOUN, genresFitting, pipelinesFitting, promptDeletion } from "./promptsAdmin"
+	import {
+		PROMPT_NOUN,
+		genresFitting,
+		pipelinesFitting,
+		promptDeletion
+	} from "./promptsAdmin"
 
 	type Prompt = Sockets.Pipelines.Library.LibraryPrompt
 	type Pipeline = Sockets.Pipelines.Library.LibraryPipeline
@@ -41,35 +49,54 @@
 
 	/** Ids this page asked to delete, so its toast counts only its own. */
 	let deleting = $state(0)
-	useInterest<"pipelines:libraryDeletePrompt">("pipelines:libraryDeletePrompt", (res) => {
-		if (res.library) view = res.library
-		if (deleting > 0 && --deleting === 0) toaster.success({ title: "Deleted" })
-	})
+	useInterest<"pipelines:libraryDeletePrompt">(
+		"pipelines:libraryDeletePrompt",
+		(res) => {
+			if (res.library) view = res.library
+			if (deleting > 0 && --deleting === 0)
+				notify.success({ title: "Deleted" })
+		}
+	)
 	useInterest<"pipelines:libraryDeletePrompt:error">(
 		"pipelines:libraryDeletePrompt:error",
 		(res) => {
 			if (deleting > 0) deleting--
-			toaster.error({ title: res.error ?? "The prompt was not deleted." })
+			notify.error({
+				title: res.error ?? "The prompt was not deleted.",
+				source: "socket:pipelines:libraryDeletePrompt:error"
+			})
 		}
 	)
 	// A clone or save made on a prompt's page answers with the whole view.
-	useInterest<"pipelines:libraryClonePrompt">("pipelines:libraryClonePrompt", (res) => {
-		if (res.library) view = res.library
-	})
-	useInterest<"pipelines:libraryUpdatePrompt">("pipelines:libraryUpdatePrompt", (res) => {
-		if (res.library) view = res.library
-	})
+	useInterest<"pipelines:libraryClonePrompt">(
+		"pipelines:libraryClonePrompt",
+		(res) => {
+			if (res.library) view = res.library
+		}
+	)
+	useInterest<"pipelines:libraryUpdatePrompt">(
+		"pipelines:libraryUpdatePrompt",
+		(res) => {
+			if (res.library) view = res.library
+		}
+	)
 
 	const rows = $derived((view.prompts ?? []) as Prompt[])
 	const pipelines = $derived((view.pipelines ?? []) as Pipeline[])
 	/** By label — the name with its genre beside it — so each genre's "Reply" reads apart. */
-	const pipelineName = $derived(new Map(pipelines.map((p) => [p.slug, p.label])))
+	const pipelineName = $derived(
+		new Map(pipelines.map((p) => [p.slug, p.label]))
+	)
 	const genreName = $derived(
-		new Map(pipelines.flatMap((p) => (p.genres ?? []).map((g) => [g.id, g.name] as const)))
+		new Map(
+			pipelines.flatMap((p) =>
+				(p.genres ?? []).map((g) => [g.id, g.name] as const)
+			)
+		)
 	)
 	const poolLabel = $derived(
 		new Map([
-			...((view.promptPools ?? []).map((p) => [p.id, p.label] as const)),
+			...(view.promptPools ?? []).map((p) => [p.id, p.label] as const),
 			...rows.map((r) => [r.poolId, r.poolLabel] as const)
 		])
 	)
@@ -152,14 +179,16 @@
 			key: "owners",
 			label: "Owners",
 			values: (r) => (r.hidden ? "hidden" : "offered"),
-			optionLabel: (v) => (v === "hidden" ? "Hidden from owners" : "Offered to owners"),
+			optionLabel: (v) =>
+				v === "hidden" ? "Hidden from owners" : "Offered to owners",
 			order: ["offered", "hidden"]
 		},
 		{
 			key: "use",
 			label: "Use",
 			values: (r) => (r.usedBy.length ? "picked" : "unused"),
-			optionLabel: (v) => (v === "picked" ? "Picked by a pipeline" : "Unused"),
+			optionLabel: (v) =>
+				v === "picked" ? "Picked by a pipeline" : "Unused",
 			order: ["picked", "unused"]
 		}
 	])
@@ -170,8 +199,10 @@
 	 */
 	function setHidden(selected: Prompt[], hidden: boolean) {
 		const ids = selected.filter((r) => r.hidden !== hidden).map((r) => r.id)
-		for (const id of ids) socket.emit("pipelines:libraryUpdatePrompt", { id, hidden })
-		toaster.success({
+		for (const id of ids)
+			socket.emit("pipelines:libraryUpdatePrompt", { id, hidden })
+		notify.success({
+			silent: true,
 			title: `${ids.length} ${ids.length === 1 ? "prompt" : "prompts"} ${hidden ? "hidden from session owners" : "offered to session owners"}`
 		})
 	}
@@ -200,7 +231,8 @@
 					.filter((r) => !r.isImmutable && !r.usedBy.length)
 					.map((r) => r.id)
 				deleting += ids.length
-				for (const id of ids) socket.emit("pipelines:libraryDeletePrompt", { id })
+				for (const id of ids)
+					socket.emit("pipelines:libraryDeletePrompt", { id })
 			}
 		}
 	]

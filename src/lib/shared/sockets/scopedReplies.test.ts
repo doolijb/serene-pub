@@ -48,6 +48,8 @@ const LOREBOOK_FAMILIES = [
  */
 const SCOPE_PATHS = {
 	"lorebooks:bindingList": ["lorebookId"],
+	// 🚧 lane cv-member2: the Update offer's reply.
+	"lorebooks:updateMemberToCardVersion": ["lorebookId"],
 	"lorebooks:get": ["lorebookId"],
 	"lorebooks:storyTime": ["lorebookId"],
 	"lorebooks:checkCalendar": ["lorebookId"],

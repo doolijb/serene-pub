@@ -50,3 +50,48 @@ describe("answerOpenCharacter", () => {
 		expect(did).toEqual(["open", "view 2", "member 40 in book 7"])
 	})
 })
+
+describe("answerOpenCharacter when the page answers later", () => {
+	/** A page whose `castMemberOf` answers with a Promise, and records the sheet. */
+	function laterPage(answer: unknown) {
+		const { did, deps } = page()
+		return {
+			did,
+			deps: {
+				...deps,
+				castMemberOf: async () => answer as never,
+				openSeatMemberSheet: (id: number) => did.push(`sheet ${id}`)
+			}
+		}
+	}
+
+	test("an address it resolves opens the member", async () => {
+		const { did, deps } = laterPage({ lorebookId: 9, castId: 90 })
+		await answerOpenCharacter({ characterId: 4 }, deps)
+		expect(did).toEqual(["member 90 in book 9"])
+	})
+
+	test('"sheet" opens the read-only sheet and nothing else', async () => {
+		const { did, deps } = laterPage("sheet")
+		await answerOpenCharacter({ characterId: 4 }, deps)
+		expect(did).toEqual(["sheet 4"])
+	})
+
+	test("null opens the card", async () => {
+		const { did, deps } = laterPage(null)
+		await answerOpenCharacter({ characterId: 4 }, deps)
+		expect(did).toEqual(["open", "view 4"])
+	})
+
+	test("a refusal rejects, opening nothing", async () => {
+		const { did, deps } = laterPage(null)
+		const refused = {
+			...deps,
+			castMemberOf: async () => {
+				throw new Error("Access denied.")
+			}
+		}
+		await expect(answerOpenCharacter({ characterId: 4 }, refused)).rejects.toThrow("Access denied.")
+		expect(did).toEqual([])
+	})
+})

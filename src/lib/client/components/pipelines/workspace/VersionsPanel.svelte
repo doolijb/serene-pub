@@ -7,7 +7,7 @@
 	 * a particular version stays true.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	type Version = NonNullable<
 		Sockets.Pipelines.Detail.Response["spec"]
@@ -25,9 +25,9 @@
 	async function copyHash(hash: string) {
 		try {
 			await navigator.clipboard.writeText(hash)
-			toaster.success({ title: "Hash copied" })
+			notify.success({ title: "Hash copied" })
 		} catch {
-			toaster.error({ title: "Clipboard unavailable" })
+			notify.error({ title: "Clipboard unavailable" })
 		}
 	}
 </script>
@@ -38,27 +38,29 @@
 	</h3>
 	<p class="text-surface-600-400 text-sm">
 		Publishing moves a pointer; it never overwrites. A run in flight keeps
-		the version it started on, so a receipt's claim to describe a
-		particular version stays true.
+		the version it started on, so a receipt's claim to describe a particular
+		version stays true.
 	</p>
 	<!-- One row per version rather than a table, so the list reads the same
 	     in a 400px column and in Focus. -->
 	<ul class="flex flex-col gap-1.5">
 		{#each versions as v (v.id)}
-			<li class="bg-surface-50-950 flex flex-col gap-1 rounded-base px-3 py-2 text-sm">
+			<li
+				class="bg-surface-50-950 rounded-base flex flex-col gap-1 px-3 py-2 text-sm"
+			>
 				<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
 					<span class="font-mono font-semibold">{v.semver}</span>
 					{#if v.isActive}
-						<Badge tone="success" size="md">
-							active
-						</Badge>
+						<Badge tone="success" size="md">active</Badge>
 					{/if}
 					<span class="text-surface-700-300">{v.status}</span>
 					<span class="text-surface-600-400 text-xs">
 						{v.nodeCount}
 						{v.nodeCount === 1 ? "node" : "nodes"}
 					</span>
-					<span class="text-surface-600-400 ml-auto text-xs whitespace-nowrap">
+					<span
+						class="text-surface-600-400 ml-auto text-xs whitespace-nowrap"
+					>
 						{when(v.publishedAt)}
 					</span>
 				</div>

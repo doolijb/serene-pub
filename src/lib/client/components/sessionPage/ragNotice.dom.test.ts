@@ -104,6 +104,8 @@ const counts = (total: number, nullCount: number, staleCount = 0) => ({
 /** The server's reply, as the notice's request handler receives it. */
 function reply(lorebook: ReturnType<typeof counts> | null, extra: object = {}) {
 	client.dispatch("vectorization:checkRagStatus", {
+		sessionId: 7,
+		lorebookId: 70,
 		applicable: true,
 		lorebook,
 		queueRunning: true,
@@ -116,6 +118,73 @@ function reply(lorebook: ReturnType<typeof counts> | null, extra: object = {}) {
 }
 
 const text = () => target.textContent?.replace(/\s+/g, " ").trim() ?? ""
+
+const asks = () =>
+	client.emits.filter((e) => e.event === "vectorization:checkRagStatus")
+	.length
+
+describe("the status ask is single-flight and scoped", () => {
+	test("a trigger in flight waits for the reply, then asks exactly once", () => {
+		expect(asks()).toBe(1)
+		// Triggers while the first ask is out: none goes out.
+		client.dispatch("vectorization:progress", { status: "idle" })
+		flushSync()
+		expect(asks()).toBe(1)
+		reply(counts(40, 28))
+		// First reply lands (and a known book arms the item listener).
+		expect(text()).toBe("")
+		expect(asks()).toBe(1)
+	})
+
+	test("ends on the newest reply's figures", () => {
+		vi.useFakeTimers()
+		try {
+			reply(counts(40, 28))
+			expect(asks()).toBe(1)
+			// An item lands: asks after the throttle window.
+			client.dispatch("vectorization:itemUpdated", { lorebookId: 70 })
+			vi.advanceTimersByTime(1000)
+			flushSync()
+			expect(asks()).toBe(2)
+			// Another lands while that ask is out: held until the reply.
+			client.dispatch("vectorization:itemUpdated", { lorebookId: 70 })
+			vi.advanceTimersByTime(1000)
+			flushSync()
+			expect(asks()).toBe(2)
+			reply(counts(40, 27))
+			expect(asks()).toBe(3)
+			expect(text()).toBe("")
+			reply(counts(40, 40))
+			expect(asks()).toBe(3)
+			expect(text()).toContain("aren't indexed yet")
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	test("another session's reply changes nothing here", () => {
+		reply(counts(4, 4))
+		reply(counts(40, 0), { sessionId: 8 })
+		expect(text()).toContain("aren't indexed yet")
+	})
+
+	test("an item of this book asks again; another book's does not", () => {
+		vi.useFakeTimers()
+		try {
+			reply(counts(40, 28))
+			client.dispatch("vectorization:itemUpdated", { lorebookId: 71 })
+			vi.advanceTimersByTime(1000)
+			flushSync()
+			expect(asks()).toBe(1)
+			client.dispatch("vectorization:itemUpdated", { lorebookId: 70 })
+			vi.advanceTimersByTime(1000)
+			flushSync()
+			expect(asks()).toBe(2)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+})
 
 describe("the RAG notice", () => {
 	test("asks for the session's status once mounted", () => {
@@ -159,20 +228,15 @@ describe("the RAG notice", () => {
 		}
 	})
 
-	test("counts only the entries while indexing", () => {
-		reply(counts(40, 28))
-		expect(text()).toContain("Indexing 12 of 40 lorebook entries.")
-	})
-
-	test("with the queue not running, says the rest are waiting — never that it is paused", () => {
-		// Nothing can pause the queue; "not running" is idle between scans or
-		// waiting on a model, so "Queue paused." was never true.
-		reply(counts(40, 28), { queueRunning: false })
-		expect(text()).not.toMatch(/paused/i)
-		expect(text()).not.toContain("Indexing 12 of 40")
-		expect(text()).toContain(
-			"12 of 40 lorebook entries are indexed. The rest are waiting to be indexed."
-		)
+	test("shows no progress line and no spinner while indexing is part way", () => {
+		// Progress lives in Activity; the composer keeps only what can be acted on.
+		for (const queueRunning of [true, false]) {
+			reply(counts(40, 28), { queueRunning })
+			expect(text()).toBe("")
+			expect(text()).not.toMatch(/Indexing|paused|waiting/)
+			expect(target.querySelector(".animate-spin")).toBeNull()
+			expect(target.querySelector("button")).toBeNull()
+		}
 	})
 
 	test("names the model when the entries were indexed with another", () => {
@@ -334,12 +398,12 @@ describe("once a session, then an icon", () => {
 	})
 
 	test("collapsing the line makes it the icon at once", () => {
-		reply(counts(40, 28))
+		reply(counts(4, 4))
 		const collapse = collapseButton()!
 		expect(collapse.getAttribute("aria-expanded")).toBe("true")
 		collapse.click()
 		flushSync()
-		expect(text()).not.toContain("Indexing 12 of 40")
+		expect(text()).not.toContain("aren't indexed yet")
 		expect(showButton()).toBeTruthy()
 	})
 
@@ -353,7 +417,7 @@ describe("once a session, then an icon", () => {
 			context: new Map([["userCtx", { user: { id: 1, isAdmin: false } }]])
 		})
 		flushSync()
-		reply(counts(4, 4))
+		reply(counts(4, 4), { sessionId: 8 })
 		expect(text()).toContain("Lorebook entries aren't indexed yet")
 	})
 })

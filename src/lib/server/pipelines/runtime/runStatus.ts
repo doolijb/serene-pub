@@ -47,14 +47,13 @@ import {
 	type ParticipantRef,
 	type StatusText
 } from "@serene-pub/sdk"
-import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 import { setStatus as setRegistryStatus } from "$lib/server/pipelines/runtime/runRegistry"
 import type { RunKind } from "$lib/server/pipelines/runtime/runRegistry"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { LLMQueueStatus } from "$lib/server/utils/llmQueue"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 
 // db is the global Db — see db/types.d.ts
@@ -198,27 +197,55 @@ export async function speakerDisplayName(
 	}
 ): Promise<string | undefined> {
 	if (opts.sideCharacterName?.trim()) return opts.sideCharacterName.trim()
-	const ref = opts.speaker
+	const speaker = opts.speaker
 	// `null` and `undefined` are NOT the same "no speaker" (ruled
 	// 2026-09-16): `null` is a narrator turn, which does have a name to
 	// give — the session's configured narrator — while `undefined` is a
 	// run that never had a speaker port at all (`sessions:fireAction`,
 	// summarize, a scene). The latter falls out here rather than reaching
 	// the narrator branch below, so its status keeps `{speaker}` unfilled.
-	if (ref === undefined) return undefined
+	if (speaker === undefined) return undefined
+	// 🚧 A `seated-member:` ref (refs in accept it) is read in the card form
+	// the gate below knows; nobody seated as that member names nobody.
+	let ref = speaker
+	if (typeof ref === "string" && ref.startsWith("seated-member:")) {
+		const { storedSeatRef } = await import(
+			"$lib/server/state/seatRefs"
+		)
+		ref = ((await storedSeatRef(db, opts.sessionId, ref)) ??
+			"") as typeof ref
+		if (!ref) return undefined
+	}
+	// ⏳ (S4) With the member-form switch on the door answers member form
+	// (`seated-member:` / `player-seat:`): read it as the card its seat holds,
+	// the form the gate below knows.
+	if (
+		typeof ref === "string" &&
+		(ref.startsWith("seated-member:") || ref.startsWith("player-seat:"))
+	) {
+		const { memberFormOn } = await import("$lib/server/state/memberForm")
+		if (memberFormOn()) {
+			const { seatOf } = await import("$lib/server/sessions/seats")
+			const cardId = (await seatOf(db, opts.sessionId, ref))?.cardId
+			if (cardId == null) return undefined
+			ref = `character:${cardId}` as typeof ref
+		}
+	}
 	if (ref && isParticipantRef(ref)) {
 		if (ref.startsWith("character:")) {
 			const id = Number(ref.slice("character:".length))
 			if (Number.isFinite(id)) {
-				const [row] = await db
-					.select({
-						name: schema.characters.name,
-						nickname: schema.characters.nickname
-					})
-					.from(schema.characters)
-					.where(eq(schema.characters.id, id))
-					.limit(1)
-				if (row) return resolveCharacterName(row, "") || undefined
+				// The seat holding the card reads its member (own name
+				// or the card's); nobody seated reads the card's current version.
+				const { cardsNowAsSeatsRead } = await import(
+					"$lib/server/pipelines/prompt/seatCards"
+				)
+				const filled = (
+					await cardsNowAsSeatsRead(db, opts.sessionId, [id])
+				).get(id)
+				if (filled) {
+					return memberShownName(undefined, filled, "") || undefined
+				}
 			}
 			return undefined
 		}

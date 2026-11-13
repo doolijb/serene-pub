@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest"
 import {
+	cardGreetings,
 	cardValueOf,
+	greetingsOf,
 	joinExampleDialogues,
 	retoldRows,
 	setRetold,
@@ -22,6 +24,7 @@ const blank: RetoldDraft = {
 	scenario: "",
 	firstMessage: "",
 	alternateGreetings: [],
+	groupOnlyGreetings: [],
 	exampleDialogues: "",
 	faceMediaId: null,
 	retold: {}
@@ -46,15 +49,12 @@ describe("retoldRows", () => {
 			"description",
 			"personality",
 			"scenario",
-			"firstMessage",
-			"alternateGreetings",
+			"greetings",
 			"exampleDialogues"
 		])
 		expect(rows.find((r) => r.field === "scenario")?.retold).toBe(true)
 		expect(rows.find((r) => r.field === "description")?.retold).toBe(false)
-		expect(rows.find((r) => r.field === "alternateGreetings")?.shape).toBe(
-			"list"
-		)
+		expect(rows.find((r) => r.field === "greetings")?.shape).toBe("list")
 		expect(rows.find((r) => r.field === "personality")?.cardHasText).toBe(
 			false
 		)
@@ -149,5 +149,68 @@ describe("takeFromCard", () => {
 	test("a missing card gives empty values", () => {
 		expect(cardValueOf(null, "firstMessage")).toBe("")
 		expect(cardValueOf(null, "alternateGreetings")).toEqual([])
+	})
+})
+
+describe("the Greetings row", () => {
+	const cardWith = { ...card, firstMessage: "Welcome." }
+
+	test("the card's value is its opener then its alternates", () => {
+		expect(cardGreetings(cardWith)).toEqual(["Welcome.", "Hello.", "Well met."])
+		expect(cardGreetings(null)).toEqual([])
+		const row = retoldRows(blank, cardWith).find((r) => r.field === "greetings")!
+		expect(row.cardValue).toEqual(["Welcome.", "Hello.", "Well met."])
+		expect(row.label).toBe("Greetings")
+	})
+
+	test("one half retold reads as retold, and the row is kept when neither is", () => {
+		const half = retoldRows(
+			{ ...blank, alternateGreetings: ["x"], retold: { alternateGreetings: true } },
+			cardWith
+		).find((r) => r.field === "greetings")!
+		expect(half.retold).toBe(true)
+		const kept = retoldRows(
+			{ ...blank, firstMessage: "Mine." },
+			cardWith
+		).find((r) => r.field === "greetings")!
+		expect(kept.kept).toBe(true)
+	})
+
+	test("on sets BOTH flags and copies the card's list into an empty one", () => {
+		const next = setRetold(blank, "greetings", true, cardWith)
+		expect(next.retold).toEqual({ firstMessage: true, alternateGreetings: true })
+		expect(next.firstMessage).toBe("Welcome.")
+		expect(next.alternateGreetings).toEqual(["Hello.", "Well met."])
+	})
+
+	test("on from a half-retold member keeps their own list and sets both flags", () => {
+		const half: RetoldDraft = {
+			...blank,
+			firstMessage: "Mine.",
+			retold: { firstMessage: true }
+		}
+		const next = setRetold(half, "greetings", true, cardWith)
+		expect(next.retold).toEqual({ firstMessage: true, alternateGreetings: true })
+		expect(greetingsOf(next)).toEqual(["Mine."])
+	})
+
+	test("off clears BOTH flags and keeps the member's list, except an untouched copy", () => {
+		const own: RetoldDraft = {
+			...blank,
+			firstMessage: "Mine.",
+			retold: { firstMessage: true, alternateGreetings: true }
+		}
+		const off = setRetold(own, "greetings", false, cardWith, blank)
+		expect(off.retold).toEqual({ firstMessage: false, alternateGreetings: false })
+		expect(off.firstMessage).toBe("Mine.")
+		const on = setRetold(blank, "greetings", true, cardWith, blank)
+		const back = setRetold(on, "greetings", false, cardWith, blank)
+		expect(back.firstMessage).toBe("")
+		expect(back.alternateGreetings).toEqual([])
+	})
+
+	test("take from card replaces the list", () => {
+		const next = takeFromCard({ ...blank, firstMessage: "Old." }, "greetings", cardWith)
+		expect(greetingsOf(next)).toEqual(["Welcome.", "Hello.", "Well met."])
 	})
 })

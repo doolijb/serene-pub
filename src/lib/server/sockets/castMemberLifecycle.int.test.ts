@@ -17,8 +17,14 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import {
+	ensureCardVersion,
+	insertCastMember,
+	insertCharacterVersions,
+	updateCardVersion
+} from "$lib/server/characters/versions"
 import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
@@ -72,17 +78,19 @@ async function makeCard(
 	return card
 }
 async function makeMember(lorebookId: number, name: string, characterId?: number) {
-	const [member] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId,
-			name,
-			binding: `{{char:${tag++}}}`,
-			characterId: characterId ?? null
-		})
-		.returning()
+	const { member } = await insertCastMember(testDb, {
+		lorebookId,
+		name,
+		binding: `{{char:${tag++}}}`,
+		characterId: characterId ?? null
+	})
 	return member
 }
+/**
+ * From `year` (on `branchId`'s line, else main) the member is drawn with
+ * `characterId`: a cast version whose parent is that card's version, reading
+ * from it what the member's base reads from its own card.
+ */
 async function amendCard(
 	lorebookId: number,
 	memberId: number,
@@ -90,13 +98,29 @@ async function amendCard(
 	characterId: number,
 	branchId: number | null = null
 ) {
-	await testDb.insert(schema.castAmendments).values({
-		lorebookBindingId: memberId,
-		lorebookId,
-		branchId,
-		year,
-		fields: { characterId }
-	})
+	const [base] = await testDb
+		.select()
+		.from(schema.characterVersions)
+		.where(
+			and(
+				eq(schema.characterVersions.castMemberId, memberId),
+				isNull(schema.characterVersions.year)
+			)
+		)
+	const card = await ensureCardVersion(testDb, characterId)
+	await insertCharacterVersions(testDb, [
+		{
+			castMemberId: memberId,
+			lorebookId,
+			branchId,
+			year,
+			parentVersionId: card!.id,
+			follows: base.follows,
+			nodeState: "active",
+			nodeVisibility: "normal",
+			writtenBy: "user:0"
+		}
+	])
 }
 async function seat(userId: number, lorebookId: number, characterId: number) {
 	const [session] = await testDb
@@ -394,16 +418,19 @@ describe("a deleted card is gone from the book (A25)", () => {
 		])
 	})
 
-	test("a member still linked to it names nobody in the gazetteer", async () => {
+	test("a member still linked to it is a cast member in the gazetteer, not the card", async () => {
 		const { user, book, gone } = await deletedCard("gazetteer")
 		const live = await makeCard(user.id, "Maren")
-		await makeMember(book.id, gone.name, gone.id)
+		const orphan = await makeMember(book.id, gone.name, gone.id)
 		await makeMember(book.id, "Maren", live.id)
 		const { loadVocabulary } = await import("$lib/server/annotations")
 		const vocabulary = await loadVocabulary(testDb as any, book.id)
 		const refs = [...vocabulary.gazetteer.byName.values()]
 		expect(refs.some((r) => r.kind === "character" && r.id === live.id)).toBe(true)
 		expect(refs.some((r) => r.kind === "character" && r.id === gone.id)).toBe(false)
+		expect(
+			refs.some((r) => r.kind === "cast_member" && r.id === orphan.id)
+		).toBe(true)
 	})
 
 	test("an export does not carry it; the member goes without a card", async () => {
@@ -565,12 +592,13 @@ describe("a cast amendment sets only what a member says at a date (A25)", () => 
 			await expect(create({ characterId })).rejects.toThrow(
 				/not one this cast member can be drawn with/
 			)
+		// Nothing was written: the member still has only its base version.
 		expect(
 			await testDb
-				.select()
-				.from(schema.castAmendments)
-				.where(eq(schema.castAmendments.lorebookBindingId, member.id))
-		).toEqual([])
+				.select({ id: schema.characterVersions.id })
+				.from(schema.characterVersions)
+				.where(eq(schema.characterVersions.castMemberId, member.id))
+		).toHaveLength(1)
 	})
 
 	test("a change that sets nothing a member can have at a date is refused", async () => {
@@ -610,11 +638,24 @@ describe("a cast amendment sets only what a member says at a date (A25)", () => 
 				noopEmit
 			)
 		).rejects.toThrow(/sets nothing/)
+		// The listed row is the cast version the create wrote: its `fields` are
+		// what differs from the version before, and the refused update left it.
+		expect(stored.fields).toEqual({ name: "Maren the Elder" })
 		const [row] = await testDb
-			.select({ fields: schema.castAmendments.fields })
-			.from(schema.castAmendments)
-			.where(eq(schema.castAmendments.id, stored.id))
-		expect(row.fields).toEqual({ name: "Maren the Elder" })
+			.select()
+			.from(schema.characterVersions)
+			.where(eq(schema.characterVersions.id, stored.id))
+		expect([row.castMemberId, row.year, row.name]).toEqual([
+			member.id,
+			4,
+			"Maren the Elder"
+		])
+		expect(
+			await testDb
+				.select({ id: schema.characterVersions.id })
+				.from(schema.characterVersions)
+				.where(eq(schema.characterVersions.castMemberId, member.id))
+		).toHaveLength(2)
 	})
 })
 
@@ -645,10 +686,12 @@ describe("a guest's persona edit stays in the guest's books (A25)", () => {
 		expect(await nameOf(inHost.id)).toBe("Wren")
 		expect(await nameOf(inGuest.id)).toBe("Wren")
 
-		await testDb
-			.update(schema.characters)
-			.set({ name: "Wrenna" })
-			.where(eq(schema.characters.id, persona.id))
+		// A card rename in place: the version the members follow.
+		await updateCardVersion(
+			testDb,
+			(await ensureCardVersion(testDb, persona.id))!.id,
+			{ name: "Wrenna" }
+		)
 		await syncLorebookBindingsForCharacter(persona.id, testDb as any)
 
 		expect(await nameOf(inHost.id)).toBe("Wren")
@@ -670,10 +713,11 @@ describe("a guest's persona edit stays in the guest's books (A25)", () => {
 		const card = await makeCard(owner.id, "Maren")
 		const book = await makeBook(owner.id, "Owner's book")
 		const member = await makeMember(book.id, "Maren", card.id)
-		await testDb
-			.update(schema.characters)
-			.set({ name: "Maren Ashe" })
-			.where(eq(schema.characters.id, card.id))
+		await updateCardVersion(
+			testDb,
+			(await ensureCardVersion(testDb, card.id))!.id,
+			{ name: "Maren Ashe" }
+		)
 		const { updateLorebookBindingHandler } = await import("./lorebooks")
 		const res = await updateLorebookBindingHandler.handler(
 			fakeSocket(owner.id),

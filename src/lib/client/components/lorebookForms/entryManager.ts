@@ -23,6 +23,7 @@ import { declareInterest } from "$lib/client/sockets/interest.svelte"
 import { interestKey } from "$lib/shared/sockets/interest"
 import type { EntryTypeId, LorebookEntry } from "$lib/shared/entries/types"
 import { keyList } from "$lib/shared/entries/keyList"
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 
 /** A binding with the character it names, as the lists send it. A persona is
  *  a character, so `character` is the only bound arc. */
@@ -127,9 +128,7 @@ export function substituteBindings(
 		if (binding.characterId)
 			out = out.replaceAll(
 				binding.binding,
-				binding.character?.nickname ||
-					binding.character?.name ||
-					binding.binding
+				memberShownName(binding, binding.character, binding.binding)
 			)
 	}
 	return out

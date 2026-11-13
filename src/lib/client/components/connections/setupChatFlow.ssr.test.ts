@@ -25,7 +25,6 @@ import SetupChatFlow from "./SetupChatFlow.svelte"
 const base = {
 	open: true,
 	onEnsureRuntime: () => {},
-	onChooseJobModel: () => {},
 	onOpenConnection: () => {},
 	onClose: () => {}
 }

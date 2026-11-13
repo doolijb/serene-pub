@@ -1,7 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
-import { and, eq, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm"
+import { eq, isNull, ne, or } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	isModelReady,
@@ -23,6 +22,7 @@ import {
 	registerProgressEmitter,
 	unregisterProgressEmitter,
 	registerOwnerEmitter,
+	embeddingLane,
 	unregisterOwnerEmitter,
 	countUnembedded,
 	getPriorityQueue,
@@ -35,6 +35,7 @@ import {
 	clearVectorizationFailureTracking,
 	clearInlineEmbedCooldown
 } from "$lib/server/embedding/vectorizationQueue"
+import { lorebookIndexCounts, wireIndexingActivity } from "$lib/server/embedding/indexingActivity"
 import { messageHasText } from "$lib/server/embedding/messageText"
 
 // ---------------------------------------------------------------------------
@@ -352,7 +353,7 @@ export const vectorizationCheckRagStatus: Handler<
 	event: "vectorization:checkRagStatus",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
+		const sessionAccess = await checkSessionAccess(params.sessionId, userId, db)
 		if (!sessionAccess.hasAccess) {
 			throw new Error(
 				"Access denied. Session not found or no permission to access."
@@ -369,6 +370,9 @@ export const vectorizationCheckRagStatus: Handler<
 
 		if (!activeModelName) {
 			const res: Sockets.Vectorization.CheckRagStatus.Response = {
+				sessionId: params.sessionId,
+				// Read after this arm; the notice has nothing to count here.
+				lorebookId: null,
 				applicable: false,
 				lorebook: null,
 				queueRunning: isVectorizationRunning(),
@@ -393,6 +397,8 @@ export const vectorizationCheckRagStatus: Handler<
 		)
 		if (Number(totalMessages) <= 10) {
 			const res: Sockets.Vectorization.CheckRagStatus.Response = {
+				sessionId: params.sessionId,
+				lorebookId: session?.lorebookId ?? null,
 				applicable: false,
 				lorebook: null,
 				queueRunning: isVectorizationRunning(),
@@ -420,51 +426,16 @@ export const vectorizationCheckRagStatus: Handler<
 		 */
 		let lorebook: Sockets.Vectorization.RagTypeCounts | null = null
 		if (session?.lorebookId) {
-			const entryWhere = eq(
-				schema.lorebookEntries.lorebookId,
-				session.lorebookId
+			lorebook = await lorebookIndexCounts(
+				db,
+				session.lorebookId,
+				activeModelName
 			)
-			const countEntries = async (extra?: SQL) => {
-				const [row] = await db
-					.select({ n: sql<number>`count(*)` })
-					.from(schema.lorebookEntries)
-					.leftJoin(
-						schema.lorebookEntryVectors,
-						and(
-							eq(
-								schema.lorebookEntryVectors.entryId,
-								schema.lorebookEntries.id
-							),
-							eq(
-								schema.lorebookEntryVectors.vectorName,
-								DEFAULT_VECTOR_NAME
-							),
-							eq(schema.lorebookEntryVectors.chunkIndex, 0)
-						)
-					)
-					.where(extra ? and(entryWhere, extra) : entryWhere)
-				return Number(row?.n ?? 0)
-			}
-
-			const [total, nullCount, staleCount] = await Promise.all([
-				countEntries(),
-				countEntries(isNull(schema.lorebookEntryVectors.entryId)),
-				countEntries(
-					and(
-						isNotNull(schema.lorebookEntryVectors.entryId),
-						ne(schema.lorebookEntryVectors.model, activeModelName)
-					)
-				)
-			])
-			lorebook = {
-				total,
-				nullCount,
-				staleCount,
-				readyCount: total - nullCount - staleCount
-			}
 		}
 
 		const res: Sockets.Vectorization.CheckRagStatus.Response = {
+			sessionId: params.sessionId,
+			lorebookId: session?.lorebookId ?? null,
 			applicable: (lorebook?.total ?? 0) > 0,
 			lorebook,
 			queueRunning: isVectorizationRunning(),
@@ -493,7 +464,7 @@ export const vectorizationSetSessionRagIgnored: Handler<
 		// not hide it for everyone else in the session (`canHide` keeps the
 		// button from them). It hides the RAG notice and nothing else: Search
 		// by meaning reads no `ragIgnored`.
-		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
+		const sessionAccess = await checkSessionAccess(params.sessionId, userId, db)
 		if (!sessionAccess.hasAccess || !sessionAccess.isOwner) {
 			throw new Error(
 				"Only the session's owner can hide or show this notice."
@@ -638,6 +609,11 @@ export function registerVectorizationHandlers(
 		registerProgressEmitter(emitToUser)
 		socket.on("disconnect", () => unregisterProgressEmitter(emitToUser))
 	}
+	// Indexing progress goes to Activity (`indexingActivity.ts`). It listens on
+	// the lane, once for the whole server; it is wired here because this is the
+	// first place a signed-in socket reaches the lane's listeners, and the
+	// module flag makes every later socket's call a no-op.
+	wireIndexingActivity(db, embeddingLane)
 	// An embedded item's badge refresh (`vectorization:itemUpdated`) is its
 	// owner's, admin or not (plan A7): every signed-in socket listens for its
 	// own user's items.

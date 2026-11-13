@@ -66,6 +66,17 @@ export function withVisionProjector(
 }
 
 /** Only the managed KoboldCPP launches models, so only it has a projector. */
+/**
+ * Is this file a vision projector rather than a model? By name: every
+ * projector the Hub publishes carries `mmproj` in its name, and the GGUF
+ * header's `general.architecture` (`clip`) is what the classifier calls
+ * unknown. A projector is a PART of a model — it is offered in the model
+ * view's projector field, never listed as a model of its own.
+ */
+export function isVisionProjectorFile(name: string): boolean {
+	return /mmproj/i.test(name)
+}
+
 export function takesVisionProjector(endpointType: string): boolean {
 	return endpointType === CONNECTION_TYPE.KOBOLDCPP_MANAGED
 }

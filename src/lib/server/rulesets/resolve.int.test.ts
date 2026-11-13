@@ -316,7 +316,7 @@ describe("🚧 every script phase, through the handler (M2, 2026-10-22)", () => 
 		const card = (first.ok.outcomes as any[]).find((o) => o.kind === "check")
 		expect(card.block).toMatchObject({ method: "card-draw", against: 9 })
 		expect(card.block.cards).toHaveLength(1)
-		const meta = async () => ((await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id)))[0]!.annex as any)?.core?.rulesetDecks
+		const meta = async () => ((await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id)))[0]!.rulesetDecks as any)
 		expect(await meta()).toEqual({ cards: { scene: null, shuffle: 0, drawn: 1 } })
 		const second = await resolveRulesetTurn(db as any, peek, { random: seededRandom("deck-2"), runId: "d2", ...none })
 		if ("halt" in second) throw new Error(second.halt)
@@ -329,6 +329,31 @@ describe("🚧 every script phase, through the handler (M2, 2026-10-22)", () => 
 		const read = await resolveRulesetTurn(db as any, { owners: peek.owners }, none)
 		if ("halt" in read) throw new Error(read.halt)
 		expect(await meta()).toEqual({ cards: { scene: null, shuffle: 0, drawn: 2 } })
+	})
+
+	test("a draw files one deck imprint per key written, in propose mode too, anchored to the turn", async () => {
+		const w = await world({ genreId: PHASED_GENRE, primaryRuleset: PHASED, rigour: "mechanics" })
+		await put(w.session.id, w.ann.id, GRIT, 2)
+		const [turn] = await db.select().from(schema.messages).where(eq(schema.messages.sessionId, w.session.id))
+		const { seededRandom } = await import("$lib/server/state/expressions")
+		const { resolveRulesetTurn } = await import("./resolve")
+		const none = { scripts: { loadSource: async () => null } }
+		const draw = (mode: "apply" | "propose", runId: string) =>
+			resolveRulesetTurn(
+				db as any,
+				{ owners: [`session:${w.session.id}`, `character:${w.ann.id}`], mode, deltas: [{ owner: `character:${w.ann.id}`, op: "use", check: "peek", against: 9 }] },
+				{ random: seededRandom(runId), runId, turnMessageId: turn!.id, ...none }
+			)
+		const imprints = async () =>
+			(await db.select().from(schema.sessionImprints).where(eq(schema.sessionImprints.sessionId, w.session.id))).filter((r) => r.subjectKind === "deck")
+		for (const [mode, runId] of [["propose", "dp1"], ["apply", "dp2"]] as const) {
+			const res = await draw(mode, runId)
+			if ("halt" in res) throw new Error(res.halt)
+		}
+		const rows = await imprints()
+		expect(rows).toHaveLength(2)
+		expect(rows[0]).toMatchObject({ subjectKey: "cards", messageId: turn!.id, runId: "dp1", before: null, after: { v: { scene: null, shuffle: 0, drawn: 1 } }, status: "standing" })
+		expect(rows[1]).toMatchObject({ subjectKey: "cards", messageId: turn!.id, runId: "dp2", before: { v: { scene: null, shuffle: 0, drawn: 1 } }, after: { v: { scene: null, shuffle: 0, drawn: 2 } } })
 	})
 })
 

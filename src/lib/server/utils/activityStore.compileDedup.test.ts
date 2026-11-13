@@ -123,3 +123,55 @@ describe("activityStore.startCompile — dedup", () => {
 		expect(activityStore.getById(atMoment)?.status).toBe("running")
 	})
 })
+
+describe("activityStore.startCompile — byDate", () => {
+	test("puts the by-date ask on the activity; an entry ask has none", () => {
+		const dated = activityStore.startCompile(
+			baseParams({
+				historyEntryId: 201,
+				byDate: { date: { year: 5, month: 2, day: 7 } }
+			})
+		)
+		const undated = activityStore.startCompile(
+			baseParams({ historyEntryId: 202, byDate: { date: null } })
+		)
+		const byEntry = activityStore.startCompile(
+			baseParams({ historyEntryId: 203 })
+		)
+		createdIds.push(dated, undated, byEntry)
+
+		expect((activityStore.getById(dated) as any).byDate).toEqual({
+			date: { year: 5, month: 2, day: 7 }
+		})
+		expect((activityStore.getById(undated) as any).byDate).toEqual({
+			date: null
+		})
+		const plain = activityStore.getById(byEntry)!
+		expect("byDate" in plain).toBe(false)
+		const listed = activityStore
+			.getFor(1, false)
+			.find((a) => a.id === dated) as any
+		expect(listed.byDate).toEqual({ date: { year: 5, month: 2, day: 7 } })
+	})
+
+	test("the ask's requestId rides on byDate when given, and is absent when not", () => {
+		const withId = activityStore.startCompile(
+			baseParams({
+				historyEntryId: 211,
+				byDate: { date: { year: 5, month: 2, day: 7 }, requestId: "ask-1" }
+			})
+		)
+		const without = activityStore.startCompile(
+			baseParams({ historyEntryId: 212, byDate: { date: null } })
+		)
+		createdIds.push(withId, without)
+
+		expect((activityStore.getById(withId) as any).byDate).toEqual({
+			date: { year: 5, month: 2, day: 7 },
+			requestId: "ask-1"
+		})
+		const bare = (activityStore.getById(without) as any).byDate
+		expect(bare).toEqual({ date: null })
+		expect("requestId" in bare).toBe(false)
+	})
+})

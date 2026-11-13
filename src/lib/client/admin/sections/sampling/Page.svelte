@@ -19,8 +19,11 @@
 	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { notify } from "$lib/client/utils/notify"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
@@ -74,7 +77,7 @@
 	useInterest<"samplingConfigs:delete">("samplingConfigs:delete", () => {
 		if (!deleting) return
 		deleting--
-		if (!deleting) toaster.success({ title: "Deleted" })
+		if (!deleting) notify.success({ title: "Deleted" })
 	})
 
 	onMount(() => socket.emit("samplingConfigs:list", {}))
@@ -95,7 +98,8 @@
 			key: "modality",
 			label: "Modality",
 			text: (r) => samplingModalityWord(r.shape),
-			sortValue: (r) => SAMPLING_MODALITY_ORDER.indexOf(samplingModality(r.shape))
+			sortValue: (r) =>
+				SAMPLING_MODALITY_ORDER.indexOf(samplingModality(r.shape))
 		},
 		{
 			key: "values",
@@ -150,7 +154,8 @@
 			label: "Use",
 			values: (r) => {
 				const out: string[] = []
-				if (samplingDefaultsFor(r.id, defaults).length) out.push("default")
+				if (samplingDefaultsFor(r.id, defaults).length)
+					out.push("default")
 				if (usedBy[r.id]?.length) out.push("pipeline")
 				return out.length ? out : "unused"
 			},
@@ -172,9 +177,12 @@
 			destructive: true,
 			confirm: (selected) => samplingDeletion(selected, defaults, usedBy),
 			run: (selected) => {
-				const ids = selected.filter((r) => !r.isImmutable).map((r) => r.id)
+				const ids = selected
+					.filter((r) => !r.isImmutable)
+					.map((r) => r.id)
 				deleting += ids.length
-				for (const id of ids) socket.emit("samplingConfigs:delete", { id })
+				for (const id of ids)
+					socket.emit("samplingConfigs:delete", { id })
 			}
 		}
 	]
@@ -199,7 +207,10 @@
 	{loading}
 	noun={{ singular: "sampling config", plural: "sampling configs" }}
 	searchText={(r) =>
-		`${r.name} ${samplingModalityWord(r.shape)} ${r.isImmutable ? "built-in" : "custom"} ${(usedBy[r.id] ?? []).join(" ")} ${samplingDefaultsFor(r.id, defaults)
+		`${r.name} ${samplingModalityWord(r.shape)} ${r.isImmutable ? "built-in" : "custom"} ${(usedBy[r.id] ?? []).join(" ")} ${samplingDefaultsFor(
+			r.id,
+			defaults
+		)
 			.map((d) => d.label)
 			.join(" ")}`}
 	rowHref={(r) => `/admin/sampling/${r.id}`}
@@ -209,7 +220,11 @@
 	emptyMessage="No sampling configs yet. Add one to decide how replies and images are generated."
 >
 	{#snippet headerActions()}
-		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openView}>
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface"
+			onclick={openView}
+		>
 			<Icons.SlidersHorizontal size={16} aria-hidden="true" />
 			Open Sampling view
 		</button>
@@ -234,13 +249,17 @@
 			{#if held.length || pipelines.length}
 				<span class="flex flex-wrap items-center gap-1">
 					{#each held as h (h.capability)}
-						<Badge tone="primary" size="sm" title="Used by the {h.label} loadout">
+						<Badge
+							tone="primary"
+							size="sm"
+							title="Used by the {h.label} loadout"
+						>
 							Loadout · {h.label}
 						</Badge>
 					{/each}
 					{#if pipelines.length}
 						<span
-							class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5 text-meta"
+							class="border-surface-200-800 text-surface-600-400 text-meta rounded-full border px-2 py-0.5"
 							title={pipelines.join(", ")}
 						>
 							{pipelines.length}

@@ -12,17 +12,11 @@
 	// SessionLayout answers. See layoutEditor.svelte.ts.
 	import { requestLayoutEditor } from "$lib/client/sessionLayout/layoutEditor.svelte"
 	import { useSessionFullscreen } from "$lib/client/sessions/fullscreen.svelte"
-	// Mobile side panels (P6, ruled 2026-08-30; revised 2026-09-10). Below
-	// 1024px a session's side zones take no layout space; if either side holds
-	// widgets they are reached from ONE panels button in this bar, which opens
-	// a sheet listing the groups.
-	// SessionLayout publishes the counts and the list and renders both sheets —
-	// it is a sibling of this component under <main>, not a descendant, so a
-	// module singleton is the bridge (exactly as layoutEditor above).
-	import {
-		mobileSidePanels,
-		showsToggles
-	} from "$lib/client/sessionLayout/mobileSidePanels.svelte"
+	// The zone switch (PLAN 2026-11-05 D11): Left · Middle · Right, drawn here
+	// on a desktop while the sides do not fit; the phone's is a row of the
+	// session's own. SessionLayout publishes its state (sessionZones) — it is a
+	// sibling of this component under <main>, not a descendant.
+	import ZoneSwitch from "$lib/client/sessionLayout/ZoneSwitch.svelte"
 
 	/**
 	 * The session header: the open session's identity, across the top of
@@ -34,10 +28,13 @@
 	 * live in the shell because this component and SessionLayout are siblings
 	 * under `<main>` rather than parent and child:
 	 *
-	 *  - the Layout button, which is the ONE way into the session layout
-	 *    editor at every width. It only asks (`requestLayoutEditor`); the
-	 *    session answers, and while its desktop editor is open this header is
-	 *    not rendered at all — the toolbar has taken the band.
+	 *  - the Layout button, one of the ways into the session layout editor,
+	 *    with the narrow menu's and the full-screen menu's *Customize
+	 *    layout* — shown with advanced controls on (🚧 2026-11-10); with it
+	 *    off a person keeps the layout they have. It only asks
+	 *    (`requestLayoutEditor`); the session answers, and while its desktop
+	 *    editor is open this header is not rendered at all — the toolbar has
+	 *    taken the band.
 	 *  - the Full screen button (Ctrl+Shift+F), beside Layout; the corner
 	 *    control (FullscreenExit) is the way out.
 	 *  - the mobile session-panels button, which is the ONLY way into a narrow
@@ -66,12 +63,6 @@
 		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
-	/**
-	 * How wide the trailing button cluster is drawing itself. The identity is
-	 * centred on the BAR, not on what is left beside the buttons, so the same
-	 * width is mirrored back as a leading spacer — see `.sp-head-lead`.
-	 */
-	let toolsW = $state(0)
 
 	/** Five faces read as a stack at a glance; more reads as a list. */
 	const CAST_SHOWN = 5
@@ -115,7 +106,11 @@
 	const rewind = $derived(openSessionCtx?.rewind ?? null)
 	const rewindId = $props.id()
 	const backTitle = $derived(
-		rewind?.back.reason ? `Back one turn — ${rewind.back.reason}` : "Back one turn"
+		rewind?.back.reason
+			? `Back one turn — ${rewind.back.reason}`
+			: rewind?.back.takes
+				? `Back: ${rewind.back.takes}`
+				: "Back one turn"
 	)
 	const forwardTitle = $derived(
 		rewind?.forward.reason
@@ -135,7 +130,8 @@
 	 * the trailing cluster is the panels button, this menu and the furl, so
 	 * the session's name keeps the room. It holds what the wide bar draws as
 	 * buttons — Back and Forward (greyed with their reason, never hidden),
-	 * Settings, Layout — and the same handlers run either way.
+	 * Settings, Layout (only with advanced controls on, 🚧 2026-11-10) —
+	 * and the same handlers run either way.
 	 */
 	const phoneMenu = $derived<RowMenuEntries>([
 		rewind && {
@@ -217,14 +213,9 @@
 	     column reads as one rounded slab capped top and bottom. -->
 		<div
 			class="bg-surface-100-900 sp-head relative flex w-full items-center gap-2 pl-4 lg:rounded-b-lg"
-			style:--sp-head-tools="{toolsW}px"
 		>
-			<!-- The trailing cluster's width, mirrored. Without it the buttons and
-		     the pill's reserve push the identity left and the session's name
-		     stops starting where the story does; see `.sp-head-lead`. -->
-			<div class="sp-head-lead" aria-hidden="true"></div>
-			<!-- The identity, centred on the measure the messages use, so the
-		     session's name and the story below it start on the same line. -->
+			<!-- The identity, at the bar's leading edge (owner 2026-11-12); the
+		     buttons take the trailing one. -->
 			<div class="sp-head-row">
 				{#if sessionName}
 					<h1 class="sp-head-name text-surface-950-50">
@@ -290,94 +281,104 @@
 				{/if}
 			</div>
 
-			<!-- The trailing cluster. Measured, because `.sp-head-lead` mirrors it:
-		     the panels button comes and goes with the session's sides. -->
-			<div class="sp-head-tools" bind:clientWidth={toolsW}>
+			<!-- The trailing cluster. -->
+			<div class="sp-head-tools">
 				{#if rewind}
 					<!-- 🚧 Back · Forward: the session owner's, first in the
 					     cluster, nearest the story's name. On a phone they are
 					     the first two items of the ⋯ below (`sp-head-wide`). -->
 					<span class="sp-head-wide sp-head-group">
-					<button
-						type="button"
-						class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
-						aria-label="Back one turn"
-						title={backTitle}
-						aria-disabled={rewind.back.disabled}
-						aria-describedby={rewind.back.reason ? `${rewindId}-back` : undefined}
-						data-header-rewind="back"
-						onclick={(e) => (rewind.back.disabled ? e.preventDefault() : rewind.goBack())}
-					>
-						<Icons.Undo2 aria-hidden="true" />
-					</button>
-					{#if rewind.back.reason}
-						<span id="{rewindId}-back" class="sr-only">{rewind.back.reason}</span>
-					{/if}
-					<button
-						type="button"
-						class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
-						aria-label="Forward one turn"
-						title={forwardTitle}
-						aria-disabled={rewind.forward.disabled}
-						aria-describedby={rewind.forward.reason || rewind.aheadText
-							? `${rewindId}-forward`
-							: undefined}
-						data-header-rewind="forward"
-						onclick={(e) => (rewind.forward.disabled ? e.preventDefault() : rewind.goForward())}
-					>
-						<Icons.Redo2 aria-hidden="true" />
-					</button>
-					{#if rewind.forward.reason || rewind.aheadText}
-						<span id="{rewindId}-forward" class="sr-only">
-							{rewind.forward.reason ?? rewind.aheadText}
-						</span>
-					{/if}
-					{#if rewind.regenerate}
 						<button
 							type="button"
 							class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
-							aria-label="Regenerate the last turn"
-							title={regenerateTitle}
-							aria-disabled={rewind.regenerate.disabled}
-							aria-describedby={rewind.regenerate.reason ? `${rewindId}-regenerate` : undefined}
-							data-header-rewind="regenerate"
-							onclick={(e) => (rewind.regenerate!.disabled ? e.preventDefault() : rewind.regenerate!.press())}
+							aria-label="Back one turn"
+							title={backTitle}
+							aria-disabled={rewind.back.disabled}
+							aria-describedby={rewind.back.reason ||
+							rewind.back.takes
+								? `${rewindId}-back`
+								: undefined}
+							data-header-rewind="back"
+							onclick={(e) =>
+								rewind.back.disabled
+									? e.preventDefault()
+									: rewind.goBack()}
 						>
-							<Icons.RefreshCw aria-hidden="true" />
+							<Icons.Undo2 aria-hidden="true" />
 						</button>
-						{#if rewind.regenerate.reason}
-							<span id="{rewindId}-regenerate" class="sr-only">{rewind.regenerate.reason}</span>
+						{#if rewind.back.reason}
+							<span id="{rewindId}-back" class="sr-only">
+								{rewind.back.reason}
+							</span>
+						{:else if rewind.back.takes}
+							<span id="{rewindId}-back" class="sr-only">
+								Back: {rewind.back.takes}
+							</span>
 						{/if}
-					{/if}
+						<button
+							type="button"
+							class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
+							aria-label="Forward one turn"
+							title={forwardTitle}
+							aria-disabled={rewind.forward.disabled}
+							aria-describedby={rewind.forward.reason ||
+							rewind.aheadText
+								? `${rewindId}-forward`
+								: undefined}
+							data-header-rewind="forward"
+							onclick={(e) =>
+								rewind.forward.disabled
+									? e.preventDefault()
+									: rewind.goForward()}
+						>
+							<Icons.Redo2 aria-hidden="true" />
+						</button>
+						{#if rewind.forward.reason || rewind.aheadText}
+							<span id="{rewindId}-forward" class="sr-only">
+								{rewind.forward.reason ?? rewind.aheadText}
+							</span>
+						{/if}
+						{#if rewind.regenerate}
+							<button
+								type="button"
+								class="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground aria-disabled:text-surface-500 size-11 shrink-0 aria-disabled:cursor-default [&>svg]:size-5"
+								aria-label="Regenerate the last turn"
+								title={regenerateTitle}
+								aria-disabled={rewind.regenerate.disabled}
+								aria-describedby={rewind.regenerate.reason
+									? `${rewindId}-regenerate`
+									: undefined}
+								data-header-rewind="regenerate"
+								onclick={(e) =>
+									rewind.regenerate!.disabled
+										? e.preventDefault()
+										: rewind.regenerate!.press()}
+							>
+								<Icons.RefreshCw aria-hidden="true" />
+							</button>
+							{#if rewind.regenerate.reason}
+								<span
+									id="{rewindId}-regenerate"
+									class="sr-only"
+								>
+									{rewind.regenerate.reason}
+								</span>
+							{/if}
+						{/if}
 					</span>
 				{/if}
-				<!-- The session's panels, mobile only (ruled 2026-09-10): ONE
-			     button opening a sheet that lists the side groups. Rendered
-			     only while a narrow session actually has a populated side
-			     (`showsToggles`), so every other page and every desktop width
-			     is untouched. -->
-				{#if showsToggles(mobileSidePanels)}
-					<button
-						class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex size-11 shrink-0 items-center justify-center p-0 lg:hidden [&>svg]:size-6"
-						class:preset-tonal={mobileSidePanels.menuOpen}
-						aria-label="Session panels"
-						type="button"
-						aria-expanded={mobileSidePanels.menuOpen}
-						onclick={(e) =>
-							mobileSidePanels.toggleMenu(
-								e.currentTarget as HTMLElement
-							)}
-					>
-						<Icons.PanelsTopLeft aria-hidden="true" />
-					</button>
-				{/if}
+				<!-- The zone switch, desktop only (D11): it draws nothing while the
+				     sides fit. The phone's is the session's own row under this bar. -->
+				<div class="hidden shrink-0 items-center lg:flex">
+					<ZoneSwitch />
+				</div>
 
 				<!-- 🚧 The session's settings, at every width (2026-10-18):
 				     the Sessions view's edit form on its Settings tab. -->
 				{#if openSessionCtx?.sessionId != null && panelsCtx}
 					<button
 						type="button"
-						class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
+						class="sp-head-wide sp-head-quiet btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
 						aria-label="Session settings"
 						title="Session settings"
 						onclick={openSessionSettings}
@@ -390,14 +391,14 @@
 				{/if}
 
 				<!-- Into the layout editor, at EVERY width (the hover-revealed
-			     pull-tab that used to hang under this bar is gone: a touch
-			     screen has no hover to reveal it with, and a control nothing
-			     announces is a control nobody finds). It only bumps a counter
-			     — the open session is the one thing that knows whether it is
-			     opening or closing. -->
+		     pull-tab that used to hang under this bar is gone: a touch
+		     screen has no hover to reveal it with, and a control nothing
+		     announces is a control nobody finds). It only bumps a counter
+		     — the open session is the one thing that knows whether it is
+		     opening or closing. -->
 				<button
 					type="button"
-					class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
+					class="sp-head-wide sp-head-quiet btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
 					aria-label="Customize layout"
 					title="Customize layout"
 					onclick={() => requestLayoutEditor()}
@@ -411,7 +412,7 @@
 				{#if openSessionCtx?.sessionId != null}
 					<button
 						type="button"
-						class="sp-head-wide btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
+						class="sp-head-wide sp-head-quiet btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
 						aria-label="Full screen (Ctrl+Shift+F)"
 						title="Full screen (Ctrl+Shift+F)"
 						onclick={enterFullscreen}
@@ -428,7 +429,8 @@
 				<span class="sp-head-narrow sp-head-group">
 					<RowMenu
 						label="Session"
-						triggerLabel="More actions for {sessionName ?? 'this session'}"
+						triggerLabel="More actions for {sessionName ??
+							'this session'}"
 						triggerTitle="More actions"
 						triggerClass="btn-icon hover:preset-tonal focus-visible:preset-tonal text-foreground size-11 shrink-0 [&>svg]:size-5"
 						horizontal
@@ -518,45 +520,21 @@
 		--sp-head-ground: var(--color-surface-900);
 	}
 
-	/* The trailing cluster, and the spacer that mirrors it.
-
-	   The identity is centred on the BAR, not on what is left over beside the
-	   buttons: with only a trailing cluster the row's auto margins centre it in
-	   the remainder, which walks the session's name left of the measure the
-	   story below it starts on. So the leading spacer takes exactly what the
-	   trailing side takes — the cluster's measured width plus the pill's
-	   reserve, less the 1rem `pl-4` this edge already has — and the row's
-	   centre is the bar's centre again. */
+	/* The trailing cluster: the buttons, at the bar's trailing edge. */
 	.sp-head-tools {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
 		flex: none;
 	}
-	.sp-head-lead {
-		/* The mirror gives way before the name does: it starts at the
-		   cluster's width and shrinks to nothing as the window tightens, so
-		   at 1440 the name is whole and merely sits a little left of the
-		   column; only once the mirror is gone does the name ellipsize
-		   (`.sp-head-row`'s `min-inline-size: 0`). */
-		flex: 0 999 calc(
-			var(--sp-head-tools, 0px) + var(--jump-pill-width, 34px) + 0.375rem
-		);
-		min-inline-size: 0;
-	}
 
-	/* The measure the conversation column takes at its default Line width,
-	   Column (★R1; `styles/widgets.css`, the `messages.stage` part: 76ch of
-	   the story's body plus the avatar gutter), centred in the bar so the two
-	   line up. `min-inline-size: 0` is what makes a tight window ellipsize
-	   the name instead of pushing into the buttons. */
+	/* The identity starts at the bar's leading edge and takes the room the
+	   cluster leaves (owner 2026-11-12). `min-inline-size: 0` is what makes a
+	   tight window ellipsize the name instead of pushing into the buttons. */
 	.sp-head-row {
 		display: flex;
 		align-items: center;
 		flex: 1 1 auto;
-		inline-size: 100%;
-		max-inline-size: calc(76 * 0.58 * 17px * var(--sp-prose-scale, 1) + 3.5rem);
-		margin-inline: auto;
 		min-inline-size: 0;
 		/* The identity never paints over the cluster: when the name's floor
 		   and the stack's first face are wider than the room left beside the
@@ -618,20 +596,10 @@
 
 	/* Measured against the BAR, not the window: a docked view takes 400px
 	   off it on a wide screen, where a viewport rule would never fire.
-	   Below 1040px of bar there is no room to centre the name over the
-	   story — the mirror spacer takes as much as the buttons do and squeezes
-	   the name to nothing — so the row starts at the edge. Below 640px the
-	   genre steps out too; the name and faces identify the session. */
+	   Below 640px the genre steps out; the name and faces identify the
+	   session. */
 	.sp-head-host {
 		container: sp-head / inline-size;
-	}
-	@container sp-head (width < 1040px) {
-		.sp-head-lead {
-			display: none;
-		}
-		.sp-head-row {
-			margin-inline: 0;
-		}
 	}
 	/* A wrapper that only groups controls for the rules below; its children
 	   sit in the cluster's own flex row. Before them, so they win. */
@@ -643,7 +611,7 @@
 	   first — it clips to its first face — so the name is cut only when it is
 	   wider than the row less one 24px face, which at 412px is well past 12
 	   characters. */
-	/* A Half-width pane (640–960px): the mirror is already gone, and the
+	/* A Half-width pane (640–960px): the
 	   trailing cluster still takes ~520px, so the identity has ~150–400px.
 	   Give way in the same order as the phone — the genre steps out, the cast
 	   clips to its first face — and the name keeps at least six rems, so it
@@ -701,6 +669,26 @@
 		}
 		.sp-head-labelled {
 			padding-inline: 0.625rem;
+		}
+	}
+
+	/* Settings, Layout and Full screen wait quietly beside the story: muted
+	   until the pointer is over one or the keyboard is on it, then at full
+	   strength. Only where there is a pointer to hover with: a touch screen
+	   draws them at full strength. The fade is motion, so it is off under
+	   reduced motion (the change of strength stays). */
+	@media (hover: hover) {
+		.sp-head-quiet {
+			opacity: 0.5;
+		}
+		.sp-head-quiet:hover,
+		.sp-head-quiet:focus-visible {
+			opacity: 1;
+		}
+	}
+	@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+		.sp-head-quiet {
+			transition: opacity var(--transition-duration-base) ease-out;
 		}
 	}
 

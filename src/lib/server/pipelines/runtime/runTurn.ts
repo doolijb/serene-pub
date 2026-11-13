@@ -23,6 +23,7 @@
  * No node can do it: a cancelled run has nothing left to run.
  */
 
+import { appletOfSession, frameCauseFor, type FrameCause } from "$lib/server/sockets/appletCause"
 import {
 	run,
 	sessionEvents,
@@ -74,7 +75,7 @@ import {
 	scriptBudgetsByNode,
 	unplacedAtStart
 } from "$lib/server/pipelines/scripts/runSeams"
-import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
+import { genreFieldsFor, getSessionGenre } from "$lib/server/pipelines/entities/sessionGenres"
 import { withTurnHold } from "$lib/server/indexing/turnHold"
 // Imported for `tokenizerFor`, and for the eight loaders that module registers
 // with the SDK as it evaluates. Both halves matter: the id below means nothing
@@ -112,7 +113,11 @@ import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDis
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { FormAwaitingPerson } from "$lib/server/notifications/openForm"
 import { v4 as uuidv4 } from "uuid"
-import { eq } from "drizzle-orm"
+import { storedSeatRef } from "$lib/server/state/seatRefs"
+import { and, asc, eq, isNull } from "drizzle-orm"
+import { hostSeatRefOf } from "$lib/server/pipelines/prompt/seatCards"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { parseSeatRef, seatInPlay, seatOf } from "$lib/server/sessions/seats"
 import * as schema from "$lib/server/db/schema"
 import { ceilingFor } from "$lib/server/pipelines/runtime/callTether"
 import { currentRunFamily, withRunFamily } from "$lib/server/utils/llmQueue"
@@ -264,6 +269,8 @@ export interface SpecRunRequest {
 	db: Db
 	sessionId: number
 	userId: number
+	/** 🚧 (M2e) See `FireActionRequest.fromPressDoor`; absent on every other run. */
+	fromPressDoor?: boolean
 	/**
 	 * This run was started by auto-advance (PLAN-turn-order §4.6), not by a
 	 * press. Every session event the run's writes cause carries it on the
@@ -271,6 +278,13 @@ export interface SpecRunRequest {
 	 * auto-advance listener reads to decide whether a `round` continues.
 	 */
 	auto?: boolean
+	/**
+	 * How the turn was reached (`TurnRequest.via`), handed to the host scope
+	 * by `runTurn` alone, so the message write's `turnCause` stamp (★T-1) is
+	 * the host's fact, never a value an event payload or a press carried in
+	 * `input`. Absent on every run that is not a turn.
+	 */
+	via?: string
 	/** Which spec to run. */
 	specId: string
 	/**
@@ -281,6 +295,8 @@ export interface SpecRunRequest {
 	 * exclude the speaking character's own name — see the note there.
 	 */
 	currentCharacterId?: number | null
+	/** 🚧 The speaker of a card-less seat — see `HostScope.currentCastMemberId`. */
+	currentCastMemberId?: number | null
 	/**
 	 * Whose turn it is, as a participant reference — what the run's
 	 * portrayals are resolved for (R-21 (4)) beside the cast, the members'
@@ -552,6 +568,21 @@ export function triggerFamilyOf(request: Pick<SpecRunRequest, "registration" | "
 	return request.registration?.family ?? request.triggerFamily ?? "action"
 }
 
+/**
+ * 🚧 (M2e) The frame-origin cause of a run: the applet that draws this session,
+ * only for a fire over the session's press door, on a session an
+ * applet genre draws. Routine, event, automatic and child runs and previews
+ * get none. Not `ActingVia`: that says who acts, this says which mounted
+ * frame the press came from.
+ */
+export async function frameCauseOfRun(
+	request: Pick<SpecRunRequest, "db" | "sessionId" | "fromPressDoor" | "lineage" | "preview">
+): Promise<FrameCause | undefined> {
+	if (request.preview || request.lineage || request.fromPressDoor !== true) return undefined
+	const id = await appletOfSession(request.db, request.sessionId)
+	return id ? frameCauseFor(id) : undefined
+}
+
 export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	/**
 	 * 🚧 The run's place in the model queue (A13, R26): its family's — a
@@ -680,6 +711,34 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		sessionId: request.sessionId,
 		swaps
 	})
+
+	// 🚧 P1 (owner 2026-11-04): the AI's form answer is off until the genre
+	// opts in (`forms.modelAnswers`). The gate is the answer's own door, not
+	// the event's: `form-addressed` dispatches in every genre and its other
+	// registrations run. A document that commits an AI's answer — it holds
+	// `core:outlet/answer-form`, which `validate()` places only under the
+	// form-addressed inlet — halts here, before its first node and any model
+	// call, on a receipt under its own spec that says why.
+	if (
+		request.lineage &&
+		doc.nodes.some(
+			(n: { definitionId: string }) =>
+				n.definitionId === "core:outlet/answer-form"
+		) &&
+		!(await sessionModelAnswersForms(request.db, request.sessionId))
+	) {
+		const { refusalReceipt } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		return refusalReceipt(request.db, {
+			runId: request.runId ?? uuidv4(),
+			specId,
+			sessionId: request.sessionId,
+			userId: request.userId,
+			lineage: request.lineage,
+			reason: MODEL_ANSWERS_OFF_REASON
+		})
+	}
 
 	// Whose document this is (D-6) — read from the spec ROW, joined to the
 	// plugin that installed it, never inferred from the id's namespace. One
@@ -829,6 +888,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 							: { reply: { channel: request.channel || "main" } })
 				})
 
+	const frameCause = await frameCauseOfRun(request)
 	const scope: HostScope = {
 		// Everything the host does outside the graph is attributed to this run:
 		// the progress an image render reports back to the person watching, and
@@ -838,9 +898,13 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		runId,
 		sessionId: request.sessionId,
 		userId: request.userId,
+		frameCause,
 		// The depth below which this run's `sources` may not reach (its registration's `minAgeOf`).
 		minAge: request.registration?.minAge ?? 0,
 		currentCharacterId: request.currentCharacterId,
+		...(request.currentCastMemberId != null
+			? { currentCastMemberId: request.currentCastMemberId }
+			: {}),
 		draftMessage: request.draftMessage,
 		portrayals,
 		verb: request.verb,
@@ -876,6 +940,9 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// Fired by auto-advance (PLAN-turn-order §4.6), so every session
 		// event this run's writes cause says so on its cause.
 		auto: request.auto,
+		// How the turn was reached (`runTurn`'s own, never the input's): the
+		// message write stamps an unprompted narrator line from it.
+		via: request.via,
 		lineage: request.lineage,
 		addressed,
 		formsAwaitingPeople,
@@ -917,6 +984,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 				nowMs: Date.now(),
 				runId,
 				user,
+				frameCause,
 				specOwner: ownerPluginId
 			})
 		}
@@ -1486,6 +1554,32 @@ function inletDefinitionIdOf(doc: {
 	return inlet ? `${inlet.definitionId}@${inlet.definitionVersion}` : undefined
 }
 
+/** 🚧 Why a form put to an AI-portrayed participant went unanswered. */
+const MODEL_ANSWERS_OFF_REASON =
+	"The AI does not answer forms in this genre: the genre does not opt in (forms.modelAnswers)."
+
+/**
+ * 🚧 Does the genre's shape opt in to the AI answering forms put to it?
+ * `forms.modelAnswers: true`; absent is off. The SDK declares the field on
+ * `SessionShape.forms` (2026-11-04); it is still read as unknown so a genre
+ * declared before that reads as off, not as a type error.
+ */
+export function genreModelAnswersForms(shape: unknown): boolean {
+	const forms = (shape as { forms?: unknown } | null | undefined)?.forms
+	return (forms as { modelAnswers?: unknown } | null | undefined)?.modelAnswers === true
+}
+
+/** 🚧 Does this session's genre opt in to the AI answering forms? The ONE session-level reader (the press door in `fireAction.ts` calls it too). */
+export async function sessionModelAnswersForms(
+	db: Db,
+	sessionId: number
+): Promise<boolean> {
+	const { sessionGenreOf } = await import("$lib/server/sessions/annexFields")
+	return genreModelAnswersForms(
+		(await getSessionGenre(db, await sessionGenreOf(db, sessionId)))?.shape
+	)
+}
+
 /**
  * Dispatch every `form-addressed` event a run collected, in order, through
  * the same path the lifecycle events take (`dispatchSessionEvent`), as
@@ -1519,10 +1613,29 @@ async function dispatchAddressedForms(
 		sessionEvents.formAddressed,
 		{ sessionId: request.sessionId }
 	)
+	// 🚧 P1: the event dispatches in every genre; the AI's answer is gated at
+	// the answer spec's door (`runSpecOnce`). `optedIn` only decides whether
+	// the card announces the answer run.
+	const optedIn = await sessionModelAnswersForms(
+		request.db,
+		request.sessionId
+	)
 	for (const { payload, form } of addressed) {
-		const parsed = parseParticipantRef(payload.addressee)
+		// 🚧 A stored addressee is in the stored form (seat-cast S3 translates it
+		// at the write: card form; ⏳ member form with the switch on); read through
+		// the door all the same. A member-form one names its card through its
+		// seat (`cardOfSeatRef`).
+		const addresseeCard =
+			(await storedSeatRef(request.db, request.sessionId, payload.addressee)) ??
+			payload.addressee
+		const parsed = parseParticipantRef(addresseeCard)
+		const addresseeCardId =
+			parsed.kind === "character"
+				? participantRowId(parsed.id)
+				: await cardOfSeatRef(request.db, request.sessionId, addresseeCard)
 		try {
-			if (answerSpec) await announceChildRun(request, receipt, answerSpec)
+			if (answerSpec && optedIn)
+				await announceChildRun(request, receipt, answerSpec)
 			await dispatchSessionEvent(request.db, {
 				sessionId: request.sessionId,
 				userId: request.userId,
@@ -1547,9 +1660,8 @@ async function dispatchAddressedForms(
 					blockId: payload.blockId,
 					form,
 					action: payload.action,
-					addressee: payload.addressee,
-					characterId:
-						parsed.kind === "character" ? participantRowId(parsed.id) : null,
+					addressee: addresseeCard,
+					characterId: addresseeCardId,
 					fields: await genreFieldsFor(request.db, request.sessionId),
 					ruleset: await sessionRulesetInput(request.db, request.sessionId)
 				}
@@ -1656,15 +1768,83 @@ export function runTurn(request: TurnRequest): Promise<Receipt> {
 	)
 }
 
+/**
+ * ⏳ (S4) The card id a member-form seat ref (`seated-member:` /
+ * `player-seat:`) holds, read through `seatOf`. Null with the switch off, for
+ * a card form (the caller parses that) and for a seat with no card.
+ */
+async function cardOfSeatRef(db: Db, sessionId: number, ref: string): Promise<number | null> {
+	if (!memberFormOn()) return null
+	const form = parseSeatRef(ref)?.form
+	if (form !== "seated-member" && form !== "player-seat") return null
+	return (await seatOf(db, sessionId, ref))?.cardId ?? null
+}
+
+/**
+ * A person's own presence (`ownPresence`'s card) as the participant ref it
+ * speaks under: `character:<cardId>` — ⏳ with the member-form switch on, the
+ * player seat holding that card, `player-seat:<id>`.
+ */
+async function presenceRef(db: Db, sessionId: number, cardId: number): Promise<ParticipantRef> {
+	if (memberFormOn()) {
+		const [seat] = await db
+			.select({
+				id: schema.sessionPersonas.id,
+				castMemberId: schema.sessionPersonas.castMemberId
+			})
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					eq(schema.sessionPersonas.personaId, cardId),
+					seatInPlay(schema.sessionPersonas)
+				)
+			)
+			.orderBy(asc(schema.sessionPersonas.position), asc(schema.sessionPersonas.id))
+			.limit(1)
+		const ref = seat
+			? hostSeatRefOf({ kind: "player", seatId: seat.id, castMemberId: seat.castMemberId, cardId })
+			: null
+		if (ref) return ref as ParticipantRef
+	}
+	return `character:${cardId}`
+}
+
 async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 	// The speaker as a reference: what the caller said, else the bare id
 	// spelled as one, else nobody (a narrator turn).
+	// 🚧 A `seated-member:<memberId>` speaker (S2) is translated to the card
+	// form every key still uses before anything reads it. The SDK's parse
+	// throws on an unparseable speaker, so one nobody is seated as does too.
+	const seatedSpeaker =
+		typeof request.speaker === "string"
+			? await storedSeatRef(request.db, request.sessionId, request.speaker)
+			: undefined
+	if (seatedSpeaker === null)
+		throw new Error(
+			`Nobody in session ${request.sessionId} is seated as ${request.speaker}.`
+		)
 	const speaker: ParticipantRef | null =
 		request.speaker !== undefined
-			? request.speaker
+			? ((seatedSpeaker ?? request.speaker) as ParticipantRef | null)
 			: request.currentCharacterId != null
-				? `character:${request.currentCharacterId}`
+				? (((await storedSeatRef(
+						request.db,
+						request.sessionId,
+						`character:${request.currentCharacterId}`
+					)) ?? `character:${request.currentCharacterId}`) as ParticipantRef)
 				: null
+	// 🚧 A card-less seat's turn (`seated-member:<id>`, no card): the run's
+	// lore scope is that member, never a card. Null on every other turn.
+	const cardlessMemberId =
+		request.currentCharacterId == null &&
+		typeof request.speaker === "string" &&
+		parseSeatRef(request.speaker)?.form === "seated-member"
+			? await (async () => {
+					const seat = await seatOf(request.db, request.sessionId, request.speaker as string)
+					return seat && seat.cardId == null ? (seat.castMemberId ?? null) : null
+				})()
+			: null
 	// Hoisted from `runSpec` so the changes below can be marked as read by
 	// the run that reads them, under the id that run's receipt carries.
 	const runId = request.runId ?? uuidv4()
@@ -1707,7 +1887,7 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 	)
 	const presser: ParticipantRef =
 		presserPresence !== null
-			? `character:${presserPresence}`
+			? await presenceRef(request.db, request.sessionId, presserPresence)
 			: `user:${request.userId}`
 	const looking = !!(request.preview || request.skipReceipt)
 	const pending = looking
@@ -1724,7 +1904,10 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 		sessionId: request.sessionId,
 		userId: request.userId,
 		specId: request.specId ?? STORY_RESPOND_SPEC_ID,
+		// How the turn was reached, for the host scope (★T-1's stamp).
+		...(request.via ? { via: request.via } : {}),
 		currentCharacterId: request.currentCharacterId,
+		...(cardlessMemberId !== null ? { currentCastMemberId: cardlessMemberId } : {}),
 		speaker,
 		draftMessage: request.draftMessage,
 		sideCharacter: request.sideCharacter ?? null,
@@ -1781,7 +1964,10 @@ async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 			// session *and* whose turn it is.
 			sessionScope: {
 				sessionId: request.sessionId,
-				currentCharacterId: request.currentCharacterId
+				currentCharacterId: request.currentCharacterId,
+				...(cardlessMemberId !== null
+					? { currentCastMemberId: cardlessMemberId }
+					: {})
 			},
 			// The row a verb re-drives, for the placeholder outlet to claim
 			// (R-17). Null on a fresh turn, which inserts.

@@ -122,7 +122,9 @@ describe("Dungeon Crawler's story turn in QuickJS", () => {
 		const gain = ruleset.kits!.byId[ruleset.kits!.order[0]!]!.levelHp
 		expect(ledger.raises).toEqual([{ owner: "player-seat:4", slot: "core:slot/hp@1", config: { max: 15 + gain } }])
 		expect(ledger.changes).toContainEqual({ owner: "player-seat:4", slot: "core:slot/hp@1", value: 12 + gain })
-		expect(ledger.changes).toContainEqual({ owner: "world", slot: "core:slot/crawl-time@1", value: "1-01-01 08:30" })
+		// Moved 2026-11-10 (hist-D1/D2): the crawl keeps no clock of its own; the ledger returns the minutes the session's story clock moves (`advance-story-clock@1`).
+		expect(ledger.changes.some((c: any) => c.slot === "core:slot/crawl-time@1")).toBe(false)
+		expect(ledger.clock).toBe(30)
 		expect(ledger.places).toEqual([{ name: "The Hall", content: "Pillars.", links: [{ to: "The Sunken Gate", linkType: "leads to", reverseLinkType: "leads to" }] }])
 		expect(ledger.progress.lastTelling.row).toBe(50)
 		expect(ledger.progress.lastTurn).toBeUndefined()

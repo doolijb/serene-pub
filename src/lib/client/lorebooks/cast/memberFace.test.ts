@@ -33,3 +33,13 @@ describe("memberFaceSrc / castFaceSrc", () => {
 		expect(castFaceSrc({ retold: { face: true } }, null)).toBeUndefined()
 	})
 })
+
+describe("memberFaceSrc through the one rule", () => {
+	test("a row lacking the fields reads as before; a retold face is drawn", () => {
+		expect(memberFaceSrc({})).toBeUndefined()
+		expect(memberFaceSrc({ faceMediaId: 41, retold: { face: false } })).toBeUndefined()
+		expect(memberFaceSrc({ faceMediaId: 41, retold: { face: true } })).toBe(
+			"/media/41"
+		)
+	})
+})

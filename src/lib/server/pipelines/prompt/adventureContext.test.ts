@@ -11,9 +11,14 @@
  * not secret, one way in left out); what is tested here is the rendering.
  */
 
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import "@serene-pub/core-catalog"
-import { locationVariables, sceneAnchor } from "$lib/server/pipelines/prompt/adventureContext"
+import {
+	locationVariables,
+	sceneAnchor,
+	withinEarshot
+} from "$lib/server/pipelines/prompt/adventureContext"
+import { memberFormSwitch } from "$lib/server/state/memberForm"
 
 const LOCATION = { id: "core:slot/location@1", appliesTo: ["world"] }
 const at = (location: unknown) => ({ world: { location }, slots: [LOCATION] })
@@ -185,5 +190,125 @@ describe("where the scene is — one answer for {{location}} and {{locationEntry
 		expect(sceneAnchor(unset as never, {}).location).toBe(
 			"somewhere this session has not named yet"
 		)
+	})
+})
+
+/**
+ * Earshot by the voice's own entry (seat-cast S4, s4-on Q3): a voice keeps its
+ * own holder-only values with the flip switch off (card form) and on (member
+ * form, `seated_member:<id>` keys). Member ids and card ids share one range,
+ * so the on case seats card 8 as member 7 — a wrong-person read would show.
+ */
+describe("withinEarshot — a voice hears its own holder-only values, switch off and on", () => {
+	const WHISPER = "test:slot/whisper@1"
+	const slots = [{ id: WHISPER, earshot: "holder" }]
+	const entry = (fields: Record<string, unknown>, whisper: string) => ({
+		key: "x",
+		name: "x",
+		enabled: true,
+		...fields,
+		whisper,
+		test_whisper: whisper
+	})
+
+	const was = memberFormSwitch.on
+	afterEach(() => {
+		memberFormSwitch.on = was
+	})
+
+	it("off: a card-form voice keeps its own, nobody else's", () => {
+		memberFormSwitch.on = false
+		const ash = entry(
+			{ id: 7, ref: "character:7", castMemberId: 70 },
+			"to ash"
+		)
+		const bram = entry(
+			{ id: 8, ref: "character:8", castMemberId: 80 },
+			"to bram"
+		)
+		const state = {
+			slots,
+			cast: { byId: { "7": ash, "8": bram }, ash, bram }
+		}
+		const heard = withinEarshot(state, "character:7") as any
+		expect(heard.cast.byId["7"].whisper).toBe("to ash")
+		expect(heard.cast.byId["8"]).not.toHaveProperty("whisper")
+		expect(heard.cast.ash).toBe(heard.cast.byId["7"])
+		// Off, a member-form speaker is nobody's voice (it fails closed).
+		const member = withinEarshot(state, "seated-member:70") as any
+		expect(member.cast.byId["7"]).not.toHaveProperty("whisper")
+		expect(member.cast.byId["8"]).not.toHaveProperty("whisper")
+		for (const nobody of [null, "envoy:castellan"]) {
+			const n = withinEarshot(state, nobody) as any
+			expect(n.cast.byId["7"]).not.toHaveProperty("whisper")
+		}
+	})
+
+	it("on: a member-form or card-form voice keeps its own seat's, never its player seat's or another member's", () => {
+		memberFormSwitch.on = true
+		// Card 7 sits in a character seat as member 70 and (K-2) in player seat 5;
+		// card 8 sits as member 7 — the same number as card 7.
+		const ash = entry(
+			{ id: 7, ref: "seated-member:70", castMemberId: 70 },
+			"to ash"
+		)
+		const ashPlayer = entry(
+			{ id: 7, playerSeatId: 5, ref: "player-seat:5", castMemberId: 70 },
+			"to ash's player seat"
+		)
+		const bram = entry(
+			{ id: 8, ref: "seated-member:7", castMemberId: 7 },
+			"to bram"
+		)
+		const state = {
+			slots,
+			cast: {
+				byId: {
+					"seated_member:70": ash,
+					"player_seat:5": ashPlayer,
+					"seated_member:7": bram
+				}
+			}
+		}
+		for (const speaker of ["seated-member:70", "character:7"]) {
+			const heard = withinEarshot(state, speaker) as any
+			expect(heard.cast.byId["seated_member:70"].whisper).toBe("to ash")
+			expect(heard.cast.byId["player_seat:5"]).not.toHaveProperty(
+				"whisper"
+			)
+			expect(heard.cast.byId["seated_member:7"]).not.toHaveProperty(
+				"whisper"
+			)
+		}
+		const bramVoice = withinEarshot(state, "seated-member:7") as any
+		expect(bramVoice.cast.byId["seated_member:7"].whisper).toBe("to bram")
+		expect(bramVoice.cast.byId["seated_member:70"]).not.toHaveProperty(
+			"whisper"
+		)
+		// A member nobody seats names nobody.
+		const stray = withinEarshot(state, "seated-member:999") as any
+		expect(stray.cast.byId["seated_member:70"]).not.toHaveProperty(
+			"whisper"
+		)
+		expect(stray.cast.byId["seated_member:7"]).not.toHaveProperty("whisper")
+	})
+
+	it("on: a card held only by a player seat is voiced as that seat", () => {
+		memberFormSwitch.on = true
+		const rook = entry(
+			{ id: 9, playerSeatId: 6, ref: "player-seat:6", castMemberId: 90 },
+			"to rook"
+		)
+		const bram = entry(
+			{ id: 8, ref: "seated-member:7", castMemberId: 7 },
+			"to bram"
+		)
+		const state = {
+			slots,
+			cast: { byId: { "player_seat:6": rook, "seated_member:7": bram } }
+		}
+		const heard = withinEarshot(state, "character:9") as any
+		expect(heard.cast.byId["player_seat:6"].whisper).toBe("to rook")
+		expect(heard.cast.byId["seated_member:7"]).not.toHaveProperty("whisper")
 	})
 })

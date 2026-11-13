@@ -19,7 +19,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { queueAfterThis } from "./reviewQueue"
 	import { capPauseLine } from "./reviewWording"
 
@@ -54,7 +54,11 @@
 		queue = [...queue, ...res.pauses.filter((p) => !known.has(p.id))]
 	}
 	const onError = (res: { error?: string; id?: string }) => {
-		if (res?.error) toaster.error({ title: res.error })
+		if (res?.error)
+			notify.error({
+				source: "socket:pipelines:resolveCapPause:error",
+				title: res.error
+			})
 		if (answeringId && (!res?.id || res.id === answeringId)) {
 			// A pause that is gone is finished, whoever finished it.
 			if (res?.id) queue = queue.filter((p) => p.id !== res.id)
@@ -115,7 +119,9 @@
 						</p>
 					</header>
 					<details class="text-sm">
-						<summary class="text-surface-600-400 cursor-pointer text-xs">
+						<summary
+							class="text-surface-600-400 cursor-pointer text-xs"
+						>
 							Details
 						</summary>
 						<ol class="mt-1 flex flex-wrap items-center gap-1">

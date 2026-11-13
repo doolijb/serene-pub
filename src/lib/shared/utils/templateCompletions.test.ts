@@ -12,7 +12,7 @@ import {
 	type ScopeDeclarer
 } from "./templateAssist"
 import { templateDiagnostics } from "./templateDiagnostics"
-import type { TemplateScope } from "@serene-pub/sdk"
+import { laidOutScope, type TemplateScope } from "@serene-pub/sdk"
 
 const HB = "core:template/handlebars@1"
 const LIQUID = "core:template/liquid@1"
@@ -360,5 +360,67 @@ describe("the helper list stays whole", () => {
 			expect(HANDLEBARS_HELPER_DOCS.strokeList).toBeUndefined()
 			expect(LIQUID_FILTER_DOCS.strokeList).toBeUndefined()
 		}
+	})
+})
+
+describe("layout references", () => {
+	const LAID = laidOutScope(SCOPE, { characters: "core:var/characters@1" })
+	const layoutOffers = {
+		"core:var/characters@1": [
+			{ reference: "core/titled-json@1", label: "Titled JSON block" },
+			{ reference: "core/json@1", label: "JSON" }
+		]
+	}
+	const ref = (marked: string, engine = HB) => {
+		const { source, offset } = at(marked)
+		return completionsAt(source, offset, LAID, { engine, layoutOffers })
+	}
+
+	test("inside the quotes of a Handlebars call: that key's references, with labels", () => {
+		for (const marked of [
+			'{{{layout characters "‸',
+			"{{layout characters '‸",
+			'{{#if (layout characters "‸',
+			'{{{~layout characters "core/t‸'
+		]) {
+			const items = ref(marked)
+			expect(
+				items.map((c) => c.label),
+				marked
+			).toEqual(
+				marked.endsWith("core/t‸")
+					? ["core/titled-json@1"]
+					: ["core/titled-json@1", "core/json@1"]
+			)
+			expect(items[0]!.detail).toBe("Titled JSON block")
+		}
+		const { source, offset } = at('{{{layout characters "core/j‸')
+		const [c] = completionsAt(source, offset, LAID, {
+			engine: HB,
+			layoutOffers
+		})
+		expect(c!.insert).toBe("core/json@1")
+		expect(source.slice(c!.start, c!.end)).toBe("core/j")
+	})
+
+	test("inside the quotes of a Liquid filter", () => {
+		const items = ref('{{ characters | layout: "‸', LIQUID)
+		expect(items.map((c) => [c.label, c.detail])).toEqual([
+			["core/titled-json@1", "Titled JSON block"],
+			["core/json@1", "JSON"]
+		])
+		expect(ref("{{- characters | layout: '‸", LIQUID)).toHaveLength(2)
+	})
+
+	test("nothing else is offered there, and a key that is not laid out has none", () => {
+		expect(ref('{{{layout scenario "‸')).toEqual([])
+		expect(ref('{{ scenario | layout: "‸', LIQUID)).toEqual([])
+	})
+
+	test("layout is among the inline helpers and the filters", () => {
+		const h = complete("{{{lay‸").find((c) => c.label === "layout")!
+		expect(h.kind).toBe("helper")
+		expect(h.detail).toBe('layout variable "reference"')
+		expect(labels("{{ scenario | lay‸", LIQUID)).toContain("layout")
 	})
 })

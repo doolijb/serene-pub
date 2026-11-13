@@ -7,7 +7,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 	import { showSceneRun } from "./sceneRunShown"
@@ -236,11 +236,13 @@
 					participantCharacters: [...new Set(participantIds)],
 					mentionedCharacters: [...new Set(mentionedIds)]
 				},
-				...(internalActivityId ? { activityId: internalActivityId } : {})
+				...(internalActivityId
+					? { activityId: internalActivityId }
+					: {})
 			} satisfies Sockets.Scenes.Update.Params)
 		} catch (err) {
 			isSaving = false
-			toaster.error({
+			notify.error({
 				title: "Failed to save new character",
 				description: err instanceof Error ? err.message : undefined
 			})
@@ -254,7 +256,10 @@
 		if (!awaitingSave || msg.scene?.id !== sceneId) return
 		awaitingSave = false
 		isSaving = false
-		toaster.success({ title: "Scene updated" })
+		notify.success({
+			source: "socket:scenes:update",
+			title: "Scene updated"
+		})
 		onApplied?.(sceneId)
 		onOpenChange({ open: false })
 	}
@@ -263,7 +268,8 @@
 		if (!awaitingSave) return
 		awaitingSave = false
 		isSaving = false
-		toaster.error({
+		notify.error({
+			source: "socket:scenes:update:error",
 			title: "Scene not saved",
 			description: msg?.error
 		})
@@ -459,9 +465,7 @@
 {#snippet previewBlock()}
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
-			<p
-				class="text-surface-600-400 text-xs font-semibold"
-			>
+			<p class="text-surface-600-400 text-xs font-semibold">
 				{genPhase === "synthesizing"
 					? "Synthesizing"
 					: `Draft ${genBatch}`}
@@ -520,11 +524,7 @@
 		</div>
 
 		<div class="border-surface-200-800 space-y-3 rounded-lg border p-3">
-			<p
-				class="text-surface-600-400 text-xs font-semibold"
-			>
-				Characters
-			</p>
+			<p class="text-surface-600-400 text-xs font-semibold">Characters</p>
 
 			<div class="space-y-1.5">
 				<p class="text-sm font-semibold">
@@ -561,10 +561,14 @@
 							labelHidden
 							placeholder="Add character…"
 							class="w-40 text-xs"
-							options={lorebookBindingList.filter((b) => !reviewParticipants.includes(b.id)).map((b) => ({
-								value: String(b.id),
-								label: b.name || b.binding
-							}))}
+							options={lorebookBindingList
+								.filter(
+									(b) => !reviewParticipants.includes(b.id)
+								)
+								.map((b) => ({
+									value: String(b.id),
+									label: b.name || b.binding
+								}))}
 							bind:value={newParticipantId}
 						/>
 						<button
@@ -587,9 +591,7 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-meta opacity-70">
-									(new)
-								</span>
+								<span class="text-meta opacity-70">(new)</span>
 								<button
 									class="hover:text-error-600-400 p-1.5"
 									aria-label="Remove suggested character {p.name}"
@@ -663,10 +665,12 @@
 							labelHidden
 							placeholder="Add character…"
 							class="w-40 text-xs"
-							options={lorebookBindingList.filter((b) => !reviewMentioned.includes(b.id)).map((b) => ({
-								value: String(b.id),
-								label: b.name || b.binding
-							}))}
+							options={lorebookBindingList
+								.filter((b) => !reviewMentioned.includes(b.id))
+								.map((b) => ({
+									value: String(b.id),
+									label: b.name || b.binding
+								}))}
 							bind:value={newMentionedId}
 						/>
 						<button
@@ -689,9 +693,7 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-meta opacity-70">
-									(new)
-								</span>
+								<span class="text-meta opacity-70">(new)</span>
 								<button
 									class="hover:text-error-600-400 p-1.5"
 									aria-label="Remove suggested character {p.name}"

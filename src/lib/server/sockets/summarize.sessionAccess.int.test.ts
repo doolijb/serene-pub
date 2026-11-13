@@ -1,5 +1,5 @@
 /**
- * Round-10 audit fix (LOW): sessionsSummarizeHandler/sessionsSetLorebookHandler
+ * Round-10 audit fix (LOW): sessionsSummarizeHandler
  * reimplemented session ownership inline instead of using the shared
  * checkSessionAccess helper (utils/sessionAccess.ts), whose own comment warns
  * against ad-hoc reimplementations — this is how a prior guest-lockout bug
@@ -75,44 +75,5 @@ describe("sessions:summarize — ownership check", () => {
 				noopEmit
 			)
 		).rejects.toThrow(/not found or access denied/i)
-	})
-})
-
-describe("sessions:setLorebook — ownership check", () => {
-	test("a non-owner, non-guest user is rejected", async () => {
-		const { sessionsSetLorebookHandler } = await import("./summarize")
-		const { owner, session } = await makeSessionWithOwner(
-			"sessionaccess-setlorebook-owner"
-		)
-		const [stranger] = await testDb
-			.insert(schema.users)
-			.values({ username: "sessionaccess-setlorebook-stranger" })
-			.returning()
-
-		await expect(
-			sessionsSetLorebookHandler.handler(
-				fakeSocket(stranger.id),
-				{ sessionId: session.id, lorebookId: null } as any,
-				noopEmit
-			)
-		).rejects.toThrow(/not found or access denied/i)
-	})
-
-	test("the owner can attach a lorebook they own", async () => {
-		const { sessionsSetLorebookHandler } = await import("./summarize")
-		const { owner, session } = await makeSessionWithOwner(
-			"sessionaccess-setlorebook-happy-owner"
-		)
-		const [lorebook] = await testDb
-			.insert(schema.lorebooks)
-			.values({ name: "Owner's Lorebook", userId: owner.id })
-			.returning()
-
-		const res = await sessionsSetLorebookHandler.handler(
-			fakeSocket(owner.id),
-			{ sessionId: session.id, lorebookId: lorebook.id } as any,
-			noopEmit
-		)
-		expect(res.session.lorebookId).toBe(lorebook.id)
 	})
 })

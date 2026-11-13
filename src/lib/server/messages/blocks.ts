@@ -129,8 +129,10 @@ export async function openFormOf(
 /**
  * The facts about a form a fire carries onto the run's input as `form` —
  * read off the stored block, so a spec's `read-answer@1` sees what the row
- * says and not what a client claimed. `characterId` is the addressee's row
- * when the addressee is a `character:` reference with a well-formed id.
+ * says and not what a client claimed. `characterId` is the addressee's card
+ * row: a `character:` reference's id, ⏳ or — once the flip is on
+ * (`state/memberForm.ts`) — the card of the seat a `seated-member:` /
+ * `player-seat:` addressee names (read by `fireAction`).
  */
 export interface FormFacts {
 	blockId: string

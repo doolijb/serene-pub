@@ -15,6 +15,7 @@
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import { adminHealth } from "$lib/client/admin/adminHealth.svelte"
 	import { appVersionDisplay } from "$lib/shared/constants/version"
+	import { castLiftOverviewLine } from "$lib/client/admin/sections/data/castUpgradeWords"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 
@@ -71,6 +72,11 @@
 	interface Line {
 		tone: Tone
 		text: string
+		/**
+		 * Where the line leads. The card is one link, so a line cannot hold a
+		 * second: a card with such a line is opened there instead.
+		 */
+		href?: string
 	}
 	interface Card {
 		title: string
@@ -183,7 +189,16 @@
 							},
 					d.dailyBackups
 						? { tone: "success", text: "Daily backups on" }
-						: { tone: "surface", text: "Daily backups off" }
+						: { tone: "surface", text: "Daily backups off" },
+					...(d.castLiftCount > 0
+						? [
+								{
+									tone: "primary" as const,
+									text: castLiftOverviewLine(d.castLiftCount),
+									href: "/admin/data#cast-upgrade"
+								}
+							]
+						: [])
 				]
 			},
 			{
@@ -337,7 +352,7 @@
 				{#each cards as card (card.title)}
 					{@const IconCmp = Icons[card.icon] as any}
 					<a
-						href={card.href}
+						href={card.lines.find((l) => l.href)?.href ?? card.href}
 						class="panel-card hover:border-surface-400-600 focus-visible:outline-primary-500 flex flex-col gap-3 transition-colors focus-visible:outline-2"
 					>
 						<div class="flex items-center gap-2">

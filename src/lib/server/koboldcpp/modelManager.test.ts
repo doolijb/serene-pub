@@ -21,6 +21,13 @@ vi.mock("./kcppHttp", () => ({
 		fetchLoadedEmbeddingModelMock(...args)
 }))
 
+// The co-load sentence reaches the status card through subprocessManager, which
+// modelManager imports dynamically; the real one would open the database.
+const noteCoLoadReasonMock = vi.fn()
+vi.mock("./subprocessManager", () => ({
+	noteCoLoadReason: (...args: any[]) => noteCoLoadReasonMock(...args)
+}))
+
 vi.mock("fs/promises", () => ({
 	writeFile: vi.fn().mockResolvedValue(undefined),
 	// The standing embedding model's file-still-there check.
@@ -359,6 +366,7 @@ describe("ensureModelLoaded", () => {
 				contextsize: 4096,
 				flashattention: false,
 				batchsize: 512,
+				smartcache: 4,
 				jinja: true
 			})
 		})
@@ -434,21 +442,26 @@ describe("ensureModelLoaded", () => {
 	})
 
 	describe("residency", () => {
-		test("planResidency evicts: today exactly one model is resident", async () => {
+		test("planResidency evicts by default, and keeps the other kind when the measured decision says so", async () => {
 			const { planResidency } = await freshImport()
+			const text = {
+				file: "some-model.gguf",
+				path: TEXT_PATH,
+				gpuLayers: -1,
+				flashAttention: false,
+				batchSize: 512,
+				contextSize: 4096
+			}
 
-			const after = planResidency(imageRequest(), {
-				text: {
-					file: "some-model.gguf",
-					path: TEXT_PATH,
-					gpuLayers: -1,
-					flashAttention: false,
-					batchSize: 512,
-					contextSize: 4096
-				}
-			})
-
-			expect(Object.keys(after)).toEqual(["image"])
+			expect(Object.keys(planResidency(imageRequest(), { text }))).toEqual(["image"])
+			// `keepOther` is coLoad.ts's answer (owner ruling 2026-11-11).
+			const both = planResidency(imageRequest(), { text }, null, null, true)
+			expect(Object.keys(both).sort()).toEqual(["image", "text"])
+			expect(both.text).toEqual(text)
+			// Symmetric: a text request keeps a resident image model.
+			const image = { file: "sdxl_q4_0.gguf", path: IMAGE_PATH }
+			const back = planResidency(textRequest(), { image }, null, null, true)
+			expect(Object.keys(back).sort()).toEqual(["image", "text"])
 		})
 
 		// The point of the seam. Nothing in production builds a two-entry plan,
@@ -475,6 +488,7 @@ describe("ensureModelLoaded", () => {
 				contextsize: 8192,
 				flashattention: false,
 				batchsize: 512,
+				smartcache: 4,
 				jinja: true,
 				sdmodel: IMAGE_PATH
 			})
@@ -498,6 +512,18 @@ describe("ensureModelLoaded", () => {
 			expect(reloads).toHaveLength(1)
 			// The text model is gone from the config, not merely joined.
 			expect("model" in lastConfig()).toBe(false)
+		})
+
+		test("a co-load decision hands its sentence to the status card", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			textHappyPath()
+			await settle(ensureModelLoaded(baseOpts()))
+			noteCoLoadReasonMock.mockClear()
+			imageHappyPath()
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
+
+			expect(noteCoLoadReasonMock).toHaveBeenCalledTimes(1)
+			expect(typeof noteCoLoadReasonMock.mock.calls[0][0]).toBe("string")
 		})
 
 		test("switching back to the text model reloads again rather than trusting the old record", async () => {
@@ -666,7 +692,7 @@ describe("ensureModelLoaded", () => {
 		// success, the OUTGOING listener keeps answering /api/v1/model with
 		// the same name for over a second, then the port is down for the whole
 		// load (6s warm, 23s for a cold 16 GB model). This is every dev-loop
-		// restart (koboldcpp adopted with the model still up) and every knob
+		// restart (an "external"-mode koboldcpp with the model still up) and every knob
 		// change on the same file.
 		test("does not accept the outgoing model when it was already reported resident before the reload", async () => {
 			const { ensureModelLoaded } = await freshImport()
@@ -728,7 +754,7 @@ describe("ensureModelLoaded", () => {
 			await expect(promise).resolves.toBe(true)
 		})
 
-		// Without a process handle (external, or adopted-external) the old
+		// Without a process handle ("external" mode) the old
 		// wait gave up after three refused ticks — about six seconds — which
 		// is shorter than the listener is down on ANY real load.
 		test("without isAlive, tolerates the listener being down for the whole of a real load", async () => {
@@ -958,6 +984,7 @@ describe("the embeddings slot", () => {
 				contextsize: 8192,
 				flashattention: false,
 				batchsize: 512,
+				smartcache: 4,
 				jinja: true,
 				// A bare string, like sdmodel — never a one-element list.
 				embeddingsmodel: EMBED_PATH

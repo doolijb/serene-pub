@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	CHARACTER_LORE_TYPE_ID,
@@ -16,6 +16,7 @@ import {
 } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -477,15 +478,12 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Bound Book" },
 			noopEmit
 		)
-		const [charBinding] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+		const charBinding = (await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				characterId: character.id,
 				binding: "{{char:1}}"
-			})
-			.returning()
-		await testDb.insert(schema.lorebookBindings).values({
+			})).member
+		await insertCastMember(testDb, {
 			lorebookId: lorebook.id,
 			characterId: persona.id,
 			binding: "{{persona:1}}"
@@ -580,6 +578,110 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		)
 	})
 
+	test("a member's own name and nickname travel with the book; a file without them imports as before (§0-D)", async () => {
+		const { lorebooksCreateHandler, lorebookImportHandler } = await import(
+			"./lorebooks"
+		)
+		const user = await makeUser("lb-ownnames-user")
+		const named = await makeCharacter(user.id, { name: "Card Named" })
+		const plain = await makeCharacter(user.id, { name: "Card Plain" })
+		const { lorebook } = await lorebooksCreateHandler.handler(
+			fakeSocket(user.id),
+			{ name: "Own Names Book" },
+			noopEmit
+		)
+		for (const v of [
+			{
+				lorebookId: lorebook.id,
+				characterId: named.id,
+				binding: "{{char:1}}",
+				ownName: "Maren",
+				ownNickname: "Mae"
+			},
+			{
+				lorebookId: lorebook.id,
+				characterId: plain.id,
+				binding: "{{char:2}}"
+			}
+		]) await insertCastMember(testDb, v)
+		const exported = await dormantExport(fakeSocket(user.id), {
+			id: lorebook.id
+		})
+		const data = JSON.parse(exported.blob.toString("utf-8"))
+		const written = data.extensions.serenepub.bindings
+		expect(written).toHaveLength(2)
+		expect(written[0]).toMatchObject({ ownName: "Maren", ownNickname: "Mae" })
+		// Written only when set.
+		expect("ownName" in written[1]).toBe(false)
+		expect("ownNickname" in written[1]).toBe(false)
+
+		const clearAll = async () => {
+			await testDb.delete(schema.lorebooks).where(eq(schema.lorebooks.userId, user.id))
+			await testDb.delete(schema.characters).where(eq(schema.characters.userId, user.id))
+		}
+		const restore = async () => {
+			const imported = await lorebookImportHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookJson: JSON.stringify(data) },
+				noopEmit
+			)
+			expect(imported.status).toBe("created")
+			return testDb.query.lorebookBindings.findMany({
+				where: (b, { eq }) => eq(b.lorebookId, imported.lorebook!.id),
+				with: { character: true }
+			})
+		}
+		await clearAll()
+		const rows = await restore()
+		expect(rows).toHaveLength(2)
+		const restoredNamed = rows.find((r) => r.character?.name === "Card Named")!
+		const restoredPlain = rows.find((r) => r.character?.name === "Card Plain")!
+		expect(restoredNamed.ownName).toBe("Maren")
+		expect(restoredNamed.ownNickname).toBe("Mae")
+		// The name sync applied them; the card's name stays an alias.
+		expect(restoredNamed.name).toBe("Mae")
+		expect(restoredNamed.aliases).toContain("Card Named")
+		// Each restored member is born with its base version: the file's own
+		// names are its own, and the name sync wrote its aliases too.
+		const baseOf = async (id: number) =>
+			(
+				await testDb
+					.select()
+					.from(schema.characterVersions)
+					.where(
+						and(
+							eq(schema.characterVersions.castMemberId, id),
+							isNull(schema.characterVersions.cardId),
+							isNull(schema.characterVersions.year)
+						)
+					)
+			)[0]
+		const namedBase = await baseOf(restoredNamed.id)
+		expect(namedBase).toMatchObject({ name: "Maren", nickname: "Mae" })
+		expect(namedBase.follows).not.toContain("name")
+		expect(namedBase.aliases).toContain("Card Named")
+		expect((await baseOf(restoredPlain.id)).follows).toContain("name")
+		expect(restoredPlain.ownName).toBeNull()
+		expect(restoredPlain.ownNickname).toBeNull()
+		expect(restoredPlain.name).toBe("Card Plain")
+
+		// An old file (no own fields at all) imports exactly as today.
+		for (const b of data.extensions.serenepub.bindings) {
+			delete b.ownName
+			delete b.ownNickname
+		}
+		await clearAll()
+		const oldRows = await restore()
+		expect(oldRows).toHaveLength(2)
+		for (const r of oldRows) {
+			expect(r.ownName).toBeNull()
+			expect(r.ownNickname).toBeNull()
+		}
+		expect(oldRows.find((r) => r.character?.name === "Card Named")!.name).toBe(
+			"Card Named"
+		)
+	})
+
 	test("include flags toggled off omit characters/personas/narrativeGraph from export, bindings restore as empty slots", async () => {
 		const {
 			lorebooksCreateHandler,
@@ -595,7 +697,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Flags Book" },
 			noopEmit
 		)
-		await testDb.insert(schema.lorebookBindings).values({
+		await insertCastMember(testDb, {
 			lorebookId: lorebook.id,
 			characterId: character.id,
 			binding: "{{char:1}}"
@@ -650,7 +752,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Background Book" },
 			noopEmit
 		)
-		await testDb.insert(schema.lorebookBindings).values({
+		await insertCastMember(testDb, {
 			lorebookId: lorebook.id,
 			characterId: null,
 			binding: "{{char:1}}",
@@ -700,7 +802,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Scoped Out Book" },
 			noopEmit
 		)
-		await testDb.insert(schema.lorebookBindings).values({
+		await insertCastMember(testDb, {
 			lorebookId: lorebook.id,
 			characterId: character.id,
 			binding: "{{char:1}}",
@@ -770,23 +872,17 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Absorb Book" },
 			noopEmit
 		)
-		const [survivorBinding] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+		const survivorBinding = (await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				characterId: character.id,
 				binding: "{{char:1}}",
 				name: "Survivor Character"
-			})
-			.returning()
-		const [absorbedBinding] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+			})).member
+		const absorbedBinding = (await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				binding: "{{char:2}}",
 				name: "Ghost NPC"
-			})
-			.returning()
+			})).member
 
 		await narrativeGraphMergeNodeHandler.handler(
 			fakeSocket(user.id),
@@ -1023,7 +1119,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 				{ name: "Txn Book" },
 				noopEmit
 			)
-			await testDb.insert(schema.lorebookBindings).values({
+			await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				characterId: character.id,
 				binding: "{{char:1}}"
@@ -1110,7 +1206,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 				{ name: "Txn Create Book" },
 				noopEmit
 			)
-			await testDb.insert(schema.lorebookBindings).values({
+			await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				characterId: character.id,
 				binding: "{{char:1}}"
@@ -1153,4 +1249,20 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			expect(rowsAfter).toHaveLength(rowsBefore.length)
 		})
 	})
+	test('an own empty nickname travels as "" (★L-3b)', async () => {
+		const { lorebooksCreateHandler, lorebookImportHandler } = await import("./lorebooks")
+		const user = await makeUser("lb-ownnick-empty-user")
+		const card = await makeCharacter(user.id, { name: "Card Empty" })
+		const { lorebook } = await lorebooksCreateHandler.handler(fakeSocket(user.id), { name: "Empty Nick Book" }, noopEmit)
+		await insertCastMember(testDb, { lorebookId: lorebook.id, characterId: card.id, binding: "{{char:1}}", ownNickname: "" })
+		const data = JSON.parse((await dormantExport(fakeSocket(user.id), { id: lorebook.id }, noopEmit)).blob.toString("utf-8"))
+		expect(data.extensions.serenepub.bindings[0].ownNickname).toBe("")
+		// Import into a fresh book: the original goes first, so the same file lands as new rows.
+		await testDb.delete(schema.lorebooks).where(eq(schema.lorebooks.id, lorebook.id))
+		const imported = await lorebookImportHandler.handler(fakeSocket(user.id), { lorebookJson: JSON.stringify(data) }, noopEmit)
+		expect(imported.lorebook?.id).toBeDefined()
+		const [row] = await testDb.select().from(schema.lorebookBindings).where(eq(schema.lorebookBindings.lorebookId, imported.lorebook!.id))
+		expect(row?.ownNickname).toBe("")
+	}, 60_000)
+
 })

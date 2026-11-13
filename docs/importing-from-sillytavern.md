@@ -16,7 +16,7 @@ Your browser reads the folder and uploads only the files the import needs. Nothi
 
 | From SillyTavern | Becomes in Serene Pub |
 | --- | --- |
-| Characters, with their expression sprites | [Characters](./characters.md), with [sprites](./characters.md#sprites) |
+| Character cards, with their expression sprites | [Characters](./characters.md), with [sprites](./characters.md#sprites) |
 | Personas, with their avatars | Characters marked as [personas](./personas.md) |
 | Chats and group chats | [Sessions](./sessions.md), with every message and its swipes |
 | World Info files | [Lorebooks](./lorebooks.md) |

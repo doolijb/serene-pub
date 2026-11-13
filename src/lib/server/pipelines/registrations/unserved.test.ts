@@ -74,5 +74,16 @@ describe("a preset's recommendations", () => {
 		expect(r.betterWith.some((t) => t.endsWith("->image"))).toBe(true)
 		expect(r.unserved.every((t) => t.endsWith("->image"))).toBe(true)
 		expect(r.words).toBe("Needs: a text model · Better with: an image model")
+		// Named, not "some of it": the start form says WHICH model is missing.
+		expect(r.unservedWords).toBe(
+			"Until an administrator sets an image model, what needs one here is unavailable."
+		)
+		const served = recommendationsOf(
+			[reg("event", "reply"), reg("action", "picture")],
+			docs,
+			new Set(["text->text", "text->image"])
+		)
+		expect(served.unserved).toEqual([])
+		expect(served.unservedWords).toBe("")
 	})
 })

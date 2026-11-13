@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm"
 import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 import { createTestDb, replyStepKeys, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import { memberFormSwitch } from "$lib/server/state/memberForm"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 
@@ -465,7 +466,17 @@ describe("who portrays whom on a turn", () => {
 		 * IS a character (0132), and a line written as them is written as that
 		 * character.
 		 */
-		expect(inlet.output.presser).toBe(`character:${personaId}`)
+		// ⏳ (S4) With the member-form switch on, the person's presence is the
+		// player seat holding the persona: `player-seat:<id>`.
+		const [presenceSeat] = await db
+			.select({ id: schema.sessionPersonas.id })
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.personaId, personaId))
+		expect(inlet.output.presser).toBe(
+			memberFormSwitch.on
+				? `player-seat:${presenceSeat!.id}`
+				: `character:${personaId}`
+		)
 		expect(inlet.output.presser).not.toBe(inlet.output.speaker)
 		// Stored with the receipt, as the blob is.
 		const [row] = await db
@@ -596,12 +607,17 @@ describe("who portrays whom on a turn", () => {
 		await db
 			.insert(schema.sessionGuests)
 			.values({ sessionId, userId: guest.id })
-		await db
+		const [elaraSeat] = await db
 			.insert(schema.sessionPersonas)
 			.values({ sessionId, personaId: elara.id })
+			.returning({ id: schema.sessionPersonas.id })
 		try {
 			const receipt: any = await turn({ seed: "turn:presence" })
-			expect(receipt.portrayals[`character:${elara.id}`]).toEqual({
+			// ⏳ (S4) Asked by the seat's member form with the switch on.
+			const asked = memberFormSwitch.on
+				? `player-seat:${elaraSeat!.id}`
+				: `character:${elara.id}`
+			expect(receipt.portrayals[asked]).toEqual({
 				by: "person",
 				userId: String(guest.id)
 			})

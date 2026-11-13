@@ -353,8 +353,19 @@ describe("a clock move in the ledger (live scenes §15 G5)", () => {
 	})
 
 	test("a skipped move says it is not on the clock, and why", () => {
-		const [line] = ledgerLines([move({ clock: { by: 3, unit: "hours", skipped: "This story has no clock yet." } })])
-		expect(line.text).toBe("Time passes: 3 hours, not on the clock. This story has no clock yet.")
+		const [line] = ledgerLines([
+			move({
+				clock: {
+					by: 3,
+					unit: "hours",
+					skipped: "This story has no clock yet.",
+					reason: "no-clock"
+				}
+			})
+		])
+		expect(line.text).toBe(
+			"Time passes: 3 hours, not on the clock. This story has no clock yet."
+		)
 	})
 
 	test("sits after the message's values, whatever its id, and never feeds a value's trail", () => {
@@ -370,7 +381,16 @@ describe("a clock move in the ledger (live scenes §15 G5)", () => {
 	test("🚧 a move made before any line is the ledger head (§15 G13): first, under no message; a value with no anchor is not", () => {
 		const lines = ledgerLines([
 			move({ id: 5, messageId: 10 }),
-			move({ id: 6, messageId: null, clock: { by: 2, unit: "hours", skipped: "No clock." } }),
+			move({
+				id: 6,
+				messageId: null,
+				clock: {
+					by: 2,
+					unit: "hours",
+					skipped: "No clock.",
+					reason: "no-clock"
+				}
+			}),
 			value({ id: 9, messageId: null })
 		])
 		// Sorted before every anchored line: before anything was said.
@@ -561,7 +581,7 @@ describe("a library change (M2c)", () => {
 		...over
 	})
 
-	test("a landed change is a line in plain words", () => {
+	test("a landed change is a line in plain words (an old attach-lorebook row still reads)", () => {
 		const lines = ledgerLines([
 			lib("create-character", "Mara", { id: 1 }),
 			lib("update-character", "Mara", { id: 2 }),
@@ -586,7 +606,7 @@ describe("a library change (M2c)", () => {
 		expect(ledgerLines([lib("create-character", "x", { library: undefined })])).toEqual([])
 	})
 
-	test("a pending library proposal reads as a proposal, for the usual Accept / Reject", () => {
+	test("a pending library proposal reads as a proposal, for the usual Accept / Reject (an old attach-lorebook row still reads)", () => {
 		const text = (op: string, label = "Mara") =>
 			describeProposal({ kind: "library", payload: { kind: "library", op, label } }, {})
 		expect(text("create-character")).toBe("Proposes a character: Mara")

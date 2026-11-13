@@ -28,7 +28,7 @@
 	 */
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 
@@ -66,7 +66,8 @@
 	function handleCreated(res: Sockets.Backups.Create.Response) {
 		busy = false
 		includeUserFilesOnce = false
-		toaster.success({
+		notify.success({
+			source: "socket:backups:create",
 			title: `Backed up to ${res.backup.name}`,
 			description: res.backup.hasUsers
 				? `With ${formatBytes(res.backup.usersBytes)} of user files beside it.`
@@ -81,7 +82,7 @@
 	function handleError(res: Sockets.ErrorResponse) {
 		loading = false
 		busy = false
-		toaster.error({ title: res.error })
+		notify.error({ source: "backups:refusal", title: res.error })
 	}
 
 	const ERROR_EVENTS = [
@@ -222,7 +223,7 @@
 				<ul class="mt-4 flex flex-col gap-2">
 					{#each listing.backups as backup (backup.name)}
 						<li
-							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-base px-3 py-2"
+							class="bg-surface-50-950 rounded-base flex flex-wrap items-center justify-between gap-2 px-3 py-2"
 						>
 							<div class="min-w-0">
 								<div class="font-mono text-xs break-all">
@@ -269,7 +270,9 @@
 
 		{#if listing && listing.setAside.length > 0}
 			<div class="panel-card">
-				<h3 id="set-aside" class="mb-2 text-sm font-medium">Databases set aside</h3>
+				<h3 id="set-aside" class="mb-2 text-sm font-medium">
+					Databases set aside
+				</h3>
 				<p class="text-surface-700-300 mb-3 text-sm">
 					When a database will not open, Serene Pub moves it aside
 					rather than deleting it. These are those copies. They may
@@ -279,7 +282,7 @@
 				<ul class="flex flex-col gap-2">
 					{#each listing.setAside as dir (dir.name)}
 						<li
-							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-base px-3 py-2"
+							class="bg-surface-50-950 rounded-base flex flex-wrap items-center justify-between gap-2 px-3 py-2"
 						>
 							<div class="min-w-0">
 								<div class="font-mono text-xs break-all">

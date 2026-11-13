@@ -27,11 +27,21 @@
  * deleted row is a selection that stores cleanly and does nothing).
  */
 
-import { asc, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { declarations } from "$lib/server/pipelines/config/panel"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { parseTemplate } from "$lib/shared/utils/templateValidation"
+import {
+	formatLayoutReference,
+	layoutSlugOf,
+	parseLayoutReference,
+	variableMajorOf
+} from "$lib/server/pipelines/entities/objectVariableLayouts"
+
+// The pair (the SDK's grammar) and the slug helper live in
+// `objectVariableLayouts.ts` (pure, so the data upgrade shares them) and are
+// re-exported here, where the sockets look for them.
+export { formatLayoutReference, layoutSlugOf, parseLayoutReference }
 
 /** The template named nothing here — deleted since the list was loaded. */
 export class VariableTemplateNotFoundError extends Error {}
@@ -57,6 +67,10 @@ export interface VariableTemplateRecord {
 	name: string
 	source: string
 	isImmutable: boolean
+	/** 🚧 The layout reference a template names it by; null on a person's row until given one. */
+	reference: string | null
+	/** 🚧 Whether this row is the pub's layout for its variable. */
+	pubDefault: boolean
 }
 
 const toRecord = (r: any): VariableTemplateRecord => ({
@@ -65,8 +79,72 @@ const toRecord = (r: any): VariableTemplateRecord => ({
 	engine: r.engine ?? CORE_TEMPLATE_ENGINE,
 	name: r.name,
 	source: r.source ?? "",
-	isImmutable: !!r.isImmutable
+	isImmutable: !!r.isImmutable,
+	reference: r.reference ?? null,
+	pubDefault: !!r.pubDefault
 })
+
+// ── 🚧 the pub's layout, references, a preset's variable layouts ────────
+// (PLAN variable-layouts 2026-11-10.) The read half every reader shares —
+// the run's resolution (`config/world.ts`), the sockets and the data
+// upgrade's tests — so the screen and the run agree on what a variable is
+// written out with. Withdrawn rows (a disabled plugin's) never answer.
+
+/** The pub's layout for a variable — the row marked `pub_default` — or null. */
+export async function pubLayoutOf(
+	db: Db,
+	variableId: string
+): Promise<number | null> {
+	const [row] = await db
+		.select({ id: schema.pipelineVariableTemplates.id })
+		.from(schema.pipelineVariableTemplates)
+		.where(
+			and(
+				eq(schema.pipelineVariableTemplates.variableId, variableId),
+				eq(schema.pipelineVariableTemplates.pubDefault, true),
+				isNull(schema.pipelineVariableTemplates.withdrawnAt)
+			)
+		)
+		.limit(1)
+	return row?.id ?? null
+}
+
+/** The row a layout reference names within its variable, or null (unknown, or withdrawn). */
+export async function layoutByReference(
+	db: Db,
+	variableId: string,
+	reference: string
+): Promise<number | null> {
+	const [row] = await db
+		.select({ id: schema.pipelineVariableTemplates.id })
+		.from(schema.pipelineVariableTemplates)
+		.where(
+			and(
+				eq(schema.pipelineVariableTemplates.variableId, variableId),
+				eq(schema.pipelineVariableTemplates.reference, reference),
+				isNull(schema.pipelineVariableTemplates.withdrawnAt)
+			)
+		)
+		.limit(1)
+	return row?.id ?? null
+}
+
+/** A preset's variable layouts as stored — `{ [variableId]: reference }`, `{}` when none. */
+export async function presetVariableLayoutsOf(
+	db: Db,
+	presetId: number
+): Promise<Record<string, string>> {
+	const [row] = await db
+		.select({ variableLayouts: schema.sessionPresets.variableLayouts })
+		.from(schema.sessionPresets)
+		.where(eq(schema.sessionPresets.id, presetId))
+		.limit(1)
+	const v = row?.variableLayouts
+	if (!v || typeof v !== "object" || Array.isArray(v)) return {}
+	return Object.fromEntries(
+		Object.entries(v).filter(([, ref]) => typeof ref === "string")
+	) as Record<string, string>
+}
 
 /**
  * Every rendering available for one variable, shipped ones first.
@@ -198,6 +276,14 @@ function refuseUnparsable(engine: string, source: string, name: string): void {
 	)
 }
 
+/** The two halves of a layout reference a person types; the major is the variable's. */
+export interface LayoutReferenceInput {
+	/** `core`, or the plugin slug this pub's own layout is filed under. */
+	ownerSlug: string
+	/** kebab-case; unique among the variable's layouts. */
+	slug: string
+}
+
 export interface CreateVariableTemplateInput {
 	variableId: string
 	name: string
@@ -205,6 +291,81 @@ export interface CreateVariableTemplateInput {
 	engine?: string | null
 	seedKey?: string
 	isImmutable?: boolean
+	/** 🚧 The layout reference to give the new row (W3). Absent: a row with none, as before. */
+	reference?: LayoutReferenceInput | null
+	/** 🚧 Make the new row the pub's layout in the same step ("use it everywhere"). */
+	useEverywhere?: boolean
+}
+
+/**
+ * The reference `{ ownerSlug, slug }` makes for a variable — its major is the
+ * variable's own (`@1` unless the id says otherwise). Refuses, in words, a
+ * malformed one.
+ */
+function referenceOf(
+	variableId: string,
+	input: LayoutReferenceInput,
+	/** A person's row: not shipped, not a package's. The owner `core` is Serene Pub's own. */
+	personsRow: boolean
+): string {
+	if (personsRow && String(input.ownerSlug).trim().toLowerCase() === "core")
+		throw new VariableTemplateNotUsableError(
+			"core is Serene Pub's own. Use an owner slug of your own."
+		)
+	const parts = {
+		owner: input.ownerSlug,
+		slug: input.slug,
+		major: variableMajorOf(variableId) ?? 1
+	}
+	let ref: string | null = null
+	try {
+		ref = formatLayoutReference(parts)
+	} catch {
+		// The SDK throws on a part outside its grammar; said in words below.
+	}
+	if (ref === null || !parseLayoutReference(ref))
+		throw new VariableTemplateNotUsableError(
+			`'${parts.owner}/${parts.slug}@${parts.major}' is not a valid layout reference. It reads ` +
+				`<owner>/<name>@<number> — the name in lower case with dashes, for example 'acme/prose@1'.`
+		)
+	return ref
+}
+
+/** A row a person made: no seed key, no plugin, not immutable. */
+const isPersonsRow = (row: {
+	seedKey: string | null
+	ownerPluginId: number | null
+	isImmutable: boolean
+}): boolean => !row.seedKey && row.ownerPluginId == null && !row.isImmutable
+
+/** Refuse a reference another layout of the variable already goes by. */
+async function refuseTakenReference(
+	db: Db,
+	variableId: string,
+	reference: string,
+	exceptId: number | null
+): Promise<void> {
+	const [taken] = await db
+		.select({
+			id: schema.pipelineVariableTemplates.id,
+			name: schema.pipelineVariableTemplates.name
+		})
+		.from(schema.pipelineVariableTemplates)
+		.where(
+			and(
+				eq(schema.pipelineVariableTemplates.variableId, variableId),
+				eq(schema.pipelineVariableTemplates.reference, reference),
+				exceptId == null
+					? undefined
+					: ne(schema.pipelineVariableTemplates.id, exceptId)
+			)
+		)
+		.limit(1)
+	if (taken)
+		throw new VariableTemplateNotUsableError(
+			`'${taken.name}' already goes by '${reference}' for this variable. A layout's ` +
+				`reference is its name in templates, so each one needs its own — pick another name.`
+		)
 }
 
 export async function createVariableTemplate(
@@ -216,22 +377,139 @@ export async function createVariableTemplate(
 		input.source,
 		input.name
 	)
+	const reference = input.reference
+		? referenceOf(
+				input.variableId,
+				input.reference,
+				!input.seedKey && !input.isImmutable
+			)
+		: null
+	const insert = async (conn: Db) => {
+		if (reference)
+			await refuseTakenReference(conn, input.variableId, reference, null)
+		const [row] = await conn
+			.insert(schema.pipelineVariableTemplates)
+			.values({
+				variableId: input.variableId,
+				name: input.name,
+				source: input.source,
+				// `null` from a caller means "core's", which is what the nullable
+				// column meant. Resolved before the insert so the stored row keeps
+				// what it was authored in even if core's default moves later —
+				// which is the argument the column's own note has always made.
+				engine: input.engine ?? CORE_TEMPLATE_ENGINE,
+				seedKey: input.seedKey ?? null,
+				isImmutable: input.isImmutable ?? false,
+				reference
+			})
+			.returning()
+		return row
+	}
+	if (!input.useEverywhere) return toRecord(await insert(db))
+	// One step: the row and its becoming the pub's layout land together or not at all.
+	return await db.transaction(async (tx: Db) => {
+		const row = await insert(tx)
+		await setPubLayoutIn(tx, row.variableId, row.id)
+		return toRecord({ ...row, pubDefault: true })
+	})
+}
+
+/**
+ * Make one row the pub's layout for its variable, or — `null` — hand the
+ * variable back to the package's default. `tx` or the db, one writer of the
+ * flag: clear the variable's rows, then set the one.
+ */
+async function setPubLayoutIn(
+	conn: Db,
+	variableId: string,
+	templateId: number | null
+): Promise<void> {
+	if (templateId != null) {
+		const [row] = await conn
+			.select()
+			.from(schema.pipelineVariableTemplates)
+			.where(eq(schema.pipelineVariableTemplates.id, templateId))
+			.limit(1)
+		if (!row)
+			throw new VariableTemplateNotFoundError(
+				"That layout no longer exists."
+			)
+		if (row.variableId !== variableId)
+			throw new VariableTemplateNotUsableError(
+				`'${row.name}' lays out something else, so it cannot be the layout for this variable.`
+			)
+		if (row.withdrawnAt)
+			throw new VariableTemplateNotUsableError(
+				`'${row.name}' belongs to a package that is switched off, so it cannot be the ` +
+					`pub's layout until the package is back on.`
+			)
+	}
+	await conn
+		.update(schema.pipelineVariableTemplates)
+		.set({ pubDefault: false })
+		.where(
+			and(
+				eq(schema.pipelineVariableTemplates.variableId, variableId),
+				eq(schema.pipelineVariableTemplates.pubDefault, true)
+			)
+		)
+	if (templateId != null)
+		await conn
+			.update(schema.pipelineVariableTemplates)
+			.set({ pubDefault: true })
+			.where(eq(schema.pipelineVariableTemplates.id, templateId))
+}
+
+/**
+ * 🚧 Choose the pub's layout for a variable: `templateId` must be one of its
+ * rows and not withdrawn; `null` goes back to the package's default. One
+ * transaction, so a variable never has two or none mid-change.
+ */
+export async function setPubLayout(
+	db: Db,
+	variableId: string,
+	templateId: number | null
+): Promise<void> {
+	await db.transaction(async (tx: Db) => {
+		await setPubLayoutIn(tx, variableId, templateId)
+	})
+}
+
+/**
+ * 🚧 Give an older row — one a person wrote before references existed — the
+ * reference `<ownerSlug>/<its name as a slug>@<the variable's major>`. Only a
+ * row with none; one that is taken, or whose name makes no slug, is refused.
+ */
+export async function stampReference(
+	db: Db,
+	templateId: number,
+	ownerSlug: string
+): Promise<VariableTemplateRecord> {
 	const [row] = await db
-		.insert(schema.pipelineVariableTemplates)
-		.values({
-			variableId: input.variableId,
-			name: input.name,
-			source: input.source,
-			// `null` from a caller means "core's", which is what the nullable
-			// column meant. Resolved before the insert so the stored row keeps
-			// what it was authored in even if core's default moves later —
-			// which is the argument the column's own note has always made.
-			engine: input.engine ?? CORE_TEMPLATE_ENGINE,
-			seedKey: input.seedKey ?? null,
-			isImmutable: input.isImmutable ?? false
-		})
+		.select()
+		.from(schema.pipelineVariableTemplates)
+		.where(eq(schema.pipelineVariableTemplates.id, templateId))
+		.limit(1)
+	if (!row)
+		throw new VariableTemplateNotFoundError("That layout no longer exists.")
+	if (row.reference)
+		throw new VariableTemplateNotUsableError(
+			`'${row.name}' already goes by '${row.reference}', and a reference is fixed once ` +
+				`it is given — templates and presets that name it would stop finding it.`
+		)
+	const slug = layoutSlugOf(row.name)
+	if (!slug)
+		throw new VariableTemplateNotUsableError(
+			`'${row.name}' has no letters or digits to make a reference from. Rename it first.`
+		)
+	const reference = referenceOf(row.variableId, { ownerSlug, slug }, isPersonsRow(row))
+	await refuseTakenReference(db, row.variableId, reference, row.id)
+	const [updated] = await db
+		.update(schema.pipelineVariableTemplates)
+		.set({ reference, updatedAt: new Date() })
+		.where(eq(schema.pipelineVariableTemplates.id, templateId))
 		.returning()
-	return toRecord(row)
+	return toRecord(updated)
 }
 
 /**
@@ -265,7 +543,13 @@ export async function duplicateVariableTemplate(
 export async function updateVariableTemplate(
 	db: Db,
 	templateId: number,
-	patch: { name?: string; source?: string; engine?: string | null }
+	patch: {
+		name?: string
+		source?: string
+		engine?: string | null
+		/** 🚧 Gives a row with no reference one; a row that has one keeps it (fixed once saved). */
+		reference?: LayoutReferenceInput | null
+	}
 ): Promise<void> {
 	const [row] = await db
 		.select()
@@ -301,9 +585,27 @@ export async function updateVariableTemplate(
 	if (patch.source !== undefined)
 		refuseUnparsable(nextEngine, patch.source, patch.name ?? row.name)
 
+	// A reference is how templates and presets name the row, so once saved it is
+	// fixed; asking for the same one again is not a change.
+	let nextReference: string | undefined
+	if (patch.reference) {
+		const wanted = referenceOf(row.variableId, patch.reference, isPersonsRow(row))
+		if (row.reference && row.reference !== wanted)
+			throw new VariableTemplateNotUsableError(
+				`'${row.name}' already goes by '${row.reference}', and a reference is fixed once ` +
+					`it is saved — templates and presets that name it would stop finding it. ` +
+					`Duplicate the layout to have one under another name.`
+			)
+		if (!row.reference) {
+			await refuseTakenReference(db, row.variableId, wanted, row.id)
+			nextReference = wanted
+		}
+	}
+
 	await db
 		.update(schema.pipelineVariableTemplates)
 		.set({
+			...(nextReference ? { reference: nextReference } : {}),
 			...(patch.name !== undefined ? { name: patch.name } : {}),
 			...(patch.source !== undefined ? { source: patch.source } : {}),
 			// Same normalization as create: the picker sends `null` for "core's
@@ -319,18 +621,36 @@ export async function updateVariableTemplate(
 /**
  * Which slot names carry a variable reference, across every published pipeline.
  *
- * Read from the declarations rather than assumed to be `'variables'`: the row
+ * Read from the node registry's slot declarations (`kind === "variables"`) of
+ * every active spec's nodes, rather than assumed to be `'variables'`: the row
  * stores the slot's *authored* name, and a plugin may call its slot anything.
  * Hard-coding the core name would let a plugin's reference go unseen, and an
  * unseen reference is a delete that succeeds and leaves a dangling pointer.
  */
 export async function variableSlotNames(db: Db): Promise<string[]> {
 	const specs = await db.select().from(schema.pipelineSpecs)
+	const versionIds = specs
+		.map((s) => s.activeVersionId)
+		.filter((v): v is number => v != null)
+	if (!versionIds.length) return []
+	const nodes = await db
+		.select({
+			definitionId: schema.pipelineNodes.definitionId,
+			definitionVersion: schema.pipelineNodes.definitionVersion
+		})
+		.from(schema.pipelineNodes)
+		.where(inArray(schema.pipelineNodes.specVersionId, versionIds))
+	const pins = new Set(
+		nodes.map((n) => `${n.definitionId}@${n.definitionVersion}`)
+	)
+	const registry = await db.select().from(schema.pipelineDefinitionRegistry)
 	const names = new Set<string>()
-	for (const spec of specs) {
-		if (!spec.activeVersionId) continue
-		for (const d of await declarations(db, spec.activeVersionId))
-			if (d.control === "variable-template-ref") names.add(d.slot)
+	for (const r of registry as any[]) {
+		if (!pins.has(`${r.definitionId}@${r.version}`)) continue
+		for (const [slot, decl] of Object.entries(
+			(r.slots ?? {}) as Record<string, { kind?: string }>
+		))
+			if (decl?.kind === "variables") names.add(slot)
 	}
 	return [...names]
 }
@@ -382,6 +702,42 @@ export async function deleteVariableTemplate(
 				`is the fallback other configurations rely on.`
 		)
 
+	// 🚧 The three things that keep a layout: it is the pub's layout; a preset
+	// chose it for its sessions; a step still has it picked (a leftover pick).
+	// The fourth, in the same block as the preset check: a context template names it by reference.
+	if (row.pubDefault)
+		throw new VariableTemplateNotUsableError(
+			`'${row.name}' is the pub's layout for this variable — every prompt that writes it ` +
+				`out uses it. Choose another layout for the variable (or the package's default) ` +
+				`first, then delete this one.`
+		)
+	if (row.reference) {
+		// The same rule the library's *Used by* and the variable page read, so a
+		// refusal never names a use those pages do not show.
+		const { layoutRowUses } = await import(
+			"$lib/server/pipelines/config/variableLayoutsView"
+		)
+		const uses = (await layoutRowUses(db, [row])).get(row.id)!
+		const chosenBy = uses.presets.map((p) => p.name)
+		if (chosenBy.length)
+			throw new VariableTemplateNotUsableError(
+				`'${row.name}' is chosen by ${chosenBy.length === 1 ? "this preset" : "these presets"}: ` +
+					`${chosenBy.map((n) => `'${n}'`).join(", ")}. Choose another layout there first, ` +
+					`then delete this one.`
+			)
+		const named = uses.namedBy.map((t) => t.name)
+		if (named.length)
+			throw new VariableTemplateNotUsableError(
+				`'${row.name}' is named by ${named.length === 1 ? "this context template" : "these context templates"}: ` +
+					`${named
+						.slice(0, 3)
+						.map((n) => `'${n}'`)
+						.join(", ")}${named.length > 3 ? ` and ${named.length - 3} more` : ""}. ` +
+					`Edit ${named.length === 1 ? "it" : "them"} to name another layout first, ` +
+					`then delete this one.`
+			)
+	}
+
 	const slots = await variableSlotNames(db)
 	let referenced = false
 	if (slots.length) {
@@ -411,9 +767,9 @@ export async function deleteVariableTemplate(
 
 	if (referenced)
 		throw new VariableTemplateNotUsableError(
-			`'${row.name}' is still in use — a pipeline is laying something out with ` +
-				`it. Layouts are shared across pipelines, so this may be one you set ` +
-				`up elsewhere. Point that setting at a different layout first, then ` +
+			`'${row.name}' is still in use — a pipeline step has it picked (a leftover ` +
+				`pick). Layouts are shared across pipelines, so this may be one you set ` +
+				`up elsewhere. Point that step at the pub's layout first, then ` +
 				`delete this one.`
 		)
 

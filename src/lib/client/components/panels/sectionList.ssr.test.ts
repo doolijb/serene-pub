@@ -317,7 +317,7 @@ describe("PanelSplit kind=sections with a SectionList", () => {
 		}).body
 		expect(out).not.toContain("<nav")
 		expect(tagWith(out, "@container/detail")).not.toMatch(/\bp-4\b/)
-		expect(out).toContain("m-4 flex min-h-0 flex-1 flex-col")
+		expect(out).toContain("mx-4 mt-4 flex min-h-0 flex-1 flex-col after:block after:h-4")
 		expect(out).toContain("Section body")
 	})
 })

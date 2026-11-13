@@ -8,6 +8,7 @@ import {
 	isPendingReplyRow,
 	openedReplyRuns,
 	pendingReplyRows,
+	pendingReplyRunOf,
 	type ReplyRunStatus
 } from "./pendingReply"
 
@@ -65,5 +66,19 @@ describe("openedReplyRuns", () => {
 		expect(
 			openedReplyRuns([run("r1"), run("r2", "parley")], [{ id: 3, channel: "parley", isGenerating: true }])
 		).toEqual(["r2"])
+	})
+})
+
+describe("pendingReplyRunOf", () => {
+	it("a waiting row stands for its run", () => {
+		const rows = pendingReplyRows(7, [run("r1")], [], new Set())
+		expect(pendingReplyRunOf(rows[0] as any)).toBe("r1")
+	})
+
+	it("a server row — a positive id, or no run on it — stands for none", () => {
+		expect(pendingReplyRunOf({ id: 10, metadata: { pendingReplyRun: "r1" } })).toBeNull()
+		expect(pendingReplyRunOf({ id: -1, metadata: {} })).toBeNull()
+		expect(pendingReplyRunOf({ id: -1 })).toBeNull()
+		expect(pendingReplyRunOf({ id: -1, metadata: { pendingReplyRun: "" } })).toBeNull()
 	})
 })

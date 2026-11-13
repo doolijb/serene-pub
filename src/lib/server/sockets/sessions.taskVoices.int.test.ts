@@ -2,7 +2,7 @@
  * 🚧 The **extra voices** (PLAN-genre-restructure §4, lane 2, 2026-10-19), on
  * a real Story send with auto-advance on Round: once the round is over, *Let
  * others speak up* gives one character who did not speak last one more line,
- * and *Narrator asides* has the narrator add one (the Narrate action) —
+ * and *Narrator's turn* has the narrator add one (the Narrate action) —
  * each at most once a round, written into the turn order (canon A9) and
  * fired by auto-advance, never decided by the reply. Off, a round is exactly
  * its cast.
@@ -113,10 +113,14 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {})
 })
 
-async function minimalWithTwo(name: string, tasks: Record<string, "full" | "off">) {
+async function minimalWithTwo(
+	name: string,
+	tasks: Record<string, "full" | "off">,
+	extra: { fields?: Record<string, unknown>; names?: string[] } = {}
+) {
 	const [p] = await db.select({ id: schema.sessionPresets.id }).from(schema.sessionPresets).where(eq(schema.sessionPresets.seedKey, "core-story-minimal"))
 	const ids: number[] = []
-	for (const n of ["Ash", "Bram"]) {
+	for (const n of extra.names ?? ["Ash", "Bram"]) {
 		const [c] = await db.insert(schema.characters).values({ userId: ownerId, name: `${n} ${name}`, description: "A traveller.", isPersona: false }).returning()
 		ids.push(c!.id)
 	}
@@ -135,7 +139,8 @@ async function minimalWithTwo(name: string, tasks: Record<string, "full" | "off"
 		.set({
 			genreFields: {
 				...((row?.genreFields ?? {}) as Record<string, unknown>),
-				autoAdvance: "round"
+				autoAdvance: "round",
+				...(extra.fields ?? {})
 			}
 		})
 		.where(eq(schema.sessions.id, sessionId))
@@ -184,9 +189,72 @@ describe("the extra voices (lane 2)", () => {
 		expect(lines.map((r) => r.characterId)).toEqual([ids[0], ids[1], ids[0]])
 		expect(t.since.filter((r) => r.isNarratorResponse)).toHaveLength(1)
 		expect(t.calls, "two extra calls a round, no more").toBe(4)
+		const cause = (r: any) => (r.metadata as any)?.turnCause
+		expect(cause(t.since.find((r) => r.isNarratorResponse))).toEqual({ via: "unprompted", every: 1 })
+		// The side-cast pick shares `via: "unprompted"` but is a character's reply: no stamp.
+		for (const r of lines) expect(cause(r)).toBeUndefined()
 
 		// A new round: the same again, never more.
 		const again = await send(sessionId)
 		expect(again.calls).toBe(4)
+	}, 240_000)
+
+	it("every 2nd round under Whole round: the narrator waits for round 2", async () => {
+		const { sessionId } = await minimalWithTwo("voices-every-2", {}, { fields: { narratorInterjections: "every-2nd-round" } })
+		const first = await send(sessionId)
+		expect(first.since.some((r) => r.isNarratorResponse)).toBe(false)
+		expect(first.calls).toBe(2)
+		for (const r of first.since) expect((r.metadata as any)?.turnCause).toBeUndefined()
+		const second = await send(sessionId)
+		expect(second.since.filter((r) => r.isNarratorResponse)).toHaveLength(1)
+		expect((second.since.find((r) => r.isNarratorResponse)!.metadata as any)?.turnCause).toEqual({ via: "unprompted", every: 2 })
+		expect(second.calls).toBe(3)
+	}, 240_000)
+
+	it("a pressed Narrate carries no turnCause", async () => {
+		const { sessionId } = await minimalWithTwo("voices-narrate", {}, { fields: { narratorInterjections: "every-round", autoAdvance: "off" } })
+		const { runReply } = await import("$lib/server/utils/runReply")
+		const outcome = await runReply({
+			socket: fakeSocket(ownerId),
+			emitToUser: emit as any,
+			sessionId,
+			userId: ownerId,
+			turn: { kind: "narrate", instructions: "" }
+		} as any)
+		expect(outcome.ok).toBe(true)
+		await settle()
+		const rows = await db.select().from(schema.sessionMessages).where(eq(schema.sessionMessages.sessionId, sessionId))
+		const narration = rows.filter((r) => r.isNarratorResponse)
+		expect(narration).toHaveLength(1)
+		expect((narration[0]!.metadata as any)?.turnCause).toBeUndefined()
+	}, 240_000)
+
+	it("a spec-supplied turnCause is stripped; the host's stands", async () => {
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const node = { key: "save", definitionId: "core:outlet/create-message" } as any
+		const { sessionId, ids } = await minimalWithTwo("voices-cause", {}, { fields: { narratorInterjections: "every-3rd-round", autoAdvance: "off" } })
+		const write = async (via: string | undefined, extra: Record<string, unknown>) => {
+			const res = (await createHost(db, { sessionId, userId: ownerId, via }).commit!(
+				{ sessionId, text: "A line.", metadata: { turnCause: { via: "unprompted", every: 9 } }, ...extra },
+				node
+			)) as { id: number }
+			const [row] = await db.select().from(schema.sessionMessages).where(eq(schema.sessionMessages.id, res.id))
+			return (row!.metadata as any)?.turnCause
+		}
+		expect(await write("pick", { narration: true })).toBeUndefined()
+		expect(await write("unprompted", { narration: true })).toEqual({ via: "unprompted", every: 3 })
+		expect(await write("unprompted", { characterId: ids[0] })).toBeUndefined()
+	}, 240_000)
+
+	it("Next turn never yields two replies: the narrator's turn waits for a Continue", async () => {
+		const { sessionId } = await minimalWithTwo(
+			"voices-next-turn",
+			{},
+			{ names: ["Ash"], fields: { autoAdvance: "next", narratorInterjections: "every-round" } }
+		)
+		const t = await send(sessionId)
+		expect(t.since.filter((r) => r.role === "assistant")).toHaveLength(1)
+		expect(t.since.some((r) => r.isNarratorResponse)).toBe(false)
+		expect(t.calls).toBe(1)
 	}, 240_000)
 })

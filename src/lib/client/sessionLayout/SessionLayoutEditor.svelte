@@ -7,7 +7,7 @@
 	 *
 	 * Mounted by the composition root only while the editor is open, so every
 	 * piece of state here is this edit's and goes when it closes. It holds ONE
-	 * working copy — `editPanels`, a `PanelLayoutV1` snapshot taken on open —
+	 * working copy — `editPanels`, a `PanelLayoutV2` snapshot taken on open —
 	 * and every edit is one of ./arrangeOps' pure ops, which answers a new
 	 * value (or the same one for a no-op, or a refusal to say). The working
 	 * panels are EMITTED as they change (`onWorking`, the live preview under
@@ -17,24 +17,46 @@
 	 * said on the Arrange tab's status line (`notice`), never a toast; there
 	 * is no lock and no floor on Done (§10 R-B).
 	 *
+	 * The editor owns the **chosen tab** (`chosen`, an instance id): the
+	 * canvas chooses it, the style overlay's Settings asks for it
+	 * (`settingsInArrangeAsk`), and the desktop canvas's right-hand
+	 * **inspector pane** (./ArrangeInspector) shows its settings and style —
+	 * nothing chosen, the layout's Backing / Opacity / Widget gap. Look edits
+	 * go through `arrangeOps.setLook`, so Undo and Cancel cover them; there is
+	 * no widget settings window. Escape backs out of the pane's editor, then
+	 * clears the choice.
+	 *
 	 * The header's Layout button is the one way in (./layoutEditor); while the
 	 * desktop editor is open the shell hands its top band to the toolbar.
 	 */
 	import { untrack } from "svelte"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
-	import { samePanels, placedIds as placedOf, type ArrangeOutcome } from "./arrangeOps"
-	import type { SimTier } from "./simulator"
+	import {
+		lookOf,
+		samePanels,
+		placedIds as placedOf,
+		setLook,
+		type ArrangeOutcome
+	} from "./arrangeOps"
+	import { simulatedGeometry, type SimTier } from "./simulator"
 	import { dropWidgetStylePins } from "$lib/client/stores/widgetStyles.svelte"
 	import { dropWidgetSettings } from "$lib/client/stores/widgetSettings.svelte"
 	import { CORE_WIDGETS } from "$lib/shared/widgets/types"
-	import { type PanelLayoutV1, type SessionLayoutV1, widgetOfInstance } from "@serene-pub/sdk"
-	import { closeWidgetSettings, openWidgetSettings } from "./widgetSettingsModal.svelte"
+	import {
+		type PanelLayoutV2,
+		type SessionLayoutV1,
+		widgetOfInstance
+	} from "@serene-pub/sdk"
 	import MobileLayoutEditor from "./MobileLayoutEditor.svelte"
 	import LayoutEditorToolbar from "./LayoutEditorToolbar.svelte"
 	import ArrangeCanvas from "./ArrangeCanvas.svelte"
+	import ArrangeInspector from "./ArrangeInspector.svelte"
 	import PresetPicture from "./PresetPicture.svelte"
 	import type { SessionLayoutModel } from "./sessionLayoutModel.svelte"
-	import type { WidgetSettingsFlow } from "./widgetSettingsFlow.svelte"
+	import {
+		settingsInArrangeAsk,
+		type WidgetSettingsFlow
+	} from "./widgetSettingsFlow.svelte"
 	import { createEditorMembership } from "./editorMembership.svelte"
 	import type { StartFromProps } from "./startFrom"
 
@@ -45,11 +67,9 @@
 		manager: SurfaceManager
 		sessionId: number | null
 		/** The working panels, emitted on every change (the live preview). */
-		onWorking: (panels: PanelLayoutV1) => void
+		onWorking: (panels: PanelLayoutV2) => void
 		/** What Done writes; the composition root persists it. */
 		onLayout: (patch: SessionLayoutV1) => void
-		/** Ask the live view to put its flyouts away. */
-		onPutAway: (zoneId?: string) => void
 		/** The editor is done (Done or Cancel): the root closes it. */
 		onClose: () => void
 	}
@@ -77,21 +97,36 @@
 		isAdmin = false,
 		onWorking,
 		onLayout,
-		onPutAway,
 		onClose
 	}: Props = $props()
 
 	const widgetLabel = (id: string) => flow.widgetLabel(id)
+	/** A widget kind's title (the inspector's second line). */
+	const kindLabel = (id: string): string =>
+		CORE_WIDGETS.find((w) => w.id === widgetOfInstance(id))?.title ??
+		manager.decls.find((d) => d.id === widgetOfInstance(id))?.title ??
+		widgetLabel(id)
+
+	/** The inspector pane's width on the desktop canvas. */
+	const INSPECTOR_PX = 380
 
 	/* ── the working copy ─────────────────────────────────────────────────
 	 * `opened` is the layout as the editor opened on it (and again after a
 	 * copy lands or a save): what Done compares against. `editPanels` is the
 	 * edit in progress; `previous` the one step Undo takes back. */
-	const snapshot = (): PanelLayoutV1 =>
-		$state.snapshot(model.savedPanels) as PanelLayoutV1
-	let opened = $state.raw<PanelLayoutV1>(untrack(snapshot))
-	let editPanels = $state.raw<PanelLayoutV1>(untrack(() => opened))
-	let previous = $state.raw<PanelLayoutV1 | null>(null)
+	const snapshot = (): PanelLayoutV2 =>
+		$state.snapshot(model.savedPanels) as PanelLayoutV2
+	let opened = $state.raw<PanelLayoutV2>(untrack(snapshot))
+	let editPanels = $state.raw<PanelLayoutV2>(untrack(() => opened))
+	let previous = $state.raw<PanelLayoutV2 | null>(null)
+	/** The chosen tab (instance id); null when nothing is chosen or the tab is not placed. */
+	let chosenRaw = $state<string | null>(null)
+	let chosen = $derived(
+		chosenRaw && placedOf(editPanels).includes(chosenRaw) ? chosenRaw : null
+	)
+	let inspector = $state<
+		{ escape(): boolean; headingId: string } | undefined
+	>()
 	/** The last refusal, said on the status line until the next kept edit. */
 	let notice = $state<string | null>(null)
 	$effect(() => onWorking(editPanels))
@@ -100,7 +135,10 @@
 	 * Keep an op's answer, or say its refusal. `merge` folds a run of edits
 	 * (a divider drag) into one Undo step. Answers whether it was kept.
 	 */
-	function edit(outcome: ArrangeOutcome, opts: { merge?: boolean } = {}): boolean {
+	function edit(
+		outcome: ArrangeOutcome,
+		opts: { merge?: boolean } = {}
+	): boolean {
 		if (!outcome.layout) {
 			notice = outcome.refused
 			return false
@@ -120,7 +158,8 @@
 
 	/** The primary widget's own title — Start from scratch's question names it. */
 	let primaryTitle = $derived(
-		CORE_WIDGETS.find((w) => w.id === widgetOfInstance(model.primaryId))?.title ??
+		CORE_WIDGETS.find((w) => w.id === widgetOfInstance(model.primaryId))
+			?.title ??
 			model.inst(model.primaryId)?.title ??
 			widgetLabel(model.primaryId)
 	)
@@ -147,9 +186,45 @@
 		edit: (outcome) => edit(outcome)
 	})
 
-	/** A tab's gear: the widget settings flow, the one modal. */
-	function openSettings(id: string, trigger: HTMLElement) {
-		openWidgetSettings({ widgetId: id, label: widgetLabel(id) }, trigger)
+	/* ── the style overlay's ask ─────────────────────────────────────────
+	 * Its Settings button asks for a tab here: switch to Arrange, choose it.
+	 * An ask made before this editor opened never fires. */
+	let seenAsk = untrack(() => settingsInArrangeAsk().n)
+	$effect(() => {
+		const ask = settingsInArrangeAsk()
+		if (ask.n === seenAsk) return
+		seenAsk = ask.n
+		untrack(() => {
+			model.editTab = "arrange"
+			chosenRaw = ask.id
+		})
+	})
+
+	/** The desktop canvas is up (the real width or a simulated desktop tier). */
+	let canvasUp = $derived(model.placing && !model.mobileEdit)
+	/** The canvas's split of the window MINUS the inspector pane. */
+	let editGeom = $derived(
+		simulatedGeometry(
+			model.simWidth ?? Math.max(0, model.vw - INSPECTOR_PX),
+			{
+				available:
+					model.simWidth == null
+						? undefined
+						: model.containerW - 24 - INSPECTOR_PX
+			}
+		)
+	)
+	let simPct = $derived(Math.round(editGeom.scale * 100))
+
+	/** Escape: back out of the pane's editor, then clear the choice. */
+	function onWindowKey(e: KeyboardEvent) {
+		if (e.key !== "Escape" || e.defaultPrevented || !canvasUp) return
+		if (inspector?.escape()) {
+			e.preventDefault()
+		} else if (chosenRaw) {
+			chosenRaw = null
+			e.preventDefault()
+		}
 	}
 
 	/* ── seeding ────────────────────────────────────────────────────────── */
@@ -160,6 +235,7 @@
 		editPanels = fresh
 		previous = null
 		notice = null
+		chosenRaw = null
 		membership.takeDuplicated()
 	}
 	/**
@@ -178,7 +254,6 @@
 			if (copiesPending === 0) return
 			copiesPending--
 			seedEditor()
-			onPutAway()
 			membership.armedId = null
 		})
 	})
@@ -232,7 +307,7 @@
 		copiesPending = 0
 		membership.armedId = null
 		model.simTier = null
-		closeWidgetSettings()
+		chosenRaw = null
 		onClose()
 	}
 
@@ -251,17 +326,19 @@
 		startedFrom && !startedFrom.isGenreDefault ? startedFrom : null
 	)
 	/** Copy a preset in (`null`: Start from scratch). */
-	async function startFrom(layoutPresetId: number | null) {
+	async function startFrom(
+		layoutPresetId: number | null,
+		opts?: { clearPlacedWidgets?: boolean }
+	) {
 		if (!onStartFrom) return
 		copiesPending++
-		const asked = onStartFrom(layoutPresetId)
-		onPutAway()
+		const asked = onStartFrom(layoutPresetId, opts)
 		membership.armedId = null
 		if (!(await asked) && copiesPending > 0) copiesPending--
 	}
 	/** **Reset to genre default layout** (or scratch, where the genre ships none). */
 	function resetLayout() {
-		startFrom(genreDefaultPreset?.id ?? null)
+		startFrom(genreDefaultPreset?.id ?? null, { clearPlacedWidgets: true })
 	}
 	/**
 	 * **Save as new layout**: commit what is arranged (as Done would), then
@@ -296,10 +373,11 @@
 		panels={editPanels}
 		{edit}
 		{membership}
-		editGeom={model.editGeom}
+		{editGeom}
 		rail={model.rail}
 		label={widgetLabel}
-		{openSettings}
+		{chosen}
+		onChoose={(id) => (chosenRaw = id)}
 	/>
 {/snippet}
 
@@ -317,6 +395,7 @@
 		iconOf={model.iconOf}
 		middleWidgetIcon={model.middleWidgetIcon}
 		{widgetLabel}
+		{kindLabel}
 		trayWidgets={membership.trayWidgets}
 		trayIcon={membership.trayIcon}
 		{presets}
@@ -391,27 +470,46 @@
 
 <!-- A width below the breakpoint gets the ROW editor instead of the canvas.
      The live session stays mounted underneath either, so nothing reloads. -->
-{#if model.placing && !model.mobileEdit}
+<svelte:window onkeydown={onWindowKey} />
+
+{#if canvasUp}
 	<div class="edit-scrim"></div>
+	<aside
+		class="edit-inspector"
+		aria-labelledby={inspector?.headingId}
+		style="inset-block-start:{model.toolbarH}px; inline-size:{INSPECTOR_PX}px;"
+	>
+		<ArrangeInspector
+			bind:this={inspector}
+			panels={editPanels}
+			chosenId={chosen}
+			label={widgetLabel}
+			{kindLabel}
+			look={lookOf(editPanels)}
+			onLook={(patch) => edit(setLook(editPanels, patch))}
+		/>
+	</aside>
 	{#if model.simWidth != null}
 		<!-- Simulated: the canvas drawn at the tier's width inside a centred,
 		     labelled frame; `transform` (always set) is the scale. -->
-		<div class="sim-stage">
+		<div class="sim-stage" style="margin-inline-end:{INSPECTOR_PX}px;">
 			<div class="sim-label">
-				Previewing at {model.simWidth} px{model.simPct < 100
-					? ` · shown at ${model.simPct}%`
+				Previewing at {model.simWidth} px{simPct < 100
+					? ` · shown at ${simPct}%`
 					: ""}
 			</div>
 			<div
 				class="sim-frame"
-				style="inline-size:{model.simWidth}px; max-block-size:{model.simHeight}px; transform:scale({model
-					.editGeom.scale});"
+				style="inline-size:{model.simWidth}px; max-block-size:{model.simHeight}px; transform:scale({editGeom.scale});"
 			>
 				{@render canvas()}
 			</div>
 		</div>
 	{:else}
-		<div class="edit-shell" style="inset-block-start:{model.toolbarH}px;">
+		<div
+			class="edit-shell"
+			style="inset-block-start:{model.toolbarH}px; inset-inline-end:{INSPECTOR_PX}px;"
+		>
 			{@render canvas()}
 		</div>
 	{/if}
@@ -461,12 +559,26 @@
 	   inline style, so this rule owns only the box. */
 	.edit-shell {
 		position: fixed;
-		inset-inline: 0;
+		inset-inline-start: 0;
 		inset-block-end: 0;
 		z-index: 16;
 		display: flex;
 		flex-direction: column;
 		min-block-size: 0;
+	}
+	/* The inspector pane: opaque, to the window's bottom and end edge, above the scrim. */
+	.edit-inspector {
+		position: fixed;
+		inset-inline-end: 0;
+		inset-block-end: 0;
+		z-index: 16;
+		display: flex;
+		flex-direction: column;
+		min-block-size: 0;
+		max-inline-size: 100vw;
+		background: var(--color-surface-50-950);
+		border-inline-start: 1px solid
+			color-mix(in oklab, var(--color-surface-400) 45%, transparent);
 	}
 
 	/* ── the screen-size simulator's frame ─────────────────────────────────

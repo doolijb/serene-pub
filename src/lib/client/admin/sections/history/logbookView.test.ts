@@ -41,6 +41,15 @@ describe("a record's object", () => {
 		expect(objectHref(rec({ action: "delete" }))).toBeNull()
 		expect(objectHref(rec({ objectType: "theme" }))).toBeNull()
 	})
+	it("links a variable layout by its id shape: a variable id to the variable's page, a row id to the old address, none to the list", () => {
+		const v = (objectId: string | null) =>
+			objectHref(rec({ objectType: "variable-template", objectId }))
+		expect(v("core:var/characters@1")).toBe(
+			"/admin/variable-layouts/core%3Avar%2Fcharacters%401"
+		)
+		expect(v("42")).toBe("/admin/variable-templates/42")
+		expect(v(null)).toBe("/admin/variable-layouts")
+	})
 	it("links to the object's history with the change form's address", () => {
 		expect(objectHistoryHref(rec({}))).toBe("/admin/history?type=connection&id=12")
 		expect(objectHistoryHref(rec({ objectType: "pub", objectId: null }))).toBe(

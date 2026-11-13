@@ -12,14 +12,20 @@
  *
  * ⚠ Pure. The resolving happened before this — these rows are already read
  * as-of (`resolveCast`), so nothing here knows about amendments or branches.
- * What it does know is that a carded member is NAMED by their card, so an
- * amendment that swaps the card shows a different person standing in the room.
+ * What it does know is that a carded member is NAMED by their card — unless
+ * the member has a name of their own in this book — so an amendment that
+ * swaps the card shows a different person standing in the room.
  */
+
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 
 /** A cast row, as much of it as presence and naming need. */
 export interface RosterRow {
 	id: number
 	name?: string | null
+	/** The name and nickname this member is shown by in this book, where they have their own. */
+	ownName?: string | null
+	ownNickname?: string | null
 	nodeState?: string | null
 	/** Which card is drawing them at this moment, where one is. */
 	characterId?: number | null
@@ -86,8 +92,11 @@ export function worldRoster(
 			// binding's own `name` is frozen at whatever it was seeded with, so
 			// using it showed one unchanging name with the live card muttering
 			// underneath — the amendment resolved, and the room did not look
-			// any different. A member with no card keeps their own name.
-			const name = (card ?? row.name ?? "").trim() || "Unnamed"
+			// any different. A member with no card keeps their own name, and one
+			// with a name of their own in this book is named by it.
+			const name =
+				memberShownName(row, { name: card ?? row.name }).trim() ||
+				"Unnamed"
 			// An aspect earns its line only when it tells two apart.
 			const aspect =
 				row.personalPosition != null

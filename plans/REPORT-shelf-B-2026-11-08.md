@@ -1,0 +1,37 @@
+# REPORT shelf-B — Get a model: sentence line, finder model page, Hub card — 2026-11-08
+
+Saved by the lead (the harness refused the supervisor's write). Brief: `plans/briefs/BRIEF-shelf-B.md`; worker briefs `BRIEF-shelf-B-w1.md` … `-w5.md`. Scope review: nothing blocking; three findings answered (★B-3, For shelf-C, queued items).
+
+## Built (plan §2 items 8–10)
+
+- `server/connections/hfGgufQuants.ts` (+test): private `readHfRepo` fills two caches from one call — siblings (10 min, failures cached) and card (24 h, public reads only); exports `HfRepoCard`, `hfRepoCardFrom`, `fetchHfRepoCard` (→ `{ card, siblings }`, no HTTP when both fresh or siblings cached a failure), `hfRepoReadCached`; `clearHfSiblingsCache` clears both; `fetchHfRepoSiblings` unchanged for koboldcpp/ollama.
+- `server/sockets/modelHubCard.ts` (+test, new): admin-only; repo guard `^[A-Za-z0-9][\w.-]*\/[\w.-]+$`, no `..`, ≤ 200 chars; limiter key `models:hubCard` spent only on a real Hub read; never throws; emits `models:hubCard { repo, card?, files?, error? }`, `files` = `.gguf` siblings in the Hub's own field names (`rfilename`, `size`). Registered in `sockets/index.ts` (:65 import, :313 call).
+- `shared/sockets/types.ts` :3524–3557: `Sockets.Models.HubCard` (Params, Card, File, Response).
+- `connections/finder.ts` (+test): `hubRepoOf`, `withHubFileSizes`, `fitBar`, `modelPageFacts` — additions only.
+- `ModelFinderView.svelte`: the sentence line replaces the For row, Download to row and landing/tier line; a result's name opens the page (`openPage` asks the card; `handleHubCard` in the admin `declareInterest` block drops other repos' replies; `closePage` restores scroll and focus); refactor `planFor`, `offer`, `runDownload`, `busyOf`; Get keeps the inline picker.
+- `FinderModelPage.svelte` (new): nav header (title = model name, Back always), `DetailHero`, description, facts `dl`, presence line, card loading/error line, files table (shared rows + fit bars), pinned footer (*To ‹destination› · ‹landing›* + **Download ‹quant›**, or On disk / Pulled, or progress + Cancel). Escape is Back; heading focused on open.
+- `QuantPicker.svelte`: rows moved into an exported `quantRows` snippet (`<script module>`); inline picker unchanged (`bars=false`).
+- Tests: `finder.dom.test.svelte.ts` (+5 sentence, +10 page), `finderViews.ssr.test.ts` (sentence assertions). Lane: 5 files, 201/201.
+
+## Lead actions and rulings (2026-11-08)
+
+- **Queued 1 (required) done:** `client/sockets/typedSocket.ts` gains `"models:hubCard"` beside `models:machineHardware`.
+- **Queued 2 done:** gated like `models:presence` — `shared/sockets/interest.ts` `GATED_EVENTS` and `gatedEvents.test.ts` `MIGRATED_EVENTS`; doc comment says *(admin; gated)*.
+- **★B-1 accepted:** the sentence keeps the scope labels as they are (*[Images] models for …*); no new words.
+- **★B-2 → owner:** `baseModel` rides the wire but has no slot in the ruled facts strip. Recommend a **Base model** fact after Parameters.
+- **★B-3 accepted:** Download disabled on a page with no files, tooltip from Get's existing *That repo lists no files to get* (a silent no-op otherwise, P1).
+- In-scope decisions accepted as reported: card asked only for admin + KoboldCPP/Ollama destination + a resolvable repo; sentence parts plain text when fixed or single; no-destination reading *[Chat] models · sized for […]*; ONNX omits the tier part; *Files land in …* moved to the page footer; page mirrors the row's badge/progress; page closes when a door prop changes scope or destination.
+- Lead re-ran `gatedEvents`, `modelHubCard`, `hfGgufQuants`, `finder`, `finderViews.ssr`: 5 files, 191/191.
+
+## For shelf-C
+
+- `docs/connections.md` § Get a model: replace "four rows" with the query, one sentence (*[Chat] models for [KoboldCPP] · sized for [8 GB]*; each bracket a short list; a part fixed by the door, or with one option, is plain text; no *sized for* for ONNX; with nothing to download into it reads *[Chat] models · sized for […]* and the "Nothing here can hold …" card follows; a dimmed destination stays pickable with its reason on a line under the sentence, as do the KoboldCPP-not-set-up and detected-hardware lines; ⋯ **Change memory tier** unchanged), then the results. The model page: a result's **name** opens it; **Back** / Escape returns to the results where you left them; **Get** still opens the file list under the row. Title = model name; hero: owner, *Recommended* or *Hugging Face*, tier chip; description; facts strip of what is known — **Parameters**, **Context** (*32k tokens*), **Licence**, **Languages** (first three, then *+N more*), **Downloads**, **Updated**; *You have this on …*; file list headed *Pick a size* / *Choose a precision*, recommended pre-selected, each with size, fit and a bar for its share of the memory size (none under *Not sure*); footer *To ‹destination› · ‹where files land›* with **Download ‹quant›**, or **On disk** / **Pulled**, or progress + **Cancel**. Hugging Face facts and file sizes are read when the page opens (*Reading the repo from Hugging Face…*; a sentence on failure). Ollama library names show *Ollama's library lists no quants for this name.* and Download pulls the list's tag; a repo with no files has Download off.
+- STYLE-GUIDE §6.3 sentence-menu pattern: one wrapping `text-sm` line; trigger `inline-flex min-h-9 items-center gap-0.5 rounded-base px-2 font-medium preset-tonal-surface pointer-coarse:min-h-11`, chosen label + 14px chevron, never gold or filled, `aria-label` *‹Question›: ‹choice›* (*For: Chat*, *Download to: KoboldCPP*, *Memory tier: 8 GB*); `Popover` + `Portal`, `bottom-start`, a `role="radiogroup"` named for the question, `role="radio"` `h-9` rows, checked `sidebar-row-active`, picking closes; a fixed or single part is plain `font-medium` text without chevron; disabled options stay pickable, dimmed, reason in `title`, and once chosen the reason shows on a muted `text-xs` line under the sentence (wraps, never truncated). The finder model page is an in-pane level: Back always drawn, Escape is Back, the footer holds its one filled primary.
+- NOMENCLATURE: new rows **finder model page** 🚧 (owns facts strip, files table, footer Download; not the quant picker or downloads list; `FinderModelPage.svelte`) and **`models:hubCard`** 🚧 (shape above; admin-only, gated, asked on page open, card cached 24 h from the same Hub read as sibling sizes, own limiter key; owned by `sockets/modelHubCard.ts` + `connections/hfGgufQuants.ts`); amend **model finder · Get a model** (~:710) and **quant picker** (:715, rows shared with the page's files table, which adds a fit bar); consider **fit bar**; labels and copy (facts labels; *Reading the repo from Hugging Face…*, *To ‹destination›*, *Download ‹quant›*; errors *Access denied. Only admin users can read Hugging Face model cards.*, *That is not a Hugging Face repo id.*, *Rate limited. Please wait a moment and try again.*, *Hugging Face would not answer for that repo.*); §25 ledger.
+
+## Noticed, not done
+
+- `QuantPicker.svelte` ~:184 `a11y_no_noninteractive_element_interactions` warning on its Escape `<section onkeydown>` — predates this lane.
+- Both Hub caches are unbounded `Map`s expiring by TTL on read (as the siblings cache already was).
+- With an ONNX destination ⋯ **Change memory tier** has no trigger on screen — predates this lane.
+- Pane-mode scroll restore shares bare mode's code; only bare mode has a DOM test.

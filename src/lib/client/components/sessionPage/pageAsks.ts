@@ -9,7 +9,7 @@
  * wrote a reply, listening only until it is answered.
  */
 import { declareInterest } from "$lib/client/sockets/interest.svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { createPendingAsks } from "$lib/client/components/sessionPage/requests/pendingAsks"
 import { runThatWrote } from "$lib/client/components/sessionPage/runInspection"
 import {
@@ -293,11 +293,20 @@ export function createPageAsks(d: PageAsksDeps) {
 		timeout: "the portrait did not change: the server did not answer"
 	})
 	// 🚧 Stats (★4): Give to…, each ask tokened.
-	const giveAsks = createPendingAsks<Sockets.State.GivePiece.Params, Sockets.State.GivePiece.Response>({
+	const giveAsks = createPendingAsks<
+		Sockets.State.GivePiece.Params,
+		Sockets.State.GivePiece.Response
+	>({
 		emit: (ask) => socket.emit("state:givePiece", ask),
 		listen: (onReply) => {
-			const refused = declareInterest<"state:givePiece:error">("state:givePiece:error", onReply)
-			const done = declareInterest<"state:givePiece">("state:givePiece", onReply)
+			const refused = declareInterest<"state:givePiece:error">(
+				"state:givePiece:error",
+				onReply
+			)
+			const done = declareInterest<"state:givePiece">(
+				"state:givePiece",
+				onReply
+			)
 			return () => {
 				done()
 				refused()
@@ -308,11 +317,20 @@ export function createPageAsks(d: PageAsksDeps) {
 	})
 
 	/** 🚧 A tie side shown or hidden (ties on the graph, screen 2), settled on its own reply. */
-	const tieShownAsks = createPendingAsks<Sockets.State.ShowTieSide.Params, Sockets.State.ShowTieSide.Response>({
+	const tieShownAsks = createPendingAsks<
+		Sockets.State.ShowTieSide.Params,
+		Sockets.State.ShowTieSide.Response
+	>({
 		emit: (ask) => socket.emit("state:showTieSide", ask),
 		listen: (onReply) => {
-			const refused = declareInterest<"state:showTieSide:error">("state:showTieSide:error", onReply)
-			const done = declareInterest<"state:showTieSide">("state:showTieSide", onReply)
+			const refused = declareInterest<"state:showTieSide:error">(
+				"state:showTieSide:error",
+				onReply
+			)
+			const done = declareInterest<"state:showTieSide">(
+				"state:showTieSide",
+				onReply
+			)
 			return () => {
 				done()
 				refused()
@@ -323,11 +341,20 @@ export function createPageAsks(d: PageAsksDeps) {
 	})
 
 	/** 🚧 An optional attribute carried or not (RF fix 8), settled on its own reply. */
-	const carryAsks = createPendingAsks<Sockets.State.SetCarry.Params, Sockets.State.SetCarry.Response & { error?: string }>({
+	const carryAsks = createPendingAsks<
+		Sockets.State.SetCarry.Params,
+		Sockets.State.SetCarry.Response & { error?: string }
+	>({
 		emit: (ask) => socket.emit("state:setCarry", ask),
 		listen: (onReply) => {
-			const refused = declareInterest<"state:setCarry:error">("state:setCarry:error", onReply as never)
-			const done = declareInterest<"state:setCarry">("state:setCarry", onReply)
+			const refused = declareInterest<"state:setCarry:error">(
+				"state:setCarry:error",
+				onReply as never
+			)
+			const done = declareInterest<"state:setCarry">(
+				"state:setCarry",
+				onReply
+			)
 			return () => {
 				done()
 				refused()
@@ -356,7 +383,8 @@ export function createPageAsks(d: PageAsksDeps) {
 			errorEvent: "entries:list:error",
 			fallbackError: "the history entries could not be read",
 			match: (data) =>
-				data.lorebookId === lorebookId && data.typeId === HISTORY_TYPE_ID
+				data.lorebookId === lorebookId &&
+				data.typeId === HISTORY_TYPE_ID
 		})
 		return reply.entryList as unknown as HistoryRow[]
 	}
@@ -398,6 +426,28 @@ export function createPageAsks(d: PageAsksDeps) {
 				(data as { characterId?: number })?.characterId === characterId,
 			fallbackError: "the character's images could not be read",
 			match: (data) => data.characterId === characterId
+		})
+		return reply.images
+	}
+	/**
+	 * 🚧 One card-less cast member's own gallery (`character-images` with
+	 * `{ castMemberId }`): the member's form replies are not scoped, so it
+	 * settles on the bare key and the reply naming that member.
+	 */
+	const readMemberGallery = async (
+		castMemberId: number
+	): Promise<Sockets.Media[]> => {
+		const reply = await awaitReply({
+			socket,
+			event: "characters:listGallery",
+			params: { castMemberId },
+			replyKey: interestKey("characters:listGallery"),
+			errorEvent: "characters:listGallery:error",
+			matchError: (data) =>
+				(data as { castMemberId?: number })?.castMemberId ===
+				castMemberId,
+			fallbackError: "that cast member's images could not be read",
+			match: (data) => data.castMemberId === castMemberId
 		})
 		return reply.images
 	}
@@ -472,7 +522,10 @@ export function createPageAsks(d: PageAsksDeps) {
 		return awaitReply({
 			socket,
 			event: "scenes:close",
-			params: { ...params, requestId } satisfies Sockets.Scenes.Close.Params,
+			params: {
+				...params,
+				requestId
+			} satisfies Sockets.Scenes.Close.Params,
 			replyKey: interestKey("scenes:close", sessionId),
 			errorEvent: "scenes:close:error",
 			matchError: (data) =>
@@ -530,7 +583,10 @@ export function createPageAsks(d: PageAsksDeps) {
 		const reply = await awaitReply({
 			socket,
 			event: "scenes:delete",
-			params: { id: sceneId, requestId } satisfies Sockets.Scenes.Delete.Params,
+			params: {
+				id: sceneId,
+				requestId
+			} satisfies Sockets.Scenes.Delete.Params,
 			errorEvent: "scenes:delete:error",
 			matchError: (data) =>
 				(data as { requestId?: string })?.requestId === requestId,
@@ -549,7 +605,10 @@ export function createPageAsks(d: PageAsksDeps) {
 		return awaitReply({
 			socket,
 			event: "scenes:merge",
-			params: { ...params, requestId } satisfies Sockets.Scenes.Merge.Params,
+			params: {
+				...params,
+				requestId
+			} satisfies Sockets.Scenes.Merge.Params,
 			replyKey: interestKey("scenes:merge", sessionId),
 			errorEvent: "scenes:merge:error",
 			matchError: (data) =>
@@ -616,21 +675,104 @@ export function createPageAsks(d: PageAsksDeps) {
 				fn()
 			}
 			// BARE: `sessions:routineLog` is not a scoped event; the session id is the filter.
-			const release = declareInterest<"sessions:routineLog">("sessions:routineLog", (res) => {
-				if (res?.sessionId !== ask.sessionId) return
-				finish(() => resolve(res))
-			})
+			const release = declareInterest<"sessions:routineLog">(
+				"sessions:routineLog",
+				(res) => {
+					if (res?.sessionId !== ask.sessionId) return
+					finish(() => resolve(res))
+				}
+			)
 			const timer = setTimeout(
-				() => finish(() => reject(new Error("the server did not answer"))),
+				() =>
+					finish(() =>
+						reject(new Error("the server did not answer"))
+					),
 				15_000
 			)
 			socket.emit("sessions:routineLog", ask)
 		})
 
+	/**
+	 * 🚧 The session's runs (`session-runs`, lay-R): one `pipelines:runs` for
+	 * this session, settled on the first reply that echoes it.
+	 */
+	const readSessionRuns = (
+		ask: Sockets.Pipelines.Runs.Params & {
+			sessionId: number
+			limit: number
+		}
+	): Promise<Sockets.Pipelines.Runs.Response> =>
+		new Promise((resolve, reject) => {
+			let done = false
+			const finish = (fn: () => void) => {
+				if (done) return
+				done = true
+				release()
+				clearTimeout(timer)
+				fn()
+			}
+			// BARE: pipelines:runs is not a scoped event; the echoed session id is the filter.
+			const release = declareInterest<"pipelines:runs">(
+				"pipelines:runs",
+				(res) => {
+					if (res?.sessionId !== ask.sessionId) return
+					finish(() => resolve(res))
+				}
+			)
+			const timer = setTimeout(
+				() =>
+					finish(() =>
+						reject(new Error("the server did not answer"))
+					),
+				15_000
+			)
+			socket.emit("pipelines:runs", ask)
+		})
+
+	/**
+	 * 🚧 One run's receipt (`session-run-steps`, lay-R): one `pipelines:run`,
+	 * settled on the reply naming the run; its `:error` rejects.
+	 */
+	const readRunReceipt = (
+		runId: string
+	): Promise<Sockets.Pipelines.Run.Response> =>
+		new Promise((resolve, reject) => {
+			let done = false
+			const finish = (fn: () => void) => {
+				if (done) return
+				done = true
+				release()
+				releaseError()
+				clearTimeout(timer)
+				fn()
+			}
+			// BARE: pipelines:run is not a scoped event; the run id is the filter.
+			const release = declareInterest<"pipelines:run">(
+				"pipelines:run",
+				(res) => {
+					if (res?.run?.runId !== runId) return
+					finish(() => resolve(res))
+				}
+			)
+			const releaseError = declareInterest<"pipelines:run:error">(
+				"pipelines:run:error",
+				(res) =>
+					finish(() => reject(new Error(res?.error ?? "no such run")))
+			)
+			const timer = setTimeout(
+				() =>
+					finish(() =>
+						reject(new Error("the server did not answer"))
+					),
+				15_000
+			)
+			socket.emit("pipelines:run", { runId })
+		})
+
 	// A widget's `set-sprite-set` owns its reply, refusal included (R77).
 	d.inbox.on("sessions:setSpriteSet", (msg) =>
 		settleSpriteSetReply(msg, spriteSetAsks, d.sessionId(), (title) =>
-			toaster.error({ title })
+			notify.error({ source: "socket:sessions:setSpriteSet", title })
 		)
 	)
 
@@ -641,14 +783,20 @@ export function createPageAsks(d: PageAsksDeps) {
 		readAuthorsNote,
 		writeAuthorsNote,
 		readStoryClock: tokenedAsk(storyClockAsks, "widget-story-clock"),
-		writeStoryClock: tokenedAsk(setStoryClockAsks, "widget-set-story-clock"),
+		writeStoryClock: tokenedAsk(
+			setStoryClockAsks,
+			"widget-set-story-clock"
+		),
 		readHistory,
 		readLines,
 		startNextEntry,
 		readSessionPlaces: tokenedAsk(placesAsks, "widget-places"),
 		readCharacterGallery,
+		readMemberGallery,
 		readStatTrail: tokenedAsk(statTrailAsks, "widget-stat-trail"),
 		readRoutineLog,
+		readSessionRuns,
+		readRunReceipt,
 		writeBackdrop: tokenedAsk(backdropAsks, "widget-set-backdrop"),
 		writeOwnerFace: tokenedAsk(ownerFaceAsks, "widget-set-owner-face"),
 		writeGive: tokenedAsk(giveAsks, "widget-give-piece"),

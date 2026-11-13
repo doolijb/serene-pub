@@ -1,9 +1,9 @@
 /**
  * `writeTurnOrder` (PLAN-turn-order §4.2, unit A4): the ONE write path for
- * stored turn order, annex owner `core`'s `turnOrder`. Under the annex lock
+ * stored turn order, the `sessions.turn_order` column. Under the annex lock
  * (`lockSessionAnnex`) it reads the stored `basedOnAt`, drops a write
  * whose `basedOnAt` is older than what is stored (`{ written: false,
- * reason: 'stale' }`), and otherwise sets the one key as raw SQL —
+ * reason: 'stale' }`), and otherwise sets the column as raw SQL —
  * so `updated_at` does not move, no `sessions:update` handler runs, and the
  * column is never read-modify-written.
  *
@@ -15,11 +15,21 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
-import { EMPTY_TURN_ORDER, readTurnOrder, type TurnOrderV1 } from "@serene-pub/sdk"
+import {
+	createTestDb,
+	createTestUser,
+	type TestDb
+} from "$lib/server/utils/testDb"
+import {
+	EMPTY_TURN_ORDER,
+	readTurnOrder,
+	type TurnOrderV1
+} from "@serene-pub/sdk"
 import { writeTurnOrder } from "./turnOrder"
-import { coreAnnexIn } from "./coreAnnex"
-import { withKeyedLock, withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
+import {
+	withKeyedLock,
+	withSessionGenerationLock
+} from "$lib/server/utils/sessionGenerationLock"
 
 let db: TestDb
 let userId: number
@@ -39,22 +49,35 @@ const order = (basedOnAt: number, tag: string): TurnOrderV1 => ({
 	strategy: "core:task/turn-round-robin@1"
 })
 
-async function makeSession(metadata: Record<string, unknown> = {}, annex: Record<string, unknown> = {}) {
+async function makeSession(
+	metadata: Record<string, unknown> = {},
+	annex: Record<string, unknown> = {},
+	columns: Partial<typeof schema.sessions.$inferInsert> = {}
+) {
 	const [session] = await db
 		.insert(schema.sessions)
-		.values({ userId, isGroup: false, metadata, annex })
+		.values({ userId, isGroup: false, metadata, annex, ...columns })
 		.returning()
 	return session
 }
 
 const rowOf = async (id: number) =>
-	(await db.select().from(schema.sessions).where(eq(schema.sessions.id, id)))[0]!
+	(
+		await db
+			.select()
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, id))
+	)[0]!
 
 describe("writeTurnOrder", () => {
-	it("writes the document under annex owner core's turnOrder and leaves every other key alone", async () => {
+	it("writes the turn_order column and leaves every other key alone", async () => {
 		const s = await makeSession(
 			{ keep: { nested: true }, other: 3 },
-			{ core: { turnTally: { v: 1, lanes: {} }, "retake-quietly": true }, acme: { x: 1 } }
+			{
+				core: { "retake-quietly": true },
+				acme: { x: 1 }
+			},
+			{ turnTally: { v: 1, lanes: {} } }
 		)
 		// Pin `updated_at` to a past instant so "unchanged" is a real
 		// assertion and not now equalling now.
@@ -62,17 +85,22 @@ describe("writeTurnOrder", () => {
 			sql`update ${schema.sessions} set updated_at = '2000-01-01T00:00:00Z' where id = ${s.id}`
 		)
 		const before = await rowOf(s.id)
-		expect(new Date(before.updatedAt as Date).toISOString()).toContain("2000-01-01")
+		expect(new Date(before.updatedAt as Date).toISOString()).toContain(
+			"2000-01-01"
+		)
 		const result = await writeTurnOrder(db, s.id, order(1000, "first"))
 		expect(result).toEqual({ written: true })
 		const after = await rowOf(s.id)
 		expect(after.metadata.keep).toEqual({ nested: true })
 		expect(after.metadata.other).toBe(3)
-		expect((after.metadata as Record<string, unknown>).turnOrder).toBeUndefined()
-		expect(coreAnnexIn(after.annex).turnTally).toEqual({ v: 1, lanes: {} })
-		expect(coreAnnexIn(after.annex)["retake-quietly"]).toBe(true)
+		expect(
+			(after.metadata as Record<string, unknown>).turnOrder
+		).toBeUndefined()
+		expect(after.turnTally).toEqual({ v: 1, lanes: {} })
+		expect((after.annex as any).core["retake-quietly"]).toBe(true)
+		expect((after.annex as any).core.turnOrder).toBeUndefined()
 		expect((after.annex as Record<string, unknown>).acme).toEqual({ x: 1 })
-		expect(readTurnOrder(coreAnnexIn(after.annex))).toMatchObject({
+		expect(readTurnOrder(after)).toMatchObject({
 			v: 1,
 			basedOnAt: 1000,
 			runId: "run-first",
@@ -84,19 +112,27 @@ describe("writeTurnOrder", () => {
 
 	it("an older write returns stale and changes nothing", async () => {
 		const s = await makeSession()
-		expect(await writeTurnOrder(db, s.id, order(2000, "newer"))).toEqual({ written: true })
+		expect(await writeTurnOrder(db, s.id, order(2000, "newer"))).toEqual({
+			written: true
+		})
 		expect(await writeTurnOrder(db, s.id, order(1000, "older"))).toEqual({
 			written: false,
 			reason: "stale"
 		})
-		expect(readTurnOrder(coreAnnexIn((await rowOf(s.id)).annex)).runId).toBe("run-newer")
+		expect(
+			readTurnOrder(await rowOf(s.id)).runId
+		).toBe("run-newer")
 	})
 
 	it("an equal basedOnAt is not stale — the later write wins", async () => {
 		const s = await makeSession()
 		await writeTurnOrder(db, s.id, order(3000, "a"))
-		expect(await writeTurnOrder(db, s.id, order(3000, "b"))).toEqual({ written: true })
-		expect(readTurnOrder(coreAnnexIn((await rowOf(s.id)).annex)).runId).toBe("run-b")
+		expect(await writeTurnOrder(db, s.id, order(3000, "b"))).toEqual({
+			written: true
+		})
+		expect(
+			readTurnOrder(await rowOf(s.id)).runId
+		).toBe("run-b")
 	})
 
 	it("concurrent writes keep the newer basedOnAt whichever lands first", async () => {
@@ -109,17 +145,21 @@ describe("writeTurnOrder", () => {
 		// Exactly the newest is stored; at least the newest was written, and
 		// anything that ran after it was told it was stale.
 		expect(results[0]).toEqual({ written: true })
-		const stored = readTurnOrder(coreAnnexIn((await rowOf(s.id)).annex))
+		const stored = readTurnOrder(await rowOf(s.id))
 		expect(stored.basedOnAt).toBe(5000)
 		expect(stored.runId).toBe("run-late")
 	})
 
 	it("a missing or invalid stored document never blocks a write, and a missing metadata column value is coalesced", async () => {
-		const s = await makeSession({}, { core: { turnOrder: "garbage" } })
-		expect(await writeTurnOrder(db, s.id, order(10, "over-garbage"))).toEqual({
+		const s = await makeSession({}, {}, { turnOrder: "garbage" as never })
+		expect(
+			await writeTurnOrder(db, s.id, order(10, "over-garbage"))
+		).toEqual({
 			written: true
 		})
-		expect(readTurnOrder(coreAnnexIn((await rowOf(s.id)).annex)).runId).toBe("run-over-garbage")
+		expect(
+			readTurnOrder(await rowOf(s.id)).runId
+		).toBe("run-over-garbage")
 	})
 
 	it("a session that does not exist is not written — and is not stale either", async () => {
@@ -170,7 +210,9 @@ describe("withKeyedLock", () => {
 				throw new Error("boom")
 			})
 		).rejects.toThrow("boom")
-		expect(await withKeyedLock("turnOrder", 3, async () => "next")).toBe("next")
+		expect(await withKeyedLock("turnOrder", 3, async () => "next")).toBe(
+			"next"
+		)
 	})
 
 	it("withSessionGenerationLock is the generation key", async () => {

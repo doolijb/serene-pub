@@ -15,15 +15,23 @@
  */
 import { untrack } from "svelte"
 import type { SessionCharactersV1 } from "@serene-pub/sdk"
+import { shownLineOf } from "../requests/showLine"
 import {
 	castIdsOf,
 	currentSpritesOf,
 	lastSpokeOf,
+	messagesAsOf,
 	projectCharacters,
+	speakerOf,
 	type CharactersSourceSession
 } from "./characters"
 
 const NO_CAST_FACES: Readonly<Record<number, number>> = Object.freeze({})
+const NO_CAST_NAMES: NonNullable<CharactersSourceSession["castNames"]> =
+	Object.freeze({})
+const NO_CAST_SPRITE_SETS: NonNullable<
+	CharactersSourceSession["castSpriteSets"]
+> = Object.freeze({})
 
 export interface CharactersSectionInputs {
 	/** The session the page is on. */
@@ -34,6 +42,11 @@ export interface CharactersSectionInputs {
 	voicedPersonaId(): number | null | undefined
 	/** The page's own pins. */
 	sceneImages(): { left: string | null; right: string | null }
+	/**
+	 * The line a Dialogue box's reader is on (a message id), or null; the
+	 * page's `show-line` answer for this session when not given.
+	 */
+	shownLine?(): number | null
 }
 
 /** The page's live section: read `current`. */
@@ -47,39 +60,60 @@ export function charactersSection(input: CharactersSectionInputs): {
 	const picks = $derived(input.session()?.spriteSetOverrides)
 	// One shared empty when the payload carries none, so a chunk keeps the reference.
 	const castFaces = $derived(input.session()?.castFaces ?? NO_CAST_FACES)
+	// The book member's own names (§0-D), the same shared empty when none.
+	const castNames = $derived(input.session()?.castNames ?? NO_CAST_NAMES)
+	// The member's own sprite sets (s27 S2), the same shared empty when none.
+	const castSpriteSets = $derived(
+		input.session()?.castSpriteSets ?? NO_CAST_SPRITE_SETS
+	)
+	const shownLine = $derived(
+		input.shownLine ? input.shownLine() : shownLineOf(input.sessionId())
+	)
+	// The log as of the shown line (the same array when none is shown).
+	const asOf = $derived(
+		messagesAsOf(input.session()?.sessionMessages ?? [], shownLine)
+	)
 	// Re-read on every chunk, but only a changed current sprite changes the key.
 	const sprites = $derived(
 		currentSpritesOf(
 			castIdsOf({ sessionCharacters: characters, sessionPersonas: personas }),
-			input.session()?.sessionMessages ?? []
+			asOf
 		)
 	)
 	const spritesKey = $derived(JSON.stringify([...sprites]))
 	const lastSpoke = $derived(
 		lastSpokeOf(
 			castIdsOf({ sessionCharacters: characters, sessionPersonas: personas }),
-			input.session()?.sessionMessages ?? []
+			asOf
 		)
 	)
 	const lastSpokeKey = $derived(JSON.stringify([...lastSpoke]))
+	// A primitive, so a chunk that moves no speaker leaves the section alone.
+	const speakerId = $derived(
+		speakerOf(input.session()?.sessionMessages ?? [], shownLine)
+	)
 	const current = $derived.by(() => {
 		const id = input.sessionId()
 		if (id == null || loadedId !== id) return undefined
 		void spritesKey
 		void lastSpokeKey
+		const speaker = speakerId
 		return projectCharacters({
 			session: {
 				userId: owner,
 				sessionCharacters: characters,
 				sessionPersonas: personas,
 				spriteSetOverrides: picks,
-				castFaces
+				castFaces,
+				castNames,
+				castSpriteSets
 			},
 			viewerUserId: input.viewerUserId(),
 			voicedPersonaId: input.voicedPersonaId(),
 			sceneImages: input.sceneImages(),
 			currentSprites: untrack(() => sprites),
-			lastSpoke: untrack(() => lastSpoke)
+			lastSpoke: untrack(() => lastSpoke),
+			speakerId: speaker
 		})
 	})
 	return {

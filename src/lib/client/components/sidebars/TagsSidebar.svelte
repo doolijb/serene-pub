@@ -4,7 +4,7 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { z } from "zod"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
 	import SessionListItem from "../listItems/SessionListItem.svelte"
@@ -427,7 +427,8 @@
 	}
 
 	function handleTagsCreate(msg: any) {
-		toaster.success({
+		notify.success({
+			source: "socket:tags:create",
 			title: "Tag created",
 			description: `Tag "${msg.tag.name}" created successfully.`
 		})
@@ -435,14 +436,16 @@
 
 	function handleTagsUpdate(msg: any) {
 		selectedTag = msg.tag
-		toaster.success({
+		notify.success({
+			source: "socket:tags:update",
 			title: "Tag updated",
 			description: `Tag "${msg.tag.name}" updated successfully.`
 		})
 	}
 
 	function handleTagsDelete(msg: any) {
-		toaster.success({
+		notify.success({
+			source: "socket:tags:delete",
 			title: "Tag deleted",
 			description: "Tag deleted successfully."
 		})
@@ -912,7 +915,7 @@
 						<button
 							type="button"
 							class="chip {tag.colorPreset ||
-								'preset-filled-primary-500'} text-sm transition-all duration-base {isSelected
+								'preset-filled-primary-500'} duration-base text-sm transition-all {isSelected
 								? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 								: ''}"
 							onclick={() => handleTagClick(tag)}

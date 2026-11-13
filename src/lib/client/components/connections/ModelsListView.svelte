@@ -4,12 +4,15 @@
 	 * The Models view's list column (plan 2026-10-11, the Models /
 	 * Connections split): "make my sessions work".
 	 *
-	 * Top to bottom: the toolbar (Get a model, the filter, the job scope, the
-	 * `⋯` with Add a model by name, Set up chat and the Defaults ledger),
-	 * then every model of every connection, one `ModelRow` each, FLAT and
-	 * sorted by name (`modelsList.ts`), its connection a chip on the row;
-	 * then the background remover (`MattingModelRow`). The downloads tray
-	 * sits at the foot while anything is arriving.
+	 * Top to bottom: the toolbar (Get a model, the filter with its job scope
+	 * and **Group by**, the `⋯` with Add a model by name, Set up chat and the
+	 * Defaults ledger, and a ↓ n button while anything is arriving), then
+	 * every model of every connection, one `ModelRow` each, in the groups
+	 * the remembered **Group by** makes (`groupModels`), its connection a
+	 * chip on the row. A service with over twelve models folds to one line
+	 * with **Show**; the background remover (`MattingModelRow`) sits in its
+	 * group. The downloads tray sits at the foot while anything is
+	 * arriving.
 	 *
 	 * Inventory only (DESIGN-image-generation §14, 2026-10-12): the status
 	 * strip, the jobs grid and the defaults ledger moved to the Loadouts
@@ -21,16 +24,18 @@
 	 * Connections index does. The dialogs it opens (the finder, Set up chat,
 	 * Add a model by name) are the caller's.
 	 *
-	 * The view decides no sentences and no filtering: `modelsList` and
-	 * `useInMenu` are pure and have their own tests.
+	 * The view decides no sentences and no filtering: `modelsList`,
+	 * `modelsGroupBy` and `useInMenu` are pure and have their own tests.
 	 */
-	import { getContext, type Snippet } from "svelte"
+	import { getContext, onMount, type Snippet } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 	import { useConnections } from "$lib/client/contexts/connections.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
+	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
 	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
@@ -43,15 +48,26 @@
 	import { localCatalogLine } from "./jobPicker"
 	import { manualAddAllowed } from "./modelManagement"
 	import {
+		cantUseNoteOf,
 		connectionChip,
 		filterModels,
 		flatModels,
+		groupModels,
+		isCantUse,
+		livesInOf,
 		MODEL_SCOPES,
 		modelsSummaryLine,
 		scopeCounts,
 		type FlatModel,
 		type ModelScope
 	} from "./modelsList"
+	import {
+		DEFAULT_MODELS_GROUP_BY,
+		MODELS_GROUP_BY,
+		readModelsGroupBy,
+		writeModelsGroupBy,
+		type ModelsGroupBy
+	} from "./modelsGroupBy"
 
 	type Row = Sockets.Connections.List.Row & { id: number }
 
@@ -62,9 +78,9 @@
 		onOpenModel: (connectionId: number, modelId: number) => void
 		/** The Set up chat stepper (U5): Runtime → Model → Done. */
 		onSetUpChat: () => void
-		/** The Get a model dialog, optionally scoped. */
+		/** Get a model (the view's detail pane), optionally scoped. */
 		onGetModel: (opts?: { capability?: string }) => void
-		/** The Add a model by name dialog. */
+		/** Add a model by name, opened in the detail pane. */
 		onAddByName: () => void
 		/** The Connections view — where a connection is added. */
 		onOpenConnections: () => void
@@ -81,6 +97,12 @@
 		useInGroupsOf?: (entry: FlatModel<Row>) => UseInGroup[] | null
 		/** A *Use in…* pick. */
 		onUseIn?: (entry: FlatModel<Row>, item: UseInItem) => void
+		/**
+		 * Which (connection, model) pairs sit in a loadout (`loadoutModelKeys`),
+		 * null until the loadouts answer — services then fold with no
+		 * exemptions and the fold line omits the count.
+		 */
+		inLoadout?: ReadonlySet<string> | null
 		/** Seeds the job scope (a `MODEL_SCOPES` id). */
 		initialScope?: ModelScope
 		/**
@@ -101,6 +123,7 @@
 		onOpenLoadouts,
 		useInGroupsOf,
 		onUseIn,
+		inLoadout = null,
 		initialScope = "all",
 		frame
 	}: Props = $props()
@@ -119,13 +142,37 @@
 	let scopeOpen = $state(false)
 
 	const all = $derived(flatModels(rows))
-	const visible = $derived(filterModels(all, { query, scope }))
-	const counts = $derived(scopeCounts(all))
+	const visible = $derived(filterModels(all, { query, scope, inLoadout }))
+	const counts = $derived(scopeCounts(all, inLoadout))
+
+	/** The remembered **Group by**; read on mount, as `localStorage` is not there in SSR. */
+	let groupBy = $state<ModelsGroupBy>(DEFAULT_MODELS_GROUP_BY)
+	onMount(() => (groupBy = readModelsGroupBy()))
+	/** Services opened with **Show**: per service, across groupings, reset each visit. */
+	const unfolded = new SvelteSet<number>()
+	const groups = $derived(
+		groupModels(visible, {
+			groupBy,
+			connections: rows,
+			inLoadout,
+			unfolded,
+			folding: !query.trim(),
+			remover: isAdmin
+		})
+	)
+	/** A DOM id from a group key: every non-alphanumeric run becomes `-`. */
+	function domId(...parts: (string | number)[]): string {
+		return `models-${parts.join("-").replace(/[^A-Za-z0-9]+/g, "-")}`
+	}
 	const scopeLabel = $derived(
 		MODEL_SCOPES.find((s) => s.id === scope)?.label ?? "All"
 	)
 	const hasNoMatches = $derived(
 		!isLoading && all.length > 0 && visible.length === 0
+	)
+	/** The groups are on screen; where they are not, the remover stands alone. */
+	const groupsDrawn = $derived(
+		!isLoading && rows.length > 0 && all.length > 0 && !hasNoMatches
 	)
 	/** Connections a model may be added to by name (`manualAddAllowed`). */
 	const addByNameTargets = $derived(
@@ -134,6 +181,11 @@
 
 	function pickScope(next: ModelScope) {
 		scopeOverride = next
+		scopeOpen = false
+	}
+	function pickGroupBy(next: ModelsGroupBy) {
+		groupBy = next
+		writeModelsGroupBy(next)
 		scopeOpen = false
 	}
 	function clearFilters() {
@@ -255,9 +307,38 @@
 									{option.label}
 								</span>
 								<span
-									class="text-surface-600-400 shrink-0 text-meta"
+									class="text-surface-600-400 text-meta shrink-0"
 								>
 									{counts[option.id]}
+								</span>
+							</button>
+						{/each}
+					</div>
+					<div class="border-surface-200-800 my-1 border-t"></div>
+					<p
+						id="models-group-by-label"
+						class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs"
+					>
+						Group by
+					</p>
+					<div
+						class="flex flex-col gap-0.5"
+						role="radiogroup"
+						aria-labelledby="models-group-by-label"
+					>
+						{#each MODELS_GROUP_BY as option (option.value)}
+							{@const checked = groupBy === option.value}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={checked}
+								class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+									? 'sidebar-row-active'
+									: 'hover:bg-surface-200-800'}"
+								onclick={() => pickGroupBy(option.value)}
+							>
+								<span class="min-w-0 flex-1 truncate">
+									{option.label}
 								</span>
 							</button>
 						{/each}
@@ -268,11 +349,27 @@
 	</Popover>
 {/snippet}
 
+{#snippet downloadsButton()}
+	<!-- What is arriving, opened as the tray's own list. -->
+	<button
+		type="button"
+		class="btn preset-tonal-surface h-10 min-w-10 shrink-0 gap-1 px-2.5"
+		title="Downloads"
+		aria-label="Downloads"
+		aria-expanded={trayOpen}
+		onclick={() => (trayOpen = true)}
+	>
+		<Icons.Download size={16} aria-hidden="true" />
+		<span class="text-sm tabular-nums">{trayCount}</span>
+	</button>
+{/snippet}
+
 {#snippet listToolbar()}
 	<ViewToolbar
 		label="Models"
 		filter={all.length > 0 ? findFilter : undefined}
 		filterActions={all.length > 0 ? findActions : undefined}
+		actions={trayCount > 0 ? downloadsButton : undefined}
 		menuItems={[
 			{
 				label: "Add a model by name",
@@ -313,7 +410,10 @@
 {/snippet}
 
 {#snippet chip(label: string, clear: () => void)}
-	<Badge size="md" class="text-surface-700-300 flex min-w-0 items-center gap-1">
+	<Badge
+		size="md"
+		class="text-surface-700-300 flex min-w-0 items-center gap-1"
+	>
 		<span class="min-w-0 truncate">{label}</span>
 		<button
 			type="button"
@@ -333,82 +433,135 @@
 	<div class="flex min-h-full flex-col gap-3">
 		{#if isLoading}
 			<LoadingState message="Loading models…" showMessage />
-		{:else}
-			{#if !rows.length}
-				<!-- Nothing is connected. Set up chat runs KoboldCPP here;
+		{:else if !rows.length}
+			<!-- Nothing is connected. Set up chat runs KoboldCPP here;
 				     everything else starts in the Connections view. -->
-				<EmptyState
-					icon={Icons.Boxes}
-					message="No models yet."
-					ctaLabel="Set up chat"
-					onCta={onSetUpChat}
-				/>
-				<p class="text-surface-600-400 text-center text-xs">
-					Or add a connection to a service or a server you run.
-					<button
-						type="button"
-						class="anchor"
-						onclick={onOpenConnections}
-					>
-						Add a connection
-					</button>
-				</p>
-			{:else if !all.length}
-				<EmptyState icon={Icons.Boxes} message="No models yet." />
-			{:else if hasNoMatches}
-				<EmptyState
-					icon={Icons.SearchX}
-					message="Nothing matches."
-					ctaLabel="Clear search and filter"
-					onCta={clearFilters}
-				/>
-			{:else}
-				<!-- The models, flat: the filter box counts them and the
-				     chip says the scope, so no heading of its own. -->
-				<section class="flex flex-col gap-1" aria-label="Models">
-					<p class="sr-only" aria-live="polite">
-						{modelsSummaryLine(visible.length, scope)}
-					</p>
-					<div class="flex flex-col gap-1" role="list">
-						{#each visible as entry (`${entry.connectionId}:${entry.model.id}`)}
-							{@const useInGroups = useInGroupsOf?.(entry) ?? null}
-							<!-- The row's *Use in…*: the loadouts of the jobs
-							     this model can do. -->
-							{#snippet useInMenu()}
-								<UseInMenu
-									groups={useInGroups ?? []}
-									modelName={entry.displayName}
-									onPick={(item) => onUseIn?.(entry, item)}
-									{onOpenLoadouts}
-								/>
-							{/snippet}
-							<div role="listitem">
-								<ModelRow
-									model={entry.model}
-									chip={connectionChip(entry)}
-									defaultFor={defaultForOf(entry)}
-									note={noteOf(entry)}
-									canUse={canUse(entry)}
-									useLabel={ctx.useLabelOf(entry.model)}
-									selected={selected?.connectionId ===
-										entry.connectionId &&
-										selected?.modelId === entry.model.id}
-									onOpen={() =>
-										onOpenModel(
-											entry.connectionId,
-											entry.model.id
-										)}
-									onUse={() => use(entry)}
-									useMenu={useInGroups ? useInMenu : undefined}
-								/>
-							</div>
-						{/each}
-					</div>
+			<EmptyState
+				icon={Icons.Boxes}
+				message="No models yet."
+				ctaLabel="Set up chat"
+				onCta={onSetUpChat}
+			/>
+			<p class="text-surface-600-400 text-center text-xs">
+				Or add a connection to a service or a server you run.
+				<button
+					type="button"
+					class="anchor"
+					onclick={onOpenConnections}
+				>
+					Add a connection
+				</button>
+			</p>
+		{:else if !all.length}
+			<EmptyState icon={Icons.Boxes} message="No models yet." />
+		{:else if hasNoMatches}
+			<EmptyState
+				icon={Icons.SearchX}
+				message="Nothing matches."
+				ctaLabel="Clear search and filter"
+				onCta={clearFilters}
+			/>
+		{:else}
+			<!-- The groups `groupModels` made: the filter box counts the rows
+			     and the chip says the scope. -->
+			<p class="sr-only" aria-live="polite">
+				{modelsSummaryLine(visible.length, scope)}
+			</p>
+			{#each groups as group (group.key)}
+				{@const headingId = domId(group.key, "label")}
+				<section
+					class="flex flex-col gap-1"
+					aria-labelledby={headingId}
+				>
+					<ListGroupLabel
+						id={headingId}
+						label={group.label}
+						trailing={group.sizeLabel ?? undefined}
+					/>
+					{#if group.rows.length}
+						<div class="flex flex-col gap-1" role="list">
+							{#each group.rows as entry (`${entry.connectionId}:${entry.model.id}`)}
+								{@const useInGroups =
+									useInGroupsOf?.(entry) ?? null}
+								<!-- The row's *Use in…*: the loadouts of the jobs
+								     this model can do. -->
+								{#snippet useInMenu()}
+									<UseInMenu
+										groups={useInGroups ?? []}
+										modelName={entry.displayName}
+										onPick={(item) =>
+											onUseIn?.(entry, item)}
+										{onOpenLoadouts}
+									/>
+								{/snippet}
+								<div role="listitem">
+									<ModelRow
+										model={entry.model}
+										chip={connectionChip(entry)}
+										defaultFor={defaultForOf(entry)}
+										note={(isCantUse(entry)
+											? cantUseNoteOf(entry)
+											: null) ?? noteOf(entry)}
+										metaTail={livesInOf(entry)}
+										canUse={canUse(entry)}
+										useLabel={ctx.useLabelOf(entry.model)}
+										selected={selected?.connectionId ===
+											entry.connectionId &&
+											selected?.modelId ===
+												entry.model.id}
+										onOpen={() =>
+											onOpenModel(
+												entry.connectionId,
+												entry.model.id
+											)}
+										onUse={() => use(entry)}
+										useMenu={useInGroups
+											? useInMenu
+											: undefined}
+									/>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					<!-- A folded service's line sits after the list, never in
+					     it: it is not a model, so not a listitem. -->
+					{#each group.folds as fold (fold.connectionId)}
+						{@const textId = domId(
+							group.key,
+							fold.connectionId,
+							"fold"
+						)}
+						<div
+							class="text-surface-600-400 flex h-9 min-w-0 items-center gap-2 px-3 text-xs"
+						>
+							<span class="min-w-0 flex-1 truncate" id={textId}>
+								{#if fold.title}
+									<span
+										class="text-surface-950-50 font-medium"
+									>
+										{fold.title}
+									</span>
+								{/if}
+								{fold.text}
+							</span>
+							<button
+								type="button"
+								class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 shrink-0 text-xs"
+								aria-describedby={textId}
+								onclick={() => unfolded.add(fold.connectionId)}
+							>
+								Show
+							</button>
+						</div>
+					{/each}
+					{#if group.remover}
+						<MattingModelRow inGroup />
+					{/if}
 				</section>
-			{/if}
+			{/each}
 		{/if}
 
-		{#if isAdmin && !isLoading}
+		{#if isAdmin && !isLoading && !groupsDrawn}
 			<MattingModelRow />
 		{/if}
 

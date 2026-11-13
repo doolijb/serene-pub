@@ -17,7 +17,7 @@
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import RetrievalExplanation from "./RetrievalExplanation.svelte"
 
 	interface Props {
@@ -37,7 +37,7 @@
 	const onExplain = (res: Sockets.Pipelines.RunExplain.Response) => {
 		loading = false
 		if (res.error) {
-			toaster.error({ title: res.error })
+			notify.error({ title: res.error })
 			return
 		}
 		// A shared channel and the receipt above can move: an answer for the
@@ -50,7 +50,11 @@
 	/** The read failed: stop waiting, and show the sentence the server wrote. */
 	const showExplainRefusal = (res: { error?: string }) => {
 		loading = false
-		if (res?.error) toaster.error({ title: res.error })
+		if (res?.error)
+			notify.error({
+				source: "socket:pipelines:runExplain:error",
+				title: res.error
+			})
 	}
 
 	// Never gated (plan ruling 2 — an error is not an output to skip), but the

@@ -69,7 +69,11 @@ class FakeAdapter {
 			throw new Error("the model fell over")
 		}
 		return {
-			compiledPrompt: { prompt: "p", messages: undefined, meta: {} as any },
+			compiledPrompt: {
+				prompt: "p",
+				messages: undefined,
+				meta: {} as any
+			},
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				onContent(REPLY)
@@ -93,7 +97,9 @@ const fakeSocket = (uid: number) =>
 const emit = (_event: string, _data: any) => {}
 
 const settle = async () =>
-	(await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+	(
+		await import("$lib/server/pipelines/runtime/sessionEvents")
+	).settleSessionEvents()
 
 const completedOf = async (sessionId: number) => {
 	await settle()
@@ -161,10 +167,14 @@ const userRows = async (sessionId: number) =>
 	).filter((m) => m.role === "user")
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-offer-message-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-offer-message-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db)
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -177,12 +187,24 @@ beforeAll(async () => {
 	characterId = character.id
 	const [persona] = await db
 		.insert(schema.characters)
-		.values({ userId, name: "Bram", description: "", isPersona: true, aliases: [] } as any)
+		.values({
+			userId,
+			name: "Bram",
+			description: "",
+			isPersona: true,
+			aliases: []
+		} as any)
 		.returning()
 	personaId = persona.id
 	const [others] = await db
 		.insert(schema.characters)
-		.values({ userId: otherUserId, name: "Cass", description: "", isPersona: true, aliases: [] } as any)
+		.values({
+			userId: otherUserId,
+			name: "Cass",
+			description: "",
+			isPersona: true,
+			aliases: []
+		} as any)
 		.returning()
 	othersPersonaId = others.id
 
@@ -190,18 +212,30 @@ beforeAll(async () => {
 		.insert(schema.connections)
 		.values({ name: "Text", type: "koboldcpp", baseUrl: "http://text" })
 		.returning()
-	const { ensureConnectionModel } = await import("$lib/server/connections/models")
-	const modelId = (await ensureConnectionModel(db, textConn.id, "default-7b"))!.id
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const modelId = (await ensureConnectionModel(
+		db,
+		textConn.id,
+		"default-7b"
+	))!.id
 	const [sampling] = await db
 		.insert(schema.samplingConfigs)
 		.values({
 			name: "Default",
 			isImmutable: false,
-			values: { contextTokens: 8192, responseTokens: 200, temperature: 0.5 },
+			values: {
+				contextTokens: 8192,
+				responseTokens: 200,
+				temperature: 0.5
+			},
 			enabled: ["contextTokens", "responseTokens", "temperature"]
 		} as any)
 		.returning()
-	const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: textConn.id,
 		connectionModelId: modelId,
@@ -219,9 +253,11 @@ describe("a person's message, saved through the pipeline", () => {
 		const presets = await db.select().from(schema.sessionPresets)
 		expect(presets.length).toBeGreaterThan(0)
 		for (const p of presets)
-			expect((p.bindings as any)?.[sessionEvents.messageOffered]).toEqual({
-				spec: SAVE_MESSAGE_SPEC_ID
-			})
+			expect((p.bindings as any)?.[sessionEvents.messageOffered]).toEqual(
+				{
+					spec: SAVE_MESSAGE_SPEC_ID
+				}
+			)
 		const { resolveSessionEventSpec } = await import(
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
@@ -231,15 +267,24 @@ describe("a person's message, saved through the pipeline", () => {
 			.values({ userId, isGroup: false, name: "bare" })
 			.returning()
 		expect(
-			await resolveSessionEventSpec(db, "core:genre/story", sessionEvents.messageOffered, {
-				sessionId: bare.id
-			})
+			await resolveSessionEventSpec(
+				db,
+				"core:genre/story",
+				sessionEvents.messageOffered,
+				{
+					sessionId: bare.id
+				}
+			)
 		).toBe(SAVE_MESSAGE_SPEC_ID)
 	})
 
 	it("the row lands, written by the save run, under the person's cause — one message-completed, and the reply still follows", async () => {
 		const sessionId = await makeSession("send")
-		const res = await send(userId, { sessionId, personaId: null, content: "Who goes there?" })
+		const res = await send(userId, {
+			sessionId,
+			personaId: null,
+			content: "Who goes there?"
+		})
 		expect(res.refused).toBeUndefined()
 		expect(res.accepted).toBe(true)
 		expect(typeof res.runId).toBe("string")
@@ -250,7 +295,9 @@ describe("a person's message, saved through the pipeline", () => {
 		expect(row.personaId).toBeNull()
 
 		// The row's run is the save, and the save is core's.
-		const { runForMessage } = await import("$lib/server/pipelines/runtime/receipts")
+		const { runForMessage } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		const run: any = await runForMessage(db, row.id)
 		expect(run?.run.runId).toBe(res.runId)
 		const [runRow] = await db
@@ -260,10 +307,16 @@ describe("a person's message, saved through the pipeline", () => {
 		expect(JSON.stringify(runRow)).toContain("core:spec/save-message")
 
 		const completed = await completedOf(sessionId)
-		const byUser = completed.filter((c) => (c.payload as any).cause?.kind === "user")
+		const byUser = completed.filter(
+			(c) => (c.payload as any).cause?.kind === "user"
+		)
 		expect(byUser).toHaveLength(1)
 		expect(byUser[0]!.messageId).toBe(row.id)
-		expect((byUser[0]!.payload as any).cause).toEqual({ kind: "user", userId, runId: res.runId })
+		expect((byUser[0]!.payload as any).cause).toEqual({
+			kind: "user",
+			userId,
+			runId: res.runId
+		})
 
 		// Auto-advance answered the send as it always did: the reply landed.
 		const replies = (
@@ -277,7 +330,11 @@ describe("a person's message, saved through the pipeline", () => {
 
 	it("a persona the person owns is the row's persona; another person's is refused, and nothing is written", async () => {
 		const sessionId = await makeSession("persona")
-		const ok = await send(userId, { sessionId, personaId, content: "As Bram." })
+		const ok = await send(userId, {
+			sessionId,
+			personaId,
+			content: "As Bram."
+		})
 		expect(ok.accepted).toBe(true)
 		expect(ok.sessionMessage.personaId).toBe(personaId)
 		expect(ok.sessionMessage.characterId).toBeNull()
@@ -285,7 +342,11 @@ describe("a person's message, saved through the pipeline", () => {
 		await settle()
 
 		const before = (await userRows(sessionId)).length
-		const refused = await send(userId, { sessionId, personaId: othersPersonaId, content: "As Cass." })
+		const refused = await send(userId, {
+			sessionId,
+			personaId: othersPersonaId,
+			content: "As Cass."
+		})
 		expect(refused.accepted).toBeUndefined()
 		expect(refused.refused).toMatch(/personas you own/)
 		expect(await userRows(sessionId)).toHaveLength(before)
@@ -295,7 +356,9 @@ describe("a person's message, saved through the pipeline", () => {
 		const { compile, spec } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
 		const { storyGenre } = await import("@serene-pub/core-catalog")
-		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const { saveDocument } = await import(
+			"$lib/server/pipelines/boot/store"
+		)
 		// A save that writes as somebody else: the host refuses a person's
 		// message spoken as anyone but the person — a refusal a genre's save meets.
 		const doc = compile(
@@ -314,7 +377,10 @@ describe("a person's message, saved through the pipeline", () => {
 				)
 				.build()
 		)
-		await saveDocument(db as never, doc as never, { name: "Refusing save", publish: true })
+		await saveDocument(db as never, doc as never, {
+			name: "Refusing save",
+			publish: true
+		})
 		const base = await chatPreset()
 		const [preset] = await db
 			.insert(schema.sessionPresets)
@@ -323,7 +389,9 @@ describe("a person's message, saved through the pipeline", () => {
 				genreId: "core:genre/story",
 				bindings: {
 					...(base.bindings as object),
-					[sessionEvents.messageOffered]: { spec: "test:spec/chat-refusing-save" }
+					[sessionEvents.messageOffered]: {
+						spec: "test:spec/chat-refusing-save"
+					}
 				}
 			} as any)
 			.returning()
@@ -331,24 +399,40 @@ describe("a person's message, saved through the pipeline", () => {
 		const { writeLegacyPresetChanges } = await import(
 			"$lib/server/pipelines/registrations/presetRows"
 		)
-		await writeLegacyPresetChanges(db as any, { id: preset.id, genreId: "core:genre/story" }, {
-			bindings: { [sessionEvents.messageOffered]: { spec: "test:spec/chat-refusing-save" } }
-		})
+		await writeLegacyPresetChanges(
+			db as any,
+			{ id: preset.id, genreId: "core:genre/story" },
+			{
+				bindings: {
+					[sessionEvents.messageOffered]: {
+						spec: "test:spec/chat-refusing-save"
+					}
+				}
+			}
+		)
 		const sessionId = await makeSession("refusing", preset.id)
 
-		const res = await send(userId, { sessionId, personaId: null, content: "Keep me." })
+		const res = await send(userId, {
+			sessionId,
+			personaId: null,
+			content: "Keep me."
+		})
 		expect(res.accepted).toBeUndefined()
 		expect(res.refused).toMatch(/as the person who sent it/)
 		expect(typeof res.runId).toBe("string")
 		expect(await userRows(sessionId)).toHaveLength(0)
 		expect(
-			(await completedOf(sessionId)).filter((c) => (c.payload as any).cause?.kind === "user")
+			(await completedOf(sessionId)).filter(
+				(c) => (c.payload as any).cause?.kind === "user"
+			)
 		).toHaveLength(0)
 	})
 
 	it("a save that never answers is stopped and refused — or, if its row landed after all, accepted", async () => {
 		const sessionId = await makeSession("slow")
-		const { offerMessage } = await import("$lib/server/sessions/offerMessage")
+		const { offerMessage } = await import(
+			"$lib/server/sessions/offerMessage"
+		)
 		const quick = await offerMessage(db as never, {
 			sessionId,
 			userId,
@@ -368,7 +452,9 @@ describe("a person's message, saved through the pipeline", () => {
 			timeoutMs: 0
 		})
 		// Either answer is honest; what may never happen is a refusal with a row.
-		const rows = (await userRows(sessionId)).filter((m) => m.content === "Too late?")
+		const rows = (await userRows(sessionId)).filter(
+			(m) => m.content === "Too late?"
+		)
 		if ("refused" in slow) expect(rows).toHaveLength(0)
 		else expect(rows).toHaveLength(1)
 		await settle()

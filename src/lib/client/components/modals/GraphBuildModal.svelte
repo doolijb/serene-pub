@@ -6,7 +6,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { getContext, onDestroy, untrack } from "svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 	import LoreWritesOffNotice from "$lib/client/lorebooks/LoreWritesOffNotice.svelte"
 	import { useLoreWritesOff } from "$lib/client/lorebooks/loreWritesOff.svelte"
@@ -260,7 +260,7 @@
 	const loreWrites = useLoreWritesOff(() => lorebookId)
 	let canApply = $derived(
 		!loreWrites.off &&
-		!unnamedNode &&
+			!unnamedNode &&
 			(activeNodes.length > 0 ||
 				activeNodeUpdates.length > 0 ||
 				activeRels.length > 0 ||
@@ -299,7 +299,9 @@
 	 */
 	let shownMode = $derived(build?.mode ?? mode)
 	let modalTitle = $derived(
-		shownMode === "extend" ? "Extend narrative graph" : "Build narrative graph"
+		shownMode === "extend"
+			? "Extend narrative graph"
+			: "Build narrative graph"
 	)
 	let runningTitle = $derived(
 		shownMode === "extend"
@@ -473,7 +475,8 @@
 		const { counts, activityId } = pendingApply
 		pendingApply = null
 		cleanupApplyProposal()
-		toaster.success({
+		notify.success({
+			source: "socket:narrativeGraph:applyProposal",
 			title: "Graph applied",
 			description: [`Saved ${counts}.`, ...(msg.applyNotes ?? [])].join(
 				" "
@@ -608,7 +611,11 @@
 
 {#snippet confirmBlock()}
 	{#if loreWrites.off}
-		<LoreWritesOffNotice by={loreWrites.by} {lorebookId} onOpenSettings={() => onOpenChange({ open: false })} />
+		<LoreWritesOffNotice
+			by={loreWrites.by}
+			{lorebookId}
+			onOpenSettings={() => onOpenChange({ open: false })}
+		/>
 	{/if}
 	<p class="text-surface-700-300 mt-1 text-sm">
 		{mode === "extend"
@@ -738,9 +745,9 @@
 						This will delete the
 						<strong>{existingCastToCastCount}</strong>
 						link{existingCastToCastCount === 1 ? "" : "s"} between cast
-						members in this book, on main and on every branch, and
-						re-create them on main from your scenes, so any drawn by
-						hand or on a branch do not come back.
+						members in this book, on main and on every branch, and re-create
+						them on main from your scenes, so any drawn by hand or on
+						a branch do not come back.
 					{:else}
 						This will re-create the links between cast members from
 						your scenes.
@@ -774,9 +781,7 @@
 	{/if}
 	{#if progressCurrentPair}
 		<div class="mt-3 space-y-1">
-			<p
-				class="text-surface-600-400 text-xs font-semibold"
-			>
+			<p class="text-surface-600-400 text-xs font-semibold">
 				Extracting perspective
 			</p>
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
@@ -798,7 +803,13 @@
 {#snippet reviewBlock()}
 	{#if loreWrites.off}
 		<!-- A review reopened after the setting moved: it cannot apply. -->
-		<div class="mb-4"><LoreWritesOffNotice by={loreWrites.by} {lorebookId} onOpenSettings={() => onOpenChange({ open: false })} /></div>
+		<div class="mb-4">
+			<LoreWritesOffNotice
+				by={loreWrites.by}
+				{lorebookId}
+				onOpenSettings={() => onOpenChange({ open: false })}
+			/>
+		</div>
 	{/if}
 	<p class="text-surface-700-300 -mt-1 mb-4 text-sm">
 		{activeNodes.length} new · {activeNodeUpdates.length} updated · {activeRels.length}
@@ -835,9 +846,7 @@
 	<!-- Node updates to existing characters -->
 	{#if proposalNodeUpdates.length > 0}
 		<section class="mb-4 space-y-2">
-			<h3
-				class="text-surface-600-400 text-xs font-semibold"
-			>
+			<h3 class="text-surface-600-400 text-xs font-semibold">
 				Updates to existing characters
 			</h3>
 			{#each proposalNodeUpdates as update, i}
@@ -902,11 +911,7 @@
 
 	<!-- Nodes -->
 	<section class="mb-4 space-y-2">
-		<h3
-			class="text-surface-600-400 text-xs font-semibold"
-		>
-			Nodes
-		</h3>
+		<h3 class="text-surface-600-400 text-xs font-semibold">Nodes</h3>
 		{#if proposalNodes.length === 0}
 			<p class="text-surface-700-300 text-sm italic">
 				No new nodes extracted.
@@ -965,7 +970,9 @@
 						</span>
 					{/if}
 					<button
-						aria-label={node._deleted ? "Restore node" : "Remove node"}
+						aria-label={node._deleted
+							? "Restore node"
+							: "Remove node"}
 						class="text-surface-600-400 hover:text-error-600-400 ml-1 shrink-0"
 						onclick={(e) => {
 							e.stopPropagation()
@@ -1015,7 +1022,10 @@
 								label="State"
 								labelHidden
 								class="text-sm"
-								options={NODE_STATES.map((s) => ({ value: s, label: s }))}
+								options={NODE_STATES.map((s) => ({
+									value: s,
+									label: s
+								}))}
 								bind:value={proposalNodes[i].nodeState}
 							/>
 						</div>
@@ -1043,9 +1053,7 @@
 
 	<!-- Relationships -->
 	<section class="mb-4 space-y-2">
-		<h3
-			class="text-surface-600-400 text-xs font-semibold"
-		>
+		<h3 class="text-surface-600-400 text-xs font-semibold">
 			Relationships
 		</h3>
 		{#if proposalRels.length === 0}
@@ -1137,11 +1145,14 @@
 						</span>
 					{:else}
 						<button
-							aria-label={rel._deleted ? "Restore relationship" : "Remove relationship"}
+							aria-label={rel._deleted
+								? "Restore relationship"
+								: "Remove relationship"}
 							class="text-surface-600-400 hover:text-error-600-400 ml-1 shrink-0"
 							onclick={(e) => {
 								e.stopPropagation()
-								proposalRels[i]._deleted = !proposalRels[i]._deleted
+								proposalRels[i]._deleted =
+									!proposalRels[i]._deleted
 							}}
 							title={rel._deleted ? "Restore" : "Remove"}
 						>
@@ -1190,7 +1201,10 @@
 									label="Status"
 									labelHidden
 									class="text-sm"
-									options={RELATIONSHIP_STATUSES.map((s) => ({ value: s, label: s }))}
+									options={RELATIONSHIP_STATUSES.map((s) => ({
+										value: s,
+										label: s
+									}))}
 									bind:value={proposalRels[i].status}
 								/>
 							</div>
@@ -1204,7 +1218,9 @@
 									label="Visibility"
 									labelHidden
 									class="text-sm"
-									options={RELATIONSHIP_VISIBILITIES.map((v) => ({ value: v, label: v }))}
+									options={RELATIONSHIP_VISIBILITIES.map(
+										(v) => ({ value: v, label: v })
+									)}
 									bind:value={proposalRels[i].visibility}
 								/>
 							</div>
@@ -1384,7 +1400,9 @@
 			lorebookId,
 			mode: shownMode,
 			resume: true,
-			...(shownMode === "extend" && sessionId != null ? { sessionId } : {}),
+			...(shownMode === "extend" && sessionId != null
+				? { sessionId }
+				: {}),
 			...(shownMode === "extend" && sessionId == null && branchId != null
 				? { branchId }
 				: {})

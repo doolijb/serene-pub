@@ -14,7 +14,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
 		AdminBulkAction,
@@ -44,8 +44,19 @@
 	})
 
 	const columns: AdminChangelistColumn<Row>[] = [
-		{ key: "name", label: "Genre", primary: true, text: (r) => r.name, sortValue: (r) => r.name },
-		{ key: "family", label: "Family", text: (r) => r.family, sortValue: (r) => r.family },
+		{
+			key: "name",
+			label: "Genre",
+			primary: true,
+			text: (r) => r.name,
+			sortValue: (r) => r.name
+		},
+		{
+			key: "family",
+			label: "Family",
+			text: (r) => r.family,
+			sortValue: (r) => r.family
+		},
 		{
 			key: "presets",
 			label: "Presets",
@@ -81,15 +92,29 @@
 	]
 
 	function setEnabled(selected: Row[], enabled: boolean) {
-		const slugs = selected.filter((r) => r.enabled !== enabled).map((r) => r.slug)
-		for (const slug of slugs) socket.emit("sessionGenres:update", { slug, enabled })
-		toaster.success({
+		const slugs = selected
+			.filter((r) => r.enabled !== enabled)
+			.map((r) => r.slug)
+		for (const slug of slugs)
+			socket.emit("sessionGenres:update", { slug, enabled })
+		notify.success({
+			silent: true,
 			title: `${slugs.length} ${slugs.length === 1 ? "genre" : "genres"} ${enabled ? "made available" : "hidden"}`
 		})
 	}
 	const bulkActions: AdminBulkAction<Row>[] = [
-		{ key: "enable", label: "Make selected genres available", icon: Icons.Eye, run: (s) => setEnabled(s, true) },
-		{ key: "hide", label: "Hide selected genres", icon: Icons.EyeOff, run: (s) => setEnabled(s, false) }
+		{
+			key: "enable",
+			label: "Make selected genres available",
+			icon: Icons.Eye,
+			run: (s) => setEnabled(s, true)
+		},
+		{
+			key: "hide",
+			label: "Hide selected genres",
+			icon: Icons.EyeOff,
+			run: (s) => setEnabled(s, false)
+		}
 	]
 </script>
 

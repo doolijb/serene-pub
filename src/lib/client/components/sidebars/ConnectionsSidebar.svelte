@@ -55,7 +55,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		CONNECTION_DEFAULTS,
 		OPENAI_COMPATIBLE_PRESETS,
@@ -93,6 +93,7 @@
 	import OnnxModelView from "$lib/client/components/connections/OnnxModelView.svelte"
 	import OnnxEndpointView from "$lib/client/components/connections/OnnxEndpointView.svelte"
 	import {
+		connectionComesWithApp,
 		endpointKind,
 		isLocalOnnxType,
 		type ModelManager
@@ -234,6 +235,7 @@
 			systemSettingsCtx?.settings?.localOnnxAvailability
 		)
 	)
+	const comesWithApp = $derived(connectionComesWithApp(connection?.type))
 	/** Which modality the New Connection picker opens on. */
 	let newConnectionModality = $state<string>("text-gen")
 	/**
@@ -470,7 +472,7 @@
 		landOnIndex(focusId)
 	}
 	function handleModelRemoved() {
-		toaster.success({ title: "Model removed" })
+		notify.success({ title: "Model removed" })
 		void goBack()
 	}
 	/**
@@ -642,7 +644,9 @@
 	 * missing key).
 	 */
 	let newConnectionBaseUrl = $state("")
-	const newConnectionAsksAddress = $derived(newConnectionService?.setupNeed === "address")
+	const newConnectionAsksAddress = $derived(
+		newConnectionService?.setupNeed === "address"
+	)
 	function handleNew(opts: { category?: ConnectionServiceCategory } = {}) {
 		newConnectionCategory = opts.category
 		newConnectionName = ""
@@ -665,15 +669,15 @@
 	function handleNewConnectionConfirm() {
 		const name = newConnectionName.trim()
 		if (!name) {
-			toaster.error({ title: "Connection name is required" })
+			notify.error({ title: "Connection name is required" })
 			return
 		}
 		if (!newConnectionService) {
-			toaster.error({ title: "Choose a service to connect to" })
+			notify.error({ title: "Choose a service to connect to" })
 			return
 		}
 		if (newConnectionBlocked) {
-			toaster.error({ title: newConnectionBlocked })
+			notify.error({ title: newConnectionBlocked })
 			return
 		}
 		// Same rule the server enforces, checked up front so the dialog can
@@ -684,7 +688,7 @@
 					(c.name ?? "").trim().toLowerCase() === name.toLowerCase()
 			)
 		) {
-			toaster.error({
+			notify.error({
 				title: `A connection named "${name}" already exists`
 			})
 			return
@@ -695,11 +699,13 @@
 				(p) => p.value === presetValue
 			)
 			if (!preset) {
-				toaster.error({ title: "Invalid OpenAI preset" })
+				notify.error({ title: "Invalid OpenAI preset" })
 				return
 			}
 		}
-		const baseUrl = newConnectionAsksAddress ? newConnectionBaseUrl.trim() : ""
+		const baseUrl = newConnectionAsksAddress
+			? newConnectionBaseUrl.trim()
+			: ""
 		const newConn = {
 			name,
 			type,
@@ -834,9 +840,13 @@
 		// connections:get produces.
 		connection = cloneConnection(msg.connection)
 		originalConnection = cloneConnection(msg.connection)
-		toaster.success({ title: "Connection updated" })
+		notify.success({
+			source: "socket:connections:update",
+			title: "Connection updated"
+		})
 		if (msg.notice)
-			toaster.warning({
+			notify.warning({
+				source: "socket:connections:update:notice",
 				title: "Preset not kept",
 				description: msg.notice
 			})
@@ -854,7 +864,10 @@
 	function handleConnectionsDelete(msg: Sockets.Connections.Delete.Response) {
 		if (msg.id !== selectedConnectionId) return
 		const deletedName = connection?.name
-		toaster.success({ title: "Connection deleted" })
+		notify.success({
+			source: "socket:connections:delete",
+			title: "Connection deleted"
+		})
 		announce(`Connection ${deletedName} has been permanently deleted`)
 		connection = undefined
 		originalConnection = undefined
@@ -1211,15 +1224,24 @@
 	</details>
 
 	<div class="flex justify-start pt-1">
-		<button
-			type="button"
-			class="btn btn-sm hover:preset-tonal-error text-error-600-400"
-			onclick={handleDelete}
-			aria-label={`Delete connection ${connection.name}`}
-		>
-			<Icons.Trash2 size={14} aria-hidden="true" />
-			Delete connection
-		</button>
+		{#if comesWithApp}
+			<p class="text-surface-600-400 text-xs">
+				Comes with Serene Pub. To free space, use <strong>
+					Delete from disk
+				</strong>
+				on a model in its Models tab.
+			</p>
+		{:else}
+			<button
+				type="button"
+				class="btn btn-sm hover:preset-tonal-error text-error-600-400"
+				onclick={handleDelete}
+				aria-label={`Delete connection ${connection.name}`}
+			>
+				<Icons.Trash2 size={14} aria-hidden="true" />
+				Delete connection
+			</button>
+		{/if}
 	</div>
 {/snippet}
 
@@ -1295,7 +1317,7 @@
 		>
 			<Icons.RefreshCcw size={16} aria-hidden="true" />
 		</button>
-		{#if showDelete}
+		{#if showDelete && !comesWithApp}
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-error-500"
@@ -1338,6 +1360,8 @@
 			bind:value={connection.name}
 			class="input"
 			aria-required="true"
+			readonly={comesWithApp}
+			aria-readonly={comesWithApp ? "true" : undefined}
 		/>
 	</div>
 	<ConnectionTypeForm bind:connection />
@@ -1404,7 +1428,7 @@
 			"audiocpp-managed" ||
 		endpointKind(connection?.type ?? selectedRow?.type) === "ollama"}
 	<span
-		class="shrink-0 rounded-full px-1.5 py-0.5 text-meta font-normal {managed
+		class="text-meta shrink-0 rounded-full px-1.5 py-0.5 font-normal {managed
 			? 'preset-tonal-tertiary'
 			: 'panel-edge text-surface-600-400 border'}"
 	>
@@ -2021,54 +2045,57 @@
 <!-- 🚧 Mounted only while open (PLAN-dc-after-walk3 R3-5, #48): two views
      hold this sidebar, and each left a hidden "Discard changes?". -->
 {#if showConfirmModal}
-<Dialog
-	open={showConfirmModal}
-	onOpenChange={(e) => (showConfirmModal = e.open)}
->
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 w-full max-w-lg space-y-6 p-6 shadow-xl"
+	<Dialog
+		open={showConfirmModal}
+		onOpenChange={(e) => (showConfirmModal = e.open)}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
-				<div
-					role="dialog"
-					aria-labelledby="confirm-title"
-					aria-describedby="confirm-desc"
+				<Dialog.Content
+					class="card bg-surface-100-900 w-full max-w-lg space-y-6 p-6 shadow-xl"
 				>
-					<header class="flex justify-between">
-						<h2 id="confirm-title" class="h2">Discard changes?</h2>
-					</header>
-					<article>
-						<p id="confirm-desc" class="opacity-60">
-							Your connection has unsaved changes. Discard them?
-						</p>
-					</article>
-					<footer class="flex justify-end gap-4">
-						<button
-							class="btn preset-tonal-surface"
-							onclick={handleModalCancel}
-							aria-label="Cancel and keep unsaved changes"
-						>
-							Keep editing
-						</button>
-						<button
-							class="btn preset-filled-error-500"
-							onclick={handleModalDiscard}
-							aria-label="Discard all unsaved changes"
-						>
-							Discard
-						</button>
-					</footer>
-				</div>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+					<div
+						role="dialog"
+						aria-labelledby="confirm-title"
+						aria-describedby="confirm-desc"
+					>
+						<header class="flex justify-between">
+							<h2 id="confirm-title" class="h2">
+								Discard changes?
+							</h2>
+						</header>
+						<article>
+							<p id="confirm-desc" class="opacity-60">
+								Your connection has unsaved changes. Discard
+								them?
+							</p>
+						</article>
+						<footer class="flex justify-end gap-4">
+							<button
+								class="btn preset-tonal-surface"
+								onclick={handleModalCancel}
+								aria-label="Cancel and keep unsaved changes"
+							>
+								Keep editing
+							</button>
+							<button
+								class="btn preset-filled-error-500"
+								onclick={handleModalDiscard}
+								aria-label="Discard all unsaved changes"
+							>
+								Discard
+							</button>
+						</footer>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}
 <Dialog
 	open={showNewConnectionModal}
@@ -2077,134 +2104,153 @@
 	<!-- 🚧 Mounted only while open (Q3-6, #48): the Connections and Models
 	     views each hold this sidebar, and each left a hidden New connection. -->
 	{#if showNewConnectionModal}
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 max-h-[90vh] w-full max-w-2xl space-y-6 overflow-y-auto p-6 shadow-xl"
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
-				<div
-					role="dialog"
-					aria-labelledby="new-conn-title"
-					aria-describedby="new-conn-desc"
+				<Dialog.Content
+					class="card bg-surface-100-900 max-h-[90vh] w-full max-w-2xl space-y-6 overflow-y-auto p-6 shadow-xl"
 				>
-					<header class="mb-[1em] flex justify-between">
-						<h2 id="new-conn-title" class="h2">New connection</h2>
-					</header>
-					<div id="new-conn-desc" class="sr-only">
-						Create a new connection to a service
-					</div>
-					<form
-						class="flex flex-col gap-2"
-						onsubmit={(e) => {
-							e.preventDefault()
-							handleNewConnectionConfirm()
-						}}
+					<div
+						role="dialog"
+						aria-labelledby="new-conn-title"
+						aria-describedby="new-conn-desc"
 					>
-						<div>
-							<label class="font-semibold" for="newConnName">
-								Connection name
-							</label>
-							<input
-								id="newConnName"
-								type="text"
-								class="input w-full"
-								bind:value={newConnectionName}
-								placeholder="Enter a descriptive name…"
-								aria-required="true"
-								oninput={() => (nameTouched = true)}
-								onkeydown={(e) => {
-									if (
-										e.key === "Enter" &&
-										newConnectionName.trim()
-									)
-										handleNewConnectionConfirm()
-								}}
-							/>
+						<header class="mb-[1em] flex justify-between">
+							<h2 id="new-conn-title" class="h2">
+								New connection
+							</h2>
+						</header>
+						<div id="new-conn-desc" class="sr-only">
+							Create a new connection to a service
 						</div>
-						<div>
-							<ConnectionServicePicker
-								label="Service"
-								initialModality={newConnectionModality}
-								initialCategory={newConnectionCategory}
-								bind:selectedItem={newConnectionService}
-							/>
-						</div>
-						{#if newConnectionService}
-							<div
-								class="bg-surface-500/25 mt-4 flex flex-col gap-2 rounded p-4"
-							>
-								<!-- The reason first, as on the picker's card: the
+						<form
+							class="flex flex-col gap-2"
+							onsubmit={(e) => {
+								e.preventDefault()
+								handleNewConnectionConfirm()
+							}}
+						>
+							<div>
+								<label class="font-semibold" for="newConnName">
+									Connection name
+								</label>
+								<input
+									id="newConnName"
+									type="text"
+									class="input w-full"
+									bind:value={newConnectionName}
+									placeholder="Enter a descriptive name…"
+									aria-required="true"
+									oninput={() => (nameTouched = true)}
+									onkeydown={(e) => {
+										if (
+											e.key === "Enter" &&
+											newConnectionName.trim()
+										)
+											handleNewConnectionConfirm()
+									}}
+								/>
+							</div>
+							<div>
+								<ConnectionServicePicker
+									label="Service"
+									initialModality={newConnectionModality}
+									initialCategory={newConnectionCategory}
+									bind:selectedItem={newConnectionService}
+								/>
+							</div>
+							{#if newConnectionService}
+								<div
+									class="bg-surface-500/25 mt-4 flex flex-col gap-2 rounded p-4"
+								>
+									<!-- The reason first, as on the picker's card: the
 								     server would refuse Create. What the service
 								     asks of the person is the chip on that card;
 								     a filled "Difficulty:" pill here read as a
 								     second button and is gone (plan 2026-10-06 §D). -->
-								{#if newConnectionBlocked}
-									<span
-										class="preset-tonal-warning p-2 break-words"
-									>
-										{newConnectionBlocked}
-									</span>
-								{/if}
-								{@html newConnectionService.description}
-							</div>
-							{#if newConnectionAsksAddress}
-								<div class="mt-2">
-									<label class="font-semibold" for="newConnBaseUrl">
-										Base URL
-									</label>
-									<input
-										id="newConnBaseUrl"
-										type="url"
-										class="input w-full"
-										bind:value={newConnectionBaseUrl}
-										placeholder={newConnectionService.type === CONNECTION_TYPE.OPENAI
-											? "http://localhost:8080/v1"
-											: ((CONNECTION_DEFAULTS as Record<string, { baseUrl?: string }>)[newConnectionService.type]?.baseUrl ?? "")}
-										autocomplete="off"
-									/>
-									<p class="text-surface-600-400 mt-1 text-xs">
-										The server's address, as its own settings or documentation give it{newConnectionService.type === CONNECTION_TYPE.OPENAI ? " — usually ending in /v1" : ""}. You can change it later in the connection's settings.
-									</p>
+									{#if newConnectionBlocked}
+										<span
+											class="preset-tonal-warning p-2 break-words"
+										>
+											{newConnectionBlocked}
+										</span>
+									{/if}
+									{@html newConnectionService.description}
 								</div>
+								{#if newConnectionAsksAddress}
+									<div class="mt-2">
+										<label
+											class="font-semibold"
+											for="newConnBaseUrl"
+										>
+											Base URL
+										</label>
+										<input
+											id="newConnBaseUrl"
+											type="url"
+											class="input w-full"
+											bind:value={newConnectionBaseUrl}
+											placeholder={newConnectionService.type ===
+											CONNECTION_TYPE.OPENAI
+												? "http://localhost:8080/v1"
+												: ((
+														CONNECTION_DEFAULTS as Record<
+															string,
+															{ baseUrl?: string }
+														>
+													)[newConnectionService.type]
+														?.baseUrl ?? "")}
+											autocomplete="off"
+										/>
+										<p
+											class="text-surface-600-400 mt-1 text-xs"
+										>
+											The server's address, as its own
+											settings or documentation give it{newConnectionService.type ===
+											CONNECTION_TYPE.OPENAI
+												? " — usually ending in /v1"
+												: ""}. You can change it later
+											in the connection's settings.
+										</p>
+									</div>
+								{/if}
 							{/if}
-						{/if}
-					</form>
-					<footer class="mt-4 flex justify-end gap-4">
-						<button
-							type="button"
-							class="btn preset-tonal-surface"
-							onclick={handleNewConnectionCancel}
-							aria-label="Cancel connection creation"
-						>
-							Cancel
-						</button>
-						<button
-							type="submit"
-							class="btn preset-filled-primary-500"
-							onclick={handleNewConnectionConfirm}
-							disabled={!newConnectionName.trim() ||
-								!newConnectionService ||
-								!!newConnectionBlocked}
-							aria-label={!newConnectionName.trim()
-								? "Enter a name to create connection"
-								: !newConnectionService
-									? "Choose a service to create connection"
-									: newConnectionBlocked
-										? `Create connection — ${newConnectionBlocked}`
-										: `Create connection named ${newConnectionName}`}
-						>
-							Create
-						</button>
-					</footer>
-				</div>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
+						</form>
+						<footer class="mt-4 flex justify-end gap-4">
+							<button
+								type="button"
+								class="btn preset-tonal-surface"
+								onclick={handleNewConnectionCancel}
+								aria-label="Cancel connection creation"
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								class="btn preset-filled-primary-500"
+								onclick={handleNewConnectionConfirm}
+								disabled={!newConnectionName.trim() ||
+									!newConnectionService ||
+									!!newConnectionBlocked}
+								aria-label={!newConnectionName.trim()
+									? "Enter a name to create connection"
+									: !newConnectionService
+										? "Choose a service to create connection"
+										: newConnectionBlocked
+											? `Create connection — ${newConnectionBlocked}`
+											: `Create connection named ${newConnectionName}`}
+							>
+								Create
+							</button>
+						</footer>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
 	{/if}
 </Dialog>
 <!-- An edit of the starred connection that makes it another model re-embeds;
@@ -2213,53 +2259,58 @@
 <EmbeddingSwitchDialog {...embeddingEdits.dialog} />
 <!-- 🚧 …and a hidden "Delete connection" (R3-5, #48). -->
 {#if showDeleteModal}
-<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 w-full max-w-lg space-y-6 p-6 shadow-xl"
+	<Dialog
+		open={showDeleteModal}
+		onOpenChange={(e) => (showDeleteModal = e.open)}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
 			>
-				<div
-					role="alertdialog"
-					aria-labelledby="delete-title"
-					aria-describedby="delete-desc"
+				<Dialog.Content
+					class="card bg-surface-100-900 w-full max-w-lg space-y-6 p-6 shadow-xl"
 				>
-					<header class="flex justify-between">
-						<h2 id="delete-title" class="h2">Delete connection</h2>
-					</header>
-					<article>
-						<p id="delete-desc" class="opacity-60">
-							Delete "{connection?.name}" and its models? Anything
-							set to use them will need another choice. This
-							cannot be undone.
-						</p>
-					</article>
-					<footer class="flex justify-end gap-4">
-						<button
-							type="button"
-							class="btn preset-tonal-surface"
-							onclick={handleDeleteModalCancel}
-							aria-label="Cancel deletion and keep the connection"
-						>
-							Cancel
-						</button>
-						<button
-							type="button"
-							class="btn preset-filled-error-500"
-							onclick={handleDeleteModalConfirm}
-							aria-label="Permanently delete this connection"
-						>
-							Delete connection
-						</button>
-					</footer>
-				</div>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+					<div
+						role="alertdialog"
+						aria-labelledby="delete-title"
+						aria-describedby="delete-desc"
+					>
+						<header class="flex justify-between">
+							<h2 id="delete-title" class="h2">
+								Delete connection
+							</h2>
+						</header>
+						<article>
+							<p id="delete-desc" class="opacity-60">
+								Delete "{connection?.name}" and its models?
+								Anything set to use them will need another
+								choice. This cannot be undone.
+							</p>
+						</article>
+						<footer class="flex justify-end gap-4">
+							<button
+								type="button"
+								class="btn preset-tonal-surface"
+								onclick={handleDeleteModalCancel}
+								aria-label="Cancel deletion and keep the connection"
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								class="btn preset-filled-error-500"
+								onclick={handleDeleteModalConfirm}
+								aria-label="Permanently delete this connection"
+							>
+								Delete connection
+							</button>
+						</footer>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}

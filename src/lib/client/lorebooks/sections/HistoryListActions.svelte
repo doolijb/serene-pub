@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
 	import { v4 as uuid } from "uuid"
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
@@ -38,9 +38,10 @@
 	async function nextDate() {
 		if (pressing) return
 		if (sources.length === 0) {
-			toaster.error({
+			notify.error({
 				title: "No entries found",
-				description: "Create at least one entry before adding the next date."
+				description:
+					"Create at least one entry before adding the next date."
 			})
 			return
 		}
@@ -75,7 +76,7 @@
 			})
 		} catch (err) {
 			if (isReplyTimeout(err))
-				toaster.error({
+				notify.error({
 					title: "The story's date did not move",
 					description: "The server did not answer in time."
 				})
@@ -83,7 +84,7 @@
 		} finally {
 			pressing = false
 		}
-		toaster.success({ title: "The story's date has moved forward" })
+		notify.success({ title: "The story's date has moved forward" })
 	}
 </script>
 

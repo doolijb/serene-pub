@@ -1,14 +1,40 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 import {
 	resolveOrCreateBindingRow,
 	syncLorebookBindingsForCharacter
 } from "$lib/server/utils/characterBindingSync"
-import { canViewCharacter } from "$lib/server/utils/sessionAccess"
+import { canViewCharacter, checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
+import { seatMembersAsRead } from "$lib/server/pipelines/prompt/seatCards"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { makeMemberCardless } from "$lib/server/cast/cardless"
 import { cardTakenBy } from "$lib/server/utils/castMemberCards"
-import { retoldFieldList } from "$lib/shared/lorebooks/retold"
-import { retoldUpdateProblem } from "$lib/server/lorebooks/retold"
+import { sanitizeLikeness } from "$lib/server/characters/likeness"
+import { RETOLD_FIELDS, retoldFieldList } from "$lib/shared/lorebooks/retold"
+import {
+	castChangesOfMemberEdit,
+	memberColumnsOfVersion,
+	retoldUpdateProblem,
+	type MemberColumnsOfVersion
+} from "$lib/server/lorebooks/retold"
+import {
+	bookPresentOf,
+	ensureCardVersion,
+	insertCastMember,
+	isBaseVersion,
+	memberProfileOf,
+	reparentFromBookPresent,
+	updateCastVersion,
+	updateMemberToCardVersion,
+	versionsAtBookPresent,
+	writeCastVersion,
+	type CastVersionChanges
+} from "$lib/server/characters/versions"
+import { compareDates } from "$lib/shared/lorebooks/storyDate"
+import { profileOf } from "$lib/shared/characters/profile"
+import { followsCardFields } from "$lib/server/cast/memberAsRead"
 import { createMedia, readMedia, sniffMedia } from "$lib/server/media"
 import { storeLorebookCover, uploadedBytes } from "$lib/server/utils"
 import {
@@ -45,6 +71,26 @@ import {
 	STARTER_KIT_KIND,
 	STARTER_KIT_SENTENCES
 } from "$lib/server/lorebooks/starterKits"
+import {
+	markedBook,
+	PROVIDED_BOOK_CAST_REFUSAL,
+	PROVIDED_BOOK_DELETE_REFUSAL,
+	providedOwnerPresent,
+	providedOwnersPresent,
+	primerRowEditProblem,
+	providedBooksReadableBy,
+	providedOwnerNames,
+	shownLorebook
+} from "$lib/server/plugins/providedMarks"
+import {
+	ownNameValue,
+	memberShownName
+} from "$lib/shared/lorebooks/memberIdentity"
+import {
+	normaliseOwnNames,
+	providedBookKeepsCast,
+	providedCastProblem
+} from "$lib/server/lorebooks/castOwnNames"
 import { relayToBookReaders } from "$lib/server/sockets/utils/bookReaders"
 import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
@@ -57,7 +103,11 @@ import {
 	rewriteImportedCastTagsDeep,
 	type CastTagReplacer
 } from "$lib/server/utils/castTags"
-import { resolveOrCreateBindingByName } from "$lib/server/utils/summarizer/availableSceneCast"
+import {
+	collectAliases,
+	entryMatches,
+	resolveOrCreateBindingByName
+} from "$lib/server/utils/summarizer/availableSceneCast"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
 import { findOrCreateTagId } from "$lib/server/utils/tags"
@@ -65,8 +115,8 @@ import {
 	extractCharacterUuid,
 	buildExistingCharacterComparisonData,
 	createCharacterFromParsedData,
-	overwriteCharacterFromParsedData,
-	buildCharactersList
+	addCardVersionFromParsedData,
+	canonicalCardOf
 } from "./characters"
 import {
 	extractPersonaUuid,
@@ -78,6 +128,11 @@ import {
 import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import { assertValidParentNode } from "$lib/server/utils/bindingParent"
 import { askerOf, refusable } from "./refusable"
+import { validateTimbre } from "$lib/server/characters/timbre"
+import {
+	canPickVoice,
+	type CharacterTimbreInput
+} from "$lib/shared/characters/timbre"
 import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import {
 	LORE_WRITES_OFF,
@@ -110,6 +165,9 @@ import {
 } from "$lib/server/state/sessionLoreRefs"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { pickableRulesets } from "$lib/server/rulesets/pubRulesets"
+import { rulesetFitReader } from "$lib/server/rulesets/genreFit"
+import { keptRulesetDocument } from "$lib/server/rulesets/versions"
+import { adoptedBookRules } from "$lib/shared/rulesets/rulesOffer"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { lorebookFileFindings } from "@serene-pub/sdk"
 import { serverFailureAs } from "$lib/server/imports/importFailure"
@@ -145,6 +203,7 @@ import {
 	sharedLorebookIdsFor
 } from "$lib/server/utils/shares"
 import { pushToUser } from "./utils/userPush"
+import { tellMemberSessions } from "$lib/server/sessions/memberSessions"
 import type {
 	LorebooksShareParams,
 	LorebooksShareResponse
@@ -285,16 +344,16 @@ async function coverMediaOf(
  * with a `session_id` — each also naming its session and the shared book it
  * overlays, newest session first. One row mapping for both.
  */
-function buildLorebooksList(userId: number): Promise<Sockets.Lorebooks.List.Response>
-function buildLorebooksList(
+export function buildLorebooksList(userId: number): Promise<Sockets.Lorebooks.List.Response>
+export function buildLorebooksList(
 	userId: number,
 	which: "sessionNotes"
 ): Promise<Sockets.Lorebooks.SessionNotes.Response>
-function buildLorebooksList(
+export function buildLorebooksList(
 	userId: number,
 	which: "books"
 ): Promise<Sockets.Lorebooks.List.Response>
-async function buildLorebooksList(
+export async function buildLorebooksList(
 	userId: number,
 	which: "books" | "sessionNotes" = "books"
 ): Promise<Sockets.Lorebooks.List.Response | Sockets.Lorebooks.SessionNotes.Response> {
@@ -303,23 +362,31 @@ async function buildLorebooksList(
 	// §6.7) ride the same read, each marked and named by its owner.
 	const sharedIds =
 		which === "books" ? await sharedLorebookIdsFor(db as unknown as Db, userId) : []
+	// ★M3-1 "Pub wide": a live provided book (a plugin's, a primer row) is every person's to read.
+	const providedIds =
+		which === "books"
+			? [...(await providedBooksReadableBy(db as unknown as Db, userId))]
+			: []
 	const books = await db.query.lorebooks.findMany({
 		// 🚧 Never a session's own book in the main list (PLAN-rulesets §26):
 		// they are listed apart, as Session notes (`which: "sessionNotes"`).
 		where: (l, { and, eq, inArray, isNotNull, isNull, or }) =>
 			which === "sessionNotes"
-				? and(isNotNull(l.sessionId), eq(l.userId, userId))
+				? and(isNotNull(l.sessionId), eq(l.userId, userId), shownLorebook(l))
 				: and(
 				isNull(l.sessionId),
+				// 🚧 (M2e) A disabled provided book is hidden here (the one decider).
+				shownLorebook(l),
 				// 🚧 Starter lorebooks (PLAN-lorebook-kinds §B): the asker's own come
 				// back marked by their book kind, for a group of their own; no
-				// one else's kit is ever on this shelf (a kit is never shared).
-				sharedIds.length
-					? or(
-							eq(l.userId, userId),
-							and(inArray(l.id, sharedIds), eq(l.kind, "book"))
-						)
-					: eq(l.userId, userId)
+				// one else's kit is on this shelf unless it is a live provided primer row.
+				or(
+					eq(l.userId, userId),
+					sharedIds.length
+						? and(inArray(l.id, sharedIds), eq(l.kind, "book"))
+						: undefined,
+					providedIds.length ? inArray(l.id, providedIds) : undefined
+				)
 			),
 		orderBy: (l, { desc }) => desc(l.name),
 		with: {
@@ -372,6 +439,21 @@ async function buildLorebooksList(
 			.filter((r) => r.lorebookId === lorebookId)
 			.map((r) => ({ id: r.id, name: r.name ?? null }))
 
+	// 🚧 (M2e) Whose marks count: core's, and any plugin that is still installed.
+	const ownersPresent = await providedOwnersPresent(db as unknown as Db, books)
+	// 🚧 (m2e-F-D, m3b-F) Who a provided row comes with: `provided.pluginName`
+	// on every marked row, `readOnly.pluginName` on a primer row. One query.
+	const ownerNames = await providedOwnerNames(
+		db as unknown as Db,
+		books.flatMap((b) => {
+			const m = markedBook(b.extraJson, b.uuid)
+			return m ? [m.plugin] : []
+		})
+	)
+
+	// 🚧 (s22-V, ★§22-3) How each enabled genre rates a book's own rules: one reader per list.
+	const rulesetFitOf = which === "books" && books.length ? await rulesetFitReader(db as unknown as Db) : null
+
 	// Transform lorebook tags to include tags as string array. The three
 	// entry lists are id-only and exist for the card's counts, so they are
 	// split back out of the one relation rather than fetched three times.
@@ -399,8 +481,27 @@ async function buildLorebooksList(
 		const entryCounts: Record<string, number> = {}
 		for (const e of lorebookEntries)
 			entryCounts[e.typeId] = (entryCounts[e.typeId] ?? 0) + 1
+		const providedBy = markedBook(book.extraJson, book.uuid)
+		const pluginName =
+			providedBy === null || providedBy.plugin === "core"
+				? null
+				: (ownerNames.get(providedBy.plugin) ?? providedBy.plugin)
+		const fit = rulesetFitOf?.(adoptedBookRules(book.primaryRuleset))
 		return {
 			...rest,
+			...(fit ? { rulesetFitByGenre: fit } : {}),
+			...(providedBy && ownersPresent.has(providedBy.plugin)
+				? {
+						provided: {
+							disabled: providedBy.disabled === true,
+							pluginName
+						},
+						// A primer row (m2e-F-D): every edit is refused; clone it.
+						...(book.kind === "starter_kit"
+							? { readOnly: { pluginName } }
+							: {})
+					}
+				: {}),
 			entryCount: lorebookEntries.length,
 			entryCounts,
 			worldLoreEntries: idsOf(WORLD_LORE_TYPE_ID),
@@ -610,10 +711,6 @@ export const lorebooksCreateHandler: Handler<
 					userId,
 					socket.user?.displayName || socket.user?.username || ""
 				)
-				if (copy.cards.length && emitToUser)
-					await emitToUser("characters:list", () =>
-						buildCharactersList(userId)
-					)
 				;[lorebook] = await db
 					.select()
 					.from(schema.lorebooks)
@@ -697,8 +794,30 @@ async function buildLorebookGet(
 
 	// Transform lorebook tags to include tags as string array
 	const { lorebookTags, user, ...bookFields } = book
+	// 🚧 (M2e) A disabled book a session still reads opens as it is, marked disabled.
+	const providedBy = markedBook(book.extraJson, book.uuid)
+	const providedOwnerHere =
+		providedBy && (await providedOwnerPresent(db as unknown as Db, providedBy.plugin))
 	const bookWithTags = {
 		...bookFields,
+		...(providedBy && providedOwnerHere
+			? {
+					provided: { disabled: providedBy.disabled === true },
+					// A primer row (m2e-F-D): every edit is refused; clone it.
+					...(book.kind === "starter_kit"
+						? {
+								readOnly: {
+									pluginName:
+										providedBy.plugin === "core"
+											? null
+											: ((
+													await providedOwnerNames(db as unknown as Db, [providedBy.plugin])
+												).get(providedBy.plugin) ?? providedBy.plugin)
+								}
+							}
+						: {})
+				}
+			: {}),
 		tags: lorebookTags?.map((lt) => lt.tag.name) || [],
 		// The one fact the client derives read-only from (lane A3).
 		bookAccess: access!,
@@ -828,6 +947,11 @@ export const lorebooksUpdateHandler: Handler<
 			// form edits it, so a whole row sent back from the form could only
 			// overwrite it with a stale copy (audit 2026-10-21).
 			const { tags } = params.lorebook
+			// A primer row is read-only (m2e-F-D): asked once the book is the asker's, before anything is written.
+			if (await findOwnedBook(db, userId, params.lorebook.id)) {
+				const primerProblem = await primerRowEditProblem(db, params.lorebook.id!)
+				if (primerProblem) throw new Error(primerProblem)
+			}
 			// The name as a person reads it: trimmed, never empty, within the
 			// length an import accepts. The form checks first; a socket client
 			// can send anything.
@@ -997,18 +1121,15 @@ export const lorebooksDeleteHandler: Handler<
 					.where(mine)
 					.limit(1)
 				if (!book) return []
+				// 🚧 (M2e) A provided book is disabled, never deleted: refuse before anything goes.
+				const mark = markedBook(book.extraJson, book.uuid)
+				if (mark && (await providedOwnerPresent(tx as unknown as Db, mark.plugin)))
+					throw new Error(PROVIDED_BOOK_DELETE_REFUSAL)
 				await purgeLorebook(tx, book.id)
 				const gone = await tx
 					.delete(schema.lorebooks)
 					.where(mine)
 					.returning({ id: schema.lorebooks.id })
-				// 🚧 (M2c) A provided book deleted by hand stays deleted: its plugin's row keeps a tombstone.
-				const { markedBook } = await import("$lib/server/plugins/providedMarks")
-				const mark = gone.length ? markedBook(book.extraJson, book.uuid) : null
-				if (mark) {
-					const { recordDismissedProvidedBook } = await import("$lib/server/plugins/providedBooks")
-					await recordDismissedProvidedBook(tx as unknown as Db, mark, userId)
-				}
 				return gone
 			})
 			if (deleted.length === 0) throw new Error("Lorebook not found.")
@@ -1114,13 +1235,13 @@ export async function syncLorebookBindings({
 		if (unissued.size === 0) return
 
 		const numbers = [...unissued].sort((a, b) => a - b)
-		await tx.insert(schema.lorebookBindings).values(
-			numbers.map((n) => ({
+		// One member at a time: each is born with its base version.
+		for (const n of numbers)
+			await insertCastMember(tx, {
 				lorebookId,
 				binding: castTag(n),
 				characterId: null
-			}))
-		)
+			})
 		// These numbers came from text, not from deriveNextBindingToken's
 		// counter; move the counter past them so it never issues one again.
 		await tx
@@ -1133,6 +1254,584 @@ export async function syncLorebookBindings({
 // =============================================
 // TYPE-SAFE LOREBOOK HANDLERS
 // =============================================
+
+// =============================================
+// A MEMBER'S WORDS LIVE ON ITS BASE VERSION
+// =============================================
+
+type MemberRow = typeof schema.lorebookBindings.$inferSelect
+type VersionRow = typeof schema.characterVersions.$inferSelect
+
+/**
+ * ⏳ The member form's columns: `lorebook_bindings` retold text, `retold`,
+ * `own_name`, `own_nickname`, `face_media_id`, `timbre`, `sprite_set`,
+ * `node_state` and `node_visibility` are frozen (plan §32 §8). Their values
+ * live on the member's character versions; the form reads and sends them by
+ * these names until the client reads versions (wave 3).
+ */
+const FROZEN_MEMBER_KEYS = [
+	"description",
+	"personality",
+	"scenario",
+	"firstMessage",
+	"alternateGreetings",
+	"exampleDialogues",
+	"retold",
+	"ownName",
+	"ownNickname",
+	"faceMediaId",
+	"timbre",
+	"spriteSet",
+	"nodeState",
+	"nodeVisibility"
+] as const
+
+/**
+ * The member-form keys that exist only on the member's versions: post-history
+ * instructions, creator notes and likeness. The row has no column for them, so
+ * they are read from the version, picked into the edit, and never written to
+ * `lorebook_bindings`.
+ */
+const VERSION_ONLY_MEMBER_KEYS = [
+	"postHistoryInstructions",
+	"creatorNotes",
+	"likeness"
+] as const
+
+/**
+ * Why a member edit's version-only keys cannot be written, or null. Normalises
+ * `likeness` in place (unknown keys dropped, text trimmed; an empty one is null).
+ */
+export async function versionOnlyProblem(
+	db: Db,
+	update: Record<string, unknown>,
+	userId: number
+): Promise<string | null> {
+	const phi = update.postHistoryInstructions
+	if (phi !== undefined && phi !== null && typeof phi !== "string")
+		return "A cast member's post-history instructions are text, or null to send none."
+	const notes = update.creatorNotes
+	if (notes !== undefined && notes !== null) {
+		const n = notes as Record<string, unknown>
+		const variants = n?.variants
+		if (
+			typeof notes !== "object" ||
+			Array.isArray(notes) ||
+			typeof n.text !== "string" ||
+			(n.lang !== undefined && typeof n.lang !== "string") ||
+			!variants ||
+			typeof variants !== "object" ||
+			Array.isArray(variants) ||
+			!Object.values(variants).every((v) => typeof v === "string")
+		)
+			return 'A cast member\'s creator notes are null, or { text: string, lang?: string, variants: { [language]: string } } — send variants as {} when there are none.'
+	}
+	const likeness = update.likeness
+	if (likeness !== undefined && likeness !== null) {
+		if (typeof likeness !== "object" || Array.isArray(likeness))
+			return "A cast member's likeness is null, or { imageMediaId?: number, prompt?: string, negative?: string }."
+		const l = likeness as Record<string, unknown>
+		if (
+			(l.imageMediaId !== undefined &&
+				(typeof l.imageMediaId !== "number" ||
+					!Number.isSafeInteger(l.imageMediaId))) ||
+			(l.prompt !== undefined && typeof l.prompt !== "string") ||
+			(l.negative !== undefined && typeof l.negative !== "string")
+		)
+			return "A cast member's likeness is null, or { imageMediaId?: number, prompt?: string, negative?: string }."
+		const clean = sanitizeLikeness(likeness)
+		if (clean?.imageMediaId !== undefined) {
+			const file = await db.query.files.findFirst({
+				where: (f, { eq }) => eq(f.id, clean.imageMediaId!),
+				columns: { userId: true }
+			})
+			if (file?.userId !== userId)
+				return "That likeness picture is not one of yours. Upload it again, or send the likeness without imageMediaId."
+		}
+		update.likeness = clean
+	}
+	return null
+}
+
+/** The columns that are written both ways: the binding keeps them, and the version holds them as profile fields. */
+const BOTH_WAYS_MEMBER_KEYS = ["name", "aliases", "summary"] as const
+
+/** The member's **base** version, for each of `memberIds` that has one (the `character_versions_base_idx` key). */
+async function baseVersionsOf(
+	h: Db,
+	memberIds: readonly number[]
+): Promise<Map<number, VersionRow>> {
+	if (!memberIds.length) return new Map()
+	const V = schema.characterVersions
+	const rows = await h
+		.select()
+		.from(V)
+		.where(
+			and(
+				inArray(V.castMemberId, [...memberIds]),
+				isNull(V.cardId),
+				isNull(V.branchId),
+				isNull(V.year),
+				isNull(V.personalPosition),
+				isNull(V.sourceSessionId)
+			)
+		)
+	return new Map(rows.map((row) => [row.castMemberId!, row]))
+}
+
+/** A member's frozen columns as stored, in the form's shape (for a member with no base yet). */
+function columnsOfRow(
+	member: MemberRow,
+	carded: boolean
+): MemberColumnsOfVersion {
+	return {
+		name: carded ? null : member.name,
+		aliases: member.aliases ?? [],
+		summary: member.summary,
+		description: member.description,
+		personality: member.personality,
+		scenario: member.scenario,
+		firstMessage: member.firstMessage,
+		alternateGreetings: member.alternateGreetings ?? [],
+		groupOnlyGreetings: [],
+		exampleDialogues: member.exampleDialogues,
+		postHistoryInstructions: null,
+		creatorNotes: null,
+		likeness: null,
+		faceMediaId: member.faceMediaId,
+		retold: member.retold ?? {},
+		ownName: member.ownName,
+		ownNickname: member.ownNickname,
+		timbre: member.timbre ?? null,
+		spriteSet: member.spriteSet,
+		nodeState: member.nodeState,
+		nodeVisibility: member.nodeVisibility
+	}
+}
+
+type CharacterRow = typeof schema.characters.$inferSelect
+type CardVersionSummary = Sockets.Characters.CardVersionSummary
+
+/**
+ * 🚧 Each of `members` as the member page and the cast lists get it: the
+ * frozen columns, `characterId` and (when the row carries one) `character`
+ * are those of **the cast version in force at the book's present on main** —
+ * "the most recently active" (owner 2026-11-06; `versionsAtBookPresent`) —
+ * with that version's card version (`cardVersion`), the card's current
+ * version and `behindCard`, and the member's **base** version in column names
+ * (`baseColumns`). The row's own `name`, `aliases` and `summary` stay the
+ * row's. A member with no version keeps its stored columns, with no
+ * version, no card version and `behindCard: false`.
+ *
+ * One read of the versions per book, one of the base versions, one of the
+ * parent card versions, one of the cards' current versions, and one for a
+ * card the row does not hold (a `character` that must change).
+ */
+async function castMemberRowsOf<
+	M extends MemberRow & { character?: CharacterRow | null }
+>(
+	h: Db,
+	members: readonly M[]
+): Promise<(M & Sockets.Lorebooks.CastRowVersion)[]> {
+	if (!members.length) return []
+	const shownBy = await versionsAtBookPresent(h, members)
+	const baseBy = await baseVersionsOf(
+		h,
+		members.map((m) => m.id)
+	)
+	const V = schema.characterVersions
+	const parentIds = new Set<number>()
+	for (const v of [...shownBy.values(), ...baseBy.values()])
+		if (v.parentVersionId != null) parentIds.add(v.parentVersionId)
+	const parents = parentIds.size
+		? await h
+				.select({
+					id: V.id,
+					cardId: V.cardId,
+					number: V.number,
+					label: V.label
+				})
+				.from(V)
+				.where(inArray(V.id, [...parentIds]))
+		: []
+	const parentById = new Map(parents.map((p) => [p.id, p]))
+	const cardIds = [
+		...new Set(
+			parents.map((p) => p.cardId).filter((id): id is number => id != null)
+		)
+	]
+	const currentOfCard = new Map<number, CardVersionSummary>()
+	if (cardIds.length)
+		for (const row of await h
+			.select({
+				id: V.id,
+				cardId: V.cardId,
+				number: V.number,
+				label: V.label
+			})
+			.from(V)
+			.where(and(inArray(V.cardId, cardIds), isNotNull(V.number)))
+			.orderBy(desc(V.number)))
+			if (!currentOfCard.has(row.cardId!))
+				currentOfCard.set(row.cardId!, {
+					id: row.id,
+					number: row.number!,
+					label: row.label
+				})
+	const cardOf = (v: VersionRow | undefined) =>
+		v?.parentVersionId != null
+			? (parentById.get(v.parentVersionId) ?? null)
+			: null
+
+	// A card the row's `character` does not hold: the shown version's.
+	const wanted = new Set<number>()
+	for (const m of members) {
+		const cardId = cardOf(shownBy.get(m.id))?.cardId ?? null
+		if (
+			shownBy.has(m.id) &&
+			"character" in m &&
+			cardId != null &&
+			cardId !== m.characterId
+		)
+			wanted.add(cardId)
+	}
+	const cardRows = wanted.size
+		? new Map(
+				(
+					await h
+						.select()
+						.from(schema.characters)
+						.where(inArray(schema.characters.id, [...wanted]))
+				).map((c) => [c.id, c])
+			)
+		: new Map<number, CharacterRow>()
+
+	return members.map((m) => {
+		const shown = shownBy.get(m.id)
+		const base = baseBy.get(m.id)
+		if (!shown)
+			return {
+				...m,
+				castVersionId: null,
+				groupOnlyGreetings: [],
+				postHistoryInstructions: null,
+				creatorNotes: null,
+				likeness: null,
+				baseColumns: base
+					? {
+							...memberColumnsOfVersion(base, {
+								carded: base.parentVersionId != null
+							}),
+							characterId: cardOf(base)?.cardId ?? null
+						}
+					: null,
+				cardVersion: null,
+				cardCurrentVersion: null,
+				behindCard: false
+			}
+		const shownParent = cardOf(shown)
+		const characterId = shownParent?.cardId ?? null
+		const c = memberColumnsOfVersion(shown, {
+			carded: shown.parentVersionId != null
+		})
+		const current =
+			characterId != null ? (currentOfCard.get(characterId) ?? null) : null
+		const cardVersion: CardVersionSummary | null =
+			shownParent && shownParent.number != null
+				? {
+						id: shownParent.id,
+						number: shownParent.number,
+						label: shownParent.label
+					}
+				: null
+		const row = {
+			...m,
+			description: c.description,
+			personality: c.personality,
+			scenario: c.scenario,
+			firstMessage: c.firstMessage,
+			alternateGreetings: c.alternateGreetings,
+			exampleDialogues: c.exampleDialogues,
+			postHistoryInstructions: c.postHistoryInstructions,
+			creatorNotes: c.creatorNotes,
+			likeness: c.likeness,
+			faceMediaId: c.faceMediaId,
+			retold: c.retold,
+			ownName: c.ownName,
+			ownNickname: c.ownNickname,
+			timbre: c.timbre,
+			spriteSet: c.spriteSet,
+			nodeState: c.nodeState,
+			nodeVisibility: c.nodeVisibility,
+			characterId,
+			castVersionId: shown.id,
+			groupOnlyGreetings: c.groupOnlyGreetings,
+			baseColumns: base
+				? {
+						...memberColumnsOfVersion(base, {
+							carded: base.parentVersionId != null
+						}),
+						characterId: cardOf(base)?.cardId ?? null
+					}
+				: null,
+			cardVersion,
+			cardCurrentVersion: current,
+			behindCard:
+				cardVersion != null &&
+				current != null &&
+				cardVersion.number < current.number
+		}
+		if ("character" in m && characterId !== m.characterId)
+			(row as { character?: CharacterRow | null }).character =
+				characterId != null ? (cardRows.get(characterId) ?? null) : null
+		return row
+	})
+}
+
+/**
+ * Writes a member-form edit onto the member's **base** version: the update's
+ * frozen keys (and `name` / `aliases` / `summary`, which the binding keeps
+ * too) become the version changes `castChangesOfMemberEdit` says they mean.
+ * Runs on the caller's transaction. An unlink (`unlink: true`) applies from
+ * the book's present (`reparentFromBookPresent` with no card: versions from the
+ * present on become card-less keeping the card's words, earlier ones stay on
+ * the card, and the base keeps the card it has); with no present it applies to
+ * every version.
+ *
+ * `onto: "shown"` (the member page's Save, owner 2026-11-06) writes **the
+ * version shown** instead — the cast version in force at the book's present
+ * on main (`versionsAtBookPresent`); the form's `before` is that version's
+ * columns. The link, unlink and swap calls are the same; the target is
+ * picked again after them (after a link or unlink at a present it is the
+ * carrier; with no present, main's head pick), read against its own parent
+ * card version. A target that is the base is written by the author path, any
+ * other in place (`updateCastVersion`).
+ *
+ * Linking a card-less member, or swapping its card, re-parents the member's
+ * versions onto the new card's current card version **from the book's present**
+ * (`reparentFromBookPresent`; earlier versions keep their own words), or every
+ * version when the book has no present: a link follows what the form leaves
+ * unretold, a swap keeps what each version followed. With no present the form's
+ * own fields then land on the base, read against the new card; with one the
+ * base keeps its card and they land on it read against that.
+ */
+async function writeMemberEdit(
+	tx: Db,
+	member: MemberRow,
+	update: Record<string, unknown>,
+	opts: { writtenBy: string; unlink: boolean; onto: "base" | "shown" }
+): Promise<{
+	before: MemberColumnsOfVersion
+	after: MemberColumnsOfVersion
+	changes: CastVersionChanges | null
+	version: VersionRow | null
+}> {
+	if (opts.onto === "shown") {
+		const shownBefore = (await versionsAtBookPresent(tx, [member])).get(
+			member.id
+		)
+		// A member with no version yet: the base path makes it.
+		if (shownBefore)
+			return writeShownEdit(tx, member, update, opts, shownBefore)
+	}
+	const base = (await baseVersionsOf(tx, [member.id])).get(member.id)
+	const carded = member.characterId != null
+	const before = base
+		? memberColumnsOfVersion(base, { carded })
+		: columnsOfRow(member, carded)
+	const picked: Record<string, unknown> = {}
+	for (const key of [
+		...FROZEN_MEMBER_KEYS,
+		...BOTH_WAYS_MEMBER_KEYS,
+		...VERSION_ONLY_MEMBER_KEYS,
+		// A version key, as on the shown path: without it a create (or a
+		// member with no version yet) dropped its group-only greetings.
+		"groupOnlyGreetings"
+	])
+		if (update[key] !== undefined) picked[key] = update[key]
+	const after: MemberColumnsOfVersion = {
+		...before,
+		...(picked as Partial<MemberColumnsOfVersion>)
+	}
+	const nextCharacterId =
+		update.characterId !== undefined
+			? ((update.characterId as number | null) ?? null)
+			: member.characterId
+
+	let unlinkedAtPresent = false
+	if (opts.unlink) {
+		const { present } = await reparentFromBookPresent(tx, member.id, {
+			cardId: null,
+			writtenBy: opts.writtenBy
+		})
+		unlinkedAtPresent = present != null
+	}
+	const movesCard =
+		!opts.unlink &&
+		nextCharacterId != null &&
+		nextCharacterId !== member.characterId
+	let reparented = false
+	if (movesCard && base) {
+		const newCard = await ensureCardVersion(tx, nextCharacterId!)
+		const { present } = await reparentFromBookPresent(tx, member.id, {
+			cardId: nextCharacterId!,
+			follows: carded
+				? undefined
+				: memberProfileOf(
+						{ ...after, name: after.name ?? "" },
+						newCard ? profileOf(newCard) : null
+					).follows,
+			writtenBy: opts.writtenBy
+		})
+		reparented = present == null
+	}
+	// With a present the base keeps the card it has: the form's other fields
+	// are read against that card, not the new one.
+	const baseKeepsCard =
+		(movesCard && !!base && !reparented) || unlinkedAtPresent
+	const baseNow = reparented
+		? (await baseVersionsOf(tx, [member.id])).get(member.id)
+		: base
+	let card: ReturnType<typeof profileOf> | null = null
+	if ((!opts.unlink || unlinkedAtPresent) && (carded || movesCard)) {
+		const parentId = baseNow?.parentVersionId
+		const parent =
+			baseNow == null
+				? await ensureCardVersion(
+						tx,
+						(unlinkedAtPresent
+							? member.characterId
+							: nextCharacterId)!
+					)
+				: parentId != null
+					? (
+							await tx
+								.select()
+								.from(schema.characterVersions)
+								.where(
+									eq(schema.characterVersions.id, parentId)
+								)
+						)[0]
+					: undefined
+		card = parent ? profileOf(parent) : null
+	}
+	const changes = castChangesOfMemberEdit(
+		{ ...before, characterId: member.characterId },
+		{
+			...after,
+			characterId: baseKeepsCard ? member.characterId : nextCharacterId
+		},
+		card
+	)
+	if (!changes) return { before, after, changes, version: null }
+	const { version } = await writeCastVersion(tx, {
+		member: member.id,
+		changes,
+		writtenBy: opts.writtenBy,
+		at: { branchId: null, date: null, personalPosition: null }
+	})
+	return { before, after, changes, version }
+}
+
+/** A cast version's parent card version, when it has one. */
+async function parentCardVersionOf(
+	tx: Db,
+	version: VersionRow
+): Promise<VersionRow | undefined> {
+	if (version.parentVersionId == null) return undefined
+	const [parent] = await tx
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.id, version.parentVersionId))
+	return parent
+}
+
+/** `writeMemberEdit` with `onto: "shown"`: the edit lands on the version in force at the book's present. */
+async function writeShownEdit(
+	tx: Db,
+	member: MemberRow,
+	update: Record<string, unknown>,
+	opts: { writtenBy: string; unlink: boolean },
+	shownBefore: VersionRow
+): Promise<{
+	before: MemberColumnsOfVersion
+	after: MemberColumnsOfVersion
+	changes: CastVersionChanges | null
+	version: VersionRow | null
+}> {
+	const beforeCardId =
+		(await parentCardVersionOf(tx, shownBefore))?.cardId ?? null
+	const before = memberColumnsOfVersion(shownBefore, {
+		carded: shownBefore.parentVersionId != null
+	})
+	const picked: Record<string, unknown> = {}
+	for (const key of [
+		...FROZEN_MEMBER_KEYS,
+		...BOTH_WAYS_MEMBER_KEYS,
+		...VERSION_ONLY_MEMBER_KEYS,
+		"groupOnlyGreetings"
+	])
+		if (update[key] !== undefined) picked[key] = update[key]
+	const after: MemberColumnsOfVersion = {
+		...before,
+		...(picked as Partial<MemberColumnsOfVersion>)
+	}
+	const nextCharacterId =
+		update.characterId !== undefined
+			? ((update.characterId as number | null) ?? null)
+			: member.characterId
+
+	if (opts.unlink)
+		await reparentFromBookPresent(tx, member.id, {
+			cardId: null,
+			writtenBy: opts.writtenBy
+		})
+	// A card the version shown already reads is no move (the stored row can
+	// hold another card than a dated card change leaves at the present).
+	const movesCard =
+		!opts.unlink &&
+		nextCharacterId != null &&
+		nextCharacterId !== member.characterId &&
+		nextCharacterId !== beforeCardId
+	if (movesCard) {
+		const newCard = await ensureCardVersion(tx, nextCharacterId!)
+		await reparentFromBookPresent(tx, member.id, {
+			cardId: nextCharacterId!,
+			follows:
+				beforeCardId != null
+					? undefined
+					: memberProfileOf(
+							{ ...after, name: after.name ?? "" },
+							newCard ? profileOf(newCard) : null
+						).follows,
+			writtenBy: opts.writtenBy
+		})
+	}
+
+	// The target, picked again: a link or unlink at a present made a carrier.
+	const target =
+		(await versionsAtBookPresent(tx, [member])).get(member.id) ??
+		shownBefore
+	const parent = await parentCardVersionOf(tx, target)
+	const card = parent ? profileOf(parent) : null
+	const changes = castChangesOfMemberEdit(
+		{ ...before, characterId: beforeCardId },
+		{ ...after, characterId: parent?.cardId ?? null },
+		card
+	)
+	if (!changes) return { before, after, changes, version: null }
+	const version = isBaseVersion(target)
+		? (
+				await writeCastVersion(tx, {
+					member: member.id,
+					changes,
+					writtenBy: opts.writtenBy,
+					at: { branchId: null, date: null, personalPosition: null }
+				})
+			).version
+		: await updateCastVersion(tx, target.id, { changes })
+	return { before, after, changes, version }
+}
 
 /**
  * Type-safe handler for listing lorebook bindings
@@ -1172,9 +1871,17 @@ export async function buildLorebookBindingList(
 
 	if (!book) throw new Error(LOREBOOK_NOT_FOUND)
 
+	const present = (await bookPresentOf(db, lorebookId))?.date
 	return {
 		lorebookId: book.id,
-		lorebookBindingList: book.lorebookBindings
+		lorebookBindingList: await castMemberRowsOf(db, book.lorebookBindings),
+		present: present
+			? {
+					year: present.year,
+					month: present.month ?? null,
+					day: present.day ?? null
+				}
+			: null
 	}
 }
 
@@ -1241,7 +1948,7 @@ export const lorebookBindingsForCharacterHandler: Handler<
 
 			const character = await db.query.characters.findFirst({
 				where: eq(schema.characters.id, params.characterId),
-				columns: { id: true, userId: true }
+				columns: { id: true, userId: true, name: true, nickname: true }
 			})
 			if (!character) throw new Error("Character not found.")
 			if (
@@ -1251,17 +1958,20 @@ export const lorebookBindingsForCharacterHandler: Handler<
 				throw new Error("Character not found.")
 			}
 
-			const bindings = await db.query.lorebookBindings.findMany({
-				where: eq(
-					schema.lorebookBindings.characterId,
-					params.characterId
-				),
-				with: {
-					lorebook: {
-						columns: { id: true, name: true, userId: true }
+			const bindings = await castMemberRowsOf(
+				db,
+				await db.query.lorebookBindings.findMany({
+					where: eq(
+						schema.lorebookBindings.characterId,
+						params.characterId
+					),
+					with: {
+						lorebook: {
+							columns: { id: true, name: true, userId: true }
+						}
 					}
-				}
-			})
+				})
+			)
 
 			const seen = new Set<number>()
 			const lorebooks = bindings
@@ -1288,7 +1998,12 @@ export const lorebookBindingsForCharacterHandler: Handler<
 					lorebookId: b.lorebook!.id,
 					lorebookName: b.lorebook!.name,
 					castId: b.id,
-					retold: retoldFieldList(b.retold)
+					retold: retoldFieldList(b.retold),
+					followsCard: followsCardFields(b.retold),
+					memberName: memberShownName(b, character),
+					cardVersion: b.cardVersion,
+					cardCurrentVersion: b.cardCurrentVersion,
+					behindCard: b.behindCard
 				}))
 
 			const res: Sockets.Lorebooks.BindingsForCharacter.Response = {
@@ -1307,6 +2022,124 @@ export const lorebookBindingsForCharacterHandler: Handler<
 		}
 	},
 	"This character's lorebooks could not be listed."
+)
+
+/**
+ * 🚧 `lorebooks:memberOfSeat` — the cast member one seat of a session seats,
+ * for a press on a person's name in the session (owner ruling 2026-11-05:
+ * "the cast panel and a message's name open the cast member page in its
+ * book"). Asked by the session's owner or a guest; a stranger is refused in
+ * the words that never confirm the session exists.
+ *
+ * `opensInBook` says whether the asker can open that member's book in their
+ * Lorebooks view: they may read the book (`lorebookAccessFor`) AND the book is
+ * not someone else's session notes — the view lists only the asker's own
+ * books, books shared with them, provided books and their own sessions'
+ * notes. When it cannot open there, `sheet` carries the read-only sheet the
+ * session draws instead: name, face and the parts the member tells in its own
+ * words, nothing else. A seat with no member yet answers `member: null`.
+ *
+ * Event is not gated by `interest.ts` (it is the asker's own one-shot reply).
+ */
+export const lorebookMemberOfSeatHandler: Handler<
+	Sockets.Lorebooks.MemberOfSeat.Params,
+	Sockets.Lorebooks.MemberOfSeat.Response
+> = refusable(
+	"lorebooks:memberOfSeat",
+	async (socket, params: Sockets.Lorebooks.MemberOfSeat.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const { sessionId, ref } = params
+		if (
+			!Number.isSafeInteger(sessionId) ||
+			typeof ref !== "string" ||
+			!(await checkSessionAccess(sessionId, userId, db as unknown as Db))
+				.hasAccess
+		)
+			throw new Error(
+				"Access denied. Session not found or no permission to access."
+			)
+
+		if (!parseSeatRef(ref))
+			throw new Error("This cast member could not be read.")
+		const seat = await seatOf(db as unknown as Db, sessionId, ref)
+		let read = null
+		if (seat?.cardId != null)
+			read = (
+				await seatMembersAsRead(db as unknown as Db, sessionId, [
+					{
+						castMemberId: seat.castMemberId,
+						character: { id: seat.cardId }
+					}
+				])
+			)[0]
+		else if (seat?.castMemberId != null)
+			read = await memberAsRead(db as unknown as Db, seat.castMemberId, {
+				sessionId
+			})
+
+		let member: Sockets.Lorebooks.MemberOfSeat.Response["member"] = null
+		if (read) {
+			const access = await lorebookAccessFor(read.lorebookId, userId, {
+				db: db as unknown as Db,
+				isAdmin: socket.user?.isAdmin
+			})
+			let opensInBook = false
+			if (access === "owner" || access === "shared") {
+				const [book] = await db
+					.select({
+						userId: schema.lorebooks.userId,
+						sessionId: schema.lorebooks.sessionId
+					})
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, read.lorebookId))
+					.limit(1)
+				opensInBook =
+					!!book && (book.sessionId == null || book.userId === userId)
+			}
+			member = {
+				castMemberId: read.castMemberId,
+				lorebookId: read.lorebookId,
+				opensInBook,
+				sheet: opensInBook
+					? null
+					: {
+							name: read.name,
+							nickname: read.nickname,
+							shownName: read.shownName,
+							faceMediaId: read.faceMediaId,
+							ownWords: RETOLD_FIELDS.flatMap((field) => {
+								// Words only: the face is a picture; the notes, the
+								// instructions and the likeness are not a sheet's prose.
+								if (
+									field === "face" ||
+									field === "postHistoryInstructions" ||
+									field === "creatorNotes" ||
+									field === "likeness" ||
+									read.followsCard.includes(field)
+								)
+									return []
+								const value = read[field]
+								const texts = (
+									Array.isArray(value) ? value : [value]
+								).filter(
+									(t): t is string =>
+										typeof t === "string" && t.trim() !== ""
+								)
+								return texts.length ? [{ field, texts }] : []
+							})
+						}
+			}
+		}
+
+		const res: Sockets.Lorebooks.MemberOfSeat.Response = {
+			sessionId,
+			ref,
+			member
+		}
+		emitToUser("lorebooks:memberOfSeat", res)
+		return res
+	},
+	"This cast member could not be read."
 )
 
 /**
@@ -1351,14 +2184,40 @@ export async function insertBackgroundBinding(
 	values: Omit<
 		Partial<typeof schema.lorebookBindings.$inferInsert>,
 		"id" | "lorebookId" | "binding" | "characterId"
-	>
+	>,
+	opts?: { writtenBy?: string | null }
 ) {
 	const token = await deriveNextBindingToken(lorebookId, tx)
-	const [inserted] = await tx
-		.insert(schema.lorebookBindings)
-		.values({ ...values, lorebookId, characterId: null, binding: token })
-		.returning()
-	return inserted
+	// Born with its base version (`insertCastMember`), in the same transaction.
+	const { member } = await insertCastMember(
+		tx,
+		{ ...values, lorebookId, characterId: null, binding: token },
+		{ writtenBy: opts?.writtenBy ?? null }
+	)
+	return member
+}
+
+/**
+ * The member's `timbre` a socket sent, made safe to store: the card rule
+ * (`validateTimbre`) — a refused one throws its reason; without
+ * `canPickVoice` the previous voices are kept. `null` on a carded member is
+ * *Use from card* and passes as it is. Only the `timbre` key is touched.
+ */
+async function checkMemberTimbre(
+	sent: Record<string, unknown>,
+	user: Parameters<typeof canPickVoice>[0],
+	previous: CharacterTimbreInput,
+	carded: boolean
+): Promise<void> {
+	if (!("timbre" in sent) || sent.timbre === undefined) return
+	if (sent.timbre === null && carded) return
+	const result = await validateTimbre(sent.timbre, {
+		db,
+		canPickVoice: canPickVoice(user),
+		previous
+	})
+	if (!result.ok) throw new Error(result.reason)
+	sent.timbre = result.timbre
 }
 
 export const createLorebookBindingHandler: Handler<
@@ -1374,6 +2233,8 @@ export const createLorebookBindingHandler: Handler<
 		const userId = socket.user!.id
 
 		const book = await assertOwnedBook(db, userId, params.lorebookBinding.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 
 		if (
 			!(await verifyBindingTargetAccess(params.lorebookBinding, userId))
@@ -1412,6 +2273,18 @@ export const createLorebookBindingHandler: Handler<
 		const safeInsert = isBound
 			? (({ name, aliases, ...r }) => r)(rest)
 			: rest
+		await checkMemberTimbre(
+			safeInsert as Record<string, unknown>,
+			socket.user,
+			{},
+			isBound
+		)
+		const versionOnlyOnCreate = await versionOnlyProblem(
+			db,
+			safeInsert as Record<string, unknown>,
+			userId
+		)
+		if (versionOnlyOnCreate) throw new Error(versionOnlyOnCreate)
 
 		await validateBindingCrossRefs(
 			safeInsert,
@@ -1461,10 +2334,35 @@ export const createLorebookBindingHandler: Handler<
 					Object.entries(rest).filter(([, v]) => v !== undefined)
 				)
 				if (Object.keys(extra).length > 0) {
-					await db
-						.update(schema.lorebookBindings)
-						.set(extra)
-						.where(eq(schema.lorebookBindings.id, id))
+					// The frozen member columns ride onto the member's base
+					// version, not the row; the rest is the binding's.
+					const bindingSet = { ...extra }
+					for (const key of [
+						...FROZEN_MEMBER_KEYS,
+						...VERSION_ONLY_MEMBER_KEYS
+					])
+						delete bindingSet[key]
+					// A version key, never a column of the row.
+					delete bindingSet.groupOnlyGreetings
+					await db.transaction(async (tx) => {
+						await tx.execute(
+							sql`select pg_advisory_xact_lock(${params.lorebookBinding.lorebookId})`
+						)
+						if (Object.keys(bindingSet).length > 0)
+							await tx
+								.update(schema.lorebookBindings)
+								.set(bindingSet)
+								.where(eq(schema.lorebookBindings.id, id))
+						const [member] = await tx
+							.select()
+							.from(schema.lorebookBindings)
+							.where(eq(schema.lorebookBindings.id, id))
+						await writeMemberEdit(tx, member, extra, {
+							writtenBy: `user:${userId}`,
+							unlink: false,
+							onto: "base"
+						})
+					})
 				}
 			}
 			// Re-read rather than trust the insert's own .returning(): the
@@ -1474,19 +2372,38 @@ export const createLorebookBindingHandler: Handler<
 				.select()
 				.from(schema.lorebookBindings)
 				.where(eq(schema.lorebookBindings.id, id))
+			;[binding] = await castMemberRowsOf(db, [binding])
 		} else {
 			const {
 				lorebookId: _lorebookId,
 				characterId: _characterId,
 				...values
 			} = safeInsert as Record<string, any>
-			binding = await db.transaction((tx) =>
-				insertBackgroundBinding(
+			binding = await db.transaction(async (tx) => {
+				const member = await insertBackgroundBinding(
 					tx,
 					params.lorebookBinding.lorebookId,
-					values
+					values,
+					{ writtenBy: `user:${userId}` }
 				)
-			)
+				// The base is built from the row, which has no column for the
+				// version-only keys or group-only greetings: they ride onto it
+				// here, as a carded create's do.
+				const versionKeys: Record<string, unknown> = {}
+				for (const key of [
+					...VERSION_ONLY_MEMBER_KEYS,
+					"groupOnlyGreetings"
+				])
+					if (values[key] !== undefined) versionKeys[key] = values[key]
+				if (Object.keys(versionKeys).length > 0)
+					await writeMemberEdit(tx, member, versionKeys, {
+						writtenBy: `user:${userId}`,
+						unlink: false,
+						onto: "base"
+					})
+				return member
+			})
+			;[binding] = await castMemberRowsOf(db, [binding])
 		}
 
 		// The refreshed cast, lazily — and exactly ONE of it.
@@ -1524,7 +2441,7 @@ export const updateLorebookBindingHandler: Handler<
 		socket,
 		params: Sockets.Lorebooks.UpdateBinding.Params,
 		emitToUser
-	) => {
+	): Promise<Sockets.Lorebooks.UpdateBinding.Response> => {
 		const userId = socket.user!.id
 
 		// Check if binding exists and user owns the lorebook
@@ -1541,6 +2458,11 @@ export const updateLorebookBindingHandler: Handler<
 		if (!lorebookOwner) {
 			throw new Error("Access denied.")
 		}
+		// What the member form shows and compares against: the frozen columns
+		// as the base version holds them.
+		const [storedMember] = await castMemberRowsOf(db, [existingBinding])
+		const primerProblem = await primerRowEditProblem(db, lorebookOwner.id)
+		if (primerProblem) throw new Error(primerProblem)
 
 		if (
 			!(await verifyBindingTargetAccess(params.lorebookBinding, userId))
@@ -1558,6 +2480,10 @@ export const updateLorebookBindingHandler: Handler<
 		// before and after this update has no entity to sync from, so its
 		// name is exactly what the client supplies here — the only way to
 		// rename a background character after creation.
+		//
+		// Its name still comes from the sync below — which applies the book's
+		// own name/nickname for the member (`ownName`/`ownNickname`, §0-D)
+		// when it has them, and the card's otherwise.
 		//
 		// ⚠ `aliases` are NOT stripped for a carded member (#114): the other
 		// names a member is known by are MEMBER-owned (cast-first, ruled
@@ -1593,11 +2519,53 @@ export const updateLorebookBindingHandler: Handler<
 			? (({ name, ...r }) => r)(restUpdate)
 			: restUpdate
 
+		// The member's own name and nickname in this book (§0-D): text; NULL =
+		// *Use from card*, an own `""` nickname = none in this book (★L-3b).
+		// Only a carded member has them — a background member's name IS its
+		// name, so they are dropped here first, silently, as before.
+		if (!willBeBound) {
+			delete (safeUpdate as Record<string, unknown>).ownName
+			delete (safeUpdate as Record<string, unknown>).ownNickname
+		}
+		const ownNamesProblem = normaliseOwnNames(
+			safeUpdate as Record<string, unknown>
+		)
+		if (ownNamesProblem) throw new Error(ownNamesProblem)
+
+		await checkMemberTimbre(
+			safeUpdate as Record<string, unknown>,
+			socket.user,
+			storedMember.timbre ?? {},
+			willBeBound
+		)
+
 		await validateBindingCrossRefs(
 			safeUpdate,
 			existingBinding.lorebookId,
 			existingBinding.id
 		)
+
+		// A provided book keeps its cast's names and faces (M2e): a change to
+		// either, against the stored row, is refused — before the face is judged; the person's clone is theirs.
+		{
+			const [book] = await db
+				.select({
+					uuid: schema.lorebooks.uuid,
+					extraJson: schema.lorebooks.extraJson
+				})
+				.from(schema.lorebooks)
+				.where(eq(schema.lorebooks.id, existingBinding.lorebookId))
+				.limit(1)
+			const castProblem =
+				book &&
+				(await providedCastProblem(
+					db,
+					book,
+					storedMember,
+					safeUpdate as Record<string, unknown>
+				))
+			if (castProblem) throw new Error(castProblem)
+		}
 
 		// The retold columns (PLAN-cast-retold-fields): checked as themselves,
 		// and a new face must be a picture this member may wear — the asker's
@@ -1612,11 +2580,18 @@ export const updateLorebookBindingHandler: Handler<
 					params.lorebookBinding.characterId !== undefined
 						? (params.lorebookBinding.characterId ?? null)
 						: existingBinding.characterId,
-				faceMediaId: existingBinding.faceMediaId
+				faceMediaId: storedMember.faceMediaId
 			},
 			userId
 		)
 		if (retoldProblem) throw new Error(retoldProblem)
+		const versionOnly = await versionOnlyProblem(
+			db,
+			safeUpdate as Record<string, unknown>,
+			userId
+		)
+		if (versionOnly) throw new Error(versionOnly)
+
 
 		// Linking a card to a background member: the member's own name and
 		// aliases are about to be overwritten by the card's (the entity sync
@@ -1645,17 +2620,31 @@ export const updateLorebookBindingHandler: Handler<
 		// A payload that names nothing writable still touches the row (its
 		// `updatedAt`, as the id-only SET this replaced did) — drizzle refuses
 		// an empty SET.
-		const set = Object.fromEntries(
+		const sent = Object.fromEntries(
 			Object.entries({ ...setValues, ...absorbed }).filter(
 				([, v]) => v !== undefined
 			)
 		)
+		// The frozen member columns are not the row's to write: they go onto the
+		// member's base version below. `fields` stays every key the person sent.
+		const fields = Object.keys(sent)
+		const set = { ...sent }
+		for (const key of [...FROZEN_MEMBER_KEYS, ...VERSION_ONLY_MEMBER_KEYS])
+			delete set[key]
+		// A version key, never a column of the row.
+		delete set.groupOnlyGreetings
+		const unlinking =
+			existingBinding.characterId != null &&
+			params.lorebookBinding.characterId !== undefined &&
+			params.lorebookBinding.characterId == null
 		// A card is one member's (plan A25): linking one another member has —
 		// linked, or drawn with from a date — would make one seat two people.
 		// Asked and written under the book's lock, the one every cast writer
 		// takes (`resolveOrCreateBindingRow`, a dated change's write), so two
 		// tabs cannot both give one card away.
 		const linking = params.lorebookBinding.characterId
+		let laterVersions = { changed: 0, kept: 0 }
+		let ownNamesChanged = false
 		let [updatedBinding] = await db.transaction(async (tx) => {
 			await tx.execute(
 				sql`select pg_advisory_xact_lock(${existingBinding.lorebookId})`
@@ -1672,11 +2661,114 @@ export const updateLorebookBindingHandler: Handler<
 						`${holder.name} already has that card in this lorebook, and a card draws one cast member.`
 					)
 			}
-			return tx
+			const written = await tx
 				.update(schema.lorebookBindings)
 				.set(Object.keys(set).length > 0 ? set : { updatedAt: new Date() })
 				.where(eq(schema.lorebookBindings.id, params.lorebookBinding.id!))
 				.returning()
+
+			// The member's words: its base version (undated, main, no life
+			// point) takes the edit.
+			const writtenBy = `user:${userId}`
+			const edit = await writeMemberEdit(tx, existingBinding, sent, {
+				writtenBy,
+				unlink: unlinking,
+				onto: "shown"
+			})
+			// The card's sprites, gallery and stats go to the member (the row's
+			// `character_id` was nulled above, so the card is passed).
+			if (unlinking)
+				await makeMemberCardless(tx as unknown as Db, existingBinding.id, {
+					cause: "unlink",
+					card: existingBinding.characterId!
+				})
+			ownNamesChanged =
+				edit.after.ownName !== edit.before.ownName ||
+				edit.after.ownNickname !== edit.before.ownNickname
+
+			// ★CV-13: the member's later versions on main either keep their own
+			// words or take the same edit. Story-written ones (with a source
+			// session) always keep theirs. "Later" is after the version
+			// written: every dated one when it is the base, else those dated
+			// after it (or the same date, written after it).
+			if (edit.changes && edit.version) {
+				const V = schema.characterVersions
+				const written = edit.version
+				const writtenDate =
+					written.year != null
+						? {
+								year: written.year,
+								month: written.month,
+								day: written.day
+							}
+						: null
+				const later = (
+					await tx
+						.select()
+						.from(V)
+						.where(
+							and(
+								eq(V.castMemberId, existingBinding.id),
+								isNull(V.branchId),
+								isNull(V.cardId),
+								isNull(V.retiredOrder),
+								ne(V.id, written.id)
+							)
+						)
+						.orderBy(
+							asc(V.year),
+							asc(V.month),
+							asc(V.day),
+							asc(V.writeOrder)
+						)
+				).filter((row) => {
+					if (isBaseVersion(written)) return true
+					if (row.year == null) return false
+					if (!writtenDate) return true
+					const order = compareDates(
+						{ year: row.year, month: row.month, day: row.day },
+						writtenDate
+					)
+					return (
+						order > 0 ||
+						(order === 0 && row.writeOrder > written.writeOrder)
+					)
+				})
+				const follows = Object.values(edit.changes).some(
+					(v) =>
+						!!v &&
+						typeof v === "object" &&
+						(v as { follow?: unknown }).follow === true
+				)
+				for (const row of later) {
+					const takes =
+						params.changeLaterVersions === true &&
+						row.sourceSessionId == null &&
+						row.year != null &&
+						!(follows && row.parentVersionId == null)
+					if (!takes) {
+						laterVersions.kept++
+						continue
+					}
+					await writeCastVersion(tx, {
+						member: existingBinding.id,
+						changes: edit.changes,
+						writtenBy,
+						at: {
+							branchId: null,
+							date: {
+								year: row.year!,
+								month: row.month,
+								day: row.day
+							},
+							historyEntryId: row.historyEntryId,
+							personalPosition: row.personalPosition
+						}
+					})
+					laterVersions.changed++
+				}
+			}
+			return written
 		})
 
 		// A person's edit settles the fields' standing imprints at once (pr-6 A3).
@@ -1685,7 +2777,7 @@ export const updateLorebookBindingHandler: Handler<
 			await markImprintsKept(db, {
 				subjectKind: "member",
 				subjectId: params.lorebookBinding.id!,
-				fields: Object.keys(set)
+				fields
 			})
 		}
 
@@ -1712,7 +2804,10 @@ export const updateLorebookBindingHandler: Handler<
 				),
 				columns: { id: true }
 			}))
-		if (updatedBinding.characterId && (attaching || ownCard)) {
+		if (
+			updatedBinding.characterId &&
+			(attaching || ownCard || ownNamesChanged)
+		) {
 			await syncLorebookBindingsForCharacter(
 				updatedBinding.characterId,
 				undefined,
@@ -1728,11 +2823,19 @@ export const updateLorebookBindingHandler: Handler<
 		// `relistBindings` emits `lorebooks:bindingList` itself, so a second
 		// emit of its result beside this call is the same payload twice. One
 		// stood here; it is gone.
-		if (emitToUser)
+		await tellMemberSessions(socket.io, db, existingBinding.lorebookId, existingBinding.id)
+		if (emitToUser) {
 			await relistBindings(socket, existingBinding.lorebookId, emitToUser)
+			// The version shown is a Changes row, and its columns changed.
+			const { buildAmendmentsList } = await import("./amendments")
+			await emitToUser("amendments:list", () =>
+				buildAmendmentsList(userId, existingBinding.lorebookId)
+			)
+		}
 
 		const res: Sockets.Lorebooks.UpdateBinding.Response = {
-			lorebookBinding: updatedBinding
+			lorebookBinding: (await castMemberRowsOf(db, [updatedBinding]))[0],
+			laterVersions
 		}
 
 		if (emitToUser) {
@@ -1746,6 +2849,113 @@ export const updateLorebookBindingHandler: Handler<
 		isUniqueViolation(e)
 			? "That character is already in this lorebook."
 			: undefined
+)
+
+/** How a card version reads in a sentence: `v1.0` for a label that starts with a digit, the label as is, `Version 3` with none (the client's `versionLabelText`). */
+function cardVersionWords(label: string | null, number: number): string {
+	const text = label?.trim()
+	if (!text) return `Version ${number}`
+	return /^\d/.test(text) ? `v${text}` : text
+}
+
+/**
+ * 🚧 `lorebooks:updateMemberToCardVersion` — **Update ‹member› to card
+ * ‹label›** from the member page: the versions of the member that read an
+ * older version of its card move to the card's current version
+ * (`updateMemberToCardVersion`), under the book's lock. The member is the one
+ * the cast list shows ("the most recently active" version at the book's
+ * present, owner 2026-11-06); a card-less member and one already on the
+ * current version are refused in words. Owner of the book only, as every
+ * member edit. Refreshes the cast and answers the member as the list now has
+ * it; `lorebookId` rides at the top because the event is scoped on it.
+ */
+export const updateMemberToCardVersionHandler: Handler<
+	Sockets.Lorebooks.UpdateMemberToCardVersion.Params,
+	Sockets.Lorebooks.UpdateMemberToCardVersion.Response
+> = refusable(
+	"lorebooks:updateMemberToCardVersion",
+	async (
+		socket,
+		params: Sockets.Lorebooks.UpdateMemberToCardVersion.Params,
+		emitToUser
+	): Promise<Sockets.Lorebooks.UpdateMemberToCardVersion.Response> => {
+		const userId = socket.user!.id
+		const castId = Number(params?.castId)
+		const member = Number.isInteger(castId)
+			? await db.query.lorebookBindings.findFirst({
+					where: (lb, { eq }) => eq(lb.id, castId)
+				})
+			: undefined
+		if (!member) throw new Error("That cast member is not in this lorebook.")
+		const lorebookOwner = await findOwnedBook(db, userId, member.lorebookId)
+		if (!lorebookOwner) throw new Error("Access denied.")
+		const primerProblem = await primerRowEditProblem(db, lorebookOwner.id)
+		if (primerProblem) throw new Error(primerProblem)
+
+		const V = schema.characterVersions
+		const { moved, cardVersion } = await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(${member.lorebookId})`
+			)
+			const shown = (await versionsAtBookPresent(tx, [member])).get(
+				member.id
+			)
+			const [parent] =
+				shown?.parentVersionId != null
+					? await tx
+							.select()
+							.from(V)
+							.where(eq(V.id, shown.parentVersionId))
+					: []
+			const [card] =
+				parent?.cardId != null
+					? await tx
+							.select()
+							.from(schema.characters)
+							.where(eq(schema.characters.id, parent.cardId))
+					: []
+			const name = memberShownName(member, card ?? null, member.name)
+			if (!parent || !card)
+				throw new Error(
+					`${name} reads no card in this lorebook, so there is no card version to update to.`
+				)
+			const [current] = await tx
+				.select()
+				.from(V)
+				.where(and(eq(V.cardId, card.id), isNotNull(V.number)))
+				.orderBy(desc(V.number))
+				.limit(1)
+			if (!current || current.id === parent.id)
+				throw new Error(
+					`${name} already reads the card's current version, ${cardVersionWords(parent.label, parent.number ?? 1)}.`
+				)
+			return {
+				moved: await updateMemberToCardVersion(tx, member.id, current.id),
+				cardVersion: {
+					id: current.id,
+					number: current.number!,
+					label: current.label
+				}
+			}
+		})
+
+		await tellMemberSessions(socket.io, db, member.lorebookId, member.id)
+		await relistBindings(socket, member.lorebookId, emitToUser)
+		const [row] = await db
+			.select()
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, member.id))
+		const res: Sockets.Lorebooks.UpdateMemberToCardVersion.Response = {
+			lorebookId: member.lorebookId,
+			castId: member.id,
+			moved,
+			cardVersion,
+			lorebookBinding: (await castMemberRowsOf(db, [row]))[0]
+		}
+		emitToUser("lorebooks:updateMemberToCardVersion", res)
+		return res
+	},
+	"That cast member could not be updated to the card's current version."
 )
 
 /**
@@ -1780,6 +2990,20 @@ export const uploadMemberFaceHandler: Handler<
 		if (!member) throw new Error("That cast member is not in this lorebook.")
 		if (!(await findOwnedBook(db, userId, member.lorebookId)))
 			throw new Error("Access denied.")
+		const primerProblem = await primerRowEditProblem(db, member.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
+		// A provided book keeps its cast's faces (§0-D): no picture is added
+		// to its list. Asked before the bytes are judged or any file written.
+		const [faceBook] = await db
+			.select({
+				uuid: schema.lorebooks.uuid,
+				extraJson: schema.lorebooks.extraJson
+			})
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, member.lorebookId))
+			.limit(1)
+		if (faceBook && (await providedBookKeepsCast(db, faceBook)))
+			throw new Error(PROVIDED_BOOK_CAST_REFUSAL)
 		const raw = params.imageFile as unknown
 		if (
 			!raw ||
@@ -1852,13 +3076,18 @@ export const listMemberFacesHandler: Handler<
 			!(await findOwnedBook(db, userId, lorebookId))
 		)
 			throw new Error("Access denied.")
+		// The faces members wear are their versions' own (a followed face is the
+		// card's).
+		const V = schema.characterVersions
 		const worn = db
-			.select({ id: schema.lorebookBindings.faceMediaId })
-			.from(schema.lorebookBindings)
+			.select({ id: V.faceMediaId })
+			.from(V)
 			.where(
 				and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					isNotNull(schema.lorebookBindings.faceMediaId)
+					eq(V.lorebookId, lorebookId),
+					isNotNull(V.castMemberId),
+					isNotNull(V.faceMediaId),
+					sql`NOT ('faceMediaId' = ANY(${V.follows}))`
 				)
 			)
 		const rows = await db
@@ -1921,6 +3150,23 @@ export const resolveOrCreateBindingByNameHandler: Handler<
 		const userId = socket.user!.id
 
 		await assertOwnedBook(db, userId, params.lorebookId)
+
+		// A primer row is read-only (m2e-F-D): a name it already has resolves; a new one would be a write.
+		const primerProblem = await primerRowEditProblem(db, params.lorebookId)
+		if (primerProblem) {
+			const trimmedName = String(params.name ?? "").trim()
+			const cast = await db.query.lorebookBindings.findMany({
+				where: eq(schema.lorebookBindings.lorebookId, params.lorebookId),
+				columns: { id: true, name: true, aliases: true, absorbedAliases: true }
+			})
+			const matched = cast.some((r) =>
+				entryMatches(
+					{ name: r.name, aliases: collectAliases(r), id: r.id },
+					trimmedName
+				)
+			)
+			if (!matched) throw new Error(primerProblem)
+		}
 
 		// From a session's summarize: Off refuses here, before a member is
 		// added, as the scene's own save would be refused after (plan A22).
@@ -2508,6 +3754,9 @@ async function restoreBoundEntities(
 		boundCharacterId: number | null
 		/** The sprite set the file names for this member, by name. */
 		spriteSet: string | null
+		/** The member's own name and nickname in this book (§0-D), trimmed; null for none. */
+		ownName: string | null
+		ownNickname: string | null
 		/** The number its tag states, in either spelling; null for none. */
 		n: number | null
 		/** Its tag as the file spells it. */
@@ -2518,6 +3767,13 @@ async function restoreBoundEntities(
 		rowId?: number
 	}
 	const landings: Landing[] = []
+	// A member's own names (§0-D) ride the file as optional text; only a
+	// carded member has them, and an over-long one is dropped like a sprite set.
+	const ownText = (v: unknown) => {
+		const t = ownNameValue(v)
+		// `""` is a value (★L-3b: no nickname in this book), kept as is.
+		return t != null && t.length <= LOREBOOK_IMPORT_LIMITS.maxNameChars ? t : null
+	}
 	const firstForCard = new Map<number, Landing>()
 	for (const binding of rawBindings) {
 		const characterId =
@@ -2544,6 +3800,10 @@ async function restoreBoundEntities(
 				binding.spriteSet.length <= LOREBOOK_IMPORT_LIMITS.maxNameChars
 					? binding.spriteSet
 					: null,
+			// An own empty NAME is nothing (refused on save); only the nickname keeps `""`.
+			ownName: boundCharacterId != null ? ownText(binding?.ownName) || null : null,
+			ownNickname:
+				boundCharacterId != null ? ownText(binding?.ownNickname) : null,
 			n,
 			written: n !== null ? (binding.bindingText as string) : null,
 			foldInto:
@@ -2576,15 +3836,20 @@ async function restoreBoundEntities(
 			l.n !== null && keeperOf.get(l.n) === l
 				? castTag(l.n)
 				: await deriveNextBindingToken(lorebookId, dbOrTx)
-		const [row] = await dbOrTx
-			.insert(schema.lorebookBindings)
-			.values({
+		// The member and its base version (`insertCastMember`). The file's
+		// sprite set and own names go in the insert: the base reads them.
+		const { member: row } = await insertCastMember(
+			dbOrTx,
+			{
 				lorebookId,
 				characterId: l.boundCharacterId,
 				binding: l.tag,
-				spriteSet: l.spriteSet
-			})
-			.returning()
+				spriteSet: l.spriteSet,
+				ownName: l.ownName,
+				ownNickname: l.ownNickname
+			},
+			{ writtenBy: `user:${userId}` }
+		)
 		l.rowId = row.id
 		bindingLocalIdToRealId.set(l.localId as number, row.id)
 		boundEntityByRealId.set(row.id, { characterId: l.boundCharacterId })
@@ -2665,7 +3930,7 @@ function retagImportedBook(
 
 /**
  * The card a file's embedded character is, in this user's library: the one
- * with its uuid, unchanged or overwritten — or a new one. A deleted card with
+ * with its uuid, unchanged or given a new card version — or a new one. A deleted card with
  * that uuid is not reused (plan A25): the import makes a new card, under a
  * fresh uuid (`claimIncomingCharacterUuid`), and the deleted one stays
  * deleted.
@@ -2677,8 +3942,11 @@ async function resolveOrOverwriteEmbeddedCharacter(
 ) {
 	const match = await matchEmbeddedCharacter(cardData, userId, dbOrTx)
 	if (match?.unchanged) return match.unchanged
+	// A difference adds a card version (★CV-5: compare with the current
+	// version first — `matchEmbeddedCharacter` — then add one); the label is
+	// the file's, else the suggestion.
 	if (match)
-		return overwriteCharacterFromParsedData(
+		return addCardVersionFromParsedData(
 			match.id,
 			cardData,
 			undefined,
@@ -2715,9 +3983,12 @@ async function matchEmbeddedCharacter(
 		dbOrTx
 	)
 	if (!comparison) return null
-	const { character_book, ...incomingForHash } = cardData
-	return hashCanonicalJson(comparison.comparisonData) ===
-		hashCanonicalJson(incomingForHash)
+	// Against the card's CURRENT version; both sides read through the one
+	// reader the card import compares with (`canonicalCardOf`), so a file
+	// that only spells the same card differently is not a new version.
+	return hashCanonicalJson(
+		await canonicalCardOf(comparison.comparisonData, userId, dbOrTx)
+	) === hashCanonicalJson(await canonicalCardOf(cardData, userId, dbOrTx))
 		? { id: existing.id, unchanged: comparison.character }
 		: { id: existing.id, unchanged: null }
 }
@@ -3247,32 +4518,52 @@ async function restoreNarrativeGraph(
 						: isEntityLinked
 							? rest
 							: nodeFields
-					const [row] = await db
-						.update(schema.lorebookBindings)
-						.set(fieldsToApply)
-						.where(eq(schema.lorebookBindings.id, boundRealId))
-						.returning({
-							id: schema.lorebookBindings.id,
-							summary: schema.lorebookBindings.summary,
-							absorbedAliases:
-								schema.lorebookBindings.absorbedAliases,
-							historyEntryId:
-								schema.lorebookBindings.historyEntryId,
-							sceneId: schema.lorebookBindings.sceneId
+					// The node state and visibility are the member's versions',
+					// not the row's: they go onto its base, with the summary
+					// (and a card-less member's name and aliases), which the
+					// row keeps as well.
+					const { nodeState, nodeVisibility, ...rowSet } =
+						fieldsToApply
+					const row = await db.transaction(async (tx) => {
+						const [updated] = await tx
+							.update(schema.lorebookBindings)
+							.set(rowSet)
+							.where(eq(schema.lorebookBindings.id, boundRealId))
+							.returning()
+						await writeMemberEdit(tx, updated, fieldsToApply, {
+							writtenBy: `user:${userId}`,
+							unlink: false,
+							onto: "base"
 						})
+						return {
+							id: updated.id,
+							summary: updated.summary,
+							absorbedAliases: updated.absorbedAliases,
+							historyEntryId: updated.historyEntryId,
+							sceneId: updated.sceneId
+						}
+					})
 					realId = row.id
 					landedOn.set(row.id, row)
 				} else {
-					const token = await deriveNextBindingToken(lorebookId, db)
-					const [inserted] = await db
-						.insert(schema.lorebookBindings)
-						.values({
+					const inserted = await db.transaction(async (tx) => {
+						const token = await deriveNextBindingToken(
 							lorebookId,
-							characterId: null,
-							binding: token,
-							...nodeFields
-						})
-						.returning()
+							tx
+						)
+						return (
+							await insertCastMember(
+								tx,
+								{
+									lorebookId,
+									characterId: null,
+									binding: token,
+									...nodeFields
+								},
+								{ writtenBy: `user:${userId}` }
+							)
+						).member
+					})
 					realId = inserted.id
 				}
 
@@ -3593,6 +4884,54 @@ function overwrittenStoryTime(serenepub: any) {
 }
 
 /**
+ * 🚧 The rules a lorebook file names, as lorebook columns (owner ruling
+ * ★M3b-S5-1, 2026-11-05: "In the book file, beside the story clock"):
+ * `extensions.serenepub.primaryRuleset` and its optional `rulesetVersion`,
+ * checked as `lorebooks:create` checks a book's rules (`chosenBookRules`: a
+ * ruleset this pub has). Rules this pub lacks bring the book in on Freeform
+ * (`BOOK_DEFAULT_RULES`), said in words; a version it never kept
+ * (`keptRulesetDocument`) is dropped, so the book follows the installed
+ * version, and said. A file that names none returns no columns: a new book
+ * takes the column's default (Freeform), an overwritten one keeps its rules.
+ * ⚠ The book's rules, never a session's: a session adopts them at start, and
+ * a Freeform book brings none (fix7). Exported for the provided-book update.
+ */
+export async function importedBookRules(
+	dbOrTx: Db,
+	serenepub: any,
+	bookName: string
+): Promise<{
+	columns: { primaryRuleset?: string; rulesetVersion?: string | null }
+	warnings: string[]
+}> {
+	const raw = serenepub && typeof serenepub === "object" ? serenepub.primaryRuleset : undefined
+	if (raw === undefined || raw === null) return { columns: {}, warnings: [] }
+	let id: string | undefined
+	try {
+		id = chosenBookRules(raw)
+	} catch {
+		return {
+			columns: { primaryRuleset: BOOK_DEFAULT_RULES, rulesetVersion: null },
+			warnings: [
+				`${bookName} plays ${String(raw)}, which this pub doesn't have — imported on Freeform.`
+			]
+		}
+	}
+	const v = serenepub.rulesetVersion
+	if (id && typeof v === "string" && v) {
+		if (await keptRulesetDocument(dbOrTx, id, v))
+			return { columns: { primaryRuleset: id, rulesetVersion: v }, warnings: [] }
+		return {
+			columns: { primaryRuleset: id, rulesetVersion: null },
+			warnings: [
+				`${bookName} was made with version ${v} of ${id}, which this pub doesn't keep — it plays the installed version.`
+			]
+		}
+	}
+	return { columns: { primaryRuleset: id, rulesetVersion: null }, warnings: [] }
+}
+
+/**
  * What an overwrite-import deletes, or changes, that the file cannot bring
  * back — dated changes, presences, lines (branches) and scenes captured from
  * a session, which no file carries; and, from a format-1 file
@@ -3765,6 +5104,12 @@ async function createLorebookFromParsedCard(
 	// (a caught-but-unhandled statement failure still poisons the rest of
 	// a Postgres transaction, which would silently roll back everything
 	// else restored above it once the outer transaction tried to commit).
+	// The book's rules, read before the transaction on the outer handle.
+	const rules = await importedBookRules(
+		db as unknown as Db,
+		card.extensions?.serenepub,
+		card.name || "Imported Lorebook"
+	)
 	const {
 		book,
 		bindingLocalIdToRealId,
@@ -3786,6 +5131,7 @@ async function createLorebookFromParsedCard(
 				// them (DESIGN-story-time P5). A malformed calendar reads as
 				// free-form rather than failing the import.
 				...importedStoryTime(card.extensions?.serenepub),
+				...rules.columns,
 				// Preserves the imported file's own uuid (when it has one
 				// and this user doesn't already own a row with it — see
 				// claimIncomingLorebookUuid) so a future re-import of this
@@ -3848,7 +5194,7 @@ async function createLorebookFromParsedCard(
 		entryRefs,
 		boundEntityByRealId
 	})
-	return { book, warnings: [...calendarWarnings, ...warnings] }
+	return { book, warnings: [...rules.warnings, ...calendarWarnings, ...warnings] }
 }
 
 /**
@@ -3870,6 +5216,11 @@ async function overwriteLorebookFromParsedCard(
 	// gone with only some/none of the new content in its place. See that
 	// function's comment for why restoreNarrativeGraph and the bound-entity
 	// sync calls stay outside this transaction.
+	const rules = await importedBookRules(
+		db as unknown as Db,
+		card.extensions?.serenepub,
+		card.name || "Imported Lorebook"
+	)
 	const {
 		book,
 		bindingLocalIdToRealId,
@@ -3885,7 +5236,8 @@ async function overwriteLorebookFromParsedCard(
 				name: card.name || "Imported Lorebook",
 				description: card.description,
 				extraJson: extractLorebookLevelExtraJson(rawData),
-				...overwrittenStoryTime(card.extensions?.serenepub)
+				...overwrittenStoryTime(card.extensions?.serenepub),
+				...rules.columns
 			})
 			.where(eq(schema.lorebooks.id, existingId))
 			.returning()
@@ -3958,7 +5310,7 @@ async function overwriteLorebookFromParsedCard(
 		entryRefs,
 		boundEntityByRealId
 	})
-	return { book, warnings: [...calendarWarnings, ...warnings] }
+	return { book, warnings: [...rules.warnings, ...calendarWarnings, ...warnings] }
 }
 
 /**
@@ -4398,6 +5750,8 @@ export const lorebookImportResolveHandler = refusable<
 			let imported: Awaited<ReturnType<typeof createLorebookFromParsedCard>>
 			if (params.action === "overwrite") {
 				const existing = await assertOwnedBook(db, userId, params.existingId)
+				const primerProblem = await primerRowEditProblem(db, existing.id)
+				if (primerProblem) throw new Error(primerProblem)
 				imported = await overwriteLorebookFromParsedCard(
 					existing.id,
 					card,
@@ -4462,8 +5816,10 @@ export function registerLorebookHandlers(
 	// Lorebook binding handlers
 	register(socket, lorebookBindingListHandler, emitToUser)
 	register(socket, lorebookBindingsForCharacterHandler, emitToUser)
+	register(socket, lorebookMemberOfSeatHandler, emitToUser)
 	register(socket, createLorebookBindingHandler, emitToUser)
 	register(socket, updateLorebookBindingHandler, emitToUser)
+	register(socket, updateMemberToCardVersionHandler, emitToUser)
 	register(socket, uploadMemberFaceHandler, emitToUser)
 	register(socket, listMemberFacesHandler, emitToUser)
 	register(socket, resolveOrCreateBindingByNameHandler, emitToUser)

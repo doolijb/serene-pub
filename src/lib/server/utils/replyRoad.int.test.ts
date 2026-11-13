@@ -34,7 +34,7 @@
  * adapter standing in for the model.
  */
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -377,6 +377,23 @@ async function sessionOverride(
 	}
 }
 
+/**
+ * The road to a first chunk is most of a second on PGlite, and longer cold or
+ * under load: the default 1 s wait is not a fact about the product.
+ */
+const FIRST_CHUNK_WAIT = { timeout: 20_000 }
+
+// A case that fails while it holds the stream must not leave the hold armed
+// for every case after it; then the turn's event work settles, so the next
+// case starts on a quiet connection. Release first: a held run never ends.
+afterEach(async () => {
+	releaseStream?.()
+	holdStream = null
+	releaseStream = null
+	adapterClass = FakeAdapter
+	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+})
+
 afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
@@ -435,20 +452,16 @@ describe("the pipeline owns its row", () => {
 		// The save fills the row; the sprite step (DESIGN-sprites §5,
 		// written into the spec since 2026-10-05) follows it — the picker,
 		// then the outlet, which writes nothing for a card with no sprites —
-		// and last the reply tick (live scenes §6, 2026-10-13).
-		expect(keys.slice(-4)).toEqual([steps.save, steps.spritePick, steps.spriteShow, "tick"])
+		// and last — no reply tick any more (owner, 2026-11-11): the round tick
+		// moves Story's clock.
+		expect(keys.slice(-3)).toEqual([steps.save, steps.spritePick, steps.spriteShow])
 		// 🚧 RF fix 3: one tail after the reply junction — each step once, and no copy of it under a branch.
 		for (const k of [steps.save, steps.spritePick!, steps.spriteShow!]) expect(keys.filter((x) => x === k), k).toHaveLength(1)
 		expect(keys.filter((x) => /(^|\.)(save|spritePick|spriteShow)$/.test(x))).toEqual([steps.save, steps.spritePick, steps.spriteShow])
 		const spriteShow = receipt.nodes.find((n) => n.nodeKey === steps.spriteShow)!
 		expect((spriteShow.output as any).kept).toBe(true)
-		// The tick ran and decided nothing — By 0, the shipped default, is
-		// off — so the clock junction and its *Advance story clock* outlet
-		// never ran and wrote nothing.
-		const tick = receipt.nodes.find((n) => n.nodeKey === "tick")!
-		expect(tick.definitionId).toBe("core:task/clock-step@1")
-		expect(tick.result).toBe("ok")
-		expect(tick.output).toMatchObject({ moves: false, by: 0 })
+		// No `tick`, no `clock` junction, no *Advance story clock* outlet in a reply.
+		expect(keys).not.toContain("tick")
 		expect(keys.filter((k) => /^clock(\.|$)/.test(k))).toEqual([])
 		expect(
 			receipt.nodes.some(
@@ -520,7 +533,7 @@ describe("the pipeline owns its row", () => {
 					b.payload.sessionMessage.content
 			)
 			expect(frames.length).toBeGreaterThan(0)
-		})
+		}, FIRST_CHUNK_WAIT)
 		const frame = broadcasts.find(
 			(b) =>
 				b.event === "sessionMessage" &&
@@ -750,9 +763,10 @@ describe("the pipeline owns its row", () => {
 				isPersona: true
 			})
 			.returning()
-		await db
+		const [meSeat] = await db
 			.insert(schema.sessionPersonas)
 			.values({ sessionId, personaId: me.id })
+			.returning()
 		const asMe = await reply(sessionId, {
 			kind: "narrate-character",
 			speaker: {
@@ -772,7 +786,8 @@ describe("the pipeline owns its row", () => {
 		expect((meRow.metadata as any).speaker).toBeFalsy()
 		// The presence is still asked about (it is in the session) and is
 		// its person's, as the member list says — not the model's.
-		expect(meReceipt.portrayals[`character:${me.id}`]).toEqual({
+		// Every player seat is `player-seat:<seatId>` once the member-form switch is on.
+		expect(meReceipt.portrayals[`player-seat:${meSeat!.id}`]).toEqual({
 			by: "person",
 			userId: String(userId)
 		})
@@ -874,7 +889,7 @@ describe("Stop is a run-level guarantee", () => {
 			const [row] = (await messagesOf(sessionId)).slice(-1)
 			expect(row?.isGenerating).toBe(true)
 			expect(row?.content).toBe(CHUNKS[0]!.trim())
-		})
+		}, FIRST_CHUNK_WAIT)
 		// The progress card's X: the run is stopped by name, and the row is
 		// not touched by the click — finalising it is the run's job.
 		const started = events.find((e) => e.event === "pipelines:runStarted")!
@@ -980,7 +995,7 @@ describe("Stop is a run-level guarantee", () => {
 		await vi.waitFor(async () => {
 			const [row] = (await messagesOf(sessionId)).slice(-1)
 			expect(row?.content).toBe(CHUNKS[0]!.trim())
-		})
+		}, FIRST_CHUNK_WAIT)
 		const [live] = (await messagesOf(sessionId)).slice(-1)
 		const res: any = await stopViaHandler(sessionId, live!.id)
 		expect(res.error).toBeUndefined()
@@ -1043,7 +1058,7 @@ describe("Stop is a run-level guarantee", () => {
 		await vi.waitFor(async () => {
 			const [row] = (await messagesOf(sessionId)).slice(-1)
 			expect(row?.content).toBe(CHUNKS[0]!.trim())
-		})
+		}, FIRST_CHUNK_WAIT)
 		const [live] = (await messagesOf(sessionId)).slice(-1)
 		// The handler's unconditional release, as it lands on the row.
 		const { updateLegacyWhere } = await import(
@@ -1094,7 +1109,7 @@ describe("Stop is a run-level guarantee", () => {
 			await vi.waitFor(async () => {
 				const [row] = (await messagesOf(sessionId)).slice(-1)
 				expect(row?.content).toBe(CHUNKS[0]!.trim())
-			})
+			}, FIRST_CHUNK_WAIT)
 			const [live] = (await messagesOf(sessionId)).slice(-1)
 			await stopViaHandler(sessionId, live!.id)
 			const outcome = await done

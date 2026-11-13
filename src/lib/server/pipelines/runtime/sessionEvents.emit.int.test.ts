@@ -685,6 +685,10 @@ describe("M3 · the emitters the modder pass adds (R30/R45 annex, R31 members)",
 			change: "added",
 			cause: { kind: "settings", userId }
 		})
+		// A first omit benches the seat (bench-L1: only an unused benched seat
+		// is removed); the second removes it, and only that one is member-removed.
+		await update([characterId])
+		expect((await ofEvent(s.sessionId, sessionEvents.memberRemoved)).length).toBe(0)
 		await update([characterId])
 		const removed = await ofEvent(s.sessionId, sessionEvents.memberRemoved)
 		expect(removed.length).toBe(1)

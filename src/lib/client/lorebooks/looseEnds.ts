@@ -13,6 +13,10 @@
  * replaced the two saved scopes "Needs keywords" and "Loose ends" (the
  * keyword filter chip stays in the pool's filters).
  *
+ * The two history-date chores come from the owner's 2026-11-10 rulings: ★H3
+ * (existing doubled dates are reported here, never merged) and rule C (a line
+ * owns a history entry only for a date strictly after its fork).
+ *
  * Kept pure so "what is left to do in this book?" is answerable without a
  * browser, and the rail's figure, the queue's groups and Next agree.
  */
@@ -24,6 +28,8 @@ import {
 } from "$lib/shared/entries/types"
 import { CAST_KIND, needsKeywords, SCENE_KIND, type PoolItem } from "./poolFilter"
 import type { CastKind } from "./castPool"
+import { historyOwnerStep, type Line } from "$lib/shared/lorebooks/lineReading"
+import { compareDates } from "$lib/shared/lorebooks/storyDate"
 
 /**
  * The kinds of loose end, in the order the queue works through them.
@@ -36,6 +42,8 @@ import type { CastKind } from "./castPool"
 export type ChoreId =
 	| "needs-keywords"
 	| "undated-history"
+	| "doubled-history-date"
+	| "history-before-fork"
 	| "empty-content"
 	| "undescribed-place"
 	| "cast-suggestion"
@@ -65,6 +73,20 @@ export const CHORES: readonly Chore[] = [
 		id: "undated-history",
 		label: "Undated history",
 		fix: "Give it a year.",
+		field: "date"
+	},
+	{
+		id: "doubled-history-date",
+		label: "Two history entries on one date",
+		// 🚧 provisional copy (★ owner)
+		fix: "Give one of them another date, or move what it says into the other and delete it.",
+		field: "date"
+	},
+	{
+		id: "history-before-fork",
+		label: "A line's own history before its fork",
+		// 🚧 provisional copy (★ owner)
+		fix: "Give it a date after the fork, or delete it.",
 		field: "date"
 	},
 	{
@@ -118,6 +140,8 @@ export interface LooseEnd {
 	/** The entry's kind (a type id) or `cast`, for the row's small label. */
 	kind: string
 	updatedAt: number
+	/** The other entries of a doubled date, oldest first; the row itself opens the oldest (`target`). */
+	alsoEntryIds?: number[]
 }
 
 /** A cast member as the queue reads one. */
@@ -131,6 +155,8 @@ export interface LooseEndMember {
 export interface LooseEndsInput {
 	/** The book's pool on the line being read (scenes ignored). */
 	items: readonly PoolItem[]
+	/** The line being read (`lineOf`); absent reads as main, where no row is before a fork. */
+	line?: Line
 	/** The cast on the line being read. */
 	members?: readonly LooseEndMember[]
 	/**
@@ -175,10 +201,44 @@ export function looseEnds(input: LooseEndsInput): LooseEnd[] {
 		if (needsKeywords(item)) out.push(entry("needs-keywords", item))
 		if (item.kind === HISTORY_TYPE_ID && !item.date)
 			out.push(entry("undated-history", item))
+		if (
+			input.line &&
+			item.kind === HISTORY_TYPE_ID &&
+			item.date &&
+			historyOwnerStep(input.line, item.date).branchId !==
+				(item.branchId ?? null)
+		)
+			out.push(entry("history-before-fork", item))
 		if (item.kind === LOCATION_TYPE_ID) {
 			if (blank(item.content) && !linked.has(item.key))
 				out.push(entry("undescribed-place", item))
 		} else if (blank(item.content)) out.push(entry("empty-content", item))
+	}
+
+	// Archived rows count: the server's one-per-date check does too.
+	const dated = input.items
+		.filter((i) => i.kind === HISTORY_TYPE_ID && i.date)
+		.sort((a, b) => compareDates(a.date!, b.date!) || a.id - b.id)
+	for (let i = 0; i < dated.length; ) {
+		let j = i + 1
+		while (
+			j < dated.length &&
+			compareDates(dated[i].date!, dated[j].date!) === 0
+		)
+			j++
+		if (j - i > 1) {
+			const group = dated.slice(i, j)
+			const first = group.reduce((a, b) => (b.id < a.id ? b : a))
+			out.push({
+				...entry("doubled-history-date", first),
+				updatedAt: Math.max(...group.map((g) => g.updatedAt)),
+				alsoEntryIds: group
+					.filter((g) => g !== first)
+					.map((g) => g.id)
+					.sort((a, b) => a - b)
+			})
+		}
+		i = j
 	}
 
 	input.suggestions?.forEach((s) =>

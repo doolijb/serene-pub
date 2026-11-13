@@ -16,7 +16,12 @@ let n = 0
 
 /** What the rollup held for the session at the moment each push went out. */
 const seenAtPush: Array<{ sessionId: number; rows: number }> = []
-const record = async (_io: unknown, sessionId: number, _event: string, _data: unknown) => {
+const record = async (
+	_io: unknown,
+	sessionId: number,
+	_event: string,
+	_data: unknown
+) => {
 	// Read through the OUTER handle: inside the store's transaction this
 	// would be refused (transactionGuard) — and before its commit, empty.
 	const rows = await db
@@ -34,7 +39,9 @@ vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db)
 	await db
 		.insert(schema.users)
@@ -53,15 +60,27 @@ beforeEach(() => {
 async function newSession(): Promise<number> {
 	const [row] = await db
 		.insert(schema.sessions)
-		.values({ name: `lore-ranked-${n++}`, isGroup: false, userId: 1 } as any)
+		.values({
+			name: `lore-ranked-${n++}`,
+			isGroup: false,
+			userId: 1
+		} as any)
 		.returning({ id: schema.sessions.id })
 	return row.id
 }
 
-const lore = (id: number) => ({ id, source: "worldLore", tokens: 10, payload: { id, name: `Entry ${id}` } })
+const lore = (id: number) => ({
+	id,
+	source: "worldLore",
+	tokens: 10,
+	payload: { id, name: `Entry ${id}` }
+})
 
 /** A turn's receipt whose one ranking judged these candidates. */
-const receiptWith = (decisions: unknown[], extra: Record<string, unknown> = {}) =>
+const receiptWith = (
+	decisions: unknown[],
+	extra: Record<string, unknown> = {}
+) =>
 	({
 		runId: `lore-ranked:${n++}`,
 		specId: "core:spec/story-respond",
@@ -72,7 +91,14 @@ const receiptWith = (decisions: unknown[], extra: Record<string, unknown> = {}) 
 		startedAt: Date.now(),
 		endedAt: Date.now() + 1,
 		nodes: [
-			{ seq: 0, nodeKey: "input", kind: "inlet", definitionId: "core:inlet/user-message@1", result: "ok", output: { speaker: "character:3" } },
+			{
+				seq: 0,
+				nodeKey: "input",
+				kind: "inlet",
+				definitionId: "core:inlet/user-message@1",
+				result: "ok",
+				output: { speaker: "character:3" }
+			},
 			{
 				seq: 1,
 				nodeKey: "rank",
@@ -92,7 +118,9 @@ const io = {} as any
 
 describe("sessions:loreRanked", () => {
 	it("is pushed once, scoped on the session, after the rollup it announces was committed", async () => {
-		const { saveReceipt } = await import("$lib/server/pipelines/runtime/receipts")
+		const { saveReceipt } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		const sessionId = await newSession()
 		const id = await saveReceipt(
 			db,
@@ -104,12 +132,19 @@ describe("sessions:loreRanked", () => {
 		)
 		expect(id).not.toBeNull()
 		expect(broadcast).toHaveBeenCalledTimes(1)
-		expect(broadcast).toHaveBeenCalledWith(io, sessionId, "sessions:loreRanked", { sessionId })
+		expect(broadcast).toHaveBeenCalledWith(
+			io,
+			sessionId,
+			"sessions:loreRanked",
+			{ sessionId }
+		)
 		// The rows were there to read when the push went out.
 		expect(seenAtPush).toEqual([{ sessionId, rows: 2 }])
 		// The payload names the scope the session page declares, and the gate knows the event.
 		expect(isGatedEvent("sessions:loreRanked")).toBe(true)
-		expect(scopeOfPayload("sessions:loreRanked", { sessionId })).toBe(String(sessionId))
+		expect(scopeOfPayload("sessions:loreRanked", { sessionId })).toBe(
+			String(sessionId)
+		)
 		const [stat] = await db
 			.select()
 			.from(schema.rankingSubjectStats)
@@ -123,30 +158,53 @@ describe("sessions:loreRanked", () => {
 	}, 60_000)
 
 	it("is not pushed for a run that ranked no lore, a session-less run, a preview, or no socket server", async () => {
-		const { saveReceipt } = await import("$lib/server/pipelines/runtime/receipts")
+		const { saveReceipt } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		const sessionId = await newSession()
 		// Messages only: counted on the ranking, never a lore subject.
 		await saveReceipt(
 			db,
-			receiptWith([{ candidate: { id: 99, source: "messages", tokens: 5 }, included: true, reason: "recent" }]),
+			receiptWith([
+				{
+					candidate: { id: 99, source: "messages", tokens: 5 },
+					included: true,
+					reason: "recent"
+				}
+			]),
 			{ sessionId, userId: 1, io }
 		)
 		// Outside any session.
-		await saveReceipt(db, receiptWith([{ candidate: lore(23), included: true, reason: "keyword" }]), {
-			userId: 1,
-			io
-		})
+		await saveReceipt(
+			db,
+			receiptWith([
+				{ candidate: lore(23), included: true, reason: "keyword" }
+			]),
+			{
+				userId: 1,
+				io
+			}
+		)
 		// A preview that left nothing behind is never stored.
 		await saveReceipt(
 			db,
-			receiptWith([{ candidate: lore(24), included: true, reason: "keyword" }], { preview: true }),
+			receiptWith(
+				[{ candidate: lore(24), included: true, reason: "keyword" }],
+				{ preview: true }
+			),
 			{ sessionId, userId: 1, io, artifacts: [] }
 		)
 		// Stored, but nobody to tell.
-		await saveReceipt(db, receiptWith([{ candidate: lore(25), included: true, reason: "keyword" }]), {
-			sessionId,
-			userId: 1
-		})
+		await saveReceipt(
+			db,
+			receiptWith([
+				{ candidate: lore(25), included: true, reason: "keyword" }
+			]),
+			{
+				sessionId,
+				userId: 1
+			}
+		)
 		expect(broadcast).not.toHaveBeenCalled()
 		const rows = await db
 			.select()
@@ -157,20 +215,30 @@ describe("sessions:loreRanked", () => {
 	}, 60_000)
 
 	it("a push that fails is logged, and the store and the receipt stand", async () => {
-		const { saveReceipt } = await import("$lib/server/pipelines/runtime/receipts")
+		const { saveReceipt } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		broadcast.mockImplementationOnce(async () => {
 			throw new Error("socket gone")
 		})
 		const sessionId = await newSession()
-		const id = await saveReceipt(db, receiptWith([{ candidate: lore(26), included: true, reason: "keyword" }]), {
-			sessionId,
-			userId: 1,
-			io
-		})
+		const id = await saveReceipt(
+			db,
+			receiptWith([
+				{ candidate: lore(26), included: true, reason: "keyword" }
+			]),
+			{
+				sessionId,
+				userId: 1,
+				io
+			}
+		)
 		expect(id).not.toBeNull()
 		expect(warn).toHaveBeenCalledWith(
-			expect.stringMatching(/could not tell the session its lore was ranked/),
+			expect.stringMatching(
+				/could not tell the session its lore was ranked/
+			),
 			expect.any(Error)
 		)
 		const rows = await db
@@ -188,6 +256,8 @@ describe("pushLoreRanked", () => {
 		await pushLoreRanked(undefined, 4)
 		expect(broadcast).not.toHaveBeenCalled()
 		await pushLoreRanked(io, 4)
-		expect(broadcast).toHaveBeenCalledWith(io, 4, "sessions:loreRanked", { sessionId: 4 })
+		expect(broadcast).toHaveBeenCalledWith(io, 4, "sessions:loreRanked", {
+			sessionId: 4
+		})
 	})
 })

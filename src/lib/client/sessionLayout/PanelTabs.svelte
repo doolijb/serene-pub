@@ -1,18 +1,19 @@
 <script lang="ts">
 	/**
 	 * One PANEL, drawn in the live session (PLAN-session-panels-2026-10-14
-	 * §1.3): its tabs, each a widget, and the two controls a person has over
-	 * the panel from the session itself — its pin (a side panel: docked, or in
-	 * the rail) and the gear that opens the ACTIVE tab's settings.
+	 * §1.3; PLAN 2026-11-05): its tabs, each a widget — and its backing. The
+	 * root IS the card: the layout's look reaches it as `--sp-widget-margin /
+	 * -background / -radius / -border` (./panelBacking `widgetBoxStyle`, the
+	 * shown widget's style on top) in `boxStyle`, and `data-backing` marks a
+	 * glass one. There is no pin and no gear: every panel is always open, and a
+	 * widget's settings are the layout settings' (R4).
 	 *
 	 * - **Two or more tabs** draw a tab strip: a `role="tablist"` with roving
 	 *   focus (Left/Right, Home, End move the selection and the focus; only
-	 *   the selected tab is in the tab order), the pin and the gear after it.
-	 *   Choosing a tab calls `onSelect`, which writes the panel's `open` to
-	 *   the session's layout at once — "which tab you have open" is saved.
-	 * - **One tab** draws NO strip (owner, Q3): the widget's own chrome, with
-	 *   the pin and the gear in a hover overlay at its corner, shown on hover
-	 *   or while focus is inside it.
+	 *   the selected tab is in the tab order). Choosing a tab calls
+	 *   `onSelect`, which writes the panel's `open` to the session's layout
+	 *   at once — "which tab you have open" is saved.
+	 * - **One tab** draws NO strip and no controls: the widget alone.
 	 *
 	 * Every tab stays MOUNTED; the inactive ones are hidden (`.wtab-hidden`,
 	 * the no-reload law), so a frame keeps its state across a switch.
@@ -21,23 +22,14 @@
 	 * mount stays in the renderer.
 	 */
 	import type { Snippet } from "svelte"
-	import * as Icons from "@lucide/svelte"
 	import type { DrawnInstance, DrawnPanel } from "@serene-pub/sdk"
 
 	interface Props {
 		panel: DrawnPanel
 		/** A tab's name on screen. */
 		label: (id: string) => string
-		/** A side panel: it can be docked or moved to the rail. Strips never pin. */
-		pinnable?: boolean
-		/** Draw the pin and the gear (not while the layout editor is open). */
-		controls?: boolean
 		/** A tab chosen. */
 		onSelect: (tab: string) => void
-		/** The pin pressed: `true` docks the panel, `false` moves it to the rail. */
-		onPin?: (pinned: boolean) => void
-		/** The gear pressed, for the active tab. */
-		onSettings?: (tab: string, trigger: HTMLElement) => void
 		/** One tab's widget; `multi` is whether the panel draws a strip. */
 		pane: Snippet<[DrawnInstance, boolean]>
 		/**
@@ -46,18 +38,19 @@
 		 * "new lines" to a screen reader.
 		 */
 		dots?: ReadonlySet<string>
+		/** The panel's backing and its box variables, as the render computed them. */
+		backing?: "card" | "glass" | "none"
+		boxStyle?: string
 	}
 
 	let {
 		panel,
 		label,
-		pinnable = false,
-		controls = true,
 		onSelect,
-		onPin,
-		onSettings,
 		pane,
-		dots
+		dots,
+		backing = "none",
+		boxStyle
 	}: Props = $props()
 
 	const uid = $props.id()
@@ -88,43 +81,9 @@
 		e.preventDefault()
 		select(next, true)
 	}
-	/** The pin's name says what pressing it does. */
-	let pinLabel = $derived(panel.pinned ? "Move to the rail" : "Dock")
-	let activeLabel = $derived(label(active))
 </script>
 
-{#snippet panelControls()}
-	{#if pinnable && onPin}
-		<button
-			type="button"
-			class="ptab-btn"
-			aria-label={pinLabel}
-			title={pinLabel}
-			aria-pressed={panel.pinned}
-			onclick={() => onPin?.(!panel.pinned)}
-		>
-			{#if panel.pinned}
-				<Icons.Pin size={13} aria-hidden="true" />
-			{:else}
-				<Icons.PinOff size={13} aria-hidden="true" />
-			{/if}
-		</button>
-	{/if}
-	{#if onSettings}
-		<button
-			type="button"
-			class="ptab-btn"
-			aria-haspopup="dialog"
-			aria-label="{activeLabel} settings"
-			title="{activeLabel} settings"
-			onclick={(e) => onSettings?.(active, e.currentTarget)}
-		>
-			<Icons.Settings size={13} aria-hidden="true" />
-		</button>
-	{/if}
-{/snippet}
-
-<div class="ptabs" class:multi data-panel-key={panel.key}>
+<div class="ptabs" class:multi data-backing={backing} style={boxStyle}>
 	{#if multi}
 		<div class="ptabs-head">
 			<div
@@ -155,11 +114,6 @@
 					</button>
 				{/each}
 			</div>
-			{#if controls}
-				<div class="ptabs-tools">
-					{@render panelControls()}
-				</div>
-			{/if}
 		</div>
 	{/if}
 	<div class="ptabs-body">
@@ -174,23 +128,30 @@
 				{@render pane(t, multi)}
 			</div>
 		{/each}
-		{#if !multi && controls && (pinnable || onSettings)}
-			<!-- A one-tab panel's controls: no strip, a corner overlay on
-			     hover or focus, over the widget's own chrome. -->
-			<div class="ptabs-hover" role="group" aria-label="{activeLabel} panel">
-				{@render panelControls()}
-			</div>
-		{/if}
 	</div>
 </div>
 
 <style>
+	/* The panel's backing: four variables the host sets inline from the
+	   layout's look (a widget's style may override them), with the no-backing
+	   values as the fallback. A custom widget style can zero any of them. */
 	.ptabs {
 		block-size: 100%;
 		min-block-size: 0;
 		min-inline-size: 0;
 		display: flex;
 		flex-direction: column;
+		margin: var(--sp-widget-margin, 0);
+		background: var(--sp-widget-background, transparent);
+		border-radius: var(--sp-widget-radius, 0);
+		border: var(--sp-widget-border, none);
+		overflow: hidden;
+		box-sizing: border-box;
+	}
+	/* Glass is the theme's tokens (STYLE-GUIDE §2.8). */
+	.ptabs[data-backing="glass"] {
+		backdrop-filter: blur(var(--sp-glass-blur));
+		box-shadow: 0 0 30px var(--sp-glass-glow) inset;
 	}
 	/* The strip: the app's tab idiom (STYLE-GUIDE §6.5) at a panel's size —
 	   a 1px rule under the row, the selected tab underlined in primary. Not
@@ -210,6 +171,7 @@
 		scrollbar-width: none;
 	}
 	.wtab {
+		cursor: pointer;
 		flex: none;
 		block-size: 2rem;
 		padding-inline: 0.6rem;
@@ -237,29 +199,9 @@
 		color: var(--color-primary-500);
 		border-block-end-color: var(--color-primary-500);
 	}
-	.ptabs-tools {
-		flex: none;
-		display: flex;
-		align-items: center;
-		gap: 0.125rem;
-	}
-	.ptab-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		inline-size: 1.5rem;
-		block-size: 1.5rem;
-		border-radius: 0.4rem;
-		color: var(--color-surface-600-400);
-	}
-	.ptab-btn:hover,
-	.ptab-btn:focus-visible {
-		background: color-mix(in oklab, var(--color-primary-500) 15%, transparent);
-		color: var(--color-primary-600);
-	}
 	.ptabs-body {
-		/* The containing block for the hover overlay and for each pane's
-		   widget overlay (WidgetHost's wrapper has no box of its own). */
+		/* The containing block for each pane's widget overlay (WidgetHost's
+		   wrapper has no box of its own). */
 		position: relative;
 		flex: 1;
 		min-block-size: 0;
@@ -282,39 +224,5 @@
 	.wtab-pane > :global(*) {
 		flex: 1;
 		min-block-size: 0;
-	}
-	/* One tab: the controls wait in the corner until the panel is pointed at
-	   or focus is inside it — never covering the widget otherwise. */
-	.ptabs-hover {
-		position: absolute;
-		inset-block-start: 0.25rem;
-		inset-inline-end: 0.25rem;
-		z-index: 5;
-		display: flex;
-		gap: 0.125rem;
-		padding: 0.125rem;
-		border-radius: 0.5rem;
-		background: var(--color-surface-50-950);
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-		opacity: 0;
-		pointer-events: none;
-		transition: opacity var(--transition-duration-fast) ease;
-	}
-	.ptabs:hover .ptabs-hover,
-	.ptabs-hover:focus-within {
-		opacity: 1;
-		pointer-events: auto;
-	}
-	@media (hover: none) {
-		/* No hover on touch: a one-tab panel's controls live in the panels
-		   menu and the editor instead of a corner nobody can reveal. */
-		.ptabs-hover {
-			display: none;
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.ptabs-hover {
-			transition: none;
-		}
 	}
 </style>

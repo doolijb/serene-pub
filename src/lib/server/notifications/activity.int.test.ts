@@ -45,7 +45,9 @@ import {
 } from "$lib/shared/notifications/kinds"
 import {
 	activityHref,
+	activityJob,
 	activityNotice,
+	activitySubject,
 	wireActivityNotifications
 } from "./activity"
 
@@ -421,5 +423,33 @@ describe("activityHref / activityNotice", () => {
 			kind: ACTIVITY_FAILED.id,
 			vars: { job: "History compile", subject: "Year 1 · Chronicle" }
 		})
+	})
+})
+
+describe("lorebook indexing activity", () => {
+	test("a running indexing activity raises no notification, and ending it clears harmlessly", async () => {
+		const owner = await newUser()
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Indexing book", userId: owner })
+			.returning()
+		activityStore.upsertLorebookIndexing({
+			userId: owner,
+			lorebookId: book!.id,
+			lorebookLabel: "Indexing book",
+			indexedCount: 1,
+			total: 3
+		})
+		const activity = activityStore
+			.getFor(owner, false)
+			.find((a) => a.kind === "lorebook_indexing")!
+		expect(activityNotice(activity)).toBeNull()
+		expect(activityJob(activity)).toBe("Indexing")
+		expect(activitySubject(activity)).toBe("Indexing book")
+		expect(activityHref(activity)).toContain(`/lorebooks#`)
+		activityStore.endLorebookIndexing(book!.id)
+		expect(activityStore.getFor(owner, false)).toHaveLength(0)
+		await new Promise((r) => setTimeout(r, 50))
+		expect(await rowsOf(owner)).toHaveLength(0)
 	})
 })

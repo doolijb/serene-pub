@@ -133,7 +133,13 @@ describe("importing a Serene Pub 0.5.3 export (PGlite integration)", () => {
 
 		const stranger = byToken.get("{{char:4}}")!
 		expect(stranger.characterId).toBeNull()
-		expect(stranger.nodeState).toBe("dormant")
+		// The node state is the member's character version's (★CV-10), not
+		// the frozen row column.
+		const [strangerBase] = await testDb
+			.select({ nodeState: schema.characterVersions.nodeState })
+			.from(schema.characterVersions)
+			.where(eq(schema.characterVersions.castMemberId, stranger.id))
+		expect(strangerBase.nodeState).toBe("dormant")
 		// 2-level alias structure from parentLocalId.
 		expect(stranger.parentNodeId).toBe(maren.id)
 

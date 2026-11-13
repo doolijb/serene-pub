@@ -11,6 +11,7 @@
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { characterSummary } from "$lib/shared/characters/characterSummary"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import { seatRefOf } from "./projections/seatIdentity"
 
 	interface Props {
 		open: boolean
@@ -21,6 +22,13 @@
 					Sockets.Sessions.Get.Response["session"]
 			  >["sessionCharacters"]
 			| undefined
+		/**
+		 * 🚧 Seats that hold no card, shown as their cast member, by cast
+		 * MEMBER id (`sessions:get`'s `cardlessSeatShown`) — never a card id.
+		 */
+		cardlessSeatShown?: NonNullable<
+			NonNullable<Sockets.Sessions.Get.Response["session"]>["cardlessSeatShown"]
+		>
 		pickSpeakerSearch: string
 		/** The narrator's row is a narrator genre's own turn (`narrate`)… */
 		narratorTurn: boolean
@@ -33,13 +41,15 @@
 		/** The narrator's resolved name — Chat's narrate function wears it. */
 		narratorName: string
 		onNarratorRow: (e: Event) => void
-		onPickSpeaker: (characterId: number) => void
+		/** The seat's host-filled ref (`seatRefOf`). */
+		onPickSpeaker: (ref: string) => void
 	}
 
 	let {
 		open,
 		onOpenChange,
 		sessionCharacters,
+		cardlessSeatShown,
 		pickSpeakerSearch = $bindable(),
 		narratorTurn,
 		narratorFunction,
@@ -49,6 +59,63 @@
 		onNarratorRow,
 		onPickSpeaker
 	}: Props = $props()
+
+	/**
+	 * Every live character seat with a card, or with no card but its member
+	 * shown (`cardlessSeatShown`, by member id): who to draw, and the ref a
+	 * press sends. A card-less row has no summary.
+	 */
+	const rows = $derived.by(() => {
+		const s = pickSpeakerSearch.trim().toLowerCase()
+		const out: {
+			ref: string
+			name: string
+			nickname: string | null
+			face: Partial<SelectCharacter>
+			summary: string | null
+			haystack: (string | null | undefined)[]
+		}[] = []
+		for (const cc of sessionCharacters || []) {
+			if (cc.removedAt) continue
+			const ref = seatRefOf(cc, "character")
+			if (!ref) continue
+			const c = cc.character
+			if (c) {
+				out.push({
+					ref,
+					name: c.name,
+					nickname: c.nickname ?? null,
+					face: c,
+					summary: characterSummary(c) || "No description",
+					haystack: [c.name, c.nickname, c.description, c.creatorNotes]
+				})
+				continue
+			}
+			const shown =
+				cc.castMemberId != null
+					? cardlessSeatShown?.[cc.castMemberId]
+					: undefined
+			if (!shown) continue
+			out.push({
+				ref,
+				name: shown.name,
+				nickname: shown.nickname,
+				face: {
+					name: shown.name,
+					...(shown.faceMediaId != null
+						? { avatarMediaId: shown.faceMediaId }
+						: {})
+				},
+				summary: null,
+				haystack: [shown.name, shown.nickname]
+			})
+		}
+		return s
+			? out.filter((r) =>
+					r.haystack.some((h) => h?.toLowerCase().includes(s))
+				)
+			: out
+	})
 </script>
 
 <Dialog {open} onOpenChange={(e) => onOpenChange(e.open)}>
@@ -121,30 +188,15 @@
 					<div
 						class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
 					>
-						{#each (sessionCharacters || []).filter((cc) => {
-							const c = cc.character
-							if (!c) return false
-							const s = pickSpeakerSearch.trim().toLowerCase()
-							if (!s) return true
-							return c.name
-									?.toLowerCase()
-									.includes(s) || c.nickname
-									?.toLowerCase()
-									.includes(s) || c.description
-									?.toLowerCase()
-									.includes(s) || c.creatorNotes
-									?.toLowerCase()
-									.includes(s)
-						}) as filtered}
+						{#each rows as row (row.ref)}
 							<div class="flex p-1 lg:basis-1/2">
 								<button
 									class="border-surface-200-800 hover:bg-surface-200-800 relative flex w-full gap-3 overflow-hidden rounded border p-2"
-									onclick={() =>
-										onPickSpeaker(filtered.character.id)}
+									onclick={() => onPickSpeaker(row.ref)}
 								>
 									<div class="w-fit shrink-0">
 										<Avatar
-											char={filtered.character}
+											char={row.face}
 											size="lg"
 											decorative
 										/>
@@ -155,14 +207,15 @@
 										<div
 											class="w-full truncate text-left font-semibold"
 										>
-											{filtered.character.nickname ||
-												filtered.character.name}
+											{row.nickname || row.name}
 										</div>
-										<div
-											class="text-surface-700-300 line-clamp-2 w-full text-left text-xs"
-										>
-											{characterSummary(filtered.character) || "No description"}
-										</div>
+										{#if row.summary != null}
+											<div
+												class="text-surface-700-300 line-clamp-2 w-full text-left text-xs"
+											>
+												{row.summary}
+											</div>
+										{/if}
 									</div>
 								</button>
 							</div>

@@ -29,6 +29,8 @@
  *   §attendance       — Who's here, new with the widget (2026-10-11, W10)
  *   §backdrop         — new with the widget (2026-10-12, DESIGN-image-generation §6.4)
  *   §routine-log      — While you were away, new with the widget (2026-10-21, PLAN-layering A7)
+ *   §session-runs     — Runs, new with the widget (2026-11-06, lay-R)
+ *   §dialogue-box     — Dialogue box, new with the widget (2026-11-11, visual novel)
  * The P3 phases re-key these rules on widget parts (`data-widget-part`,
  * STYLE-GUIDE §6.16 "Widget parts"), one widget at a time: Stats (P3a),
  * World State (P3b), Scene Portraits (P3c), Lore entries (P3d), and the
@@ -90,6 +92,30 @@
 	--sp-w-muted-opacity: 0.7;
 }
 
+/* Whatever a widget offers to press shows the hand: Tailwind 4 and Skeleton 5
+   leave buttons on the arrow. A part rule that says otherwise wins (the whole
+   selector sits in :where, so this has zero specificity). */
+:where(
+	:is([data-sp-widget-box], [data-widget-part])
+		:is(
+			button,
+			[role="button"],
+			[role="tab"],
+			[role="option"],
+			[role="menuitem"],
+			[role="menuitemradio"],
+			[role="menuitemcheckbox"],
+			summary,
+			select,
+			input[type="checkbox"],
+			input[type="radio"],
+			label:has(> input[type="checkbox"]),
+			label:has(> input[type="radio"])
+		):not(:disabled, [aria-disabled="true"])
+) {
+	cursor: pointer;
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    §conversation (was styles/conversation.css)
    ════════════════════════════════════════════════════════════════════════ */
@@ -125,7 +151,8 @@
    a widget fills the width its zone grants (STYLE-GUIDE 5.3, ruled
    2026-09-29). Nothing here caps them. */
 [data-widget-part~="messages.root"] [data-widget-part~="messages.stage"],
-[data-widget-part~="messages.root"] [data-widget-part~="messages.compose"] {
+[data-widget-part~="messages.root"] [data-widget-part~="messages.compose"],
+[data-widget-part~="composer.root"] {
 	inline-size: 100%;
 	min-inline-size: 0;
 }
@@ -134,7 +161,7 @@
    `data-line-width`) — the rows and the field keep a reading measure plus the
    avatar gutter (STYLE-GUIDE 3.4), centred in however wide the box is; the
    scroll region around them is not capped. Comfortable's measure is about
-   640px of prose (40rem). Column, the default (★R1, 2026-10-24), is 76ch of
+   640px of prose (40rem). Column (the default until the owner ruling 2026-11-04 §0-G, which made Full the default; ★R1, 2026-10-24) is 76ch of
    the story's body — Literata's `ch` is 0.58em at the body's 17px, scaled by
    the person's story text size — never wider than the box. A unit `ch` here
    would be the interface face's at the interface size, a Comfortable in all
@@ -147,10 +174,12 @@
    by half the difference and never past either edge. Outside a session
    layout both are unset and this is `margin-inline: auto`. The pure mirror
    is `columnInsetPx` in sessionLayout/tuckedSides.ts. */
-[data-widget-part~="messages.root"][data-line-width="column"] {
+[data-widget-part~="messages.root"][data-line-width="column"],
+[data-widget-part~="composer.root"][data-line-width="column"] {
 	--sp-measure: min(100%, calc(76 * 0.58 * 17px * var(--sp-prose-scale, 1)));
 }
-[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) {
+[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]),
+[data-widget-part~="composer.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) {
 	--sp-column-width: calc(var(--sp-measure, 40rem) + 3.5rem);
 	--sp-column-shift: calc(
 		(var(--sp-stage-balance-start, 0px) - var(--sp-stage-balance-end, 0px)) /
@@ -158,7 +187,8 @@
 	);
 }
 [data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) [data-widget-part~="messages.stage"],
-[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) [data-widget-part~="messages.compose"] {
+[data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) [data-widget-part~="messages.compose"],
+[data-widget-part~="composer.root"]:is([data-line-width="comfortable"], [data-line-width="column"]) {
 	max-inline-size: var(--sp-column-width);
 	margin-inline-start: clamp(
 		0px,
@@ -189,68 +219,24 @@
 	flex-direction: column;
 }
 
-/* With the log hidden the widget is its composer, and the field keeps the
-   end of the box it was drawn at. */
-[data-widget-part~="messages.root"][data-show-messages="false"][data-composer-position="bottom"] {
-	justify-content: flex-end;
+/* The Composer and the Turn line are widgets of their own, each in its own
+   panel: the Composer's root is the compose block (its height is its content —
+   the host measures it), the Turn line's the strip above it. The Composer's
+   column follows its target's Line width (`data-line-width`, written by the
+   host from the target), by the rules above. */
+[data-widget-part~="composer.root"],
+[data-widget-part~="turn-line.root"] {
+	display: block;
+	min-inline-size: 0;
 }
 
-/* Composer at the top: the field moves above the banners and the nudge, and
-   the whole compose block above the log, so the two strips stay between the
-   field and the conversation at either end. */
-[data-widget-part~="messages.root"][data-composer-position="top"] [data-widget-part~="messages.compose"] {
-	order: -1;
-}
-[data-widget-part~="messages.root"][data-composer-position="top"] [data-widget-part~="messages.compose-area"] {
-	order: -1;
-}
-
-/* THE MESSAGE BACKING (note 18; `$lib/shared/widgets/messageBacking`): the
-   host resolves the widget's Card setting (Auto / On / Off) against what its
-   message style declares and the app background, and says the answer as
-   `data-sp-backing` on the widget's box. A backing is one pane behind the
-   rows and the composer — the box's width less an 8px margin, or the
-   column's under Comfortable — standing still while the log scrolls over it.
-   The box keeps the pane's margin, border and padding on its block ends, so
-   the log clips at the pane's inner edge; the rows and the field keep them
-   on their inline ends, so they sit inside the pane.
-
-   How a card and a glass pane LOOK is the theme's, never a style's: the card
-   is Skeleton's `card` with a filled surface preset, the glass is the
-   theme's `preset-glass-surface` (app.css). `none` draws nothing. */
-[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"] {
-	padding-block: 17px 33px;
-}
-[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"]::before {
-	content: "";
-	position: absolute;
-	z-index: -1;
-	inset-block: 8px 16px;
-	inset-inline: 8px;
-	/* Skeleton's card radius — the theme's, as `card` itself reads it. */
-	border-radius: var(--radius-container);
-	pointer-events: none;
-}
-[data-sp-backing="card"] [data-widget-part~="messages.root"]::before {
-	@apply preset-filled-surface-100-900 border-surface-200-800 border shadow-sm;
-}
-[data-sp-backing="glass"] [data-widget-part~="messages.root"]::before {
-	@apply preset-glass-surface;
-}
-/* Under Column and Comfortable the pane is the column's, balance included
-   (see the Line width rules above). */
-[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"]:is([data-line-width="comfortable"], [data-line-width="column"])::before {
-	inset-inline: clamp(
-			0px,
-			(100% - var(--sp-column-width)) / 2 + var(--sp-column-shift),
-			max(0px, 100% - var(--sp-column-width))
-		)
-		auto;
-	inline-size: min(100%, var(--sp-column-width));
-}
-[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"] [data-widget-part~="messages.stage"],
-[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"] [data-widget-part~="messages.compose"] {
-	padding-inline: 25px;
+/* The Composer's "Writing to ‹channel›" line: a quiet status above the compose area. */
+[data-widget-part~="composer.writing-to"] {
+	margin: 0 0 0.375rem;
+	padding-inline: 0.5rem;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
 
 /* Avatars off: the cell goes, and the custom properties a style sizes its
@@ -362,6 +348,30 @@
 /* Hidden from the story: the badge says it whole (the base's 12ch is for a scene's name). */
 [data-widget-part~="messages.message-badge-hidden"] [data-widget-part~="messages.message-badge-text"] {
 	max-inline-size: none;
+}
+/* The narrator's-turn badge says it whole too; for the owner it is a quiet
+   button that opens the turn picker (44px on touch, STYLE-GUIDE §9). */
+[data-widget-part~="messages.message-badge-cause"] [data-widget-part~="messages.message-badge-text"] {
+	max-inline-size: none;
+}
+button[data-widget-part~="messages.message-badge-cause"] {
+	cursor: pointer;
+	position: relative;
+}
+button[data-widget-part~="messages.message-badge-cause"]:hover {
+	text-decoration: underline;
+}
+@media (pointer: coarse) {
+	button[data-widget-part~="messages.message-badge-cause"]::after {
+		content: "";
+		position: absolute;
+		inset: 50% auto auto 50%;
+		translate: -50% -50%;
+		min-inline-size: 44px;
+		min-block-size: 44px;
+		inline-size: 100%;
+		block-size: 100%;
+	}
 }
 
 /* 🚧 The channel tabs (lair fix 2: the Lair's Story · Sanctum): a copy that
@@ -1325,10 +1335,10 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 	max-block-size: 18em;
 	overflow-y: auto;
 }
-[data-widget-part~="messages.root"] :is([data-widget-part~="messages.composer-preview"], [data-widget-part~="messages.edit-preview-body"]) {
+:is([data-widget-part~="messages.root"], [data-widget-part~="composer.root"], [data-widget-part~="turn-line.root"]) :is([data-widget-part~="messages.composer-preview"], [data-widget-part~="messages.edit-preview-body"]) {
 	color: var(--sp-body, inherit);
 }
-[data-widget-part~="messages.root"] :is([data-widget-part~="messages.composer-preview"], [data-widget-part~="messages.edit-preview-body"]) span.quoted-text {
+:is([data-widget-part~="messages.root"], [data-widget-part~="composer.root"], [data-widget-part~="turn-line.root"]) :is([data-widget-part~="messages.composer-preview"], [data-widget-part~="messages.edit-preview-body"]) span.quoted-text {
 	color: var(--sp-quote, inherit);
 }
 
@@ -2254,6 +2264,11 @@ button[data-widget-part~="messages.composer-persona"] {
    until the line has your attention, and Send appears once there is
    something to send. Pairs with a message style that draws no backing. */
 [data-composer-skin="quill"] {
+	/* The Composer sits in its own panel, on the panel's card: the page line
+	   draws no background or border of its own. */
+	background: none;
+	border: 0;
+	box-shadow: none;
 	--sp-quill-rule: light-dark(
 		color-mix(in oklab, var(--color-surface-400) 55%, transparent),
 		color-mix(in oklab, var(--color-surface-600) 55%, transparent)
@@ -2834,8 +2849,6 @@ button[data-widget-part~="messages.composer-persona"] {
 [data-widget-part~="messages.message-vectors"][data-vectors="stale"] {
 	color: var(--color-warning-500);
 }
-/* "In scene:", said to a screen reader only. */
-[data-widget-part~="messages.message-badge-label"],
 [data-widget-part~="messages.message-option-note"] {
 	position: absolute;
 	width: 1px;
@@ -4563,7 +4576,7 @@ button[data-widget-part~="messages.composer-persona"] {
 
 /* Keyed on the widget's parts (`data-widget-part`, P3a); the markup carries
    no look. Parts: stats.root · stats.alert · stats.empty · stats.card ·
-   stats.card-head · stats.card-name · stats.card-note · stats.card-body ·
+   stats.card-head · stats.card-name · stats.card-body ·
    stats.group · stats.group-head · stats.strip · stats.strip-head ·
    stats.strip-name (STYLE-GUIDE §6.16); on the root `data-arrangement`
    (`cards` · `list` · `strip`) and `data-owners`. The type and colour values are the theme's, exactly
@@ -4644,12 +4657,6 @@ button[data-widget-part~="messages.composer-persona"] {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	font-weight: var(--font-weight-semibold);
-}
-/* A member with nothing to show says so, quietly, inside its card. */
-[data-widget-part~="stats.card-note"] {
-	font-size: calc(0.75rem * var(--text-scaling));
-	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
-	color: var(--color-surface-500);
 }
 [data-widget-part~="stats.card-body"] {
 	display: flex;
@@ -5280,7 +5287,8 @@ button[data-widget-part~="messages.composer-persona"] {
 	padding: 0;
 	list-style: none;
 }
-[data-widget-part~="stats.carry-switch"] {
+[data-widget-part~="stats.carry-switch"],
+[data-widget-part~="stats.hidden-stats-switch"] {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.35rem;
@@ -5318,7 +5326,8 @@ button[data-widget-part~="messages.composer-persona"] {
 	white-space: pre-line;
 }
 @media (pointer: coarse) {
-	[data-widget-part~="stats.carry-switch"] {
+	[data-widget-part~="stats.carry-switch"],
+	[data-widget-part~="stats.hidden-stats-switch"] {
 		min-height: 44px;
 	}
 }
@@ -5396,6 +5405,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	flex: none;
 	border-radius: var(--sp-w-chip-radius);
 	object-fit: cover;
+	object-position: top;
 	background: var(--sp-w-chip-bg);
 	font-size: var(--sp-w-font-meta);
 	font-weight: var(--font-weight-semibold);
@@ -5403,6 +5413,82 @@ button[data-widget-part~="messages.composer-persona"] {
 [data-widget-part~="stats.faces-img"] {
 	inline-size: 1.25rem;
 	block-size: 1.25rem;
+}
+/* The Characters sheet (a faces sheet): the owner's portrait column, then its
+   blocks as sections. The portrait column is a fraction of the box, never
+   under 7rem nor over 12rem; under 30rem the sheet is one column and the
+   portrait shrinks to a face with the name and role beside it. */
+[data-widget-part~="stats.faces-sheet"][data-sheet] [data-widget-part~="stats.card"] {
+	display: grid;
+	grid-template-columns: clamp(7rem, 30cqi, 12rem) minmax(0, 1fr);
+	align-items: start;
+	gap: var(--sp-w-card-gap) calc(var(--spacing) * 3);
+}
+[data-widget-part~="stats.sheet-portrait"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+	text-align: center;
+}
+[data-widget-part~="stats.sheet-portrait"] [data-widget-part~="stats.face-img"] {
+	inline-size: 100%;
+	block-size: auto;
+	aspect-ratio: 1;
+	font-size: calc(var(--sp-w-font-head) * 3);
+}
+[data-widget-part~="stats.sheet-portrait"] [data-widget-part~="stats.face"] {
+	display: flex;
+	inline-size: 100%;
+}
+[data-widget-part~="stats.sheet-name"] {
+	font-size: var(--sp-w-font-head);
+	font-weight: var(--font-weight-semibold);
+	overflow-wrap: anywhere;
+}
+[data-widget-part~="stats.sheet-role"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="stats.sheet-sections"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-w-card-gap);
+	min-width: 0;
+}
+[data-widget-part~="stats.ties-head"] {
+	margin: 0;
+	font-size: 0.7rem;
+	font-weight: var(--font-weight-semibold);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: var(--sp-w-muted-opacity);
+}
+@container sp-widget (max-width: 30rem) {
+	[data-widget-part~="stats.faces-sheet"][data-sheet] [data-widget-part~="stats.card"] {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	[data-widget-part~="stats.sheet-portrait"] {
+		display: grid;
+		grid-template-columns: 3rem minmax(0, 1fr);
+		grid-template-areas: "face name" "face role";
+		align-items: center;
+		justify-items: start;
+		column-gap: calc(var(--spacing) * 2);
+		text-align: start;
+	}
+	[data-widget-part~="stats.sheet-portrait"] > :first-child {
+		grid-area: face;
+	}
+	[data-widget-part~="stats.sheet-name"] {
+		grid-area: name;
+		align-self: end;
+	}
+	[data-widget-part~="stats.sheet-role"] {
+		grid-area: role;
+		align-self: start;
+	}
 }
 button[data-widget-part~="stats.face"]:hover [data-widget-part~="stats.face-img"],
 button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.face-img"] {
@@ -6004,6 +6090,11 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	gap: calc(var(--spacing) * 2);
 	min-height: 0;
 }
+/* A stage never takes more than 40% of the screen's height: in a Fit panel its
+   picture's natural height would crowd out the panel above it, on a phone the whole zone. */
+[data-widget-part~="scene-portraits.root"][data-arrangement="stage"] {
+	max-block-size: 40svh;
+}
 [data-widget-part~="scene-portraits.stage"] > [data-widget-part~="scene-portraits.face"] {
 	justify-content: flex-end;
 	max-width: none;
@@ -6012,11 +6103,19 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 [data-widget-part~="scene-portraits.stage"] > [data-widget-part~="scene-portraits.face"]:only-child {
 	grid-column: 1 / -1;
 }
+/* The picture's box hugs the picture (width and height auto, held by both
+   maxima, aspect kept), so its rounded corners sit on the picture at every
+   width. With `inline-size: 100%` + `contain` the box ran wider than the
+   picture and the corners fell on empty space — rounded only when the column
+   was narrow enough (a sidebar open) to make box and picture meet (2026-11-06). */
 [data-widget-part~="scene-portraits.stage"] [data-widget-part~="scene-portraits.face-img"]:not([data-blank]) {
-	inline-size: 100%;
+	inline-size: auto;
+	block-size: auto;
+	max-inline-size: 100%;
 	aspect-ratio: auto;
 	max-height: 100%;
 	min-height: 0;
+	align-self: center;
 	object-fit: contain;
 	object-position: bottom;
 	background: none;
@@ -6327,6 +6426,18 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	background: var(--sp-w-meter-fill-bg);
 }
 
+/* Speaker focus (the Scene Portraits setting): while a drawn portrait is
+   speaking, the others step back. The widget sets `data-speaker-focus` on the
+   root only then, so nothing here asks whether the speaker is on stage. */
+[data-widget-part~="scene-portraits.root"][data-speaker-focus] [data-widget-part~="scene-portraits.face"]:not([data-speaking]) {
+	filter: brightness(0.55) saturate(0.7);
+}
+@media (prefers-reduced-motion: no-preference) {
+	[data-widget-part~="scene-portraits.root"][data-speaker-focus] [data-widget-part~="scene-portraits.face"] {
+		transition: filter var(--transition-duration-base);
+	}
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    §authors-note (2026-10-02, AN1)
    ════════════════════════════════════════════════════════════════════════ */
@@ -6334,7 +6445,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 /*
  * Core's Author's note widget, keyed on its widget parts; the markup carries
  * no look. Parts: authors-note.root · .note · .alert · .field · .label ·
- * .text · .numbers · .number · .help · .advanced · .role · .role-field ·
+ * .scenario · .scenario-text · .text · .numbers · .number · .help · .advanced · .role · .role-field ·
  * .actions · .unsaved · .discard · .save · .last-reply (STYLE-GUIDE §6.16).
  * State: `data-dirty` on the root while the draft differs from what is
  * saved; `data-applied` on the last-reply line when the newest reply carried
@@ -6374,6 +6485,12 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	font-weight: 500;
 }
 /* Two numbers side by side, stacking in a narrow box. */
+/* The scenario section: the root's column, one look for both sections. */
+[data-widget-part~="authors-note.scenario"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+}
 [data-widget-part~="authors-note.numbers"] {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
@@ -6381,6 +6498,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 }
 /* Skeleton's `textarea` and `input`, as the lore search field draws one. */
 [data-widget-part~="authors-note.text"],
+[data-widget-part~="authors-note.scenario-text"],
 [data-widget-part~="authors-note.number"] {
 	display: block;
 	width: 100%;
@@ -6394,15 +6512,18 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	box-shadow: inset 0 0 0 1px var(--color-surface-300-700);
 	outline-color: transparent;
 }
-[data-widget-part~="authors-note.text"] {
+[data-widget-part~="authors-note.text"],
+[data-widget-part~="authors-note.scenario-text"] {
 	resize: vertical;
 	min-height: calc(var(--spacing) * 24);
 }
 [data-widget-part~="authors-note.text"]:focus,
+[data-widget-part~="authors-note.scenario-text"]:focus,
 [data-widget-part~="authors-note.number"]:focus {
 	box-shadow: inset 0 0 0 2px var(--color-primary-500);
 }
 [data-widget-part~="authors-note.text"]:disabled,
+[data-widget-part~="authors-note.scenario-text"]:disabled,
 [data-widget-part~="authors-note.number"]:disabled {
 	opacity: 70%;
 	cursor: not-allowed;
@@ -6504,19 +6625,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	font-size: calc(0.75rem * var(--text-scaling));
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
 	color: light-dark(var(--color-error-700), var(--color-error-300));
-}
-/* Nobody to take a turn: why, quietly, where the rows would be. */
-[data-widget-part~="turn-order.empty"] {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: var(--sp-w-empty-gap);
-	flex: 1;
-	padding: var(--sp-w-empty-pad);
-	text-align: center;
-	font-size: var(--sp-w-font-row);
-	opacity: var(--sp-w-muted-opacity);
 }
 
 /* The head line: whose turn it is, in the composer line's words. */
@@ -6751,19 +6859,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	font-size: calc(0.75rem * var(--text-scaling));
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
 	color: light-dark(var(--color-error-700), var(--color-error-300));
-}
-/* Nothing to press: why, quietly, where the buttons would be. */
-[data-widget-part~="actions.empty"] {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: var(--sp-w-empty-gap);
-	flex: 1;
-	padding: var(--sp-w-empty-pad);
-	text-align: center;
-	font-size: var(--sp-w-font-row);
-	opacity: var(--sp-w-muted-opacity);
 }
 
 /* A group: its heading on a line of its own, then its buttons, wrapping. */
@@ -7164,19 +7259,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
-/* Nothing yet: the one line, quietly, where the tiles would be. */
-[data-widget-part~="album.empty"] {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: var(--sp-w-empty-gap);
-	flex: 1;
-	padding: var(--sp-w-empty-pad);
-	text-align: center;
-	font-size: var(--sp-w-font-row);
-	opacity: var(--sp-w-muted-opacity);
-}
 
 /* Grid: as many tiles of the chosen side as the box holds, stretched to
    fill the row so no ragged gap sits at its end. */
@@ -7318,7 +7400,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 
 /*
  * Core's Chronicle widget, keyed on its widget parts; the markup carries no
- * look. Parts: chronicle.root · .alert · .empty · .note · .clock ·
+ * look. Parts: chronicle.root · .alert · .empty · .note · .clock · (★S2-1b: .unfiled · .unfiled-day · .unfiled-day-head · .unfiled-date · .unfiled-count)
  * .clock-head · .clock-date · .behind · .clock-note · .clock-controls ·
  * .step · .move · .follow · .move-form · .fields · .field · .field-label ·
  * .field-input · .form-actions · .cancel · .save · .now · .heading ·
@@ -7328,8 +7410,9 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
  * .earlier · .earlier-list · .earlier-row · .earlier-entry · .earlier-more
  * · 🚧 live scenes (§7, lane D): .open-scene · .open-scene-head ·
  * .open-scene-name · .open-scene-meta · .open-scene-since · .cast ·
- * .cast-member · .cast-evidence · .open-scene-actions · .close ·
+ * .cast-member · .open-scene-actions · .close ·
  * .close-summarize · .open-scene-note · .scene-status · .scene-summarize ·
+ * .scene-running ·
  * .summarize-all (STYLE-GUIDE §6.16). State is the elements' own: a scene's colour on its
  * swatch's `data-swatch` (0–7, the conversation's scene palette, in the
  * order the session's scenes began), an entry that says nothing yet on its
@@ -7355,21 +7438,12 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
 	color: light-dark(var(--color-error-700), var(--color-error-300));
 }
-/* Nothing to show here: why, quietly. */
-[data-widget-part~="chronicle.empty"],
+/* The owner-only reason, quietly. */
 [data-widget-part~="chronicle.note"] {
 	margin: 0;
 	padding: calc(var(--spacing) * 1) 0;
 	font-size: var(--sp-w-font-row);
 	opacity: var(--sp-w-muted-opacity);
-}
-[data-widget-part~="chronicle.root"][data-state="no-book"] > [data-widget-part~="chronicle.empty"] {
-	display: flex;
-	flex: 1;
-	align-items: center;
-	justify-content: center;
-	padding: var(--sp-w-empty-pad);
-	text-align: center;
 }
 
 /* The clock: the date large, whose clock it is beneath, the owner's controls. */
@@ -7571,7 +7645,9 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 
 /* Now and Scenes: a quiet heading over each. */
 [data-widget-part~="chronicle.now"],
-[data-widget-part~="chronicle.scenes"] {
+[data-widget-part~="chronicle.scenes"],
+[data-widget-part~="chronicle.unfiled"],
+[data-widget-part~="chronicle.unfiled-day"] {
 	display: flex;
 	flex-direction: column;
 	gap: calc(var(--spacing) * 1.5);
@@ -7596,7 +7672,8 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	background: var(--sp-w-card-bg);
 	font-size: var(--sp-w-font-row);
 }
-[data-widget-part~="chronicle.entry-date"] {
+[data-widget-part~="chronicle.entry-date"],
+[data-widget-part~="chronicle.unfiled-date"] {
 	font-weight: var(--font-weight-semibold);
 }
 [data-widget-part~="chronicle.entry-line"] {
@@ -7609,7 +7686,16 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	font-style: italic;
 	opacity: var(--sp-w-muted-opacity);
 }
-[data-widget-part~="chronicle.entry-scenes"] {
+/* ★S2-1b (2026-11-04): a Not-yet-compiled day's head — the day and its count on one line. */
+[data-widget-part~="chronicle.unfiled-day-head"] {
+	display: flex;
+	align-items: baseline;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="chronicle.entry-scenes"],
+[data-widget-part~="chronicle.unfiled-count"] {
 	font-size: var(--sp-w-font-meta);
 	opacity: var(--sp-w-muted-opacity);
 }
@@ -7724,9 +7810,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	background: var(--sp-w-chip-bg);
 	font-size: var(--sp-w-font-meta);
 }
-[data-widget-part~="chronicle.cast-evidence"] {
-	opacity: var(--sp-w-muted-opacity);
-}
 [data-widget-part~="chronicle.open-scene-actions"] {
 	display: flex;
 	flex-wrap: wrap;
@@ -7785,6 +7868,15 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 		opacity: 1;
 	}
 }
+/* *Summarizing…* in words where the row's Summarize was, as the
+   conversation's divider says it: the dot alone is easy to miss. */
+[data-widget-part~="chronicle.scene-running"] {
+	flex-shrink: 0;
+	padding-inline: calc(var(--spacing) * 2.5);
+	font-size: calc(0.75rem * var(--text-scaling));
+	white-space: nowrap;
+	color: light-dark(var(--color-primary-700), var(--color-primary-300));
+}
 
 /* Earlier: folded in the host's accordion; each entry a row of date, first
    line, scenes. */
@@ -7841,7 +7933,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
  * look. Parts: places.root · .alert · .grant-note · .empty · .toolbar · .headline · .flip ·
  * .list · .row · .row-open · .name · .here · .category · .present · .face ·
  * .ways · .detail · .detail-head · .detail-name · .close · .detail-heading ·
- * .detail-ways · .detail-none · .linked · .detail-present · .stats ·
+ * .detail-ways · .linked · .detail-present · .stats ·
  * .detail-actions · .open (STYLE-GUIDE §6.16). State is the elements' own:
  * a category's hue on `data-tint` (0–5, dealt in the lorebook's Places lens
  * order, so a category is one hue on the book's map and here), the place
@@ -8063,11 +8155,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 1.5);
-}
-[data-widget-part~="places.detail-none"] {
-	margin: 0;
-	font-size: var(--sp-w-font-meta);
-	opacity: var(--sp-w-muted-opacity);
 }
 [data-widget-part~="places.stats"] {
 	display: grid;
@@ -8490,14 +8577,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	color: light-dark(var(--color-primary-800), var(--color-primary-200));
 	opacity: 1;
 }
-/* Nobody else is here: quietly, under the viewer's own row. */
-[data-widget-part~="attendance.empty"] {
-	margin: 0;
-	padding: calc(var(--spacing) * 1) var(--sp-w-empty-pad);
-	text-align: center;
-	font-size: var(--sp-w-font-row);
-	opacity: var(--sp-w-muted-opacity);
-}
 
 /* STYLE-GUIDE §9: a finger lands on 44px, however small the pill reads. */
 @media (pointer: coarse) {
@@ -8552,8 +8631,7 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	pointer-events: none;
 }
 /* The file is gone: said where the picture was, never a broken image. */
-[data-widget-part~="backdrop.missing"],
-[data-widget-part~="backdrop.empty"] {
+[data-widget-part~="backdrop.missing"] {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -8757,13 +8835,6 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	font-size: calc(0.75rem * var(--text-scaling));
 	color: light-dark(var(--color-error-700), var(--color-error-300));
 }
-[data-widget-part~="routine-log.empty"] {
-	margin: 0;
-	padding: calc(var(--spacing) * 1) var(--sp-w-empty-pad);
-	text-align: center;
-	font-size: var(--sp-w-font-row);
-	opacity: var(--sp-w-muted-opacity);
-}
 [data-widget-part~="routine-log.group"] {
 	display: flex;
 	flex-direction: column;
@@ -8847,5 +8918,287 @@ button[data-widget-part~="stats.face"]:focus-visible [data-widget-part~="stats.f
 	[data-widget-part~="routine-log.inspect"] {
 		min-height: 44px;
 		min-width: 44px;
+	}
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   §session-runs (Runs, new with the widget, 2026-11-06, lay-R)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Runs widget (an administrator's list of this session's pipeline
+ * runs), keyed on its widget parts; the markup carries no look. Parts:
+ * session-runs.root · .toolbar · .refresh · .alert · .list · .entry ·
+ * .pipeline · .outcome · .preview · .started-by · .when · .duration ·
+ * .tokens · .stopped-at · .actions · .steps-toggle · .inspect · .prompt ·
+ * .more · .steps · .step · .step-key · .step-kind · .step-result ·
+ * .step-reason · .step-duration · .step-tokens. A run's raw outcome rides on
+ * `data-outcome` (`ok` · `halt` · `err` · `cancelled`), a nested run's
+ * indent on `data-depth`, a step's result on `data-result`. Outside the
+ * layer, as routine-log's section is.
+ */
+[data-widget-part~="session-runs.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	height: 100%;
+	min-width: 0;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+[data-widget-part~="session-runs.toolbar"] {
+	display: flex;
+	justify-content: flex-end;
+}
+[data-widget-part~="session-runs.refresh"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+	padding: 0.15rem 0.5rem;
+	border-radius: var(--sp-w-card-radius);
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="session-runs.refresh"]:hover,
+[data-widget-part~="session-runs.refresh"]:focus-visible {
+	opacity: 1;
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="session-runs.alert"] {
+	margin: 0;
+	font-size: calc(0.75rem * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="session-runs.list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="session-runs.entry"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.15rem calc(var(--spacing) * 1.5);
+	min-width: 0;
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="session-runs.entry"][data-depth] {
+	margin-inline-start: calc(var(--spacing) * 3);
+}
+[data-widget-part~="session-runs.pipeline"] {
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="session-runs.outcome"],
+[data-widget-part~="session-runs.started-by"],
+[data-widget-part~="session-runs.when"],
+[data-widget-part~="session-runs.duration"],
+[data-widget-part~="session-runs.tokens"],
+[data-widget-part~="session-runs.stopped-at"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="session-runs.entry"][data-outcome="err"] [data-widget-part~="session-runs.outcome"] {
+	opacity: 1;
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="session-runs.entry"][data-outcome="halt"] [data-widget-part~="session-runs.outcome"],
+[data-widget-part~="session-runs.entry"][data-outcome="cancelled"] [data-widget-part~="session-runs.outcome"] {
+	opacity: 1;
+	color: light-dark(var(--color-warning-700), var(--color-warning-300));
+}
+[data-widget-part~="session-runs.when"] {
+	margin-inline-start: auto;
+}
+[data-widget-part~="session-runs.preview"] {
+	padding: 0 0.4rem;
+	border-radius: var(--sp-w-chip-radius);
+	font-size: var(--sp-w-font-meta);
+	background: color-mix(in oklab, var(--color-primary-500) 16%, transparent);
+	color: light-dark(var(--color-primary-800), var(--color-primary-200));
+}
+[data-widget-part~="session-runs.stopped-at"] {
+	flex-basis: 100%;
+}
+[data-widget-part~="session-runs.actions"] {
+	display: flex;
+	flex-basis: 100%;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 1);
+}
+[data-widget-part~="session-runs.steps-toggle"],
+[data-widget-part~="session-runs.inspect"],
+[data-widget-part~="session-runs.prompt"],
+[data-widget-part~="session-runs.more"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+	padding: 0.15rem 0.5rem;
+	border-radius: var(--sp-w-card-radius);
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="session-runs.steps-toggle"]:hover,
+[data-widget-part~="session-runs.steps-toggle"]:focus-visible,
+[data-widget-part~="session-runs.inspect"]:hover,
+[data-widget-part~="session-runs.inspect"]:focus-visible,
+[data-widget-part~="session-runs.prompt"]:hover,
+[data-widget-part~="session-runs.prompt"]:focus-visible,
+[data-widget-part~="session-runs.more"]:hover,
+[data-widget-part~="session-runs.more"]:focus-visible {
+	opacity: 1;
+}
+[data-widget-part~="session-runs.steps"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	flex-basis: 100%;
+	margin: 0;
+	padding: 0.25rem 0 0;
+	border-top: 1px solid color-mix(in oklab, currentColor 15%, transparent);
+	list-style: none;
+}
+[data-widget-part~="session-runs.step"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.1rem calc(var(--spacing) * 1.5);
+	min-width: 0;
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="session-runs.step-key"] {
+	font-family: var(--font-mono, ui-monospace, monospace);
+}
+[data-widget-part~="session-runs.step-kind"],
+[data-widget-part~="session-runs.step-result"],
+[data-widget-part~="session-runs.step-reason"],
+[data-widget-part~="session-runs.step-duration"],
+[data-widget-part~="session-runs.step-tokens"] {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="session-runs.step"][data-result="error"] [data-widget-part~="session-runs.step-result"],
+[data-widget-part~="session-runs.step"][data-result="err"] [data-widget-part~="session-runs.step-result"] {
+	opacity: 1;
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+/* STYLE-GUIDE §9: a finger lands on 44px. */
+@media (pointer: coarse) {
+	[data-widget-part~="session-runs.refresh"],
+	[data-widget-part~="session-runs.steps-toggle"],
+	[data-widget-part~="session-runs.inspect"],
+	[data-widget-part~="session-runs.prompt"],
+	[data-widget-part~="session-runs.more"] {
+		min-height: 44px;
+		min-width: 44px;
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §dialogue-box (new with the widget, 2026-11-11, visual novel layout)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Dialogue box: one message at a time, then a reading bar while more
+ * are queued. Parts: dialogue-box.root · .line (`data-arrive`: every line
+ * after the first this mount drew; holds Messages' own row, whose name is
+ * `messages.message-name`) · .bar · .queued · .progress (an `sp-progress`) ·
+ * .pause (`aria-pressed`) · .next. The bar is a plain container and Next line
+ * its one real button, stretched across the bar here (the host forwards
+ * clicks only from buttons); Pause sits above that stretch.
+ */
+[data-widget-part~="dialogue-box.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	min-inline-size: 0;
+	padding: calc(var(--spacing) * 3) calc(var(--spacing) * 4);
+}
+[data-widget-part~="dialogue-box.line"] {
+	min-inline-size: 0;
+}
+
+/* The name plate: the speaker's name on a dark ground. Never gold
+   (STYLE-GUIDE §2.3: a name is not gold-filled or gold-tinted). */
+[data-widget-part~="dialogue-box.root"] [data-widget-part~="messages.message-name"] {
+	display: inline-block;
+	padding: 0.1rem 0.7rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: color-mix(in oklab, var(--color-surface-950) 65%, transparent);
+	color: var(--color-surface-50);
+	font-weight: var(--font-weight-semibold);
+}
+
+/* The reading bar. Pressable as a whole: Next line's ::after covers it. */
+[data-widget-part~="dialogue-box.bar"] {
+	position: relative;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	cursor: pointer;
+}
+[data-widget-part~="dialogue-box.queued"] {
+	font-size: var(--sp-w-font-meta);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="dialogue-box.progress"] {
+	display: block;
+	flex: 1;
+	min-inline-size: 4rem;
+	color: var(--color-primary-500);
+}
+[data-widget-part~="dialogue-box.next"],
+[data-widget-part~="dialogue-box.pause"] {
+	min-block-size: 32px;
+	padding: var(--sp-w-control-pad);
+	padding-inline: 0.75rem;
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="dialogue-box.next"]:hover,
+[data-widget-part~="dialogue-box.pause"]:hover {
+	background: var(--sp-w-chip-on-bg);
+}
+[data-widget-part~="dialogue-box.pause"][aria-pressed="true"] {
+	background: var(--sp-w-chip-on-bg);
+}
+[data-widget-part~="dialogue-box.next"]:focus-visible,
+[data-widget-part~="dialogue-box.pause"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+@media (pointer: coarse) {
+	[data-widget-part~="dialogue-box.next"],
+	[data-widget-part~="dialogue-box.pause"] {
+		min-block-size: 44px;
+	}
+}
+[data-widget-part~="dialogue-box.next"]::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+}
+[data-widget-part~="dialogue-box.pause"] {
+	position: relative;
+	z-index: 1;
+}
+
+/* A new line slides up as it arrives; the first one of a mount does not. */
+@media (prefers-reduced-motion: no-preference) {
+	[data-widget-part~="dialogue-box.line"][data-arrive] {
+		animation: sp-dialogue-arrive var(--transition-duration-base) cubic-bezier(0.33, 1, 0.68, 1);
+	}
+}
+@keyframes sp-dialogue-arrive {
+	from {
+		opacity: 0;
+		transform: translateY(0.5rem);
 	}
 }

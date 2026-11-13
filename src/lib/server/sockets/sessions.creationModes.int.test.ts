@@ -308,11 +308,13 @@ describe("next-chapter", () => {
 		const doc = ((held.next.annex ?? {}) as any)[PLUGIN] ?? {}
 		expect(doc.oath).toBe("to the ford")
 		expect(doc.grudge).toBeUndefined()
-		const [delta] = await testDb
+		const imprints = await testDb
 			.select()
-			.from(schema.annexDeltas)
-			.where(eq(schema.annexDeltas.sessionId, res.session.id))
-		expect(delta!.messageId).toBe(held.messages[0]!.id)
+			.from(schema.sessionImprints)
+			.where(eq(schema.sessionImprints.sessionId, res.session.id))
+		const oath = imprints.find((r) => r.subjectKind === "annex" && r.subjectKey === `${PLUGIN}/oath`)
+		expect(oath!.messageId).toBe(held.messages[0]!.id)
+		expect(oath!.after).toEqual({ v: "to the ford" })
 	})
 
 	test("an archived session is not closed out again", async () => {
@@ -323,6 +325,26 @@ describe("next-chapter", () => {
 		expect(summaries).not.toHaveBeenCalled()
 		expect(await testDb.select().from(schema.scenes).where(eq(schema.scenes.sessionId, w.session.id))).toHaveLength(0)
 	})
+
+	test("a next chapter starts at the followed session's clock", async () => {
+		const w = await world({ lines: 2 })
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: 1200, storyClockMonth: 3, storyClockDay: 4, storyClockHour: 5, storyClockMinute: 6 })
+			.where(eq(schema.sessions.id, w.session.id))
+		const res = await create(w.owner.id, { mode: "next-chapter", from: w.session.id, session: { name: "Chapter two", genreId: STORY_GENRE } })
+		expect(res.error ?? null).toBeNull()
+		const [next] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, res.session.id))
+		expect([next.storyClockYear, next.storyClockMonth, next.storyClockDay, next.storyClockHour, next.storyClockMinute]).toEqual([1200, 3, 4, 5, 6])
+	}, 60_000)
+
+	test("a following session is followed by a following one", async () => {
+		const w = await world({ lines: 2 })
+		const res = await create(w.owner.id, { mode: "next-chapter", from: w.session.id, session: { name: "Chapter two", genreId: STORY_GENRE } })
+		expect(res.error ?? null).toBeNull()
+		const [next] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, res.session.id))
+		expect([next.storyClockYear, next.storyClockMonth, next.storyClockDay, next.storyClockHour, next.storyClockMinute]).toEqual([null, null, null, null, null])
+	}, 60_000)
 
 	test("refuses: no session chosen, and someone else's", async () => {
 		const w = await world({ lines: 2 })
@@ -352,5 +374,145 @@ describe("next-chapter", () => {
 		expect(next.lorebookId).toBe(notes.id)
 		expect(book!.sessionId).toBeNull()
 		expect((await messagesOf(res.session.id)).map((m) => m.content)).toContain("Chapter begins.")
+	})
+})
+
+describe("a surfaced book (★B-3)", () => {
+	/** A session whose own notes were shared as a lorebook: the book is surfaced from it. */
+	async function surfaced() {
+		const w = await world({ lines: 2 })
+		const [bare] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: w.owner.id, isGroup: false, genreId: STORY_GENRE, name: "Surfacing" })
+			.returning()
+		await insertLegacy(testDb as unknown as Db, { sessionId: bare.id, role: "user", content: "a line", channel: "main" })
+		const { ownBookFor, shareAsLorebook } = await import("$lib/server/lorebooks/ownBook")
+		const notes = await ownBookFor(testDb as unknown as Db, bare.id)
+		await testDb
+			.insert(schema.lorebookEntries)
+			.values({ lorebookId: notes.id, typeId: "core:entry/world-lore", typeVersion: 1, position: 1, title: "The mill", content: "Loud." } as any)
+		await shareAsLorebook(testDb as unknown as Db, { sessionId: bare.id, userId: w.owner.id })
+		return { ...w, bare, bookId: notes.id }
+	}
+	const SENTENCE = "This lorebook is another session's story. Start from a copy of it instead."
+
+	const BRANCH_SENTENCE =
+		"Only a lorebook of your own can be branched off at the start. Choose one of yours, or start on its latest line."
+	const sessionRow = async (id: number) =>
+		(await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, id)))[0]!
+	/** A line of the book, played by the surfacing session (so it is the most recent). */
+	async function playedLine(s: Awaited<ReturnType<typeof surfaced>>) {
+		const [line] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: s.bookId, name: "Saga line" })
+			.returning()
+		await testDb.update(schema.sessions).set({ lorebookBranchId: line!.id }).where(eq(schema.sessions.id, s.bare.id))
+		return line!
+	}
+
+	test("the owner's plain create on it starts on the book, on its most recently played line", async () => {
+		const s = await surfaced()
+		const line = await playedLine(s)
+		const res = await create(s.owner.id, { session: { name: "Plain", genreId: STORY_GENRE, lorebookId: s.bookId } })
+		expect(res.error ?? null).toBeNull()
+		const row = await sessionRow(res.session.id)
+		expect(row.lorebookId).toBe(s.bookId)
+		expect(row.lorebookBranchId).toBe(line.id)
+		expect(row.lineOnFirstWrite).toBe(false)
+		const surfacing = await sessionRow(s.bare.id)
+		expect(surfacing.lorebookId).toBe(s.bookId)
+		expect(surfacing.lorebookBranchId).toBe(line.id)
+		expect(surfacing.lineOnFirstWrite).toBe(false)
+	})
+
+	test("the owner's branch off: that line, that clock, the flag; the first write forks a line from it", async () => {
+		const s = await surfaced()
+		const line = await playedLine(s)
+		const res = await create(s.owner.id, {
+			session: {
+				name: "Branching",
+				genreId: STORY_GENRE,
+				lorebookId: s.bookId,
+				lorebookBranchId: line.id,
+				storyClockYear: 1200,
+				storyClockMonth: 3,
+				storyClockDay: 4,
+				lineOnFirstWrite: true
+			}
+		})
+		expect(res.error ?? null).toBeNull()
+		const row = await sessionRow(res.session.id)
+		expect(row.lorebookId).toBe(s.bookId)
+		expect(row.lorebookBranchId).toBe(line.id)
+		expect([row.storyClockYear, row.storyClockMonth, row.storyClockDay]).toEqual([1200, 3, 4])
+		expect(row.lineOnFirstWrite).toBe(true)
+		const { ensureSessionLine } = await import("$lib/server/lorebooks/sessionLine")
+		const newLine = await ensureSessionLine(testDb as unknown as Db, res.session.id)
+		expect(newLine).not.toBeNull()
+		expect(newLine).not.toBe(line.id)
+		const [forked] = await testDb.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.id, newLine!))
+		expect(forked!.forkedFromBranchId).toBe(line.id)
+		expect([forked!.forkYear, forked!.forkMonth, forked!.forkDay]).toEqual([1200, 3, 4])
+		const after = await sessionRow(res.session.id)
+		expect(after.lorebookBranchId).toBe(newLine)
+		expect(after.lineOnFirstWrite).toBe(false)
+		// The surfacing session is untouched.
+		const surfacing = await sessionRow(s.bare.id)
+		expect([surfacing.lorebookId, surfacing.lorebookBranchId, surfacing.lineOnFirstWrite]).toEqual([s.bookId, line.id, false])
+	})
+
+	test("another user's surfaced book, shared with them: a plain create is refused, a copy starts on a copy", async () => {
+		const s = await surfaced()
+		await testDb.insert(schema.lorebookShares).values({ lorebookId: s.bookId, userId: s.stranger.id } as any)
+		// Not their book to read: the access denial stops it before any start.
+		await expect(
+			create(s.stranger.id, { session: { name: "Plain", genreId: STORY_GENRE, lorebookId: s.bookId } })
+		).rejects.toThrow(/only read a lorebook you own/)
+		const copy = await create(s.stranger.id, { mode: "new-world", session: { name: "Mine", genreId: STORY_GENRE, lorebookId: s.bookId } })
+		expect(copy.error ?? null).toBeNull()
+		expect(copy.session.lorebookId).not.toBe(s.bookId)
+		const [copied] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, copy.session.lorebookId))
+		expect(copied!.userId).toBe(s.stranger.id)
+	})
+
+	test("lineOnFirstWrite is refused on a copy, with no book, and on a book the asker does not own", async () => {
+		const s = await surfaced()
+		const copy = await create(s.owner.id, { mode: "new-world", session: { name: "C", genreId: STORY_GENRE, lorebookId: s.bookId, lineOnFirstWrite: true } })
+		expect(copy).toEqual({ error: BRANCH_SENTENCE })
+		const none = await create(s.owner.id, { session: { name: "N", genreId: STORY_GENRE, lineOnFirstWrite: true } })
+		expect(none).toEqual({ error: BRANCH_SENTENCE })
+		await testDb.insert(schema.lorebookShares).values({ lorebookId: s.book.id, userId: s.stranger.id } as any)
+		// A book the asker does not own never starts: the access denial comes first.
+		await expect(
+			create(s.stranger.id, { session: { name: "F", genreId: STORY_GENRE, lorebookId: s.book.id, lineOnFirstWrite: true } })
+		).rejects.toThrow(/only read a lorebook you own/)
+	})
+
+	test("a next chapter of the surfacing session starts on the book, and so does the chapter after that", async () => {
+		const s = await surfaced()
+		const one = await create(s.owner.id, { mode: "next-chapter", from: s.bare.id, session: { name: "Two", genreId: STORY_GENRE } })
+		expect(one.error ?? null).toBeNull()
+		expect(one.session.lorebookId).toBe(s.bookId)
+		const two = await create(s.owner.id, { mode: "next-chapter", from: one.session.id, session: { name: "Three", genreId: STORY_GENRE } })
+		expect(two.error ?? null).toBeNull()
+		expect(two.session.lorebookId).toBe(s.bookId)
+	})
+
+	test("a copy (new-world) starts on a copy, and the original stays surfaced", async () => {
+		const s = await surfaced()
+		const res = await create(s.owner.id, { mode: "new-world", session: { name: "Elsewhere", lorebookId: s.bookId } })
+		expect(res.error ?? null).toBeNull()
+		expect(res.session.lorebookId).not.toBe(s.bookId)
+		const [copy] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, res.session.lorebookId))
+		expect(copy!.surfacedFromSessionId).toBeNull()
+		const [source] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, s.bookId))
+		expect(source!.surfacedFromSessionId).toBe(s.bare.id)
+	})
+
+	test("a branch of the surfacing session reads it", async () => {
+		const s = await surfaced()
+		const res = await create(s.owner.id, { mode: "branch", from: s.bare.id, session: { name: "ignored" } })
+		expect(res.error ?? null).toBeNull()
+		expect(res.session.lorebookId).toBe(s.bookId)
 	})
 })

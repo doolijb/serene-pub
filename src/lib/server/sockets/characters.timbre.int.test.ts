@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, test, vi } from 
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -63,10 +63,19 @@ async function card(userId: number, timbre?: Record<string, unknown>, extra: Rec
 	return c!
 }
 
-const timbreOf = async (id: number) => {
-	const [row] = await db.select({ e: schema.characters.extensions }).from(schema.characters).where(eq(schema.characters.id, id))
-	return ((row!.e as any)?.serenepub?.timbre ?? null) as Record<string, any> | null
+// The card's content lives on its current card version.
+const currentVersionOf = async (id: number) => {
+	const [v] = await db
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.cardId, id))
+		.orderBy(desc(schema.characterVersions.number))
+		.limit(1)
+	return v!
 }
+
+const timbreOf = async (id: number) =>
+	((await currentVersionOf(id)).timbre ?? null) as Record<string, any> | null
 
 async function update(u: { id: number; isAdmin: boolean }, id: number, extensions: unknown) {
 	const { charactersUpdate } = await import("./characters")
@@ -115,8 +124,9 @@ describe("characters:update", () => {
 		const c = await card(admin.id, { voice: "alice" }, { other_tool: { keep: 1 } })
 		expect((await update(admin, c.id, withTimbre(null, { other_tool: { keep: 1 } }))).error).toBeNull()
 		expect(await timbreOf(c.id)).toBeNull()
-		const [row] = await db.select({ e: schema.characters.extensions }).from(schema.characters).where(eq(schema.characters.id, c.id))
-		expect((row!.e as any).other_tool).toEqual({ keep: 1 })
+		expect(
+			((await currentVersionOf(c.id)).extensions as any).other_tool
+		).toEqual({ keep: 1 })
 	})
 
 	test("a MEMBER's sent voice is ignored and the stored one kept; their other timbre fields save", async () => {

@@ -123,3 +123,74 @@ describe("the two windows", () => {
 		expect(recent).toEqual([])
 	})
 })
+
+describe("a card-less character seat's line as a query", () => {
+	const seats = {
+		sessionCharacters: [
+			{ character: { id: 1, name: "Vell" }, castMemberId: null },
+			{ characterId: null, castMemberId: 1, character: { name: "Ash" } }
+		],
+		removedSessionCharacters: [
+			{
+				characterId: null,
+				castMemberId: 7,
+				character: null,
+				removedName: "Departed"
+			}
+		],
+		sessionPersonas: [{ persona: null, seatName: "Wren", castMemberId: 1 }]
+	}
+
+	it("is named by the seat with no card whose member spoke it", () => {
+		expect(
+			formatMessageForQuery(
+				{
+					role: "assistant",
+					content: "hi",
+					castMemberId: 1,
+					speaker: "seated-member:1"
+				},
+				seats
+			)
+		).toBe("[Ash]: hi")
+		expect(
+			formatMessageForQuery(
+				{ role: "assistant", content: "hi", castMemberId: 1 },
+				seats
+			)
+		).toBe("[Ash]: hi")
+	})
+
+	it("a player's line with the same member is not the character seat", () => {
+		expect(
+			formatMessageForQuery(
+				{ role: "user", content: "hi", castMemberId: 1 },
+				seats
+			)
+		).toBe("[user]: hi")
+		expect(
+			formatMessageForQuery(
+				{
+					role: "assistant",
+					content: "hi",
+					castMemberId: 1,
+					speaker: "player-seat:4"
+				},
+				seats
+			)
+		).toBe("[assistant]: hi")
+	})
+
+	it("a departed card-less seat's line is still named", () => {
+		expect(
+			formatMessageForQuery(
+				{
+					role: "assistant",
+					content: "hi",
+					speaker: "seated-member:7"
+				},
+				seats
+			)
+		).toBe("[Departed]: hi")
+	})
+})

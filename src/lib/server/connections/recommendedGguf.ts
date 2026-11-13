@@ -38,6 +38,12 @@ export interface RecommendedEntry {
 	/** GB, as the list quotes it; 0 when it quotes none or garbles it. */
 	size: number
 	recommended_vram: number
+	/**
+	 * A vision entry's projector file in the same repo (`mmproj-F16.gguf`),
+	 * which KoboldCPP loads beside the model to read pictures; Get downloads
+	 * the pair. Empty when the list names none.
+	 */
+	mmproj: string
 	/** The list's own controlled vocabulary. Empty when an entry has none. */
 	tags: string[]
 	details: {
@@ -73,6 +79,7 @@ export function parseRecommendedYaml(text: string): RecommendedEntry[] {
 				pull: "",
 				size: 0,
 				recommended_vram: 0,
+				mmproj: "",
 				tags: [],
 				details: {
 					parameter_size: "",
@@ -91,6 +98,7 @@ export function parseRecommendedYaml(text: string): RecommendedEntry[] {
 		else if (t.startsWith("recommended_vram:"))
 			cur.recommended_vram =
 				parseInt(t.replace("recommended_vram:", "").trim()) || 0
+		else if (t.startsWith("mmproj:")) cur.mmproj = unquote(t.replace("mmproj:", ""))
 		else if (t.startsWith("tags:")) cur.tags = readTags(t.replace("tags:", ""))
 		else if (t === "details:") inDetails = true
 		else if (inDetails) {

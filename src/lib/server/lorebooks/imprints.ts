@@ -13,7 +13,11 @@
  * the question is the same for all of them: *is this still as the run left
  * it?*
  *
- * ## The one retraction rule (`retractImprints`)
+ * ## The one retraction rule (`retractionAct`, applied by `retractImprints`)
+ *
+ * The rule is the pure function `retractionAct`; `session_imprints`
+ * (`sessions/sessionImprints.ts`) calls it too, with a session row always
+ * reverted.
  *
  * A swipe, a regenerate, a delete and a failed reply all take back what the
  * message changed, newest imprint first:
@@ -42,7 +46,7 @@
  * its `tx` (the outer `db` deadlocks PGlite). Never statically imports
  * `$lib/server/db`.
  */
-import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, isNull, ne, or } from "drizzle-orm"
 import { i18nText } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { KeptImprint } from "$lib/shared/entries/types"
@@ -62,6 +66,17 @@ export type ImprintStatus = (typeof IMPRINT_STATUSES)[number]
 
 export type LoreImprintRow = typeof schema.loreImprints.$inferSelect
 
+/** Who made a change record: the values of the `lore_imprints.origin` CHECK. */
+export const IMPRINT_ORIGINS = ["run", "routine", "press", "person", "apply", "book-run", "upgrade"] as const
+export type ImprintOrigin = (typeof IMPRINT_ORIGINS)[number]
+
+/** What a change record says of itself besides the change; absent is a run's (`origin: 'run'`). */
+interface ImprintMeta {
+	origin?: ImprintOrigin
+	batch?: string | null
+	cause?: Record<string, unknown> | null
+}
+
 /** Where an imprint is filed: the session, the message that caused it, the run. */
 export interface ImprintAnchor {
 	sessionId: number
@@ -70,9 +85,9 @@ export interface ImprintAnchor {
 	runId: string | null
 }
 
-type Wrapped = { v: unknown } | null
-const wrap = (v: unknown): Wrapped => (v === undefined ? null : { v: plain(v) })
-const unwrap = (w: Wrapped | undefined): unknown => (w == null ? undefined : w.v)
+export type Wrapped = { v: unknown } | null
+export const wrap = (v: unknown): Wrapped => (v === undefined ? null : { v: plain(v) })
+export const unwrap = (w: Wrapped | undefined): unknown => (w == null ? undefined : w.v)
 
 /** A value as JSON keeps it — a `Date` as its ISO string. */
 function plain(v: unknown): unknown {
@@ -98,6 +113,24 @@ function canonical(v: unknown): string {
 /** Whether two values are the same value (absent is its own answer). */
 export const sameValue = (a: unknown, b: unknown): boolean => canonical(a) === canonical(b)
 
+/**
+ * **The one retraction rule**, decided for one field imprint — a lore imprint
+ * here, a session imprint in `sessions/sessionImprints.ts`: both call this and
+ * act on the answer, so the rule is written once.
+ */
+export function retractionAct(i: {
+	after: Wrapped
+	/** The oldest LATER imprint of the same field that still stands (or was kept by this same pass); null when none. */
+	later: { before: Wrapped } | null
+	/** A session's own notes, or a session row: always reverted. */
+	alwaysRevert: boolean
+	/** The field's value now (ignored when `alwaysRevert`). */
+	now: unknown
+}): "spliced" | "dropped" | "reverted" | "kept" {
+	if (i.later) return sameValue(unwrap(i.later.before), unwrap(i.after)) ? "spliced" : "dropped"
+	return i.alwaysRevert || sameValue(i.now, unwrap(i.after)) ? "reverted" : "kept"
+}
+
 // ── The subjects ────────────────────────────────────────────────────────────
 
 /** How one subject kind is read, written, removed and put back. */
@@ -113,7 +146,7 @@ interface SubjectAccess {
 	/** The columns a made row is judged on — derived ones (vectors, hashes, stamps) never. */
 	ignored?: ReadonlySet<string>
 	/** Something else stands on the row that its removal would take with it. */
-	holds?(db: Db, id: number): Promise<boolean>
+	holds?(db: Db, id: number, imprint: LoreImprintRow): Promise<boolean>
 }
 
 const E = schema.lorebookEntries
@@ -181,11 +214,23 @@ const SUBJECTS: Record<ImprintSubject, SubjectAccess> = {
 			await db.insert(E).values(withDates(without(snapshot, ENTRY_DERIVED), ["createdAt", "updatedAt"]) as never)
 		},
 		ignored: new Set(["id", "createdAt", "updatedAt", "position", ...ENTRY_DERIVED]),
-		async holds(db, id) {
+		async holds(db, id, imprint) {
+			// A link kept in another session's notes is that session's own: it
+			// never holds an entry for this run's undo. A link in the lorebook,
+			// or in this session's own notes, does.
 			const [link] = await db
 				.select({ id: R.id })
 				.from(R)
-				.where(or(eq(R.fromEntryId, id), eq(R.toEntryId, id)))
+				.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, R.lorebookId))
+				.where(
+					and(
+						or(eq(R.fromEntryId, id), eq(R.toEntryId, id)),
+						or(
+							isNull(schema.lorebooks.sessionId),
+							eq(schema.lorebooks.sessionId, imprint.sessionId)
+						)
+					)
+				)
 				.limit(1)
 			if (link) return true
 			const [child] = await db.select({ id: E.id }).from(E).where(eq(E.anchorEntryId, id)).limit(1)
@@ -193,7 +238,8 @@ const SUBJECTS: Record<ImprintSubject, SubjectAccess> = {
 			const [amended] = await db
 				.select({ id: schema.entryAmendments.id })
 				.from(schema.entryAmendments)
-				.where(eq(schema.entryAmendments.entryId, id))
+				// A held amendment is one session's own change; it never blocks taking back a made entry.
+				.where(and(eq(schema.entryAmendments.entryId, id), isNull(schema.entryAmendments.base)))
 				.limit(1)
 			return !!amended
 		}
@@ -337,7 +383,8 @@ export async function imprintField(
 	anchor: ImprintAnchor,
 	at: { lorebookId: number; subject: ImprintSubject; subjectId: number; field: string },
 	before: unknown,
-	after: unknown
+	after: unknown,
+	meta: ImprintMeta = {}
 ): Promise<void> {
 	if (sameValue(before, after)) return
 	const I = schema.loreImprints
@@ -348,7 +395,9 @@ export async function imprintField(
 				eq(I.subjectKind, at.subject),
 				eq(I.subjectId, at.subjectId),
 				eq(I.field, at.field),
-				eq(I.status, "kept")
+				eq(I.status, "kept"),
+				// An Apply's record is its take-back, all or nothing: never dropped here.
+				ne(I.origin, "apply")
 			)
 		)
 	await db.insert(I).values({
@@ -360,7 +409,10 @@ export async function imprintField(
 		subjectId: at.subjectId,
 		field: at.field,
 		before: wrap(before),
-		after: wrap(after)
+		after: wrap(after),
+		...(meta.origin ? { origin: meta.origin } : {}),
+		...(meta.batch != null ? { batch: meta.batch } : {}),
+		...(meta.cause != null ? { cause: meta.cause } : {})
 	})
 }
 
@@ -371,11 +423,12 @@ export async function imprintChanges(
 	at: { lorebookId: number; subject: ImprintSubject; subjectId: number },
 	before: Record<string, unknown>,
 	after: Record<string, unknown>,
-	fields: readonly string[]
+	fields: readonly string[],
+	meta: ImprintMeta = {}
 ): Promise<void> {
 	const access = SUBJECTS[at.subject]
 	for (const field of fields)
-		await imprintField(db, anchor, { ...at, field }, access.read(before, field), access.read(after, field))
+		await imprintField(db, anchor, { ...at, field }, access.read(before, field), access.read(after, field), meta)
 }
 
 /** File a row a run made, as made: retracting it removes the row. */
@@ -474,7 +527,8 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 	const batch = (await db
 		.select()
 		.from(I)
-		.where(and(where, eq(I.status, "standing")))
+		// An applied change is the lorebook's ("Only Apply settles"): no message or run takes it back.
+		.where(and(where, eq(I.status, "standing"), ne(I.origin, "apply")))
 		.orderBy(desc(I.id))) as LoreImprintRow[]
 	const taken: TakenImprint[] = []
 	const notesCache = new Map<number, boolean>()
@@ -510,17 +564,18 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 				)
 				.orderBy(I.id)
 				.limit(1)
-			if (later) {
+			const now = access.read(row, imprint.field)
+			const act = retractionAct({ after: imprint.after, later: later ?? null, alwaysRevert: notes, now })
+			if (act === "spliced" || act === "dropped") {
 				// 1. A later run wrote the field since: it is that run's now.
-				if (sameValue(unwrap(later.before), unwrap(imprint.after))) {
-					await db.update(I).set({ before: imprint.before }).where(eq(I.id, later.id))
-					taken.push({ act: "spliced", imprint, later: { id: later.id, before: later.before } })
+				if (act === "spliced") {
+					await db.update(I).set({ before: imprint.before }).where(eq(I.id, later!.id))
+					taken.push({ act: "spliced", imprint, later: { id: later!.id, before: later!.before } })
 				} else taken.push({ act: "dropped", imprint })
 				await drop(imprint.id)
 				continue
 			}
-			const now = access.read(row, imprint.field)
-			if (notes || sameValue(now, unwrap(imprint.after))) {
+			if (act === "reverted") {
 				// 2–3. The notes always; a book while the field is as the run left it.
 				await access.write(db, imprint.subjectId, imprint.field, unwrap(imprint.before))
 				await drop(imprint.id)
@@ -550,7 +605,7 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 			Object.keys(asMade)
 				.filter((k) => !access.ignored?.has(k))
 				.every((k) => sameValue(row[k] ?? undefined, asMade[k] ?? undefined)) &&
-			!(await access.holds?.(db, imprint.subjectId))
+			!(await access.holds?.(db, imprint.subjectId, imprint))
 		if (notes || untouched) {
 			await access.remove!(db, imprint.subjectId)
 			// What a later run wrote on the row went with it.
@@ -616,7 +671,7 @@ export const imprintsChanged = (taken: readonly TakenImprint[]): boolean =>
 export type { KeptImprint }
 
 /** A field address in words, as the entry's form names it. */
-function fieldLabel(field: string, decl?: { fields?: Record<string, { label?: unknown }> }): string {
+export function fieldLabel(field: string, decl?: { fields?: Record<string, { label?: unknown }> }): string {
 	if (field.startsWith(FIELD_PREFIX)) {
 		const key = field.slice(FIELD_PREFIX.length)
 		return i18nText(decl?.fields?.[key]?.label as never) ?? key
@@ -691,6 +746,9 @@ export async function markImprintsKept(
 				eq(I.subjectKind, at.subjectKind),
 				eq(I.subjectId, at.subjectId),
 				eq(I.status, "standing"),
+				// An Apply's record is no decision note: a person's later edit
+				// leaves it whole, and take-back then refuses on the changed field.
+				ne(I.origin, "apply"),
 				or(inArray(I.field, [...at.fields]), isNull(I.field))
 			)
 		)

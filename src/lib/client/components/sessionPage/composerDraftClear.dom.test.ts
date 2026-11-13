@@ -52,7 +52,7 @@ class Page {
 		const sections = componentParitySections() as Record<string, unknown>
 		this.view = await mountComponent({
 			root: CORE_CATALOG,
-			entry: "dist/components/messages.js",
+			entry: "dist/components/composer.js",
 			owner: "core",
 			coreConversation: true,
 			timeoutMs: 60_000,

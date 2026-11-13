@@ -21,7 +21,9 @@ type Kind = Sockets.KoboldCPP.ModelKindFilter
  * only about making the kind impossible to forget.
  */
 export function downloadParams(
-	model: Sockets.KoboldCPP.SearchModels.ModelResult,
+	model: Sockets.KoboldCPP.SearchModels.ModelResult & {
+		visionProjector?: Sockets.KoboldCPP.VisionProjectorPull
+	},
 	opt: Sockets.KoboldCPP.SearchModels.PullOption,
 	kind: Kind
 ): Sockets.KoboldCPP.DownloadModel.Params {
@@ -33,6 +35,11 @@ export function downloadParams(
 		description: model.description,
 		quantization: opt.label,
 		sizeBytes: opt.sizeBytes,
-		kind
+		kind,
+		// A recommended vision model names its projector; the server fetches
+		// it after the model and pairs the two (★A, 2026-11-11).
+		...(kind === "text" && model.visionProjector
+			? { visionProjector: model.visionProjector }
+			: {})
 	}
 }

@@ -197,6 +197,44 @@ describe("syncWidgetSettings", () => {
  * Last, because it takes the table back to its 0.6 shape and lets the
  * migration bring it forward again — the state every later test would see.
  */
+describe("syncWidgetSettings: spare", () => {
+	test("keeps only the moved keys, only on Messages copies, only for the spared person and session", async () => {
+		const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+		const { syncWidgetSettings } = await import("./widgetSettings")
+		const a = await scenario()
+		const b = await scenario()
+		const moved = { composer: "quill", nextUp: "list", showActions: true }
+		await store(a.session.id, a.user.id, "messages", {
+			...moved,
+			title: "Log",
+			junk: 1
+		})
+		await store(a.session.id, a.user.id, "messages#sanctum", { ...moved, junk: 2 })
+		await store(a.session.id, a.user.id, "stats", { composer: "quill" })
+		await store(b.session.id, b.user.id, "messages", { ...moved, title: "Log" })
+
+		await syncWidgetSettings(CORE_WIDGETS, {
+			spare: [{ userId: a.user.id, sessionId: a.session.id }]
+		})
+
+		const mine = (await rowsFor(a.session.id, "messages"))[0].values
+		expect(mine).toEqual({ ...moved, title: "Log" })
+		expect((await rowsFor(a.session.id, "messages#sanctum"))[0].values).toEqual(moved)
+		expect(await rowsFor(a.session.id, "stats")).toEqual([])
+		// Not spared: pruned as before.
+		expect((await rowsFor(b.session.id, "messages"))[0].values).toEqual({
+			title: "Log"
+		})
+
+		// The next boot, no longer spared, clears the leftovers.
+		await syncWidgetSettings(CORE_WIDGETS, { spare: [] })
+		expect((await rowsFor(a.session.id, "messages"))[0].values).toEqual({
+			title: "Log"
+		})
+		expect(await rowsFor(a.session.id, "messages#sanctum")).toEqual([])
+	}, 60_000)
+})
+
 describe("0099_rename_widget_settings_instance_id", () => {
 	const MIGRATION = "0099_rename_widget_settings_instance_id"
 	const client = () => (testDb as any).$client

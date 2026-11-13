@@ -27,6 +27,8 @@ import { eq, sql } from "drizzle-orm"
 import type { CastEntry, ExtractedCastRef } from "./templates"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import { insertCastMember } from "$lib/server/characters/versions"
+import { seatCardsAsRead } from "$lib/server/pipelines/prompt/seatCards"
 
 export type { CastEntry, ExtractedCastRef }
 
@@ -388,38 +390,64 @@ export async function buildSceneCastList(
 				where: eq(schema.sessionPersonas.sessionId, sessionId),
 				with: {
 					persona: {
-						columns: { id: true, name: true, aliases: true }
+						columns: {
+							id: true,
+							name: true,
+							nickname: true,
+							aliases: true
+						}
 					}
 				}
 			})
 		])
 
-		for (const cc of sessionChars) {
+		// A character seat reads as its member (own name and nickname, else the card's).
+		const seatsRead = await seatCardsAsRead(db, sessionId, sessionChars)
+		for (const [i, cc] of sessionChars.entries()) {
 			const char = (cc as any).character
 			if (!char?.name) continue
+			const read = (seatsRead[i] as any).character
 			const binding = bindingOfCard(char.id)
-			const name = binding ? binding.name || char.name : char.name
+			const name = binding ? binding.name || read.name : read.name
 			// The card's own name too: a dated card is often named otherwise
 			// than the member ("The Lamp Keeper" for Verity), and the model
 			// reads it on the seat.
 			const aliases = [
 				char.name,
 				...(char.nickname ? [char.nickname] : []),
+				...(read.nickname && read.nickname !== char.nickname
+					? [read.nickname]
+					: []),
 				...(char.aliases ?? [])
 			].filter((a: string) => !namesMatch(a, name))
 			mergeOrPush(entries, name, aliases, binding?.id ?? null, skipDedup)
 		}
 
-		for (const cp of sessionPersonas) {
+		// A player seat reads as its member too (★pT-1, 2026-11-05:
+		// "Everything in session is cast -> active card").
+		const personasRead = await seatCardsAsRead(
+			db,
+			sessionId,
+			sessionPersonas.map((cp) => ({
+				castMemberId: cp.castMemberId,
+				character: cp.persona
+			}))
+		)
+		for (const [i, cp] of sessionPersonas.entries()) {
 			const persona = (cp as any).persona
 			if (!persona?.name) continue
+			const read = (personasRead[i] as any).character
 			// Same map as the cast: a voiced character's binding IS a
 			// character binding.
 			const binding = bindingOfCard(persona.id)
-			const name = binding ? binding.name || persona.name : persona.name
-			const aliases = [persona.name, ...(persona.aliases ?? [])].filter(
-				(a: string) => !namesMatch(a, name)
-			)
+			const name = binding ? binding.name || read.name : read.name
+			const aliases = [
+				persona.name,
+				...(read.nickname && read.nickname !== persona.nickname
+					? [read.nickname]
+					: []),
+				...(persona.aliases ?? [])
+			].filter((a: string) => !namesMatch(a, name))
 			mergeOrPush(entries, name, aliases, binding?.id ?? null, skipDedup)
 		}
 	}
@@ -620,16 +648,13 @@ export async function resolveOrCreateBindingByName(
 		if (existing) return { id: existing.id, created: false }
 
 		const token = await deriveNextBindingToken(lorebookId, tx)
-		const [inserted] = await tx
-			.insert(schema.lorebookBindings)
-			.values({
-				lorebookId,
-				characterId: null,
-				binding: token,
-				name: trimmed
-			})
-			.returning({ id: schema.lorebookBindings.id })
-		return { id: inserted.id, created: true }
+		const { member } = await insertCastMember(tx, {
+			lorebookId,
+			characterId: null,
+			binding: token,
+			name: trimmed
+		})
+		return { id: member.id, created: true }
 	})
 }
 

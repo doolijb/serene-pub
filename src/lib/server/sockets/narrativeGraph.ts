@@ -1,7 +1,9 @@
 import { db } from "$lib/server/db"
+import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import * as schema from "$lib/server/db/schema"
 import type {
 	NodeState,
+	NodeVisibility,
 	RelationshipVisibility
 } from "$lib/server/db/schema"
 import {
@@ -21,6 +23,8 @@ import {
 } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
+import { cardsAsSeatsRead } from "$lib/server/pipelines/prompt/seatCards"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
@@ -115,6 +119,18 @@ import {
 	rowsOnReading,
 	type LineReading
 } from "$lib/server/state/reading"
+import type { EntryReading } from "$lib/server/state/entriesOnReading"
+import { castVersionsInForce } from "$lib/server/cast/memberAsRead"
+import { memberColumnsOfVersion } from "$lib/server/lorebooks/retold"
+import {
+	CAST_VERSION_TAG_COLUMNS,
+	ensureCardVersion,
+	insertCastMember,
+	insertCharacterVersions,
+	writeCastVersion,
+	type CastVersionChanges
+} from "$lib/server/characters/versions"
+import { CHARACTER_PROFILE_FIELDS } from "$lib/shared/characters/profile"
 import { onLineSql } from "$lib/server/state/lineSql"
 import { deleteOwnerStats } from "$lib/server/state/lorebookState"
 import { pendingChangesFor } from "$lib/server/lorebooks/tableRegistry"
@@ -564,6 +580,87 @@ function directEntryOf(
 	)!
 }
 
+/**
+ * A member's story state as one reading has it: the node state and visibility
+ * of the cast version in force, and that version. The columns are frozen
+ * (plan §32 §8: their values live on versions), so the graph reads these.
+ * A member with no version (an error: the lift gave every member a base) reads
+ * the version defaults: active, normal (`version: null`).
+ */
+type StoryStateRead = {
+	nodeState: NodeState
+	nodeVisibility: NodeVisibility
+	version: typeof schema.characterVersions.$inferSelect | null
+}
+
+/**
+ * Each member's story state on `reading` (Main at its head where none is
+ * given), in one read.
+ */
+async function storyStatesOf(
+	handle: Db,
+	members: readonly { id: number }[],
+	reading?: EntryReading
+): Promise<Map<number, StoryStateRead>> {
+	if (members.length === 0) return new Map()
+	const inForce = await castVersionsInForce(
+		handle,
+		members.map((m) => m.id),
+		reading ? { reading } : {}
+	)
+	return new Map(
+		members.map((m) => {
+			const version = inForce.get(m.id)?.version ?? null
+			return [
+				m.id,
+				{
+					nodeState: version?.nodeState ?? "active",
+					nodeVisibility: version?.nodeVisibility ?? "normal",
+					version
+				}
+			]
+		})
+	)
+}
+
+/**
+ * Where on its member's line a cast version sits (its line, date, history
+ * entry and life point): the `at` of an author write that lands on it. No
+ * version is the base's place, main undated.
+ */
+function keyOfVersion(v: typeof schema.characterVersions.$inferSelect | null) {
+	return {
+		branchId: v?.branchId ?? null,
+		date:
+			v?.year == null
+				? null
+				: { year: v.year, month: v.month, day: v.day },
+		historyEntryId: v?.historyEntryId ?? null,
+		personalPosition: v?.personalPosition ?? null
+	}
+}
+
+/** `rows` with their node state and visibility read from their versions (`storyStatesOf`). */
+async function withStoryStates<
+	M extends {
+		id: number
+		nodeState: NodeState
+		nodeVisibility: NodeVisibility
+	}
+>(handle: Db, rows: readonly M[], reading?: EntryReading): Promise<M[]> {
+	const states = await storyStatesOf(handle, rows, reading)
+	return rows.map((row) => {
+		const read = states.get(row.id)
+		return read
+			? {
+					...row,
+					nodeState: read.nodeState,
+					nodeVisibility: read.nodeVisibility
+				}
+			: row
+	})
+}
+
 /** What a build of one line would read, counted (`Sockets.NarrativeGraph.GraphBuildCounts`). */
 function emptyBuildCounts(): Sockets.NarrativeGraph.GraphBuildCounts {
 	return {
@@ -639,6 +736,9 @@ async function buildGraphList(
 			.where(directEntryOf(lorebookId, "every"))
 	])
 
+	// The story state is on versions (the columns are frozen).
+	const nodesRead = await withStoryStates(db, nodes)
+
 	const byLine = new Map<number | null, Sockets.NarrativeGraph.GraphBuildCounts>()
 	const countsOf = (branchId: number | null) => {
 		let counts = byLine.get(branchId)
@@ -665,7 +765,7 @@ async function buildGraphList(
 	return {
 		// The scope the gate reads. See the Response type.
 		lorebookId,
-		nodes,
+		nodes: nodesRead,
 		// Entries are on the graph too: an entry with an edge is a node, and
 		// the endpoint carries what it takes to draw one.
 		relationships,
@@ -805,6 +905,8 @@ async function buildGraph(
 	// is left building. After `activityStore.start`, a failure is the
 	// activity's `status: "error"` instead (`narrativeGraphBuildHandler`).
 	const lorebook = await assertOwnedBook(db, userId, params.lorebookId)
+	const primerProblem = await primerRowEditProblem(db, params.lorebookId)
+	if (primerProblem) throw new Error(primerProblem)
 
 	// A graph build turns what sessions played into the book: the owner's
 	// lore write mode Off refuses it before any work (plan A22).
@@ -950,7 +1052,14 @@ async function buildGraph(
 			where: eq(schema.sessions.id, scopeSessionId),
 			columns: { lorebookId: true, lorebookBranchId: true }
 		})
-		if (!session || session.lorebookId !== params.lorebookId)
+		// A session on its own notes (no attached book) may extend its own
+		// book's graph; its line is a line of that book (★bk-fold-1).
+		let readsIt = !!session && session.lorebookId === params.lorebookId
+		if (session && session.lorebookId == null) {
+			const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+			readsIt = (await ownBookOf(db, scopeSessionId))?.id === params.lorebookId
+		}
+		if (!session || !readsIt)
 			throw new Error(
 				"That session does not read this lorebook, so the graph cannot be extended from it."
 			)
@@ -1021,8 +1130,9 @@ async function buildGraph(
 	// Fetch bindings with left joins (explicit joins have reliable TS inference).
 	// A deleted card is nobody in a lorebook (plan A25): its member is named by
 	// their own name, as a member without a card is.
-	const bindings = await db
+	const bindingRows = await db
 		.select({
+			id: schema.lorebookBindings.id,
 			binding: schema.lorebookBindings.binding,
 			memberName: schema.lorebookBindings.name,
 			characterName: schema.characters.name,
@@ -1038,12 +1148,32 @@ async function buildGraph(
 		)
 		.where(eq(schema.lorebookBindings.lorebookId, params.lorebookId))
 
+	// A member's own names are its cast version's in force at the build's line
+	// head; a member with no version (an error) has none.
+	const bindingVersions = await storyStatesOf(db, bindingRows, {
+		branchId: buildBranchId,
+		moment: null,
+		forkedAt: null,
+		line
+	})
+	const bindings = bindingRows.map((b) => {
+		const version = bindingVersions.get(b.id)?.version
+		if (!version) return { ...b, ownName: null, ownNickname: null }
+		const { ownName, ownNickname } = memberColumnsOfVersion(version, {
+			carded: version.parentVersionId != null
+		})
+		return { ...b, ownName, ownNickname }
+	})
+
 	// Build substitution map: binding token → display name
 	const bindingMap: Record<string, string> = {}
 	for (const b of bindings) {
 		if (!b.binding) continue
 		const label = b.characterName
-			? b.characterNickname || b.characterName
+			? memberShownName(
+					{ ownName: b.ownName, ownNickname: b.ownNickname },
+					{ name: b.characterName, nickname: b.characterNickname }
+				)
 			: b.memberName?.trim() || b.binding
 		bindingMap[b.binding] = label
 	}
@@ -1182,6 +1312,8 @@ async function buildGraph(
 	}
 
 	// Map scenes to GraphBuilderScene format with binding substitution applied
+	const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
+	const shownSceneNames = await sceneDisplayNames(db, filteredRawScenes)
 	const scenes: GraphBuilderScene[] = [
 		...filteredRawScenes.map((s) => {
 			const cast = castFor(sceneCasts, s.id)
@@ -1190,7 +1322,7 @@ async function buildGraph(
 			)
 			return {
 				id: s.id,
-				name: s.name,
+				name: shownSceneNames.get(s.id) ?? s.name,
 				summary: s.summary ? resolveBindings(s.summary) : s.summary,
 				historyEntryId: s.historyEntryId ?? null,
 				historyEntry: s.historyEntry
@@ -1253,32 +1385,41 @@ async function buildGraph(
 		const characterIds = allBindings
 			.map((b) => b.characterId)
 			.filter((id): id is number => id != null)
-		const characters =
+		// The summary a member is seeded with is its card's: the card's
+		// current version, the one source (a deleted card seeds nothing,
+		// plan A25).
+		const liveCardIds =
 			characterIds.length > 0
-				? await db
-						.select({
-							id: schema.characters.id,
-							name: schema.characters.name,
-							nickname: schema.characters.nickname,
-							description: schema.characters.description,
-							summary: schema.characters.summary
-						})
-						.from(schema.characters)
-						.where(
-							and(
-								inArray(schema.characters.id, characterIds),
-								// A deleted card seeds nothing (plan A25).
-								eq(schema.characters.isDeleted, false)
+				? (
+						await db
+							.select({ id: schema.characters.id })
+							.from(schema.characters)
+							.where(
+								and(
+									inArray(schema.characters.id, characterIds),
+									eq(schema.characters.isDeleted, false)
+								)
 							)
-						)
+					).map((c) => c.id)
 				: []
-		const charMap = new Map(characters.map((c) => [c.id, c]))
+		const charMap = new Map<
+			number,
+			{ summary: string | null; description: string | null }
+		>()
+		for (const id of liveCardIds) {
+			const current = await ensureCardVersion(db, id)
+			if (current)
+				charMap.set(id, {
+					summary: current.summary,
+					description: current.description
+				})
+		}
 
 		function fallbackSummary(b: (typeof allBindings)[number]): string {
 			if (b.characterId) {
 				const char = charMap.get(b.characterId)
 				return (
-					char?.summary?.trim() || char?.description.trim() || ""
+					char?.summary?.trim() || char?.description?.trim() || ""
 				)
 			}
 			return ""
@@ -1326,10 +1467,22 @@ async function buildGraph(
 					)
 				: []
 
+		// Their state and visibility are the cast versions' in force at the
+		// build's line head (the columns are frozen).
+		const storyStates = await storyStatesOf(db, allBindings, {
+			branchId: buildBranchId,
+			moment: null,
+			forkedAt: null,
+			line
+		})
+
 		// Build alias name map: non-hidden alias-child names per parent
 		const childrenByParent = new Map<number, string[]>()
 		for (const b of allBindings) {
-			if (b.parentNodeId !== null && b.nodeVisibility !== "hidden") {
+			if (
+				b.parentNodeId !== null &&
+				storyStates.get(b.id)!.nodeVisibility !== "hidden"
+			) {
 				const list = childrenByParent.get(b.parentNodeId) ?? []
 				list.push(b.name)
 				childrenByParent.set(b.parentNodeId, list)
@@ -1352,7 +1505,7 @@ async function buildGraph(
 			seeds.push({
 				id: b.id,
 				name,
-				nodeState: b.nodeState,
+				nodeState: storyStates.get(b.id)!.nodeState,
 				summary: b.summary?.trim() || fallbackSummary(b) || null,
 				aliases: [
 					...new Set([
@@ -1495,8 +1648,13 @@ async function buildGraph(
 								)
 						: Promise.resolve([])
 				])
+				// A character is named as its seat reads it (the seated member's own name, else the card's).
+				const seated = await cardsAsSeatsRead(db, sessionId, characters)
 				const characterMap = new Map(
-					characters.map((c) => [c.id, resolveCharacterName(c)])
+					seated.map((c) => [
+						c.id,
+						memberShownName(undefined, c, "assistant")
+					])
 				)
 				const personaMap = new Map(
 					personas.map((p) => [p.id, p.name])
@@ -2124,6 +2282,8 @@ export const narrativeGraphApplyProposalHandler = refusable<
 		const lorebook = await findOwnedBook(db, userId, lorebookId)
 		if (!lorebook)
 			refuseApply("That lorebook was not found. Nothing was changed.")
+		const primerProblem = await primerRowEditProblem(db, lorebookId)
+		if (primerProblem) refuseApply(primerProblem)
 		// The owner's lore write mode Off: nothing a build proposed is
 		// written (plan A22), even from a review opened before it was set.
 		if ((await bookLoreWriteMode(db, lorebookId)) === "off")
@@ -2574,9 +2734,9 @@ export const narrativeGraphApplyProposalHandler = refusable<
 							`“${name}” is the name of a place or thing in this book, so it can't be added as a character. Rename it or remove it, then apply again. Nothing was changed.`
 						)
 					const token = await deriveNextBindingToken(lorebookId, tx)
-					const [inserted] = await tx
-						.insert(schema.lorebookBindings)
-						.values({
+					const { member: inserted } = await insertCastMember(
+						tx,
+						{
 							lorebookId,
 							characterId: null,
 							binding: token,
@@ -2590,8 +2750,9 @@ export const narrativeGraphApplyProposalHandler = refusable<
 							),
 							sceneId: nodeProposal.sceneId ?? null,
 							historyEntryId: nodeProposal.historyEntryId ?? null
-						})
-						.returning()
+						},
+						{ writtenBy: `user:${userId}` }
+					)
 					tempIdMap.set(nodeProposal.tempId, inserted.id)
 					addedHere.add(inserted.id)
 					cast.push({ id: inserted.id, name, aliases: [] })
@@ -2612,11 +2773,16 @@ export const narrativeGraphApplyProposalHandler = refusable<
 					const id = tempIdMap.get(update.tempId)
 					if (id == null) refuseApply(PROPOSAL_NOT_FROM_BUILD)
 					if (update.nodeState !== undefined) {
-						await tx
-							.update(schema.lorebookBindings)
-							.set({
-								nodeState: sanitizeNodeState(update.nodeState)
+						// The state is a cast version's now (the column is
+						// frozen): written at the key of the version in force at
+						// the build's line head, so that line reads it there.
+						// Nothing is written when the state already reads so.
+						const nodeState = sanitizeNodeState(update.nodeState)
+						const [member] = await tx
+							.select({
+								id: schema.lorebookBindings.id
 							})
+							.from(schema.lorebookBindings)
 							.where(
 								and(
 									eq(schema.lorebookBindings.id, id),
@@ -2626,6 +2792,19 @@ export const narrativeGraphApplyProposalHandler = refusable<
 									)
 								)
 							)
+						if (member) {
+							const read = (
+								await storyStatesOf(tx, [member], writeReading)
+							).get(id)!
+							if (read.nodeState !== nodeState) {
+								await writeCastVersion(tx, {
+									member: id,
+									changes: { nodeState },
+									writtenBy: `user:${userId}`,
+									at: keyOfVersion(read.version)
+								})
+							}
+						}
 					}
 					if (update.summary !== undefined) {
 						// Fill-blanks-only, enforced in the WHERE rather than by
@@ -2635,14 +2814,13 @@ export const narrativeGraphApplyProposalHandler = refusable<
 						// and the column cannot tell them apart. Encoding it here
 						// also means a concurrent edit can't slip through, and the
 						// client-supplied previousSummary is never trusted.
-						await tx
+						const summary = capText(
+							update.summary,
+							MAX_NODE_TEXT_LENGTH
+						)
+						const filled = await tx
 							.update(schema.lorebookBindings)
-							.set({
-								summary: capText(
-									update.summary,
-									MAX_NODE_TEXT_LENGTH
-								)
-							})
+							.set({ summary })
 							.where(
 								and(
 									eq(schema.lorebookBindings.id, id),
@@ -2656,6 +2834,20 @@ export const narrativeGraphApplyProposalHandler = refusable<
 									)
 								)
 							)
+							.returning({ id: schema.lorebookBindings.id })
+						// The base keeps in step: the summary is a profile field
+						// of the member's versions too.
+						if (filled.length > 0)
+							await writeCastVersion(tx, {
+								member: id,
+								changes: { summary },
+								writtenBy: `user:${userId}`,
+								at: {
+									branchId: null,
+									date: null,
+									personalPosition: null
+								}
+							})
 					}
 				}
 
@@ -3298,7 +3490,7 @@ export const narrativeGraphApplyProposalHandler = refusable<
 					orderBy: asc(schema.narrativeRelationships.id)
 				})
 			])
-			nodes = bindingRows
+			nodes = await withStoryStates(db, bindingRows)
 			wiredRelationships = await wireRelationships(relationshipRows)
 			res = {
 				lorebookId,
@@ -3419,6 +3611,8 @@ export const narrativeGraphDeleteNodeHandler: Handler<
 
 		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 		if (!lorebook) throw new Error("Access denied.")
+		const primerProblem = await primerRowEditProblem(db, existing.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		/**
 		 * Their private lore: the character-lore entries anchored to them.
@@ -3630,6 +3824,8 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 
 		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 		if (!lorebook) throw new Error("That link is not in this lorebook.")
+		const primerProblem = await primerRowEditProblem(db, existing.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		// Explicit allowlist, not a denylist — a denylist previously let a
 		// client rewrite fromNodeId/toNodeId/lorebookId to point anywhere.
@@ -3832,6 +4028,8 @@ export const narrativeGraphDeleteRelationshipHandler: Handler<
 
 		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 		if (!lorebook) throw new Error("That link is not in this lorebook.")
+		const primerProblem = await primerRowEditProblem(db, existing.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 		// From the row's own line only (plan B0): absent or null is main.
 		await assertRelationshipWrite(db, {
 			op: "delete",
@@ -3882,6 +4080,8 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 		const title = wayWords(params.name)
 
 		const lorebook = await assertOwnedBook(db, userId, lorebookId)
+		const primerProblem = await primerRowEditProblem(db, lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		assertRelationshipWords({
 			relationshipType,
@@ -4050,6 +4250,8 @@ export const narrativeGraphSetTieSideHandler: Handler<
 			: undefined
 		if (!existing || !(await findOwnedBook(db, userId, existing.lorebookId)))
 			throw new Error("That link is not in this lorebook.")
+		const primerProblem = await primerRowEditProblem(db, existing.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 		const { fileHeldFieldChange } = await import("$lib/server/rulesets/ties")
 		const filed = await fileHeldFieldChange(db, {
 			relationshipId: existing.id,
@@ -4100,6 +4302,12 @@ type MemberStory = {
 	 * them: that undo has none to put back.
 	 */
 	stateProposals?: Record<string, unknown>[]
+	/**
+	 * Their cast versions (`character_versions` rows), base first. Absent from
+	 * a log whose absorb did not keep them: that undo makes the base from the
+	 * saved row's columns and has nothing dated to put back.
+	 */
+	castVersions?: Record<string, unknown>[]
 }
 
 /**
@@ -4160,6 +4368,9 @@ async function rewriteMergeLogCastTags(
 				),
 				castPresences: story.castPresences.map((r) =>
 					retext(r, ["note"])
+				),
+				castVersions: story.castVersions?.map((r) =>
+					retext(r, CAST_VERSION_TAG_COLUMNS)
 				)
 			}
 		const deletedRelationships = (
@@ -4329,6 +4540,20 @@ async function memberIsLinked(
 			schema.castAmendments,
 			eq(schema.castAmendments.lorebookBindingId, bindingId)
 		)) ||
+		// A cast version that is not the base: a dated change, one on a
+		// line or at a life point, or one a session wrote.
+		(await any(
+			schema.characterVersions,
+			and(
+				eq(schema.characterVersions.castMemberId, bindingId),
+				or(
+					isNotNull(schema.characterVersions.branchId),
+					isNotNull(schema.characterVersions.year),
+					isNotNull(schema.characterVersions.personalPosition),
+					isNotNull(schema.characterVersions.sourceSessionId)
+				)
+			)
+		)) ||
 		(await any(
 			schema.castPresences,
 			eq(schema.castPresences.lorebookBindingId, bindingId)
@@ -4379,7 +4604,8 @@ async function memberIsLinked(
  * member by a plain `(owner_kind, owner_id)` pair with no key, and pending
  * changes name them in their payload, and those are deleted by hand
  * (`deleteMemberStats`). All six are snapshotted here so an undo can put the
- * member back as they were, not as a bare row.
+ * member back as they were, not as a bare row. Their cast versions go with
+ * the row too (`ON DELETE CASCADE`) and are snapshotted with the rest.
  */
 async function snapshotMemberStory(
 	tx: Db,
@@ -4411,13 +4637,19 @@ async function snapshotMemberStory(
 		.select()
 		.from(schema.stateProposals)
 		.where(pendingChangesFor(["cast_member"], [bindingId]))
+	const castVersions = await tx
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.castMemberId, bindingId))
+		.orderBy(asc(schema.characterVersions.id))
 	return {
 		castAmendments,
 		castPresences,
 		attributeValues,
 		attributeConfigs,
 		ownerSheets,
-		stateProposals
+		stateProposals,
+		castVersions
 	}
 }
 
@@ -4478,7 +4710,13 @@ function reviveRow(row: Record<string, unknown>): Record<string, any> {
 async function restoreMemberStory(
 	tx: Db,
 	story: MemberStory,
-	newBindingId: number
+	newBindingId: number,
+	versions: {
+		/** The recreated member's base version (`insertCastMember`'s); null for an overlay row. */
+		base: typeof schema.characterVersions.$inferSelect | null
+		lorebookId: number
+		writtenBy: string
+	}
 ): Promise<number> {
 	const ownerSheets = story.ownerSheets ?? []
 	// A waiting change names its owner in its payload: pointed at the
@@ -4492,13 +4730,15 @@ async function restoreMemberStory(
 			}
 		}
 	)
+	const castVersions = story.castVersions ?? []
 	const all = [
 		...story.castAmendments,
 		...story.castPresences,
 		...story.attributeValues,
 		...story.attributeConfigs,
 		...ownerSheets,
-		...stateProposals
+		...stateProposals,
+		...castVersions
 	]
 	if (all.length === 0) return 0
 	const col = (key: string) => all.map((r) => r[key] as number | null)
@@ -4515,7 +4755,10 @@ async function restoreMemberStory(
 		col("historyEntryId")
 	)
 	const scenes = await stillThere(tx, schema.scenes, col("sceneId"))
-	const sessions = await stillThere(tx, schema.sessions, col("sessionId"))
+	const sessions = await stillThere(tx, schema.sessions, [
+		...col("sessionId"),
+		...col("sourceSessionId")
+	])
 	const messages = await stillThere(tx, schema.messages, [
 		...col("validFromMessageId"),
 		...col("messageId")
@@ -4576,6 +4819,113 @@ async function restoreMemberStory(
 			}
 			await tx.insert(table).values({ ...values, ...owner })
 		}
+	skipped += await restoreCastVersions(tx, castVersions, newBindingId, {
+		...versions,
+		skip: (row) =>
+			gone(branches, row.branchId) ||
+			gone(sessions, row.sourceSessionId) ||
+			gone(messages, row.validFromMessageId),
+		historyEntryGone: (id) => gone(historyEntries, id)
+	})
+	return skipped
+}
+
+const sameJson = (a: unknown, b: unknown) =>
+	JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+
+/**
+ * Put a cast member's versions back onto their recreated row. The recreated
+ * row has a fresh base, made from the saved row's columns (which can be stale);
+ * the logged **base** is brought onto it by one author write, and every other
+ * logged version is inserted again (`insertCharacterVersions`) in id order,
+ * keeping its write order and retire mark, so the member reads as before.
+ *
+ * A version whose line, session or turn is gone went with it and is skipped
+ * (the amendments' rule), a history entry that is gone is let go of, and a
+ * version whose card version is gone loses its parent and so its `follows`
+ * (the followed values are not recoverable: the card went with them).
+ * Answers how many versions could not be put back.
+ */
+async function restoreCastVersions(
+	tx: Db,
+	logged: Record<string, unknown>[],
+	newBindingId: number,
+	opts: {
+		base: typeof schema.characterVersions.$inferSelect | null
+		lorebookId: number
+		writtenBy: string
+		skip: (row: Record<string, unknown>) => boolean
+		historyEntryGone: (id: unknown) => boolean
+	}
+): Promise<number> {
+	if (logged.length === 0) return 0
+	const isBase = (row: Record<string, unknown>) =>
+		row.branchId == null &&
+		row.year == null &&
+		row.personalPosition == null &&
+		row.sourceSessionId == null
+	const loggedBase = logged.find(isBase)
+	const { base } = opts
+
+	if (loggedBase && base) {
+		const wasFollowing = new Set((loggedBase.follows ?? []) as string[])
+		const changes: Record<string, unknown> = {}
+		for (const field of CHARACTER_PROFILE_FIELDS) {
+			const nowFollows = base.follows.includes(field)
+			if (wasFollowing.has(field) && base.parentVersionId != null) {
+				if (!nowFollows) changes[field] = { follow: true }
+			} else if (nowFollows || !sameJson(base[field], loggedBase[field]))
+				changes[field] = loggedBase[field] ?? null
+		}
+		for (const key of ["nodeState", "nodeVisibility"] as const)
+			if (loggedBase[key] != null && loggedBase[key] !== base[key])
+				changes[key] = loggedBase[key]
+		if (Object.keys(changes).length > 0)
+			await writeCastVersion(tx, {
+				member: newBindingId,
+				changes: changes as CastVersionChanges,
+				writtenBy: opts.writtenBy,
+				at: { branchId: null, date: null, personalPosition: null }
+			})
+	}
+
+	const others = logged.filter((row) => !(base && loggedBase && isBase(row)))
+	const parentsLeft = await stillThere(
+		tx,
+		schema.characterVersions,
+		others.map((row) => row.parentVersionId as number | null)
+	)
+	let skipped = 0
+	const rows: Record<string, unknown>[] = []
+	for (const row of others) {
+		if (opts.skip(row)) {
+			skipped++
+			continue
+		}
+		const {
+			id: _id,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			...rest
+		} = row
+		const parentLeft =
+			typeof row.parentVersionId === "number" &&
+			parentsLeft.has(row.parentVersionId)
+		rows.push({
+			...rest,
+			castMemberId: newBindingId,
+			lorebookId: opts.lorebookId,
+			parentVersionId: parentLeft ? row.parentVersionId : null,
+			follows: parentLeft ? (row.follows ?? []) : [],
+			historyEntryId: opts.historyEntryGone(row.historyEntryId)
+				? null
+				: (row.historyEntryId ?? null)
+		})
+	}
+	await insertCharacterVersions(
+		tx,
+		rows as unknown as Parameters<typeof insertCharacterVersions>[1]
+	)
 	return skipped
 }
 
@@ -4622,6 +4972,8 @@ export const narrativeGraphMergeNodeHandler: Handler<
 
 		const lorebook = await findOwnedBook(db, userId, child.lorebookId)
 		if (!lorebook) throw new Error("Access denied.")
+		const primerProblem = await primerRowEditProblem(db, child.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		// Binding IS the row, so absorbing two bound rows into each other
 		// would mean reassigning one character's identity onto a different
@@ -5104,7 +5456,9 @@ export const narrativeGraphMergeNodeHandler: Handler<
 		})
 
 		const res: Sockets.NarrativeGraph.MergeNode.Response = {
-			survivorNode: merged.survivorNode
+			survivorNode: (
+				await withStoryStates(db, [merged.survivorNode])
+			)[0]
 		}
 		emitToUser("narrativeGraph:mergeNode", res)
 		await afterCastTagRewrite(
@@ -5171,6 +5525,8 @@ export const narrativeGraphUndoMergeHandler: Handler<
 
 		const lorebook = await findOwnedBook(db, userId, log.lorebookId)
 		if (!lorebook) throw new Error("Access denied.")
+		const primerProblem = await primerRowEditProblem(db, log.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		if (log.survivorId === null) {
 			throw new Error(
@@ -5221,9 +5577,6 @@ export const narrativeGraphUndoMergeHandler: Handler<
 					summary: schema.lorebookBindings.summary,
 					aliases: schema.lorebookBindings.aliases,
 					absorbedAliases: schema.lorebookBindings.absorbedAliases,
-					spriteSet: schema.lorebookBindings.spriteSet,
-					nodeState: schema.lorebookBindings.nodeState,
-					nodeVisibility: schema.lorebookBindings.nodeVisibility,
 					sceneId: schema.lorebookBindings.sceneId,
 					historyEntryId: schema.lorebookBindings.historyEntryId,
 					parentNodeId: schema.lorebookBindings.parentNodeId
@@ -5238,7 +5591,17 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				.limit(1)
 			let restoredTag = snapshotTag
 			if (tagHolder) {
-				const blank = isBlankMember(tagHolder)
+				// Their state and sprite set are their versions' (the columns
+				// are frozen).
+				const holderRead = (
+					await storyStatesOf(tx, [tagHolder])
+				).get(tagHolder.id)!
+				const blank = isBlankMember({
+					...tagHolder,
+					nodeState: holderRead.nodeState,
+					nodeVisibility: holderRead.nodeVisibility,
+					spriteSet: holderRead.version?.spriteSet ?? null
+				})
 				if (
 					blank &&
 					!(await memberIsLinked(tx, log.lorebookId, tagHolder.id))
@@ -5268,19 +5631,21 @@ export const narrativeGraphUndoMergeHandler: Handler<
 			// the row and describes the row's text, which comes back as it
 			// was, so it needs no embed; the queue's hash check re-embeds it
 			// only if that text did move (`columnStoreNeedsEmbedding`).
-			const [inserted] = await tx
-				.insert(schema.lorebookBindings)
-				.values({
-					...(rest as typeof schema.lorebookBindings.$inferInsert),
-					binding: restoredTag,
-					vectorizedAt: snapshotVectorizedAt
-						? new Date(snapshotVectorizedAt as string)
-						: null,
-					createdAt: snapshotCreatedAt
-						? new Date(snapshotCreatedAt as string)
-						: new Date()
-				})
-				.returning()
+			const { member: inserted, base: insertedBase } =
+				await insertCastMember(
+					tx,
+					{
+						...(rest as typeof schema.lorebookBindings.$inferInsert),
+						binding: restoredTag,
+						vectorizedAt: snapshotVectorizedAt
+							? new Date(snapshotVectorizedAt as string)
+							: null,
+						createdAt: snapshotCreatedAt
+							? new Date(snapshotCreatedAt as string)
+							: new Date()
+					},
+					{ writtenBy: `user:${userId}` }
+				)
 
 			// Null passes straight through: that end of the edge is an entry,
 			// which a merge never touched and an undo must not invent one for.
@@ -5470,7 +5835,12 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				? await restoreMemberStory(
 						tx,
 						memberStory as MemberStory,
-						inserted.id
+						inserted.id,
+						{
+							base: insertedBase,
+							lorebookId: inserted.lorebookId,
+							writtenBy: `user:${userId}`
+						}
 					)
 				: 0
 
@@ -5584,9 +5954,14 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				log.id,
 				{
 					castMember: [inserted.id],
-					castAmendment: (await ownedBy(schema.castAmendments)).map(
-						(r: { id: number }) => r.id
-					),
+					castVersion: (
+						await tx
+							.select({ id: schema.characterVersions.id })
+							.from(schema.characterVersions)
+							.where(
+								eq(schema.characterVersions.castMemberId, inserted.id)
+							)
+					).map((r) => r.id),
 					castPresence: (await ownedBy(schema.castPresences)).map(
 						(r: { id: number }) => r.id
 					),
@@ -5619,7 +5994,7 @@ export const narrativeGraphUndoMergeHandler: Handler<
 			// and the record it undid, so the list that asked claims it (B8).
 			lorebookId: log.lorebookId,
 			mergeLogId,
-			restoredNode: restored.inserted,
+			restoredNode: (await withStoryStates(db, [restored.inserted]))[0],
 			unrestoredLinkCount: restored.unrestoredLinkCount,
 			unrestoredMovedLinkCount: restored.unrestoredMovedLinkCount,
 			unrestoredStoryCount: restored.unrestoredStoryCount,
@@ -5714,6 +6089,8 @@ export const narrativeGraphDismissDuplicateHandler: Handler<
 		const { lorebookId, bindingIdA, bindingIdB } = params
 
 		const lorebook = await assertOwnedBook(db, userId, lorebookId)
+		const primerProblem = await primerRowEditProblem(db, lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 
 		const [a, b] = orderedBindingPair(bindingIdA, bindingIdB)
 		// Both this book's own members: the pair's keys reach any binding, so

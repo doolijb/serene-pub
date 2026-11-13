@@ -56,6 +56,7 @@ function open() {
 	})
 	let voiced = $state<number | null>(null)
 	let pins = $state<{ left: string | null; right: string | null }>({ left: null, right: null })
+	let shown = $state<number | null>(null)
 	const builds: SessionCharactersV1[] = []
 	stop = $effect.root(() => {
 		const section = charactersSection({
@@ -63,7 +64,8 @@ function open() {
 			session: () => session,
 			viewerUserId: () => 30,
 			voicedPersonaId: () => voiced,
-			sceneImages: () => pins
+			sceneImages: () => pins,
+			shownLine: () => shown
 		})
 		$effect(() => {
 			const now = section.current
@@ -84,6 +86,10 @@ function open() {
 		},
 		voice(id: number) {
 			voiced = id
+			flushSync()
+		},
+		show(id: number | null) {
+			shown = id
 			flushSync()
 		},
 		pin(left: string) {
@@ -123,5 +129,36 @@ describe("charactersSection", () => {
 		page.pick("Casual")
 		expect(page.builds).toHaveLength(5)
 		expect(ada().spriteSet).toBe("Casual")
+	})
+})
+
+describe("charactersSection as of a shown line", () => {
+	const lines = [line(1, "Hello"), line(2, "Ha!", "happy")]
+	const adaSprite = (s: SessionCharactersV1) => s.members.find((m) => m.characterId === 3)!.sprite
+
+	test("setting, moving and clearing the line rebuilds with the earlier sprite and the speaker", () => {
+		const page = open()
+		page.stream(lines)
+		const whole = page.builds[page.builds.length - 1]
+		expect(whole.speakerRef).toBe("character:3")
+		page.show(1)
+		const early = page.builds[page.builds.length - 1]
+		expect(early).not.toBe(whole)
+		expect(adaSprite(early)).not.toBe(adaSprite(whole))
+		expect(early.speakerRef).toBe("character:3")
+		page.show(2)
+		expect(adaSprite(page.builds[page.builds.length - 1])).toBe(adaSprite(whole))
+		page.show(null)
+		expect(page.builds[page.builds.length - 1]).toEqual(whole)
+	})
+
+	test("a streamed chunk with a line shown leaves the section the same object", () => {
+		const page = open()
+		page.stream(lines)
+		page.show(1)
+		const n = page.builds.length
+		page.stream([...lines, line(3, "Th")])
+		page.stream([...lines, line(3, "The rain")])
+		expect(page.builds).toHaveLength(n)
 	})
 })

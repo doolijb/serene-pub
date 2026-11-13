@@ -198,11 +198,6 @@ button[data-widget-part~="messages.message-name"]:hover {
 	line-height: 1.4;
 	color: var(--color-surface-500);
 }
-/* The scene's own colour, inherited from the row (`--sp-scene`), so this badge
-   and the pack's scene edge are the same colour by construction. */
-[data-widget-part~="messages.message-badge-scene"] {
-	color: var(--sp-scene, var(--color-surface-500));
-}
 [data-widget-part~="messages.message-badge-text"] {
 	max-inline-size: 12ch;
 	overflow: hidden;
@@ -658,6 +653,13 @@ button[data-widget-part~="messages.scene-title"]:hover {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.25rem;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-500);
+}
+/* ★S-4 (2026-11-04): why a scene began by itself, one quiet line under its name. */
+[data-widget-part~="messages.scene-cause"] {
+	flex-basis: 100%;
 	font-size: 0.75rem;
 	line-height: 1.4;
 	color: var(--color-surface-500);

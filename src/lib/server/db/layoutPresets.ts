@@ -71,6 +71,7 @@ import {
 } from "drizzle-orm"
 import { db } from "."
 import * as schema from "./schema"
+import { presetLayoutAsV2, storedLayoutAsV2 } from "./panelsFromStored"
 import {
 	DEFAULT_PRESET_NAME,
 	coreLayoutSeedKey,
@@ -707,6 +708,43 @@ export async function guestsLayoutRow(genreId: string, handle: Db = db): Promise
 	return row ?? null
 }
 
+/** Resolve a shipped slug-only pin to `{ id, slug }` by its seeded system row; an unmatched one is copied as it is (the client store ignores a pin with no id), as is a pin with a numeric `id`. */
+async function resolveShippedPins(
+	tx: Db,
+	pins: Record<string, Record<string, unknown>>
+): Promise<Record<string, Record<string, unknown>>> {
+	const slugOnly = Object.values(pins)
+		.filter((p) => typeof p.id !== "number" && typeof p.slug === "string")
+		.map((p) => p.slug as string)
+	const rows = slugOnly.length
+		? await tx
+				.select({
+					id: schema.widgetStyles.id,
+					slug: schema.widgetStyles.slug,
+					widgetSlug: schema.widgetStyles.widgetSlug
+				})
+				.from(schema.widgetStyles)
+				.where(
+					and(
+						inArray(schema.widgetStyles.slug, slugOnly),
+						eq(schema.widgetStyles.source, "system")
+					)
+				)
+		: []
+	const out: Record<string, Record<string, unknown>> = {}
+	for (const [instanceId, pin] of Object.entries(pins)) {
+		if (typeof pin.id === "number" || typeof pin.slug !== "string") {
+			out[instanceId] = pin
+			continue
+		}
+		const row = rows.find(
+			(r) => r.slug === pin.slug && r.widgetSlug === widgetOfInstance(instanceId)
+		)
+		out[instanceId] = row ? { id: row.id, slug: row.slug } : pin
+	}
+	return out
+}
+
 /** What a copy was asked to do. */
 export interface CopyLayoutIntoSession {
 	sessionId: number
@@ -754,6 +792,12 @@ export type CopyLayoutOutcome =
  *   A FIRST open that finds nothing to copy (a genre with no genre default
  *   layout) also writes `{}`, but clears nothing: it is not the person
  *   asking to start over.
+ * - A shipped pin that names a style by `slug` alone is resolved here to its
+ *   seeded system row, stored as an ordinary `{ id, slug }` pin; one that
+ *   matches no system row of that widget is dropped.
+ * - The copy is written as panels version 2 (`presetLayoutAsV2`): a version 1
+ *   preset converts here, its Messages settings split onto the Composer and
+ *   Turn line; the preset row itself is never changed.
  * - Provenance: `started from` the preset (null for scratch), copied now.
  */
 export async function copyLayoutIntoSession(
@@ -769,10 +813,13 @@ export async function copyLayoutIntoSession(
 			args.userId
 		)
 		if (!row) return { ok: false, error: LAYOUT_PRESET_UNKNOWN }
-		if (isPlainObject(row.layout)) source = row.layout
+		if (isPlainObject(row.layout)) source = presetLayoutAsV2(row.layout)
 	}
 	const layout = arrangementOf(source)
-	const incomingPins = objectEntries(source.widgetStyles)
+	const incomingPins = await resolveShippedPins(
+		tx,
+		objectEntries(source.widgetStyles)
+	)
 	const incomingSettings = objectEntries(source.widgetSettings)
 	const at = new Date()
 	const provenance = {
@@ -1259,11 +1306,13 @@ async function packSessionLayout(
 			)
 		).filter(([id]) => placed.has(id))
 	)
-	return {
-		...arrangement,
-		...(Object.keys(settings).length ? { widgetSettings: settings } : {}),
-		...(Object.keys(pins).length ? { widgetStyles: pins } : {})
-	}
+	return storedLayoutAsV2({
+		layout: {
+			...arrangement,
+			...(Object.keys(settings).length ? { widgetSettings: settings } : {}),
+			...(Object.keys(pins).length ? { widgetStyles: pins } : {})
+		}
+	}).layout
 }
 
 /**
@@ -1287,7 +1336,9 @@ async function markStartedFrom(
 		.values({
 			sessionId: from.sessionId,
 			userId: from.userId,
-			layout: arrangementOf(from.layout),
+			layout: arrangementOf(
+				storedLayoutAsV2({ layout: arrangementOf(from.layout) }).layout
+			),
 			...provenance
 		})
 		.onConflictDoUpdate({

@@ -19,7 +19,6 @@
  *     (`autoAdvancing`), so a client can stop waiting for a reply that is
  *     not coming instead of hiding its next-speaker block until a backstop.
  */
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -284,10 +283,10 @@ async function orderOf(sessionId: number) {
 	const schema = await import("$lib/server/db/schema")
 	const { readTurnOrder } = await import("@serene-pub/sdk")
 	const [row] = await testDb
-		.select({ annex: schema.sessions.annex })
+		.select({ turnOrder: schema.sessions.turnOrder })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
-	return readTurnOrder(coreAnnexIn(row!.annex)).order
+	return readTurnOrder(row!).order
 }
 
 async function repliesOf(sessionId: number) {

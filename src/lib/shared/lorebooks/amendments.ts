@@ -26,6 +26,7 @@
  *    cut), in date order
  * 3. every amendment on each **ancestor branch**, oldest ancestor first, same
  * 4. every amendment **on the branch being read**, same
+ * 5. the session's **held amendments** 🚧, last: by the turn's anchor, then id
  *
  * Later wins per field, and a nearer line always wins over an ancestor at the
  * same date — that is the whole point of a branch. The chain and its cuts are
@@ -35,8 +36,10 @@
  * ⚠ **`moment = null` means now, and now applies EVERY dated amendment** —
  * including one dated after the latest dated thing in the book. The future does
  * not exist in a book; there is only dated and undated, and an undated change
- * is an edit to the base, not an amendment. The `year` column is `NOT NULL`
- * for that reason.
+ * is an edit to the base, not an amendment. The exception is a **held
+ * amendment** 🚧 (`held` set): the session's own change on top of an entry of
+ * the lorebook it reads. It may be undated, applies after every line step, and
+ * is never cut by a fork — it is the session's, not a line's.
  *
  * ⚠ **An absent key and a null value are different.** A key the amendment does
  * not mention is passed through from below; a key set to `null` sets null. That
@@ -56,8 +59,8 @@ import {
 	type Line
 } from "./lineReading"
 
-/** One dated overlay, as both tables carry it. */
-export interface Amendment {
+/** One dated overlay of a line, as both tables carry it. */
+export interface LineAmendment {
 	id: number
 	/** NULL = main, the shared line. */
 	branchId: number | null
@@ -66,7 +69,26 @@ export interface Amendment {
 	day?: number | null
 	/** A partial of the subject's writable columns. Present keys overlay. */
 	fields: Record<string, unknown>
+	/** Absent: a line's amendment. See `HeldAmendment`. */
+	held?: undefined
 }
+
+/**
+ * A held amendment 🚧: a session's own change on top of an entry of the
+ * lorebook it reads. May be undated; `held.anchor` is its turn's message.
+ */
+export interface HeldAmendment {
+	id: number
+	branchId: number | null
+	year: number | null
+	month?: number | null
+	day?: number | null
+	fields: Record<string, unknown>
+	held: { anchor: number | null }
+}
+
+/** A line's amendment or a held one; test `held` to tell them apart. */
+export type Amendment = LineAmendment | HeldAmendment
 
 /** Which line, and how far along it, a subject is being read at. */
 export interface AsOf {

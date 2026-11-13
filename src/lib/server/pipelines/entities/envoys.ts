@@ -19,6 +19,7 @@
 
 import { onRegistrationsChanged } from "$lib/server/pipelines/registrations/resolve"
 import { and, asc, eq, isNull } from "drizzle-orm"
+import { seatCast } from "$lib/server/sessions/seats"
 import * as schema from "$lib/server/db/schema"
 import {
 	actionsOf,
@@ -265,16 +266,8 @@ export async function seatEnvoy(
 		)
 		.limit(1)
 	const wasLive = !!before && before.removedAt == null
-	await db
-		.insert(schema.sessionCharacters)
-		.values({ sessionId, characterId: null, envoySlug: slug, position })
-		.onConflictDoUpdate({
-			target: [
-				schema.sessionCharacters.sessionId,
-				schema.sessionCharacters.envoySlug
-			],
-			set: { removedAt: null, removedName: null, isActive: true, position }
-		})
+	// The one seat writer: an envoy seat, revived if it departed (it has no member).
+	await seatCast(db, { sessionId, envoySlug: slug, position })
 	return !wasLive
 }
 
@@ -388,10 +381,12 @@ export async function seatDefaultEnvoys(
 	for (const slug of extra) if (declared.some((d) => d.slug === slug)) wanted.add(slug)
 	let position = 0
 	for (const slug of wanted) {
-		await db
-			.insert(schema.sessionCharacters)
-			.values({ sessionId, characterId: null, envoySlug: slug, position: position++ })
-			.onConflictDoNothing()
+		await seatCast(db, {
+			sessionId,
+			envoySlug: slug,
+			position: position++,
+			onExisting: "keep"
+		})
 	}
 	return [...wanted]
 }

@@ -1,12 +1,15 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { SegmentedControl, Switch } from "@skeletonlabs/skeleton-svelte"
-	import { shellPrefs, PROSE_SIZES } from "$lib/client/shell/shellPrefs.svelte"
+	import {
+		shellPrefs,
+		PROSE_SIZES
+	} from "$lib/client/shell/shellPrefs.svelte"
 	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { Theme } from "$lib/client/consts/Theme"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 	import CustomThemeEditor from "./CustomThemeEditor.svelte"
 	import SettingCard from "./settingsTabs/SettingCard.svelte"
@@ -95,9 +98,7 @@
 			{
 				key: "pub",
 				label: "Pub themes",
-				themes: pubThemes
-					.filter((t) => !mine.has(t.name))
-					.map(toChoice)
+				themes: pubThemes.filter((t) => !mine.has(t.name)).map(toChoice)
 			}
 		]
 	})
@@ -124,7 +125,10 @@
 
 	function handleCustomThemesListError() {
 		isLoading = false
-		toaster.error({ title: "Failed to load themes" })
+		notify.error({
+			source: "socket:customThemes:list:error",
+			title: "Failed to load themes"
+		})
 	}
 
 	// A success says nothing: the switch and the whole screen already show
@@ -135,14 +139,20 @@
 		message: SocketEventMap["userSettings:updateDarkMode"]["response"]
 	) {
 		if (!message.success)
-			toaster.error({ title: "Failed to update dark mode setting" })
+			notify.error({
+				source: "socket:userSettings:updateDarkMode",
+				title: "Failed to update dark mode setting"
+			})
 	}
 
 	function handleUserSettingsUpdateTheme(
 		message: SocketEventMap["userSettings:updateTheme"]["response"]
 	) {
 		if (!message.success) {
-			toaster.error({ title: "Failed to update theme" })
+			notify.error({
+				source: "socket:userSettings:updateTheme",
+				title: "Failed to update theme"
+			})
 		}
 	}
 
@@ -202,7 +212,10 @@
 		     theme's ladders — built-ins are all imported in app.css, and every
 		     custom theme's stylesheet is injected by Layout under
 		     `[data-theme='<cssKey>']`. Light/dark follows the page's data-mode. -->
-		<section class="panel-card flex flex-col gap-4" aria-labelledby="theme-heading">
+		<section
+			class="panel-card flex flex-col gap-4"
+			aria-labelledby="theme-heading"
+		>
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<h3 id="theme-heading" class="text-lead font-medium">Theme</h3>
 				<Switch
@@ -239,7 +252,7 @@
 							{#each group.themes as t (t.value)}
 								{@const isSelected = selectedTheme === t.value}
 								<label
-									class="bg-surface-50-950 border-surface-200-800 hover:border-surface-400-600 has-[:focus-visible]:ring-primary-500 relative flex cursor-pointer flex-col gap-2 rounded-container border p-2 has-[:focus-visible]:ring-2 {isSelected
+									class="bg-surface-50-950 border-surface-200-800 hover:border-surface-400-600 has-[:focus-visible]:ring-primary-500 rounded-container relative flex cursor-pointer flex-col gap-2 border p-2 has-[:focus-visible]:ring-2 {isSelected
 										? 'ring-primary-500 ring-offset-surface-100 dark:ring-offset-surface-900 ring-2 ring-offset-2'
 										: ''}"
 								>
@@ -269,20 +282,24 @@
 										></span>
 									</div>
 									<span
-										class="flex min-w-0 items-center gap-1 text-chip"
+										class="text-chip flex min-w-0 items-center gap-1"
 									>
 										<!-- "(Default)" is part of the option label for the
 										     dropdowns elsewhere; on a swatch it would push
 										     the name into an ellipsis, so it becomes a line. -->
 										<span class="min-w-0 flex-1">
 											<span class="block truncate">
-												{t.label.replace(/\s*\(Default\)$/, "")}
+												{t.label.replace(
+													/\s*\(Default\)$/,
+													""
+												)}
 											</span>
 											{#if /\(Default\)$/.test(t.label)}
 												<span
-													class="text-surface-600-400 block text-meta"
-													>Default</span
+													class="text-surface-600-400 text-meta block"
 												>
+													Default
+												</span>
 											{/if}
 										</span>
 										{#if isSelected}
@@ -325,7 +342,9 @@
 							value={String(px)}
 							aria-label="{px} pixels"
 						>
-							<SegmentedControl.ItemText>{px}</SegmentedControl.ItemText>
+							<SegmentedControl.ItemText>
+								{px}
+							</SegmentedControl.ItemText>
 							<SegmentedControl.ItemHiddenInput />
 						</SegmentedControl.Item>
 					{/each}
@@ -408,11 +427,7 @@
 
 			<!-- My Themes -->
 			<div class="space-y-2">
-				<p
-					class="text-surface-600-400 text-xs"
-				>
-					My themes
-				</p>
+				<p class="text-surface-600-400 text-xs">My themes</p>
 				{#if myThemes.length === 0}
 					<div
 						class="bg-surface-100-900 rounded-lg p-4 text-center text-sm opacity-60"
@@ -472,11 +487,7 @@
 			<!-- Pub Themes (only when accounts enabled and there are some) -->
 			{#if isAccountsEnabled && pubThemes.length > 0}
 				<div class="space-y-2">
-					<p
-						class="text-surface-600-400 text-xs"
-					>
-						Pub themes
-					</p>
+					<p class="text-surface-600-400 text-xs">Pub themes</p>
 					{#each pubThemes as theme}
 						<div
 							class="bg-surface-100-900 flex items-center gap-3 rounded-lg p-3"

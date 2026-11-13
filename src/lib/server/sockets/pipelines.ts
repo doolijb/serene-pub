@@ -75,6 +75,7 @@ import type { EntryTypeId } from "$lib/shared/entries/types"
 import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 import { askerOf } from "./refusable"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import {
 	pipelinesCatalogue,
 	pipelinesDraftDiscard,
@@ -649,7 +650,7 @@ async function noticesFor(
 
 /**
  * The gate every prompt mutation passes first — and it is the same shape as
- * `layoutForOption` and `contextTemplateForOption` now, which it was not.
+ * `contextTemplateForOption` now, which it was not.
  *
  * It replaces `promptInSpec`, which asked whether the prompt belonged to the
  * pipeline whose panel was open. That was the right question while a prompt was
@@ -1017,212 +1018,8 @@ export const pipelinesDeletePrompt: Handler<
 	}
 }
 
-/* ------------------------------------------------------------------ *
- * Variable layout CRUD — clone, edit, delete, from the panel
- * ------------------------------------------------------------------ */
-
 /**
- * The gate, and the shape all three of them take now.
- *
- * A layout is shared across pipelines *by design* — that is the feature — so
- * "does this row belong to this spec" has no true answer for one, and a gate
- * asking it would quietly remove cross-pipeline reuse while looking like a
- * security check.
- *
- * What is checked instead: the option handle resolves to a layout setting this
- * pipeline actually declares, the viewer may write it, and the row being
- * mutated renders the same variable that setting does. So the rule is "you may
- * edit a layout through a setting that uses it", which is the honest version of
- * the ownership question.
- *
- * Prompts used to be the exception here, gated on ownership because they were
- * namespaced to a spec. Pooling them by the node that consumes them made the
- * ownership question exactly as meaningless for a prompt as it always was for a
- * layout, so `promptForOption` is now this same shape.
- */
-async function layoutForOption(
-	socket: any,
-	params: {
-		slug: string
-		optionId: string
-		templateId: number
-		sessionId?: number
-	}
-) {
-	const { variableOptionGate } = await import(
-		"$lib/server/pipelines/config/panel"
-	)
-	const { assertSelectable } = await import(
-		"$lib/server/pipelines/entities/variableTemplates"
-	)
-	const viewer = await viewerFor(socket, params.sessionId, params.slug)
-	const { variableId } = await variableOptionGate(
-		db,
-		await pubSecret(),
-		params.slug,
-		viewer,
-		params.optionId
-	)
-	const row = await assertSelectable(db, variableId, params.templateId)
-	return { viewer, variableId, row }
-}
-
-/** "JSON (copy)", then "(copy 2)" — names are unique per variable. */
-async function layoutCopyName(
-	variableId: string,
-	base: string
-): Promise<string> {
-	const rows = await db
-		.select({ name: schema.pipelineVariableTemplates.name })
-		.from(schema.pipelineVariableTemplates)
-		.where(eq(schema.pipelineVariableTemplates.variableId, variableId))
-	const taken = new Set((rows as any[]).map((r) => r.name))
-	let candidate = `${base} (copy)`
-	for (let n = 2; taken.has(candidate); n++) candidate = `${base} (copy ${n})`
-	return candidate
-}
-
-const layoutRefusal = async (err: unknown): Promise<string> => {
-	const { VariableTemplateNotFoundError, VariableTemplateNotUsableError } =
-		await import("$lib/server/pipelines/entities/variableTemplates")
-	const { OptionNotFoundError, OptionNotWritableError } = await import(
-		"$lib/server/pipelines/config/panel"
-	)
-	if (
-		err instanceof VariableTemplateNotFoundError ||
-		err instanceof VariableTemplateNotUsableError ||
-		err instanceof OptionNotFoundError ||
-		err instanceof OptionNotWritableError
-	)
-		return err.message
-	console.error("[pipelines] layout mutation failed:", err)
-	return "That change could not be saved. The server log has the details."
-}
-
-export const pipelinesCloneVariableTemplate: Handler<
-	Sockets.Pipelines.CloneVariableTemplate.Params,
-	Sockets.Pipelines.CloneVariableTemplate.Response
-> = {
-	event: "pipelines:cloneVariableTemplate",
-	handler: async (socket, params, emitToUser) => {
-		let templateId: number
-		try {
-			const { variableId, row } = await layoutForOption(socket, params)
-			const { duplicateVariableTemplate } = await import(
-				"$lib/server/pipelines/entities/variableTemplates"
-			)
-			const copy = await duplicateVariableTemplate(
-				db,
-				row.id,
-				params.name?.trim() ||
-					(await layoutCopyName(variableId, row.name))
-			)
-			templateId = copy.id
-		} catch (err) {
-			const res = { error: await layoutRefusal(err) }
-			emitToUser("pipelines:cloneVariableTemplate:error", res)
-			return res
-		}
-		const view = await emitViewReturning(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		// Rides along so the panel can select the copy in the same gesture —
-		// clone-and-edit, not clone-then-hunt-the-dropdown.
-		const res = {
-			templateId,
-			...view
-		} as Sockets.Pipelines.CloneVariableTemplate.Response
-		emitToUser("pipelines:cloneVariableTemplate", res)
-		return res
-	}
-}
-
-export const pipelinesUpdateVariableTemplate: Handler<
-	Sockets.Pipelines.UpdateVariableTemplate.Params,
-	Sockets.Pipelines.UpdateVariableTemplate.Response
-> = {
-	event: "pipelines:updateVariableTemplate",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const { row } = await layoutForOption(socket, params)
-			const { updateVariableTemplate } = await import(
-				"$lib/server/pipelines/entities/variableTemplates"
-			)
-			await updateVariableTemplate(db, row.id, {
-				...(params.name !== undefined ? { name: params.name } : {}),
-				...(params.source !== undefined
-					? { source: params.source }
-					: {}),
-				...(params.engine !== undefined
-					? { engine: params.engine }
-					: {})
-			})
-		} catch (err) {
-			const res = { error: await layoutRefusal(err) }
-			emitToUser("pipelines:updateVariableTemplate:error", res)
-			return res
-		}
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		return {}
-	}
-}
-
-export const pipelinesDeleteVariableTemplate: Handler<
-	Sockets.Pipelines.DeleteVariableTemplate.Params,
-	Sockets.Pipelines.DeleteVariableTemplate.Response
-> = {
-	event: "pipelines:deleteVariableTemplate",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const { row } = await layoutForOption(socket, params)
-			// The caller's own selection does not hold a layout alive: Delete
-			// sits beside the *selected* row, and selecting is itself a
-			// reference, so without this the button is unreachable.
-			//
-			// Told to the delete rather than released before it, which is the
-			// correction live use forced. Releasing first meant a *refused*
-			// delete cleared the selection anyway — and for layouts refusal is
-			// the common case, because another pipeline holding the row is
-			// exactly the thing that refuses. The row survived, the choice did
-			// not, and nothing said so. Now the rows only go once the delete
-			// has actually succeeded.
-			const { deleteVariableTemplate, variableSlotNames } = await import(
-				"$lib/server/pipelines/entities/variableTemplates"
-			)
-			const slots = await variableSlotNames(db)
-			const ownRefs = await ownGenreRefs(socket, params.slug, row.id, slots)
-			await deleteVariableTemplate(db, row.id, {
-				ignoreRegistrationRefs: await ignoringRefs(ownRefs)
-			})
-			await releaseRefs(params.slug, ownRefs)
-		} catch (err) {
-			const res = { error: await layoutRefusal(err) }
-			emitToUser("pipelines:deleteVariableTemplate:error", res)
-			return res
-		}
-		await emitView(
-			socket,
-			emitToUser,
-			"pipelines:get",
-			params.slug,
-			params.sessionId
-		)
-		return {}
-	}
-}
-
-/**
- * The same gate as `layoutForOption`, for the story string.
+ * The gate for the story string: a context template is picked through a setting.
  *
  * A context template is shared across pipelines by design, so ownership has no
  * true answer here either. What is checked is that the option handle resolves
@@ -1568,9 +1365,19 @@ export const pipelinesPreviewTemplate: Handler<
 					decl.scope
 				).map((i) => i.message)
 		} else {
+			// A draft naming a layout by reference previews through it: the
+			// rows resolved by variable, as a run's world resolves them.
+			const { draftReferenceLayouts } = await import(
+				"$lib/server/pipelines/entities/variableLayouts"
+			)
 			res = await previewContextTemplate({
 				source: params.source,
-				engine: params.engine
+				engine: params.engine,
+				layouts: await draftReferenceLayouts(
+					db,
+					params.engine,
+					params.source
+				)
 			})
 			res.issues = handlebars
 				? lintContextTemplate(params.source).map((i) => i.message)
@@ -1905,7 +1712,9 @@ export const pipelinesLibraryCreateTemplate: Handler<
 					variableId: params.poolId,
 					name,
 					source: params.source ?? "",
-					engine: params.engine ?? null
+					engine: params.engine ?? null,
+					...(params.reference ? { reference: params.reference } : {}),
+					...(params.useEverywhere ? { useEverywhere: true } : {})
 				})
 			}
 			return await libraryAnswer(
@@ -2016,7 +1825,10 @@ export const pipelinesLibraryUpdateTemplate: Handler<
 				const { updateVariableTemplate } = await import(
 					"$lib/server/pipelines/entities/variableTemplates"
 				)
-				await updateVariableTemplate(db, params.id, patch)
+				await updateVariableTemplate(db, params.id, {
+					...patch,
+					...(params.reference ? { reference: params.reference } : {})
+				})
 			}
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
@@ -2068,6 +1880,193 @@ export const pipelinesLibraryDeleteTemplate: Handler<
 			emitToUser,
 			"pipelines:libraryDeleteTemplate"
 		)
+	}
+}
+
+/* --- ⏳ leftover picks, and a layout's reference (variable layouts) ----- */
+
+/** The refusals a leftover-pick or reference write answers in words. */
+const leftoverRefusal = async (
+	err: unknown
+): Promise<{ error: string; code?: string }> => {
+	const { LeftoverPickRefusal } = await import(
+		"$lib/server/pipelines/config/leftoverPicks"
+	)
+	if (err instanceof LeftoverPickRefusal)
+		return { error: err.message, ...(err.code ? { code: err.code } : {}) }
+	return { error: await libraryRefusal(err) }
+}
+
+/** What the asker sent that names its view, each only when sent: echoed on answers and refusals. */
+const leftoverEcho = (
+	params: Sockets.Pipelines.LeftoverPicks.Params
+): Sockets.Pipelines.LeftoverPicks.View & { slug?: string } => ({
+	...(params?.slug !== undefined ? { slug: params.slug } : {}),
+	...(params?.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
+	...(params?.presetId !== undefined ? { presetId: params.presetId } : {})
+})
+
+/** The leftovers a view lists: the viewer is an admin, the scope is the asker's. */
+async function leftoverView(
+	socket: any,
+	params: Sockets.Pipelines.LeftoverPicks.Params
+): Promise<Sockets.Pipelines.LeftoverPicks.Response> {
+	const { leftoverPicksFor } = await import(
+		"$lib/server/pipelines/config/leftoverPicks"
+	)
+	const viewer = await viewerFor(socket, params.sessionId, params.slug)
+	const steps = await leftoverPicksFor(
+		db,
+		params.slug,
+		viewer,
+		await pubSecret(),
+		{
+			sessionId: params.sessionId,
+			presetId: params.presetId
+		}
+	)
+	return { ...leftoverEcho(params), steps }
+}
+
+export const pipelinesLeftoverPicks: Handler<
+	Sockets.Pipelines.LeftoverPicks.Params,
+	Sockets.Pipelines.LeftoverPicks.Response
+> = {
+	event: "pipelines:leftoverPicks",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			const res = { ...leftoverEcho(params), error: gate.error }
+			emitToUser("pipelines:leftoverPicks:error", res)
+			return res
+		}
+		try {
+			const res = await leftoverView(socket, params)
+			emitToUser("pipelines:leftoverPicks", res)
+			return res
+		} catch (err) {
+			const res = { ...leftoverEcho(params), ...(await leftoverRefusal(err)) }
+			emitToUser("pipelines:leftoverPicks:error", res)
+			return res
+		}
+	}
+}
+
+export const pipelinesClearLeftoverPick: Handler<
+	Sockets.Pipelines.ClearLeftoverPick.Params,
+	Sockets.Pipelines.ClearLeftoverPick.Response
+> = {
+	event: "pipelines:clearLeftoverPick",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			const res = { ...leftoverEcho(params), error: gate.error }
+			emitToUser("pipelines:clearLeftoverPick:error", res)
+			return res
+		}
+		try {
+			const { clearLeftoverPick } = await import(
+				"$lib/server/pipelines/config/leftoverPicks"
+			)
+			await clearLeftoverPick(
+				db,
+				params.slug,
+				await pubSecret(),
+				params.scope,
+				{
+					stepKey: params.stepKey,
+					slot: params.slot,
+					key: params.key
+				}
+			)
+			const res = await leftoverView(socket, params)
+			emitToUser("pipelines:clearLeftoverPick", res)
+			return res
+		} catch (err) {
+			const res = { ...leftoverEcho(params), ...(await leftoverRefusal(err)) }
+			emitToUser("pipelines:clearLeftoverPick:error", res)
+			return res
+		}
+	}
+}
+
+export const pipelinesMoveLeftoversIntoTemplate: Handler<
+	Sockets.Pipelines.MoveLeftoversIntoTemplate.Params,
+	Sockets.Pipelines.MoveLeftoversIntoTemplate.Response
+> = {
+	event: "pipelines:moveLeftoversIntoTemplate",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			const res = { ...leftoverEcho(params), error: gate.error }
+			emitToUser("pipelines:moveLeftoversIntoTemplate:error", res)
+			return res
+		}
+		try {
+			const { moveLeftoversIntoTemplate } = await import(
+				"$lib/server/pipelines/config/leftoverPicks"
+			)
+			const viewer = await viewerFor(socket, params.sessionId, params.slug)
+			const moved = await moveLeftoversIntoTemplate(
+				db,
+				params.slug,
+				viewer,
+				await pubSecret(),
+				{ stepKey: params.stepKey, slot: params.slot },
+				{
+					sessionId: params.sessionId,
+					presetId: params.presetId,
+					ownerSlug: params.ownerSlug
+				}
+			)
+			const res = { ...(await leftoverView(socket, params)), ...moved }
+			emitToUser("pipelines:moveLeftoversIntoTemplate", res)
+			return res
+		} catch (err) {
+			const res = { ...leftoverEcho(params), ...(await leftoverRefusal(err)) }
+			emitToUser("pipelines:moveLeftoversIntoTemplate:error", res)
+			return res
+		}
+	}
+}
+
+export const pipelinesStampVariableTemplateReference: Handler<
+	Sockets.Pipelines.StampVariableTemplateReference.Params,
+	Sockets.Pipelines.StampVariableTemplateReference.Response
+> = {
+	event: "pipelines:stampVariableTemplateReference",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:stampVariableTemplateReference:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { stampReference } = await import(
+				"$lib/server/pipelines/entities/variableTemplates"
+			)
+			const stamped = await stampReference(
+				db,
+				params.templateId,
+				String(params.ownerSlug ?? "").trim()
+			)
+			const { libraryView } = await import(
+				"$lib/server/pipelines/config/library"
+			)
+			const res = {
+				library: (await libraryView(
+					db
+				)) as Sockets.Pipelines.Library.Response,
+				templateId: stamped.id,
+				reference: stamped.reference ?? undefined
+			}
+			emitToUser("pipelines:stampVariableTemplateReference", res)
+			return res
+		} catch (err) {
+			const res = { error: await libraryRefusal(err) }
+			emitToUser("pipelines:stampVariableTemplateReference:error", res)
+			return res
+		}
 	}
 }
 
@@ -2831,12 +2830,45 @@ async function portrayalLinesOf(
 	)
 	if (!entries.length) return []
 
+	// 🚧 seat-cast S3: a receipt may key a portrayal `seated-member:<memberId>`
+	// (the ref the run asked about). It is named through its seat's card form
+	// (`storedSeatRef`); old receipts keep their `character:` keys and read as
+	// they did. A member no seat of the session holds — or no session in hand —
+	// is named by its reference.
+	// ⏳ Once the flip is on (`state/memberForm.ts`) a receipt keys a seat by its
+	// member form — `seated-member:<id>` or `player-seat:<id>` — so each is read
+	// through its seat: the card it holds (`character:<cardId>`), else the
+	// card-less player seat itself. Old receipts' `character:` keys read as
+	// they are, in either mode.
+	const cardFormOf = new Map<string, string>()
+	if (sessionId != null && memberFormOn()) {
+		const { seatOf } = await import("$lib/server/sessions/seats")
+		for (const [ref] of entries) {
+			const kind = parseParticipantRef(ref).kind
+			if (kind !== "seated-member" && kind !== "player-seat") continue
+			const seat = await seatOf(db, sessionId, ref)
+			if (!seat) continue
+			const form =
+				seat.cardId != null
+					? `character:${seat.cardId}`
+					: `player-seat:${seat.seatId}`
+			if (form !== ref) cardFormOf.set(ref, form)
+		}
+	} else if (sessionId != null) {
+		const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+		for (const [ref] of entries)
+			if (parseParticipantRef(ref).kind === "seated-member") {
+				const card = await storedSeatRef(db, sessionId, ref)
+				if (card !== null) cardFormOf.set(ref, card)
+			}
+	}
+
 	const characterIds = new Set<number>()
 	const userIds = new Set<number>()
 	const seatIds = new Set<number>()
 	for (const [ref, portrayal] of entries) {
 		if (portrayal.by === "none") continue
-		const parsed = parseParticipantRef(ref)
+		const parsed = parseParticipantRef(cardFormOf.get(ref) ?? ref)
 		if (parsed.kind === "character") {
 			const id = participantRowId(parsed.id)
 			if (id !== null) characterIds.add(id)
@@ -2855,15 +2887,13 @@ async function portrayalLinesOf(
 		}
 	}
 	const [characters, users, seats] = await Promise.all([
+		// A character is named as the run's session seats read it (the seated
+		// member's own name, else the card's current version).
 		characterIds.size
-			? db
-					.select({
-						id: schema.characters.id,
-						name: schema.characters.name
-					})
-					.from(schema.characters)
-					.where(inArray(schema.characters.id, [...characterIds]))
-			: [],
+			? (
+					await import("$lib/server/pipelines/prompt/seatCards")
+				).cardsNowAsSeatsRead(db, sessionId, [...characterIds])
+			: new Map<number, { name: string }>(),
 		userIds.size
 			? db
 					.select({
@@ -2886,7 +2916,9 @@ async function portrayalLinesOf(
 			: []
 	])
 	const seatName = new Map(seats.map((s) => [s.id, s.name?.trim() || null]))
-	const characterName = new Map(characters.map((c) => [c.id, c.name]))
+	const characterName = new Map(
+		[...characters].map(([id, c]) => [id, c.name])
+	)
 	const userName = new Map(
 		users.map((u) => [u.id, u.displayName?.trim() || u.username])
 	)
@@ -2922,11 +2954,18 @@ async function portrayalLinesOf(
 				return (id !== null ? userName.get(id) : undefined) ?? ref
 			}
 			case "player-seat": {
+				const card = cardFormOf.get(ref)
+				if (card) return nameOf(card)
 				const id = participantRowId(parsed.id)
 				return (id !== null ? seatName.get(id) : undefined) ?? ref
 			}
 			case "envoy":
 				return envoyName.get(parsed.slug) ?? parsed.slug
+			case "seated-member": {
+				// 🚧 Named through its seat's card form (seat-cast S3).
+				const card = cardFormOf.get(ref)
+				return card ? nameOf(card) : ref
+			}
 			default:
 				return parsed.kind
 		}
@@ -3050,7 +3089,12 @@ export const pipelinesRuns: Handler<
 	event: "pipelines:runs",
 	handler: async (socket, params, emitToUser) => {
 		if (receiptsAdminOnly(socket, emitToUser, "pipelines:runs")) {
-			const res = { runs: [] }
+			const res = {
+				runs: [],
+				...(params.sessionId != null
+					? { sessionId: params.sessionId }
+					: {})
+			}
 			emitToUser("pipelines:runs", res)
 			return res
 		}
@@ -3124,7 +3168,13 @@ export const pipelinesRuns: Handler<
 				tokensSpent: schema.pipelineRuns.tokensSpent,
 				isPreview: schema.pipelineRuns.isPreview,
 				sessionId: schema.pipelineRuns.sessionId,
-				startedAt: schema.pipelineRuns.startedAt
+				startedAt: schema.pipelineRuns.startedAt,
+				triggerFamily: schema.pipelineRuns.triggerFamily,
+				registrationKey: schema.pipelineRuns.registrationKey,
+				triggerSource: schema.pipelineRuns.triggerSource,
+				endedAt: schema.pipelineRuns.endedAt,
+				parentRunId: schema.pipelineRuns.parentRunId,
+				depth: schema.pipelineRuns.depth
 			})
 			.from(schema.pipelineRuns)
 			.where(where)
@@ -3176,8 +3226,15 @@ export const pipelinesRuns: Handler<
 				isPreview: r.isPreview,
 				artifacts: artifacts.get(r.id) ?? [],
 				sessionId: r.sessionId,
-				startedAt: new Date(r.startedAt).toISOString()
-			}))
+				startedAt: new Date(r.startedAt).toISOString(),
+				triggerFamily: r.triggerFamily ?? null,
+				registrationKey: r.registrationKey ?? null,
+				triggerSource: r.triggerSource,
+				endedAt: new Date(r.endedAt).toISOString(),
+				parentRunId: r.parentRunId ?? null,
+				depth: r.depth ?? 0
+			})),
+			...(params.sessionId != null ? { sessionId: params.sessionId } : {})
 		}
 		emitToUser("pipelines:runs", res)
 		return res
@@ -3299,6 +3356,12 @@ export const pipelinesRun: Handler<
 				// across the whole session, not just this turn.
 				sessionId: (r as any).sessionId ?? null,
 				startedAt: new Date((r as any).startedAt).toISOString(),
+				triggerFamily: (r as any).triggerFamily ?? null,
+				registrationKey: (r as any).registrationKey ?? null,
+				triggerSource: (r as any).triggerSource,
+				endedAt: new Date((r as any).endedAt).toISOString(),
+				parentRunId: (r as any).parentRunId ?? null,
+				depth: (r as any).depth ?? 0,
 				receipt: ((r as any).receipt ?? {}) as Record<string, unknown>,
 				// Who portrayed whom, named — the receipt's pinned map with
 				// the names the viewer can already see beside it (R-21 (4)).
@@ -4612,6 +4675,7 @@ export function explainRetrieval(
 				verdict: reason
 					? `Never reached the ranker — ${reason}.`
 					: "Never reached the ranker.",
+				...(reason ? { skipReason: reason } : {}),
 				marker: "Not considered",
 				markerKind: "none",
 				criteria: [],
@@ -5007,12 +5071,14 @@ async function previewCastFor(sessionId: number) {
 			},
 			sessionCharacters: {
 				where: (cc, { isNull }) => isNull(cc.removedAt),
-				with: { character: true },
+				// Ids only: the preview reads which seats have a card, never
+				// the card's words (those are `cardsNow`'s, where a turn needs them).
+				with: { character: { columns: { id: true } } },
 				orderBy: (cc, { asc }) => asc(cc.position)
 			},
 			sessionPersonas: {
 				where: (cp, { isNull }) => isNull(cp.removedAt),
-				with: { persona: true },
+				with: { persona: { columns: { id: true } } },
 				orderBy: (cp, { asc }) => asc(cp.position)
 			}
 		}
@@ -5151,8 +5217,15 @@ export const pipelinesPreviewRetrieval: Handler<
 		const { headTurnEntry } = await import("$lib/server/sessions/fireTurn")
 		const head = await headTurnEntry(db, sessionId)
 		const headRef = typeof head?.ref === "string" ? head.ref : null
-		const headCharacterId =
-			headRef && headRef.startsWith("character:")
+		// ⏳ The stored head is a member form once the flip is on
+		// (`state/memberForm.ts`): its card is its seat's `cardId`; off, the
+		// card form's own number.
+		const headCharacterId = memberFormOn()
+			? headRef
+				? ((await (await import("$lib/server/sessions/seats")).seatOf(db, sessionId, headRef))
+						?.cardId ?? null)
+				: null
+			: headRef && headRef.startsWith("character:")
 				? Number(headRef.slice("character:".length))
 				: null
 		const currentCharacterId =
@@ -5866,13 +5939,43 @@ export const pipelinesCancelRun: Handler<
 			return res
 		}
 
-		const { cancel } = await import(
+		const { cancel, cancelAs, runKindOf, runLineBoundOf, runSessionOf } = await import(
 			"$lib/server/pipelines/runtime/runRegistry"
 		)
+		const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
 		const { found, allowed } = cancel(params.runId, userId)
-		const res = allowed
-			? { ok: true, found }
-			: { ok: false, found: true, error: "Not your run." }
+		let res: { ok: boolean; found: boolean; error?: string }
+		if (!found) {
+			res = { ok: true, found: false }
+		} else if (allowed) {
+			res = { ok: true, found: true }
+		} else {
+			// Not the starter: a waiting reply is the room's to stop (any member);
+			// any other run in a session, bar a line-bound one, is the owner's.
+			const sessionId = runSessionOf(params.runId)
+			const person = await actingPersonFor(db, { via: "press", userId })
+			let may = false
+			if (person && sessionId !== undefined) {
+				if (runKindOf(params.runId) === "reply") {
+					may = (
+						await personMay(db, person, "write", {
+							kind: "reply-run",
+							sessionId,
+							runId: params.runId
+						})
+					).ok
+				} else if (!runLineBoundOf(params.runId)) {
+					may = (await personMay(db, person, "write", { kind: "session", id: sessionId })).ok
+				}
+			}
+			if (may) {
+				// False when the run finished during the reads above: a late cancel, not a stop.
+				const stopped = cancelAs(params.runId, `user:${userId}`, "the run was cancelled")
+				res = { ok: true, found: stopped }
+			} else {
+				res = { ok: false, found: true, error: "Not your run." }
+			}
+		}
 		emitToUser("pipelines:cancelRun", res)
 		return res
 	}
@@ -5938,6 +6041,10 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesLibraryCloneTemplate, emitToUser)
 	register(socket, pipelinesLibraryUpdateTemplate, emitToUser)
 	register(socket, pipelinesLibraryDeleteTemplate, emitToUser)
+	register(socket, pipelinesLeftoverPicks, emitToUser)
+	register(socket, pipelinesClearLeftoverPick, emitToUser)
+	register(socket, pipelinesMoveLeftoversIntoTemplate, emitToUser)
+	register(socket, pipelinesStampVariableTemplateReference, emitToUser)
 	register(socket, pipelinesLibraryClonePrompt, emitToUser)
 	register(socket, pipelinesLibraryUpdatePrompt, emitToUser)
 	register(socket, pipelinesLibraryDeletePrompt, emitToUser)
@@ -5952,9 +6059,6 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesCloneContextTemplate, emitToUser)
 	register(socket, pipelinesUpdateContextTemplate, emitToUser)
 	register(socket, pipelinesDeleteContextTemplate, emitToUser)
-	register(socket, pipelinesCloneVariableTemplate, emitToUser)
-	register(socket, pipelinesUpdateVariableTemplate, emitToUser)
-	register(socket, pipelinesDeleteVariableTemplate, emitToUser)
 	register(socket, pipelinesDetail, emitToUser)
 	register(socket, pipelinesRuns, emitToUser)
 	register(socket, pipelinesReviews, emitToUser)

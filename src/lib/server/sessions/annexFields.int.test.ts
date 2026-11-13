@@ -50,17 +50,28 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 
 /** Every per-member push, resolved — what each member's tab would be sent. */
 const pushes: Array<{ userId: number; event: string; data: any }> = []
-vi.mock("$lib/server/sockets/utils/broadcastHelpers", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	broadcastToSessionUsers: async () => {},
-	emitToUserRedacted: async (_io: unknown, userId: number, event: string, data: unknown) => {
-		pushes.push({
-			userId,
-			event,
-			data: typeof data === "function" ? await (data as () => Promise<unknown>)() : data
-		})
-	}
-}))
+vi.mock(
+	"$lib/server/sockets/utils/broadcastHelpers",
+	async (importOriginal) => ({
+		...(await importOriginal<object>()),
+		broadcastToSessionUsers: async () => {},
+		emitToUserRedacted: async (
+			_io: unknown,
+			userId: number,
+			event: string,
+			data: unknown
+		) => {
+			pushes.push({
+				userId,
+				event,
+				data:
+					typeof data === "function"
+						? await (data as () => Promise<unknown>)()
+						: data
+			})
+		}
+	})
+)
 
 const OWNER = "acme.dice"
 const fakeIo = {} as any
@@ -86,24 +97,42 @@ const press = async (
 	action: string,
 	payload: Record<string, unknown> | undefined
 ) => {
-	const { fireAction } = await import("$lib/server/pipelines/runtime/fireAction")
-	return fireAction(db as any, { sessionId, action, payload, actor: { userId }, io: fakeIo })
+	const { fireAction } = await import(
+		"$lib/server/pipelines/runtime/fireAction"
+	)
+	return fireAction(db as any, {
+		sessionId,
+		action,
+		payload,
+		actor: { userId },
+		io: fakeIo
+	})
 }
 
 const annexRow = async () => {
 	const [row] = await db
-		.select({ annex: schema.sessions.annex, audiences: schema.sessions.annexAudiences })
+		.select({
+			annex: schema.sessions.annex,
+			audiences: schema.sessions.annexAudiences
+		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
-	return { annex: (row!.annex ?? {}) as any, audiences: (row!.audiences ?? {}) as any }
+	return {
+		annex: (row!.annex ?? {}) as any,
+		audiences: (row!.audiences ?? {}) as any
+	}
 }
 
 beforeAll(async () => {
 	process.env.SP_PLUGINS_ENABLED = "1"
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-annex-fields-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-annex-fields-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db)
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -123,8 +152,18 @@ beforeAll(async () => {
 			see: ["person"],
 			act: ["participant"]
 		}),
-		annexField({ key: "mood", shape: { type: "enum", of: ["calm", "tense"] }, see: ["ai"], act: ["owner"] }),
-		annexField({ key: "tally", shape: { type: "integer" }, see: ["person"], act: ["owner"] }),
+		annexField({
+			key: "mood",
+			shape: { type: "enum", of: ["calm", "tense"] },
+			see: ["ai"],
+			act: ["owner"]
+		}),
+		annexField({
+			key: "tally",
+			shape: { type: "integer" },
+			see: ["person"],
+			act: ["owner"]
+		}),
 		annexField({
 			key: "adventure-only",
 			shape: { type: "string" },
@@ -133,7 +172,14 @@ beforeAll(async () => {
 	])
 	await install(
 		"acme.off",
-		[annexField({ key: "note", shape: { type: "string" }, see: ["person"], act: ["owner"] })],
+		[
+			annexField({
+				key: "note",
+				shape: { type: "string" },
+				see: ["person"],
+				act: ["owner"]
+			})
+		],
 		false
 	)
 })
@@ -144,15 +190,25 @@ afterAll(async () => {
 
 describe("annex fields — a widget sets a declared value through core's one pipeline", () => {
 	it("is listed at the widget venue for whoever may set it", async () => {
-		const { listSessionActions } = await import("$lib/server/pipelines/entities/sessionActions")
+		const { listSessionActions } = await import(
+			"$lib/server/pipelines/entities/sessionActions"
+		)
 		const ids = (v: any) =>
-			[...v.widget.primary, ...v.widget.overflow].map((a: any) => `${a.specSlug}#${a.key}`)
-		const forOwner = ids(await listSessionActions(db as any, sessionId, { userId: ownerId }))
+			[...v.widget.primary, ...v.widget.overflow].map(
+				(a: any) => `${a.specSlug}#${a.key}`
+			)
+		const forOwner = ids(
+			await listSessionActions(db as any, sessionId, { userId: ownerId })
+		)
 		expect(forOwner).toContain(annexFieldAction(OWNER, "last-roll"))
 		expect(forOwner).toContain(annexFieldAction(OWNER, "tally"))
 		// Another genre's field is not this session's.
-		expect(forOwner).not.toContain(annexFieldAction(OWNER, "adventure-only"))
-		const forGuest = ids(await listSessionActions(db as any, sessionId, { userId: guestId }))
+		expect(forOwner).not.toContain(
+			annexFieldAction(OWNER, "adventure-only")
+		)
+		const forGuest = ids(
+			await listSessionActions(db as any, sessionId, { userId: guestId })
+		)
 		expect(forGuest).toContain(annexFieldAction(OWNER, "last-roll"))
 		// `tally` is set by the owner only (its `act`).
 		expect(forGuest).not.toContain(annexFieldAction(OWNER, "tally"))
@@ -160,7 +216,9 @@ describe("annex fields — a widget sets a declared value through core's one pip
 
 	it("saves a declared field: receipted, annex-changed recorded, every member's view re-sent", async () => {
 		pushes.length = 0
-		const out = await press(guestId, annexFieldAction(OWNER, "last-roll"), { value: 17 })
+		const out = await press(guestId, annexFieldAction(OWNER, "last-roll"), {
+			value: 17
+		})
 		expect(out.kind).toBe("ran")
 		if (out.kind !== "ran") return
 		expect(out.specId).toBe("core:spec/set-annex-field")
@@ -170,7 +228,9 @@ describe("annex fields — a widget sets a declared value through core's one pip
 		expect(annex[OWNER]).toEqual({ "last-roll": 17 })
 		expect(audiences[OWNER]).toEqual({ "last-roll": ["person"] })
 
-		const { settleSessionEvents } = await import("$lib/server/pipelines/runtime/sessionEvents")
+		const { settleSessionEvents } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
 		await settleSessionEvents()
 		const changes = await db
 			.select()
@@ -178,18 +238,28 @@ describe("annex fields — a widget sets a declared value through core's one pip
 			.where(eq(schema.sessionChanges.sessionId, sessionId))
 		expect(
 			changes.some(
-				(c) => c.event === "core:event/annex-changed@1" && (c.payload as any)?.owner === OWNER
+				(c) =>
+					c.event === "core:event/annex-changed@1" &&
+					(c.payload as any)?.owner === OWNER
 			)
 		).toBe(true)
 
 		// The viewer's view updated — pushed to each member, their own view.
 		const views = pushes.filter((p) => p.event === "sessions:annex")
-		expect(views.map((p) => p.userId).sort()).toEqual([ownerId, guestId].sort())
-		for (const v of views) expect(v.data).toEqual({ sessionId, annex: { [OWNER]: { "last-roll": 17 } } })
+		expect(views.map((p) => p.userId).sort()).toEqual(
+			[ownerId, guestId].sort()
+		)
+		for (const v of views)
+			expect(v.data).toEqual({
+				sessionId,
+				annex: { [OWNER]: { "last-roll": 17 } }
+			})
 	})
 
 	it("respects the declared audience: an AI-only field is in nobody's person view", async () => {
-		const out = await press(ownerId, annexFieldAction(OWNER, "mood"), { value: "tense" })
+		const out = await press(ownerId, annexFieldAction(OWNER, "mood"), {
+			value: "tense"
+		})
 		expect(out.kind === "ran" && out.receipt.outcome).toBe("ok")
 		const { annex, audiences } = await annexRow()
 		expect(annex[OWNER].mood).toBe("tense")
@@ -202,51 +272,104 @@ describe("annex fields — a widget sets a declared value through core's one pip
 	})
 
 	it("refuses a value its shape refuses, with the validator's sentence", async () => {
-		const wrongType = await press(ownerId, annexFieldAction(OWNER, "last-roll"), { value: "seven" })
-		expect(wrongType).toEqual({ kind: "refused", error: expect.stringMatching(/should be a number/) })
-		const tooHigh = await press(ownerId, annexFieldAction(OWNER, "last-roll"), { value: 21 })
-		expect(tooHigh).toEqual({ kind: "refused", error: expect.stringMatching(/above the maximum 20/) })
-		const noValue = await press(ownerId, annexFieldAction(OWNER, "last-roll"), {})
-		expect(noValue).toEqual({ kind: "refused", error: expect.stringMatching(/payload: \{ value \}/) })
+		const wrongType = await press(
+			ownerId,
+			annexFieldAction(OWNER, "last-roll"),
+			{ value: "seven" }
+		)
+		expect(wrongType).toEqual({
+			kind: "refused",
+			error: expect.stringMatching(/should be a number/)
+		})
+		const tooHigh = await press(
+			ownerId,
+			annexFieldAction(OWNER, "last-roll"),
+			{ value: 21 }
+		)
+		expect(tooHigh).toEqual({
+			kind: "refused",
+			error: expect.stringMatching(/above the maximum 20/)
+		})
+		const noValue = await press(
+			ownerId,
+			annexFieldAction(OWNER, "last-roll"),
+			{}
+		)
+		expect(noValue).toEqual({
+			kind: "refused",
+			error: expect.stringMatching(/payload: \{ value \}/)
+		})
 		expect((await annexRow()).annex[OWNER]["last-roll"]).toBe(17)
 	})
 
 	it("refuses a presser outside `act`", async () => {
-		const out = await press(guestId, annexFieldAction(OWNER, "tally"), { value: 3 })
+		const out = await press(guestId, annexFieldAction(OWNER, "tally"), {
+			value: 3
+		})
 		expect(out.kind).toBe("refused")
 		expect((await annexRow()).annex[OWNER].tally).toBeUndefined()
 		// The owner may.
-		const mine = await press(ownerId, annexFieldAction(OWNER, "tally"), { value: 3 })
+		const mine = await press(ownerId, annexFieldAction(OWNER, "tally"), {
+			value: 3
+		})
 		expect(mine.kind === "ran" && mine.receipt.outcome).toBe("ok")
 	})
 
 	it("refuses an undeclared key, another package's namespace, and another genre's field", async () => {
-		const undeclared = await press(ownerId, annexFieldAction(OWNER, "nope"), { value: 1 })
+		const undeclared = await press(
+			ownerId,
+			annexFieldAction(OWNER, "nope"),
+			{ value: 1 }
+		)
 		expect(undeclared).toEqual({
 			kind: "refused",
-			error: expect.stringMatching(/'nope' is not an annex field 'acme.dice' declares/)
+			error: expect.stringMatching(
+				/'nope' is not an annex field 'acme.dice' declares/
+			)
 		})
-		const foreign = await press(ownerId, annexFieldAction("other.pkg", "last-roll"), { value: 1 })
+		const foreign = await press(
+			ownerId,
+			annexFieldAction("other.pkg", "last-roll"),
+			{ value: 1 }
+		)
 		expect(foreign).toEqual({
 			kind: "refused",
-			error: expect.stringMatching(/'last-roll' is not an annex field 'other.pkg' declares/)
+			error: expect.stringMatching(
+				/'last-roll' is not an annex field 'other.pkg' declares/
+			)
 		})
-		const otherGenre = await press(ownerId, annexFieldAction(OWNER, "adventure-only"), { value: "x" })
+		const otherGenre = await press(
+			ownerId,
+			annexFieldAction(OWNER, "adventure-only"),
+			{ value: "x" }
+		)
 		expect(otherGenre.kind).toBe("refused")
 	})
 
 	it("refuses every press while plugins are off — the flag, or the plugin switched off", async () => {
-		const switchedOff = await press(ownerId, annexFieldAction("acme.off", "note"), { value: "hi" })
+		const switchedOff = await press(
+			ownerId,
+			annexFieldAction("acme.off", "note"),
+			{ value: "hi" }
+		)
 		expect(switchedOff).toEqual({
 			kind: "refused",
-			error: expect.stringMatching(/not available while its plugin is turned off/)
+			error: expect.stringMatching(
+				/not available while its plugin is turned off/
+			)
 		})
 		process.env.SP_PLUGINS_ENABLED = "0"
 		try {
-			const flagOff = await press(ownerId, annexFieldAction(OWNER, "last-roll"), { value: 5 })
+			const flagOff = await press(
+				ownerId,
+				annexFieldAction(OWNER, "last-roll"),
+				{ value: 5 }
+			)
 			expect(flagOff).toEqual({
 				kind: "refused",
-				error: expect.stringMatching(/not available while its plugin is turned off/)
+				error: expect.stringMatching(
+					/not available while its plugin is turned off/
+				)
 			})
 		} finally {
 			process.env.SP_PLUGINS_ENABLED = "1"
@@ -256,23 +379,51 @@ describe("annex fields — a widget sets a declared value through core's one pip
 	})
 
 	it("the outlet judges the payload again — an undeclared field or a bad value halts the write", async () => {
-		const { createHost, HostScopeError } = await import("$lib/server/pipelines/runtime/host")
-		const host = createHost(db as any, {
-			sessionId,
-			userId: ownerId,
-			specId: "core:spec/set-annex-field",
-			runId: "run-annex-field-direct"
-		} as any)
-		const node = { key: "write", definitionId: "core:outlet/set-annex-field", definitionVersion: 1 } as any
+		const { createHost, HostScopeError } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const host = createHost(
+			db as any,
+			{
+				sessionId,
+				userId: ownerId,
+				specId: "core:spec/set-annex-field",
+				runId: "run-annex-field-direct"
+			} as any
+		)
+		const node = {
+			key: "write",
+			definitionId: "core:outlet/set-annex-field",
+			definitionVersion: 1
+		} as any
 		await expect(
-			host.commit!({ payload: { field: annexFieldAction(OWNER, "nope"), value: 1 } }, node)
+			host.commit!(
+				{
+					payload: {
+						field: annexFieldAction(OWNER, "nope"),
+						value: 1
+					}
+				},
+				node
+			)
 		).rejects.toThrow(HostScopeError)
 		await expect(
-			host.commit!({ payload: { field: annexFieldAction(OWNER, "last-roll"), value: 99 } }, node)
+			host.commit!(
+				{
+					payload: {
+						field: annexFieldAction(OWNER, "last-roll"),
+						value: 99
+					}
+				},
+				node
+			)
 		).rejects.toThrow(/above the maximum 20/)
-		await expect(host.commit!({ payload: { field: "acme.dice:spec/x#y", value: 1 } }, node)).rejects.toThrow(
-			/not an annex field's identity/
-		)
+		await expect(
+			host.commit!(
+				{ payload: { field: "acme.dice:spec/x#y", value: 1 } },
+				node
+			)
+		).rejects.toThrow(/not an annex field's identity/)
 		expect((await annexRow()).annex[OWNER]["last-roll"]).toBe(17)
 	})
 })

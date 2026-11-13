@@ -5,7 +5,7 @@
 	import { onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
 	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import { changedFields } from "$lib/shared/lorebooks/amendments"
@@ -33,6 +33,7 @@
 	import DatedEntryPanel from "./DatedEntryPanel.svelte"
 	import { dateAtRatio, parseMoment } from "./moment"
 	import { findGaps } from "./timeGaps"
+	import { openUnfiledScene } from "../sections/unfiledFocus.svelte"
 	import {
 		buildLanes,
 		dropOffer,
@@ -121,6 +122,12 @@
 	 * the next entry opened).
 	 */
 	let pendingDate = $state<{ entryId: number; date: StoryDate } | null>(null)
+	/**
+	 * A mention a drop asked for, and the history entry of that day it was
+	 * dropped onto — held like `pendingDate`: until that entry's draft exists,
+	 * appended to no other draft, and cleared by `discardDraft`.
+	 */
+	let pendingMention = $state<{ entryId: number; text: string } | null>(null)
 	let compileTarget = $state<PoolSource | null>(null)
 	let compileOpen = $state(false)
 	let showAllUndated = $state(false)
@@ -257,6 +264,10 @@
 		if (item.kind === "scene") {
 			const scene = scenes.find((s) => s.id === item.id)
 			if (!scene) return
+			if (scene.historyEntryId == null) {
+				void openUnfiledScene({ id: scene.id, lorebookId })
+				return
+			}
 			void loreRoute.navigate({
 				type: "openEntry",
 				entryId: scene.historyEntryId,
@@ -273,6 +284,7 @@
 		draftKey = null
 		pristineDraft = null
 		pendingDate = null
+		pendingMention = null
 		hasUnsavedChanges = false
 	}
 
@@ -299,7 +311,7 @@
 	/** A reply that never came is said here; a refusal Layout already toasts. */
 	function reportUnanswered(err: unknown, title: string) {
 		if (isReplyTimeout(err))
-			toaster.error({
+			notify.error({
 				title,
 				description:
 					"The server did not answer in time. Your changes are still here."
@@ -345,7 +357,7 @@
 				return
 			}
 			saving = false
-			toaster.success({ title: "History created" })
+			notify.success({ title: "History created" })
 			// Opened where it landed on the line — unless the author has
 			// since moved on to something else.
 			if (!creating || draftKey !== "new") return
@@ -359,7 +371,7 @@
 		// ⚠ The DIFF, never the whole draft (see `pristineDraft`).
 		const fields = changedFields(payload, pristineDraft ?? {})
 		if (!Object.keys(fields).length) {
-			toaster.error({ title: "Nothing has changed" })
+			notify.error({ title: "Nothing has changed" })
 			return
 		}
 		const id = payload.id as number
@@ -383,7 +395,7 @@
 			return
 		}
 		saving = false
-		toaster.success({ title: "History updated" })
+		notify.success({ title: "History updated" })
 		// Settle the draft on what was sent — the saved text is now "as
 		// built" — keeping anything typed while the save was in flight.
 		if (draftKey === `entry#${id}` && draft) {
@@ -420,7 +432,7 @@
 		const ratio = ratioFromEvent(event, event.currentTarget as HTMLElement)
 		const date = ratio === null ? null : dateAtRatio(ticks, ratio)
 		if (!date) {
-			toaster.error({
+			notify.error({
 				title: "Nothing is dated yet",
 				description:
 					"Date an entry first, and the timeline has somewhere to drop onto."
@@ -454,7 +466,45 @@
 			void loreRoute.navigate({ type: "openEntry", entryId: row.id })
 			return
 		}
-		await startCreate(date, (row.name ?? "").trim())
+		const name = (row.name ?? "").trim()
+		// ★H1 (owner, 2026-11-10): a day has one history entry, so a drop onto
+		// a day that has one opens it with the mention ready; only an empty
+		// day starts a new entry.
+		const day = {
+			year: date.year,
+			month: date.month ?? null,
+			day: date.day ?? null
+		}
+		let existing: number | null = null
+		for (const r of dated) {
+			if (r.typeId !== HISTORY_TYPE_ID) continue
+			const rd = {
+				year: r.year,
+				month: r.month ?? null,
+				day: r.day ?? null
+			}
+			if (compareDates(rd as StoryDate, day as StoryDate) !== 0) continue
+			if (existing === null || r.id < existing) existing = r.id
+		}
+		if (existing === null) {
+			await startCreate(date, name)
+			return
+		}
+		const entryId = existing
+		if (draft && !creating && draftKey === `entry#${entryId}`) {
+			appendMention(draft, name)
+			return
+		}
+		if (!(await loreRoute.confirmLeave())) return
+		discardDraft()
+		pendingMention = { entryId, text: name }
+		void loreRoute.navigate({ type: "openEntry", entryId })
+	}
+
+	function appendMention(target: Record<string, any>, text: string) {
+		if (!text) return
+		const content = target.content ?? ""
+		target.content = content ? `${content}\n\n${text}` : text
 	}
 
 	/** The end of the line, which is where a keyboard drop lands. */
@@ -474,6 +524,14 @@
 		if (!held || !draft || draftKey !== `entry#${held.entryId}`) return
 		writeDate(draft, held.date)
 		pendingDate = null
+	}
+
+	/** The held mention, into the draft of the entry it was dropped onto only. */
+	function applyPendingMention() {
+		const held = pendingMention
+		if (!held || !draft || draftKey !== `entry#${held.entryId}`) return
+		appendMention(draft, held.text)
+		pendingMention = null
 	}
 
 	function recompile() {
@@ -515,6 +573,7 @@
 		// Only into the dropped entry's own draft (`applyPendingDate`); any
 		// other move clears it (`discardDraft`).
 		if (pendingDate && draft) applyPendingDate()
+		if (pendingMention && draft) applyPendingMention()
 	})
 
 	/**
@@ -695,7 +754,7 @@
 							{/each}
 							{#if lane.items.length === 0}
 								<span
-									class="text-surface-700-300 absolute top-1/2 left-2 -translate-y-1/2 text-meta italic"
+									class="text-surface-700-300 text-meta absolute top-1/2 left-2 -translate-y-1/2 italic"
 								>
 									Nothing dated on this lane yet
 								</span>

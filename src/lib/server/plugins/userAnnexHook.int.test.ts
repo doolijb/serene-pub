@@ -93,7 +93,7 @@ afterAll(async () => {
 
 function setup(
 	backend: "quickjs" | "ses",
-	opts: { granted?: boolean; handle?: () => any } = {}
+	opts: { granted?: boolean; handle?: () => any; frame?: boolean | string } = {}
 ) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-hookannex-"))
 	cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -114,8 +114,19 @@ function setup(
 		hook: string,
 		input: Record<string, unknown>,
 		user?: string,
-		kind: "outlet" | "task" = "outlet"
-	) => mgr.callHook(ID, hook, input, { kind, timeoutMs: 8000, user })
+		kind: "outlet" | "task" | "event" | "lifecycle" = "outlet"
+	) =>
+		mgr.callHook(ID, hook, input, {
+			kind,
+			timeoutMs: 8000,
+			user,
+			// The plugin's own frame is open unless a test says otherwise (a
+			// string names ANOTHER plugin's frame).
+			frameCause:
+				opts.frame === false
+					? undefined
+					: { pluginId: typeof opts.frame === "string" ? opts.frame : ID }
+		})
 	return { call }
 }
 
@@ -213,6 +224,36 @@ describe.each(["quickjs", "ses"] as const)("ctx.annex('user') on %s", (backend) 
 			const r = await call("rejects", {}, user)
 			expect(r.ok && r.value).toBe("annex('user'): no person is acting for this call")
 		}
+	})
+
+	it("rejects with the one closed sentence unless the plugin's own frame caused the call", async () => {
+		// An event or lifecycle hook, the schedule tick, a routine run and an
+		// ordinary session-page send carry no frame cause; another plugin's
+		// frame being open does not open this one's.
+		for (const opts of [{ frame: false }, { frame: "acme.other" }]) {
+			const { call } = setup(backend, opts)
+			const r = await call("rejects", {}, String(u1))
+			expect(r.ok && r.value).toBe(
+				"annex('user'): This person's saved data is only available while the app is open."
+			)
+			const w = await call("set", { key: "profile", doc: "hi" }, String(u1))
+			expect(w.ok).toBe(false)
+			expect(await getUserAnnex(db as any, u1, ID, "profile")).toBeNull()
+		}
+		// An event or lifecycle hook is never frame-caused.
+		const { call: bare } = setup(backend, { frame: false })
+		for (const kind of ["event", "lifecycle"] as const) {
+			const r = await bare("rejects", {}, String(u1), kind)
+			expect(r.ok && r.value, kind).toMatch(/is only available while the app is open\.$/)
+		}
+		// Present, it reaches the annex.
+		const { call } = setup(backend)
+		const ok = await call("set", { key: "profile", doc: "hi" }, String(u1))
+		expect(ok.ok && ok.value).toEqual({ ok: true, version: 1 })
+		// `Object.keys(ctx)` stays the whole answer: the member is present, it rejects.
+		const { call: closed } = setup(backend, { frame: false })
+		const keys = await closed("keys", {}, String(u1))
+		expect(keys.ok && (keys.value as string[])).toContain("annex")
 	})
 
 	it("rejects with a sentence when the user annex was not granted", async () => {

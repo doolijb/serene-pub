@@ -22,11 +22,25 @@ afterAll(async () => {
 	for (const d of dirs) await rm(d, { recursive: true, force: true })
 })
 
+// Stats with nothing to show draws nothing (R10), so both mounts get a state
+// with one attribute on the viewer's own seat.
+const state = {
+	sessionId: 7,
+	loaded: true,
+	error: null,
+	resolved: { world: {}, cast: { "player_seat:1": { "core.mood": "giddy" } } },
+	slots: [{ slotId: "core:slot/mood@1", key: "mood", qualifiedKey: "core.mood", label: "Mood", type: "text", appliesTo: ["cast"] }],
+	owners: [
+		{ key: "world", kind: "session", id: 7, label: "World", configs: {} },
+		{ key: "player_seat:1", kind: "player_seat", id: 1, label: "Wren", seat: true, mine: true, configs: { "core:slot/mood@1": {} } }
+	]
+}
 const context = {
 	session: { id: 7, name: "Proof" },
 	settings: {},
-	viewer: { userId: 1, isAdmin: false, isGuest: false }
-}
+	viewer: { userId: 1, isAdmin: false, isGuest: false },
+	scoped: { session_state: state }
+} as never
 
 /** What a box drew, as text, whitespace folded. */
 const drawn = (v: MountedComponent) => (v.root.textContent ?? "").replace(/\s+/g, " ").trim()
@@ -66,6 +80,6 @@ test("core's Stats, compiled by the service from its source.json and read back f
 	expect(clone.errors).toEqual([])
 	expect(clone.refused).toEqual([])
 	expect(drawn(clone)).not.toBe("")
-	expect(clone.root.querySelector("[data-state-widget='stats']")).not.toBeNull()
+	expect(clone.root.querySelector("[data-state-widget='stats']") === null).toBe(false)
 	expect(drawn(clone)).toBe(drawn(core))
 }, 180_000)

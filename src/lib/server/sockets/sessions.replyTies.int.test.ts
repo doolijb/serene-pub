@@ -12,6 +12,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf } from "$lib/server/state/seatRefs"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -153,11 +155,17 @@ describe("🚧 a reply carrying changes sets a tie's field (ties T3)", () => {
 			])
 			.returning()
 		await db.update(schema.sessions).set({ lorebookId: book!.id, primaryRuleset: ROMANCE, rigour: "mechanics" }).where(eq(schema.sessions.id, sessionId))
-		const key = (c: { id: number }) => `character:${c.id}`
+		// ⏳ A seat is stored in member form once the switch is on: its key, owner and tie ends name the seated member, not the card.
+		const seatMap = await loadSeatMap(db as any, sessionId)
+		const key = (c: { id: number }) => (memberFormOn() ? (memberFormOf(seatMap, `character:${c.id}`) ?? `character:${c.id}`) : `character:${c.id}`)
+		const ownerOf = (c: { id: number }) => {
+			const card = { kind: "session_cast", id: c.id }
+			return memberFormOn() ? (memberFormOf(seatMap, card) ?? card) : card
+		}
 		const side = (who: { id: number }, other: { id: number; name: string }, row: { id: number }, fields: Record<string, unknown>) => ({
 			sessionId,
-			ownerKind: "session_cast",
-			ownerId: who.id,
+			ownerKind: ownerOf(who).kind,
+			ownerId: ownerOf(who).id,
 			rulesetId: ROMANCE,
 			zoneType: "bonds",
 			entries: [{ entryId: null, entryType: "bond", name: other.name, sideOwner: key(who), fields: { towards: key(other), edge: String(row.id), ...fields } }]
@@ -207,7 +215,7 @@ describe("🚧 a reply carrying changes sets a tie's field (ties T3)", () => {
 		expect((apply?.output ?? apply?.outputs)?.rejected ?? []).toEqual([])
 
 		const { zonesFor } = await import("$lib/server/rulesets/zones")
-		const zones = await zonesFor(db, sessionId, ROMANCE, [wren!, mara!].map((c) => ({ key: key(c), owner: { kind: "session_cast", id: c.id } })) as any)
+		const zones = await zonesFor(db, sessionId, ROMANCE, [wren!, mara!].map((c) => ({ key: key(c), owner: ownerOf(c) })) as any)
 		expect(zones[key(mara!)]?.bonds?.[0]?.fields).toMatchObject({ affection: 9, standing: "close", towards: key(wren!) })
 		// Wren's side is his own: untouched.
 		expect(zones[key(wren!)]?.bonds?.[0]?.fields).toMatchObject({ affection: 7, standing: "warm" })

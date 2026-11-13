@@ -15,6 +15,8 @@ import * as schema from "$lib/server/db/schema"
 import { presencesOnLine, type Presence } from "$lib/shared/lorebooks/presence"
 import { formatDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { sessionReadingOf } from "$lib/server/state/reading"
+import { castOwnerOf } from "$lib/server/state/owners"
+import { castLinkKey } from "$lib/server/state/keys"
 import { bookCalendarOf, clockOfNow, sessionStoryNowOf } from "$lib/server/state/storyTime"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { getRuleset, storyDayIndex, type FieldDecl } from "@serene-pub/sdk"
@@ -155,12 +157,32 @@ export async function placementsAt(
 	const { zonesFor, entryTypesOf, fieldsOf, CARRIED } = await import("$lib/server/rulesets/zones")
 	const links = await sessionLinks(db, sessionId)
 	const members = links.cast.filter((c) => typeof c.castMemberId === "number")
-	const owners = members.map((m) => ({ key: String(m.characterId), owner: { kind: "session_cast" as const, id: m.characterId } }))
+	// 🚧 ⏳ Flip on (`memberForm.ts`): a seat's own owner and key (`castOwnerOf`, `castLinkKey`); off, its card's.
+	// 🚧 ⏳ S4 (flip on): a card-less character seat whose member lives in the read book is read as its member (`seated_member:<id>`), with no card.
+	const seated = (links.seatedMembers ?? []).filter(
+		(s) => typeof s.castMemberId === "number"
+	)
+	const seatedKey = (s: { seatMemberId: number }) =>
+		`seated_member:${s.seatMemberId}`
+	const owners = [
+		...members.map((m) => ({ key: castLinkKey(m), owner: castOwnerOf(m) })),
+		...seated.map((s) => ({
+			key: seatedKey(s),
+			owner: { kind: "seated_member" as const, id: s.seatMemberId }
+		}))
+	]
 	const zones = await zonesFor(db, sessionId, ruleset.id, owners)
 	const types = entryTypesOf(ruleset)
 	const out: { bindingId: number; where: string }[] = []
-	for (const m of members) {
-		const held = zones[String(m.characterId)] ?? {}
+	const readers = [
+		...members.map((m) => ({ key: castLinkKey(m), bindingId: m.castMemberId as number })),
+		...seated.map((s) => ({
+			key: seatedKey(s),
+			bindingId: s.castMemberId as number
+		}))
+	]
+	for (const m of readers) {
+		const held = zones[m.key] ?? {}
 		const zoneTypes = [CARRIED, ...Object.keys(held).filter((z) => z !== CARRIED)]
 		let pairs: Pair[] | null = null
 		scan: for (const z of zoneTypes)
@@ -174,7 +196,7 @@ export async function placementsAt(
 			}
 		if (!pairs?.length) continue
 		const fit = [...pairs].reverse().find(([h]) => h <= hour) ?? pairs[pairs.length - 1]!
-		out.push({ bindingId: m.castMemberId as number, where: fit[1] })
+		out.push({ bindingId: m.bindingId, where: fit[1] })
 	}
 	return out
 }

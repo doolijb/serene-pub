@@ -2,7 +2,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onMount, untrack } from "svelte"
 	import { diffWords } from "diff"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { v4 as uuid } from "uuid"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import {
 		declareInterest,
@@ -18,6 +19,7 @@
 		formatDate,
 		type StoryDate
 	} from "$lib/client/lorebooks/sections/historyDates"
+	import { compareDates, dayOnly } from "$lib/shared/lorebooks/storyDate"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 	import LoreWritesOffNotice from "$lib/client/lorebooks/LoreWritesOffNotice.svelte"
 	import { useLoreWritesOff } from "$lib/client/lorebooks/loreWritesOff.svelte"
@@ -32,7 +34,20 @@
 	interface Props {
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
-		historyEntry: History
+		/**
+		 * The entry compiled. Exactly one of this and `byDate` is given.
+		 */
+		historyEntry?: History
+		/**
+		 * 🚧 Compile by date (S-B2): the line's scenes not yet compiled of this
+		 * day (`date` null = *Undated*), into the history entry of that date,
+		 * which the press makes when there is none. The modal learns the entry
+		 * from the compile activity that appears and is that entry's from then
+		 * on; `entryOf` reads its row.
+		 */
+		byDate?: { lorebookId: number; date: StoryDate | null }
+		/** The history rows as the workspace holds them, to read an adopted entry. */
+		entryOf?: (id: number) => History | undefined
 		activityId?: string | null
 		pendingResult?: { content: string } | null
 		initialStep?: "review" | "running"
@@ -59,6 +74,8 @@
 		open = $bindable(),
 		onOpenChange,
 		historyEntry,
+		byDate,
+		entryOf,
 		activityId = null,
 		pendingResult = null,
 		initialStep,
@@ -73,8 +90,67 @@
 
 	/** The reading this modal compiles and saves at, fixed when it opens. */
 	const reading = untrack(() => ({ branchId, moment }))
+
+	/** By date: the entry the press made or found, once its activity shows. */
+	let adoptedId = $state<number | null>(null)
+	/** The entry compiled, or null while a by-date ask has not found its own. */
+	let entryId = $derived(historyEntry ? historyEntry.id : adoptedId)
+	/** The asked day, as a history entry's date reads (Year 1 for Undated). */
+	const askedDate = untrack(() => byDate?.date ?? null)
+	const dateLabel = askedDate ? formatDate(askedDate) : "Undated"
+	// A display stand-in: it never decides where or what Save writes.
+	const stubOf = (id: number) =>
+		({
+			id,
+			lorebookId: untrack(() => byDate?.lorebookId ?? 0),
+			typeId: HISTORY_TYPE_ID,
+			year: askedDate?.year ?? 1,
+			month: askedDate ? (askedDate.month ?? null) : 1,
+			day: askedDate ? (askedDate.day ?? null) : 1,
+			content: "",
+			isCompleted: false,
+			branchId: reading.branchId
+		}) as unknown as History
+	/** The row the modal works on; a stand-in until the by-date entry is known. */
+	let entry: History = $derived(
+		historyEntry ??
+			(adoptedId != null
+				? (entryOf?.(adoptedId) ?? stubOf(adoptedId))
+				: stubOf(0))
+	)
+	/** The real row Save works on; undefined while a by-date entry's row is not known. */
+	let savedEntry: History | undefined = $derived(
+		historyEntry ?? (adoptedId != null ? entryOf?.(adoptedId) : undefined)
+	)
 	/** Where Save writes: the entry, or an amendment on the line (and when). */
-	let saveAt = $derived(compileSaveOf(historyEntry, reading))
+	let saveAt = $derived(
+		savedEntry ? compileSaveOf(savedEntry, reading) : null
+	)
+
+	/** Whether a history entry is the asked day (hour never counts; no month, no day). */
+	function isAskedDay(row: History | undefined): boolean {
+		if (!askedDate) return true
+		if (!row) return false
+		return (
+			compareDates(
+				dayOnly({
+					year: row.year,
+					month: row.month ?? null,
+					day: row.day ?? null
+				}),
+				dayOnly(askedDate)
+			) === 0
+		)
+	}
+
+	/** Whether an activity's asked day is this window's (Undated matches Undated only). */
+	function sameAskedDay(day: StoryDate | null): boolean {
+		if (askedDate === null || day === null) return askedDate === day
+		return compareDates(dayOnly(day), dayOnly(askedDate)) === 0
+	}
+
+	/** The `requestId` of this window's by-date ask, a fresh one per press; null for an entry window. */
+	let askedRequestId: string | null = null
 
 	let internalActivityId = $state(untrack(() => activityId))
 
@@ -97,13 +173,11 @@
 	let genTotalBatches = $state(1)
 	let genPartial = $state<{ content?: string; raw?: string }>({})
 
-	let hasExistingContent = $derived(
-		(historyEntry.content?.trim().length ?? 0) > 0
-	)
+	let hasExistingContent = $derived((entry.content?.trim().length ?? 0) > 0)
 
 	let diffParts = $derived.by(() => {
 		if (!hasExistingContent || step !== "review") return []
-		return diffWords(historyEntry.content ?? "", editableContent)
+		return diffWords(entry.content ?? "", editableContent)
 	})
 	let hasDiff = $derived(diffParts.some((p) => p.added || p.removed))
 
@@ -130,9 +204,12 @@
 	// Lorebook writes from sessions Off (plan A22): a compile folds what
 	// sessions played into the book, so it says so before any work and
 	// neither compiles nor saves.
-	const loreWrites = useLoreWritesOff(() => historyEntry?.lorebookId)
+	const loreWrites = useLoreWritesOff(() => entry.lorebookId)
 	let canSave = $derived(
-		!loreWrites.off && editableContent.trim().length > 0 && !saving
+		!loreWrites.off &&
+			savedEntry != null &&
+			editableContent.trim().length > 0 &&
+			!saving
 	)
 
 	$effect(() => {
@@ -150,13 +227,19 @@
 	 */
 	const compileEntriesCtx: CompileEntriesCtx | undefined =
 		getContext("compileEntriesCtx")
+	/**
+	 * The compile activities present when a by-date press was made — taken at
+	 * mount too, since the effect below runs before `onMount` asks.
+	 */
+	const activityIds = () =>
+		new Set((compileEntriesCtx?.activities ?? []).map((a) => a.activityId))
+	let knownActivities = untrack(activityIds)
 	const finishedRunsOf = () =>
 		new Set(
 			(compileEntriesCtx?.activities ?? [])
 				.filter(
 					(a) =>
-						a.historyEntryId === historyEntry.id &&
-						a.status !== "running"
+						a.historyEntryId === entryId && a.status !== "running"
 				)
 				.map((a) => a.activityId)
 		)
@@ -171,21 +254,38 @@
 		if (step !== "running") return
 		const list = compileEntriesCtx?.activities ?? []
 		const named = runActivityId
-		const entryId = historyEntry.id
+		const id = entryId
+		// By date, the entry is unknown until its compile appears: the first
+		// activity that was not there when the press was made, of this book,
+		// line and moment, of the asked day (Undated matches Undated only),
+		// and carrying THIS press's `requestId`. An entry compile is never
+		// this window's.
 		const run = named
 			? list.find((a) => a.activityId === named)
-			: list.find(
-					(a) =>
-						a.historyEntryId === entryId &&
-						sameLineAndMoment(a, reading) &&
-						(a.status === "running" ||
-							!finishedBeforeRun.has(a.activityId))
-				)
+			: id == null
+				? list.find(
+						(a) =>
+							askedRequestId !== null &&
+							a.byDate?.requestId === askedRequestId &&
+							!knownActivities.has(a.activityId) &&
+							a.lorebookId === byDate?.lorebookId &&
+							sameLineAndMoment(a, reading) &&
+							a.byDate !== undefined &&
+							sameAskedDay(a.byDate.date)
+					)
+				: list.find(
+						(a) =>
+							a.historyEntryId === id &&
+							sameLineAndMoment(a, reading) &&
+							(a.status === "running" ||
+								!finishedBeforeRun.has(a.activityId))
+					)
 		if (!run) return
 		const status = run.status
 		const result = run.pendingResult
 		const failure = run.errorMessage
 		untrack(() => {
+			if (id == null) adoptedId = run.historyEntryId
 			runActivityId = run.activityId
 			if (status === "review" && result) {
 				internalActivityId = run.activityId
@@ -206,6 +306,7 @@
 			step = "error"
 			return
 		}
+		knownActivities = activityIds()
 		step = "running"
 		genPhase = "drafting"
 		genBatch = 0
@@ -214,8 +315,19 @@
 		errorMessage = ""
 		// The reading it is asked from: its line decides the scenes, and the
 		// activity keeps both so a review reopened later saves right here.
+		if (entryId == null && byDate) {
+			askedRequestId = uuid()
+			socket.emit("scenes:compile", {
+				lorebookId: byDate.lorebookId,
+				date: byDate.date,
+				branchId: reading.branchId,
+				moment: reading.moment,
+				requestId: askedRequestId
+			} satisfies Sockets.Scenes.Compile.Params)
+			return
+		}
 		socket.emit("scenes:compile", {
-			historyEntryId: historyEntry.id,
+			historyEntryId: entryId!,
 			branchId: reading.branchId,
 			moment: reading.moment
 		} satisfies Sockets.Scenes.Compile.Params)
@@ -231,7 +343,7 @@
 	}
 
 	function handleComplete(data: Sockets.Scenes.Compile.Response) {
-		if (data.historyEntryId !== historyEntry.id) return
+		if (data.historyEntryId !== entryId) return
 		if (!sameLineAndMoment(data, reading)) return
 		internalActivityId = data.activityId
 		editableContent = data.content
@@ -244,14 +356,27 @@
 	 * lorebook docked beside a session page can hold two Compile windows, and
 	 * one's failure must not flip the other (or a review) to the error step
 	 * (plan B8). A refusal naming no entry is the run's own early refusal.
+	 * A refusal carrying a `requestId` answers a by-date ask: it is this
+	 * window's only when that is the id this window asked with (then it is
+	 * accepted whatever entry it names), so the Chronicle's (or another
+	 * window's) refusal never lands here, and an entry window ignores every
+	 * by-date ask's.
 	 */
 	function handleError(data: Sockets.Scenes.Compile.ErrorResponse) {
 		if (step !== "running") return
 		if (
-			typeof data.historyEntryId === "number" &&
-			data.historyEntryId !== historyEntry.id
+			typeof data.requestId === "string" &&
+			data.requestId !== askedRequestId
 		)
 			return
+		const own = askedRequestId !== null && data.requestId === askedRequestId
+		// By date, before the entry is known, a refusal naming no entry is
+		// ours; one naming an entry is ours only when it is the asked day's.
+		if (!own && typeof data.historyEntryId === "number") {
+			if (entryId == null) {
+				if (!isAskedDay(entryOf?.(data.historyEntryId))) return
+			} else if (data.historyEntryId !== entryId) return
+		}
 		errorMessage = data.error
 		step = "error"
 	}
@@ -270,7 +395,8 @@
 	 * which is why `scenes:compile:progress` has to carry `historyEntryId`.
 	 */
 	$effect(() => {
-		const id = historyEntry.id
+		const id = entryId
+		if (id == null) return
 		const releases = [
 			declareInterest<"scenes:compile:progress">(
 				interestKey("scenes:compile:progress", id),
@@ -314,13 +440,15 @@
 	 * here to retry.
 	 */
 	async function save() {
-		if (saving || loreWrites.off) return
+		if (saving || loreWrites.off || !savedEntry || !saveAt) return
+		const row = savedEntry
+		const at = saveAt
 		const content = editableContent.trim()
 		const fields = changedFields(
 			{ content, isCompleted: true },
 			{
-				content: historyEntry.content ?? "",
-				isCompleted: !!historyEntry.isCompleted
+				content: row.content ?? "",
+				isCompleted: !!row.isCompleted
 			}
 		)
 		saving = true
@@ -328,15 +456,15 @@
 		try {
 			if (!Object.keys(fields).length) {
 				// Already says this: nothing to write, the review is done.
-			} else if (saveAt.kind === "amendment") {
+			} else if (at.kind === "amendment") {
 				await fileEntryAmendments(
 					socket,
 					{
-						lorebookId: historyEntry.lorebookId,
-						entryId: historyEntry.id,
-						branchId: saveAt.branchId
+						lorebookId: row.lorebookId,
+						entryId: row.id,
+						branchId: at.branchId
 					},
-					[{ ...saveAt.date, fields }],
+					[{ ...at.date, fields }],
 					knownAmendmentIds
 				)
 			} else {
@@ -346,17 +474,14 @@
 					params: {
 						entry: {
 							...fields,
-							id: historyEntry.id,
+							id: row.id,
 							typeId: HISTORY_TYPE_ID
 						} as any
 					},
-					replyKey: interestKey(
-						"entries:update",
-						historyEntry.lorebookId
-					),
+					replyKey: interestKey("entries:update", row.lorebookId),
 					errorEvent: "entries:update:error",
 					fallbackError: "The history entry could not be saved.",
-					match: (data) => data.entry?.id === historyEntry.id
+					match: (data) => data.entry?.id === row.id
 				})
 			}
 		} catch (err) {
@@ -375,13 +500,13 @@
 				id: internalActivityId,
 				how: "acted"
 			})
-		toaster.success({
+		notify.success({
 			title:
-				saveAt.kind === "amendment"
-					? `History amended as of ${formatDate(saveAt.date)}`
+				at.kind === "amendment"
+					? `History amended as of ${formatDate(at.date)}`
 					: "History entry updated"
 		})
-		onSaved?.({ ...historyEntry, content, isCompleted: true })
+		onSaved?.({ ...row, content, isCompleted: true })
 		onOpenChange({ open: false })
 	}
 
@@ -412,9 +537,7 @@
 {#snippet previewBlock()}
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
-			<p
-				class="text-surface-600-400 text-xs font-semibold"
-			>
+			<p class="text-surface-600-400 text-xs font-semibold">
 				{genPhase === "synthesizing"
 					? "Synthesizing"
 					: `Draft ${genBatch}`}
@@ -451,15 +574,13 @@
 			<!-- A review reopened after the setting moved: it cannot save. -->
 			<LoreWritesOffNotice
 				by={loreWrites.by}
-				lorebookId={historyEntry?.lorebookId}
+				lorebookId={entry.lorebookId}
 				onOpenSettings={() => onOpenChange({ open: false })}
 			/>
 		{/if}
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">
-				<p
-					class="text-surface-600-400 text-xs font-semibold"
-				>
+				<p class="text-surface-600-400 text-xs font-semibold">
 					Changes
 				</p>
 				<div
@@ -491,14 +612,14 @@
 				bind:value={editableContent}
 			></textarea>
 		</div>
-		{#if saveAt.kind === "amendment" && saveAt.atEntryDate}
+		{#if saveAt?.kind === "amendment" && saveAt.atEntryDate}
 			<p class="text-surface-700-300 text-xs">
 				Saved as an amendment on this line only, dated {formatDate(
 					saveAt.date
 				)}, the entry's own date. The entry comes from the line this one
 				branched from, and that line keeps it as it was.
 			</p>
-		{:else if saveAt.kind === "amendment"}
+		{:else if saveAt?.kind === "amendment"}
 			<p class="text-surface-700-300 text-xs">
 				Saved as an amendment dated {formatDate(saveAt.date)}: the entry
 				reads this way from then on, and as it was before.
@@ -516,7 +637,7 @@
 	title="Compile to Entry"
 	runningTitle="Compiling scenes…"
 	reviewTitle="Review compiled entry"
-	badge="History entry"
+	badge={byDate && entryId == null ? dateLabel : "History entry"}
 	{step}
 	{progressPercent}
 	{progressLabel}

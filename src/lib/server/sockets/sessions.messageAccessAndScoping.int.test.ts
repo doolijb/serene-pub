@@ -195,20 +195,26 @@ describe("sessions:update — allowlist + lorebookId scoping (PGlite integration
 		expect(reloaded!.name).toBe("Renamed")
 	})
 
-	test("applies allowlisted fields including an owned lorebookId", async () => {
+	test("applies allowlisted fields; a lorebookId is never moved (the book lock)", async () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const owner = await makeUser("sessionupdate-owner-2")
 		const session = await makeSession(owner.id)
 		const ownLorebook = await makeLorebook(owner.id, "Own Book")
 
+		await expect(
+			sessionsUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{ session: { id: session.id, lorebookId: ownLorebook.id } as any },
+				noopEmit
+			)
+		).rejects.toThrow("A session keeps the lorebook it started with.")
 		await sessionsUpdateHandler.handler(
 			fakeSocket(owner.id),
 			{
 				session: {
 					id: session.id,
 					name: "New Name",
-					scenario: "A scenario",
-					lorebookId: ownLorebook.id
+					scenario: "A scenario"
 				} as any
 			},
 			noopEmit
@@ -219,6 +225,6 @@ describe("sessions:update — allowlist + lorebookId scoping (PGlite integration
 		})
 		expect(reloaded!.name).toBe("New Name")
 		expect(reloaded!.scenario).toBe("A scenario")
-		expect(reloaded!.lorebookId).toBe(ownLorebook.id)
+		expect(reloaded!.lorebookId).toBeNull()
 	})
 })

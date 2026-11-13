@@ -41,11 +41,14 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	ensureSessionMessageEmbedded: async () => {},
 	autoEnqueueSession: async () => {}
 }))
-vi.mock("$lib/server/sockets/utils/broadcastHelpers", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	broadcastToSessionUsers: async () => {},
-	emitToUserRedacted: async () => {}
-}))
+vi.mock(
+	"$lib/server/sockets/utils/broadcastHelpers",
+	async (importOriginal) => ({
+		...(await importOriginal<object>()),
+		broadcastToSessionUsers: async () => {},
+		emitToUserRedacted: async () => {}
+	})
+)
 
 const OWNER = "showcase.twenty-questions"
 const GENRE = `${OWNER}:genre/twenty-questions`
@@ -79,30 +82,51 @@ let sessionId: number
 
 const host = async (spec: string) => {
 	const { createHost } = await import("$lib/server/pipelines/runtime/host")
-	return createHost(db as any, {
-		sessionId,
-		userId: ownerId,
-		specId: `${OWNER}:spec/${spec}`,
-		runId: `run-${Math.random().toString(36).slice(2)}`
-	} as any)
+	return createHost(
+		db as any,
+		{
+			sessionId,
+			userId: ownerId,
+			specId: `${OWNER}:spec/${spec}`,
+			runId: `run-${Math.random().toString(36).slice(2)}`
+		} as any
+	)
 }
-const WRITE = { key: "remember", definitionId: "core:outlet/set-session-annex", definitionVersion: 1 } as any
-const READ = { key: "gather.annex.read", definitionId: "core:query/session-annex", definitionVersion: 1 }
+const WRITE = {
+	key: "remember",
+	definitionId: "core:outlet/set-session-annex",
+	definitionVersion: 1
+} as any
+const READ = {
+	key: "gather.annex.read",
+	definitionId: "core:query/session-annex",
+	definitionVersion: 1
+}
 
 const stored = async () => {
 	const [row] = await db
-		.select({ annex: schema.sessions.annex, audiences: schema.sessions.annexAudiences })
+		.select({
+			annex: schema.sessions.annex,
+			audiences: schema.sessions.annexAudiences
+		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
-	return { annex: (row!.annex ?? {}) as any, audiences: (row!.audiences ?? {}) as any }
+	return {
+		annex: (row!.annex ?? {}) as any,
+		audiences: (row!.audiences ?? {}) as any
+	}
 }
 
 beforeAll(async () => {
 	process.env.SP_PLUGINS_ENABLED = "1"
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-secret-annex-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-secret-annex-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db)
 
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -110,7 +134,12 @@ beforeAll(async () => {
 	guestId = (await createTestUser(db, "secret-annex-guest")).id
 	const [session] = await db
 		.insert(schema.sessions)
-		.values({ userId: ownerId, isGroup: false, name: "twenty questions", genreId: GENRE } as any)
+		.values({
+			userId: ownerId,
+			isGroup: false,
+			name: "twenty questions",
+			genreId: GENRE
+		} as any)
 		.returning()
 	sessionId = session.id
 	await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
@@ -125,32 +154,43 @@ beforeAll(async () => {
 		enabled: true,
 		manifest
 	} as any)
-	const { registerPluginAnnex } = await import("$lib/server/plugins/pluginAnnex")
+	const { registerPluginAnnex } = await import(
+		"$lib/server/plugins/pluginAnnex"
+	)
 	expect(registerPluginAnnex(manifest, OWNER)).toEqual([])
 })
 
 afterAll(async () => {
-	const { withdrawPluginAnnex } = await import("$lib/server/plugins/pluginAnnex")
+	const { withdrawPluginAnnex } = await import(
+		"$lib/server/plugins/pluginAnnex"
+	)
 	withdrawPluginAnnex(OWNER)
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 describe("an AI-only secret, written once and read back", () => {
 	it("the create run writes it, under the declared audience; a turn's empty write changes nothing", async () => {
-		const created: any = await (await host("create-session")).commit!({ value: { secret: CLOCKTOWER } }, WRITE)
+		const created: any = await (
+			await host("create-session")
+		).commit!({ value: { secret: CLOCKTOWER } }, WRITE)
 		expect(created.written).toBe(true)
 		const { annex, audiences } = await stored()
 		expect(annex[OWNER]).toEqual({ secret: CLOCKTOWER })
 		expect(audiences[OWNER]).toEqual({ secret: ["ai"] })
 
-		const turn: any = await (await host("respond")).commit!({ value: {} }, WRITE)
+		const turn: any = await (
+			await host("respond")
+		).commit!({ value: {} }, WRITE)
 		expect(turn.written).toBe(false)
 		expect((await stored()).annex[OWNER]).toEqual({ secret: CLOCKTOWER })
 	})
 
 	it("refuses a value its shape refuses", async () => {
 		await expect(
-			(await host("respond")).commit!({ value: { secret: { secretEntryId: "eleven" } } }, WRITE)
+			(await host("respond")).commit!(
+				{ value: { secret: { secretEntryId: "eleven" } } },
+				WRITE
+			)
 		).rejects.toThrow(/refused/)
 	})
 
@@ -161,7 +201,11 @@ describe("an AI-only secret, written once and read back", () => {
 			["respond", undefined]
 		] as const) {
 			const h: any = await host(spec)
-			const view = await h.read("session_annex", { sessionId, view: "ai", ...(speaker ? { speaker } : {}) }, READ)
+			const view = await h.read(
+				"session_annex",
+				{ sessionId, view: "ai", ...(speaker ? { speaker } : {}) },
+				READ
+			)
 			expect(view).toEqual({ secret: CLOCKTOWER })
 		}
 	})
@@ -176,7 +220,9 @@ describe("an AI-only secret, written once and read back", () => {
 	})
 
 	it("the Session data panel lists it for the owner, as a declared field; a guest is refused", async () => {
-		const { inspectAnnex } = await import("$lib/server/sessions/annexInspect")
+		const { inspectAnnex } = await import(
+			"$lib/server/sessions/annexInspect"
+		)
 		const mine = await inspectAnnex(db as any, sessionId, { id: ownerId })
 		expect(mine.ok).toBe(true)
 		expect(JSON.stringify(mine)).toContain("The Clocktower")
@@ -185,8 +231,15 @@ describe("an AI-only secret, written once and read back", () => {
 	})
 
 	it("a new game's create run replaces it", async () => {
-		const lighthouse = { ...CLOCKTOWER, secretEntryId: 21, secretEntryName: "The Lighthouse", secretEntryAliases: [] }
-		const out: any = await (await host("create-session")).commit!({ value: { secret: lighthouse } }, WRITE)
+		const lighthouse = {
+			...CLOCKTOWER,
+			secretEntryId: 21,
+			secretEntryName: "The Lighthouse",
+			secretEntryAliases: []
+		}
+		const out: any = await (
+			await host("create-session")
+		).commit!({ value: { secret: lighthouse } }, WRITE)
 		expect(out.written).toBe(true)
 		expect((await stored()).annex[OWNER]).toEqual({ secret: lighthouse })
 	})
@@ -202,7 +255,9 @@ describe("an AI-only secret, written once and read back", () => {
  */
 describe("P6 · a template reads the secret through the template view", () => {
 	const templateView = async () => {
-		const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
 		const h: any = await host("respond")
 		const out: any = await coreBindings()["core:query/session-annex@1"]!(
 			{ scope: { sessionId }, view: "template" } as any,
@@ -220,24 +275,37 @@ describe("P6 · a template reads the secret through the template view", () => {
 			bundleSource: "// none",
 			bundleHash: "hash-acme.off",
 			enabled: false,
-			manifest: { annexFields: [annexField({ key: "note", shape: { type: "string" } })] }
+			manifest: {
+				annexFields: [
+					annexField({ key: "note", shape: { type: "string" } })
+				]
+			}
 		} as any)
 		await db
 			.update(schema.sessions)
 			.set({
 				annex: {
-					[OWNER]: { secret: CLOCKTOWER, legacyNote: "stored before any declaration" },
+					[OWNER]: {
+						secret: CLOCKTOWER,
+						legacyNote: "stored before any declaration"
+					},
 					"acme.off": { note: "its plugin is switched off" },
 					"user:my-spec": { anything: "undeclared owner" }
 				}
 			})
 			.where(eq(schema.sessions.id, sessionId))
-		expect(await templateView()).toEqual({ [OWNER]: { secret: CLOCKTOWER } })
+		expect(await templateView()).toEqual({
+			[OWNER]: { secret: CLOCKTOWER }
+		})
 	})
 
 	it("renders through Assemble's annex port", async () => {
-		const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
-		const { CORE_TEMPLATE_ENGINE } = await import("$lib/server/pipelines/prompt/renderers")
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		const { CORE_TEMPLATE_ENGINE } = await import(
+			"$lib/server/pipelines/prompt/renderers"
+		)
 		const result: any = await coreBindings()["core:task/assemble@2"]!(
 			{
 				template: {
@@ -252,6 +320,8 @@ describe("P6 · a template reads the secret through the template view", () => {
 			{ countTokens: (t: string) => t.length } as any
 		)
 		expect(result.kind).toBe("ok")
-		expect(result.value.context.rendered).toBe("Thinking of: The Clocktower")
+		expect(result.value.context.rendered).toBe(
+			"Thinking of: The Clocktower"
+		)
 	})
 })

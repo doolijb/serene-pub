@@ -10,6 +10,7 @@ import {
 	type SupervisorSpec,
 	type SupervisorStatusEvent
 } from "./supervisor"
+import { spawnWatchdog, WATCHDOG_FILE_NAME } from "./watchdog"
 
 // A REAL child process, no mocks: the factory's whole job is process
 // handling, and the fakes in subprocessManager.test.ts cannot show that a
@@ -117,7 +118,6 @@ describe.skipIf(process.platform !== "linux")("createSupervisor", () => {
 			const st = sup.getStatus()
 			expect(st.status).toBe("running")
 			expect(st.pid).toBeGreaterThan(0)
-			expect(st.isExternal).toBe(false)
 			expect(sup.isRunning()).toBe(true)
 			expect(fs.readFileSync(env.pidFile, "utf8")).toBe(String(st.pid))
 			expect(seen.map((e) => e.status)).toEqual(["starting", "running"])
@@ -176,7 +176,7 @@ describe.skipIf(process.platform !== "linux")("createSupervisor", () => {
 	)
 
 	test(
-		"adopts a verified process from a previous session as ours",
+		"the boot sweep kills our own process from a previous session and clears its pid file",
 		async () => {
 			const env = await makeEnv()
 			const child = spawn(env.bin, ["--port", String(env.port)], {
@@ -191,21 +191,40 @@ describe.skipIf(process.platform !== "linux")("createSupervisor", () => {
 			const sup = make(env.spec)
 			await sup.checkForOrphanOnBoot()
 
-			const st = sup.getStatus()
-			expect(st.status).toBe("running")
-			expect(st.pid).toBe(child.pid)
-			expect(sup.isExternal()).toBe(false)
-
-			// Owned, so Stop works on it.
-			await sup.stop()
+			// Nothing adopted: the sweep only reaps.
 			expect(sup.getStatus().status).toBe("stopped")
+			expect(sup.getStatus().pid).toBeNull()
+			expect(() => process.kill(child.pid!, 0)).toThrow()
+			expect(fs.existsSync(env.pidFile)).toBe(false)
+		},
+		T
+	)
+
+	test(
+		"start() replaces our own leftover process instead of adopting it",
+		async () => {
+			const env = await makeEnv()
+			const child = spawn(env.bin, ["--port", String(env.port)], {
+				detached: true,
+				stdio: "ignore"
+			})
+			child.unref()
+			strayPids.push(child.pid!)
+			fs.writeFileSync(env.pidFile, String(child.pid))
+			await waitFor(() => pingHealth(`http://127.0.0.1:${env.port}`, 500))
+
+			const sup = make(env.spec)
+			await sup.start()
+
+			expect(sup.getStatus().status).toBe("running")
+			expect(sup.getStatus().pid).not.toBe(child.pid)
 			expect(() => process.kill(child.pid!, 0)).toThrow()
 		},
 		T
 	)
 
 	test(
-		"adopts an unrecorded process as external and refuses to stop it",
+		"start() refuses a port held by a process that is not ours, in words",
 		async () => {
 			const env = await makeEnv()
 			const child = spawn(env.bin, ["--port", String(env.port)], {
@@ -217,11 +236,83 @@ describe.skipIf(process.platform !== "linux")("createSupervisor", () => {
 			await waitFor(() => pingHealth(`http://127.0.0.1:${env.port}`, 500))
 
 			const sup = make(env.spec)
-			expect(await sup.adoptIfAlreadyRunning()).toBe(true)
+			await expect(sup.start()).rejects.toThrow(
+				`Port ${env.port} is already in use by a program Serene Pub didn't start`
+			)
 
-			expect(sup.getStatus().status).toBe("running")
-			expect(sup.isExternal()).toBe(true)
-			await expect(sup.stop()).rejects.toThrow(/externally/)
+			expect(sup.getStatus().status).toBe("crashed")
+			expect(sup.getStatus().lastError).toMatch(/Stop it, or change the port/)
+			// The stranger is untouched.
+			expect(() => process.kill(child.pid!, 0)).not.toThrow()
+		},
+		T
+	)
+
+	test(
+		"a pid file naming a recycled pid that runs something else is left alone",
+		async () => {
+			const env = await makeEnv()
+			// A live process that is not our binary.
+			const other = spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)"], {
+				detached: true,
+				stdio: "ignore"
+			})
+			other.unref()
+			strayPids.push(other.pid!)
+			fs.writeFileSync(env.pidFile, String(other.pid))
+
+			const sup = make(env.spec)
+			await sup.checkForOrphanOnBoot()
+
+			expect(() => process.kill(other.pid!, 0)).not.toThrow()
+			// The file stays too: it was not ours to clear on a guess.
+			expect(fs.existsSync(env.pidFile)).toBe(true)
+		},
+		T
+	)
+
+	test(
+		"a watchdog is written beside the pid file and ends the child when core dies",
+		async () => {
+			const env = await makeEnv()
+			const sup = make(env.spec)
+			await sup.start()
+			const pid = sup.getStatus().pid!
+			expect(fs.existsSync(path.join(env.dir, WATCHDOG_FILE_NAME))).toBe(true)
+
+			// Stand in for core: a process the watchdog takes for us.
+			const fakeCore = spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)"], {
+				stdio: "ignore"
+			})
+			strayPids.push(fakeCore.pid!)
+			const dog = await spawnWatchdog(env.dir, pid, "Fake", {
+				corePid: fakeCore.pid!
+			})
+			expect(dog.pid).toBeGreaterThan(0)
+			strayPids.push(dog.pid!)
+			await new Promise((r) => setTimeout(r, 1200))
+			expect(() => process.kill(pid, 0)).not.toThrow()
+
+			fakeCore.kill("SIGKILL")
+			await waitFor(async () => {
+				try {
+					process.kill(pid, 0)
+					return false
+				} catch {
+					return true
+				}
+			})
+			// The watchdog leaves once its work is done.
+			await waitFor(async () => {
+				try {
+					process.kill(dog.pid!, 0)
+					return false
+				} catch {
+					return true
+				}
+			})
+			// The supervisor saw its child die out from under it.
+			await waitFor(async () => sup.getStatus().status === "crashed")
 		},
 		T
 	)

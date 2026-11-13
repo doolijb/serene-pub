@@ -22,7 +22,7 @@ You need a connection that can draw first. There are three kinds of place a pict
 - **ComfyUI or a Stable Diffusion program you run yourself.** Add the connection and point it at the program's address. ComfyUI draws with a workflow, and Serene Pub ships six to start from. See [ComfyUI](./connections.md#comfyui) and [Stable Diffusion](./connections.md#stable-diffusion-a1111-compatible).
 - **An online service.** OpenAI, Google Gemini, Black Forest Labs (FLUX) and NovelAI need an account and a key, and charge per picture. AI Horde is free and needs no key, but your pictures wait in a queue. See [Image services online](./connections.md#image-services-online) and [Images from OpenAI](./connections.md#images-from-openai).
 
-How a picture is drawn (its size, steps and so on) comes from the loadout's sampling config. Serene Pub ships one for each common model family; pick the one that matches your model (see [Immutable presets](./connections.md#immutable-presets)).
+How a picture is drawn (its size, steps and so on) comes from the loadout's sampling config. Serene Pub ships one for each common model family; pick the one that matches your model (see [Immutable presets](./connections.md#immutable-presets)). When you press **Use**, the loadout's preset follows what the model file says where a file can be read — a GGUF the KoboldCPP run by Serene Pub holds names its family — and otherwise stays as it is, and the message after **Use** says which; a ComfyUI or Stable Diffusion checkpoint is never guessed at from its name, so switch the preset yourself if it isn't SD 1.5.
 
 ## Give a character a likeness
 
@@ -39,13 +39,15 @@ The likeness prompt does most of the work. A good line of looks matters more tha
 In a Story session, open **Actions** above the composer; **Scene** is there too.
 
 - **Image** asks *What should the image show?*. Describe it and the picture is drawn and posted in the session.
-- **Scene** asks nothing. It reads the last few messages and how everyone in the session looks, writes a description of the moment, and draws a wide picture of it. By default the picture is posted and also becomes the session's backdrop.
+- **Scene** asks nothing. It reads the last few messages and how everyone in the session looks, writes a description of the moment for the picture model, and draws a wide picture of it; a second short call writes the one sentence the picture is posted with, so the message reads as prose and the picture model's tag line stays in the picture's details. By default the picture is posted and also becomes the session's backdrop.
 
 Both take a little while; a progress line shows the picture being drawn, and **Stop** ends it. See [Sessions → Scene](./sessions.md#scene).
 
 ## Generate a portrait
 
-Open a character, switch to the **Gallery** tab and press **Generate portrait**. Pick how many pictures (one to four) and a **Style**: **Tags** for most local models, **Prose** for online services. Before anything is drawn you see the prompt, and can change it or stop. The new pictures land in the gallery marked **New**; open one's menu to make it the avatar or the likeness image. See [Characters → Generate a portrait](./characters.md#generate-a-portrait).
+Open a character, switch to the **Gallery** tab and press **Generate portrait**. Pick how many pictures (one to four) and a **Style**: **Tags** for most local models, **Prose** for online services. Before anything is drawn you see the prompt as it will be sent — your likeness line, highlighted, inside the step's fixed portrait wording — and can change your part or stop. The new pictures land in the gallery marked **New**; open one's menu to make it the avatar or the likeness image. See [Characters → Generate a portrait](./characters.md#generate-a-portrait).
+
+A cast member's portraits can be generated too. The new pictures belong to the lorebook's owner and stay with that cast member.
 
 ## Fill a character's sprites
 
@@ -53,14 +55,17 @@ Sprites are the faces a character shows beside what they say. Open the character
 
 Every picture in one fill shares a seed and is shown the likeness image, so the set looks like one person. A model that can't take a reference picture still draws, from the likeness prompt alone, and the form says so before you start; the set will match less closely.
 
+A cast member can have their sprites filled too. Open the member on their lorebook page, switch to their **Sprites** tab and press **Fill empty sprites**, the same as for a character. It's there for whoever can edit that lorebook; anyone else only sees the sprites. The new pictures belong to the lorebook's owner and stay with that cast member. Re-express from neutral is on a cast member's sprites too, for whoever can edit their lorebook, when the image model supports expressions.
+
 Sprites need a clear background so they sit cleanly over a session. Some models draw one themselves. For the rest, Serene Pub cuts the background out afterwards with a small background remover that downloads once, the first time it's needed (a couple of hundred megabytes); the form mentions it and the progress line shows it. See [Characters → Fill empty sprites](./characters.md#fill-empty-sprites) and [The background remover](./connections.md#the-background-remover).
 
 ## Where pictures go
 
 - **Under a message.** A picture from **Image** or **Scene** is posted as a message, with the picture in the strip under it. The **Album** widget gathers every picture in the session in one place.
 - **In the character's gallery.** Portraits go to the **Gallery** tab, and nothing changes until you choose one.
-- **Behind the session.** A backdrop is one picture for the whole session, shown by the **Backdrop** widget. Everyone in the session sees the same one; its owner can change or clear it. See [Session layout](./session-layout.md#the-widgets).
+- **Behind the session.** A backdrop is one picture for the whole session, shown by the **Backdrop** widget. Everyone in the session sees the same one; its owner can change or clear it. Its chooser also lists the pictures of someone in the session who has no character card: their own pictures. See [Session layout](./session-layout.md#the-widgets).
 - **In the sprite set.** Filled sprites go straight into the set you picked, as new pictures beside anything already there.
+- **With a cast member.** A cast member can hold sprite sets and gallery pictures of their own. When a member loses their card (it's unlinked, or deleted), they keep copies of the card's sprite sets and gallery pictures, so a session still shows their sprites. See [Cast and relationships](./lorebook-cast.md#merging-and-deleting).
 - **When a scene opens**, in Story, if the routine **Picture each new scene** is on (it starts Off; see [Story › What runs between turns](./genre-story.md#what-runs-between-turns)): a picture of the new scene is posted like **Scene**'s.
 
 Every picture you make is kept in your media, like an upload.

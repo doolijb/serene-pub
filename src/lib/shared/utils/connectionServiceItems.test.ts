@@ -38,12 +38,14 @@ const IMAGE_PRESETS = OPENAI_COMPATIBLE_PRESETS.filter(
 describe("buildConnectionServiceItems", () => {
 	const items = buildConnectionServiceItems()
 
-	test("has one item per native type (except OPENAI, the managed types and the two merged embedding types) plus one per preset, plus Ollama and the embedding presets under Embeddings, plus the drawing presets under Images", () => {
+	test("has one item per native type (except OPENAI, the managed types, the two merged embedding types and the two app-made local ONNX types) plus one per preset, plus Ollama and the embedding presets under Embeddings, plus the drawing presets under Images", () => {
 		const expectedCount =
 			CONNECTION_TYPES.length -
 			1 -
 			KOBOLDCPP_MANAGED_TYPES.length -
 			AUDIOCPP_MANAGED_TYPES.length -
+			2 -
+			// The two local ONNX connections are Serene Pub's own, made at boot (2026-11-04): never offered.
 			2 +
 			OPENAI_COMPATIBLE_PRESETS.length +
 			1 +
@@ -218,7 +220,10 @@ describe("buildConnectionServiceItems", () => {
 				// never created by hand, for the same reason the managed types
 				// above are not.
 				t.value === CONNECTION_TYPE.OLLAMA_EMBEDDINGS ||
-				t.value === CONNECTION_TYPE.OPENAI_EMBEDDINGS
+				t.value === CONNECTION_TYPE.OPENAI_EMBEDDINGS ||
+				// Serene Pub makes both local ONNX rows itself (2026-11-04, item 17).
+				t.value === CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS ||
+				t.value === CONNECTION_TYPE.LOCAL_ONNX_NER
 			)
 				continue
 			const item = items.find((i) => i.key === `type:${t.value}`)
@@ -333,22 +338,24 @@ describe("local ONNX types on a machine that can't run them", () => {
 		reason: "the Android app can't run the ONNX runtime"
 	}
 
-	test("are still listed, each disabled with the machine's reason", () => {
-		const items = buildConnectionServiceItems({ localOnnx: verdict })
-		for (const type of ONNX) {
-			const item = items.find((i) => i.type === type)
-			// Listed, not hidden: a missing option reads as "not built".
-			expect(item, type).toBeDefined()
-			expect(item!.disabledReason).toBe(
-				"Not available on this machine: the Android app can't run the ONNX runtime"
-			)
+	test("are never offered: Serene Pub makes both rows itself (owner 2026-11-04, item 17), whatever the machine", () => {
+		for (const localOnnx of [
+			verdict,
+			{ available: true, reason: null },
+			undefined
+		]) {
+			const items = buildConnectionServiceItems({ localOnnx })
+			for (const type of ONNX)
+				expect(
+					items.find((i) => i.type === type),
+					type
+				).toBeUndefined()
 		}
 	})
 
 	test("disable nothing else", () => {
 		const items = buildConnectionServiceItems({ localOnnx: verdict })
-		const disabled = items.filter((i) => i.disabledReason)
-		expect(disabled.map((i) => i.type).sort()).toEqual([...ONNX].sort())
+		expect(items.filter((i) => i.disabledReason)).toEqual([])
 	})
 
 	test("a machine that runs them, or settings not yet arrived, disables none", () => {
@@ -508,9 +515,7 @@ describe("what each service asks of the person", () => {
 			CONNECTION_TYPE.LM_STUDIO,
 			CONNECTION_TYPE.LLAMACPP,
 			CONNECTION_TYPE.KOBOLDCPP,
-			CONNECTION_TYPE.A1111,
-			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
-			CONNECTION_TYPE.LOCAL_ONNX_NER
+			CONNECTION_TYPE.A1111
 		])
 			expect(byKey(`type:${type}`).setupNeed, type).toBe("local")
 		// A native type keeps its own prose.

@@ -11,7 +11,7 @@
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import GraphBuildModal from "$lib/client/components/modals/GraphBuildModal.svelte"
 	import AbsorbBindingModal from "$lib/client/components/modals/AbsorbBindingModal.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import DeleteCastMemberModal from "./cast/DeleteCastMemberModal.svelte"
 	import { deletedMemberToast, type PrivateLoreChoice } from "./cast/castSave"
 	import {
@@ -86,6 +86,7 @@
 		unnamedPairsFor
 	} from "./graphs/sceneGaps"
 	import { loreRoute } from "./loreRoute.svelte"
+	import { openUnfiledScene } from "./sections/unfiledFocus.svelte"
 	import { graphBuildReason, type LoreDrawing } from "./graphs"
 	import { lensEmptyMessage } from "./lenses/registry"
 	import {
@@ -591,7 +592,10 @@
 	 * (an empty SCOPE of a built graph is not a reason to rebuild).
 	 */
 	let canStartBuild = $derived(
-		drawing !== "places" && !activeBuild && !buildReason && nodes.length === 0
+		drawing !== "places" &&
+			!activeBuild &&
+			!buildReason &&
+			nodes.length === 0
 	)
 
 	function startBuild() {
@@ -903,6 +907,11 @@
 	function openScene(sceneId: number) {
 		const scene = scenes.find((s) => s.id === sceneId)
 		if (!scene) return
+		// A scene not yet compiled has no entry: it opens in Not yet compiled.
+		if (scene.historyEntryId == null) {
+			void openUnfiledScene(scene)
+			return
+		}
 		void loreRoute.navigate({
 			type: "openEntry",
 			scope: "history",
@@ -988,7 +997,7 @@
 		// deleted: Layout leaves this event's refusals to the surface that
 		// asked, because the place page says them in its row.
 		void rels.remove(id, route.branch ?? null).catch((err) => {
-			toaster.error({
+			notify.error({
 				title: "The link was not deleted",
 				description: isReplyTimeout(err)
 					? "The server did not answer in time."
@@ -1060,7 +1069,7 @@
 			// A refusal Layout's `:error` catch-all has already toasted is
 			// not toasted again; silence is said here, since nothing else will.
 			if (isReplyTimeout(err))
-				toaster.error({
+				notify.error({
 					title: `${name} was not deleted`,
 					description: "The server did not answer in time."
 				})
@@ -1069,7 +1078,7 @@
 		deleting = false
 		deleteTarget = null
 		deleteCheck = null
-		toaster.success({
+		notify.success({
 			title: deletedMemberToast(name, res.deletedLoreCount)
 		})
 	}
@@ -1185,7 +1194,10 @@
 			</div>
 		{:else if activeBuild.status === "error"}
 			<div class="flex items-center gap-2">
-				<Icons.AlertCircle size={14} class="text-error-600-400 shrink-0" />
+				<Icons.AlertCircle
+					size={14}
+					class="text-error-600-400 shrink-0"
+				/>
 				<span class="text-error-600-400 text-sm">Failed</span>
 			</div>
 		{/if}
@@ -1247,18 +1259,18 @@
 		<Icons.RefreshCw size={14} aria-hidden="true" />
 	</button>
 	{#if !readOnly}
-	<button
-		class="btn btn-sm {showPipelinePanel
-			? 'preset-tonal-surface'
-			: 'preset-tonal-surface'}"
-		type="button"
-		title="The pipeline behind the build: which model, sampling profile and prompt each step runs on"
-		aria-label="Graph build pipeline settings"
-		aria-pressed={showPipelinePanel}
-		onclick={() => (showPipelinePanel = !showPipelinePanel)}
-	>
-		<Icons.Workflow size={14} aria-hidden="true" />
-	</button>
+		<button
+			class="btn btn-sm {showPipelinePanel
+				? 'preset-tonal-surface'
+				: 'preset-tonal-surface'}"
+			type="button"
+			title="The pipeline behind the build: which model, sampling profile and prompt each step runs on"
+			aria-label="Graph build pipeline settings"
+			aria-pressed={showPipelinePanel}
+			onclick={() => (showPipelinePanel = !showPipelinePanel)}
+		>
+			<Icons.Workflow size={14} aria-hidden="true" />
+		</button>
 	{/if}
 {/snippet}
 
@@ -1322,29 +1334,29 @@
 			</span>
 		{/if}
 		{#if !readOnly}
-		<div class="ml-auto flex gap-1">
-			<button
-				class="btn btn-sm preset-tonal-warning p-1.5"
-				type="button"
-				onclick={() => {
-					mergeTarget = node
-					showMergeModal = true
-				}}
-				title="Absorb into another member, because they are the same person"
-				aria-label="Absorb into another member"
-			>
-				<Icons.GitMerge size={13} aria-hidden="true" />
-			</button>
-			<button
-				class="btn btn-sm preset-tonal-error p-1.5"
-				type="button"
-				onclick={() => void requestDeleteNode(node)}
-				title="Delete"
-				aria-label="Delete"
-			>
-				<Icons.Trash2 size={13} aria-hidden="true" />
-			</button>
-		</div>
+			<div class="ml-auto flex gap-1">
+				<button
+					class="btn btn-sm preset-tonal-warning p-1.5"
+					type="button"
+					onclick={() => {
+						mergeTarget = node
+						showMergeModal = true
+					}}
+					title="Absorb into another member, because they are the same person"
+					aria-label="Absorb into another member"
+				>
+					<Icons.GitMerge size={13} aria-hidden="true" />
+				</button>
+				<button
+					class="btn btn-sm preset-tonal-error p-1.5"
+					type="button"
+					onclick={() => void requestDeleteNode(node)}
+					title="Delete"
+					aria-label="Delete"
+				>
+					<Icons.Trash2 size={13} aria-hidden="true" />
+				</button>
+			</div>
 		{/if}
 	</div>
 	{#if node.summary}
@@ -1365,7 +1377,9 @@
 					: readOnly
 						? "No graph yet."
 						: lensEmptyMessage("graph")}
-				ctaLabel={canStartBuild && !readOnly ? "Build a graph" : undefined}
+				ctaLabel={canStartBuild && !readOnly
+					? "Build a graph"
+					: undefined}
 				onCta={canStartBuild && !readOnly ? startBuild : undefined}
 			/>
 		{:else}
@@ -1397,7 +1411,7 @@
 						</span>
 					{:else}
 						<span
-							class="badge preset-tonal-surface shrink-0 text-meta"
+							class="badge preset-tonal-surface text-meta shrink-0"
 						>
 							Entry
 						</span>
@@ -1515,31 +1529,32 @@
 					) ?? "?"}
 				</span>
 				{#if !readOnly}
-				<button
-					class="btn btn-sm preset-tonal-surface p-1.5"
-					type="button"
-					title={relLockedReason(selectedRel) ?? "Edit relationship"}
-					aria-label="Edit relationship"
-					disabled={!!relLockedReason(selectedRel)}
-					onclick={async () => {
-						const rel = selectedRel
-						if (!rel || !(await leaveForms())) return
-						openRelEdit(rel)
-					}}
-				>
-					<Icons.Pencil size={13} aria-hidden="true" />
-				</button>
-				<button
-					class="btn btn-sm preset-tonal-error p-1.5"
-					type="button"
-					title={relLockedReason(selectedRel) ??
-						"Delete relationship"}
-					aria-label="Delete relationship"
-					disabled={!!relLockedReason(selectedRel)}
-					onclick={() => (confirmingRelDelete = selectedRel!.id)}
-				>
-					<Icons.Trash2 size={13} aria-hidden="true" />
-				</button>
+					<button
+						class="btn btn-sm preset-tonal-surface p-1.5"
+						type="button"
+						title={relLockedReason(selectedRel) ??
+							"Edit relationship"}
+						aria-label="Edit relationship"
+						disabled={!!relLockedReason(selectedRel)}
+						onclick={async () => {
+							const rel = selectedRel
+							if (!rel || !(await leaveForms())) return
+							openRelEdit(rel)
+						}}
+					>
+						<Icons.Pencil size={13} aria-hidden="true" />
+					</button>
+					<button
+						class="btn btn-sm preset-tonal-error p-1.5"
+						type="button"
+						title={relLockedReason(selectedRel) ??
+							"Delete relationship"}
+						aria-label="Delete relationship"
+						disabled={!!relLockedReason(selectedRel)}
+						onclick={() => (confirmingRelDelete = selectedRel!.id)}
+					>
+						<Icons.Trash2 size={13} aria-hidden="true" />
+					</button>
 				{/if}
 				<button
 					class="btn btn-sm preset-tonal-surface p-1.5"
@@ -1608,10 +1623,21 @@
 				</span>
 				{#if selectedRel.rulesRunId}
 					<!-- 🚧 Ties on the graph (screen 3): the type the rules write, marked. -->
-					<p class="flex flex-wrap items-center gap-1.5 text-xs" data-rel-from-the-rules>
-						<span class="text-surface-600-400">Relationship type</span>
-						<span class="font-semibold">{selectedRel.relationshipType}</span>
-						<span class="border-primary-500 text-primary-ink rounded-full border px-2">from the rules</span>
+					<p
+						class="flex flex-wrap items-center gap-1.5 text-xs"
+						data-rel-from-the-rules
+					>
+						<span class="text-surface-600-400">
+							Relationship type
+						</span>
+						<span class="font-semibold">
+							{selectedRel.relationshipType}
+						</span>
+						<span
+							class="border-primary-500 text-primary-ink rounded-full border px-2"
+						>
+							from the rules
+						</span>
 					</p>
 				{/if}
 				{#if selectedRel.description}
