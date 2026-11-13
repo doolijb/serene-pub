@@ -230,6 +230,8 @@ import {
 import { stableExamplePick } from "$lib/server/pipelines/prompt/promptFields"
 import {
 	MESSAGE_SCAFFOLD_TOKENS,
+	earlierBlockTokens,
+	earlierScenesShown,
 	historyReadTokens,
 	holdCut,
 	isCuttableLine,
@@ -6078,12 +6080,73 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// system text (`midSystemFor`, projected by `world.ts`).
 				const midSystem = input?.connection?.metadata?.midSystem
 
+				/**
+				 * 🚧 *Earlier in the story*: the port's scenes, only a well-formed
+				 * `{ maxTokens, scenes }` (malformed entries dropped, a malformed
+				 * whole reads as no block). Which show is decided per render, from
+				 * the first line that render keeps (`earlierScenesShown`).
+				 */
+				const earlierPort = (() => {
+					const raw = (input as { earlierScenes?: unknown } | undefined)
+						?.earlierScenes as
+						| { maxTokens?: unknown; scenes?: unknown }
+						| null
+						| undefined
+					if (!raw || typeof raw !== "object" || !Array.isArray(raw.scenes))
+						return undefined
+					const maxTokens =
+						typeof raw.maxTokens === "number" && Number.isFinite(raw.maxTokens)
+							? raw.maxTokens
+							: null
+					if (raw.maxTokens !== null && maxTokens === null) return undefined
+					const scenes = (raw.scenes as unknown[]).flatMap((e) => {
+						const x = e as
+							| { name?: unknown; summary?: unknown; firstLineId?: unknown }
+							| null
+						return x &&
+							typeof x.name === "string" &&
+							typeof x.summary === "string" &&
+							typeof x.firstLineId === "number" &&
+							Number.isFinite(x.firstLineId)
+							? [{ name: x.name, summary: x.summary, firstLineId: x.firstLineId }]
+							: []
+					})
+					return scenes.length ? { maxTokens, scenes } : undefined
+				})()
+				const earlierCost = (e: { name: string; summary: string }) => {
+					const text = JSON.stringify({ name: e.name, summary: e.summary })
+					return typeof ctx?.countTokens === "function"
+						? ctx.countTokens(text)
+						: Math.ceil(text.length / 4)
+				}
+				const earlierCosts = earlierPort
+					? earlierPort.scenes.map((e) => ({
+							firstLineId: e.firstLineId,
+							tokens: earlierCost(e)
+						}))
+					: []
+				/** The scenes shown for a render of `lines`: older than its first cuttable line, within the share. */
+				const earlierShownFor = (lines: typeof messages) => {
+					if (!earlierPort) return []
+					const first = (lines as any[]).find(isCuttableLine)
+					return earlierScenesShown(
+						earlierPort.scenes,
+						first ? (first.id as number) : Infinity,
+						earlierPort.maxTokens,
+						earlierCost
+					)
+				}
+
 				const renderWith = (
 					lines: typeof messages,
 					placedReminder: typeof postHistory,
 					placedNote: typeof authorsNote
 				) =>
 					render({
+						earlierScenes: earlierShownFor(lines).map(({ name, summary }) => ({
+							name,
+							summary
+						})),
 						allocation,
 						postHistory: placedReminder,
 						authorsNote: placedNote,
@@ -6116,6 +6179,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						...run
 					})
 				let rendered = await renderWith(messages, postHistory, authorsNote)
+				// The block counts only where the template places it. A custom
+				// template that leaves `earlierScenes` out, or a Prompt blocks
+				// list with it switched off, renders no block: the cut must not
+				// make room for one, and the receipt must not say it is there.
+				const earlierPlaced =
+					!!earlierPort &&
+					rendered.usedVariables.includes("earlierScenes")
 
 				/**
 				 * 🚧 Placed media in the budget (O10, `prompt/mediaBudget.ts`):
@@ -6182,6 +6252,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * conversation look shorter must not switch the reminder off.
 				 */
 				let transcriptFit: Record<string, unknown> | undefined
+				// The lines the final render was handed, for the earlier-scenes note.
+				let finalLines = messages
 				const fitBudget = Number(input?.budget?.total ?? 0)
 				const count = (t: string) => ctx.countTokens(t)
 				// The executor always hands a counter; a binding called
@@ -6206,7 +6278,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 								placedMediaTokens([m])
 						),
 						total: measured,
-						budget: fitBudget
+						budget: fitBudget,
+						...(earlierPort && earlierPlaced
+							? {
+									earlier: {
+										scenes: earlierCosts,
+										maxTokens: earlierPort.maxTokens,
+										measured: earlierBlockTokens(
+											earlierShownFor(messages),
+											earlierCost
+										)
+									}
+								}
+							: {})
 					})
 					let from = 0
 					let held = false
@@ -6222,6 +6306,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						const lines = (messages as any[]).filter(
 							(m) => !isCuttableLine(m) || keep.has(m)
 						) as typeof messages
+						finalLines = lines
 						let placedReminder = postHistory
 						if (postHistory?.hasContent)
 							placedReminder = (
@@ -6272,7 +6357,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 							),
 							total: size,
 							budget: fitBudget,
-							fresh: true
+							fresh: true,
+							...(earlierPort && earlierPlaced
+								? {
+										earlier: {
+											scenes: earlierCosts,
+											maxTokens: earlierPort.maxTokens,
+											measured: earlierBlockTokens(
+												earlierShownFor(lines),
+												earlierCost
+											)
+										}
+									}
+								: {})
 						})
 					}
 					if (from > 0) {
@@ -6296,6 +6393,42 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 									held
 								})
 							]
+						}
+					}
+				}
+
+				/**
+				 * 🚧 The receipt's note for *Earlier in the story* (P1: the cause,
+				 * and how to switch it off). Only when a scene lost a line from
+				 * the final render; the ordinary payload is untouched.
+				 */
+				if (earlierPort && earlierPlaced) {
+					const first = (finalLines as any[]).find(isCuttableLine)
+					const firstKept = first ? (first.id as number) : Infinity
+					const qualified = earlierPort.scenes.filter(
+						(e) => e.firstLineId < firstKept
+					)
+					if (qualified.length) {
+						const shown = earlierScenesShown(
+							earlierPort.scenes,
+							firstKept,
+							earlierPort.maxTokens,
+							earlierCost
+						)
+						const left = qualified.length - shown.length
+						const scenesOf = (n: number) => `${n} scene${n === 1 ? "" : "s"}`
+						const stop =
+							"Leave Earlier in the story out under Prompt blocks to stop it."
+						const note = shown.length
+							? `earlier scenes: the ${shown.length === 1 ? "summary" : "summaries"} of ${scenesOf(shown.length)} ${shown.length === 1 ? "is" : "are"} in the prompt (${shown.map((e) => e.name).join(", ")}), because some of their lines are no longer in it.` +
+								(left
+									? ` ${left} older ${left === 1 ? "one was" : "ones were"} left out to keep the block within its share of the window (${earlierPort.maxTokens} tokens).`
+									: "") +
+								` ${stop}`
+							: `earlier scenes: ${scenesOf(qualified.length)} lost lines from the prompt, but none of their summaries fit the block's share of the window (${earlierPort.maxTokens} tokens). ${stop}`
+						rendered = {
+							...rendered,
+							notes: [...(rendered.notes ?? []), note]
 						}
 					}
 				}
@@ -6381,7 +6514,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"decisions",
 					"messages",
 					"groups",
-					"annex"
+					"annex",
+					"earlierScenes"
 				],
 				// `truncation` left this schema (R-12): assemble drops nothing —
 				// what fits is the ranker's `select`, per band.
@@ -8510,6 +8644,71 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({ status: "committed", ids, cue: cue ?? null })
 			},
 			{ ports: ["at", "channel", "reason", "trigger"], params: ["ask"] }
+		),
+		/**
+		 * 🚧 The scene summaries routine's look: the host reads
+		 * `sceneSummaryDueOf` (`scenes/sceneSummaryDue.ts`), read-only. `main` is the
+		 * oldest finished scene due a summary as its id, or `null`.
+		 */
+		"core:query/scene-summary-due@1": reads<typeof C.sceneSummaryDue>(
+			async (input: NodeInput<typeof C.sceneSummaryDue>) => {
+				const sessionId = input?.scope?.sessionId
+				if (sessionId === undefined)
+					return halt(
+						"there is no session to look for a scene due a summary in — the run is not scoped to a session"
+					)
+				const raw = input?.params?.depth
+				const depth = typeof raw === "number" && Number.isInteger(raw) && raw >= 1 ? raw : 6
+				const db = (await import("$lib/server/db")).db as never
+				const { sceneSummaryDueOf } = await import("$lib/server/scenes/sceneSummaryDue")
+				const result = await sceneSummaryDueOf(db, sessionId, { depth })
+				return ok({ main: result.sceneId })
+			},
+			{ ports: ["scope"], params: ["depth"] }
+		),
+		/**
+		 * 🚧 *Earlier in the story*: the session's closed main-channel scenes with a
+		 * usable summary and no history entry (`earlierScenesOf`), read-only, with
+		 * the block's share of the budget: `maxTokens = floor(share × budget.total)`,
+		 * `null` with no usable budget. Which of them show is Assemble's call, once
+		 * it knows which lines it keeps. Writes nothing.
+		 */
+		"core:query/earlier-scenes@1": reads<typeof C.earlierScenes>(
+			async (input: NodeInput<typeof C.earlierScenes>) => {
+				const sessionId = input?.scope?.sessionId
+				if (sessionId === undefined)
+					return halt(
+						"there is no session to read earlier scenes from — the run is not scoped to a session"
+					)
+				const raw = input?.params?.share
+				const share = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.15
+				const total = (input?.budget as { total?: unknown } | undefined)?.total
+				const maxTokens =
+					typeof total === "number" && Number.isFinite(total) && total > 0
+						? Math.floor(share * total)
+						: null
+				const db = (await import("$lib/server/db")).db as never
+				const { earlierScenesOf } = await import("$lib/server/scenes/earlierScenes")
+				const scenes = await earlierScenesOf(db, sessionId)
+				return ok({ main: { maxTokens, scenes } })
+			},
+			{ ports: ["scope", "budget"], params: ["share"] }
+		),
+		/**
+		 * 🚧 Summarize a finished scene: the host's commit starts the genre's own
+		 * summarizer in the background (`startRoutineSceneSummary`,
+		 * `sockets/scenes.ts`) and returns at once. `main` is
+		 * `{ status: "committed", ids }`.
+		 */
+		"core:outlet/summarize-finished-scene@1": reads<typeof C.summarizeFinishedScene>(
+			async (input: NodeInput<typeof C.summarizeFinishedScene>, ctx: OutletCtx) => {
+				const { halt: halted, ...ids } = (await ctx.commit(input)) as Record<string, unknown> & {
+					halt?: unknown
+				}
+				if (typeof halted === "string") return halt(halted)
+				return ok({ status: "committed", ids })
+			},
+			{ ports: ["scene", "routine"] }
 		),
 		/**
 		 * 🚧 A note in a scene (★S4, owner 2026-11-10): the host's commit is

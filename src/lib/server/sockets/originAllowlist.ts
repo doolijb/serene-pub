@@ -282,6 +282,34 @@ export function isMissingOriginAllowed(
 }
 
 /**
+ * Whether the browser itself says this request came from a page of this same
+ * site (`Sec-Fetch-Site: same-origin`).
+ *
+ * Why it is needed. A live connection opens with a plain same-origin GET, and a
+ * browser sends NO `Origin` header on one. The handshake's headers are that
+ * first request's for the life of the connection, so every browser tab reaches
+ * the missing-Origin branch. Judged by address alone, a visitor from outside
+ * the local network was refused "Origin not allowed" as soon as a reverse proxy
+ * reported their real address (`TRUSTED_PROXIES` / `ADDRESS_HEADER`), which is
+ * the documented way to run one.
+ *
+ * Why it is safe. Page script cannot set or change a `Sec-Fetch-*` header, and
+ * a request another site's page makes is stamped `cross-site` or `same-site`,
+ * never `same-origin`. A program that is not a browser can send any header it
+ * likes, this one included, but it could already send an `Origin` that matches
+ * `Host` and pass `isOriginAllowed`; this opens nothing that was shut.
+ *
+ * Browsers send it only over HTTPS (and to localhost). A public visitor over
+ * plain http, or a browser too old to send it, is judged by address as before.
+ */
+export function isSameOriginBrowserRequest(
+	headers: Record<string, any> | null | undefined
+): boolean {
+	const site = headers?.["sec-fetch-site"]
+	return typeof site === "string" && site.trim().toLowerCase() === "same-origin"
+}
+
+/**
  * Whether this connection is local, transitively — the direct peer AND
  * every hop the configured ADDRESS_HEADER reports must be local. Depth-
  * independent by construction (checks "all local," not "the Nth one"), so

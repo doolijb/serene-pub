@@ -1,8 +1,8 @@
 # Summarization
 
-Summarization turns stretches of a session into lorebook entries: what happened in a scene, what the party learned about the world, what a character revealed about herself. A long story then keeps its important facts as short, searchable lore instead of relying on messages the model can no longer see.
+Summarization turns stretches of a session into lorebook entries: what happened in a scene, what the party learned about the world, what a character revealed about herself. A long story then keeps its important facts as short, searchable lore instead of relying on messages the model can no longer see. A scene's saved summary also stands in for its lines in the reply's prompt once they no longer fit there, in Story and the Dungeon Crawler (see [Context templates → Earlier in the story](./context-templates.md#earlier-in-the-story)).
 
-It runs only when you ask. Nothing is summarized in the background, and nothing costs tokens until you start it.
+It runs when you ask. In a genre that summarizes finished scenes by itself (Story, the Lair and the Dungeon Crawler), it also runs a few rounds after each scene ends (see [Finished scenes, summarized by themselves](#finished-scenes-summarized-by-themselves)). Nothing else is summarized in the background, and nothing costs tokens until one of these starts.
 
 :::note Before you start
 What you save goes into the session's [lorebook](./lorebooks.md), or into its own [Session notes](./lorebooks.md#your-sessions-own-notes) when it reads no shared lorebook. Neither your [Lorebook writes from sessions](./lorebooks.md#what-a-session-may-write) setting nor the book's own may be **Off**.
@@ -45,11 +45,29 @@ The model is told the scene's name, the day it began and who was present, and, i
 
 A scene keeps its summary and cast even if its messages, or the whole session, are later deleted.
 
-A scene started and ended in the conversation can also be summarized from the session: **Summarize** on its divider or its row in the [Chronicle](./session-layout.md#the-widgets), **Close and summarize** on the Chronicle's open scene, and **Summarize all (N)** for every finished scene of the session with no summary yet, one after another. When the session's **Summaries** is **On close**, each scene is summarized in the background as it ends (a scene made with **Mark as scene** included); with **Never**, none of these is offered (see [When a new scene begins](./sessions.md#when-a-new-scene-begins)). Each run lands in the activity list for review, as above.
+A scene started and ended in the conversation can also be summarized from the session: **Summarize** on its divider or its row in the [Chronicle](./session-layout.md#the-widgets), **Close and summarize** on the Chronicle's open scene, and **Summarize all (N)** for every finished scene of the session with no summary yet, one after another. When the session's **Summaries** is **On close**, each scene is summarized in the background as it ends (a scene made with **Mark as scene** included), and the routine above leaves that scene alone; with **Never**, none of these is offered, and the routine stops too (see [When a new scene begins](./sessions.md#when-a-new-scene-begins)). Each run lands in the activity list for review, as above.
 
 A finished run waits for you. Until you decide, the scene's divider and its Chronicle row say **Ready to review**; click it to open the review in the **Scene summary** window. The summary is written only when you press **Apply**. **Discard** (or dismissing its card in the Activity view) leaves the scene as it was before the run: summarized, not summarized or out of date. Stopping a run does the same. **Summarize all (N)** skips a scene that's waiting for review, so it never replaces a result you haven't looked at.
 
 When a scene's boundaries move afterwards (its start nudged or dragged, its end moved, the scene reopened, or another scene joined to it with **Remove boundary**), its summary no longer matches its lines. The summary is kept, and its divider says **Summary out of date** until you **Summarize** it again (**Summarize all (N)** counts only scenes with no summary at all). A scene that joins the one before it takes its own summary with it.
+
+## Finished scenes, summarized by themselves
+
+Story (its **Living** and **Rule Based** presets), the Lair and the Dungeon Crawler register a routine, **Summarize finished scenes**, that summarizes each scene a few rounds after it ends. It is listed under **Edit session › Settings › Routines** like any routine, with its mode: **Off**, **Review** or **Full**. See [Routines](./sessions.md#routines).
+
+- **Which scene.** Each run takes the oldest scene on the main channel that ended at least 6 rounds ago and has no summary, and that nobody has decided about. A summary you saved (even one a moved boundary marked out of date), a review you discarded, a summary that failed, and one being written or waiting for review are never taken. One scene per run. Nothing runs while **Summaries** is **Never**, or while you have taken turns back with **Back** and a Forward is waiting. On a branch, only the scenes on the branch's own lines are summarized.
+- **One at a time.** While one scene's summary is being written, the routine starts no other. If you go **Back**, swipe or delete lines of that scene while it is written, nothing is saved and the scene is summarized again once it is old enough. If you stop a summary the routine started, the routine leaves that scene alone from then on; you can still summarize it yourself.
+- **Full** (the default) saves the summary by itself, and the model's name for the scene only while the scene still has its automatic name (*Scene 3*); a name you gave is kept. Saving a name stops the automatic *Scene N* numbering, as any name does. The scene's cast stays as the scene's close recorded it. New characters are not proposed.
+- **Review** waits for you in the activity list and the **Scene summary** window, like a summary you started: **Ready to review**, **Apply**, **Discard**.
+- **Off** runs nothing.
+
+The routine asks no model itself. It starts the genre's own scene summarizer, the same **Summarize scene** pipeline your **Summarize** runs. Its model calls queue as a routine's do: replies to people reach the model first. You can keep playing, write, get replies and press **Back** while it runs. The run shows as a **Scene** card in the Activity view, and goes away once the summary is saved under **Full**.
+
+A summary saved by itself is not yet the record. It does not fix the story for **Back**: Back can go into that scene, which marks its automatic summary out of date, and the routine writes it again once the scene is old enough (**Forward** puts the summary back). It writes no *In the lorebook up to here* mark and no *Written from…* line. It becomes yours when you save it: editing the summary in the lorebook's scene page, or applying a review of it, makes it a summary you applied (see [What an applied summary fixes](#what-an-applied-summary-fixes)). The scene page says, on a summary saved this way, *Summarized by itself. You can edit it, or turn this off under Routines.*
+
+**What it is for.** 🚧 Once a scene's lines no longer fit in the reply's prompt, its saved summary is read in their place, under *Earlier in the story* (in Story and the Dungeon Crawler; the Lair's turns don't read them). A summary saved by itself counts as soon as it is saved, a summary **Back** took back stops counting at once, and a scene compiled into a history entry is read as history instead. See [Context templates → Earlier in the story](./context-templates.md#earlier-in-the-story).
+
+Held [lorebook changes](./pipelines.md#summaries-and-the-lorebook) still apply as each scene ends; they do not wait for a summary that has not started. While a summary is being written or waits for review, changes from that scene on wait. When the routine's summary is saved, fails or is stopped, the changes held up to the newest finished scene apply.
 
 ## Which summarizer runs
 
@@ -59,7 +77,7 @@ A routine that summarizes (see [Routines](./pipelines.md#routines)) reads only l
 
 ## What an applied summary fixes
 
-Saving a reviewed summary, or applying a scene's summary, puts that part of the story in the lorebook. From then on [Back](./sessions.md#back-and-forward) stops at the newest line the summary was written from, and says *This part of the story is in the lorebook now.* The conversation marks the spot with *In the lorebook up to here*, and for a scene's summary the scene's row in Chronicle says *Written from the story up to 3 Oct, 14:20*: when the newest line it was written from was written. What you save is kept; to change it, edit the lorebook entry.
+Saving a reviewed summary, or applying a scene's summary, puts that part of the story in the lorebook. (A summary [saved by itself](#finished-scenes-summarized-by-themselves) does not, until you save it.) From then on [Back](./sessions.md#back-and-forward) stops at the newest line the summary was written from, and says *This part of the story is in the lorebook now.* The conversation marks the spot with *In the lorebook up to here*, and for a scene's summary the scene's row in Chronicle says *Written from the story up to 3 Oct, 14:20*: when the newest line it was written from was written. What you save is kept; to change it, edit the lorebook entry.
 
 ## Close out and the catch-up offer
 
@@ -94,7 +112,7 @@ Each job has a card under **In progress** that moves from running to **Ready to 
 | Card | While running | When it's done |
 | --- | --- | --- |
 | **Summarize** (world or character lore) | *Summarizing…*, with a stop button | The card's title takes you back to the session, where the review opens |
-| **Scene** | *Processing…*, with a stop button | **Review results**, or **Go to Scene** if it failed |
+| **Scene** | *Processing…*, with a stop button | **Review results**, or **Go to Scene** if it failed; a run of the routine under **Full** leaves when it is saved |
 | **Compile** | *Compiling…*; a compile can't be stopped | **Review and apply**, or **Go to Entry** |
 | **Build graph** / **Extend graph** | The phase and *scene X/Y*, with **Stop** and **View progress** | **Review and apply**, or **View error** |
 

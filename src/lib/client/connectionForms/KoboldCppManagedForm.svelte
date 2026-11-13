@@ -286,7 +286,6 @@
 						</div>
 					{/if}
 				{/each}
-				<hr class="border-surface-200-800" />
 				<p class="text-surface-600-400 text-xs">
 					Managed mode launch settings — applied the next time this
 					model is loaded.

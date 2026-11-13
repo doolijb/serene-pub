@@ -78,7 +78,7 @@
 	{:else}
 		{#each scripts.attached ?? [] as s (s.id)}
 			<div
-				class="border-surface-200-800 flex items-center gap-2 rounded-lg border px-2 py-1"
+				class="panel-edge flex items-center gap-2 rounded-lg border px-2 py-1"
 			>
 				<span
 					class="min-w-0 flex-1 truncate text-sm {s.enabled

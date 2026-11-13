@@ -194,7 +194,7 @@
 				Icons.Cable
 			)}
 			<div
-				class="border-surface-200-800 flex flex-col gap-2 rounded-container border px-3 py-2.5"
+				class="bg-surface-50-950 flex flex-col gap-2 rounded-container px-3 py-2.5"
 				data-chosen-model
 			>
 				<div class="flex min-w-0 items-start gap-3">

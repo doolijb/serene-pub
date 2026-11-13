@@ -256,7 +256,7 @@
 					Generate new recovery codes
 				</button>
 			</div>
-			<div class="border-surface-200-800 space-y-2 border-t pt-3">
+			<div class="space-y-2">
 				<label class="label">
 					<span class="label-text">
 						Enter a current code to turn two-factor off

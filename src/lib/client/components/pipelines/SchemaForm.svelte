@@ -593,7 +593,7 @@
 		{/each}
 	{/each}
 	{#each groups.filter((g) => g.group === ADVANCED_GROUP) as g (g.group)}
-		<details class="border-surface-200-800 rounded-container border p-3" data-testid="schema-form-advanced">
+		<details class="panel-edge rounded-container border p-3" data-testid="schema-form-advanced">
 			<summary class="text-surface-600-400 cursor-pointer text-xs font-semibold">Advanced</summary>
 			<div class="mt-3 flex flex-col gap-3">
 				{#each g.fields as { key, decl } (key)}

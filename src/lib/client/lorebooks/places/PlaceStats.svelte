@@ -274,7 +274,7 @@
 			{#each rows as row (row.slot.slotId)}
 				{@const slotId = row.slot.slotId}
 				<li
-					class="bg-surface-100-900 border-surface-200-800 flex flex-col gap-2 rounded-lg border p-2.5 {row.writable
+					class="bg-surface-100-900 panel-edge flex flex-col gap-2 rounded-lg border p-2.5 {row.writable
 						? ''
 						: 'opacity-70'}"
 					data-place-stat={slotId}

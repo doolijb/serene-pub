@@ -1786,7 +1786,9 @@
 	{@const held = effectivePresence(row)}
 	{@const summary = summaryFor(row.key)}
 	{@const fileLine = quantLine(row)}
-	<div class="panel-card flex flex-col gap-2">
+	<div
+		class="panel-card [&_[data-quant-picker]]:bg-surface-50-950 flex flex-col gap-2"
+	>
 		<div class="flex items-start gap-2.5">
 			<span
 				class="preset-tonal-surface rounded-base grid size-9 shrink-0 place-items-center"
@@ -1913,7 +1915,9 @@
 	{@const held = effectivePresence({ key: row.key })}
 	{@const summary = summaryFor(row.key)}
 	{@const fileLine = quantLine(row)}
-	<div class="panel-card flex flex-col gap-2">
+	<div
+		class="panel-card [&_[data-quant-picker]]:bg-surface-50-950 flex flex-col gap-2"
+	>
 		<div class="flex items-start gap-2.5">
 			<span
 				class="preset-tonal-surface rounded-base grid size-9 shrink-0 place-items-center"

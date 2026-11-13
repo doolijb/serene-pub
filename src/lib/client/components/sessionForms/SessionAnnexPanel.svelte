@@ -182,7 +182,7 @@
 				{#each group.fields as field, fi (field.key)}
 					{@const label = i18nTextIn(field.label) ?? field.key}
 					{@const description = i18nTextIn(field.description)}
-					<li class="border-surface-200-800 rounded-md border p-2">
+					<li class="bg-surface-50-950 rounded-md p-2">
 						<div class="flex flex-wrap items-baseline gap-x-2">
 							<span class="text-sm font-medium">{label}</span>
 							{#if label !== field.key}
@@ -265,7 +265,7 @@
 			</p>
 			<ul class="flex flex-col gap-2" aria-label="Legacy data">
 				{#each view.legacy as row, li (`${row.owner} ${row.key ?? ""}`)}
-					<li class="border-surface-200-800 rounded-md border p-2">
+					<li class="bg-surface-50-950 rounded-md p-2">
 						<div class="flex flex-wrap items-baseline gap-x-2">
 							<span class="text-sm font-medium">{row.key ?? "Whole entry"}</span>
 							<span class="text-surface-600-400 text-xs">{ownerName(row.owner)}</span>

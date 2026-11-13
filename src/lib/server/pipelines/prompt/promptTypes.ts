@@ -160,6 +160,8 @@ export type TemplateContext = {
 	characterLore?: string
 	history?: string
 	currentDate?: string
+	/** 🚧 `core:var/earlier-scenes@1`, laid out — the closed scenes' summaries whose lines left the prompt. */
+	earlierScenes?: string
 	narrativeGraph?: string
 	/**
 	 * The speaker-centric relationship summary from

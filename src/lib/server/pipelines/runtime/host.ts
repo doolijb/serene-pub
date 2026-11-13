@@ -9472,6 +9472,42 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					return { written, sessionId, cue }
 				}
 
+				case "core:outlet/summarize-finished-scene": {
+					/**
+					 * 🚧 **Summarize a finished scene** (`core:outlet/summarize-finished-scene@1`):
+					 * starts the genre's own summarizer for `scene` through
+					 * `startRoutineSceneSummary` (`sockets/scenes.ts`) in the background and
+					 * returns at once, never awaiting it. It calls no model itself. The
+					 * routine's `mode` (`full` | `review`) decides what the summary becomes;
+					 * a run no routine started does nothing. ⚠ Not `scenes:process` (a
+					 * person's press) and not *Compile to Entry*.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to summarize a scene in — the run was started without a session scope`
+						)
+					if (p.scene === undefined || p.scene === null)
+						return { written: false, sessionId, note: "no finished scene is due a summary" }
+					const sceneId = Number(p.scene)
+					if (typeof p.scene !== "number" || !Number.isInteger(sceneId) || sceneId <= 0)
+						return {
+							halt: `${node.key}: scene names no scene — a scene id, as scene-summary-due@1 names it.`
+						}
+					const mode = (p.routine as { mode?: unknown } | undefined)?.mode
+					if (mode !== "full" && mode !== "review")
+						return {
+							written: false,
+							sessionId,
+							note: "a scene's summary is started only by a routine — this run was not started by one"
+						}
+					const { startRoutineSceneSummary } = await import("$lib/server/sockets/scenes")
+					const started = await startRoutineSceneSummary({ sessionId, sceneId, mode, io: scope.io })
+					if (!started.started) return { written: false, sessionId, sceneId, note: started.note }
+					record(node, "session", sessionId, "updated")
+					return { written: true, sessionId, sceneId }
+				}
+
 				case "core:outlet/note-scene": {
 					/**
 					 * 🚧 **Note it in the scene** (`core:outlet/note-scene@1`, ★S4

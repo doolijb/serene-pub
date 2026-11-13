@@ -661,7 +661,7 @@
 				</div>
 				{#if neighbours.prev || neighbours.next}
 					<nav
-						class="border-surface-200-800 mt-8 grid grid-cols-2 gap-3 border-t pt-4"
+						class="mt-8 grid grid-cols-2 gap-3"
 						aria-label="More pages"
 					>
 						{#if neighbours.prev}

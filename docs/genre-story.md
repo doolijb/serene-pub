@@ -37,7 +37,7 @@ Story ships three layouts: the default (the story in the middle, the cast and th
 
 ## What runs between turns
 
-Besides the reply, Story has five **routines**: pipelines that run on their own between turns. Open **Edit session › Settings › Routines** to see them. Each says what it does and **When it runs**, and has three modes: **Off** (it doesn't run), **Review** (it runs, and what it would change waits for you to accept) and **Full** (it runs and its changes apply).
+Besides the reply, Story has six **routines**: pipelines that run on their own between turns. Open **Edit session › Settings › Routines** to see them. Each says what it does and **When it runs**, and has three modes: **Off** (it doesn't run), **Review** (it runs, and what it would change waits for you to accept) and **Full** (it runs and its changes apply).
 
 | Routine | When it runs | On Living and Rule Based | On Minimal |
 | --- | --- | --- | --- |
@@ -45,6 +45,7 @@ Besides the reply, Story has five **routines**: pipelines that run on their own 
 | **Look back over the story** | Every 5 turns | Full | not run |
 | **Picture each new scene** | When a scene opens | Off | not run |
 | **Find where scenes begin** | Every 2 rounds | Full | not run |
+| **Summarize finished scenes** | Every 2 rounds | Full | not run |
 | **After a rest** | When the session's rules' own **Rest** is taken | Full | Full |
 
 Each routine waits until the reply and everything it set off have finished, so it never slows the reply down. The session's owner can run one by hand: pick it under **Routines** in the composer's actions. See [Pipelines › Routines](./pipelines.md#routines) for what every routine shares.
@@ -56,6 +57,8 @@ What each one does, and the switches it offers in its own card in the same Setti
   It writes no history entry: a lorebook's history comes from the session's scenes (see [History entries and scenes](./lorebook-time.md#history-entries-and-scenes)).
 - **After a rest** moves the story clock on by the rest the session's rules say was taken, after their own **Rest** (see [Actions](#actions)). It makes no model call, and does nothing under rules with no **Rest** of their own.
 - **Find where scenes begin** begins the story's scenes with no model call: it reads lines at least 2 rounds old and, by the session's **Scenes** setting, starts a scene where the day or the place changed, which is **Automatic** unless you change it. Each scene it begins says why on its divider. See [When a new scene begins](./sessions.md#when-a-new-scene-begins).
+- **Summarize finished scenes** summarizes each scene a few rounds after it ends, with Story's own **Summarize scene** pipeline: it asks no model itself. Each run takes the oldest finished scene with no summary that ended at least 6 rounds ago. On **Full** it saves the summary, and the scene's name if it still has its automatic one, by itself; on **Review** it waits for you. A summary saved by itself does not yet fix the story for **Back**, and becomes yours when you save it. See [Summarization](./summarization.md#finished-scenes-summarized-by-themselves).
+- 🚧 **Earlier in the story**: once a finished scene's lines no longer fit in the prompt, the reply, **Narrate** and a side character's turn read its saved summary in their place, on every preset (on **Minimal**, only scenes you summarized yourself). It costs no model call. See [Context templates → Earlier in the story](./context-templates.md#earlier-in-the-story).
 - **Picture each new scene** turns the last few lines into a picture when a scene opens. It needs a model that draws: on a pub without one it never runs, and its row says _Unavailable: needs a model that can draw pictures._ until an administrator sets one.
 
 **Each round moves the clock.** On every preset, when a round ends, the story clock moves on by the session's **Minutes each round moves the clock** (5 by default), with no model. It isn't a routine, so it isn't on the **Routines** card, and it has no card of its own: the amount is a setting, under **Turns** in Story's settings (0 turns it off). It moves only a story whose clock is set, the session's own or the one set on its lorebook's line; a story with no clock set is left alone and gets no line. The move shows under the line that ended the round and goes back if you delete that line, but not if you swipe or regenerate it (see [The story clock](./lorebook-time.md#the-story-clock)). **Note what changed**'s **Move the clock** switch ships off on every preset; switched on, both moves happen: the round's minutes, and the time the routine judges the story took (set the round's minutes to 0 for only the routine's).

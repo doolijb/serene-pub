@@ -1,7 +1,8 @@
 import { db } from "$lib/server/db"
 import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray, asc, and, sql, isNull } from "drizzle-orm"
+import { eq, inArray, asc, desc, and, sql, isNull, isNotNull } from "drizzle-orm"
+import { liveMessageWhere } from "$lib/server/messages/liveHistory"
 import type { Handler } from "$lib/shared/events"
 import { askerOf, refusable } from "./refusable"
 import { relistEntries } from "./entries"
@@ -30,6 +31,7 @@ import {
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
+import { messageWithoutQueryText } from "$lib/server/db/errors"
 import { loreWritesOffRefusal, sceneWriteRefusal } from "$lib/server/messages/writes"
 import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
@@ -543,177 +545,228 @@ export const sceneCreateHandler: Handler<
 	askerOf
 )
 
-export const sceneUpdateHandler: Handler<
-	Sockets.Scenes.Update.Params,
-	Sockets.Scenes.Update.Response
-> = refusable(
-	"scenes:update",
-	async (socket, params: Sockets.Scenes.Update.Params, emitToUser) => {
-		const userId = socket.user!.id
+/**
+ * The one writer of a saved scene summary (`scenes:update`'s body). Two callers,
+ * told apart by `by`:
+ *
+ * - `person`: a person's Save, as it always was. A summary they save makes it
+ *   theirs (`summary_origin: person`); an unapplied one, or one the routine
+ *   saved, is *applied*: its lore sources, the settle, `scene-summary-applied`
+ *   and the held changes it kept back.
+ * - `routine`: the scene summaries routine under Full, as the session's
+ *   owner. Saves the summary, the model's name while the scene's name is
+ *   still automatic, `done` and `summary_origin: routine`, and nothing else:
+ *   no cast (the close stored it), no lore sources, no settle, no event. Back
+ *   can still undo it; they are written when a person makes it theirs. The
+ *   write lands only while the scene still reads `running`.
+ *
+ * Refusals are decided once, for both. `emitToUser` is the person's socket
+ * (the scene list, lazily); the routine has none and broadcasts to `io`.
+ */
+export async function saveSceneSummary(input: {
+	by: "person" | "routine"
+	userId: number
+	params: Sockets.Scenes.Update.Params
+	io?: unknown
+	emitToUser?: (event: string, data: any) => void | Promise<void>
+	/** The routine's run: the spec that ran, the model's name for the scene, and what the summary was written from. */
+	routine?: { specId: string; modelName?: string; sourceIds?: readonly number[] }
+}): Promise<{
+	saved: boolean
+	note?: string
+	scene: typeof schema.scenes.$inferSelect & Awaited<ReturnType<typeof readSceneCast>>
+}> {
+	const { by, userId, params, emitToUser } = input
+	const byRoutine = by === "routine"
+	const io = input.io
 
-		const existing = await db.query.scenes.findFirst({
-			where: eq(schema.scenes.id, params.scene.id)
-		})
+	const existing = await db.query.scenes.findFirst({
+		where: eq(schema.scenes.id, params.scene.id)
+	})
 
-		if (!existing) throw new Error("Scene not found.")
+	if (!existing) throw new Error("Scene not found.")
 
-		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
+	const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 
-		if (!lorebook) {
-			throw new Error("Scene not found or access denied.")
-		}
-		{
-			const primerProblem = await primerRowEditProblem(db, lorebook.id)
-			if (primerProblem) throw new Error(primerProblem)
-		}
-		// A session's scene saved is a session writing the book: lore writes
-		// Off refuses it, as it refuses the scene's creation (plan A22). A
-		// scene with no session is a person at a book, which it does not touch.
-		if (existing.sessionId != null) {
-			const off = await loreWritesOffRefusal(db, existing.sessionId)
-			if (off) throw new Error(off)
-		}
+	if (!lorebook) {
+		throw new Error("Scene not found or access denied.")
+	}
+	{
+		const primerProblem = await primerRowEditProblem(db, lorebook.id)
+		if (primerProblem) throw new Error(primerProblem)
+	}
+	// A session's scene saved is a session writing the book: lore writes
+	// Off refuses it, as it refuses the scene's creation (plan A22). A
+	// scene with no session is a person at a book, which it does not touch.
+	if (existing.sessionId != null) {
+		const off = await loreWritesOffRefusal(db, existing.sessionId)
+		if (off) throw new Error(off)
+	}
+	if (byRoutine && existing.sessionId == null)
+		throw new Error("This scene is in no session, so the routine does not summarize it.")
 
-		// Explicit allowlist, not a spread — ownership above is only checked
-		// against the scene's *current* lorebookId; without this, a client
-		// could redirect their own scene into another user's lorebook/session/
-		// history entry by including a foreign id in the payload, with no
-		// re-validation (sceneCreateHandler validates its target ids on
-		// insert — this was the one outlier that didn't).
-		let {
-			name,
-			summary,
-			selectedMessageIds,
-			participantCharacters,
-			mentionedCharacters,
-			graphed
-		} = params.scene
+	// Explicit allowlist, not a spread — ownership above is only checked
+	// against the scene's *current* lorebookId; without this, a client
+	// could redirect their own scene into another user's lorebook/session/
+	// history entry by including a foreign id in the payload, with no
+	// re-validation (sceneCreateHandler validates its target ids on
+	// insert — this was the one outlier that didn't).
+	let {
+		name,
+		summary,
+		selectedMessageIds,
+		participantCharacters,
+		mentionedCharacters,
+		graphed
+	} = params.scene
 
-		// Cast is only rewritten when the payload actually carries it; a rename
-		// or summary edit leaves the existing scene_characters rows alone.
-		const carriesCast =
-			participantCharacters !== undefined ||
-			mentionedCharacters !== undefined
-		if (carriesCast) {
-			participantCharacters = await filterCharacterIdsToLorebook(
-				existing.lorebookId,
-				participantCharacters ?? []
-			)
-			mentionedCharacters = await filterCharacterIdsToLorebook(
-				existing.lorebookId,
-				mentionedCharacters ?? []
-			)
-		}
+	// Cast is only rewritten when the payload actually carries it; a rename
+	// or summary edit leaves the existing scene_characters rows alone. The routine
+	// carries none: the known cast is what the scene's close stored.
+	const carriesCast =
+		!byRoutine &&
+		(participantCharacters !== undefined ||
+			mentionedCharacters !== undefined)
+	if (carriesCast) {
+		participantCharacters = await filterCharacterIdsToLorebook(
+			existing.lorebookId,
+			participantCharacters ?? []
+		)
+		mentionedCharacters = await filterCharacterIdsToLorebook(
+			existing.lorebookId,
+			mentionedCharacters ?? []
+		)
+	}
 
-		// 🚧 pr-6 (B §B-7): an APPLIED summary commits. Applied = this update
-		// writes a non-blank summary to a session's scene whose summary was not
-		// already done, or that names this scene's own review.
-		const reviewActivity = params.activityId
+	// 🚧 pr-6 (B §B-7): an APPLIED summary commits. Applied = this update
+	// writes a non-blank summary to a session's scene whose summary was not
+	// already done (or was saved by the routine, which is not yet the record),
+	// or that names this scene's own review.
+	const reviewActivity =
+		!byRoutine && params.activityId
 			? activityStore.getById(params.activityId)
 			: undefined
-		const namesOwnReview =
-			reviewActivity?.kind === "scene_summarize" &&
-			reviewActivity.userId === userId &&
-			reviewActivity.sceneId === existing.id
-		const applied =
-			summary !== undefined &&
-			!!summary?.trim() &&
-			existing.sessionId != null &&
-			(existing.summaryStatus !== "done" || namesOwnReview)
-		let appliedIds: number[] = []
-		if (applied) {
-			const parked =
-				namesOwnReview && reviewActivity?.kind === "scene_summarize"
-					? reviewActivity.pendingResult
-					: undefined
-			if (parked?.sourceIds?.length) appliedIds = parked.sourceIds
-			else if (existing.openedAtMessageId != null) {
-				const { storyLinesInRange } = await import("$lib/server/scenes/liveScenes")
-				appliedIds = (
-					await storyLinesInRange(
-						db,
-						existing.sessionId!,
-						existing.channel,
-						existing.openedAtMessageId,
-						existing.closedAtMessageId
-					)
-				).map((m) => m.id)
-			} else appliedIds = existing.selectedMessageIds ?? []
-			if (appliedIds.length) {
-				const { checkLoreSources } = await import(
-					"$lib/server/pipelines/runtime/loreSources"
-				)
-				await checkLoreSources(
+	const namesOwnReview =
+		reviewActivity?.kind === "scene_summarize" &&
+		reviewActivity.userId === userId &&
+		reviewActivity.sceneId === existing.id
+	const applied =
+		!byRoutine &&
+		summary !== undefined &&
+		!!summary?.trim() &&
+		existing.sessionId != null &&
+		(existing.summaryStatus !== "done" ||
+			existing.summaryOrigin === "routine" ||
+			namesOwnReview)
+	let appliedIds: number[] = []
+	if (applied || byRoutine) {
+		const parked =
+			namesOwnReview && reviewActivity?.kind === "scene_summarize"
+				? reviewActivity.pendingResult
+				: undefined
+		const sourceIds = byRoutine ? input.routine?.sourceIds : parked?.sourceIds
+		if (sourceIds?.length) appliedIds = [...sourceIds]
+		else if (existing.openedAtMessageId != null) {
+			const { storyLinesInRange } = await import("$lib/server/scenes/liveScenes")
+			appliedIds = (
+				await storyLinesInRange(
 					db,
-					{ sessionId: existing.sessionId!, minAge: 0 },
-					"save",
-					appliedIds.map((id) => ({ id }))
+					existing.sessionId!,
+					existing.channel,
+					existing.openedAtMessageId,
+					existing.closedAtMessageId
 				)
-			}
-		}
-		let span: { fromMessageId: number; throughMessageId: number } | undefined
-		let settled:
-			| Awaited<ReturnType<typeof import("$lib/server/sessions/settle").settleThrough>>
-			| undefined
-
-		// 🚧 ★4b: a rename is read against the name as shown. The shown name sent
-		// back changes nothing (it stays automatic); blank makes the automatic
-		// name again; anything else is custom.
-		let namePatch: { name?: string | null; nameIsDefault?: boolean } = {}
-		if (name !== undefined) {
-			const { sceneDisplayNames, sceneNameFor, sceneClockOf } = await import(
-				"$lib/server/scenes/liveScenes"
+			).map((m) => m.id)
+		} else appliedIds = existing.selectedMessageIds ?? []
+		if (appliedIds.length) {
+			const { checkLoreSources } = await import(
+				"$lib/server/pipelines/runtime/loreSources"
 			)
-			const shown = (await sceneDisplayNames(db, [existing])).get(existing.id) ?? null
-			if (name !== null && name.trim() === (shown ?? "").trim() && shown !== null) {
-				namePatch = {}
-			} else if (
-				name !== null &&
-				existing.nameIsDefault &&
-				name.trim() === (existing.name ?? "").trim()
-			) {
-				// A review opened before a renumber still carries the old stored name.
-				namePatch = {}
-			} else if (name === null || !name.trim()) {
-				// The scene as it will be after this save: its start, so its
-				// number, comes from the selection the save sets.
-				const after =
-					selectedMessageIds !== undefined
-						? { ...existing, selectedMessageIds }
-						: existing
-				const start = sceneStartOf(after)
-				namePatch =
-					after.sessionId != null && start != null
-						? {
-								name: await sceneNameFor(
-									db,
-									after.sessionId,
-									after.channel,
-									after.lorebookId,
-									sceneClockOf(after, "opened"),
-									start
-								),
-								nameIsDefault: true
-							}
-						: { name: null, nameIsDefault: false }
-			} else namePatch = { name, nameIsDefault: false }
+			await checkLoreSources(
+				db,
+				{ sessionId: existing.sessionId!, minAge: 0 },
+				"save",
+				appliedIds.map((id) => ({ id }))
+			)
 		}
+	}
+	let span: { fromMessageId: number; throughMessageId: number } | undefined
+	let settled:
+		| Awaited<ReturnType<typeof import("$lib/server/sessions/settle").settleThrough>>
+		| undefined
 
-		await db.transaction(async (tx) => {
-			// The same two capture rules `scenes:create` holds — this session's
-			// messages only, none already in another scene — minus this scene's
-			// own capture, which is not an overlap with itself. Checked on the
-			// write's transaction under the session's capture lock, as there.
-			if (selectedMessageIds !== undefined)
-				selectedMessageIds =
-					(await capturableMessageIds(
-						tx,
-						existing.sessionId ?? null,
-						selectedMessageIds ?? null,
-						existing.id
-					)) ?? undefined
+	// 🚧 ★4b: a rename is read against the name as shown. The shown name sent
+	// back changes nothing (it stays automatic); blank makes the automatic
+	// name again; anything else is custom.
+	let namePatch: { name?: string | null; nameIsDefault?: boolean } = {}
+	if (byRoutine) {
+		// The model's name replaces an automatic one only; a name a person gave stays.
+		const modelName = input.routine?.modelName?.trim()
+		if (modelName && existing.nameIsDefault)
+			namePatch = { name: modelName, nameIsDefault: false }
+	} else if (name !== undefined) {
+		const { sceneDisplayNames, sceneNameFor, sceneClockOf } = await import(
+			"$lib/server/scenes/liveScenes"
+		)
+		const shown = (await sceneDisplayNames(db, [existing])).get(existing.id) ?? null
+		if (name !== null && name.trim() === (shown ?? "").trim() && shown !== null) {
+			namePatch = {}
+		} else if (
+			name !== null &&
+			existing.nameIsDefault &&
+			name.trim() === (existing.name ?? "").trim()
+		) {
+			// A review opened before a renumber still carries the old stored name.
+			namePatch = {}
+		} else if (name === null || !name.trim()) {
+			// The scene as it will be after this save: its start, so its
+			// number, comes from the selection the save sets.
+			const after =
+				selectedMessageIds !== undefined
+					? { ...existing, selectedMessageIds }
+					: existing
+			const start = sceneStartOf(after)
+			namePatch =
+				after.sessionId != null && start != null
+					? {
+							name: await sceneNameFor(
+								db,
+								after.sessionId,
+								after.channel,
+								after.lorebookId,
+								sceneClockOf(after, "opened"),
+								start
+							),
+							nameIsDefault: true
+						}
+					: { name: null, nameIsDefault: false }
+		} else namePatch = { name, nameIsDefault: false }
+	}
 
-			const sceneSet = {
+	let landed = true
+	await db.transaction(async (tx) => {
+		// The same two capture rules `scenes:create` holds — this session's
+		// messages only, none already in another scene — minus this scene's
+		// own capture, which is not an overlap with itself. Checked on the
+		// write's transaction under the session's capture lock, as there.
+		if (selectedMessageIds !== undefined)
+			selectedMessageIds =
+				(await capturableMessageIds(
+					tx,
+					existing.sessionId ?? null,
+					selectedMessageIds ?? null,
+					existing.id
+				)) ?? undefined
+
+		const sceneSet = byRoutine
+			? {
+					...namePatch,
+					summary,
+					summaryStatus: "done" as const,
+					summaryOrigin: "routine" as const,
+					processedBySpecId: input.routine?.specId
+				}
+			: {
 					...namePatch,
 					...(summary !== undefined ? { summary } : {}),
 					// 🚧 A summary written (by a review's save or by hand) is a
@@ -723,6 +776,8 @@ export const sceneUpdateHandler: Handler<
 					...(summary !== undefined
 						? { summaryStatus: summary?.trim() ? ("done" as const) : ("none" as const) }
 						: {}),
+					// A person who saves a summary makes it theirs.
+					...(summary !== undefined ? { summaryOrigin: "person" as const } : {}),
 					...(selectedMessageIds !== undefined
 						? { selectedMessageIds }
 						: {}),
@@ -731,107 +786,158 @@ export const sceneUpdateHandler: Handler<
 					// touched for any reason would claim it needs no extraction.
 					...(carriesCast ? { castResolvedAt: new Date() } : {}),
 					...(graphed !== undefined ? { graphed } : {})
-			}
-			// The shown name sent back alone writes nothing (★4b).
-			if (Object.keys(sceneSet).length)
-				await tx
-					.update(schema.scenes)
-					.set(sceneSet)
-					.where(eq(schema.scenes.id, params.scene.id))
-
-			if (carriesCast) {
-				await writeSceneCast(
-					params.scene.id,
-					{ participantCharacters, mentionedCharacters },
-					tx
+				}
+		if (byRoutine) {
+			// Only while the scene still reads `running`: a person who saved, discarded
+			// or pressed something meanwhile has the last word.
+			const wrote = await tx
+				.update(schema.scenes)
+				.set(sceneSet)
+				.where(
+					and(
+						eq(schema.scenes.id, params.scene.id),
+						eq(schema.scenes.summaryStatus, "running")
+					)
 				)
-			}
-
-			if (applied && appliedIds.length) {
-				const { recordLoreSources } = await import(
-					"$lib/server/pipelines/runtime/loreSources"
-				)
-				const { settleThrough } = await import("$lib/server/sessions/settle")
-				const parkedRunId =
-					namesOwnReview && reviewActivity?.kind === "scene_summarize"
-						? reviewActivity.pendingResult?.runId
-						: undefined
-				span = await recordLoreSources(tx, {
-					sessionId: existing.sessionId!,
-					runId: parkedRunId ?? null,
-					lorebookId: existing.lorebookId,
-					subjectKind: "scene",
-					subjectId: existing.id,
-					ids: appliedIds
-				})
-				settled = await settleThrough(tx, existing.sessionId!, span.throughMessageId, {
-					userId
-				})
-			}
-		})
-
-		if (span && settled) {
-			const { announceHistorySettled } = await import("$lib/server/sessions/settle")
-			await announceHistorySettled(db, {
-				sessionId: existing.sessionId!,
-				userId,
-				...settled,
-				io: socket.io
-			})
-			try {
-				const [{ sessionEvents }, { emitSessionEvent }] = await Promise.all([
-					import("@serene-pub/sdk"),
-					import("$lib/server/pipelines/runtime/sessionEvents")
-				])
-				await emitSessionEvent(db, {
-					sessionId: existing.sessionId!,
-					userId,
-					event: sessionEvents.sceneSummaryApplied,
-					payload: {
-						event: sessionEvents.sceneSummaryApplied,
-						sessionId: existing.sessionId!,
-						at: Date.now(),
-						sceneId: existing.id,
-						...(existing.historyEntryId != null
-							? { entryId: existing.historyEntryId }
-							: {}),
-						loreSources: span,
-						cause: { kind: "user", userId }
-					},
-					io: socket.io
-				})
-			} catch (err) {
-				console.warn("[scenes:update] scene-summary-applied emit failed:", err)
-			}
+				.returning({ id: schema.scenes.id })
+			landed = wrote.length > 0
+			return
 		}
+		// The shown name sent back alone writes nothing (★4b).
+		if (Object.keys(sceneSet).length)
+			await tx
+				.update(schema.scenes)
+				.set(sceneSet)
+				.where(eq(schema.scenes.id, params.scene.id))
 
-		// The summary is saved: the held changes its wait kept back apply now (after the commit; never fails the save).
-		if (applied && existing.sessionId != null) {
-			const { applyHeldAutomaticallyAndTell } = await import("./sessions")
-			await applyHeldAutomaticallyAndTell(db, {
-				sessionId: existing.sessionId,
-				automatic: "scene-summary",
-				sceneId: existing.id,
-				io: socket.io
-			})
-		}
-
-		const [updated] = await db
-			.select()
-			.from(schema.scenes)
-			.where(eq(schema.scenes.id, params.scene.id))
-
-		// Refresh scene list — lazy, for the reasons `scenes:create` gives.
-		if (emitToUser && updated.sessionId) {
-			const sessionId = updated.sessionId
-			await emitToUser("scenes:list", () =>
-				buildSceneList(sessionId, userId)
+		if (carriesCast) {
+			await writeSceneCast(
+				params.scene.id,
+				{ participantCharacters, mentionedCharacters },
+				tx
 			)
 		}
 
+		if (applied && appliedIds.length) {
+			const { recordLoreSources } = await import(
+				"$lib/server/pipelines/runtime/loreSources"
+			)
+			const { settleThrough } = await import("$lib/server/sessions/settle")
+			const parkedRunId =
+				namesOwnReview && reviewActivity?.kind === "scene_summarize"
+					? reviewActivity.pendingResult?.runId
+					: undefined
+			span = await recordLoreSources(tx, {
+				sessionId: existing.sessionId!,
+				runId: parkedRunId ?? null,
+				lorebookId: existing.lorebookId,
+				subjectKind: "scene",
+				subjectId: existing.id,
+				ids: appliedIds
+			})
+			settled = await settleThrough(tx, existing.sessionId!, span.throughMessageId, {
+				userId
+			})
+		}
+	})
+
+	if (span && settled) {
+		const { announceHistorySettled } = await import("$lib/server/sessions/settle")
+		await announceHistorySettled(db, {
+			sessionId: existing.sessionId!,
+			userId,
+			...settled,
+			io
+		})
+		try {
+			const [{ sessionEvents }, { emitSessionEvent }] = await Promise.all([
+				import("@serene-pub/sdk"),
+				import("$lib/server/pipelines/runtime/sessionEvents")
+			])
+			await emitSessionEvent(db, {
+				sessionId: existing.sessionId!,
+				userId,
+				event: sessionEvents.sceneSummaryApplied,
+				payload: {
+					event: sessionEvents.sceneSummaryApplied,
+					sessionId: existing.sessionId!,
+					at: Date.now(),
+					sceneId: existing.id,
+					...(existing.historyEntryId != null
+						? { entryId: existing.historyEntryId }
+						: {}),
+					loreSources: span,
+					cause: { kind: "user", userId }
+				},
+				io
+			})
+		} catch (err) {
+			console.warn("[scenes:update] scene-summary-applied emit failed:", err)
+		}
+	}
+
+	// The summary is saved: the held changes its wait kept back apply now (after the commit; never fails the save).
+	if (applied && existing.sessionId != null) {
+		const { applyHeldAutomaticallyAndTell } = await import("./sessions")
+		await applyHeldAutomaticallyAndTell(db, {
+			sessionId: existing.sessionId,
+			automatic: "scene-summary",
+			sceneId: existing.id,
+			io
+		})
+	}
+
+	const [updated] = await db
+		.select()
+		.from(schema.scenes)
+		.where(eq(schema.scenes.id, params.scene.id))
+
+	// Refresh scene list — lazy, for the reasons `scenes:create` gives. The
+	// routine has no socket: its list goes to every page of the session.
+	if (byRoutine) {
+		if (landed && updated.sessionId)
+			try {
+				await pushSceneList(io, { sessionId: updated.sessionId, userId })
+			} catch (err) {
+				console.warn("[scenes] the scene list was not sent after a routine's summary:", err)
+			}
+	} else if (emitToUser && updated.sessionId) {
+		const sessionId = updated.sessionId
+		await emitToUser("scenes:list", () =>
+			buildSceneList(sessionId, userId)
+		)
+	}
+
+	return {
+		saved: landed,
+		...(landed
+			? {}
+			: {
+					note: "The scene's summary changed while the routine was writing it, so the routine saved nothing."
+				}),
+		scene: { ...updated, ...(await readSceneCast(params.scene.id)) }
+	}
+}
+
+export const sceneUpdateHandler: Handler<
+	Sockets.Scenes.Update.Params,
+	Sockets.Scenes.Update.Response
+> = refusable(
+	"scenes:update",
+	async (socket, params: Sockets.Scenes.Update.Params, emitToUser) => {
+		const userId = socket.user!.id
+
+		const { scene } = await saveSceneSummary({
+			by: "person",
+			userId,
+			params,
+			io: socket.io,
+			emitToUser
+		})
+
 		const res = {
 			...askerOf(params),
-			scene: { ...updated, ...(await readSceneCast(params.scene.id)) }
+			scene
 		}
 
 		/**
@@ -1715,12 +1821,26 @@ export const sceneCompileHandler: Handler<
  * listens on `scenes:process:error#<sceneId>`: a refusal naming no scene never
  * reaches it, and the modal would spin at "running".
  */
-/** The scene summary run — `scenes:process`'s body. `via` runs a registration's pipeline (Close out) instead of the genre's summarize-scene. */
+/**
+ * The routine's start of a scene summary (`opts.routine`): its mode, and the
+ * socket server to broadcast to (none: the global one).
+ * - `review`: the run parks for the person's review, exactly as a pressed *Summarize*.
+ * - `full`: the run saves the summary itself (`saveSceneSummary`, `by: "routine"`).
+ */
+export interface RoutineSceneSummary {
+	mode: "review" | "full"
+	io?: unknown
+}
+
+/** The scene summary run — `scenes:process`'s body. `via` runs a registration's pipeline (Close out) instead of the genre's summarize-scene. `routine` marks the run the scene summaries routine's: its model calls queue as a routine's, and its held changes release up to the channel's newest closed scene. */
 export async function processScene(
 	userId: number,
 	params: Sockets.Scenes.Process.Params,
 	emitToUser: (event: string, data: any) => void,
-	opts: { via?: { specId: string; registrationKey: string; minAge: number } } = {}
+	opts: {
+		via?: { specId: string; registrationKey: string; minAge: number }
+		routine?: RoutineSceneSummary
+	} = {}
 ): Promise<Sockets.Scenes.Process.Response | undefined> {
 
 	const scene = await db.query.scenes.findFirst({
@@ -1819,6 +1939,50 @@ export async function processScene(
 	 * back what the scene was. Best-effort: a status that could not be
 	 * written never fails the run.
 	 */
+	/**
+	 * Release the held changes this summary's wait kept back. A pressed run
+	 * names its own scene. A routine's names the newest closed scene on the
+	 * summarized scene's channel: a `running` scene holds every automatic
+	 * Apply from its start, so a scene that closed while the run went would
+	 * otherwise wait. Never fails the run.
+	 */
+	/**
+	 * A person stopping a run the routine started has decided about the scene:
+	 * the draft mark is set, so the routine does not start it again two rounds
+	 * later (`sceneSummaryDueOf` takes only a scene nobody has drafted). The
+	 * mark names the routine, since no summarizer finished. A restart is not a
+	 * stop: the boot reconcile resets `running` and leaves no mark.
+	 */
+	const stoppedMark: Partial<typeof schema.scenes.$inferInsert> = opts.routine
+		? { processedBySpecId: "core:spec/scene-summaries" }
+		: {}
+	const releaseHeld = async (automatic: "scene-summary" | "scene-close") => {
+		const sessionId = scene.sessionId
+		if (sessionId == null) return
+		let sceneId = params.sceneId
+		if (opts.routine) {
+			const [newest] = await db
+				.select({ id: schema.scenes.id })
+				.from(schema.scenes)
+				.where(
+					and(
+						eq(schema.scenes.sessionId, sessionId),
+						eq(schema.scenes.channel, scene.channel),
+						isNotNull(schema.scenes.closedAtMessageId)
+					)
+				)
+				.orderBy(desc(schema.scenes.closedAtMessageId))
+				.limit(1)
+			if (newest) sceneId = newest.id
+		}
+		const { applyHeldAutomaticallyAndTell } = await import("./sessions")
+		await applyHeldAutomaticallyAndTell(db, {
+			sessionId,
+			automatic,
+			sceneId,
+			...(opts.routine?.io ? { io: opts.routine.io } : {})
+		})
+	}
 	const setSummaryStatus = async (
 		status: schema.SceneSummaryStatus,
 		extra: Partial<typeof schema.scenes.$inferInsert> = {}
@@ -1844,10 +2008,8 @@ export async function processScene(
 			}
 		// A summary that stops waiting without being saved (failed, cancelled) releases the held changes
 		// its wait kept back (never fails the run; no socket here, so the room push finds the server itself).
-		if (sessionId != null && status !== "running" && status !== "review" && status !== "done") {
-			const { applyHeldAutomaticallyAndTell } = await import("./sessions")
-			await applyHeldAutomaticallyAndTell(db, { sessionId, automatic: "scene-close", sceneId: params.sceneId })
-		}
+		if (sessionId != null && status !== "running" && status !== "review" && status !== "done")
+			await releaseHeld("scene-close")
 	}
 	const failRun = (error: string): never => {
 		ended = true
@@ -1909,7 +2071,7 @@ export async function processScene(
 		)
 
 		if (abortController.signal.aborted) {
-			await setSummaryStatus(statusBefore)
+			await setSummaryStatus(statusBefore, stoppedMark)
 			return null as any
 		}
 
@@ -1991,6 +2153,8 @@ export async function processScene(
 			sessionId: scene.sessionId,
 			userId,
 			specId: resolvedSpec.specId,
+			// The routine's run queues behind people's replies (`LLM_PRIORITY.routine`).
+			...(opts.routine && !opts.via ? { triggerFamily: "routine" } : {}),
 			...(opts.via
 				? {
 						registration: {
@@ -2095,8 +2259,71 @@ export async function processScene(
 		// binding-creation/DB-write work below runs against a cancelled
 		// generation's partial result.
 		if (abortController.signal.aborted) {
-			await setSummaryStatus(statusBefore)
+			await setSummaryStatus(statusBefore, stoppedMark)
 			return null as any
+		}
+		// 🚧 The routine under Full saves by itself: the summary, the model's name for an
+		// automatic scene name; the cast stays what the scene's close stored. No review,
+		// no `scenes:process:complete` (no window opens): the card ends as used.
+		if (opts.routine?.mode === "full") {
+			const saveInput = (receipt.nodes.find((n: any) => n.nodeKey === "save") as any)?.input
+			let done: Awaited<ReturnType<typeof saveSceneSummary>>
+			try {
+				done = await saveSceneSummary({
+					by: "routine",
+					userId,
+					params: { scene: { id: params.sceneId, summary: result.content } },
+					io: opts.routine.io,
+					routine: {
+						specId: resolvedSpec.specId,
+						modelName: result.name,
+						sourceIds: loreSourceIdsOf(saveInput?.sources)
+					}
+				})
+			} catch (err) {
+				// The save's refusals are sentences of ours (a line taken back, lore writes Off, ownership):
+				// the card says them, as it says a run's own.
+				console.warn(`[scenes] scene ${params.sceneId}: the routine's summary was not saved:`, err)
+				// Lines taken back while it was written (Back, a swipe, a delete):
+				// nothing failed, the scene simply changed. It goes back to what
+				// it was, so it is summarized again once it is due; `failed` would
+				// leave it unsummarized for good, since the routine never retries one.
+				const sources = loreSourceIdsOf(saveInput?.sources)
+				const live = sources.length
+					? await db
+							.select({ id: schema.sessionMessages.id })
+							.from(schema.sessionMessages)
+							.where(
+								and(
+									inArray(schema.sessionMessages.id, sources),
+									liveMessageWhere()
+								)
+							)
+					: []
+				if (live.length < sources.length) {
+					ended = true
+					await setSummaryStatus(statusBefore)
+					activityStore.remove(activityId, "dismissed")
+					await releaseHeld("scene-close")
+					return undefined
+				}
+				return failRun(
+					messageWithoutQueryText(err) || "The summary could not be saved."
+				)
+			}
+			if (!done.saved) {
+				// A person had the last word. Their save releases only up to this
+				// scene's close; what waited behind this run is released here.
+				console.info(`[scenes] scene ${params.sceneId}: ${done.note}`)
+				ended = true
+				activityStore.remove(activityId, "dismissed")
+				await releaseHeld("scene-summary")
+				return undefined
+			}
+			ended = true
+			activityStore.remove(activityId, "acted")
+			await releaseHeld("scene-summary")
+			return undefined
 		}
 		// The run's receipt is the spec that processed it, applied or not.
 		await setSummaryStatus("review", {
@@ -2201,7 +2428,7 @@ export async function processScene(
 		// only add a way to misfire on a cancellation from somewhere else
 		// and strand this activity at "running" forever.
 		if (abortController.signal.aborted) {
-			await setSummaryStatus(statusBefore)
+			await setSummaryStatus(statusBefore, stoppedMark)
 			return null as any // already removed by activityStore.cancel() — nothing to update
 		}
 		if (ended) throw err
@@ -2226,12 +2453,16 @@ export async function processScene(
  * whether a person pressed it or `runSceneSummaries` started it.
  */
 const sceneProcessHandlerVia = (
-	via?: { specId: string; registrationKey: string; minAge: number }
+	via?: { specId: string; registrationKey: string; minAge: number },
+	routine?: RoutineSceneSummary
 ): Handler<Sockets.Scenes.Process.Params, Sockets.Scenes.Process.Response> =>
 	refusable(
 		"scenes:process",
 		async (socket, params: Sockets.Scenes.Process.Params, emitToUser) =>
-			(await processScene(socket.user!.id, params, emitToUser, via ? { via } : {})) as Sockets.Scenes.Process.Response,
+			(await processScene(socket.user!.id, params, emitToUser, {
+				...(via ? { via } : {}),
+				...(routine ? { routine } : {})
+			})) as Sockets.Scenes.Process.Response,
 		"The scene could not be summarized.",
 		undefined,
 		(params) => ({ sceneId: (params as { sceneId?: unknown } | undefined)?.sceneId })
@@ -2705,12 +2936,15 @@ export function runSceneSummaries(
 	sceneIds: readonly number[],
 	userId: number,
 	emitToUser: (event: string, data: any) => void | Promise<void>,
-	opts?: { via?: { specId: string; registrationKey: string; minAge: number } }
+	opts?: {
+		via?: { specId: string; registrationKey: string; minAge: number }
+		routine?: RoutineSceneSummary
+	}
 ): Promise<void> {
 	return (async () => {
 		for (const sceneId of sceneIds) {
 			try {
-				await sceneProcessHandlerVia(opts?.via).handler(
+				await sceneProcessHandlerVia(opts?.via, opts?.routine).handler(
 					{ user: { id: userId } },
 					{ sceneId },
 					emitToUser as (event: string, data: any) => void
@@ -2720,6 +2954,58 @@ export function runSceneSummaries(
 			}
 		}
 	})()
+}
+
+/**
+ * 🚧 The scene summaries routine's start (the host's outlet calls this and
+ * nothing else): the session genre's scene summarizer runs for a finished
+ * scene in the background, as the session's owner, as a routine's run (its
+ * model calls queue after people's). `review` parks the result for the
+ * owner's review; `full` saves it by itself. Refuses with a sentence when the
+ * scene is gone, not this session's, no longer `none`, or the save's own
+ * refusals say no (the owner's lorebook, the primer, lore writes Off).
+ * Returns at once; the run is never awaited and is its own root.
+ */
+export async function startRoutineSceneSummary(params: {
+	sessionId: number
+	sceneId: number
+	mode: "review" | "full"
+	io?: unknown
+}): Promise<{ started: true } | { started: false; note: string }> {
+	const { sessionId, sceneId, mode } = params
+	const scene = await db.query.scenes.findFirst({
+		where: eq(schema.scenes.id, sceneId)
+	})
+	if (!scene || scene.sessionId !== sessionId)
+		return { started: false, note: "That scene is not in this session." }
+	if (scene.summaryStatus !== "none")
+		return { started: false, note: "That scene's summary is already written, running or waiting." }
+	const [session] = await db
+		.select({ userId: schema.sessions.userId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return { started: false, note: "That session is gone." }
+	const ownerId = session.userId
+	const lorebook = await findOwnedBook(db, ownerId, scene.lorebookId)
+	if (!lorebook) return { started: false, note: "The session's owner does not own this scene's lorebook." }
+	const primerProblem = await primerRowEditProblem(db, lorebook.id)
+	if (primerProblem) return { started: false, note: primerProblem }
+	const off = await loreWritesOffRefusal(db, sessionId)
+	if (off) return { started: false, note: off }
+
+	const io =
+		params.io ??
+		(globalThis as { __SERENE_PUB_SOCKET_STATE__?: { io?: unknown } }).__SERENE_PUB_SOCKET_STATE__?.io
+	const emitToOwner = async (event: string, data: any) => {
+		if (!io) return
+		const { emitToUserRedacted } = await import("$lib/server/sockets/utils/broadcastHelpers")
+		await emitToUserRedacted(io as any, ownerId, event, data)
+	}
+	// Its own root: `runSpec` opens a fresh run-family context with the routine's family
+	// whatever run called here, and passes no lineage, so the caller's run tree is not this one's.
+	void runSceneSummaries([sceneId], ownerId, emitToOwner, { routine: { mode, io } })
+	return { started: true }
 }
 
 /**

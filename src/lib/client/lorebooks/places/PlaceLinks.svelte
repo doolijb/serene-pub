@@ -492,7 +492,7 @@
 	{#if adding}
 		<div
 			id="{uid}-new"
-			class="bg-surface-100-900 border-surface-200-800 flex flex-col gap-2 rounded-lg border p-3 text-sm"
+			class="bg-surface-100-900 panel-edge flex flex-col gap-2 rounded-lg border p-3 text-sm"
 			data-place-link-new
 		>
 			<div class="flex items-center gap-2">
@@ -583,7 +583,7 @@
 			{#each rows as row (row.id)}
 				{@const open = openId === row.id}
 				<li
-					class="bg-surface-100-900 border-surface-200-800 flex flex-col gap-2 rounded-lg border p-2.5 {row.later ||
+					class="bg-surface-100-900 panel-edge flex flex-col gap-2 rounded-lg border p-2.5 {row.later ||
 					row.archived
 						? 'opacity-70'
 						: ''}"

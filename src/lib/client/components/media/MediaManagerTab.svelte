@@ -827,7 +827,7 @@
 			{#each filtered as item (item.id)}
 				<div
 					role="listitem"
-					class="border-surface-200-800 flex items-center gap-2 rounded-lg border p-1.5"
+					class="bg-surface-100-900 flex items-center gap-2 rounded-lg p-1.5"
 					animate:flip={{ duration: motionDuration(MOTION.base) }}
 					out:fade={{ duration: motionDuration(MOTION.fast) }}
 				>
@@ -932,10 +932,7 @@
 			{/if}
 		</button>
 		{#if cleanupOpen}
-			<div
-				id="media-cleanup"
-				class="border-surface-200-800 flex flex-col gap-4 border-t p-3"
-			>
+			<div id="media-cleanup" class="flex flex-col gap-4 p-3">
 				{#if !cleanup}
 					<div class="flex justify-center py-4">
 						<Icons.Loader2

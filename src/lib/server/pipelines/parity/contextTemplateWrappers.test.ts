@@ -145,6 +145,22 @@ const AUTHORS_NOTE_BLOCK =
 	"{{/if}}\n" +
 	"{{/with}}\n"
 
+/**
+ * 🚧 The sixth recorded exception: *Earlier in the story*, the summaries of
+ * closed scenes whose lines left the prompt (`core:var/earlier-scenes@1`),
+ * placed after the history. 0.5 had no scene summaries, so its template has no
+ * block; 0.6's renders zero bytes for a session with none eligible. Written as
+ * the exact string, wrapper included, so anything that is not precisely this
+ * block still fails the comparison.
+ */
+const EARLIER_SCENES_BLOCK =
+	"{{#if earlierScenes}}\n" +
+	"Earlier in the story:\n" +
+	"```json\n" +
+	"{{{earlierScenes}}}\n" +
+	"```\n" +
+	"{{/if}}\n"
+
 describe("the wrappers moved without changing", () => {
 	it("rebuilds 0.5's template from 0.6's plus the shipped layouts", () => {
 		let rebuilt = SHIPPED_CONTEXT_TEMPLATE
@@ -171,7 +187,7 @@ describe("the wrappers moved without changing", () => {
 		// "Your relationships:" block holding both directions. That is a real
 		// change to the prompt; the injections loop, the character lore
 		// block, the author's note, the current date's move and the
-		// transcript's attachments below are the other five.
+		// transcript's attachments below are the other six.
 		//
 		// It is folded back here rather than the assertion being relaxed,
 		// because a weaker assertion would stop noticing the *next* change.
@@ -191,6 +207,12 @@ describe("the wrappers moved without changing", () => {
 			"the injections block is no longer the shape this exception describes"
 		).toBe(true)
 		rebuilt = rebuilt.replace(INJECTIONS_BLOCK, "")
+
+		expect(
+			rebuilt.includes(EARLIER_SCENES_BLOCK),
+			"the earlier scenes block is not the shape this exception describes"
+		).toBe(true)
+		rebuilt = rebuilt.replace(EARLIER_SCENES_BLOCK, "")
 
 		expect(
 			rebuilt.includes(CHARACTER_LORE_BLOCK),

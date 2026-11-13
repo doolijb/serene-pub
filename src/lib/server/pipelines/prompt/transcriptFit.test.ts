@@ -9,9 +9,12 @@
 
 import { describe, it, expect, beforeEach } from "vitest"
 import {
+	EARLIER_SCENES_BLOCK_TOKENS,
 	HISTORY_READ_MAX_ROWS,
 	MESSAGE_SCAFFOLD_TOKENS,
 	TRANSCRIPT_CUT_FREES,
+	earlierBlockTokens,
+	earlierScenesShown,
 	historyReadRowCount,
 	historyReadTokens,
 	holdCut,
@@ -98,6 +101,211 @@ describe("the start of the prompt holds across turns", () => {
 		// quarter of 2000 is ~8 lines, so the cut moves every ~4 turns.
 		expect(changes).toBeGreaterThan(0)
 		expect(changes).toBeLessThanOrEqual(3)
+	})
+})
+
+describe("earlierScenesShown (🚧 earlier in the story)", () => {
+	const scene = (firstLineId: number, tokens: number) => ({
+		firstLineId,
+		tokens
+	})
+	const tokensOf = (s: { tokens: number }) => s.tokens
+
+	it("shows only scenes starting before the first kept line, one that lost only its opening line included", () => {
+		const scenes = [scene(1, 10), scene(11, 10), scene(21, 10)]
+		expect(earlierScenesShown(scenes, 11, null, tokensOf)).toEqual([scenes[0]])
+		// The second scene lost only line 11, its opening one.
+		expect(earlierScenesShown(scenes, 12, null, tokensOf)).toEqual([
+			scenes[0],
+			scenes[1]
+		])
+		expect(earlierScenesShown(scenes, 1, null, tokensOf)).toEqual([])
+	})
+
+	it("keeps the newest under the cap, and skips one that does not fit while older ones that do still show", () => {
+		const scenes = [scene(1, 10), scene(11, 100), scene(21, 20), scene(31, 20)]
+		// 31 and 21 fit (40); 11 (100) does not and is skipped; 1 (10) still fits.
+		expect(
+			earlierScenesShown(scenes, Infinity, EARLIER_SCENES_BLOCK_TOKENS + 50, tokensOf)
+		).toEqual([scenes[0], scenes[2], scenes[3]])
+		// With no room left for it, the oldest is the one dropped.
+		expect(
+			earlierScenesShown(scenes, Infinity, EARLIER_SCENES_BLOCK_TOKENS + 40, tokensOf)
+		).toEqual([scenes[2], scenes[3]])
+		// One oversized newest summary does not empty the block.
+		const big = [scene(1, 10), scene(11, 10), scene(21, 500)]
+		expect(
+			earlierScenesShown(big, Infinity, EARLIER_SCENES_BLOCK_TOKENS + 30, tokensOf)
+		).toEqual([big[0], big[1]])
+		expect(earlierScenesShown(scenes, Infinity, 5, tokensOf)).toEqual([])
+	})
+
+	it("keeps every qualifying scene with no cap, returns oldest first, and nothing for nothing", () => {
+		const scenes = [scene(1, 1000), scene(5, 1000), scene(9, 1000)]
+		expect(earlierScenesShown(scenes, Infinity, null, tokensOf)).toEqual(scenes)
+		expect(earlierScenesShown([], 10, 100, tokensOf)).toEqual([])
+		expect(earlierScenesShown([], Infinity, null, tokensOf)).toEqual([])
+	})
+
+	it("sizes the block as the shown tokens plus the heading, 0 when none show", () => {
+		expect(earlierBlockTokens([], tokensOf)).toBe(0)
+		expect(earlierBlockTokens([scene(1, 7), scene(2, 8)], tokensOf)).toBe(
+			15 + EARLIER_SCENES_BLOCK_TOKENS
+		)
+	})
+})
+
+describe("planTranscriptCut with the earlier-scenes block (🚧)", () => {
+	const ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+	const tokens = ids.map(() => 100)
+	// A system block of 100 and ten lines of 100; one scene (50 tokens) from line 1.
+	const base = { ids, tokens, total: 1100, budget: 800 }
+	const earlier = {
+		scenes: [{ firstLineId: 1, tokens: 50 }],
+		maxTokens: null,
+		measured: 0
+	}
+	const blockCost = 50 + EARLIER_SCENES_BLOCK_TOKENS
+
+	it("does not take a held cut that fits only without the block", () => {
+		holdCut(4)
+		expect(planTranscriptCut(base)).toMatchObject({
+			from: 3,
+			held: true,
+			estimate: 800
+		})
+		const cut = planTranscriptCut({ ...base, earlier })!
+		expect(cut.held).toBe(false)
+		expect(cut.from).toBe(6)
+		expect(cut.estimate).toBe(1100 - 600 + blockCost)
+	})
+
+	it("takes a held cut that fits with the block", () => {
+		holdCut(5)
+		const cut = planTranscriptCut({ ...base, earlier })!
+		expect(cut).toMatchObject({
+			from: 4,
+			held: true,
+			estimate: 1100 - 400 + blockCost
+		})
+	})
+
+	it("is today's result when `earlier` is absent", () => {
+		const fresh = planTranscriptCut(base)!
+		expect(fresh).toEqual({ from: 5, held: false, estimate: 600 })
+		expect(
+			planTranscriptCut({
+				...base,
+				earlier: { scenes: [], maxTokens: null, measured: 0 }
+			})
+		).toEqual(fresh)
+	})
+
+	it("cuts more than without the block by at most the block's cap plus the largest line", () => {
+		const maxTokens = 200
+		const lines = [90, 120, 60, 100, 80, 110, 70, 100, 100, 100, 60, 90]
+		const lineIds = lines.map((_, i) => i + 1)
+		const scenes = [1, 4, 7, 10].map((firstLineId) => ({
+			firstLineId,
+			tokens: 70
+		}))
+		const largest = Math.max(...lines)
+		for (const total of [1500, 1800, 2400, 3000]) {
+			for (const budget of [900, 1200, 1500]) {
+				const input = {
+					ids: lineIds,
+					tokens: lines,
+					total,
+					budget,
+					fresh: true
+				}
+				const without = planTranscriptCut(input)
+				const withBlock = planTranscriptCut({
+					...input,
+					earlier: { scenes, maxTokens, measured: 0 }
+				})
+				if (!without || !withBlock) continue
+				const cutOf = (from: number) =>
+					lines.slice(0, from).reduce((n, t) => n + t, 0)
+				expect(cutOf(withBlock.from) - cutOf(without.from)).toBeLessThanOrEqual(
+					maxTokens + largest
+				)
+			}
+		}
+	})
+
+	/**
+	 * Twenty turns, two 60-token lines a turn, scenes of ten lines closing as
+	 * the conversation passes them. The first render reads every line and
+	 * measures the block at the first read line (nearly empty); the cut is
+	 * planned, applied, and the block re-measured at the kept line.
+	 */
+	describe("over twenty turns", () => {
+		const SYSTEM = 600
+		const LINE = 60
+		const BUDGET = 2000
+		const SCENE = 40
+		const CAP = EARLIER_SCENES_BLOCK_TOKENS + 3 * SCENE
+		const cost = (s: { tokens: number }) => s.tokens
+
+		function run(planWithEarlier: boolean) {
+			resetHeldCuts()
+			const firsts: number[] = []
+			let over = 0
+			let all: number[] = []
+			for (let turn = 0; turn < 20; turn++) {
+				all = [...all, all.length + 1, all.length + 2]
+				const scenes = Array.from(
+					{ length: Math.floor(all.length / 10) },
+					(_, k) => ({ firstLineId: k * 10 + 1, tokens: SCENE })
+				)
+				const blockAt = (first: number) =>
+					earlierBlockTokens(
+						earlierScenesShown(scenes, first, CAP, cost),
+						cost
+					)
+				const measured = blockAt(all[0])
+				const total = SYSTEM + all.length * LINE + measured
+				const cut = planTranscriptCut({
+					ids: all,
+					tokens: all.map(() => LINE),
+					total,
+					budget: BUDGET,
+					...(planWithEarlier
+						? { earlier: { scenes, maxTokens: CAP, measured } }
+						: {})
+				})
+				const from = cut?.from ?? 0
+				if (cut) holdCut(all[from])
+				const real = SYSTEM + (all.length - from) * LINE + blockAt(all[from])
+				if (real > BUDGET) over++
+				firsts.push(all[from])
+			}
+			const changed = firsts.map((id, i) => i > 0 && id !== firsts[i - 1])
+			return {
+				over,
+				changes: changed.filter(Boolean).length,
+				twiceRunning: changed.some((c, i) => c && changed[i - 1])
+			}
+		}
+
+		it("holds the first line and always fits when the block is counted", () => {
+			const r = run(true)
+			expect(r.over).toBe(0)
+			expect(r.changes).toBeGreaterThan(0)
+			expect(r.changes).toBeLessThanOrEqual(3)
+			expect(r.twiceRunning).toBe(false)
+		})
+
+		it("goes over the budget or moves more when the block is not counted", () => {
+			const counted = run(true)
+			const blind = run(false)
+			expect(
+				blind.over > 0 ||
+					blind.changes > counted.changes ||
+					blind.twiceRunning
+			).toBe(true)
+		})
 	})
 })
 

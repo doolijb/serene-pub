@@ -91,6 +91,64 @@ describe("the declared default is the shipped order", () => {
 	})
 })
 
+describe("🚧 Earlier in the story, the block added after history", () => {
+	const summary = { name: "The Ford", summary: "They crossed the ford." }
+	const withScenes = {
+		...base,
+		template: SHIPPED_CONTEXT_TEMPLATE,
+		templateContext: CONTEXT,
+		earlierScenes: [summary]
+	}
+	const BLOCK =
+		'Earlier in the story:\n```json\n[{"name":"The Ford","summary":"They crossed the ford."}]\n```'
+	const previousTen = SHIPPED_PROMPT_BLOCKS.filter(
+		(b) => b.id !== "earlierScenes"
+	)
+
+	it("is in the shipped ids once, right after history", () => {
+		const ids = [...SHIPPED_PROMPT_BLOCK_IDS]
+		expect(ids.filter((i) => i === "earlierScenes")).toHaveLength(1)
+		expect(ids.indexOf("earlierScenes")).toBe(ids.indexOf("history") + 1)
+	})
+
+	it("a stored list equal to the previous ten counts as shipped, and the block keeps its place", async () => {
+		expect(previousTen).toHaveLength(SHIPPED_PROMPT_BLOCKS.length - 1)
+		expect(isShippedPromptBlocks(previousTen)).toBe(true)
+		const untouched = await render(withScenes)
+		const stored = await render({ ...withScenes, blocks: previousTen })
+		expect(stored.rendered).toBe(untouched.rendered)
+		expect(stored.rendered).toContain(BLOCK)
+	})
+
+	it("a list a person reordered, or switched a block off in, does not get the block", async () => {
+		const reordered = [...previousTen].reverse()
+		expect(isShippedPromptBlocks(reordered)).toBe(false)
+		const a = await render({ ...withScenes, blocks: reordered })
+		expect(a.rendered).not.toContain("Earlier in the story")
+		const off = previousTen.map((b) =>
+			b.id === "scenario" ? { ...b, enabled: false } : b
+		)
+		expect(isShippedPromptBlocks(off)).toBe(false)
+		const b = await render({ ...withScenes, blocks: off })
+		expect(b.rendered).not.toContain("Earlier in the story")
+	})
+
+	it("a list that includes it switched off leaves it out", async () => {
+		const off = SHIPPED_PROMPT_BLOCKS.map((b) =>
+			b.id === "earlierScenes" ? { ...b, enabled: false } : b
+		)
+		const r = await render({ ...withScenes, blocks: off })
+		expect(r.rendered).not.toContain("Earlier in the story")
+	})
+
+	it("renders nothing, byte for byte, with no scenes", async () => {
+		const bare = await render({ ...withScenes, earlierScenes: undefined })
+		const empty = await render({ ...withScenes, earlierScenes: [] })
+		expect(empty.rendered).toBe(bare.rendered)
+		expect(bare.rendered).not.toContain("Earlier in the story")
+	})
+})
+
 describe("applying a pack", () => {
 	it("leaves the template byte-identical when the pack is the shipped one", async () => {
 		const untouched = await render({

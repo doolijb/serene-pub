@@ -650,7 +650,6 @@
 						["Private", "Free"]
 					)}
 				</div>
-				<hr class="panel-edge my-1" />
 				<p class="text-surface-600-400 text-xs">
 					Know what you want?
 					<button

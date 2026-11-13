@@ -299,13 +299,9 @@
 <!-- The chrome is the app's own (panel-edge rules, surface grounds,
      muted text) so it follows the theme being edited; only the code area is
      CodeMirror's dark editor. -->
-<div
-	class="panel-edge bg-surface-50-950 flex h-full flex-col overflow-hidden rounded-xl border"
->
+<div class="bg-surface-100-900 flex h-full flex-col overflow-hidden rounded-xl">
 	<!-- Editor toolbar -->
-	<div
-		class="panel-edge bg-surface-100-900 flex items-center gap-2 border-b px-4 py-2"
-	>
+	<div class="flex items-center gap-2 px-4 py-2">
 		<div class="flex flex-1 items-center gap-3">
 			<!-- Dot accent -->
 			<span
@@ -333,7 +329,7 @@
 	</div>
 
 	<!-- Fields row -->
-	<div class="panel-edge bg-surface-100-900 border-b px-4 py-3">
+	<div class="px-4 py-3">
 		<label
 			for="theme-label-input"
 			class="text-surface-600-400 mb-1 block text-xs font-medium"
@@ -364,9 +360,7 @@
 	></div>
 
 	<!-- Status bar -->
-	<div
-		class="panel-edge bg-surface-100-900 flex items-center justify-between border-t px-4 py-1.5"
-	>
+	<div class="flex items-center justify-between px-4 py-1.5">
 		<div class="text-surface-600-400 flex items-center gap-4 text-xs">
 			<span>{lineCount} lines</span>
 			<span>{charCount.toLocaleString()} chars</span>

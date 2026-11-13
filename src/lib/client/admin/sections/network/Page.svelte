@@ -331,7 +331,7 @@
 			     that is not being consulted at all is worse than not showing
 			     the list. -->
 			<div
-				class="panel-card border-warning-500 flex items-start gap-3"
+				class="panel-card border-warning-500 flex items-start gap-3 border"
 				role="note"
 			>
 				<Icons.TriangleAlert

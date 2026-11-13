@@ -123,7 +123,7 @@
 	<RulesFitLine {fits} freeform={isFreeformBook(current)} mode="details" />
 	{#if asking}
 		<div
-			class="border-surface-200-800 rounded-base flex flex-col gap-2 border p-3"
+			class="bg-surface-50-950 rounded-base flex flex-col gap-2 p-3"
 			role="group"
 			aria-label="Change the rules"
 			data-lore-book-rules-confirm

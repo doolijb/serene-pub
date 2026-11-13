@@ -221,7 +221,7 @@
 					id="stream"
 					type="checkbox"
 					bind:checked={llamaCppFields.stream}
-					class="input bg-background border-muted h-6 w-6 rounded border"
+					class="input bg-background border-surface-200-800 h-6 w-6 rounded border"
 				/>
 			</div>
 		{/if}

@@ -1100,6 +1100,13 @@
       "when": 1794465710551,
       "tag": "0156_nappy_paladin",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1794539967291,
+      "tag": "0157_legal_puppet_master",
+      "breakpoints": true
     }
   ]
 }

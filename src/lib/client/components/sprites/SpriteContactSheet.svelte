@@ -194,7 +194,7 @@
 						</div>
 					{:else}
 						<div
-							class="text-surface-500 flex h-full items-center justify-center border-2 border-dashed"
+							class="text-surface-500 border-surface-300-700 flex h-full items-center justify-center border-2 border-dashed"
 						>
 							<Icons.ImageOff size={18} aria-hidden="true" />
 							<span class="sr-only">

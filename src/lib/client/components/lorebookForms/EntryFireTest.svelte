@@ -280,7 +280,7 @@
 </script>
 
 <section
-	class="border-surface-200-800 flex flex-col gap-2 rounded border p-3"
+	class="panel-edge flex flex-col gap-2 rounded border p-3"
 	aria-label="Would this entry be read in?"
 	data-lore-signals
 >
@@ -406,7 +406,7 @@
 
 	<!-- Teaching writes the entry's marks: not in a shared (read-only) book. -->
 	{#if !readOnly}
-	<div class="border-surface-200-800 flex flex-col gap-1 border-t pt-2">
+	<div class="flex flex-col gap-1">
 		<span class="text-xs">
 			<span class="font-semibold">Teach it</span>
 			{#if teachFor != null}

@@ -82,7 +82,7 @@ Every run of one session, not only its routines', is listed for administrators i
 
 ## Summaries and the lorebook
 
-A summarizer registers three ways: on an **action** (a summary you ask for), on an **event** (a scene ending, say) and as a **routine** (on a cadence). Each registration has its own values, so one summarizer can run on a cadence with a minimum age of 20 messages and again on [Close out](./sessions.md#close-out) with none. The host refuses a run whose span is younger than its registration's minimum age. A routine's minimum is 20; an action's or an event's is 0. See [Summarization](./summarization.md#which-summarizer-runs).
+A summarizer registers three ways: on an **action** (a summary you ask for), on an **event** (a scene ending, say) and as a **routine** (on a cadence). Each registration has its own values, so one summarizer can run on a cadence with a minimum age of 20 messages and again on [Close out](./sessions.md#close-out) with none. The host refuses a run whose span is younger than its registration's minimum age. A routine's minimum is 20; an action's or an event's is 0. The exception is **Summarize finished scenes**: its minimum is 0, and its age guard is its own, a scene that ended at least 6 rounds ago (see [Summarization](./summarization.md#finished-scenes-summarized-by-themselves)). See [Summarization](./summarization.md#which-summarizer-runs).
 
 Lore outlets carry **sources**: the ids of the messages a write was generated from.
 
@@ -256,7 +256,9 @@ The same happens to configurations made on an earlier 0.6 pre-release: one a pre
 
 ## Prompt blocks
 
-**Prompt blocks** are the sections a prompt is built from: the instructions, the character cards, the personas, the scenario, world lore, history, relationships. Which are included, and in what order, is the **Prompt blocks** setting on the pipeline's prompt-building step. Like any setting it is the genre's default unless a preset or a session changes it.
+**Prompt blocks** are the sections a prompt is built from: the instructions, the character cards, the personas, the scenario, world lore, history, earlier in the story, relationships. Which are included, and in what order, is the **Prompt blocks** setting on the pipeline's prompt-building step. Like any setting it is the genre's default unless a preset or a session changes it.
+
+🚧 **Earlier in the story** (the summaries of scenes whose lines are no longer in the prompt; see [Context templates → Earlier in the story](./context-templates.md#earlier-in-the-story)) sits after **History**. A step whose blocks were left in the shipped order gets it in that place. One whose blocks you reordered or switched off before it existed doesn't get it by itself: add **Earlier in the story** under **Prompt blocks**.
 
 Drag a row, or use its arrows, to move it. Switch a block off to leave it out but keep its place, or remove it to forget where it sat. Like any setting it shows a dot when changed, resets, and appears in Changes.
 
@@ -267,6 +269,8 @@ It never refuses a turn. A block the selected context template doesn't render is
 Each lore source carries its own **share** of the context window: **Share — world lore** on the world-lore step, **Share — conversation** on the history step, **Share — relationships** on the relationships step, each with a **Most entries** limit and a **Priority**. Shares are relative: raising one takes room from the others, and a share of zero leaves that source out. The conversation also has **Always keep at least**, a minimum it always gets. The narrator pipelines find all their lore with one step, which carries **Share — world lore**, **Share — character lore** and **Share — history** side by side.
 
 A priority of **always** puts every entry from that source in ahead of the rest, up to its **Most entries** limit. Only a pinned entry goes past that limit.
+
+🚧 **Share — earlier scenes**, on the **Earlier scenes** step, is not relative: it is the most of the window the summaries of earlier scenes may take (0.15 by default), and the oldest are left out first when they don't fit.
 
 A source that found nothing this turn still reserves its share and hands what it didn't use to the others. A source added by a plugin takes part the same way, with its own share and limit, and the run's report lists which shares came from a step's own settings and which were the shipped defaults.
 

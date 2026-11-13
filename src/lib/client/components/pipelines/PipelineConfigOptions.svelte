@@ -1517,9 +1517,7 @@
 						     would put it where nothing reads it. Copying hands
 						     it to the person, who knows which prompt or
 						     pipeline it belongs in now. -->
-						<div
-							class="border-surface-500/30 space-y-2 border-t pt-3"
-						>
+						<div class="space-y-2">
 							<p class="text-surface-600-400 text-xs">
 								<Icons.Archive size={11} class="inline" />
 								Archived — this step no longer has

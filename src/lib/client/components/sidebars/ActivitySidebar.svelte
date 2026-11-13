@@ -1015,7 +1015,7 @@
 						<div class="divide-surface-200-800 divide-y">
 							{#each taskQueueCtx.tasks as task}
 								{@const expanded = expandedTaskId === task.id}
-								<div class="divide-surface-200-800 divide-y">
+								<div>
 									<button
 										class="hover:bg-surface-100-900 flex w-full items-center gap-2 px-4 py-3 text-left transition-colors"
 										onclick={() => toggleTask(task.id)}

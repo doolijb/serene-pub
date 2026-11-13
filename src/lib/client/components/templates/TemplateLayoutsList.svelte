@@ -129,7 +129,7 @@
 		{#if open}
 			<div
 				id="{uid}-layouts"
-				class="border-surface-200-800 flex flex-col gap-2 rounded border p-2"
+				class="panel-edge flex flex-col gap-2 rounded border p-2"
 			>
 				{#if canBare || canTitled}
 					<div class="flex flex-wrap gap-1">

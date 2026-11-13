@@ -575,7 +575,7 @@
 			class="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 @container/editor flex max-h-[100dvh] w-full max-w-3xl flex-col shadow-xl sm:max-h-[92vh]"
+				class="card bg-surface-50-950 @container/editor flex max-h-[100dvh] w-full max-w-3xl flex-col shadow-xl sm:max-h-[92vh]"
 			>
 				<!-- Header -->
 				<header

@@ -262,7 +262,7 @@
 						type="number"
 						step="1"
 						bind:value={ollamaFields.keepAliveNumber}
-						class="input bg-background border-muted w-32 rounded border"
+						class="input bg-background border-surface-200-800 w-32 rounded border"
 					/>
 					<Select
 						class="w-24"

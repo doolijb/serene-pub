@@ -47,7 +47,7 @@
 {#if imprints.length}
 	<section
 		data-kept-imprints
-		class="border-surface-200-800 flex flex-col gap-2 rounded-md border p-2 text-xs"
+		class="panel-edge flex flex-col gap-2 rounded-md border p-2 text-xs"
 		aria-label={KEPT_IMPRINT_HEADING}
 	>
 		<p class="flex items-center gap-1.5 font-medium">

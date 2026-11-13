@@ -1369,7 +1369,7 @@
 		{/if}
 
 		{#if addingBackground}
-			<div class="panel-edge flex flex-col gap-2 rounded-lg border p-3">
+			<div class="bg-surface-100-900 flex flex-col gap-2 rounded-lg p-3">
 				<label class="text-sm font-semibold" for="newBackgroundName">
 					Background character name
 				</label>

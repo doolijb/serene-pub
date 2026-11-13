@@ -1206,7 +1206,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// system block so the top of the prompt stays cache-stable. Nothing else
 	// moved: with the old order put back the descriptor hashes to the old pin.
 	// (was "a09e1d06836e8")
-	"core:task/assemble@2": "980fcefab8e91",
+	"core:task/assemble@2": "77b5ad64835be" /* (was "980fcefab8e91") — lead, sense-prm 2026-11-12: the earlier-scenes query and block (optional in-port, renders entry) */,
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	// Moved (enum member labels, 2026-09-29): `style` gained `members` — a label
@@ -1848,6 +1848,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// 🚧 NEW 2026-11-11 (sense-clk2, owner ruling): how many story minutes one round is worth — the session's `roundWorth` genre field, as a number and a clock step.
 	"core:query/round-worth@1": "17f5045d5976ed",
 	"core:query/scene-boundaries@1": "12e77a18036ca5" /* new — lead, sense-scn 2026-11-12 */,
+	"core:query/scene-summary-due@1": "d78f075f52a77" /* new — lead, sense-sum 2026-11-12 */,
+	"core:query/earlier-scenes@1": "baf88f0f6b87b" /* new — lead, sense-prm 2026-11-12 */,
+	"core:outlet/summarize-finished-scene@1": "1443315d18526" /* new — lead, sense-sum 2026-11-12 */,
 	// New 2026-10-31 (M2c path B; pinned by E): the Guide's draft reader (T) and the four library outlets (T), each with review.fields.
 	"core:task/read-library-draft@1": "143fcc2d9e0fb7",
 	"core:outlet/create-character@1": "11cab3736ed8b5",

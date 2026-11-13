@@ -69,7 +69,7 @@
 <!-- Selection is a RING, as on a character card: the selected row's inset
      bar would sit under the cover. -->
 <div
-	class="group bg-surface-100-900 panel-edge relative flex h-full flex-col overflow-hidden rounded-container border transition-shadow hover:shadow-lg {active
+	class="group bg-surface-100-900 relative flex h-full flex-col overflow-hidden rounded-container transition-shadow hover:shadow-lg {active
 		? 'ring-primary-500 ring-offset-surface-50-950 ring-2 ring-offset-2'
 		: ''}"
 	role="listitem"

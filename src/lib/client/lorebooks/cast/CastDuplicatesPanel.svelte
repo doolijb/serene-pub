@@ -239,7 +239,7 @@
 				<div class="mt-2 flex flex-col gap-1.5">
 					{#each mergeLogs as log (log.id)}
 						<div
-							class="panel-edge flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
+							class="bg-surface-100-900 flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs"
 						>
 							<span class="text-surface-600-400 min-w-0">
 								"{log.absorbedName}" absorbed into "{log.survivorName ??

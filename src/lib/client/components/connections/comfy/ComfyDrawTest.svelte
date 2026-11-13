@@ -185,7 +185,7 @@
 			<Icons.X size={14} aria-hidden="true" />
 			Cancel
 		</button>
-		<div class="border-surface-500/20 rounded-lg border p-2 text-xs">
+		<div class="panel-edge rounded-lg border p-2 text-xs">
 			<span class="capitalize">{progress?.stage ?? "starting"}…</span>
 			{#if progress?.percent != null}
 				· {Math.round(progress.percent)}%

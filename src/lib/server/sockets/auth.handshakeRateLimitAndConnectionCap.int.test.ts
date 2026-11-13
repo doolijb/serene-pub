@@ -173,6 +173,49 @@ describe("authMiddleware — handshake rate limiting (Round-12 audit fix, PGlite
 	})
 })
 
+describe("authMiddleware — a browser tab behind a reverse proxy sends no Origin on its first request", () => {
+	// A live connection opens with a same-origin GET, which carries no Origin.
+	// Behind a proxy that reports the visitor's real address, judging that by
+	// address alone refused every visitor from outside the local network.
+	afterEach(() => {
+		delete process.env.ADDRESS_HEADER
+	})
+
+	const throughProxy = (visitor: string, headers: Record<string, string> = {}) => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const socket = makeFakeSocket({ address: "127.0.0.1" })
+		delete socket.handshake.headers.origin
+		Object.assign(socket.handshake.headers, { "x-forwarded-for": visitor, ...headers })
+		return socket
+	}
+
+	test("a same-origin browser request from a public address is let in", async () => {
+		const socket = throughProxy("203.0.113.61", { "sec-fetch-site": "same-origin" })
+		expect(await callMiddleware(socket)).toBeUndefined()
+		expect(socket.isDisconnected).toBe(false)
+	})
+
+	test("with no such stamp, a public address is still refused", async () => {
+		const socket = throughProxy("203.0.113.62")
+		expect((await callMiddleware(socket))?.message).toBe("Origin not allowed")
+		expect(socket.isDisconnected).toBe(true)
+	})
+
+	test("another site's request is still refused, with or without an Origin", async () => {
+		const noOrigin = throughProxy("203.0.113.63", { "sec-fetch-site": "cross-site" })
+		expect((await callMiddleware(noOrigin))?.message).toBe("Origin not allowed")
+		// A disallowed Origin is judged as an Origin; the stamp cannot rescue it.
+		const withOrigin = makeFakeSocket({ address: "203.0.113.64" })
+		withOrigin.handshake.headers["sec-fetch-site"] = "same-origin"
+		expect((await callMiddleware(withOrigin))?.message).toBe("Origin not allowed")
+	})
+
+	test("a local visitor with no Origin and no stamp is let in, as before", async () => {
+		const socket = throughProxy("192.168.1.20")
+		expect(await callMiddleware(socket)).toBeUndefined()
+	})
+})
+
 describe("authMiddleware — handshake rate limiting honors ADDRESS_HEADER behind a trusted proxy (Round-14 audit fix)", () => {
 	afterEach(() => {
 		delete process.env.ADDRESS_HEADER

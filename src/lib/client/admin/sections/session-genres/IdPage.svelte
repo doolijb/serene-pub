@@ -1079,58 +1079,61 @@
 				title="Event surface"
 				description="What this genre declares, and which published pipelines answer each event. A preset binds the events that are not open; required ones must be bound for a preset to be offered."
 			>
-				<AdminList
-					rows={detail.slots}
-					columns={slotColumns}
-					searchText={(s) => s.event}
-					searchPlaceholder="Search events…"
-					defaultSort="standing"
-					storageKey="serene-pub:adminView:genreSlots"
-					emptyMessage="This genre declares no events — its declaration predates the event surface."
-				>
-					{#snippet cell(slot, col)}
-						{#if col.key === "event"}
-							<a
-								class="anchor font-mono text-xs font-semibold"
-								href={eventHref(slot.event)}
-							>
-								{slot.event}
-							</a>
-						{:else if col.key === "standing"}
-							{#if slot.required}
-								<Badge tone="primary" size="md">required</Badge>
-							{:else if slot.open}
-								<span
-									class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs"
+				<!-- The list's own cards sit inside this fieldset's card: the inset fill. -->
+				<div class="[&_.panel-card]:bg-surface-50-950">
+					<AdminList
+						rows={detail.slots}
+						columns={slotColumns}
+						searchText={(s) => s.event}
+						searchPlaceholder="Search events…"
+						defaultSort="standing"
+						storageKey="serene-pub:adminView:genreSlots"
+						emptyMessage="This genre declares no events — its declaration predates the event surface."
+					>
+						{#snippet cell(slot, col)}
+							{#if col.key === "event"}
+								<a
+									class="anchor font-mono text-xs font-semibold"
+									href={eventHref(slot.event)}
 								>
-									open
-								</span>
-							{:else}
-								<Badge size="md">optional</Badge>
+									{slot.event}
+								</a>
+							{:else if col.key === "standing"}
+								{#if slot.required}
+									<Badge tone="primary" size="md">required</Badge>
+								{:else if slot.open}
+									<span
+										class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs"
+									>
+										open
+									</span>
+								{:else}
+									<Badge size="md">optional</Badge>
+								{/if}
+							{:else if col.key === "candidates"}
+								{#if slot.candidates.length}
+									<span class="flex flex-wrap gap-1.5">
+										{#each slot.candidates as c (c.slug)}
+											<a
+												class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs hover:underline"
+												href="/admin/pipelines/{encodeURIComponent(
+													c.slug
+												)}"
+												title={c.slug}
+											>
+												{c.name}
+											</a>
+										{/each}
+									</span>
+								{:else}
+									<span class="text-surface-600-400 text-xs">
+										nothing serves this yet
+									</span>
+								{/if}
 							{/if}
-						{:else if col.key === "candidates"}
-							{#if slot.candidates.length}
-								<span class="flex flex-wrap gap-1.5">
-									{#each slot.candidates as c (c.slug)}
-										<a
-											class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs hover:underline"
-											href="/admin/pipelines/{encodeURIComponent(
-												c.slug
-											)}"
-											title={c.slug}
-										>
-											{c.name}
-										</a>
-									{/each}
-								</span>
-							{:else}
-								<span class="text-surface-600-400 text-xs">
-									nothing serves this yet
-								</span>
-							{/if}
-						{/if}
-					{/snippet}
-				</AdminList>
+						{/snippet}
+					</AdminList>
+				</div>
 			</AdminFieldset>
 		{/if}
 

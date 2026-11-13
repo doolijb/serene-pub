@@ -92,6 +92,16 @@ export const SHIPPED_CONTEXT_TEMPLATE_NAME = "Default"
  * bytes it always did. `SHIPPED_PROMPT_BLOCK_IDS` (SDK) carries the same order.
  */
 
+/*
+ * 🚧 *Earlier in the story* sits after history and before the relationships,
+ * for comprehension: the compiled history, then the later scenes' summaries,
+ * then the lines. It buys nothing for prefix reuse — the per-turn lore already
+ * sits earlier. It has no blank line above it, like the pairs described
+ * above, so an empty block prints nothing and a session with no earlier scene
+ * renders the bytes it always did. `SHIPPED_PROMPT_BLOCK_IDS` (SDK) carries
+ * the same order.
+ */
+
 export const SHIPPED_CONTEXT_TEMPLATE = `{{#systemBlock}}
 
 {{#if instructions}}
@@ -119,6 +129,9 @@ export const SHIPPED_CONTEXT_TEMPLATE = `{{#systemBlock}}
 
 {{#if history}}
 {{{history}}}
+{{/if}}
+{{#if earlierScenes}}
+{{{earlierScenes}}}
 {{/if}}
 
 {{#if relationshipsPerspectives}}

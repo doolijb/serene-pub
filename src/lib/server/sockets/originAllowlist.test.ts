@@ -92,6 +92,19 @@ describe("isMissingOriginAllowed", () => {
 	})
 })
 
+describe("isSameOriginBrowserRequest", () => {
+	test("only the browser's own same-origin stamp counts", async () => {
+		const { isSameOriginBrowserRequest } = await import("./originAllowlist")
+		expect(isSameOriginBrowserRequest({ "sec-fetch-site": "same-origin" })).toBe(true)
+		expect(isSameOriginBrowserRequest({ "sec-fetch-site": "Same-Origin " })).toBe(true)
+		// Another site's page, a sibling subdomain, a typed address, nothing.
+		for (const site of ["cross-site", "same-site", "none", "", undefined, ["same-origin"]])
+			expect(isSameOriginBrowserRequest({ "sec-fetch-site": site })).toBe(false)
+		expect(isSameOriginBrowserRequest({})).toBe(false)
+		expect(isSameOriginBrowserRequest(null)).toBe(false)
+	})
+})
+
 describe("isLocalThroughProxy", () => {
 	test("ADDRESS_HEADER unset, local peer — true (baseline unaffected)", async () => {
 		const { isLocalThroughProxy } = await import("./originAllowlist")

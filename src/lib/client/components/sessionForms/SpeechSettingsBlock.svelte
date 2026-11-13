@@ -251,7 +251,7 @@
 				<ul class="flex flex-col gap-2">
 					{#each envoys as e (e.slug)}
 						{@const did = `envoy-${e.slug}-details`}
-						<li class="rounded-base border-surface-200-800 border p-2" data-envoy={e.slug}>
+						<li class="rounded-base bg-surface-50-950 p-2" data-envoy={e.slug}>
 							<div class="flex flex-wrap items-center gap-2 @sm:flex-nowrap">
 								<Avatar src={e.avatar} name={e.name} fallback="initial" size="sm" decorative />
 								<span class="min-w-0 flex-1 truncate text-sm font-medium @sm:w-32 @sm:flex-none @sm:shrink-0" title={e.name}>{e.name}</span>

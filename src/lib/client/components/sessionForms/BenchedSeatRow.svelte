@@ -40,7 +40,7 @@
 </script>
 
 <li
-	class="border-surface-200-800 rounded-base flex min-h-11 flex-wrap items-center gap-2 border p-2"
+	class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
 	data-dnd-handle
 >
 	{#if grip}

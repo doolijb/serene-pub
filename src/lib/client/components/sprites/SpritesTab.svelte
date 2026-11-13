@@ -1146,7 +1146,7 @@
 									{:else if isOwner}
 										<button
 											type="button"
-											class="text-surface-500 hover:text-primary-ink flex h-full w-full items-center justify-center border-2 border-dashed"
+											class="text-surface-500 hover:text-primary-ink border-surface-300-700 flex h-full w-full items-center justify-center border-2 border-dashed"
 											onclick={() =>
 												uploadInto(group.label)}
 											aria-label="Upload an image for {group.label}"

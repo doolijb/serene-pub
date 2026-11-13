@@ -370,7 +370,7 @@
 		{/each}
 
 		{#if selected}
-			<div class="border-surface-200-800 mt-1 rounded-lg border p-3">
+			<div class="bg-surface-100-900 mt-1 rounded-lg p-3">
 				<p class="text-xs font-medium">
 					Selected: <span class="text-primary-ink">
 						{selected.name}

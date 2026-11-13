@@ -87,7 +87,7 @@
 <section class="flex flex-col gap-2" aria-label="The tie's sides" data-tie-sides-block>
 	{#if reply && reply.sides.length}
 		{#each reply.sides as side (side.owner)}
-			<article class="border-surface-200-800 flex flex-col gap-1.5 rounded-md border p-2" data-tie-side={side.owner}>
+			<article class="panel-edge flex flex-col gap-1.5 rounded-md border p-2" data-tie-side={side.owner}>
 				<div class="flex flex-wrap items-baseline gap-2">
 					<strong class="text-sm">{side.ownerName}'s side</strong>
 					{#if side.exposed}<span class="text-surface-600-400 text-xs">shown to others</span>{/if}

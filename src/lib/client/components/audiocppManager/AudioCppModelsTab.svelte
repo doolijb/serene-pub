@@ -197,7 +197,7 @@
 							{@const arriving = arrivingOf(row)}
 							{@const effective = arriving ? "downloading" : row.state}
 							<li
-								class="border-surface-200-800 flex flex-wrap items-start justify-between gap-2 rounded-md border p-2"
+								class="bg-surface-100-900 flex flex-wrap items-start justify-between gap-2 rounded-md p-2"
 								data-package={row.id}
 							>
 								<!-- A real basis, so a narrow dock wraps the actions

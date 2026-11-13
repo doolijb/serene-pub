@@ -251,7 +251,7 @@ Under **Edit session › Settings**:
 | **What your lines are called** | Your lines' name, *Dungeon Master* when empty. |
 | **Ask before regenerating a turn** | Brings back the dialog you turned off with *Don't ask again*. |
 
-**Rules** and **How strict** are the session's own (see [Rules](./rulesets.md)); **Routines** lists **Keep the books**, **Keep the scratchpad**, **File the current room** and **Find where scenes begin**. A preset can lock a setting: **Words only** locks How strict and Rooms, and **The rules decide** locks How strict. Neither locks the rules.
+**Rules** and **How strict** are the session's own (see [Rules](./rulesets.md)); **Routines** lists **Keep the books**, **Keep the scratchpad**, **File the current room**, **Find where scenes begin** and **Summarize finished scenes** (a few rounds after a scene ends, with the Lair's own scene summarizer; see [Summarization](./summarization.md#finished-scenes-summarized-by-themselves)). 🚧 Unlike Story and the Dungeon Crawler, the Lair's turns don't read those summaries in place of older lines (*Earlier in the story*): a Lair scene's summary can draw on the Sanctum, which only the keeper sees. A preset can lock a setting: **Words only** locks How strict and Rooms, and **The rules decide** locks How strict. Neither locks the rules.
 
 ## Stats
 

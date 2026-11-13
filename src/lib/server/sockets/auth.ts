@@ -4,6 +4,7 @@ import { authenticate } from "$lib/server/providers/users/authenticate"
 import {
 	isOriginAllowed,
 	isLocalThroughProxy,
+	isSameOriginBrowserRequest,
 	getSocketClientAddress,
 	warnIfSocketAddressHeaderUnset
 } from "$lib/server/sockets/originAllowlist"
@@ -118,7 +119,11 @@ export async function authMiddleware(
 		const origin = socket.handshake.headers.origin as string | undefined
 		const requestHost = socket.handshake.headers.host as string | undefined
 		if (!origin) {
-			// No Origin header at all — a non-browser client (CLI tool, the
+			// No Origin header at all. One case is every browser tab: a live
+			// connection opens with a same-origin GET, which carries no
+			// Origin, and the browser's own `Sec-Fetch-Site: same-origin`
+			// is what says so (see isSameOriginBrowserRequest). The other is
+			// a non-browser client (CLI tool, the
 			// Android wrapper, server-to-server), not subject to the
 			// browser-mediated attack the check below defends against. Still
 			// scoped to the local network by default: an internet-reachable
@@ -128,7 +133,10 @@ export async function authMiddleware(
 			// depth-independent chain check (not just the raw peer address),
 			// so a reverse proxy in front of this server can't make every
 			// connection look local.
-			if (!isLocalThroughProxy(socket)) {
+			if (
+				!isSameOriginBrowserRequest(socket.handshake.headers) &&
+				!isLocalThroughProxy(socket)
+			) {
 				console.log(
 					`Socket connection with no Origin header from "${clientAddress}" — rejecting (not a local-network address; set ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
 				)

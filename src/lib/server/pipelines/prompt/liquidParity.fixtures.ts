@@ -62,6 +62,9 @@ export const SHIPPED_CONTEXT_TEMPLATE_LIQUID = `{%- systemBlock -%}
 {%- if history -%}
 {{ history }}
 {%- endif -%}
+{%- if earlierScenes -%}
+{{ earlierScenes }}
+{%- endif -%}
 
 {%- if relationshipsPerspectives -%}
 {{ relationshipsPerspectives }}

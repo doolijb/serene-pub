@@ -411,6 +411,34 @@ const anchoredEntries = (key: string): string =>
 	].join("\n")
 
 /**
+ * 🚧 The earlier scenes — `{ name, summary }` each, oldest first — as one
+ * heading over minified JSON, byte for byte `JSON.stringify` of the list
+ * mapped to `{ name, summary }`.
+ *
+ * ```
+ * [
+ *   {{~#each earlierScenes~}}
+ *     {"name":{{{jsonValue name indent=0}}},"summary":{{{jsonValue summary indent=0}~}}
+ *     }{{#unless @last}},{{/unless}}
+ *   {{~/each~}}
+ * ]
+ * ```
+ *
+ * No `{{#if}}`, for the reason `recordEntries` gives; an empty list is
+ * `renderVariable`'s absence rule (`render` returns `""`), which drops the
+ * heading too, so the layout never has to.
+ */
+const earlierSceneEntries = (key: string): string =>
+	[
+		`[`,
+		`  {{~#each ${key}~}}`,
+		`    {"name":{{{jsonValue name indent=0}}},"summary":{{{jsonValue summary indent=0}~}}`,
+		`    }{{#unless @last}},{{/unless}}`,
+		`  {{~/each~}}`,
+		`]`
+	].join("\n")
+
+/**
  * `JSON.stringify(x, null, 1)`, which is what the narrative graph produced.
  *
  * One space, not two, and the difference reached every prompt that had a
@@ -767,6 +795,32 @@ const VARIABLES: VariableDefinition[] = [
 		wrapper: {
 			name: "Titled JSON block",
 			wrap: jsonBlock("Story history:")
+		}
+	},
+	/**
+	 * 🚧 *Earlier in the story*: one heading, then per scene its name and
+	 * summary, oldest first. An empty list renders nothing, heading included.
+	 */
+	{
+		variableId: "core:var/earlier-scenes@1",
+		key: "earlierScenes",
+		content: {
+			name: "JSON",
+			source: earlierSceneEntries("earlierScenes"),
+			render: (v: unknown): string => {
+				if (!Array.isArray(v) || v.length === 0) return ""
+				return JSON.stringify(
+					v.map((s: { name: unknown; summary: unknown }) => ({
+						name: s.name,
+						summary: s.summary
+					}))
+				)
+			},
+			explicit: true
+		},
+		wrapper: {
+			name: "Titled JSON block",
+			wrap: jsonBlock("Earlier in the story:")
 		}
 	},
 	/**

@@ -133,7 +133,7 @@
 {#if tabs.length}
 	<div
 		data-lore-inspector
-		class="border-surface-200-800 flex flex-col gap-2 border-t pt-2"
+		class="flex flex-col gap-2"
 	>
 		<div class="flex flex-wrap gap-1" role="tablist" aria-label="Inspector">
 			{#each tabs as tab (tab.id)}

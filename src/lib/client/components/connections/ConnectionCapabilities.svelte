@@ -218,7 +218,7 @@
 			</span>
 			{#if row.assumed}
 				<span
-					class="text-surface-600-400 border-b border-dotted text-meta"
+					class="text-surface-600-400 border-surface-300-700 border-b border-dotted text-meta"
 					title="Nothing has tested this connection, so this is the connection type's own guess."
 				>
 					Assumed

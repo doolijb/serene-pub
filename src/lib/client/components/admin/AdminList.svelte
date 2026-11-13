@@ -528,16 +528,16 @@
 </div>
 
 <style>
-	/* A clickable card's hover edge. Plain CSS rather than a `hover:` utility:
-	   `panel-card` sets its border under a `dark:` variant, which would win
-	   over a bare `hover:border-*` in dark mode. */
+	/* A clickable card's cue. A card has no border (2026-11-12), so the cue
+	   is the row-hover fill, and keyboard focus gets a primary outline: the
+	   border colour this used to set shows nothing without a border width. */
 	.admin-card-link:hover,
 	.admin-card-link:focus-visible {
-		border-color: color-mix(
-			in oklab,
-			var(--color-primary-500) 50%,
-			transparent
-		);
+		background-color: var(--color-surface-200-800);
+	}
+	.admin-card-link:focus-visible {
+		outline: 2px solid var(--color-primary-500);
+		outline-offset: 2px;
 	}
 	/* Intrinsically container-responsive: auto-fill needs no breakpoints. */
 	.card-grid {

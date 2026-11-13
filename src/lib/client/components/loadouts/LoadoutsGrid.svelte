@@ -25,7 +25,7 @@
 		{@const GroupIcon = (Icons as any)[group.icon] ?? Icons.Boxes}
 		<section aria-label={group.label}>
 			<header
-				class="border-surface-200-800 mb-2 flex items-center gap-2 border-b pb-1"
+				class="mb-2 flex items-center gap-2"
 			>
 				<GroupIcon size={14} class="shrink-0" aria-hidden="true" />
 				<h3 class="min-w-0 flex-1 truncate text-xs font-semibold">
@@ -42,7 +42,7 @@
 					<button
 						type="button"
 						class="panel-card hover:preset-tonal-primary focus-visible:ring-primary-500 flex min-h-[88px] min-w-0 flex-col gap-1 !p-3 text-left focus-visible:ring-2 focus-visible:outline-none {tile.isDefault
-							? 'border-primary-500/40!'
+							? 'border border-primary-500/40!'
 							: ''}"
 						data-default={tile.isDefault || undefined}
 						aria-label={tileLabel(tile)}

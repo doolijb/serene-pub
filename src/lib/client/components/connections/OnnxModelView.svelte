@@ -360,7 +360,7 @@
 		<!-- 1. STATUS. What this model is right now, and the one thing to do
 		     about it. -->
 		<div
-			class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 {isActive
+			class="card preset-filled-surface-100-900 flex flex-col gap-3 p-3 [&_[data-quant-picker]]:bg-surface-50-950 {isActive
 				? 'ring-primary-500/70 ring-2'
 				: ''}"
 		>

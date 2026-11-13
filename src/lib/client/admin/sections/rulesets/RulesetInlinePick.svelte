@@ -100,7 +100,7 @@
 			tabindex="-1"
 			aria-label={label}
 			aria-multiselectable={many || undefined}
-			class="panel-card absolute top-full left-0 z-30 mt-1 flex max-h-72 min-w-56 flex-col gap-0.5 overflow-auto p-1 text-sm shadow-lg"
+			class="bg-surface-50-950 panel-edge rounded-container absolute top-full left-0 z-30 mt-1 flex max-h-72 min-w-56 flex-col gap-0.5 overflow-auto border p-1 text-sm shadow-lg"
 			onkeydown={onKey}
 		>
 			{#each choices as c (c.value)}

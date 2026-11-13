@@ -205,7 +205,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was 'e396fa6e5ffb8')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1ba28f5858a4c3')
 	// Moved 2026-11-11 (sense-clk2, owner ruling "Remove it"): the per-reply tick is gone — no `tick` node, no `clock` junction, no `clock.moves.advance`; Story's clock is moved by the round tick (one default owner). Edited in place. (was "e396fa6e5ffb8")
-	"core:spec/story-respond@1.21.0": "757e3c34b4284",
+	"core:spec/story-respond@1.21.0": "12007bbfaccef3" /* (was "757e3c34b4284") — lead, sense-prm 2026-11-12: the earlier-scenes query and block */,
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -948,7 +948,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "15aa6f9a036898")
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was '1f9200326c48e5')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '3101ab26e6aea')
-	"core:spec/story-side-character@1.0.0": "1f9200326c48e5",
+	"core:spec/story-side-character@1.0.0": "96a5d6e7ab8c5" /* (was "1f9200326c48e5") — lead, sense-prm 2026-11-12: the earlier-scenes query and block */,
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -1029,7 +1029,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-21 (PLAN-layering repair 1): the `heard` step declares no status — a declared one shows on every run; the step says *listening* only when it hears. (was "14543f10b90f87")
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was '1015774ca55aa6')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1b0768b11a79c')
-	"core:spec/story-narrate@1.11.0": "1015774ca55aa6",
+	"core:spec/story-narrate@1.11.0": "11626bcaa736fa" /* (was "1015774ca55aa6") — lead, sense-prm 2026-11-12: the earlier-scenes query and block */,
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -1754,7 +1754,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-11-10 (hist-D1, ★H4 + ★C1): a death writes `update-cast-member@1 {nodeState: "deceased"}` and a `progress.fallen` item instead of a history cairn; the turn moves the session story clock (`advance-story-clock@1`, cause `action`) instead of `crawl-time`; the Narrator names a death in its own sentence. Edited in place. (was "1a18135c4edb35")
 	// Moved 2026-11-11 (bench-L3, benched seats ★4): the genre carries `writes.seats: true`, and the story turn gains the `companions` junction (`fates` → each `companion` → `set-seat-bench@1` `bench`, then `update-cast-member@1` `state`) for a companion's death or story revival; the Planner's turn grammar gains `fallenCompanions` / `revivedCompanions`. Edited in place. (was "1dbe9e4d1a637a")
 	// Moved 2026-11-11 (bench verification): the companion junction's two steps are headed "The companion's cast member" / "The companion's new state", so no two steps of the spec read alike (groups.int). Labels only. Edited in place. (was "14977e35fe6578")
-	"core:spec/dungeon-crawler-respond@1.0.0": "c4c7152584fda",
+	"core:spec/dungeon-crawler-respond@1.0.0": "9539a78373383" /* (was "c4c7152584fda") — lead, sense-prm 2026-11-12: the earlier-scenes query and block */,
 	// NEW 2026-10-15 (the story-turn lane): Rest (no model call) and what
 	// follows the goal (its form; one call for a new goal). 🚧
 	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the rest's
@@ -1783,7 +1783,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-18 (the 100-turn walk, lane A): End has the Narrator close the adventure at once (`route.closing.*`, the narrate row and template). (was "118dc8ba87098b")
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '543d52c482263')
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '94629a034f581')
-	"core:spec/dungeon-crawler-goal@1.0.0": "169cb881199cd5",
+	"core:spec/dungeon-crawler-goal@1.0.0": "f76fb724eef6d" /* (was "169cb881199cd5") — lead, sense-prm 2026-11-12: the earlier-scenes query and block */,
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '1524465e47d46c')
 	"core:spec/dungeon-crawler-answer-form@1.0.0": "1e7803cf9f381",
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'b315665323b9a')
@@ -1934,7 +1934,8 @@ const PUBLISHED: Record<string, string> = {
 	// NEW 2026-11-11 (sense-clk, PLAN-sensible-engine §2.11): each round moves the story clock — an event pipeline on round-ended, registered by Story and the Lair; no model. 🚧
 	// Moved 2026-11-11 (sense-clk2, owner ruling "Remove it" / "Story should be round"): reads the round worth (`core:query/round-worth@1`) and feeds its step to the clock; its exposed *By* setting is gone, and only Story registers it. Edited in place. (was "8090bdc19f449")
 	// Moved 2026-11-11, sense-clk3 + sense-clk4: Words only registers the round tick and the tick steps aside while the Lair keeper runs (steps `modes` and `keeper`, branches review, full, tick); compile lists a clause's member-less branches last, by name (tick, full, review). Edited in place. (was "123220d7c924ea")
-	"core:spec/scene-boundaries@1.0.0": "bb370142425c8" /* new — lead, sense-scn 2026-11-12: the scenes routine */,
+	"core:spec/scene-boundaries@1.0.0": "1e8c550568e1f5" /* (was "bb370142425c8") — lead, sense-sum 2026-11-12: its purpose sentence, now allowed on a spec that calls no model */,
+	"core:spec/scene-summaries@1.0.0": "1b6e3f7460bd58" /* new — lead, sense-sum 2026-11-12: the routine that summarizes finished scenes */,
 	"core:spec/round-tick@1.0.0": "123220d7c924ea" /* (was "17442b115a76f") — lead, sense-st2b 2026-11-11: the keeper gate is gone; back to the hash before sense-clk3. */
 }
 

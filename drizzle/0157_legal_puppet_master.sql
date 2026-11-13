@@ -1,0 +1,1 @@
+ALTER TABLE "scenes" ADD COLUMN "summary_origin" text;

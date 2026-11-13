@@ -90,6 +90,9 @@ The shipped **Default** template, exactly as it is:
 {{#if history}}
 {{{history}}}
 {{/if}}
+{{#if earlierScenes}}
+{{{earlierScenes}}}
+{{/if}}
 
 {{#if relationshipsPerspectives}}
 {{{relationshipsPerspectives}}}
@@ -185,6 +188,7 @@ All of these may be empty, so wrap each in `{{#if …}}`. Use triple braces, `{{
 - **`scenario`**: the session's scenario.
 - **`worldLore`**: the world lore chosen for this turn, most relevant first.
 - **`history`**: summaries of earlier parts of the story, newest first, each headed by its date.
+- **`earlierScenes`** 🚧: the summaries of this session's finished scenes whose lines are no longer in the prompt, oldest first, each with its scene's name, under the heading _Earlier in the story:_. Empty until the conversation is long enough to be cut, and in a pipeline that doesn't read earlier scenes. See [Earlier in the story](#earlier-in-the-story).
 - **`relationshipsPerspectives`** and **`relationshipsKnown`**: how the speaking character sees the others, and how they are seen in return (plus well-known figures marked **legendary**). Built fresh for whoever is speaking, whenever the speaker is bound in the session's lorebook (or, with none, its **Session notes**).
 - **`docsExcerpts`**: the Guide's documentation excerpts, only on the Guide's reply (see [Guide](./genres.md#guide)).
 - **`recalledLines`**: older lines of the conversation found again because they name what the scene names now, one per line (_Earlier (turn 12) — Mira: I hid the brass key under the chapel floor._). No shipped pipeline or template uses it yet; to use it, set Entity search's **Earlier messages found by name** above 0 and place `{{{recalledLines}}}` in your template.
@@ -350,6 +354,18 @@ An entry's **Priority** (see [Lorebooks](./lorebooks.md)) adds a bonus. Entries 
 - When the model's context window is full, nothing more is added that turn. **Context Tokens** in the [sampling config](./connections.md#sampling-configs) sets the window.
 - When the conversation itself no longer fits, its oldest messages are left out: enough to free about a quarter of the budget at once, starting at a message kept for the next turns, so the start of the prompt stays the same until the conversation outgrows it again. The run inspector's **Prompt** tab says how many were left out.
 - How much of the conversation is read in the first place follows the context window too, not a count of messages: a reply reads about twice what the window could hold (up to 2,000 messages), so a long session never loses a message off its start on every turn just because it passed a fixed number. Steps that ask the model a question rather than continue the story (answering a form, Story's **Ask**, the Lair's room drafting) still read the newest **100**, set by the history read's **Limit** in [Admin › Pipelines](./pipelines.md).
+
+### Earlier in the story
+
+🚧 When the oldest messages are left out, the summaries of the scenes they belonged to take their place, in the `{{{earlierScenes}}}` block (_Earlier in the story:_), which the Default template places after `{{{history}}}`.
+
+- **Which scenes.** Every finished scene on the main channel that has lost at least one of its lines from the prompt, has a saved summary (yours, or one **Summarize finished scenes** saved), and isn't compiled into a history entry yet. A scene that lost only its first lines is included too, so the model may read its last lines twice. A scene made by selecting messages counts from its first selected message. Oldest first, each with its name.
+- **Which summaries don't count.** One being written, one waiting for review, one that failed, one marked out of date, and one **Back** took back (it returns with **Forward**). The scenes around it still show.
+- **Its own share of the window.** The block may take **Share — earlier scenes** of the window (0.15 by default, on the **Earlier scenes** step). When the summaries don't fit, the oldest are left out first.
+- **Nothing else moves.** No message is left out because a summary exists. The cut that decides where the conversation starts counts the block, so the start of the prompt still stays the same from turn to turn.
+- **Once compiled**, a scene leaves this block and reaches the prompt as history does, when retrieval chooses its history entry.
+- **Who reads it.** Story's reply, **Narrate** and a side character's turn, and the Dungeon Crawler's Narrator. The Lair's turns don't (see [The Lair](./genre-lair.md)). In a pipeline that doesn't read earlier scenes the block is empty.
+- **Checking what happened.** The run inspector's **Prompt** tab names the scenes whose summaries were included and how many older ones were left out. To stop it, leave **Earlier in the story** out under [Prompt blocks](./pipelines.md#prompt-blocks).
 
 ## Why character, persona, and lore data is JSON, not prose
 

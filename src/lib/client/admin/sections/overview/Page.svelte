@@ -353,7 +353,7 @@
 					{@const IconCmp = Icons[card.icon] as any}
 					<a
 						href={card.lines.find((l) => l.href)?.href ?? card.href}
-						class="panel-card hover:border-surface-400-600 focus-visible:outline-primary-500 flex flex-col gap-3 transition-colors focus-visible:outline-2"
+						class="panel-card hover:bg-surface-200-800 focus-visible:outline-primary-500 flex flex-col gap-3 transition-colors focus-visible:outline-2"
 					>
 						<div class="flex items-center gap-2">
 							<IconCmp

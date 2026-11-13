@@ -252,7 +252,7 @@
 							{#each group.themes as t (t.value)}
 								{@const isSelected = selectedTheme === t.value}
 								<label
-									class="bg-surface-50-950 border-surface-200-800 hover:border-surface-400-600 has-[:focus-visible]:ring-primary-500 rounded-container relative flex cursor-pointer flex-col gap-2 border p-2 has-[:focus-visible]:ring-2 {isSelected
+									class="bg-surface-50-950 hover:bg-surface-200-800 has-[:focus-visible]:ring-primary-500 rounded-container relative flex cursor-pointer flex-col gap-2 p-2 has-[:focus-visible]:ring-2 {isSelected
 										? 'ring-primary-500 ring-offset-surface-100 dark:ring-offset-surface-900 ring-2 ring-offset-2'
 										: ''}"
 								>
@@ -268,7 +268,7 @@
 									     ink bars and an accent pill. -->
 									<div
 										data-theme={t.dataTheme}
-										class="bg-surface-50-950 border-surface-200-800 flex h-16 flex-col justify-center gap-1.5 rounded-lg border px-3"
+										class="bg-surface-100-900 flex h-16 flex-col justify-center gap-1.5 rounded-lg px-3"
 										aria-hidden="true"
 									>
 										<span

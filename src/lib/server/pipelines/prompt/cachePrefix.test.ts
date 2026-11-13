@@ -154,6 +154,42 @@ describe("KoboldCPP chat wire — turn N+1 starts with turn N plus its reply", (
 	})
 })
 
+describe("🚧 Earlier in the story — the block and the cache prefix", () => {
+	const scenes = (names: string[]) => names.map((n) => ({ name: n, summary: `${n} summary.` }))
+	const lines = (from: number, to: number) =>
+		Array.from({ length: to - from + 1 }, (_, i) => {
+			const id = from + i
+			return line(id, id % 2 ? "user" : "assistant", id % 2 ? "Jody" : "Aria", `Line ${id}.`)
+		})
+
+	it("turn N+1 starts with turn N when no scene left the transcript, scenes being eligible", async () => {
+		// Both turns keep from line 5: the same scenes show on each.
+		const earlierScenes = scenes(["The Ford", "The Inn"])
+		const turnN = await chatPrompt([...lines(5, 8), seed()], { earlierScenes })
+		const turnN1 = await chatPrompt([...lines(5, 10), seed()], { earlierScenes })
+		expect(turnN.text).toContain("The Inn summary.")
+		const upToLastLine = turnN.text.slice(0, turnN.text.lastIndexOf("<|im_start|>user"))
+		expect(turnN1.text.startsWith(upToLastLine)).toBe(true)
+	})
+
+	it("when a scene left the transcript, the two prompts are equal up to the block and differ first inside it", async () => {
+		const turnN = await chatPrompt([...lines(5, 8), seed()], {
+			earlierScenes: scenes(["The Ford"])
+		})
+		// The cut moved past the start of "The Inn": its summary joins the block.
+		const turnN1 = await chatPrompt([...lines(7, 10), seed()], {
+			earlierScenes: scenes(["The Ford", "The Inn"])
+		})
+		const at = turnN.text.indexOf('[{"name":"The Ford"')
+		expect(at).toBeGreaterThan(0)
+		expect(turnN1.text.slice(0, at)).toBe(turnN.text.slice(0, at))
+		const firstDiff = [...turnN.text].findIndex((c, i) => c !== turnN1.text[i])
+		const blockEnd = turnN.text.indexOf("\n```", at)
+		expect(firstDiff).toBeGreaterThanOrEqual(at)
+		expect(firstDiff).toBeLessThan(blockEnd + 4)
+	})
+})
+
 describe("the parity guard — no connection in scope", () => {
 	it("renders the seed line and keeps system text in place, as it always did", async () => {
 		const r = await render({

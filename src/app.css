@@ -396,13 +396,16 @@
 
    One step lighter than the ground it sits on: the panes are surface-950 in
    the dark themes and surface-50 in the light ones, which makes surface-900
-   and surface-100 the steps a card reads against without a shadow.
+   and surface-100 the steps a card reads against without a shadow. The fill
+   is the edge: no border (owner, 2026-11-12). A card inside a card takes the
+   inset fill (`bg-surface-50-950`) so it does not vanish; a signal edge on a
+   card writes its own `border` beside the colour.
 
    @utility rather than a plain rule, matching .panel-actions below: a call
    site adds its own layout utilities beside this one, and an unlayered rule
    beats every Tailwind utility regardless of specificity. */
 @utility panel-card {
-	@apply border-surface-200-800 bg-surface-100-900 rounded-container border p-4;
+	@apply bg-surface-100-900 rounded-container p-4;
 }
 
 /* The card's edge on its own, for a bordered box that is not a section card
@@ -415,7 +418,10 @@
 }
 
 /* A section inside a card, one step back toward the ground (950 on a 900
-   card) — the replacement for a `border-t` separator between sections. */
+   card) — the replacement for a `border-t` separator between sections. It
+   keeps its hairline for now (2026-11-12): at dock width the lorebook
+   editors sit on the bare 950 ground, where the border is an inset's only
+   edge. */
 @utility panel-inset {
 	@apply border-surface-200-800 bg-surface-50-950 rounded-base border p-3;
 }

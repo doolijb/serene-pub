@@ -475,9 +475,9 @@
 							{@const v = shown(row)}
 							{@const own = shownLimits(row)}
 							<li
-								class="bg-surface-50-950 border-surface-200-800 flex flex-col gap-2 rounded-lg border p-2.5 {row.writable
+								class="bg-surface-50-950 flex flex-col gap-2 rounded-lg p-2.5 {row.writable
 									? ''
-									: 'opacity-70'} {slotId in values || slotId in limits ? 'border-primary-500/60' : ''}"
+									: 'opacity-70'} {slotId in values || slotId in limits ? 'border border-primary-500/60' : ''}"
 								data-card-stat={slotId}
 							>
 								<div class="flex min-w-0 flex-wrap items-baseline gap-x-2">

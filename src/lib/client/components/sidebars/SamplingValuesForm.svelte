@@ -301,7 +301,7 @@
 													(values[key] = parseFloat(
 														e.currentTarget.value
 													))}
-												class="border-primary input w-24 rounded border py-0.5 text-center"
+												class="border-surface-200-800 input w-24 rounded border py-0.5 text-center"
 												onblur={() =>
 													(editingField = null)}
 												onkeydown={(e) => {

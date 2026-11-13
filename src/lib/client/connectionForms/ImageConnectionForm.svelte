@@ -267,7 +267,7 @@
 	<!-- Everything below is this backend's own, rendered from what its adapter
 	     declares. Core has no idea what any of these fields mean. -->
 	{#if profileSchema && Object.keys(profileSchema).length}
-		<div class={embedded ? "mt-6" : "border-surface-500/20 mt-5 border-t pt-4"}>
+		<div class="mt-6">
 			<h4 class="mb-1 flex items-center gap-1.5 font-semibold">
 				<Icons.SlidersHorizontal size={14} />
 				{embedded ? "Image generation" : "Backend Settings"}
@@ -293,7 +293,7 @@
 
 	{#if capabilities?.size && capabilities.size.kind !== "free"}
 		<p
-			class="text-surface-600-400 border-surface-500/20 mt-3 rounded border p-2 text-xs"
+			class="text-surface-600-400 panel-edge mt-3 rounded border p-2 text-xs"
 		>
 			<Icons.Info size={12} class="mr-1 inline" />
 			This backend renders at a fixed set of sizes. A width and height that
@@ -355,7 +355,7 @@
 				{/if}
 
 				{#if generating}
-					<div class="border-surface-500/20 rounded-lg border p-2">
+					<div class="panel-edge rounded-lg border p-2">
 						<div
 							class="text-surface-600-400 mb-1 flex items-center justify-between text-xs"
 						>

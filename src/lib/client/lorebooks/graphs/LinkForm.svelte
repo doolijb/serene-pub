@@ -94,7 +94,7 @@
 </script>
 
 <div
-	class="bg-surface-200-800 panel-edge flex flex-col gap-2 rounded-lg border p-3 text-sm"
+	class="bg-surface-200-800 flex flex-col gap-2 rounded-lg p-3 text-sm"
 	data-graph-link-form
 >
 	<div class="flex items-center gap-2">

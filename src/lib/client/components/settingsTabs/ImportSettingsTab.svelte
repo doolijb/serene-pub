@@ -912,7 +912,7 @@
 						</div>
 
 						<!-- Import Confirmation -->
-						<div class="border-surface-400-600 mt-6 border-t pt-4">
+						<div class="mt-6">
 							<div class="mb-4 flex items-center gap-2">
 								<Switch
 									name="confirm-import"

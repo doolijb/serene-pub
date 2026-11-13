@@ -4869,6 +4869,16 @@ export const scenes = pgTable(
 		/** The summarize-scene spec that last processed this scene (receipt). */
 		processedBySpecId: text("processed_by_spec_id"),
 		/**
+		 * 🚧 Who saved the scene's `done` summary: `routine` (the scene summaries
+		 * routine, under Full: not yet the record, Back may undo it, it never
+		 * settles) or `person`. NULL reads as a person's, so every row stored
+		 * before this column behaves as before. It stays `routine` when Back
+		 * resets a routine-saved summary to `none`, which lets the routine take
+		 * the scene again. Written by the one scene-summary writer
+		 * (`sockets/scenes.ts`).
+		 */
+		summaryOrigin: text("summary_origin").$type<SceneSummaryOrigin>(),
+		/**
 		 * 🚧 Scene notes (`core:outlet/note-scene@1`, ★S4 2026-11-10): facts a
 		 * run noted in the scene that are not story lines (a death, a treaty, a
 		 * clock jump), oldest first. `runId` is `run:<id>`'s id, `messageId`
@@ -4954,6 +4964,9 @@ export type SceneSummaryStatus =
 	| "review"
 	| "done"
 	| "failed"
+
+/** Who saved a scene's `done` summary (`scenes.summary_origin`); NULL reads as `person`. */
+export type SceneSummaryOrigin = "person" | "routine"
 
 /**
  * Which characters are in a scene, and how — replacing the untyped

@@ -890,8 +890,9 @@
 						Refresh
 					</button>
 				{/snippet}
+				<!-- A card inside this fieldset's card takes the inset fill. -->
 				<div
-					class="flex min-w-0 flex-col gap-3"
+					class="flex min-w-0 flex-col gap-3 [&_.panel-card]:bg-surface-50-950"
 					bind:clientWidth={modelsWidth}
 				>
 					{#if localOnnxBlocked}

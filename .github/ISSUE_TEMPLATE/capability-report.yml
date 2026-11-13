@@ -96,7 +96,7 @@ body:
       attributes:
           label: Serene Pub version
           description: Settings › About shows it.
-          placeholder: 0.6.0-pr-7
+          placeholder: 0.6.0-pr-8
       validations:
           required: true
     - type: textarea

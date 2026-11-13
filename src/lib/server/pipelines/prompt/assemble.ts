@@ -570,6 +570,12 @@ export interface RenderInput extends RenderRun {
 	/** Everything else the template references — characters, personas, scenario. */
 	templateContext?: Record<string, unknown>
 	/**
+	 * 🚧 The scenes the binding chose for *Earlier in the story*
+	 * (`core:var/earlier-scenes@1`), oldest first. Absent or empty renders
+	 * nothing.
+	 */
+	earlierScenes?: ReadonlyArray<{ name: string; summary: string }>
+	/**
 	 * The annex as a template reads it — `annex.<owner>.<key>` (typed
 	 * templates P6): every declared key of every owner in scope, from
 	 * `core:query/session-annex@1` with `view: 'template'` on Assemble's
@@ -804,6 +810,11 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		)
 	)
 
+	const earlierScenesLaidOut = await layout(
+		"earlierScenes",
+		input.earlierScenes?.length ? input.earlierScenes : undefined
+	)
+
 	refuseBandCollisions(declared, input.prompts, input.templateContext)
 	const bandsInPlay = includedBandKeys(included, laidOut, declared)
 	const annex = templateAnnexValue(input.annex, input.prompts, input.templateContext)
@@ -836,6 +847,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		characterLore: laidOut.characterLore,
 		history: laidOut.history,
 		currentDate: currentDateLaidOut,
+		earlierScenes: earlierScenesLaidOut,
 		sessionMessages: input.messages,
 		// Script injections, resolved from depth to a render index — the same
 		// arithmetic and the same moment as `postHistory.targetIndex` (§20):
@@ -947,7 +959,9 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			const text =
 				key === "currentDate"
 					? currentDateLaidOut
-					: key in laidOut
+					: key === "earlierScenes"
+						? earlierScenesLaidOut
+						: key in laidOut
 						? laidOut[key]
 						: (LAID_OUT_CONTEXT_KEYS as readonly string[]).includes(key)
 							? (context as Record<string, unknown>)[key]
@@ -971,7 +985,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			laidOutSafeFor(
 				input.engine,
 				neutralizeRenderScope(context),
-				[...LAID_OUT_CONTEXT_KEYS, ...CORE_RENDERED_BANDS, "currentDate", ...declared]
+				[...LAID_OUT_CONTEXT_KEYS, ...CORE_RENDERED_BANDS, "currentDate", "earlierScenes", ...declared]
 			),
 			explicit.renders && neutralizeRenderScope(explicit.renders)
 		),
@@ -1133,7 +1147,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			// line (`explicit.uses`) says what it rendered through.
 			const placed = new Set(referencedVariables(explicit.template))
 			const layouts = [
-				...[...CORE_RENDERED_BANDS, ...declared, "currentDate"]
+				...[...CORE_RENDERED_BANDS, ...declared, "currentDate", "earlierScenes"]
 					.filter((key) => placed.has(key))
 					.map((key) => layoutUseOf(input.variables, key)),
 				...explicit.uses

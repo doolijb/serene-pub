@@ -156,7 +156,7 @@
 
 	{#if hasErrors}
 		<div
-			class="panel-card border-error-500/60! mb-4 flex flex-col gap-2"
+			class="panel-card border-error-500/60! mb-4 flex flex-col gap-2 border"
 			role="alert"
 		>
 			<p class="text-error-600-400 flex items-center gap-2 text-sm font-medium">

@@ -229,7 +229,7 @@
 			{@const n = pos + 1}
 			{@const isOff = stroke.when?.mode === "off"}
 			<li
-				class="bg-surface-50-950 border-surface-200-800 data-[drop-target=true]:border-primary-500 flex flex-col gap-2 rounded-lg border p-2"
+				class="bg-surface-50-950 data-[drop-target=true]:border-primary-500 flex flex-col gap-2 rounded-lg border border-transparent p-2"
 				data-stroke-key={key}
 				data-stroke-row={n}
 				use:rowDrag={{

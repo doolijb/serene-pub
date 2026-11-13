@@ -112,7 +112,8 @@ The same three questions decide almost every colour:
 
 **What is it sitting on?** Grounds alternate between `950` and `900`. The sidebar and popovers are
 `950`; the page is `900`. A card on the sidebar is `900`; an input or card on the page is `950`.
-Never stack the same stop on itself. Borders are `800` on either ground.
+Never stack the same stop on itself. Borders are `800` on either ground. A card has no border: its
+fill, one step off the ground, is its edge (owner, 2026-11-12; §6.4).
 
 **Can the user act on it?** Then it is `primary`. A primary button is `preset-filled-primary-500`,
 which under Lamplight is gold with dark text (contrast well above 7:1). Focus rings are
@@ -231,7 +232,8 @@ preferred. A component that only declares dark stops is a bug, even if it looks 
 `text-muted-foreground` — and 43 of them were swept in L13. The grounds are three tiers: ground
 `surface-100-900` (a card), panel `surface-50-950` (the sidebar, a popover, an inset), raised
 `surface-200-800` (a chip, a hover, a selected row); the hairline is one,
-`border-surface-200-800` (`panel-card`, `panel-edge`, `panel-inset` included). `surface-300-700`
+`border-surface-200-800` (`panel-edge`, `panel-inset` included; this note also named `panel-card`,
+superseded for cards by the owner's go of 2026-11-12: a card has no border). `surface-300-700`
 is kept for what must read stronger than a hairline: a dashed drop zone, a meter's track, a
 divider dot. Alpha glass (`950/60` over art, `50-950/50` wells) is its own case.
 
@@ -1147,11 +1149,28 @@ then `+N more`). Tags are the human ones only — Hugging Face answers with `lic
 `arxiv:…` and `base_model:…` mixed in, and four chips of machine metadata is four chips nobody
 reads. The licence rides the facts line instead.
 
-A card is `rounded-[12px] border border-surface-800` with `p-4`, on the ground one step lighter
-than what it sits on. That recipe is the `.panel-card` utility in `app.css`, paired for light mode;
-use it rather than spelling the four classes out again. Section cards carry a 12px **muted** label or a
+A card is `bg-surface-100-900 rounded-container p-4` — **no border**: on the `50-950` sidebar
+ground its fill, one step lighter, is its edge (owner, 2026-11-12: borders on cards were noise in
+what should be a clean, minimal look). That recipe is the `.panel-card` utility in `app.css`;
+use it rather than spelling the classes out again. Section cards carry a 12px **muted** label or a
 14px medium heading, then content. (It said quiet until 2026-09-25 — see the quiet-is-for-icons rule above: a label is text a reader uses.) Empty sections are not rendered; the card boundary is the
 separator, so there is no rule between cards.
+
+Three consequences of the borderless card (2026-11-12):
+
+- **A card inside a card** takes the inset fill, `bg-surface-50-950`, or it vanishes. When the inner
+  card is a component that also sits on the bare ground elsewhere, set it at the call site
+  (`[&_[data-quant-picker]]:bg-surface-50-950` on the outer card), never by changing the component.
+- **A signal edge** on a card (a status card's gold, red or green edge, the default tile, a warning
+  or error card) writes its own `border` beside the colour: `border border-warning-500`.
+- **A box whose only boundary was an outline** (a seat row, a list row, a details block with no
+  fill) takes the other of the two grounds from its immediate parent — `bg-surface-50-950` inside a
+  card or a `100-900` box, `bg-surface-100-900` on the sidebar ground or inside an inset — with no
+  border, keeping its radius and padding. An interactive one that used a border colour as its hover
+  cue moves the cue to the fill (`hover:bg-surface-200-800`). **Where the parent's ground depends on
+  the width or the call site** (anything inside a lorebook editor, which sits in a card at desk width
+  and on the bare ground in the dock; a component rendered on both grounds), no fixed fill reads in
+  both, so the box keeps its hairline as `panel-edge border`.
 
 **Badges** (L13, 2026-10-24). A short label in a pill — a count, a status word, a kind,
 _Default_ — is **`Badge`** (`components/Badge.svelte`): `tone` `surface` (default) · `primary` ·
@@ -1209,10 +1228,14 @@ opening under it on Change. Name first; in the 400px dock at 900px tall, Name, e
 Preset row show without scrolling.
 
 Two siblings carry the same edge (2026-10-02, notes 3/24 — the Settings view's treatment is the
-reference for every sidebar view, Lorebooks first): **`.panel-edge`** is the card's border tone on
-its own, for a bordered strip that is not a section card (a chip bar, a guide line); **`.panel-inset`**
-is a section inside a card, one step back toward the ground, replacing a `border-t` between
-sections. Never write a bare `border` / `border-l` / `border-t`: Tailwind 4's default border colour
+reference for every sidebar view, Lorebooks first; superseded for cards by the owner's go of
+2026-11-12, when the card lost its border and kept its fill): **`.panel-edge`** is the hairline tone
+on its own, for a bordered strip that is not a section card (a chip bar, a guide line); **`.panel-inset`**
+is a section inside a card, one step back toward the ground (`bg-surface-50-950` with the hairline),
+replacing a `border-t` between sections. **The inset keeps its hairline for now** (2026-11-12): at
+dock width the lorebook editors sit straight on the `50-950` sidebar ground, not in a card, so an
+inset there is `50-950` on `50-950` and its border is its only edge; a borderless inset waits on
+those editors sitting in a card at every width. Never write a bare `border` / `border-l` / `border-t`: Tailwind 4's default border colour
 is `currentColor`, which is how white bars ended up between the Lorebooks panes. A pane split (list
 beside editor) is two cards or a list beside a `.panel-card` — never a rule. Since notes 24 (2026-10-02) the
 shell's own edges (rail, sidebar, header row, spine, bottom bar), Admin's outer chrome, `PanelSplit`'s

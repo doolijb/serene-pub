@@ -20,7 +20,7 @@
  * `$lib/server/db`, and nothing emits inside a transaction.
  */
 
-import { and, eq, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm"
 import {
 	getGenre,
 	historySettleOf,
@@ -59,8 +59,10 @@ export class SettledRefusal extends Error {
 /**
  * The session's settle line: the greater of `sessions.settled_message_id` and
  * the newest message any applied scene summary was written from (its close,
- * or the greatest id of its selection, over scenes whose summary is `done`);
- * null when neither says anything.
+ * or the greatest id of its selection, over scenes whose summary is `done`
+ * and was not saved by the scene summaries routine: that summary is not yet
+ * the record, `summary_origin` NULL or `person` counts); null when neither
+ * says anything.
  */
 export async function settledLineOf(db: Db, sessionId: number): Promise<number | null> {
 	const [session] = await db
@@ -75,7 +77,13 @@ export async function settledLineOf(db: Db, sessionId: number): Promise<number |
 			selected: schema.scenes.selectedMessageIds
 		})
 		.from(schema.scenes)
-		.where(and(eq(schema.scenes.sessionId, sessionId), eq(schema.scenes.summaryStatus, "done")))
+		.where(
+			and(
+				eq(schema.scenes.sessionId, sessionId),
+				eq(schema.scenes.summaryStatus, "done"),
+				or(isNull(schema.scenes.summaryOrigin), ne(schema.scenes.summaryOrigin, "routine"))
+			)
+		)
 	for (const scene of done) {
 		const ids = [scene.closed, ...((scene.selected as number[] | null) ?? [])].filter(
 			(n): n is number => typeof n === "number"

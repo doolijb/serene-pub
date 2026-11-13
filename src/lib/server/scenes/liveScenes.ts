@@ -1584,6 +1584,21 @@ const resetSummary = (scene: SceneRow): SceneRow["summaryStatus"] =>
 	scene.summaryStatus === "running" ? "running" : "none"
 
 /**
+ * The reset as a patch. A summary the routine saved by itself also loses its
+ * draft mark, so the routine takes the scene again once it is due
+ * (`sceneSummaryDueOf` asks for no draft mark). A person's keeps it: what a
+ * person saved or discarded is never taken.
+ */
+const summaryResetPatch = (
+	scene: SceneRow
+): Pick<typeof schema.scenes.$inferInsert, "summaryStatus" | "processedBySpecId"> => ({
+	summaryStatus: resetSummary(scene),
+	...(scene.summaryOrigin === "routine" && scene.summaryStatus === "done"
+		? { processedBySpecId: null }
+		: {})
+})
+
+/**
  * Move one or both boundaries of a scene. 🚧 `closedAt: null` (lane E)
  * **reopens** a closed scene — it runs on to its lane's newest line again —
  * refused while a later range scene stands on its lane. Every move resets
@@ -1629,7 +1644,7 @@ export async function moveSceneBoundary(
 					? Number(params.closedAt)
 					: scene.closedAtMessageId
 			const patch: Partial<typeof schema.scenes.$inferInsert> = {
-				summaryStatus: resetSummary(scene)
+				...summaryResetPatch(scene)
 			}
 			if (movesOpen) {
 				const msg = await boundaryMessage(tx, scene.sessionId, scene.channel, opened)
@@ -1738,7 +1753,7 @@ export async function mergeScene(
 								end
 							)
 						: [],
-				summaryStatus: resetSummary(previous)
+				...summaryResetPatch(previous)
 			})
 			.where(eq(schema.scenes.id, previous.id))
 			.returning()
@@ -2000,7 +2015,7 @@ const reopenedPatch = (scene: SceneRow): Partial<typeof schema.scenes.$inferInse
 	closedAtMessageId: null,
 	...prefixed("closed", null),
 	selectedMessageIds: [],
-	summaryStatus: resetSummary(scene),
+	...summaryResetPatch(scene),
 	updatedAt: new Date()
 })
 
@@ -2011,7 +2026,8 @@ const reopenedPatch = (scene: SceneRow): Partial<typeof schema.scenes.$inferInse
  * and by `deleteTurnYield`. Rules, in order (shapes §A-2): a scene opened at the
  * row is removed and the one before it reopens; a scene closed at the row
  * reopens (or its close moves back); a selection holding the row loses it.
- * A scene with an applied summary is never touched. A scene is also left exactly
+ * A scene with a person's applied summary is never touched (one the scene
+ * summaries routine saved is taken like an unsummarized scene). A scene is also left exactly
  * as it is when a later live line of the session sits after the row on its
  * channel and stays: a boundary goes with the newest line, not with an older one
  * that later lines already sit in. `opts.leavingWith` lists rows that leave in
@@ -2033,7 +2049,9 @@ export async function takeSceneBoundariesAt(
 	const sessionId = msg.sessionId
 	const sceneRows = () =>
 		tx.select().from(schema.scenes).where(eq(schema.scenes.sessionId, sessionId))
-	const notDone = (s: SceneRow) => s.summaryStatus !== "done"
+	// A summary the scene summaries routine saved is not yet the record: Back takes
+	// that scene as an unsummarized one (its status goes `none`, the origin stays).
+	const notDone = (s: SceneRow) => s.summaryStatus !== "done" || s.summaryOrigin === "routine"
 
 	// 1. Scenes opened at the row.
 	for (const s of (await sceneRows()).filter(
@@ -2099,7 +2117,7 @@ export async function takeSceneBoundariesAt(
 						s.openedAtMessageId,
 						before
 					),
-					summaryStatus: resetSummary(s),
+					...summaryResetPatch(s),
 					updatedAt: new Date()
 				})
 				.where(eq(schema.scenes.id, s.id))

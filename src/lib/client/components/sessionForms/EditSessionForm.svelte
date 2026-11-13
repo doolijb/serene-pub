@@ -154,14 +154,8 @@
 	 */
 	const FIELD_CLASS = "input rounded-base"
 
-	/**
-	 * The card a section sits in, and the hook a shared `@utility panel-card`
-	 * takes over the day one exists. The pane is surface-950, so surface-900 is
-	 * the step a card reads against without a shadow; the light pair keeps it
-	 * legible under a light theme.
-	 */
-	const CARD_CLASS =
-		"panel-card border-surface-200-800 bg-surface-100-900 rounded-container border p-4"
+	/** The card a section sits in: the shared `panel-card` utility. */
+	const CARD_CLASS = "panel-card"
 
 	// STATE VARIABLES
 
@@ -2349,7 +2343,7 @@
 										{@const label =
 											c.nickname || c.name || ""}
 										<div
-											class="border-surface-200-800 rounded-base flex min-h-11 flex-wrap items-center gap-2 border p-2"
+											class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
 											data-dnd-handle
 										>
 											<span
@@ -2453,7 +2447,7 @@
 									{#each selectedMembers as m (`member:${m.id}`)}
 										{@const saved = savedMemberSeat(m.id)}
 										<div
-											class="border-surface-200-800 rounded-base flex min-h-11 flex-wrap items-center gap-2 border p-2"
+											class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
 										>
 											<Avatar
 												char={{
@@ -2526,7 +2520,7 @@
 							<div class="mb-2 flex flex-col gap-1">
 								{#each genreEnvoys as envoy (envoy.slug)}
 									<div
-										class="border-surface-200-800 rounded-base flex min-h-11 flex-wrap items-center gap-2 border p-2"
+										class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
 									>
 										{#if envoy.image}
 											<img
@@ -2632,7 +2626,7 @@
 								{#each selectedPersonas as p, i (p.id)}
 									{@const saved = savedPersonaSeat(p.id)}
 									<div
-										class="border-surface-200-800 rounded-base flex min-h-11 flex-wrap items-center gap-2 border p-2"
+										class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
 										data-dnd-handle
 									>
 										<span
@@ -2734,7 +2728,7 @@
 											seat.id
 										)}
 										<li
-											class="border-surface-200-800 rounded-base flex min-h-11 flex-wrap items-center gap-2 border p-2"
+											class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
 										>
 											<Icons.UserRound
 												size={20}
@@ -3095,7 +3089,7 @@
 											(g) => g.userId === guest.userId
 										)}
 									<div
-										class="border-surface-200-800 rounded-base flex min-h-11 items-center justify-between gap-2 border p-2"
+										class="bg-surface-50-950 rounded-base flex min-h-11 items-center justify-between gap-2 p-2"
 									>
 										<span
 											class="flex min-w-0 flex-1 items-center gap-2"
@@ -3830,7 +3824,7 @@
 						{@const ex = accountVisibility.exposed}
 						{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
 							<div
-								class="border-surface-200-800 bg-surface-100-900 rounded-container text-chip border p-4"
+								class="bg-surface-100-900 rounded-container text-chip p-4"
 							>
 								You have not added any of your own characters,
 								personas, or lorebooks to this session — so it
@@ -3840,7 +3834,7 @@
 							<div class="flex flex-col gap-3">
 								{#if ex.characters.length}
 									<div
-										class="border-surface-200-800 bg-surface-100-900 rounded-container flex flex-col gap-2 border p-3"
+										class="bg-surface-100-900 rounded-container flex flex-col gap-2 p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-medium"
@@ -3860,7 +3854,7 @@
 								{/if}
 								{#if ex.personas.length}
 									<div
-										class="border-surface-200-800 bg-surface-100-900 rounded-container flex flex-col gap-2 border p-3"
+										class="bg-surface-100-900 rounded-container flex flex-col gap-2 p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-medium"
@@ -3880,7 +3874,7 @@
 								{/if}
 								{#if ex.lorebooks.length}
 									<div
-										class="border-surface-200-800 bg-surface-100-900 rounded-container flex flex-col gap-2 border p-3"
+										class="bg-surface-100-900 rounded-container flex flex-col gap-2 p-3"
 									>
 										<div
 											class="flex items-center gap-2 text-sm font-medium"
@@ -3914,7 +3908,7 @@
 								<div class="flex flex-col gap-2">
 									{#each accountVisibility.viewers as v}
 										<div
-											class="border-surface-200-800 bg-surface-100-900 rounded-container text-chip flex items-center justify-between gap-3 border p-3"
+											class="bg-surface-100-900 rounded-container text-chip flex items-center justify-between gap-3 p-3"
 										>
 											<span
 												class="flex items-center gap-2"

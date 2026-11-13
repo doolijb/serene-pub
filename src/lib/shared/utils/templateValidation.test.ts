@@ -21,6 +21,7 @@ const CONTRACT = [
 	"scenario",
 	"worldLore",
 	"history",
+	"earlierScenes",
 	"relationshipsPerspectives",
 	"relationshipsKnown",
 	"sessionMessages",

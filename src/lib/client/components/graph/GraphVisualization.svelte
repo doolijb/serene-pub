@@ -1237,7 +1237,7 @@
 					</div>
 				{/each}
 			</div>
-			<div class="border-surface-600 space-y-1 border-t pt-2">
+			<div class="space-y-1">
 				<p
 					class="text-surface-600-400 font-semibold"
 					style="font-size:11px"

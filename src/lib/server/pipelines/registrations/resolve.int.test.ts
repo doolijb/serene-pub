@@ -81,6 +81,7 @@ describe("the boot's projection", () => {
 		expect(minimal.filter((r) => r.dropped).map((r) => r.key).sort()).toEqual([
 			"after-each-round→story-reckoning",
 			"every-n-rounds→scene-boundaries",
+			"every-n-rounds→scene-summaries",
 			"every-n-turns→story-sweep",
 			"on-event→story-illustrate-new-scene"
 		])

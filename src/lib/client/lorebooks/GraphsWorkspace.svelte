@@ -1722,9 +1722,7 @@
 	{/if}
 
 	{#if showPipelinePanel}
-		<div
-			class="bg-surface-200-800 panel-edge space-y-2 rounded-lg border p-3 text-sm"
-		>
+		<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
 			<div class="flex items-center justify-between gap-2">
 				<p class="font-medium">
 					<Icons.Workflow size={14} class="mr-1 inline" />
@@ -1753,7 +1751,7 @@
 
 	{#if activeBuild && drawing === "relationships" && !readOnly}
 		<div
-			class="bg-surface-200-800 panel-edge flex flex-col gap-2 rounded-lg border p-3 text-sm"
+			class="bg-surface-200-800 flex flex-col gap-2 rounded-lg p-3 text-sm"
 		>
 			{#if activeBuild.status === "building"}
 				<p class="text-surface-700-300 text-xs capitalize">
@@ -1847,7 +1845,7 @@
 		     proposes a fresh one beside it every time. Surfaced so it can be
 		     named or removed by hand. -->
 		<div
-			class="bg-surface-200-800 panel-edge flex items-center gap-2 rounded-lg border p-3 text-sm"
+			class="bg-surface-200-800 flex items-center gap-2 rounded-lg p-3 text-sm"
 		>
 			<Icons.HelpCircle size={14} class="text-surface-600-400 shrink-0" />
 			<span class="text-surface-700-300">

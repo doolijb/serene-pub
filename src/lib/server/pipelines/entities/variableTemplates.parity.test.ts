@@ -227,6 +227,33 @@ const OBJECT_CASES: Record<string, () => Array<[string, unknown]>> = {
 	]
 }
 
+/**
+ * 🚧 `core:var/earlier-scenes@1`'s shape: `{ name, summary }` each. Every
+ * entry carries both: the binding only ever hands over whole pairs, and the
+ * generic list cases below would hand it `description`s it drops.
+ */
+const earlierScenesCases: Array<[string, unknown]> = [
+	["an empty list", []],
+	["one entry", [{ name: "The Ford", summary: "They crossed at dawn." }]],
+	[
+		"quotes, angle brackets and braces",
+		[{ name: `She said "no" & <left>`, summary: "'quickly' & </br> {{user}}" }]
+	],
+	["newlines and tabs", [{ name: "A\tB", summary: "one\ntwo\tthree\r\nfour" }]],
+	["a non-BMP emoji", [{ name: "🜁", summary: "👩‍🚒 ash" }]],
+	["an empty summary", [{ name: "The Ford", summary: "" }]],
+	["an empty name", [{ name: "", summary: "Unnamed." }]],
+	[
+		"several entries",
+		[
+			{ name: "The Ford", summary: "one" },
+			{ name: "The Inn", summary: "two" },
+			{ name: "The Pass", summary: "three" }
+		]
+	],
+	["undefined", undefined]
+]
+
 const shapedCases = (key: string): Array<[string, unknown]> => {
 	const shared: Array<[string, unknown]> = [
 		["an empty list", []],
@@ -270,6 +297,7 @@ const shapedCases = (key: string): Array<[string, unknown]> => {
 		["undefined", undefined]
 	]
 	if (key === "characterLore") return characterLoreCases
+	if (key === "earlierScenes") return earlierScenesCases
 	if (key !== "characters") return shared
 	return [
 		...shared,
@@ -532,6 +560,7 @@ describe("a heading never appears above nothing", () => {
 			"characterLore",
 			"characters",
 			"currentDate",
+			"earlierScenes",
 			"history",
 			"instructions",
 			"personas",
@@ -679,6 +708,7 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 			"characterLore",
 			"characters",
 			"currentDate",
+			"earlierScenes",
 			"history",
 			"personas",
 			"relationshipsKnown",

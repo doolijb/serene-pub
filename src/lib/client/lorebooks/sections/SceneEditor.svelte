@@ -90,4 +90,10 @@
 	{/if}
 </div>
 
+{#if source?.summaryStatus === "done" && source?.summaryOrigin === "routine"}
+	<p class="text-surface-600-400 text-xs">
+		Summarized by itself. You can edit it, or turn this off under Routines.
+	</p>
+{/if}
+
 <SceneForm bind:draft {bindings} />

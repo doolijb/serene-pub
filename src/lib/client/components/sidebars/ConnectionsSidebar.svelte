@@ -161,9 +161,9 @@
 	 * green once replies come from here.
 	 */
 	const NEXT_STEP_EDGE: Record<string, string> = {
-		unfinished: "border-primary-500/30!",
-		broken: "border-error-500/30!",
-		ready: "border-success-500/30!"
+		unfinished: "border border-primary-500/30!",
+		broken: "border border-error-500/30!",
+		ready: "border border-success-500/30!"
 	}
 
 	// ── View state ──────────────────────────────────────────────────────────
@@ -1205,7 +1205,7 @@
 			     disclosure, open by default only when a note exists —
 			     a person who wrote one wants to see it. -->
 	<details
-		class="group panel-edge rounded-lg border"
+		class="group bg-surface-100-900 rounded-lg"
 		open={!!connection.notes}
 	>
 		<summary
@@ -1681,7 +1681,7 @@
 						     offers for this connection. The tab strip's
 						     panel when there is one (its tab names it). -->
 							<section
-								class="panel-card flex flex-col gap-2"
+								class="panel-card [&_.panel-card]:bg-surface-50-950 flex flex-col gap-2"
 								id="api-connection-models"
 								role={showsTabStrip(apiTabs)
 									? "tabpanel"
@@ -1884,7 +1884,7 @@
 								     compatible endpoint with no /models, a
 								     catalogue that lags a launch. -->
 									<form
-										class="panel-edge flex flex-col gap-2 border-t pt-2"
+										class="flex flex-col gap-2"
 										onsubmit={(e) => {
 											e.preventDefault()
 											submitAddByName()

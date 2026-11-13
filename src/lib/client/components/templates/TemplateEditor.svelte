@@ -398,7 +398,7 @@
 
 		{#if wantsTree}
 			<section
-				class="border-surface-200-800 flex min-w-0 flex-col gap-1 rounded border p-2"
+				class="panel-edge flex min-w-0 flex-col gap-1 rounded border p-2"
 				aria-labelledby="{uid}-tree-h"
 			>
 				<div class="flex items-center gap-1">

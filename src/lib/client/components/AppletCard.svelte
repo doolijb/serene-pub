@@ -8,7 +8,8 @@
 	 * (`/apps/<pluginId>`) is an address, so a press navigates there.
 	 *
 	 * Not a session card (`SessionCardItem`) and not a genre: it carries no
-	 * status and no actions. Ground and border are the session card's.
+	 * status and no actions. No border: its fill is its edge (the continue card's
+	 * on the home page, a card's in the Apps view).
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
@@ -61,7 +62,9 @@
 <a
 	href="/apps/{pluginId}"
 	{onclick}
-	class="bg-surface-100-900 panel-edge hover:bg-surface-200-800 focus-visible:outline-primary-500 rounded-container flex h-full flex-col overflow-hidden border focus-visible:outline-2 focus-visible:outline-offset-2"
+	class="{from === 'home'
+		? 'bg-surface-50-950'
+		: 'bg-surface-100-900'} hover:bg-surface-200-800 focus-visible:outline-primary-500 rounded-container flex h-full flex-col overflow-hidden focus-visible:outline-2 focus-visible:outline-offset-2"
 	aria-label={title}
 	aria-describedby={metaId}
 	data-applet-card={pluginId}

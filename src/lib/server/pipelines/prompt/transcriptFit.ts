@@ -47,6 +47,18 @@
  * a cut can fall, and this node, not a row count, decides where the
  * conversation starts. Rows beyond what the window could ever hold are never
  * read, which keeps a preview on a long session cheap.
+ *
+ * ## Counting the earlier-scenes block in the cut (🚧)
+ *
+ * The prompt's *Earlier in the story* block holds the summaries of scenes
+ * that lost a line to the cut, so its size depends on where the cut falls.
+ * The first render measures it nearly empty (the history read goes two
+ * budgets back, so almost every scene still has its lines in), and a cut
+ * that left it uncounted would "fit" a held line and go over once the block
+ * filled — the first line would then move on most turns. So the cut takes an
+ * optional `earlier` input and estimates each candidate first line with the
+ * block as it would show there ({@link earlierScenesShown},
+ * {@link earlierBlockTokens}). The pass bound (4, in the binding) stands.
  */
 
 /**
@@ -165,6 +177,57 @@ export function promptTokens(
 	return count(out.rendered ?? "")
 }
 
+/** 🚧 Tokens the block's heading and fence add to its entries — an estimate the re-measure pass corrects. */
+export const EARLIER_SCENES_BLOCK_TOKENS = 10
+
+export interface EarlierSceneCost {
+	firstLineId: number
+	tokens: number
+}
+
+/**
+ * Which earlier scenes show for a prompt whose first kept line is `firstKept`
+ * (`Infinity` when none is kept or given: every scene qualifies).
+ *
+ * `scenes` arrive oldest first. A scene shows when it starts before the first
+ * kept line — one that lost only its opening line shows too, so the model
+ * reads its kept tail twice, the cheaper mistake. Then, newest first, scenes
+ * are added while their tokens plus {@link EARLIER_SCENES_BLOCK_TOKENS} stay
+ * within `maxTokens` (`null`: no cap): the newest first, and one that does
+ * not fit in what is left is skipped while older ones that fit still show.
+ * Returned oldest first.
+ */
+export function earlierScenesShown<T extends { firstLineId: number }>(
+	scenes: readonly T[],
+	firstKept: number,
+	maxTokens: number | null,
+	tokensOf: (s: T) => number
+): T[] {
+	const lost = scenes.filter((s) => s.firstLineId < firstKept)
+	if (maxTokens === null) return lost
+	const shown: T[] = []
+	let sum = EARLIER_SCENES_BLOCK_TOKENS
+	for (let i = lost.length - 1; i >= 0; i--) {
+		const t = tokensOf(lost[i])
+		// One summary too large for what is left is skipped, never a stop:
+		// the older ones that fit still show (a gap is normal), and a single
+		// oversized summary cannot empty the block.
+		if (sum + t > maxTokens) continue
+		sum += t
+		shown.unshift(lost[i])
+	}
+	return shown
+}
+
+/** The block's estimated size: the shown scenes' tokens plus {@link EARLIER_SCENES_BLOCK_TOKENS}, or 0 when none show. */
+export function earlierBlockTokens<T>(
+	shown: readonly T[],
+	tokensOf: (s: T) => number
+): number {
+	if (!shown.length) return 0
+	return shown.reduce((n, s) => n + tokensOf(s), EARLIER_SCENES_BLOCK_TOKENS)
+}
+
 export interface TranscriptCutInput {
 	/** The lines that may be left out, oldest first — their message ids. */
 	ids: readonly number[]
@@ -176,6 +239,17 @@ export interface TranscriptCutInput {
 	budget: number
 	/** Skip the held cuts — a re-cut after a render that still did not fit. */
 	fresh?: boolean
+	/**
+	 * 🚧 The earlier-scenes block, counted in the estimate: the eligible scenes
+	 * in story order (oldest first) with their cost, the block's share of the
+	 * budget, and `measured` — the block's estimated size
+	 * ({@link earlierBlockTokens}) in the render `total` measured.
+	 */
+	earlier?: {
+		scenes: readonly EarlierSceneCost[]
+		maxTokens: number | null
+		measured: number
+	}
 }
 
 export interface TranscriptCut {
@@ -200,10 +274,28 @@ export function planTranscriptCut(
 ): TranscriptCut | null {
 	const { ids, tokens, total, budget } = input
 	if (!(budget > 0) || total <= budget || ids.length < 2) return null
+	const { earlier } = input
+	let cutSum = 0
+	/** The estimate with the first `p` lines cut — the block counted as it shows from `ids[p]`. */
+	const estimateAt = (p: number, cutSum: number): number =>
+		earlier
+			? total -
+				cutSum -
+				earlier.measured +
+				earlierBlockTokens(
+					earlierScenesShown(
+						earlier.scenes,
+						ids[p],
+						earlier.maxTokens,
+						(s) => s.tokens
+					),
+					(s) => s.tokens
+				)
+			: total - cutSum
 	if (!input.fresh) {
-		let est = total
 		for (let p = 1; p < ids.length; p++) {
-			est -= tokens[p - 1] ?? 0
+			cutSum += tokens[p - 1] ?? 0
+			const est = estimateAt(p, cutSum)
 			if (HELD.has(ids[p]) && est <= budget)
 				return { from: p, held: true, estimate: est }
 		}
@@ -211,9 +303,11 @@ export function planTranscriptCut(
 	const target = Math.floor(budget * (1 - TRANSCRIPT_CUT_FREES))
 	let p = 0
 	let est = total
+	cutSum = 0
 	while (p < ids.length - 1 && est > target) {
-		est -= tokens[p] ?? 0
+		cutSum += tokens[p] ?? 0
 		p++
+		est = estimateAt(p, cutSum)
 	}
 	return { from: p, held: false, estimate: est }
 }

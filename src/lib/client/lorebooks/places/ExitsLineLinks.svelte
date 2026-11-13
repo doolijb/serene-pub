@@ -260,7 +260,7 @@
 
 <div
 	id="{uid}-exits"
-	class="bg-surface-100-900 border-surface-200-800 flex flex-col gap-2 rounded-lg border p-3 text-sm"
+	class="bg-surface-100-900 panel-edge flex flex-col gap-2 rounded-lg border p-3 text-sm"
 	role="group"
 	aria-labelledby="{uid}-exits-title"
 	data-exits-links
@@ -285,7 +285,7 @@
 				{@const id = `${uid}-exit-${index}`}
 				{@const error = tickable(link) ? errors.get(link.key) : undefined}
 				<li
-					class="border-surface-200-800 flex flex-col gap-1 rounded-md border p-2 {tickable(
+					class="panel-edge flex flex-col gap-1 rounded-md border p-2 {tickable(
 						link
 					)
 						? ''

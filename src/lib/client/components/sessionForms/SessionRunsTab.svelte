@@ -252,9 +252,7 @@
 									{stepError.get(row.runId)}
 								</p>
 							{:else if stepsOf.has(row.runId)}
-								<ol
-									class="border-surface-200-800 flex flex-col gap-1 border-t pt-2"
-								>
+								<ol class="mt-1 flex flex-col gap-1">
 									{#each stepsOf.get(row.runId) ?? [] as step (step.seq)}
 										<li
 											class="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs"
