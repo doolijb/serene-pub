@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -169,17 +169,20 @@ describe("library writes (needs 0141)", () => {
 		)
 	})
 
-	test("an unset mode reads Review", async () => {
+	test("an unset mode reads Full: the card is made at once", async () => {
 		const w = await world(LIBRARY_GENRE, null)
 		const r: any = await w.host.commit!({ card: CARD }, node("create-character"))
-		expect(r.proposed).toEqual(expect.any(Number))
+		expect(r.proposed).toBeUndefined()
+		expect(r.characterId).toEqual(expect.any(Number))
+		const [row] = await libraryRows(w.session.id)
+		expect(row).toMatchObject({ status: "applied" })
 	})
 
 	test("Back hides the made card; Forward brings it back", async () => {
 		const w = await world(LIBRARY_GENRE, "full")
 		const r: any = await w.host.commit!({ card: CARD }, node("create-character"))
 		const { retractStateAnchoredTo, restoreRetractedState } = await import("$lib/server/state/write")
-		const back = await retractStateAnchoredTo(db(), w.message.id, { ticks: "take" })
+		const back = await retractStateAnchoredTo(db(), w.message.id, "leaves")
 		expect(back.changed).toBe(true)
 		const [hidden] = await testDb.select().from(schema.characters).where(eq(schema.characters.id, r.characterId))
 		expect(hidden!.isDeleted).toBe(true)
@@ -196,7 +199,7 @@ describe("library writes (needs 0141)", () => {
 		const r: any = await w.host.commit!({ lorebook }, node("create-lorebook"))
 		expect(r.lorebookId).toEqual(expect.any(Number))
 		const { retractStateAnchoredTo, restoreRetractedState } = await import("$lib/server/state/write")
-		const back = await retractStateAnchoredTo(db(), w.message.id, { ticks: "take" })
+		const back = await retractStateAnchoredTo(db(), w.message.id, "leaves")
 		expect(await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, r.lorebookId))).toEqual([])
 		expect((back.taken.proposals[0]!.payload as any).document).toBeTruthy()
 		await restoreRetractedState(db(), back.taken)
@@ -238,11 +241,274 @@ describe("library writes (needs 0141)", () => {
 			.values({ userId: w.user.id, name: "Old", description: "Before." })
 			.returning()
 		await w.host.commit!({ characterId: mine!.id, changes: { name: "New", description: "After." } }, node("update-character"))
-		const [changed] = await testDb.select().from(schema.characters).where(eq(schema.characters.id, mine!.id))
+		// the version holds the change; the row's name and description are its ⏳ copies
+		expect(await currentProfile(mine!.id)).toMatchObject({
+			name: "New",
+			description: "After."
+		})
+		const [changed] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, mine!.id))
 		expect(changed).toMatchObject({ name: "New", description: "After." })
 		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-		await retractStateAnchoredTo(db(), w.message.id, { ticks: "take" })
-		const [restored] = await testDb.select().from(schema.characters).where(eq(schema.characters.id, mine!.id))
+		await retractStateAnchoredTo(db(), w.message.id, "leaves")
+		expect(await currentProfile(mine!.id)).toMatchObject({
+			name: "Old",
+			description: "Before."
+		})
+		const [restored] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, mine!.id))
 		expect(restored).toMatchObject({ name: "Old", description: "Before." })
+	})
+})
+
+/** The profile of a card's current (highest-numbered) version. */
+async function currentProfile(cardId: number) {
+	const { profileOf } = await import("$lib/shared/characters/profile")
+	const [row] = await testDb
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.cardId, cardId))
+		.orderBy(desc(schema.characterVersions.number))
+		.limit(1)
+	return profileOf(row!)
+}
+const versionsOf = (cardId: number) =>
+	testDb
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.cardId, cardId))
+
+describe("update-character writes the card's current version (cv-writers)", () => {
+	const cardOf = async (userId: number) => {
+		const [card] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId,
+				name: "Old",
+				description: "Before.",
+				personality: "Calm",
+				scenario: "A road.",
+				firstMessage: "Hi",
+				alternateGreetings: ["Hello"],
+				groupOnlyGreetings: ["All"],
+				exampleDialogues: ["A", "B"]
+			})
+			.returning()
+		return card!
+	}
+
+	test("the change lands on the current version, not on the row's frozen columns, and Back restores it", async () => {
+		const w = await world(LIBRARY_GENRE, "full")
+		const mine = await cardOf(w.user.id)
+		const greetings = [
+			{ text: "Well met" },
+			{ text: "Ho" },
+			{ text: "Folks", groupOnly: true }
+		]
+		await w.host.commit!(
+			{
+				characterId: mine.id,
+				changes: {
+					personality: "Sharp",
+					greetings,
+					exampleDialogues: ["X"]
+				}
+			},
+			node("update-character")
+		)
+		const now = await currentProfile(mine.id)
+		expect(now).toMatchObject({
+			personality: "Sharp",
+			greetings,
+			exampleDialogues: ["X"]
+		})
+		// no new version: the current one is written in place
+		expect(await versionsOf(mine.id)).toHaveLength(1)
+		// the row's content columns are frozen
+		const [row] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, mine.id))
+		expect(row).toMatchObject({
+			personality: "Calm",
+			firstMessage: "Hi",
+			exampleDialogues: ["A", "B"]
+		})
+
+		const { retractStateAnchoredTo, restoreRetractedState } = await import(
+			"$lib/server/state/write"
+		)
+		const back = await retractStateAnchoredTo(db(), w.message.id, "leaves")
+		expect(await currentProfile(mine.id)).toMatchObject({
+			personality: "Calm",
+			greetings: [
+				{ text: "Hi" },
+				{ text: "Hello" },
+				{ text: "All", groupOnly: true }
+			],
+			exampleDialogues: ["A", "B"]
+		})
+		await restoreRetractedState(db(), back.taken)
+		expect(await currentProfile(mine.id)).toMatchObject({
+			personality: "Sharp",
+			greetings,
+			exampleDialogues: ["X"]
+		})
+	})
+
+	test("a write after a newer version lands on the newer one, the older untouched", async () => {
+		const w = await world(LIBRARY_GENRE, "full")
+		const mine = await cardOf(w.user.id)
+		const { ensureCardVersion, newCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const { profileOf } = await import("$lib/shared/characters/profile")
+		const v1 = await ensureCardVersion(db(), mine.id)
+		await newCardVersion(db(), mine.id, {
+			...profileOf(v1!),
+			description: "Second."
+		})
+		await w.host.commit!(
+			{ characterId: mine.id, changes: { scenario: "A harbour." } },
+			node("update-character")
+		)
+		const [first, second] = (await versionsOf(mine.id)).sort(
+			(a, b) => a.number! - b.number!
+		)
+		expect(first).toMatchObject({ scenario: "A road." })
+		expect(second).toMatchObject({
+			scenario: "A harbour.",
+			description: "Second."
+		})
+	})
+
+	test("a stored row with first_mes and mes_example still undoes and redoes (⏳ the old names map)", async () => {
+		const w = await world(LIBRARY_GENRE, "full")
+		const mine = await cardOf(w.user.id)
+		const { fileLibraryChange, undoLibraryChange, redoLibraryChange } =
+			await import("$lib/server/library/writes")
+		const { ensureCardVersion, updateCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const v1 = await ensureCardVersion(db(), mine.id)
+		// what the old writer left: the new text on the card, the old on the row
+		await updateCardVersion(db(), v1!.id, {
+			greetings: [
+				{ text: "Brand new" },
+				{ text: "Hello" },
+				{ text: "All", groupOnly: true }
+			],
+			exampleDialogues: ["N1", "N2", "N3"]
+		})
+		await fileLibraryChange(
+			db(),
+			{ sessionId: w.session.id, updatedBy: "run:old" },
+			{
+				kind: "library",
+				op: "update-character",
+				input: {
+					characterId: mine.id,
+					changes: {
+						first_mes: "Brand new",
+						mes_example: "N1<START>N2<START>N3"
+					}
+				},
+				by: w.user.id,
+				label: "Old",
+				result: { characterId: mine.id },
+				before: {
+					fields: { first_mes: "Hi", mes_example: "A<START>B" }
+				}
+			},
+			"applied"
+		)
+		const [row] = await libraryRows(w.session.id)
+		await undoLibraryChange(db(), row!)
+		expect(await currentProfile(mine.id)).toMatchObject({
+			greetings: [
+				{ text: "Hi" },
+				{ text: "Hello" },
+				{ text: "All", groupOnly: true }
+			],
+			exampleDialogues: ["A", "B"]
+		})
+		await redoLibraryChange(db(), row!)
+		expect(await currentProfile(mine.id)).toMatchObject({
+			greetings: [
+				{ text: "Brand new" },
+				{ text: "Hello" },
+				{ text: "All", groupOnly: true }
+			],
+			exampleDialogues: ["N1", "N2", "N3"]
+		})
+	})
+
+	test("an opener from a stored row is put first when the card has none", async () => {
+		const { greetingsWithOpener } = await import(
+			"$lib/server/characters/cardIO"
+		)
+		expect(
+			greetingsWithOpener([{ text: "G", groupOnly: true }], "Hi")
+		).toEqual([{ text: "Hi" }, { text: "G", groupOnly: true }])
+		expect(
+			greetingsWithOpener([{ text: "Hi" }, { text: "Yo" }], null)
+		).toEqual([{ text: "Yo" }])
+		expect(
+			greetingsWithOpener([{ text: "Hi" }, { text: "Yo" }], "Hey")
+		).toEqual([{ text: "Hey" }, { text: "Yo" }])
+	})
+
+	test("a new request with the old names is refused: first_mes and mes_example are not fields", async () => {
+		const w = await world(LIBRARY_GENRE, "full")
+		const mine = await cardOf(w.user.id)
+		const r1: any = await w.host.commit!(
+			{ characterId: mine.id, changes: { first_mes: "x" } },
+			node("update-character")
+		)
+		expect(r1.halt).toMatch(
+			/'first_mes' is not a field that can be changed on a character here\./
+		)
+		const r2: any = await w.host.commit!(
+			{ characterId: mine.id, changes: { mes_example: "x" } },
+			node("update-character")
+		)
+		expect(r2.halt).toMatch(/'mes_example' is not a field/)
+		expect(await versionsOf(mine.id)).toEqual([])
+		expect(await libraryRows(w.session.id)).toEqual([])
+	})
+
+	test("greetings and exampleDialogues are judged by their kinds", async () => {
+		const w = await world(LIBRARY_GENRE, "full")
+		const mine = await cardOf(w.user.id)
+		const refusal = async (changes: unknown) =>
+			(
+				(await w.host.commit!(
+					{ characterId: mine.id, changes },
+					node("update-character")
+				)) as any
+			).halt
+		expect(await refusal({ greetings: "Hi" })).toMatch(
+			/'greetings' is a list of greetings, each with its text\./
+		)
+		expect(await refusal({ greetings: [{ groupOnly: true }] })).toMatch(
+			/'greetings' is a list of greetings/
+		)
+		expect(await refusal({ exampleDialogues: "A<START>B" })).toMatch(
+			/'exampleDialogues' is a list of text\./
+		)
+		expect(await refusal({ exampleDialogues: [1] })).toMatch(
+			/'exampleDialogues' is a list of text\./
+		)
+		expect(await refusal({ description: 4 })).toMatch(
+			/'description' is text\./
+		)
+		expect(await refusal({ name: "  " })).toMatch(
+			/A character needs a name\./
+		)
+		expect(await libraryRows(w.session.id)).toEqual([])
 	})
 })

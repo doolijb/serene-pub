@@ -515,13 +515,29 @@ export async function buildDocs({ watch = false, profile = "app" } = {}) {
 	// Only the site profile reads it at all, so only the site profile has
 	// anything to say about it missing: warning the app build about a directory
 	// it would ignore if it existed is noise on every dev-server start.
+	// Regenerated first, so the pages are the checkout's current declarations and
+	// not whatever the last `sdk:build` left; a failure is a warning and the
+	// build goes on with what is there.
+	if (target.api && fs.existsSync(path.join(SDK_REPO_DIR, "package.json"))) {
+		// `npm` is `npm.cmd` on Windows, which only a shell resolves.
+		const gen = child_process.spawnSync("npm", ["run", "docs:api"], {
+			cwd: SDK_REPO_DIR,
+			stdio: "inherit",
+			shell: process.platform === "win32"
+		})
+		if (gen.status !== 0)
+			console.warn(
+				`[docs] \`npm run docs:api\` in ${SDK_REPO_DIR} did not finish ` +
+					`(${gen.error ? gen.error.message : `exit ${gen.status}`}); using the API reference already there, if any.`
+			)
+	}
 	const apiPages =
 		target.api && fs.existsSync(SDK_API_DIR)
 			? await loadMarkdownDir(SDK_API_DIR)
 			: null
 	if (target.api && !apiPages) {
 		console.warn(
-			`[docs] no API reference at ${SDK_API_DIR} — run \`npm run sdk:build\` ` +
+			`[docs] no API reference at ${SDK_API_DIR} — run \`npm run docs:api\` in the SDK checkout ` +
 				`to generate it; compiling without the SDK API source.`
 		)
 	}

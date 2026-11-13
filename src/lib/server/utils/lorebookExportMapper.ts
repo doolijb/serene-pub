@@ -744,6 +744,16 @@ export interface ExportedBinding {
 	personaLocalId: number | null
 	/** The cast member's sprite set, by name; written only when set (E-8). */
 	spriteSet?: string
+	/**
+	 * The member's own name in this book (§0-D); written only when set. The
+	 * book keeps it, so it travels with the book. Optional and additive: no
+	 * `LOREBOOK_FORMAT_VERSION` bump — a file without it imports as before.
+	 */
+	ownName?: string
+	/** The member's own nickname in this book (§0-D); written when set — `""` means none in this book (★L-3b). */
+	ownNickname?: string
+	// ⚠ The member's face does NOT travel: the format carries no pictures
+	// (no media at all).
 }
 
 /**

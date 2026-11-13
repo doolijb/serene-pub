@@ -44,6 +44,22 @@ describe("R3 · a collecting press opens the modal", () => {
 		expect(opensModal({ collects: WHISPER }, "hold the line")).toBe(true)
 	})
 
+	it("a command typed in full with nothing after it (an empty argument) fires an optional text; a required one still asks", () => {
+		const ROOM: ListedCollects = { text: { need: "optional", label: "Describe the room" } }
+		expect(opensModal({ collects: ROOM }, "")).toBe(false)
+		expect(opensModal({ collects: ROOM })).toBe(true)
+		expect(opensModal({ collects: NUDGE }, "")).toBe(true)
+		expect(opensModal({ collects: WHISPER }, "")).toBe(true)
+		expect(routePress({ slash: "room", name: "Answer the door", collects: ROOM }, { text: "" })).toEqual({
+			route: "fire",
+			collected: {}
+		})
+		expect(routePress({ slash: "nudge", name: "Nudge", collects: NUDGE }, { text: "" })).toEqual({
+			route: "modal",
+			initialText: ""
+		})
+	})
+
 	it("submit is ready once required text is written and recipients are within bounds", () => {
 		expect(collectReady(NUDGE, {})).toBe(false)
 		expect(collectReady(NUDGE, { text: "  " })).toBe(false)
@@ -203,9 +219,22 @@ describe("C2 · /narrate <text> fires the narration directly", () => {
 		expect(narrateDirectly(NARRATE_ACTION, route)).toBe("the storm breaks")
 	})
 
-	it("with none: the narrator modal opens, as the chip's press does", () => {
+	it("with none from a chip or a menu: the narrator modal opens", () => {
 		expect(narrateDirectly(NARRATE_ACTION, routePress(NARRATE))).toBeNull()
-		expect(narrateDirectly(NARRATE_ACTION, routePress(NARRATE, { text: "   " }))).toBeNull()
+	})
+
+	it("a bare /narrator (an empty argument) fires the narrator with no direction, no modal", () => {
+		// The shipped Narrate declares optional text: an empty argument is a fire with none.
+		const typed = routePress(NARRATE, { text: "" })
+		expect(typed).toEqual({ route: "fire", collected: {} })
+		expect(narrateDirectly(NARRATE_ACTION, typed, { text: "" })).toBe("")
+		// One declaring no text at all routes plain; the empty argument still says it was typed.
+		const NARRATOR = { slash: "narrator", name: "Narrate" }
+		const route = routePress(NARRATOR, { text: "" })
+		expect(route).toEqual({ route: "plain" })
+		expect(narrateDirectly(NARRATE_ACTION, route, { text: "" })).toBe("")
+		expect(narrateDirectly(NARRATE_ACTION, routePress(NARRATOR, { text: "   " }), { text: "   " })).toBe("")
+		expect(narrateDirectly(NARRATE_CHARACTER_ACTION, route, { text: "" })).toBeNull()
 	})
 
 	it("only Narrate: a side character still needs the modal to say who speaks", () => {
@@ -411,5 +440,47 @@ describe("🚧 live scenes §6 · the clock step a press collects", () => {
 			text: "go"
 		})
 		expect(collectsNote(TIME_PASSES)).toBe("Asks how much time passes")
+	})
+})
+
+describe("🚧 holdsOf — what the seat's ref names holds (s27 S3)", () => {
+	const state = (byId: Record<string, Record<string, unknown>>) => ({ cast: { byId } })
+
+	it("today's data: a character:<card> ref reads the card-keyed entry", () => {
+		const s = state({ "12": { whisper: "Beware" }, "13": { whisper: "   " } })
+		expect(holdsOf(s, "whisper", "character:12")).toBe("Beware")
+		expect(holdsOf(s, "whisper", "character:13")).toBeUndefined()
+		expect(holdsOf(s, undefined, "character:12")).toBeUndefined()
+		expect(holdsOf(null, "whisper", "character:12")).toBeUndefined()
+	})
+
+	it("today's data: a card-less player seat's ref reads player_seat:<id>", () => {
+		expect(holdsOf(state({ "player_seat:4": { whisper: "Hush" } }), "whisper", "player-seat:4")).toBe("Hush")
+	})
+
+	it("member-keyed data: the entry the ref names, though card 7 and member 7 are different people", () => {
+		const s = state({
+			"7": { ref: "seated-member:9", castMemberId: 9, cardId: 7, whisper: "Cal's" },
+			"12": { ref: "seated-member:7", castMemberId: 7, cardId: 31, whisper: "Bea's" },
+			"s4": { ref: "player-seat:4", whisper: "Seat's" }
+		})
+		expect(holdsOf(s, "whisper", "seated-member:7")).toBe("Bea's")
+		expect(holdsOf(s, "whisper", "seated-member:9")).toBe("Cal's")
+		expect(holdsOf(s, "whisper", "player-seat:4")).toBe("Seat's")
+		// A card-form ref never lands on a member's key once entries carry refs.
+		expect(holdsOf(s, "whisper", "character:7")).toBeUndefined()
+	})
+
+	it("member form (the flip): byId keyed seated_member:<id> / player_seat:<id>, each entry carrying its ref; K-2 member in both seats", () => {
+		const s = state({
+			"seated_member:7": { ref: "seated-member:7", castMemberId: 7, cardId: 31, whisper: "Character seat's" },
+			"player_seat:4": { ref: "player-seat:4", castMemberId: 7, whisper: "Player seat's" },
+			"seated_member:31": { ref: "seated-member:31", castMemberId: 31, cardId: 7, whisper: "Other" }
+		})
+		expect(holdsOf(s, "whisper", "seated-member:7")).toBe("Character seat's")
+		expect(holdsOf(s, "whisper", "player-seat:4")).toBe("Player seat's")
+		expect(holdsOf(s, "whisper", "seated-member:31")).toBe("Other")
+		// A card-form ref finds nothing once entries carry refs (card 7 is not member 7).
+		expect(holdsOf(s, "whisper", "character:7")).toBeUndefined()
 	})
 })

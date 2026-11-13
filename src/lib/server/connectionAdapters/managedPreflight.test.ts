@@ -78,6 +78,7 @@ vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 		return loaded
 	},
 	resetTtl: () => {},
+	clearTtl: () => {},
 	getLoadedSignature: () => null,
 	DEFAULT_MANAGED_CONFIG: {
 		gpuLayers: -1,
@@ -109,10 +110,8 @@ vi.mock("$lib/server/koboldcpp/subprocessManager", () => ({
 		lastError: subprocess.lastError,
 		pid: null,
 		startedAt: null,
-		restartCount: 0,
-		isExternal: false
+		restartCount: 0
 	}),
-	isExternal: () => false,
 	suspendHealthCheck: () => {},
 	resumeHealthCheck: () => {},
 	pingActivity: () => {}
@@ -477,9 +476,15 @@ describe("ensureManagedReady — starting the instance", () => {
 
 	it("loads with the admin password start() just wrote, not the one read before it", async () => {
 		// doStart generates and persists a password when the row has none; the
-		// process is spawned with it, so the load must send it too.
+		// process is spawned with it, so the load must send it too. Managed
+		// mode starts when OUR process is not running — never because the
+		// port is quiet (nothing on it is adopted).
+		subprocess.running = false
+		subprocess.status = "stopped"
 		subprocess.start.mockImplementation(async () => {
 			settings.koboldCppManagedAdminPassword = "generated-by-start"
+			subprocess.running = true
+			subprocess.status = "running"
 		})
 		const log = vi.spyOn(console, "log").mockImplementation(() => {})
 		try {
@@ -491,6 +496,31 @@ describe("ensureManagedReady — starting the instance", () => {
 			expect(loadOpts.adminPassword).toBe("generated-by-start")
 			expect(startedLines(log)).toHaveLength(1)
 		} finally {
+			log.mockRestore()
+		}
+	})
+})
+
+describe("ensureManagedReady — the address follows the port", () => {
+	it("loads against the address start() left, not the one read before it", async () => {
+		responding = false
+		subprocess.running = false
+		subprocess.status = "stopped"
+		subprocess.start.mockImplementation(async () => {
+			settings.koboldCppManagerBaseUrl = "http://localhost:5002"
+			subprocess.running = true
+			subprocess.status = "running"
+		})
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			const ensureManagedReady = await loadReady()
+			const res = await ensureManagedReady(textSpec(), {
+				connectionId: 3
+			})
+			expect(loadOpts.baseUrl).toBe("http://localhost:5002")
+			expect(res.baseUrl).toBe("http://localhost:5002")
+		} finally {
+			settings.koboldCppManagerBaseUrl = "http://localhost:5001"
 			log.mockRestore()
 		}
 	})

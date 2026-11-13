@@ -53,7 +53,7 @@
 	const TABS: PanelTab[] = [
 		{ value: "file", label: "Files", icon: Icons.Paperclip },
 		{ value: "session", label: "Sessions", icon: Icons.MessagesSquare },
-		{ value: "character", label: "Characters", icon: Icons.UsersRound },
+		{ value: "character", label: "Character cards", icon: Icons.UsersRound },
 		{ value: "lorebook", label: "Lorebooks", icon: Icons.BookOpen }
 	]
 	const NOUN: Record<PickKind, string> = {

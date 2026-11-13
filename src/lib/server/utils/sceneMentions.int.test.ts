@@ -368,6 +368,126 @@ describe("deriveSceneMentions", () => {
 })
 
 /**
+ * A card-less member resolves to a `cast_member:<id>` key (owner ruling
+ * 2026-11-06, ★9 2026-11-08: the key is the only thing stored; readers filter
+ * out members that no longer exist). The rows are written by hand beside the
+ * real pass's fresh sentinel, so these claims do not depend on what
+ * `loadVocabulary` resolves.
+ */
+describe("deriveSceneMentions — cast_member keys", () => {
+	/** A card-less member of `lorebookId`. */
+	const cardless = async (lorebookId: number, name: string) =>
+		(
+			await testDb
+				.insert(schema.lorebookBindings)
+				.values({
+					lorebookId,
+					characterId: null,
+					binding: `{{char:${name.toLowerCase()}${seq++}}}`,
+					name
+				})
+				.returning()
+		)[0]
+
+	/** The message's fresh sentinel row, copied under a `cast_member:` key. */
+	async function mention(messageId: number, memberId: number) {
+		const [fresh] = await testDb
+			.select()
+			.from(schema.messageAnnotations)
+			.where(eq(schema.messageAnnotations.messageId, messageId))
+			.limit(1)
+		await testDb.insert(schema.messageAnnotations).values({
+			...fresh,
+			entityKey: `cast_member:${memberId}`,
+			tier: "gazetteer",
+			surface: "x",
+			normalized: "x",
+			mentions: 1
+		})
+	}
+
+	/**
+	 * Members are made BEFORE the pass (a named member joins the vocabulary and
+	 * so changes its hash); the reader is then given the vocabulary the rows
+	 * were written under, which is what lets a member be deleted afterwards
+	 * without every row going stale.
+	 */
+	async function seeded(memberNames: string[] = []) {
+		const made = await makeScene(["The rain kept on, and nothing moved."])
+		const members = []
+		for (const name of memberNames)
+			members.push(await cardless(made.lorebook.id, name))
+		const { loadVocabulary } = await import("$lib/server/annotations")
+		const vocabulary = await loadVocabulary(testDb as any, made.lorebook.id)
+		await annotate(made.lorebook.id, made.session.id)
+		const messageId = made.scene.selectedMessageIds![0]!
+		const read = async () => {
+			const { deriveSceneMentionsFor } = await import("./sceneMentions")
+			return deriveSceneMentionsFor(
+				testDb as any,
+				made.lorebook.id,
+				made.scene,
+				vocabulary
+			)
+		}
+		return { ...made, members, messageId, read }
+	}
+
+	it("maps the key straight to a card-less member of the book", async () => {
+		const { members, messageId, read } = await seeded(["Grust"])
+		await mention(messageId, members[0].id)
+		const mentions = await read()
+		expect(mentions.status).toBe("derived")
+		if (mentions.status !== "derived") throw new Error("unreachable")
+		expect(mentions.bindingIds).toEqual([members[0].id])
+	}, 60_000)
+
+	it("filters a member that has been deleted, without throwing", async () => {
+		const { members, messageId, read } = await seeded(["Grust"])
+		await mention(messageId, members[0].id)
+		await testDb
+			.delete(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, members[0].id))
+		const mentions = await read()
+		expect(mentions.status).toBe("derived")
+		if (mentions.status !== "derived") throw new Error("unreachable")
+		expect(mentions.bindingIds).toEqual([])
+		expect(mentions.coverage).toEqual({ total: 1, annotated: 1 })
+	}, 60_000)
+
+	it("filters a member of another book", async () => {
+		const { messageId, read } = await seeded()
+		const other = await makeScene([])
+		const stranger = await cardless(other.lorebook.id, "Stranger")
+		await mention(messageId, stranger.id)
+		const mentions = await read()
+		expect(mentions.status).toBe("derived")
+		if (mentions.status !== "derived") throw new Error("unreachable")
+		expect(mentions.bindingIds).toEqual([])
+	}, 60_000)
+
+	it("excludes a member who is a participant (present beats mentioned)", async () => {
+		const { scene, members, messageId, read } = await seeded([
+			"Grust",
+			"Petra"
+		])
+		const [grust, petra] = members
+		await testDb.insert(schema.sceneCharacters).values({
+			sceneId: scene.id,
+			bindingId: grust.id,
+			role: "participant",
+			ordinal: 1
+		})
+		await mention(messageId, grust.id)
+		await mention(messageId, petra.id)
+		const mentions = await read()
+		expect(mentions.status).toBe("derived")
+		if (mentions.status !== "derived") throw new Error("unreachable")
+		expect(mentions.bindingIds).toEqual([petra.id])
+	}, 60_000)
+})
+
+/**
  * A scene's span outlives the messages it names (plan A23(a)).
  *
  * The ids are the scene's place in play: `scenes:compile` orders a history

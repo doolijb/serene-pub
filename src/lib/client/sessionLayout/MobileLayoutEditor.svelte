@@ -1,17 +1,21 @@
 <script lang="ts">
 	/**
-	 * The PHONE editor (PLAN-session-panels-2026-10-14 §3 lane 4).
+	 * The PHONE editor (panels v2).
 	 *
 	 * Below the breakpoint the session draws one panel under the next, so the
-	 * editor is a list: one row per panel, its tabs listed inside, in the order
-	 * Above · Middle · Below · Left · Right (./mobileEdit). Every edit is one of
-	 * ./arrangeOps — the desktop editor's — over the one working
-	 * `PanelLayoutV1`, so there is no mobile layout blob and no mobile preset.
+	 * editor is a list: three sections, Left · Middle · Right, each a plain
+	 * stack of panel rows with its tabs listed inside (./mobileEdit). There are
+	 * no groups, no primary and no Make main. Every edit is one of ./arrangeOps
+	 * over the one working `PanelLayoutV2`, so there is no mobile layout blob and
+	 * no mobile preset.
 	 *
-	 * Nothing is locked (§10 R-B): every tab has ×, and a refusal
-	 * (`MIDDLE_EMPTY`) is said in the status line. A side lists two groups,
-	 * Docked then In the rail (R-C); a row's up / down crosses between them.
-	 * Any row but the primary can be made main (`makeMain`).
+	 * Each row has up / down (within its section), Fit · Fill and a Priority of
+	 * High · Normal · Low. Nothing is locked: every tab has ×, and a refusal is
+	 * said in the status line.
+	 *
+	 * Settings are never a pop-up. A tab's gear, and the bar's Layout settings,
+	 * PUSH a screen inside the editor's own box: a Back button over the one
+	 * ArrangeInspector the desktop uses (chosenId null is Layout settings).
 	 *
 	 * Done writes the panels through the manager's `setPanels` only when they
 	 * differ from what the editor opened on (`samePanels`), then closes.
@@ -22,11 +26,16 @@
 	 */
 	import { tick, untrack, type Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { PanelLayoutV1 } from "@serene-pub/sdk"
+	import type { PanelLayoutV2 } from "@serene-pub/sdk"
 	import { isInstanceOf, widgetOfInstance } from "@serene-pub/sdk"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import { duplicateOffered, type TrayWidget } from "./widgetInstances"
-	import { samePanels, type ArrangeOutcome } from "./arrangeOps"
+	import {
+		lookOf,
+		samePanels,
+		setLook,
+		type ArrangeOutcome
+	} from "./arrangeOps"
 	import {
 		addAt,
 		canSplitOut,
@@ -38,16 +47,16 @@
 		moveTabWithin,
 		phoneSections,
 		removeTabFrom,
-		makeMain,
 		setRowHeight,
+		setRowPriority,
 		splitTab,
 		type AddTarget,
 		type PhoneRow
 	} from "./mobileEdit"
 	import type { SimTier } from "./simulator"
-	// A widget's settings and style open in the one app-level modal — the same
-	// one the desktop editor's gear opens, a full-screen sheet at this width.
-	import { openWidgetSettings } from "./widgetSettingsModal.svelte"
+	// A widget's settings, and the layout's, are the desktop inspector's own
+	// column, pushed inside the editor.
+	import ArrangeInspector from "./ArrangeInspector.svelte"
 	// The layouts sheet says what the desktop's Layouts tab says: the same
 	// sections, source lines, status line, Updated offer, questions and card menu.
 	import LayoutConfirmDialog from "./LayoutConfirmDialog.svelte"
@@ -78,10 +87,10 @@
 	} from "./startFrom"
 
 	/** The floor a session draws with nothing placed: Messages alone in the middle. */
-	const floorPanels = (): PanelLayoutV1 => ({
-		version: 1,
+	const floorPanels = (): PanelLayoutV2 => ({
+		version: 2,
 		left: [],
-		middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+		middle: [{ key: "p1", tabs: ["messages"] }],
 		right: []
 	})
 
@@ -90,14 +99,14 @@
 		 * The editor's working arrangement. Bound: every row edit replaces it
 		 * with the op's answer, so the live view under the editor follows.
 		 */
-		editPanels?: PanelLayoutV1
+		editPanels?: PanelLayoutV2
 		/**
 		 * The arrangement the editor opened on; Done writes only when the
 		 * working one differs from it. Absent: `editPanels` as it is mounted.
 		 */
-		openedPanels?: PanelLayoutV1
+		openedPanels?: PanelLayoutV2
 		/** The surface manager: Done's one write (`setPanels`). */
-		manager?: { setPanels(panels: PanelLayoutV1): void }
+		manager?: { setPanels(panels: PanelLayoutV2): void }
 		/**
 		 * The instance ids that hold stored values (settings, a style pin), so
 		 * a minted id never inherits a removed copy's (`mintInstanceId`).
@@ -117,6 +126,8 @@
 		iconOf: (p: PanelInstance) => any
 		middleWidgetIcon: (id: string) => any
 		widgetLabel: (id: string) => string
+		/** A widget kind's name, for the settings screen. */
+		kindLabel: (id: string) => string
 		/**
 		 * The picker sheet's list: every widget kind, every time — a placed
 		 * one with its count, one at its cap disabled with the reason.
@@ -153,7 +164,10 @@
 		onPresetUsage?: (presetId: number) => void
 		/** The answer to the last usage ask; null while in flight. */
 		presetUsage?: LayoutPresetUsage | null
-		onShareLayout?: (presetId: number, visibility: "shared" | "private") => void
+		onShareLayout?: (
+			presetId: number,
+			visibility: "shared" | "private"
+		) => void
 		onCloneLayout?: (presetId: number) => void
 		onSetNewSessionLayout?: (presetId: number | null) => void
 		/** **Save changes to "*Name*"**, as the desktop's. */
@@ -186,6 +200,7 @@
 		iconOf,
 		middleWidgetIcon,
 		widgetLabel,
+		kindLabel,
 		trayWidgets,
 		trayIcon,
 		presets,
@@ -213,9 +228,9 @@
 	}: Props = $props()
 
 	/** What the editor opened on, taken once: Done compares against it. */
-	const opened: PanelLayoutV1 = untrack(() =>
+	const opened: PanelLayoutV2 = untrack(() =>
 		$state.snapshot(openedPanels ?? editPanels)
-	) as PanelLayoutV1
+	) as PanelLayoutV2
 
 	/* ── the rows ───────────────────────────────────────────────────────── */
 	let sections = $derived(phoneSections(editPanels))
@@ -233,7 +248,7 @@
 		return true
 	}
 	/** Ops read a plain document, never the bound proxy. */
-	const cur = () => $state.snapshot(editPanels) as PanelLayoutV1
+	const cur = () => $state.snapshot(editPanels) as PanelLayoutV2
 
 	function addFromPicker(target: AddTarget, widgetId: string) {
 		const id = mintFor(cur(), widgetId, storedIds())
@@ -265,6 +280,26 @@
 		const now = cur()
 		if (manager && !samePanels(opened, now)) manager.setPanels(now)
 		onDone()
+	}
+
+	/* ── the pushed settings screen ─────────────────────────────────────── */
+	/** The screen pushed over the list: a widget's settings, or (id null) the layout's. */
+	let pushed = $state<{ id: string | null; from: HTMLElement | null } | null>(
+		null
+	)
+	let backButton = $state<HTMLButtonElement | null>(null)
+	let inspector = $state<ReturnType<typeof ArrangeInspector> | null>(null)
+	async function push(id: string | null, from: HTMLElement | null) {
+		pushed = { id, from }
+		await tick()
+		backButton?.focus()
+	}
+	async function back() {
+		const from = pushed?.from
+		pushed = null
+		// The list is `inert` until the screen is gone: focus waits for that.
+		await tick()
+		if (from?.isConnected) from.focus()
 	}
 
 	/* ── sheets ─────────────────────────────────────────────────────────── */
@@ -310,7 +345,9 @@
 	let renameField = $state<HTMLInputElement | null>(null)
 	/** The row a delete was asked for, awaiting its usage answer. */
 	let deleteAskId = $state<number | null>(null)
-	let deletingPreset = $derived(presets.find((p) => p.id === deleteAskId) ?? null)
+	let deletingPreset = $derived(
+		presets.find((p) => p.id === deleteAskId) ?? null
+	)
 	let deleteUsage = $derived(
 		presetUsage && presetUsage.id === deleteAskId ? presetUsage : null
 	)
@@ -321,7 +358,10 @@
 		copyAsk
 			? copyConfirm(copyAsk, mainWidgetTitle)
 			: saveChangesAsk
-				? saveChangesConfirm(saveChangesAsk.preset, saveChangesAsk.updated)
+				? saveChangesConfirm(
+						saveChangesAsk.preset,
+						saveChangesAsk.updated
+					)
 				: unshareAsk
 					? unshareConfirm(unshareAsk)
 					: deletingPreset
@@ -336,8 +376,12 @@
 		unshareAsk = null
 		copyAsk = ask
 	}
-	function onCardAction(action: CardMenuAction, p: Sockets.Sessions.LayoutPreset) {
-		if (action === "new-session") onSetNewSessionLayout?.(newSessionChoice(p))
+	function onCardAction(
+		action: CardMenuAction,
+		p: Sockets.Sessions.LayoutPreset
+	) {
+		if (action === "new-session")
+			onSetNewSessionLayout?.(newSessionChoice(p))
 		else if (action === "stop-new-session") onSetNewSessionLayout?.(null)
 		else if (action === "copy") onCloneLayout?.(p.id)
 		else if (action === "share") onShareLayout?.(p.id, "shared")
@@ -373,7 +417,9 @@
 	 */
 	async function focusRowMenu(id: number) {
 		await tick()
-		sheetEl?.querySelector<HTMLElement>(`[data-card-menu="${id}"] button`)?.focus()
+		sheetEl
+			?.querySelector<HTMLElement>(`[data-card-menu="${id}"] button`)
+			?.focus()
 	}
 	/** Enter and blur both commit; an unchanged or blank name is dropped. */
 	function commitRename(id: number) {
@@ -395,7 +441,10 @@
 		renamingId = null
 		deleteAskId = null
 		unshareAsk = null
-		saveChangesAsk = { preset: p, updated: startedFromUpdated && startedFrom?.id === p.id }
+		saveChangesAsk = {
+			preset: p,
+			updated: startedFromUpdated && startedFrom?.id === p.id
+		}
 	}
 
 	/**
@@ -451,19 +500,12 @@
 	let dragOriginY = 0
 	let dragStepPx = 44
 
-	/** A row's index in its column (the middle's three sections are one column). */
+	/** A row's index within its own section. */
 	function columnIndex(key: string): number {
-		const row = sections.flatMap((s) => s.rows).find((r) => r.key === key)
-		if (!row) return -1
-		const middle = row.place === "above" || row.place === "primary" || row.place === "below"
-		const column = sections
-			.filter((s) =>
-				middle
-					? s.place === "above" || s.place === "primary" || s.place === "below"
-					: s.place === row.place
-			)
-			.flatMap((s) => s.rows)
-		return column.findIndex((r) => r.key === key)
+		const section = sections.find((sec) =>
+			sec.rows.some((r) => r.key === key)
+		)
+		return section ? section.rows.findIndex((r) => r.key === key) : -1
 	}
 	function startRowDrag(e: PointerEvent, key: string) {
 		const grip = e.currentTarget as HTMLElement
@@ -492,11 +534,13 @@
 	}
 
 	/**
-	 * Escape closes the topmost sheet, innermost first. A dialog over the
-	 * sheet is topmost and closes itself, so the sheet under it stays.
+	 * Escape closes the topmost layer, innermost first: a dialog, the pushed
+	 * screen (its inspector's own Escape first, then Back), the picker sheet,
+	 * the layouts sheet. A dialog over the sheet closes itself, so the sheet
+	 * under it stays.
 	 */
 	$effect(() => {
-		if (!pickerTarget && !presetSheet) return
+		if (!pickerTarget && !presetSheet && !pushed) return
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return
 			// Focus is trapped in an open dialog, so the key comes from it —
@@ -519,7 +563,9 @@
 				)
 			)
 				return
-			if (pickerTarget) pickerTarget = null
+			if (pushed) {
+				if (!inspector?.escape()) back()
+			} else if (pickerTarget) pickerTarget = null
 			else presetSheet = false
 		}
 		document.addEventListener("keydown", onKey)
@@ -527,10 +573,9 @@
 	})
 </script>
 
-<!-- The PHONE editor (PLAN-session-panels-2026-10-14 §3 lane 4): one row per
-     panel, its tabs inside, in the order Above · Middle · Below · Left ·
-     Right. A screen this narrow draws one panel under the next and hovers
-     for nothing, so every control is on the row. -->
+<!-- The PHONE editor (panels v2): three sections, Left · Middle · Right, one
+     row per panel, its tabs inside. A screen this narrow draws one panel under
+     the next and hovers for nothing, so every control is on the row. -->
 <!-- A tab's Duplicate: a copy of the widget beside it in the same panel, its
      settings and style copied. At the widget's cap, the reason. -->
 {#snippet duplicateControl(id: string, label: string)}
@@ -538,11 +583,20 @@
 	{#if !duplicateOffered()}
 		<!-- QD's "tray only": no Duplicate. -->
 	{:else if full}
-		<span class="medit-floor medit-nocopy" role="note" title={full} aria-label={full}>
+		<span
+			class="medit-floor medit-nocopy"
+			role="note"
+			title={full}
+			aria-label={full}
+		>
 			<Icons.Copy size={13} aria-hidden="true" />
 		</span>
 	{:else}
-		<button class="medit-btn" aria-label="Duplicate {label}" onclick={() => duplicate(id)}>
+		<button
+			class="medit-btn"
+			aria-label="Duplicate {label}"
+			onclick={() => duplicate(id)}
+		>
 			<Icons.Copy size={14} />
 		</button>
 	{/if}
@@ -605,8 +659,7 @@
 		<button
 			class="medit-btn"
 			aria-label="Open {label} settings"
-			aria-haspopup="dialog"
-			onclick={(e) => openWidgetSettings({ widgetId: id, label }, e.currentTarget)}
+			onclick={(e) => push(id, e.currentTarget)}
 		>
 			<Icons.Settings size={14} />
 		</button>
@@ -624,7 +677,12 @@
 {#snippet panelRow(row: PhoneRow)}
 	{@const Icon = rowIcon(row)}
 	{@const title = rowTitle(row)}
-	<li class="medit-row" class:dragging={dragRowKey === row.key} data-panel-row={row.key}>
+	{@const fit = row.height === "fit"}
+	<li
+		class="medit-row"
+		class:dragging={dragRowKey === row.key}
+		data-panel-row={row.key}
+	>
 		<div class="medit-line">
 			{#if row.canMoveUp || row.canMoveDown}
 				<!-- The drag handle. `touch-action: none` (in CSS) is what stops
@@ -665,36 +723,48 @@
 					<Icons.ChevronDown size={15} />
 				</button>
 			{/if}
-			{#if row.height && row.group !== "rail"}
-				{@const fit = row.height === "fit"}
-				<!-- Fit takes the content's height; Fill shares what is left. -->
-				<button
-					class="medit-chip medit-height"
-					aria-label="Height of {title}: {fit ? 'Fit' : 'Fill'}. Switch to {fit ? 'Fill' : 'Fit'}"
-					onclick={() => apply(setRowHeight(cur(), row.key, fit ? "fill" : "fit"))}
-				>
-					{#if fit}<Icons.FoldVertical size={13} />{:else}<Icons.UnfoldVertical size={13} />{/if}
-					{fit ? "Fit" : "Fill"}
-				</button>
-			{/if}
-			{#if row.canMakeMain}
-				<!-- The primary is a place: this panel goes there, the old
-				     primary to the end of Above. -->
-				<button
-					class="medit-btn"
-					aria-label="Make {title} main"
-					title="Make main"
-					data-make-main={row.key}
-					onclick={() => apply(makeMain(cur(), row.key))}
-				>
-					<Icons.Crown size={15} />
-				</button>
-			{/if}
+			<!-- Fit takes the content's height; Fill shares what is left. -->
+			<button
+				class="medit-chip medit-height"
+				aria-label="Height of {title}: {fit
+					? 'Fit'
+					: 'Fill'}. Switch to {fit ? 'Fill' : 'Fit'}"
+				onclick={() =>
+					apply(setRowHeight(cur(), row.key, fit ? "fill" : "fit"))}
+			>
+				{#if fit}<Icons.FoldVertical
+						size={13}
+					/>{:else}<Icons.UnfoldVertical size={13} />{/if}
+				{fit ? "Fit" : "Fill"}
+			</button>
+			<!-- Priority: which panel keeps its room, and which yields first, when
+			     the screen is short. One of three, so segmented. -->
+			<div class="medit-seg" role="group" aria-label="Priority">
+				{#each [["high", "High"], ["normal", "Normal"], ["low", "Low"]] as const as [v, name] (v)}
+					<button
+						class="medit-seg-btn"
+						class:preset-pressed={row.priority === v}
+						aria-pressed={row.priority === v}
+						data-priority-high={v === "high" ? row.key : undefined}
+						data-priority-normal={v === "normal"
+							? row.key
+							: undefined}
+						data-priority-low={v === "low" ? row.key : undefined}
+						onclick={() => {
+							if (row.priority !== v)
+								apply(setRowPriority(cur(), row.key, v))
+						}}
+					>
+						{name}
+					</button>
+				{/each}
+			</div>
 			<button
 				class="medit-btn"
 				aria-label="Add a tab to {title}"
 				aria-haspopup="dialog"
-				onclick={() => (pickerTarget = { kind: "panel", panelKey: row.key })}
+				onclick={() =>
+					(pickerTarget = { kind: "panel", panelKey: row.key })}
 			>
 				<Icons.Plus size={15} />
 			</button>
@@ -716,10 +786,11 @@
 			<span class="medit-note">Previewing {simWidth} px</span>
 		{/if}
 	</header>
-	<div class="medit-body">
+	<!-- While a screen is pushed, the list and the bar are inert (and covered). -->
+	<div class="medit-body" inert={!!pushed}>
 		<p class="medit-note">
-			A screen this narrow draws one panel under the next. Drag a handle, or
-			use the arrows, to change the order.
+			A screen this narrow draws one panel under the next. Drag a handle,
+			or use the arrows, to change the order.
 		</p>
 		{#if notice}
 			<p class="medit-notice" role="status" data-medit-notice>{notice}</p>
@@ -729,43 +800,60 @@
 				<header class="medit-zone-head">
 					{s.label}
 					<span class="flex-1"></span>
-					<button class="medit-chip" onclick={() => (pickerTarget = s.add)}>
+					<button
+						class="medit-chip"
+						onclick={() => (pickerTarget = s.add)}
+					>
 						<Icons.Plus size={13} />
 						Add
 					</button>
 				</header>
-				{#if s.groups}
-					<!-- A side: Docked, then In the rail. Both headers always
-					     show, so an empty group still says where rows go. -->
-					{#each s.groups as g (g.group)}
-						<h3 class="medit-group-head" data-side-group={g.group}>{g.label}</h3>
-						<ul class="medit-list" data-side-group-list={g.group}>
-							{#each g.rows as row (row.key)}
-								{@render panelRow(row)}
-							{/each}
-							{#if !g.rows.length}
-								<li class="medit-empty">
-									{g.group === "docked" ? "Nothing docked." : "Nothing in the rail."}
-								</li>
-							{/if}
-						</ul>
+				<ul class="medit-list">
+					{#each s.rows as row (row.key)}
+						{@render panelRow(row)}
 					{/each}
-				{:else}
-					<ul class="medit-list">
-						{#each s.rows as row (row.key)}
-							{@render panelRow(row)}
-						{/each}
-						{#if !s.rows.length}
-							<li class="medit-empty">Nothing here yet.</li>
-						{/if}
-					</ul>
-				{/if}
+					{#if !s.rows.length}
+						<li class="medit-empty">Nothing here yet.</li>
+					{/if}
+				</ul>
 			</section>
 		{/each}
 	</div>
+	{#if pushed}
+		<!-- The settings screen, pushed over the list inside the editor's own box
+		     (never a dialog). It covers the bar, which is also inert. -->
+		<div
+			class="medit-push"
+			role="region"
+			aria-labelledby={inspector?.headingId}
+			data-medit-push
+		>
+			<header class="medit-head">
+				<button
+					class="medit-chip"
+					bind:this={backButton}
+					onclick={back}
+				>
+					<Icons.ChevronLeft size={14} />
+					Back
+				</button>
+			</header>
+			<div class="medit-push-body">
+				<ArrangeInspector
+					bind:this={inspector}
+					panels={editPanels}
+					chosenId={pushed.id}
+					label={widgetLabel}
+					{kindLabel}
+					look={lookOf(editPanels)}
+					onLook={(patch) => apply(setLook(cur(), patch))}
+				/>
+			</div>
+		</div>
+	{/if}
 	<!-- The sticky bar is the toolbar down here: commit, cancel and restore
 	     without a row of tabs a thumb cannot reach. -->
-	<div class="medit-bar">
+	<div class="medit-bar" inert={!!pushed}>
 		<button
 			class="medit-chip"
 			aria-haspopup="dialog"
@@ -776,9 +864,18 @@
 			Layouts
 			<!-- The source changed since the copy: an offer waits inside. -->
 			{#if startedFromUpdated}
-				<span class="medit-dot" data-updated-dot aria-hidden="true"></span>
+				<span
+					class="medit-dot"
+					data-updated-dot
+					aria-hidden="true"
+				></span>
 				<span class="sr-only">(updated)</span>
 			{/if}
+		</button>
+		<!-- The layout's own settings (Backing, Opacity, Widget gap): pushed. -->
+		<button class="medit-chip" onclick={(e) => push(null, e.currentTarget)}>
+			<Icons.SlidersHorizontal size={14} />
+			Layout settings
 		</button>
 		<!-- Icon-only, and it replaces the layout like the sheet's own Reset:
 		     it asks first. -->
@@ -834,15 +931,17 @@
 					<IconCmp size={18} />
 					<span>{t.title}</span>
 					{#if t.placed}
-						<span class="msheet-count"
-							><span class="sr-only">{" · "}</span>{t.placed} placed</span
-						>
+						<span class="msheet-count">
+							<span class="sr-only">{" · "}</span>
+							{t.placed} placed
+						</span>
 					{/if}
 					<!-- No hover on a phone: the cap's reason is said on the row. -->
 					{#if t.full}
-						<span class="msheet-count"
-							><span class="sr-only">{" · "}</span>{t.full}</span
-						>
+						<span class="msheet-count">
+							<span class="sr-only">{" · "}</span>
+							{t.full}
+						</span>
 					{/if}
 				</button>
 			{/each}
@@ -876,9 +975,9 @@
 			<!-- Where this session's layout started from, and — when that
 			     changed since the copy — the offer to copy it again. -->
 			<p class="msheet-status" data-layout-provenance>
-				{provenance.lead}{#if provenance.name}<strong
-						>{provenance.name}</strong
-					>{/if}{provenance.tail}
+				{provenance.lead}{#if provenance.name}<strong>
+						{provenance.name}
+					</strong>{/if}{provenance.tail}
 			</p>
 			{#if updatedSource}
 				{@const src = updatedSource}
@@ -912,7 +1011,8 @@
 						     end, is everything else (brief 6b). -->
 						<div
 							class="msheet-row"
-							class:armed={deleteAskId === p.id || unshareAsk?.id === p.id}
+							class:armed={deleteAskId === p.id ||
+								unshareAsk?.id === p.id}
 						>
 							{#if renamingId === p.id && canManageLayout(p, isAdmin)}
 								<div class="msheet-item msheet-renaming">
@@ -946,14 +1046,17 @@
 									class:on={current}
 									aria-current={current ? "true" : undefined}
 									data-preset-card={p.id}
-									onclick={() => askCopy({ kind: "card", preset: p })}
+									onclick={() =>
+										askCopy({ kind: "card", preset: p })}
 								>
 									{@render presetPicture(p.layout)}
 									<span class="msheet-item-text">
 										<span class="msheet-item-name">
 											{p.name}
 											{#if current && startedFromUpdated}
-												<span class="msheet-chip">Updated</span>
+												<span class="msheet-chip">
+													Updated
+												</span>
 											{/if}
 										</span>
 										<!-- No hover on a phone: the star's words are
@@ -963,22 +1066,36 @@
 												class="msheet-item-desc msheet-new-session"
 												data-new-session-layout
 											>
-												<Icons.Star size={12} aria-hidden="true" />
+												<Icons.Star
+													size={12}
+													aria-hidden="true"
+												/>
 												{newSessionMark(genreName)}
 											</span>
 										{/if}
 										<!-- Where it comes from (./startFrom `sourceLine`). -->
-										<span class="msheet-item-desc" data-preset-source
-											>{sourceLine(p, startedFrom?.id ?? null)}</span
+										<span
+											class="msheet-item-desc"
+											data-preset-source
 										>
+											{sourceLine(
+												p,
+												startedFrom?.id ?? null
+											)}
+										</span>
 										<!-- Yours, shared: the desktop card's word. -->
 										{#if sharedMark(p)}
-											<span class="msheet-item-desc" data-shared-mark
-												>{sharedMark(p)}</span
+											<span
+												class="msheet-item-desc"
+												data-shared-mark
 											>
+												{sharedMark(p)}
+											</span>
 										{/if}
 										{#if p.description}
-											<span class="msheet-item-desc">{p.description}</span>
+											<span class="msheet-item-desc">
+												{p.description}
+											</span>
 										{/if}
 									</span>
 								</button>
@@ -1017,12 +1134,17 @@
 				Save as new layout
 			</button>
 			<!-- The verbs that REPLACE this session's layout; each asks. -->
-			<div class="msheet-verbs" role="group" aria-label="Replace this session's layout">
+			<div
+				class="msheet-verbs"
+				role="group"
+				aria-label="Replace this session's layout"
+			>
 				{#if !updatedSource?.isGenreDefault}
 					<button
 						class="medit-chip"
 						data-copy-verb="reset"
-						onclick={() => askCopy({ kind: "reset", preset: genreDefault })}
+						onclick={() =>
+							askCopy({ kind: "reset", preset: genreDefault })}
 					>
 						<Icons.RotateCcw size={14} />
 						Reset to genre default layout
@@ -1033,7 +1155,8 @@
 					<button
 						class="medit-chip"
 						data-copy-verb="again"
-						onclick={() => askCopy({ kind: "again", preset: again })}
+						onclick={() =>
+							askCopy({ kind: "again", preset: again })}
 					>
 						<Icons.RotateCcw size={14} />
 						Start again from {quoted(again.name)}
@@ -1091,6 +1214,7 @@
 	.medit-head,
 	.medit-bar {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.4rem;
 		padding: 0.5rem 0.75rem;
@@ -1219,13 +1343,42 @@
 		block-size: 2.25rem;
 		color: var(--color-surface-600-400);
 	}
-	/* A side's group label (Docked / In the rail): plain, under the section head. */
-	.medit-group-head {
-		margin: 0;
-		padding: 0.3rem 0.5rem 0.15rem;
-		font-size: 0.6875rem;
-		font-weight: 600;
-		color: var(--color-surface-600-400);
+	/* Priority: High · Normal · Low, one pressed (STYLE-GUIDE §6.5). */
+	.medit-seg {
+		display: inline-flex;
+		border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+		border-radius: 0.4rem;
+		overflow: hidden;
+	}
+	/* 44px: a touch target (§9). The pressed one wears `preset-pressed`
+	   (§2.4: pressed is not gold), so no colour of its own here. */
+	.medit-seg-btn {
+		min-block-size: 2.75rem;
+		padding-inline: 0.5rem;
+		font-size: 0.75rem;
+		color: inherit;
+		border: none;
+		cursor: pointer;
+	}
+	.medit-seg-btn:not(.preset-pressed) {
+		background: transparent;
+	}
+	/* The pushed settings screen: over the whole editor, inside its fixed box. */
+	.medit-push {
+		position: absolute;
+		inset: 0;
+		z-index: 1;
+		display: flex;
+		flex-direction: column;
+		background: inherit;
+	}
+	.medit-push-body {
+		flex: 1;
+		min-block-size: 0;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		padding-block-end: env(safe-area-inset-bottom);
 	}
 	.medit-members {
 		flex-basis: 100%;
@@ -1244,10 +1397,14 @@
 		padding: 0.4rem 0.6rem;
 		border-radius: 0.4rem;
 		font-size: 0.8rem;
-		background: color-mix(in oklab, var(--color-warning-500) 16%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-warning-500) 16%,
+			transparent
+		);
 	}
 	.medit-chip.medit-height {
-		min-block-size: 2.25rem;
+		min-block-size: 2.75rem; /* 44px touch target (STYLE-GUIDE §4.2) */
 		padding-inline: 0.5rem;
 		font-size: 0.75rem;
 	}
@@ -1261,7 +1418,7 @@
 		align-items: center;
 		gap: 0.3rem;
 		padding: 0.4rem 0.7rem;
-		min-block-size: 2.25rem;
+		min-block-size: 2.75rem;
 		border-radius: 0.4rem;
 		border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
 		background: transparent;
@@ -1393,7 +1550,11 @@
 	}
 	/* The row whose delete is being asked about. */
 	.msheet-row.armed {
-		background: color-mix(in oklab, var(--color-error-500) 14%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-error-500) 14%,
+			transparent
+		);
 	}
 	.msheet-renaming {
 		cursor: default;
@@ -1459,7 +1620,11 @@
 		gap: 0.4rem;
 		padding: 0.5rem 0.6rem;
 		border-radius: 0.5rem;
-		background: color-mix(in oklab, var(--color-primary-500) 10%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-primary-500) 10%,
+			transparent
+		);
 		font-size: 0.8rem;
 	}
 	.msheet-updated p {
@@ -1474,7 +1639,11 @@
 		font-size: 0.6875rem;
 		font-weight: 600;
 		line-height: 1.5;
-		background: color-mix(in oklab, var(--color-primary-500) 22%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-primary-500) 22%,
+			transparent
+		);
 		color: var(--color-primary-800);
 	}
 	:global([data-mode="dark"]) .msheet-chip {

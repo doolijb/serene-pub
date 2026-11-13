@@ -13,6 +13,14 @@
  * Nothing comes back in the reply: the new settings reach the widget as its
  * `settings` section, and its face follows.
  *
+ * The member is named by 🚧 `memberRef` (`seated-member:<castMemberId>`,
+ * ★S3-8) or ⏳ `characterRef` (`character:<id>`), and FOUND in the cast the
+ * page projects — never parsed: a `memberRef` matches the member whose host-
+ * filled `ref` it is (exact `ref` wins), else whose `castMemberId` formats to it. The pair is
+ * stored under the found member's own `ref`, the form the host emits (member
+ * form from the flip, whose boot pass rekeys old lines; ⏳ card form before),
+ * so nothing stored changes form here.
+ *
  * Refused, in words, for a member not in the session's cast, a ref that is
  * not one, or an instance whose settings hold no chosen images.
  */
@@ -37,8 +45,10 @@ export interface SetChosenImageDeps {
 	settings: InstanceSettings
 }
 
-/** A member ref the cast names its people by. */
-const MEMBER_REF = /^character:\d+$/
+/** ⏳ A card-form member ref (`characterRef`). */
+const CHARACTER_REF = /^character:\d+$/
+/** 🚧 A member-form ref (`memberRef`): the prefix and something after it. */
+const MEMBER_PREFIX = "seated-member:"
 
 /** Answer one `set-chosen-image` for the asking instance. */
 export function answerSetChosenImage(
@@ -47,25 +57,50 @@ export function answerSetChosenImage(
 	d: SetChosenImageDeps
 ): void {
 	const p = (params ?? {}) as Partial<Params>
-	const member =
-		typeof p.characterRef === "string" ? p.characterRef.trim() : ""
-	if (!MEMBER_REF.test(member))
-		throw new Error("set-chosen-image names a member as character:<id>")
+	const byMember = typeof p.memberRef === "string"
+	const named = (
+		byMember
+			? p.memberRef
+			: typeof p.characterRef === "string"
+				? p.characterRef
+				: ""
+	)!.trim()
+	if (
+		byMember
+			? !named.startsWith(MEMBER_PREFIX) ||
+				named.length === MEMBER_PREFIX.length
+			: !CHARACTER_REF.test(named)
+	)
+		throw new Error(
+			"set-chosen-image names a member as memberRef (seated-member:<id>), or characterRef (character:<id>)"
+		)
 	const image =
 		p.mediaRef === null
 			? null
 			: typeof p.mediaRef === "string"
 				? p.mediaRef.trim()
 				: undefined
-	// A ref holds no `=`: the stored pair is `character:<id>=<ref>`.
+	// A ref holds no `=`: the stored pair is `<member's ref>=<image ref>`,
+	// the member's ref as the host emits it (`seated-member:<id>` / `player-seat:<id>` from the flip; ⏳ `character:<id>` before).
 	if (image === undefined || image === "" || image?.includes("="))
 		throw new Error(
 			"set-chosen-image takes an image's ref, or null for none"
 		)
 	const cast = d.characters()
 	if (!cast) throw new Error("the session's cast has not arrived yet")
-	if (!cast.members.some((m) => m.ref === member))
-		throw new Error("that character is not in this session")
+	// An exact `ref` wins; only then the member whose `castMemberId` formats to
+	// it — a K-2 member in both seats is two members with one `castMemberId`,
+	// and `named` is the character seat's ref.
+	const found = byMember
+		? (cast.members.find((m) => m.ref === named) ??
+			cast.members.find(
+				(m) =>
+					m.castMemberId != null &&
+					`${MEMBER_PREFIX}${m.castMemberId}` === named
+			))
+		: cast.members.find((m) => m.ref === named)
+	if (!found) throw new Error("that character is not in this session")
+	const member = found.ref
 	const instance = from?.widgetId
 	if (!instance || !d.settings.declares(instance, "chosenImages"))
 		throw new Error("this widget keeps no chosen images")

@@ -34,6 +34,7 @@ import { eq } from "drizzle-orm"
 import { renderStatusText, type StatusText } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -247,7 +248,7 @@ async function makeChatSession(tag: string, withLorebook = false) {
 	await db.insert(schema.sessionCharacters).values({
 		sessionId: session.id,
 		characterId,
-		isActive: true,
+		isActive: true
 	})
 	await db.insert(schema.sessionPersonas).values({
 		sessionId: session.id,
@@ -338,9 +339,12 @@ beforeAll(async () => {
 	)
 	await bootstrapPipelines(db)
 	GENERATE = (
-		await (await import("$lib/server/utils/testDb")).replyStepKeys(
+		await (
+			await import("$lib/server/utils/testDb")
+		).replyStepKeys(
 			db,
-			(await import("$lib/server/pipelines/boot/bootstrap")).STORY_RESPOND_SPEC_ID
+			(await import("$lib/server/pipelines/boot/bootstrap"))
+				.STORY_RESPOND_SPEC_ID
 		)
 	).generate
 
@@ -486,8 +490,7 @@ describe("the live row and the session list", () => {
 		const res: any = await trigger(sessionId)
 		expect(res?.error, res?.error).toBeUndefined()
 		const frames = broadcasts.filter(
-			(b) =>
-				b.sessionId === sessionId && b.event === "sessions:runStatus"
+			(b) => b.sessionId === sessionId && b.event === "sessions:runStatus"
 		)
 		expect(frames.length).toBeGreaterThan(0)
 		for (const f of frames) expect(f.payload.kind).toBe("reply")
@@ -751,5 +754,43 @@ describe("an envoy's turn", () => {
 		const statuses = rowStatuses(sessionId).map(rendered)
 		expect(statuses).toContain("Serene is typing")
 		expect(statuses.every((s) => !s!.includes("{speaker}"))).toBe(true)
+	})
+})
+
+describe("a member's own name in the book (§0-D)", () => {
+	it("{speaker} is the own name; a card without one reads the card", async () => {
+		const { speakerDisplayName } = await import(
+			"$lib/server/pipelines/runtime/runStatus"
+		)
+		const [book] = await db
+			.insert(schema.lorebooks)
+			.values({ name: "Own names", userId })
+			.returning()
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false, lorebookId: book.id })
+			.returning()
+		await insertCastMember(db, {
+			lorebookId: book.id,
+			binding: "{{char:own-name}}",
+			characterId,
+			ownName: "Maren"
+		} as any)
+		expect(
+			await speakerDisplayName(db as any, {
+				sessionId: session.id,
+				speaker: `character:${characterId}` as never
+			})
+		).toBe("Maren")
+		const [bare] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false })
+			.returning()
+		expect(
+			await speakerDisplayName(db as any, {
+				sessionId: bare.id,
+				speaker: `character:${characterId}` as never
+			})
+		).toBe("Jasmine")
 	})
 })

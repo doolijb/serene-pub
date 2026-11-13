@@ -23,7 +23,7 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import * as Icons from "@lucide/svelte"
 	import SchemaForm from "./SchemaForm.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { queueAfterThis, queuePosition } from "./reviewQueue"
 	import { reviewPlainLine } from "./reviewWording"
 	import { pipelineLabel } from "$lib/client/utils/pipelineGenre"
@@ -46,9 +46,7 @@
 	 * no genre (NOMENCLATURE §2), so it names both — "Reply · Adventure".
 	 */
 	let pipelines = $state<Sockets.Pipelines.Namespace[] | null>(null)
-	let genres = $state<Sockets.Sessions.Genres.Response["genres"] | null>(
-		null
-	)
+	let genres = $state<Sockets.Sessions.Genres.Response["genres"] | null>(null)
 	const carded = $derived(!!current)
 	$effect(() => {
 		if (!carded) return
@@ -70,10 +68,40 @@
 	const specLabel = (specId: string) => {
 		const named = pipelineLabel(specId, pipelines, genres)
 		if (named) return named
-		const tail = specId.slice(specId.lastIndexOf("/") + 1).replace(/-/g, " ")
+		const tail = specId
+			.slice(specId.lastIndexOf("/") + 1)
+			.replace(/-/g, " ")
 		return tail ? tail[0].toUpperCase() + tail.slice(1) : specId
 	}
 	const submitting = $derived(!!current && submittingId === current.id)
+
+	/**
+	 * 🚧 A picture step's fields as they will be SENT (owner ruling
+	 * 2026-11-08): the row's fixed words around the person's part. The
+	 * seeded rows are plain `{{prompt}}` / `{{negative}}` templates, so the
+	 * split is textual: the pieces around the field's own placeholder are
+	 * read-only, the field's current value sits between them. A row with
+	 * no such placeholder is shown whole.
+	 */
+	const PLACEHOLDER_OF: Record<string, string> = { prompt: "prompt", negative: "negative" }
+	const sentAs = $derived.by(() => {
+		const rows = current?.sentAs
+		if (!rows) return []
+		return Object.entries(rows).map(([field, template]) => {
+			const token = new RegExp(`\\{\\{\\s*${PLACEHOLDER_OF[field] ?? field}\\s*\\}\\}`)
+			const m = template.match(token)
+			const value = String(values[field] ?? "")
+			if (!m || m.index == null) return { field, before: template, value: "", after: "" }
+			return {
+				field,
+				before: template.slice(0, m.index),
+				value,
+				after: template.slice(m.index + m[0].length)
+			}
+		})
+	})
+	const fieldLabel = (field: string) =>
+		String((current?.schema as any)?.[field]?.label ?? field)
 
 	// A fresh card resets the working values to the payload's own.
 	$effect(() => {
@@ -129,7 +157,11 @@
 		queue = [...queue, ...res.reviews.filter((r) => !known.has(r.id))]
 	}
 	const onError = (res: { error?: string; id?: string }) => {
-		if (res?.error) toaster.error({ title: res.error })
+		if (res?.error)
+			notify.error({
+				source: "socket:pipelines:resolveReview:error",
+				title: res.error
+			})
 		// A refusal reaches the tab that asked and names its card; only the
 		// card in flight re-enables. A server too old to name the card falls back to whatever
 		// this tab has in flight.
@@ -168,7 +200,7 @@
 
 {#if current}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/60 p-4"
+		class="bg-surface-950/60 fixed inset-0 z-50 flex items-center justify-center p-4"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="review-title"
@@ -183,8 +215,8 @@
 					<p class="font-semibold" id="review-title">
 						Waiting for your review{#if queuePosition(queue.length)}
 							<span class="text-surface-600-400 font-normal">
-								· {queuePosition(queue.length)}</span
-							>{/if}
+								· {queuePosition(queue.length)}
+							</span>{/if}
 					</p>
 					<!-- Plain words first (D3): what is about to happen and
 					     what Approve does. The pipeline and the step are under
@@ -201,13 +233,15 @@
 					</p>
 					{#if current.whatIsReviewed}
 						<details class="mt-1 text-xs">
-							<summary class="text-surface-600-400 cursor-pointer">
+							<summary
+								class="text-surface-600-400 cursor-pointer"
+							>
 								Details
 							</summary>
 							<p class="mt-1" data-testid="review-what">
-								<span class="text-surface-600-400"
-									>{specLabel(current.specId)} · step “{current.nodeKey}”:</span
-								>
+								<span class="text-surface-600-400">
+									{specLabel(current.specId)} · step “{current.nodeKey}”:
+								</span>
 								{current.whatIsReviewed}
 							</p>
 						</details>
@@ -216,6 +250,27 @@
 			</div>
 
 			<SchemaForm schema={current.schema as any} bind:values />
+
+			{#if sentAs.length}
+				<section class="flex flex-col gap-2" aria-label="As it will be sent">
+					<h3 class="text-surface-600-400 text-xs font-semibold uppercase tracking-wide">
+						As it will be sent
+					</h3>
+					{#each sentAs as row (row.field)}
+						<div class="rounded-lg border border-surface-300-700 p-2 text-sm">
+							<span class="text-surface-600-400 text-xs">{fieldLabel(row.field)}</span>
+							<p class="font-mono text-xs leading-relaxed break-words">
+								{#if row.before}<span class="text-surface-500">{row.before}</span>{/if}
+								{#if row.value}<mark class="rounded bg-primary-500/15 px-0.5 text-inherit">{row.value}</mark>{:else if row.after || row.before}<span class="text-surface-400 italic">(empty)</span>{/if}
+								{#if row.after}<span class="text-surface-500">{row.value ? row.after : " " + row.after.replace(/^[\s,]+/, "")}</span>{/if}
+							</p>
+							<p class="text-surface-500 text-xs">
+								The highlighted part is yours to change above; the rest is the step's prompt row.
+							</p>
+						</div>
+					{/each}
+				</section>
+			{/if}
 
 			{#if lastError}
 				<p

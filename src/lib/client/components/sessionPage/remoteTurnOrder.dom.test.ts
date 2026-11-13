@@ -392,7 +392,7 @@ describe("core's remote Turn order", () => {
 
 describe("the page mounts Turn order remote", () => {
 	test("core's own module at /core-ui/turn-order, granted the cast, reading its declaration's sections", () => {
-		const widget = coreDefaultWidgets().find((p) => p.id === "turn-order")!
+		const widget = coreDefaultWidgets(true).find((p) => p.id === "turn-order")!
 		expect(widget.surface).toEqual({
 			kind: "remote",
 			owner: "core",

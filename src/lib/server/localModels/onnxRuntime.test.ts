@@ -10,6 +10,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 const isAndroidWrapperMock = vi.fn(() => false)
 
+// The runtime reads the leaf module (`utils/androidWrapper.ts`), not the barrel: a
+// static barrel import from the db's boot path bound the real db inside int tests (M2e).
+vi.mock("$lib/server/utils/androidWrapper", () => ({
+	isAndroidWrapper: () => isAndroidWrapperMock()
+}))
 vi.mock("$lib/server/utils", () => ({
 	getAppDataDir: () => "/tmp/fake-app-data",
 	isAndroidWrapper: () => isAndroidWrapperMock()

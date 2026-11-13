@@ -32,7 +32,9 @@
  * says why on the ledger's failure lines; 🚧 an attribute role an **entry field selector** fills —
  * `entryFields`, `bond.affection` — also carries `fields: { [selector]:
  * { entryType, field, type, min?, max?, entries } }`, the owner's held entries of
- * that type; ties T3) — plus `check` (before, after, decide), `answer`,
+ * that type; ties T3) — each attribute role also carries `writtenAgo: { [id]:
+ * { minutes, realSeconds? } }`, how long ago a session wrote that value (🚧 lane
+ * sense-age2; `realSeconds` only for a use that declares `countsTime` `'real'` or `'both'`) — plus `check` (before, after, decide), `answer`,
  * `actor` and `aimedAt` (invoke), `blocks` and `outcomes` (render).
  * `ctx.random()` is the call's seeded stream; `ctx.log(x)` writes the trail.
  *
@@ -366,6 +368,9 @@ async function bindingValues(
 			const bounds: Record<string, { min?: number; max?: number; start?: unknown }> = {}
 			// 🚧 An entry's field (ties T3): the owner's held entries of its type, read per entry.
 			const fields: Record<string, { entryType: string; field: string; type: string; min?: number; max?: number; entries: unknown[] }> = {}
+			// 🚧 How long ago each value was written (lane sense-age2): story minutes always; real seconds only for a use that counts real time.
+			const writtenAgo: Record<string, { minutes: number | null; realSeconds?: number | null }> = {}
+			const countsReal = use.decl?.countsTime === "real" || use.decl?.countsTime === "both"
 			for (const id of b.ids) {
 				const ef = entryFieldOf(input.ruleset, id)
 				if (ef) {
@@ -390,11 +395,13 @@ async function bindingValues(
 					continue
 				}
 				got[id] = value
+				const ago = owner && slot ? input.writtenAgo?.[owner.key]?.[slot] : undefined
+				writtenAgo[id] = { minutes: ago?.minutes ?? null, ...(countsReal ? { realSeconds: ago?.realSeconds ?? null } : {}) }
 				// 🚧 The owner's own most, where a stat configuration sets one (lane G3,
 				// 2026-10-23): a rest restores a seat to its full health, never the slot's ceiling.
 				bounds[id] = { ...boundsOf(input.ruleset, id, slot), ...(isNumber(stat?.max) ? { max: stat.max } : {}) }
 			}
-			out[role] = { ...base, values: got, bounds, ...(Object.keys(fields).length ? { fields } : {}) }
+			out[role] = { ...base, values: got, bounds, writtenAgo, ...(Object.keys(fields).length ? { fields } : {}) }
 		} else if (b.to === "entry-type") out[role] = { ...base, entries: owner ? entriesOf(input, owner, b.ids) : [] }
 		else if (b.to === "zone-type") {
 			const zones: Record<string, unknown[]> = {}

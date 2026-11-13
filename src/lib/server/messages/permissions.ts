@@ -47,6 +47,7 @@
 import { and, eq } from "drizzle-orm"
 import { DEFAULT_CHANNEL, envoySlugOfRef, parseChannel } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 async function ownsCharacter(
 	db: Db,
@@ -66,31 +67,45 @@ async function ownsCharacter(
 	return !!row
 }
 
+/**
+ * Whether the person acts for the seat of this session a speaker reference
+ * resolves to (`seatOf`): the person who **seated** a character seat, the
+ * player of a player seat (owner ruling 2026-11-05: "The person who seated
+ * it"; plan §33.4) — `seatActorOf`. Only where that is unset is the owner of
+ * the seat's member's ACTIVE card on the reading the judge (then the seat's
+ * own card). A card no seat holds here any more is judged by the message's
+ * own card.
+ */
+async function ownsSeatedCard(
+	db: Db,
+	sessionId: number,
+	cardId: number,
+	userId: number,
+	/**
+	 * ⏳ The seat the line's stamp names (`metadata.speaker`, member form once
+	 * the flip is on): read before the card, so a persona whose card also sits
+	 * in a character seat (★K-2) is judged by its own seat.
+	 */
+	stamped?: unknown
+): Promise<boolean> {
+	const { seatOf, seatActorOf } = await import("$lib/server/sessions/seats")
+	const named =
+		memberFormOn() && typeof stamped === "string" && /^(player-seat|seated-member):\d+$/.test(stamped)
+			? await seatOf(db, sessionId, stamped)
+			: null
+	const seat = named ?? (await seatOf(db, sessionId, `character:${cardId}`))
+	if (!seat) return ownsCharacter(db, cardId, userId)
+	return (await seatActorOf(db, sessionId, seat)) === userId
+}
+
 /** Owner, guest, or neither — for one session and one person. */
 export async function sessionAccessFor(
 	db: Db,
 	sessionId: number,
 	userId: number
 ): Promise<{ isOwner: boolean; isGuest: boolean; hasAccess: boolean }> {
-	const [session] = await db
-		.select({ userId: schema.sessions.userId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	if (!session) return { isOwner: false, isGuest: false, hasAccess: false }
-	const isOwner = session.userId === userId
-	const [guest] = await db
-		.select({ userId: schema.sessionGuests.userId })
-		.from(schema.sessionGuests)
-		.where(
-			and(
-				eq(schema.sessionGuests.sessionId, sessionId),
-				eq(schema.sessionGuests.userId, userId)
-			)
-		)
-		.limit(1)
-	const isGuest = !!guest
-	return { isOwner, isGuest, hasAccess: isOwner || isGuest }
+	const { checkSessionAccess } = await import("$lib/server/utils/sessionAccess")
+	return checkSessionAccess(sessionId, userId, db)
 }
 
 /**
@@ -180,11 +195,35 @@ export async function canActOnMessage(
 	if (!access.hasAccess) return false
 
 	if (message.personaId)
-		return await ownsCharacter(db, message.personaId, userId)
+		return await ownsSeatedCard(
+			db,
+			message.sessionId,
+			message.personaId,
+			userId,
+			(message.metadata as { speaker?: unknown } | null)?.speaker
+		)
 
 	if (message.characterId) {
 		if (access.isOwner) return true
-		return await ownsCharacter(db, message.characterId, userId)
+		return await ownsSeatedCard(
+			db,
+			message.sessionId,
+			message.characterId,
+			userId,
+			(message.metadata as { speaker?: unknown } | null)?.speaker
+		)
+	}
+
+	// 🚧 A card-less character seat's line (`seated-member:<id>`, owner ruling
+	// 2026-11-05 "Still theo"): the owner's, else the person who seated it —
+	// `seatOf` answers the live seat, else the departed one. A card-less
+	// PLAYER line (`player-seat:<id>`) is not this: it falls through.
+	const speaker = (message.metadata as { speaker?: unknown } | null)?.speaker
+	if (typeof speaker === "string" && speaker.startsWith("seated-member:") && !message.isNarratorResponse) {
+		if (access.isOwner) return true
+		const { seatOf, seatActorOf } = await import("$lib/server/sessions/seats")
+		const seat = await seatOf(db, message.sessionId, speaker)
+		return seat != null && (await seatActorOf(db, message.sessionId, seat)) === userId
 	}
 
 	// An envoy's line: its only identity is the reference on the row, and

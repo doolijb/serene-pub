@@ -240,10 +240,31 @@ export async function persistGenerationErrorRow(
 	if (updated && !String((updated as { content?: unknown }).content ?? "").trim()) {
 		try {
 			const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-			const taken = await retractStateAnchoredTo(db, generatingMessageId)
+			// "replaced": the failed run replaced nothing; the message stays.
+			const taken = await retractStateAnchoredTo(db, generatingMessageId, "replaced")
 			if (taken.changed && socketIo) {
 				if (taken.clockMoved) broadcastSessionRow(socketIo, sessionId)
 				await broadcastToSessionUsers(socketIo, sessionId, "state:changed", { sessionId })
+			}
+			if (socketIo && taken.seatChanges.length) {
+				let seatUserId = userId
+				if (seatUserId == null) {
+					const [owner] = await db
+						.select({ userId: schema.sessions.userId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					seatUserId = owner?.userId
+				}
+				if (seatUserId != null) {
+					const { announceSeatChanges } = await import("$lib/server/sessions/seats")
+					await announceSeatChanges(
+						db,
+						socketIo,
+						{ sessionId, userId: seatUserId },
+						taken.seatChanges
+					)
+				}
 			}
 		} catch (e) {
 			console.warn("[generationStatus] a failed reply's changes could not be taken back:", e)

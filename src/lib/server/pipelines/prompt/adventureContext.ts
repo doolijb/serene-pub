@@ -37,6 +37,7 @@ import {
 } from "@serene-pub/sdk"
 import { castKey, qualifiedSlotKey, slotKey } from "$lib/server/state/resolve"
 import { heardOnly } from "$lib/server/state/earshot"
+import { castMemberKey } from "$lib/server/state/keys"
 import { locationRowOf } from "$lib/shared/lorebooks/describingRow"
 import {
 	relationshipSentence,
@@ -113,9 +114,10 @@ function valueOf(from: Record<string, unknown>, decl: AttributeSlotDecl) {
  * holder's own voice. So every prompt is built from the state with each such
  * value taken off every cast member but the one `speaker` names:
  *
- *  · `speaker` a `character:<id>` reference — a cast member's own voice
- *    (`build-side-character-context@1`, or a spec that wires `speaker` on
- *    `build-template-context@1`): that member keeps theirs, nobody else does;
+ *  · `speaker` a `character:<id>` or 🚧 `seated-member:<id>` reference — a
+ *    cast member's own voice (`build-side-character-context@1`, or a spec
+ *    that wires `speaker` on `build-template-context@1`): that member keeps
+ *    theirs, nobody else does (the entry is found as `holderOf` says);
  *  · anything else — `null`, an `envoy:` reference, a role — is nobody's
  *    voice: the planner, the scene, the state-keeper, a trap or a reveal. No
  *    member keeps one.
@@ -135,8 +137,11 @@ function valueOf(from: Record<string, unknown>, decl: AttributeSlotDecl) {
  * mutates and fails closed; see there.
  */
 export function withinEarshot<S>(state: S, speaker: unknown): S {
-	const holder = holderOf(speaker)
-	return heardOnly(state, (characterId) => holder !== null && characterId === holder)
+	const holder = holderOf(state, speaker)
+	return heardOnly(
+		state,
+		(memberKey) => holder !== null && memberKey === holder
+	)
 }
 
 /**
@@ -221,16 +226,57 @@ export function withinReach<S>(state: S, plan?: PlanLike, entries?: unknown): S 
 	return { ...(state as object), locations: { ...locations, byId: kept } } as S
 }
 
-/** The character id a `character:<id>` reference names; null for any other speaker. */
-function holderOf(speaker: unknown): string | null {
+/**
+ * The key (`castMemberKey`) of the cast entry a voice's `speaker` names — the
+ * key `heardOnly` asks about; null for any other speaker.
+ *
+ * Only a `character:<cardId>` or 🚧 `seated-member:<memberId>` speaker is a
+ * voice. Its entry is the `state.cast.byId` entry whose host-filled `ref` is
+ * the speaker, else (a card-form speaker) the entry whose `id` is that card —
+ * its character seat's first, else its player seat's (a card held by both is
+ * voiced as its character seat, ★K-2); that entry's `castMemberKey` is the
+ * holder, so once the
+ * flip is on (S4) a voice keys as `seated_member:<id>` exactly as its values
+ * are heard. With no such entry a card-form speaker falls back to its bare
+ * card id (the switch-off key) and a `seated-member:` one names nobody — no
+ * holder-only value is heard, it fails closed. Pure.
+ */
+function holderOf(state: unknown, speaker: unknown): string | null {
 	if (typeof speaker !== "string") return null
-	try {
-		const ref = parseParticipantRef(speaker)
-		return ref.kind === "character" ? ref.id : null
-	} catch {
-		return null
+	const s = speaker.trim()
+	let cardId: string | null = null
+	if (!SEATED_MEMBER_SPEAKER.test(s)) {
+		try {
+			const ref = parseParticipantRef(s)
+			if (ref.kind !== "character") return null
+			cardId = ref.id
+		} catch {
+			return null
+		}
 	}
+	const cast = (state as { cast?: { byId?: unknown } } | null)?.cast
+	const byId = cast?.byId
+	const entries =
+		byId && typeof byId === "object" && !Array.isArray(byId)
+			? (
+					Object.values(byId) as Array<Record<string, unknown> | null>
+				).filter(
+					(e): e is Record<string, unknown> =>
+						!!e && typeof e === "object"
+				)
+			: []
+	const holds = (e: Record<string, unknown>) => String(e.id) === cardId
+	const named =
+		entries.find((e) => e.ref === s) ??
+		(cardId === null
+			? undefined
+			: (entries.find(
+					(e) => holds(e) && typeof e.playerSeatId !== "number"
+				) ?? entries.find(holds)))
+	return named ? castMemberKey(named) : cardId
 }
+
+const SEATED_MEMBER_SPEAKER = /^seated-member:\d+$/
 
 /**
  * The declarations this session tracks for one facet, in a stable order.

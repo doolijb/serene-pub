@@ -28,7 +28,10 @@ export const CONTEXT_HANDLEBARS_HELPERS = [
 	"strokeList",
 	"systemBlock",
 	"assistantBlock",
-	"userBlock"
+	"userBlock",
+	// The SDK's `VARIABLE_LAYOUT_HELPER`, written as the literal: this file
+	// imports nothing at run time. The test holds the two equal.
+	"layout"
 ] as const
 
 /** Liquid's `{% name %}…{% endname %}` role wrappers — the Handlebars block helpers' names. */
@@ -43,7 +46,9 @@ export const CONTEXT_LIQUID_FILTERS = [
 	"pad",
 	"json",
 	"jsonValue",
-	"strokeList"
+	"strokeList",
+	// The SDK's `VARIABLE_LAYOUT_HELPER`, as a filter (see the helper above).
+	"layout"
 ] as const
 
 /**

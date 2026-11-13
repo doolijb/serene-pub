@@ -84,3 +84,21 @@ describe("diagnostics cross the seam", () => {
 		expect(d!.actions).toBeUndefined()
 	})
 })
+
+describe("a layout reference completion", () => {
+	test("comes through with its reference as label and the offer's label as detail", () => {
+		const r = toCompletionResult([
+			item({
+				label: "core/json@1",
+				insert: "core/json@1",
+				kind: "placeholder",
+				detail: "JSON",
+				start: 30,
+				end: 36
+			})
+		])!
+		expect(r.from).toBe(30)
+		expect(r.options[0]!.label).toBe("core/json@1")
+		expect(r.options[0]!.detail).toBe("JSON")
+	})
+})

@@ -1,4 +1,5 @@
 import * as path from "path"
+import { decideCoLoad, textNeedGib, type CoLoadAnswer } from "./coLoad"
 import * as fsPromises from "fs/promises"
 import {
 	fetchCurrentModelStatus,
@@ -322,27 +323,58 @@ async function standingAudioModel(): Promise<AudioModelSlot | null> {
 }
 
 /**
+ * Whether to keep the other of text/image loaded beside this request, by
+ * measurement (`coLoad.ts`). Null when the question does not arise (no other
+ * kind resident, or an embeddings/audio request). Every input that cannot be
+ * read answers "no room" — never a guess.
+ */
+async function coLoadAnswer(
+	req: ManagedModelRequest,
+	current: Residency,
+	enabled: boolean
+): Promise<CoLoadAnswer | null> {
+	if (req.kind !== "text" && req.kind !== "image") return null
+	const residentOther = req.kind === "text" ? current.image?.file : current.text?.file
+	if (!residentOther) return null
+	// This kind already resident with the same file: both are in memory and
+	// fit; measuring now (with both loaded) would only read less room and
+	// drop one for nothing. The plan keeps what is there.
+	if (current[req.kind]?.file === req.file)
+		return { keep: true, reason: `Both models stay loaded: the ${req.kind} model is already resident.` }
+	let freeGib: number | null = null
+	let needGib: number | null = null
+	if (enabled) {
+		const { freeGpuMemoryGib } = await import("$lib/server/connections/hardware")
+		freeGib = await freeGpuMemoryGib()
+		if (req.kind === "image") {
+			const { recommendedImageEntries } = await import(
+				"$lib/server/connections/recommendedImageGguf"
+			)
+			const entry = (await recommendedImageEntries()).get(req.file)
+			needGib = entry?.recommended_vram || null
+		} else {
+			try {
+				needGib = textNeedGib((await fsPromises.stat(req.path)).size)
+			} catch {
+				needGib = null
+			}
+		}
+	}
+	return decideCoLoad({ kind: req.kind, residentOther, enabled, freeGib, needGib })
+}
+
+/**
  * Which of the models named by connections should be resident after this load.
  *
- * Text and image: exactly one of the two. koboldcpp CAN hold a text and an
- * image model at once — verified against the real binary, one .kcpps carrying
- * both `model` and `sdmodel` loads both and reports `llm: true` and `txt2img:
- * true` together — so co-loading is not ruled out, it is simply not what we
- * do. That makes this a SCHEDULING decision, and it is made here and nowhere
- * else.
- *
- * To co-load them, return `{ ...current, ...planEntry(req) }` and the rest of
- * this file follows unchanged: the .kcpps builder already emits every block
- * independently, the signature already holds every entry, and the readiness
- * waits already wait on whichever kinds the plan names. Nothing in
- * connections, the schema, the manifest, the adapters or dispatchImage knows
- * this function exists.
- *
- * The cost of that answer, stated plainly so nobody rediscovers it as a bug:
- * chat and image CONTEND for the one slot, so a message with a picture can cost
- * two model loads. That is the accepted trade — switching models is the same as
- * it already is between two LLMs — and it is exactly what co-loading would
- * remove.
+ * Text and image: one of the two, or both when `keepOther` says so. koboldcpp
+ * holds a text and an image model at once — one .kcpps carrying `model` and
+ * `sdmodel` loads both and reports `llm: true` and `txt2img: true` together —
+ * and the .kcpps builder, the signature and the readiness waits all follow
+ * whichever kinds the plan names. Whether to keep the other kind is a
+ * SCHEDULING decision made by measurement in `coLoad.ts` (the admin's switch,
+ * the free graphics memory now, what the incoming model needs; owner ruling
+ * 2026-11-11) and handed in here as `keepOther`. Without it, chat and image
+ * CONTEND for the one slot and a message with a picture costs two loads.
  *
  * Embeddings: CO-RESIDENT, always (see "The embeddings slot" above). An
  * embeddings request keeps whatever text or image model `current` holds; a
@@ -354,7 +386,9 @@ export function planResidency(
 	req: ManagedModelRequest,
 	current: Residency,
 	standingEmbeddings: EmbeddingModelSlot | null = null,
-	standingAudio: AudioModelSlot | null = null
+	standingAudio: AudioModelSlot | null = null,
+	/** Keep the other of text/image resident beside this load (`coLoad.ts`). */
+	keepOther = false
 ): Residency {
 	// The speech slot rides along with EVERY request, like embeddings: an
 	// omitted `ttsmodel` would unload it. A request for another kind keeps
@@ -377,7 +411,14 @@ export function planResidency(
 			...planEntry(req)
 		}
 	}
+	const other =
+		keepOther && req.kind === "text" && current.image
+			? { image: current.image }
+			: keepOther && req.kind === "image" && current.text
+				? { text: current.text }
+				: {}
 	return {
+		...other,
 		...planEntry(req),
 		...(standingEmbeddings ? { embeddings: standingEmbeddings } : {}),
 		...(standingAudio ? { audio: standingAudio } : {})
@@ -503,7 +544,7 @@ type Verdict = "confirmed" | "contradicted" | "unknown"
 
 /**
  * How long an unbroken run of connection refusals is tolerated on a load we
- * cannot gate on process liveness (an external or adopted-external instance).
+ * cannot gate on process liveness (an instance in "external" mode).
  *
  * koboldcpp takes its listener DOWN for the whole of a load — measured against
  * the real binary at 6s for a warm same-file reload and 23s for a cold 16 GB
@@ -526,8 +567,8 @@ const TEXT_RELOAD_SETTLE_MS = 20_000
 /**
  * Wait for the text model to finish loading.
  *
- * The trap is a same-file reload: this process restarted while koboldcpp kept
- * running with the model (adopted through the pid file), or a load knob
+ * The trap is a same-file reload: an instance in "external" mode that already
+ * holds the model while this process starts afresh, or a load knob
  * changed (context, GPU layers). koboldcpp really does tear down and reload —
  * but its OUTGOING listener keeps answering `/api/v1/model` with the very same
  * name for over a second after `reload_config` has returned `success`. A wait
@@ -842,6 +883,13 @@ export function buildConfigContent(plan: Residency): Record<string, unknown> {
 					contextsize: plan.text.contextSize,
 					flashattention: plan.text.flashAttention,
 					batchsize: plan.text.batchSize,
+					// 🚧 Owner test, 2026-11-04: `--smartcache 4` keeps up to four
+					// KV snapshots in RAM so a side task (summary, extraction) on
+					// the same model does not evict the reply's cache. An int
+					// (argparse default 0 = off), not in reload_config's protected
+					// args, so it must be written here or a reload resets it.
+					// Needs fast forwarding, which is koboldcpp's default.
+					smartcache: 4,
 					// `--mmproj [filename]`, a plain string (default ''), and not
 					// in reload_config's protected args — so it is written here
 					// on every load or the reload resets it to none (verified
@@ -930,6 +978,12 @@ export async function ensureModelLoaded(opts: {
 	adminDir: string
 	adminPassword: string
 	ttlSecs: number
+	/**
+	 * The admin's switch for keeping the text and the image model loaded
+	 * together (`koboldcpp_settings.koboldcpp_managed_co_load`). Absent = off:
+	 * nothing is measured and the two swap as before.
+	 */
+	coLoad?: boolean
 	signal?: AbortSignal
 	/** Ground-truth "is the koboldcpp process we spawned still alive"
 	 * check — only available when the caller owns the subprocess (managed
@@ -945,6 +999,7 @@ export async function ensureModelLoaded(opts: {
 		adminDir,
 		adminPassword,
 		ttlSecs,
+		coLoad: coLoadEnabled = false,
 		signal,
 		isAlive
 	} = opts
@@ -973,11 +1028,23 @@ export async function ensureModelLoaded(opts: {
 	}
 
 	const current = shared.loadedSignature?.resident ?? {}
+	const coLoad = await coLoadAnswer(request, current, coLoadEnabled)
+	if (coLoad) {
+		console.log(`[KoboldCPP] ${coLoad.reason}`)
+		// Dynamic: subprocessManager imports this module statically.
+		try {
+			const { noteCoLoadReason } = await import("./subprocessManager")
+			noteCoLoadReason(coLoad.reason)
+		} catch {
+			// Best-effort: a failure to push never fails a load.
+		}
+	}
 	const plan = planResidency(
 		request,
 		current,
 		request.kind === "embeddings" ? null : await standingEmbeddingModel(),
-		request.kind === "audio" ? null : await standingAudioModel()
+		request.kind === "audio" ? null : await standingAudioModel(),
+		coLoad?.keep ?? false
 	)
 
 	// Ask koboldcpp about the kind this REQUEST names, and only that one — a

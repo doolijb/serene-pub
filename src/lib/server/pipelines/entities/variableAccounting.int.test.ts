@@ -96,17 +96,21 @@ describe("a spec's renders, stored and read back", () => {
 		})
 	}, 60_000)
 
-	it("the panel's option for the key names the spec's variable", async () => {
-		const { declarations } = await import("$lib/server/pipelines/config/panel/declarations")
-		const decls = await declarations(db, versionId)
-		const option = decls.find(
-			(d) => d.nodeKey === "prompt" && d.slot === "variables" && d.path === "currentDate"
+	it("the step's variable keys name the spec's variable, and declare no setting", async () => {
+		const { declarationsAndVariableKeys } = await import(
+			"$lib/server/pipelines/config/panel/declarations"
 		)
-		expect(option?.variableId).toBe(PLAIN_DATE)
+		const { decls, variableKeys } = await declarationsAndVariableKeys(db, versionId)
+		const key = variableKeys.find(
+			(k) => k.nodeKey === "prompt" && k.slot === "variables" && k.path === "currentDate"
+		)
+		expect(key?.variableId).toBe(PLAIN_DATE)
 		// The other keys still mean core's.
 		expect(
-			decls.find((d) => d.nodeKey === "prompt" && d.path === "worldLore")?.variableId
+			variableKeys.find((k) => k.nodeKey === "prompt" && k.path === "worldLore")?.variableId
 		).toBe("core:var/world-lore@1")
+		// No per-step layout pick is offered.
+		expect(decls.some((d) => d.nodeKey === "prompt" && d.slot === "variables")).toBe(false)
 	}, 60_000)
 
 	it("the run hands the render the spec's variable, and drops the pick made for core's", async () => {
@@ -116,6 +120,8 @@ describe("a spec's renders, stored and read back", () => {
 		// The "Numeric" row was core's layout for core's date parts. It no
 		// longer applies to what the key means, so no source arrives…
 		expect(layouts.currentDate?.source).toBeUndefined()
+		// …the entry says the floor is why…
+		expect(layouts.currentDate?.reason).toBe("no-layout")
 		// …and the plugin's own floor renders the value as written.
 		expect(
 			await renderVariable(layouts, "currentDate", "the third day of Thaw")
@@ -140,6 +146,8 @@ describe("a spec's renders, stored and read back", () => {
 					eq(schema.pipelineConfigValues.path, "currentDate")
 				)
 			)
+		// Written for another variable than the key renders, it is no leftover
+		// pick (the run ignores it), so it goes, with a notice.
 		expect(left.map((r: { value: unknown }) => r.value)).not.toContain(plantedRowId)
 		const notices = await db
 			.select()
@@ -152,9 +160,12 @@ describe("a spec's renders, stored and read back", () => {
 				)
 			)
 		expect(notices.map((n: { previousValue: unknown }) => n.previousValue)).toContain(plantedRowId)
+		const world = await buildWorld(db, { specId: STORY_RESPOND_SPEC_ID })
+		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ?? {}) as any
+		expect(layouts.currentDate?.source).toBeUndefined()
 	}, 60_000)
 
-	it("a preset naming core's row for the re-pointed key is not culled and written back on every boot", async () => {
+	it("a preset naming core's row for the re-pointed key changes nothing on a second boot", async () => {
 		const { reconcileConfigs } = await import("$lib/server/pipelines/config/named")
 		const [spec] = await db
 			.select()
@@ -187,30 +198,22 @@ describe("a spec's renders, stored and read back", () => {
 			value: { seedKey: numeric!.seedKey }
 		})
 
-		const noticesAt = async () =>
-			(
-				await db
-					.select()
-					.from(schema.pipelineConfigNotices)
-					.where(eq(schema.pipelineConfigNotices.path, "currentDate"))
-			).length
+		const snapshot = async () =>
+			JSON.stringify([
+				(await db.select().from(schema.pipelineConfigNotices)).length,
+				(await db.select().from(schema.pipelineConfigValues))
+					.map((r: { id: number }) => r.id)
+					.sort((a: number, b: number) => a - b)
+			])
 		await reconcileConfigs(db, spec!.id, versionId, STORY_RESPOND_SPEC_ID)
-		const afterFirst = await noticesAt()
+		const afterFirst = await snapshot()
 		await reconcileConfigs(db, spec!.id, versionId, STORY_RESPOND_SPEC_ID)
-		// A second boot says nothing new about the address…
-		expect(await noticesAt()).toBe(afterFirst)
-		// …and no configuration holds core's row for a key that means the plugin's.
-		const picks = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(
-				and(
-					eq(schema.pipelineConfigValues.nodeKey, "prompt"),
-					eq(schema.pipelineConfigValues.path, "currentDate")
-				)
-			)
-		const forThisSpec = picks.filter((r: { configId: number }) => r.configId === plantedConfigId)
-		expect(forThisSpec.map((r: { value: unknown }) => r.value)).not.toContain(plantedRowId)
+		// A second boot changes nothing…
+		expect(await snapshot()).toBe(afterFirst)
+		// …and the run never takes core's row for a key that means the plugin's.
+		const world = await buildWorld(db, { specId: STORY_RESPOND_SPEC_ID })
+		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ?? {}) as any
+		expect(layouts.currentDate?.variableId).toBe(PLAIN_DATE)
+		expect(layouts.currentDate?.source).toBeUndefined()
 	}, 60_000)
 })
-

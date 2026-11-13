@@ -21,6 +21,12 @@
 	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import { formatSize } from "./modelDisplay"
 
+	interface Props {
+		/** Drawn as the last row of a Models list group, whose label heads it. */
+		inGroup?: boolean
+	}
+	let { inGroup = false }: Props = $props()
+
 	type Matting = Sockets.LocalModels.Matting.Response
 
 	let matting = $state<Matting | null>(null)
@@ -95,8 +101,17 @@
 </script>
 
 {#if matting}
-	<section class="flex flex-col gap-1" aria-labelledby="models-matting">
-		<ListGroupLabel id="models-matting" label="Background remover" />
+	<section
+		class="flex flex-col gap-1"
+		aria-labelledby={inGroup ? undefined : "models-matting"}
+		aria-label={inGroup ? "Background remover" : undefined}
+	>
+		<!-- Inside a Models list group the group's own label is the heading;
+		     the model's name ("Background remover (BiRefNet-lite)") already
+		     says what it is. -->
+		{#if !inGroup}
+			<ListGroupLabel id="models-matting" label="Background remover" />
+		{/if}
 		<div class="panel-card flex items-center gap-2">
 			<div class="min-w-0 flex-1">
 				<p class="truncate text-lead font-medium">{matting.name}</p>

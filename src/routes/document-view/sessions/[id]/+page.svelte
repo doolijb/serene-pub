@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
+	import { castNameOf } from "$lib/client/components/sessionPage/projections/characters"
 	import { onMount, getContext, untrack } from "svelte"
 	import { page } from "$app/state"
 	import { replaceState } from "$app/navigation"
@@ -138,12 +139,24 @@
 			const cc = session?.sessionCharacters?.find(
 				(c) => c.characterId === msg.characterId
 			)
-			return cc?.character?.nickname || cc?.character?.name || "Character"
+			return castNameOf(
+				session ?? {},
+				msg.characterId,
+				cc?.character,
+				"Character"
+			)
 		}
 		if (msg.personaId) {
 			const cp = session?.sessionPersonas?.find(
 				(p) => p.personaId === msg.personaId
 			)
+			// A player seat reads its cast member as a character seat does
+			// (s27 S2c); the seat's own name still wins over it.
+			if (cp?.persona && session?.castNames?.[cp.persona.id])
+				return (
+					cp.seatName?.trim() ||
+					castNameOf(session, cp.persona.id, cp.persona, "You")
+				)
 			return cp?.persona?.name || "You"
 		}
 		return msg.role === "system" ? "System" : "Unknown"

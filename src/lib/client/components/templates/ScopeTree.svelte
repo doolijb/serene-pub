@@ -27,6 +27,11 @@
 		insertable?: boolean
 		/** Rows shown open whatever the reader chose — a filter's matches. */
 		reveal?: ReadonlySet<string>
+		/**
+		 * Root row id → the name of the layout it is written with (W5). A root
+		 * in the map gets a *Written as ‹name›* line after *From …*.
+		 */
+		writtenAs?: Readonly<Record<string, string>>
 		label?: string
 	}
 
@@ -35,6 +40,7 @@
 		oninsert,
 		insertable = true,
 		reveal,
+		writtenAs,
 		label = "Variables available here"
 	}: Props = $props()
 
@@ -259,6 +265,11 @@
 					{#if node.declarer}
 						<span class="text-surface-600-400">
 							From {node.declarer}
+						</span>
+					{/if}
+					{#if writtenAs?.[node.id]}
+						<span class="text-surface-600-400">
+							Written as {writtenAs[node.id]}
 						</span>
 					{/if}
 					{#if node.insideEach && row.posInSet === 1}

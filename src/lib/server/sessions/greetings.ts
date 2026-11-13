@@ -17,9 +17,13 @@ import { canonicalChannel } from "$lib/server/messages/channels"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import {
-	applyRetold,
-	retoldMembersForSession
-} from "$lib/server/lorebooks/retold"
+	cardlessSeatCard,
+	seatCardAsRead,
+	seatMembersAsRead,
+	type SeatCardRow
+} from "$lib/server/pipelines/prompt/seatCards"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { withSeatName } from "$lib/server/sessions/seatName"
 
 // db is the global Db — see db/types.d.ts
 
@@ -72,8 +76,56 @@ export function buildCharacterFirstSessionMessage({
 	return history
 }
 
+/**
+ * 🚧 Seat rows with their card as the session reads it: the member each seat
+ * seats, laid over the card's **current card version** (`cardsNow`, never the
+ * row's ⏳ copy or frozen columns); a seat no member answers for reads the
+ * card's current version alone. Order and every other key kept.
+ *
+ * `cardless` (character seats only — a player seat never takes it): a row with
+ * NO card that stores a member reads that member's own fields as an id-less
+ * card-shaped row (`cardlessSeatCard`).
+ */
+async function seatsAsRead<
+	R extends SeatCardRow & { character?: SelectCharacter | null }
+>(
+	db: Db,
+	sessionId: number,
+	rows: readonly R[],
+	opts: { cardless?: boolean } = {}
+): Promise<R[]> {
+	const asReads = await seatMembersAsRead(db, sessionId, rows, opts)
+	const now = await cardsNow(
+		db,
+		rows.flatMap((row) => (row.character ? [row.character.id] : []))
+	)
+	return rows.map((row, i) => {
+		if (!row.character) {
+			const asRead = asReads[i]
+			return opts.cardless && asRead && row.castMemberId != null
+				? {
+						...row,
+						character: cardlessSeatCard(
+							asRead
+						) as unknown as SelectCharacter
+					}
+				: row
+		}
+		const base = (now.get(row.character.id) ??
+			row.character) as unknown as SelectCharacter
+		const asRead = asReads[i]
+		return {
+			...row,
+			character: asRead ? seatCardAsRead(base, asRead) : base
+		}
+	})
+}
+
 export interface SessionGreetingEntry {
-	characterId: number
+	/** The card the seat holds; null for a card-less seat (then `castMemberId` is the speaker). */
+	characterId: number | null
+	/** A card-less seat's member — written as `metadata.speaker = "seated-member:<id>"`; absent for a carded seat. */
+	castMemberId?: number
 	/** First entry is the message; the whole list becomes the swipe history. */
 	texts: string[]
 }
@@ -88,10 +140,7 @@ export async function collectSessionGreetings(
 	sessionId: number
 ): Promise<{ isGroup: boolean; entries: SessionGreetingEntry[] }> {
 	const [session] = await db
-		.select({
-			isGroup: schema.sessions.isGroup,
-			lorebookId: schema.sessions.lorebookId
-		})
+		.select({ isGroup: schema.sessions.isGroup })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
@@ -103,7 +152,14 @@ export async function collectSessionGreetings(
 	// both tables have had `position` since the cast rows did. Ordering is
 	// unchanged.
 	const sessionCharacters = await db.query.sessionCharacters.findMany({
-		where: (cc, { eq }) => eq(cc.sessionId, sessionId),
+		// Character seats: not an envoy, and a card or a member (a card-less
+		// seat has a member only).
+		where: (cc, { eq, and, or, isNull, isNotNull }) =>
+			and(
+				eq(cc.sessionId, sessionId),
+				isNull(cc.envoySlug),
+				or(isNotNull(cc.characterId), isNotNull(cc.castMemberId))
+			),
 		with: { character: true },
 		orderBy: (cc, { asc }) => asc(cc.position)
 	})
@@ -114,30 +170,49 @@ export async function collectSessionGreetings(
 		orderBy: (cp, { asc }) => asc(cp.position)
 	})
 
-	// A seat whose card is a member of the session's book greets in the
-	// member's words when the member retells the first message or the other
-	// greetings (PLAN-cast-retold-fields). Empty when nobody retells.
-	const retold = session
-		? await retoldMembersForSession(
-				db,
-				{ id: sessionId, lorebookId: session.lorebookId },
-				sessionCharacters.flatMap((cc) =>
-					cc.character ? [cc.character.id] : []
-				)
-			)
-		: new Map()
+	// A seat greets in the words of the cast member it seats — their own
+	// name, and the first message and other greetings they retell — over the
+	// member's active card (seat-cast S2: `seatCardsAsRead`, which finds the
+	// member wherever it lives, the session's own book included). Nobody
+	// retelling: the card's words.
+	const seats = await seatsAsRead(db, sessionId, sessionCharacters, {
+		cardless: true
+	})
+	// `{{user}}` is the first player seat's name: its member as read (★pT-1,
+	// 2026-11-05: "Everything in session is cast -> active card"), a seat
+	// name still winning.
+	const [personaSeat] = sessionPersona
+		? await seatsAsRead(db, sessionId, [
+				{
+					castMemberId: sessionPersona.castMemberId,
+					character: sessionPersona.persona
+				}
+			])
+		: []
+	const persona = withSeatName(personaSeat?.character, sessionPersona?.seatName)
 
 	const entries: SessionGreetingEntry[] = []
-	for (const cc of sessionCharacters) {
+	for (const cc of seats) {
 		if (!cc.character) continue
-		const member = retold.get(cc.character.id)
+		// A card-less seat greets only while it is live.
+		if (cc.characterId == null && cc.removedAt != null) continue
 		const texts = buildCharacterFirstSessionMessage({
-			character: member ? applyRetold(cc.character, member) : cc.character,
-			persona: sessionPersona?.persona,
+			character: cc.character,
+			persona,
 			isGroup
 		})
+		// The row's own `characterId` column — a card-less seat's `character`
+		// carries no id, and a member id is never a card id.
 		if (texts.length > 0)
-			entries.push({ characterId: cc.character.id, texts })
+			entries.push(
+				cc.characterId == null
+					? {
+							characterId: null,
+							castMemberId: cc.castMemberId!,
+							texts
+						}
+					: { characterId: cc.characterId, texts }
+			)
 	}
 	return { isGroup, entries }
 }
@@ -177,6 +252,11 @@ export async function writeSessionGreetings(
 			content: entry.texts[0],
 			isGenerating: false,
 			metadata: {
+				// A card-less seat speaks as its member; the store's speaker
+				// stamp (rule d) fills `cast_member_id` from this.
+				...(entry.characterId == null && entry.castMemberId != null
+					? { speaker: `seated-member:${entry.castMemberId}` }
+					: {}),
 				isGreeting: true,
 				swipes: {
 					currentIdx: 0,
@@ -227,18 +307,23 @@ export async function collectEnvoyGreeting(
 	)
 	const playerLabel = await playerLabelFor(db, sessionId)
 	const party = await db.query.sessionCharacters.findMany({
-		where: (cc, { and, eq, isNull, isNotNull }) =>
+		where: (cc, { and, eq, or, isNull, isNotNull }) =>
 			and(
 				eq(cc.sessionId, sessionId),
-				isNotNull(cc.characterId),
+				isNull(cc.envoySlug),
+				or(isNotNull(cc.characterId), isNotNull(cc.castMemberId)),
 				isNull(cc.removedAt)
 			),
 		with: { character: true },
 		orderBy: (cc, { asc }) => asc(cc.position)
 	})
 	const { joinWithAnd } = await import("$lib/shared/utils/joinWithAnd")
+	// The party's names are the members' own, as the session reads them.
+	const partyRead = await seatsAsRead(db, sessionId, party, {
+		cardless: true
+	})
 	const characterNames = joinWithAnd(
-		party
+		partyRead
 			.filter((cc) => cc.character && cc.isActive !== false)
 			.map((cc) => resolveCharacterName(cc.character!))
 	)

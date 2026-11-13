@@ -301,7 +301,7 @@ describe("core:query/stat-trail@1 — one stat over time", () => {
 		await played(s.id, "session_cast", b.verity.id, HP, 7, m3)
 		// The reply at m3 is swiped: the swipe path retracts what it wrote.
 		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-		await retractStateAnchoredTo(testDb as unknown as Db, m3)
+		await retractStateAnchoredTo(testDb as unknown as Db, m3, "replaced")
 		// A branched session holds its own copies; they are not this session's.
 		const other = await session(b)
 		const om = await message(other.id, b.verity.id)

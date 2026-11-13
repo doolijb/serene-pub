@@ -140,27 +140,38 @@ describe("a card import in the person's words", () => {
 		const png = new PNG({ width: 1, height: 1 })
 		png.data.fill(200)
 		const image = `data:image/png;base64,${PNG.sync.write(png).toString("base64")}`
-		// Postgres keeps no NUL in text, so this label fails the sprite's query.
+		// The sprite's insert fails (a refused query); the card has landed.
 		const file = Buffer.from(
 			JSON.stringify({
 				spec: "chara_card_v2",
 				spec_version: "2.0",
 				data: {
 					...JSON.parse(Buffer.from(cardFile("Joy"), "base64").toString()).data,
-					extensions: { risuai: { emotions: [["joy\u0000x", image]] } }
+					extensions: { risuai: { emotions: [["joyx", image]] } }
 				}
 			})
 		).toString("base64")
+		const insert = testDb.insert.bind(testDb)
+		const spy = vi.spyOn(testDb, "insert").mockImplementation(((table: any) => {
+			if (table === schema.sprites)
+				throw new DrizzleQueryError(
+					'insert into "sprites" ("label") values ($1)',
+					["joyx"],
+					new Error("boom")
+				)
+			return insert(table)
+		}) as any)
 		const logged = vi.spyOn(console, "error").mockImplementation(() => {})
 		vi.spyOn(console, "warn").mockImplementation(() => {})
 		try {
 			const res = await charactersImportCard.handler(socketOf(u.id), { file }, () => {})
 			expect(res.character?.name).toBe("Joy")
 			expect(res.warnings).toEqual([
-				"1 of the card's sprites was not imported (joy\u0000x: the server could not save it; the server log has the details)."
+				"1 of the card's sprites was not imported (joyx: the server could not save it; the server log has the details)."
 			])
 			expect(logged).toHaveBeenCalled()
 		} finally {
+			spy.mockRestore()
 			vi.restoreAllMocks()
 		}
 	})

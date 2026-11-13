@@ -21,6 +21,7 @@ import {
 	resolveOrCreateBindingByName,
 	type CastEntry
 } from "./availableSceneCast"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 
@@ -86,14 +87,13 @@ async function makeBinding(
 	lorebookId: number,
 	overrides: Partial<typeof schema.lorebookBindings.$inferInsert> = {}
 ) {
-	const [binding] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+	const binding = (
+		await insertCastMember(testDb, {
 			lorebookId,
 			binding: `{{char:seed-${++seedTag}}}`,
 			...overrides
 		})
-		.returning()
+	).member
 	return binding
 }
 
@@ -261,6 +261,54 @@ describe("resolveOrCreateBindingByName", () => {
 })
 
 describe("buildSceneCastList", () => {
+	// ★pT-1 (owner, 2026-11-05): "Everything in session is cast -> active
+	// card" -- a player seat is a priority entry under its member's own name.
+	test("a player seat is merged in like a character seat: its member's own nickname is an alias beside the card's", async () => {
+		const user = await createTestUser(testDb, "cast-player-seat-user")
+		const lorebook = await makeLorebook(user.id)
+		const [persona] = await testDb
+			.insert(schema.characters)
+			.values({ userId: user.id, name: "Pia", description: "" })
+			.returning()
+		const member = (
+			await insertCastMember(testDb, {
+				lorebookId: lorebook.id,
+				characterId: persona.id,
+				binding: "{{char:pia}}",
+				name: "Pia",
+				ownName: "Pia of the Book",
+				ownNickname: "Pip"
+			} as any)
+		).member
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: user.id,
+				name: "Player seat session",
+				lorebookId: lorebook.id,
+				isGroup: false
+			})
+			.returning()
+		await testDb.insert(schema.sessionPersonas).values({
+			sessionId: session.id,
+			personaId: persona.id,
+			castMemberId: member.id
+		} as any)
+		const historyEntry = await makeHistoryEntry(lorebook.id)
+		const scene = await makeScene(lorebook.id, historyEntry.id)
+
+		const cast = await buildSceneCastList(
+			scene.id,
+			lorebook.id,
+			session.id,
+			testDb
+		)
+		// The binding's name still wins the canonical name, as a character seat's.
+		const entry = cast.find((c) => c.name === "Pia")
+		expect(entry).toBeDefined()
+		expect(entry!.aliases).toContain("Pip")
+	})
+
 	test("session characters/personas are merged in as priority entries, taking their binding's name when one exists", async () => {
 		const user = await createTestUser(testDb, "cast-session-user")
 		const lorebook = await makeLorebook(user.id)
@@ -431,13 +479,12 @@ describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 		const lorebook = await makeLorebook(user.id, "Cap Over Book")
 
 		const total = MAX_BINDINGS_FOR_SCENE_CAST + 1
-		await testDb.insert(schema.lorebookBindings).values(
-			Array.from({ length: total }, (_, i) => ({
+		for (let i = 0; i < total; i++)
+			await insertCastMember(testDb, {
 				lorebookId: lorebook.id,
 				binding: `{{char:${i + 1}}}`,
 				name: `NPC ${i + 1}`
-			}))
-		)
+			})
 
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)
@@ -453,7 +500,7 @@ describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 		const user = await createTestUser(testDb, "scenecast-cap-under-user")
 		const lorebook = await makeLorebook(user.id, "Cap Under Book")
 
-		await testDb.insert(schema.lorebookBindings).values([
+		for (const v of [
 			{
 				lorebookId: lorebook.id,
 				binding: "{{char:1}}",
@@ -467,6 +514,7 @@ describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 				name: "Jonathon"
 			}
 		])
+			await insertCastMember(testDb, v)
 
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)

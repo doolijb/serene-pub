@@ -23,19 +23,24 @@
 	import * as Icons from "@lucide/svelte"
 	import { samplingSchemaFor, type SettingsSchema } from "@serene-pub/sdk"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import {
 		adminGoto,
 		adminPage,
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 	import SamplingValuesForm from "$lib/client/components/sidebars/SamplingValuesForm.svelte"
 	import SamplingEnabledForm from "$lib/client/components/sidebars/SamplingEnabledForm.svelte"
 	import { groupSamplingFields } from "$lib/client/components/sidebars/samplingFields"
@@ -51,7 +56,11 @@
 	import { openInSampling } from "$lib/client/admin/railDoors"
 	import { samplingSidebarMemory } from "$lib/client/components/sidebars/samplingList"
 
-	type Draft = { name: string; values: Record<string, unknown>; enabled: string[] }
+	type Draft = {
+		name: string
+		values: Record<string, unknown>
+		enabled: string[]
+	}
 
 	const socket = useTypedSocket()
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
@@ -137,7 +146,12 @@
 			$state.snapshot(row.values) as Record<string, unknown> | null
 		)
 		socket.emit("samplingConfigs:update", {
-			sampling: { id, name: snap.name, values, enabled: snap.enabled } as any
+			sampling: {
+				id,
+				name: snap.name,
+				values,
+				enabled: snap.enabled
+			} as any
 		})
 	}
 	function land(intent: AdminSaveIntent) {
@@ -158,17 +172,20 @@
 		edits.markSaved()
 		pendingIntent = null
 		saving = false
-		toaster.success({ title: `Saved ${msg.sampling.name}` })
+		notify.success({ title: `Saved ${msg.sampling.name}` })
 		land(mine)
 	})
-	useInterest<"samplingConfigs:update:error">("samplingConfigs:update:error", (msg) => {
-		if (!pendingIntent) return
-		pendingIntent = null
-		saving = false
-		const error = msg.error ?? "The sampling config was not saved."
-		if (/name/i.test(error)) nameError = error
-		else formErrors = [error]
-	})
+	useInterest<"samplingConfigs:update:error">(
+		"samplingConfigs:update:error",
+		(msg) => {
+			if (!pendingIntent) return
+			pendingIntent = null
+			saving = false
+			const error = msg.error ?? "The sampling config was not saved."
+			if (/name/i.test(error)) nameError = error
+			else formErrors = [error]
+		}
+	)
 
 	// ── delete ──────────────────────────────────────────────────────────
 	/** The delete answer carries no id; this page listens only while it asked. */
@@ -182,7 +199,7 @@
 		if (!deleting) return
 		deleting = false
 		edits.forget()
-		toaster.success({ title: "Sampling config deleted" })
+		notify.success({ title: "Sampling config deleted" })
 		void adminGoto("/admin/sampling", { replaceState: true })
 	})
 
@@ -206,11 +223,18 @@
 	const readOnly = $derived(!!row?.isImmutable)
 	const title = $derived(draft?.name.trim() || row?.name || "Sampling config")
 	const count = $derived(
-		draft ? samplingEnabledCount({ id, name: "", enabled: draft.enabled }, schema) : null
+		draft
+			? samplingEnabledCount(
+					{ id, name: "", enabled: draft.enabled },
+					schema
+				)
+			: null
 	)
 	/** One fieldset per group that has a parameter switched on. */
 	const groups = $derived(
-		draft ? groupSamplingFields(schema, (key) => draft!.enabled.includes(key)) : []
+		draft
+			? groupSamplingFields(schema, (key) => draft!.enabled.includes(key))
+			: []
 	)
 	const sliceOf = (fields: { key: string }[]): SettingsSchema =>
 		Object.fromEntries(fields.map((f) => [f.key, schema[f.key]]))
@@ -224,7 +248,9 @@
 	<!-- Between addresses: nothing to show for a frame. -->
 {:else if listLoaded && !listed && !row}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
-		<p class="text-surface-600-400 text-sm">There is no sampling config {id}.</p>
+		<p class="text-surface-600-400 text-sm">
+			There is no sampling config {id}.
+		</p>
 		<a href="/admin/sampling" class="btn btn-sm preset-tonal-surface">
 			All sampling configs
 		</a>
@@ -255,7 +281,12 @@
 		historyHref="/admin/history?type=sampling-config&id={id}"
 		deletion={readOnly
 			? undefined
-			: () => samplingDeletion(listed ? [listed] : [row as any], defaults, usedBy)}
+			: () =>
+					samplingDeletion(
+						listed ? [listed] : [row as any],
+						defaults,
+						usedBy
+					)}
 		onDelete={readOnly ? undefined : remove}
 		onSave={save}
 	>
@@ -263,28 +294,39 @@
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface"
-				onclick={() => openInSampling(panelsCtx, samplingSidebarMemory, id)}
+				onclick={() =>
+					openInSampling(panelsCtx, samplingSidebarMemory, id)}
 			>
 				<Icons.SlidersHorizontal size={16} aria-hidden="true" />
 				Open in Sampling
 			</button>
-			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={duplicate}>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={duplicate}
+			>
 				<Icons.Copy size={16} aria-hidden="true" />
 				Duplicate
 			</button>
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span
+					class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+				>
 					{samplingModalityWord(row?.shape)}
 				</span>
 				{#if readOnly}
-					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span
+						class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+					>
 						Built-in
 					</span>
 				{/if}
 				{#if count}
-					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span
+						class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+					>
 						{count.on} of {count.total} parameters sent
 					</span>
 				{/if}
@@ -300,7 +342,11 @@
 		<AdminFieldset title="Identity">
 			<div class="grid gap-4 @min-[36rem]/content:grid-cols-3">
 				{#if readOnly}
-					<AdminField id="sampling-admin-name" label="Name" value={draft.name} />
+					<AdminField
+						id="sampling-admin-name"
+						label="Name"
+						value={draft.name}
+					/>
 				{:else}
 					<AdminField
 						id="sampling-admin-name"
@@ -315,7 +361,10 @@
 							type="text"
 							bind:value={draft.name}
 							aria-invalid={!!nameError}
-							aria-describedby={describedBy("sampling-admin-name", !!nameError)}
+							aria-describedby={describedBy(
+								"sampling-admin-name",
+								!!nameError
+							)}
 						/>
 					</AdminField>
 				{/if}
@@ -336,8 +385,8 @@
 		{#if !groups.length}
 			<AdminFieldset title="Parameters">
 				<p class="text-surface-600-400 text-sm">
-					No parameters switched on: requests go out with the backend's own
-					defaults.
+					No parameters switched on: requests go out with the
+					backend's own defaults.
 					{#if !readOnly}Switch some on under Advanced.{/if}
 				</p>
 			</AdminFieldset>
@@ -361,7 +410,10 @@
 			description="The defaults and pipelines that pick this config. Deleting it leaves them without that choice."
 		>
 			{#snippet aside()}
-				<a href="/admin/defaults" class="btn btn-sm preset-tonal-surface shrink-0">
+				<a
+					href="/admin/defaults"
+					class="btn btn-sm preset-tonal-surface shrink-0"
+				>
 					<Icons.Target size={14} aria-hidden="true" />
 					Change defaults
 				</a>
@@ -370,19 +422,24 @@
 				<ul class="flex flex-col gap-1.5 text-sm">
 					{#each held as h (h.capability)}
 						<li class="flex flex-wrap items-baseline gap-x-2">
-							<span class="font-medium">The {h.label} loadout</span>
+							<span class="font-medium">
+								The {h.label} loadout
+							</span>
 						</li>
 					{/each}
 					{#each pipelines as p (p)}
 						<li class="flex flex-wrap items-baseline gap-x-2">
 							<span class="font-medium">{p}</span>
-							<span class="text-surface-600-400 text-xs">pipeline</span>
+							<span class="text-surface-600-400 text-xs">
+								pipeline
+							</span>
 						</li>
 					{/each}
 				</ul>
 			{:else}
 				<p class="text-surface-600-400 text-sm">
-					Nothing yet. Pick it in Defaults or in a pipeline's settings.
+					Nothing yet. Pick it in Defaults or in a pipeline's
+					settings.
 				</p>
 			{/if}
 		</AdminFieldset>

@@ -14,13 +14,18 @@
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { declareInterest, requestWithInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -34,10 +39,16 @@
 
 	adminUnsavedEdits(() => !!name.trim() && !saving)
 
-	const selected = $derived((view.types ?? []).find((t) => t.typeId === typeId))
+	const selected = $derived(
+		(view.types ?? []).find((t) => t.typeId === typeId)
+	)
 	const scopeLabel = (c: string) => c.charAt(0).toUpperCase() + c.slice(1)
 	const options = $derived(
-		(view.types ?? []).map((t) => ({ value: t.typeId, label: t.name, group: scopeLabel(t.content) }))
+		(view.types ?? []).map((t) => ({
+			value: t.typeId,
+			label: t.name,
+			group: scopeLabel(t.content)
+		}))
 	)
 
 	let saving = $state(false)
@@ -48,25 +59,40 @@
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			declareInterest<"pipelines:createScript">("pipelines:createScript", (res) => {
-				const intent = pendingIntent
-				if (!intent) return
-				pendingIntent = null
-				saving = false
-				const created = res.scripts?.scripts?.find((s) => !priorIds.has(s.id))
-				toaster.success({ title: `Added ${created?.name ?? "the script"}` })
-				name = ""
-				if (intent === "save") void adminGoto("/admin/scripts")
-				else if (intent === "continue" && created)
-					void adminGoto(`/admin/scripts/${created.id}`, { replaceState: true })
-				else priorIds = new Set((res.scripts?.scripts ?? []).map((s) => s.id))
-			}),
-			declareInterest<"pipelines:createScript:error">("pipelines:createScript:error", (res) => {
-				if (!pendingIntent) return
-				pendingIntent = null
-				saving = false
-				formErrors = [res.error ?? "The script was not added."]
-			}),
+			declareInterest<"pipelines:createScript">(
+				"pipelines:createScript",
+				(res) => {
+					const intent = pendingIntent
+					if (!intent) return
+					pendingIntent = null
+					saving = false
+					const created = res.scripts?.scripts?.find(
+						(s) => !priorIds.has(s.id)
+					)
+					notify.success({
+						title: `Added ${created?.name ?? "the script"}`
+					})
+					name = ""
+					if (intent === "save") void adminGoto("/admin/scripts")
+					else if (intent === "continue" && created)
+						void adminGoto(`/admin/scripts/${created.id}`, {
+							replaceState: true
+						})
+					else
+						priorIds = new Set(
+							(res.scripts?.scripts ?? []).map((s) => s.id)
+						)
+				}
+			),
+			declareInterest<"pipelines:createScript:error">(
+				"pipelines:createScript:error",
+				(res) => {
+					if (!pendingIntent) return
+					pendingIntent = null
+					saving = false
+					formErrors = [res.error ?? "The script was not added."]
+				}
+			),
 			requestWithInterest("pipelines:scripts", {}, (res) => {
 				view = res
 				loading = false
@@ -85,7 +111,10 @@
 		priorIds = new Set((view.scripts ?? []).map((s) => s.id))
 		saving = true
 		pendingIntent = intent
-		socket.emit("pipelines:createScript", { typeId, name: name.trim() || undefined })
+		socket.emit("pipelines:createScript", {
+			typeId,
+			name: name.trim() || undefined
+		})
 	}
 </script>
 
@@ -106,9 +135,9 @@
 	<AdminFieldset title="Script">
 		{#if !loading && !options.length}
 			<p class="text-surface-600-400 text-sm">
-				No script types are registered. Core registers its own at startup, so an empty list
-				usually means the type registry refused to sync — check the server log for a
-				bootstrap warning.
+				No script types are registered. Core registers its own at
+				startup, so an empty list usually means the type registry
+				refused to sync — check the server log for a bootstrap warning.
 			</p>
 		{:else}
 			<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
@@ -126,10 +155,17 @@
 						bind:value={typeId}
 						placeholder={loading ? "Loading types…" : "Pick a type"}
 						invalid={!!typeError}
-						describedBy={describedBy("script-new-type", !!typeError)}
+						describedBy={describedBy(
+							"script-new-type",
+							!!typeError
+						)}
 					/>
 				</AdminField>
-				<AdminField id="script-new-name" label="Name" help="Optional — a default is assigned.">
+				<AdminField
+					id="script-new-name"
+					label="Name"
+					help="Optional — a default is assigned."
+				>
 					<input
 						id="script-new-name"
 						class="input"
@@ -146,7 +182,10 @@
 						<Badge tone="warning" size="sm">
 							{selected.blastRadius}
 						</Badge>
-						· reads {[...selected.varsIn, ...selected.extras].join(", ") || "—"} · rewrites {selected.varsOut.join(", ") || "—"}
+						· reads {[...selected.varsIn, ...selected.extras].join(
+							", "
+						) || "—"} · rewrites {selected.varsOut.join(", ") ||
+							"—"}
 					</p>
 				</div>
 			{/if}

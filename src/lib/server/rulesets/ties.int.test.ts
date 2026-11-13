@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_FUNCTION_IDS, defineRuleset, genre, rulesetAttributeSlotId, type FunctionDecl, type RulesetEntryTypeDecl } from "@serene-pub/sdk"
 import { romanceTemplate } from "@serene-pub/core-catalog"
@@ -175,10 +175,11 @@ async function world(ruleset = RULESET) {
 		.insert(schema.characters)
 		.values(["Wren", "Mara", "Dov"].map((name) => ({ userId: user.id, name: `${name} ${suffix}`, description: `${name}.` })))
 		.returning()
-	const bindings = await db
-		.insert(schema.lorebookBindings)
-		.values(chars.map((c, i) => ({ lorebookId: book!.id, characterId: c.id, binding: `{{char:${i + 1}}}`, name: c.name })))
-		.returning()
+	// Members and their base versions (a member's state is its version's).
+	const { insertCastMember } = await import("$lib/server/characters/versions")
+	const bindings: (typeof schema.lorebookBindings.$inferSelect)[] = []
+	for (const [i, c] of chars.entries())
+		bindings.push((await insertCastMember(db as any, { lorebookId: book!.id, characterId: c.id, binding: `{{char:${i + 1}}}`, name: c.name })).member)
 	const [session] = await db
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: true, name: `Pier ${suffix}`, genreId: GENRE, primaryRuleset: ruleset, rigour: "mechanics", lorebookId: book!.id })
@@ -205,6 +206,13 @@ async function draw(w: World, from: { id: number }, to: { id: number }, words: {
 		.returning()
 	const { drawTieSides } = await import("./ties")
 	return { row: row!, made: await drawTieSides(db, row!) }
+}
+
+/** The state a member reads in the session (`membersAsRead`): a landing on cast state is a cast version's. */
+async function stateOf(w: World, who: { id: number }) {
+	const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+	const id = w.bindingOf(who).id
+	return (await membersAsRead(db as any, [id], { sessionId: w.session.id })).get(id)?.nodeState
 }
 
 const rowOf = async (id: number) => (await db.select().from(schema.narrativeRelationships).where(eq(schema.narrativeRelationships.id, id)))[0]
@@ -350,10 +358,82 @@ describe("one writer, one history (T2, T3)", () => {
 		const w = await world()
 		// The rules set it (the model may not set a ruleset's value): a function's own set.
 		const out = await act(w, "ties-vanish", w.wren, w.mara)
-		const [b] = await db.select().from(schema.lorebookBindings).where(eq(schema.lorebookBindings.id, w.bindingOf(w.mara).id))
-		expect(b!.nodeState).toBe("missing")
+		expect(await stateOf(w, w.mara)).toBe("missing")
 		expect((out.facts.landings as any[])[0]).toMatchObject({ kind: "attribute", attribute: "fate", bindingId: w.bindingOf(w.mara).id, columns: [{ target: "cast-state", to: "missing" }] })
 		expect(rulesetAttributeSlotId(RULESET, "fate")).toBe("test.ties-int:slot/fate@1")
+	})
+})
+
+describe("a landing on cast state is a cast version's story write", () => {
+	test("the member reads the new state in the session, the book's base keeps its own, and Back takes it", async () => {
+		const w = await world()
+		const { turn } = await actOnTurn(w, "ties-vanish", w.wren, w.mara, null, "run-castver-1")
+		expect(await stateOf(w, w.mara)).toBe("missing")
+		// The member's frozen column is never written.
+		const [frozen] = await db.select().from(schema.lorebookBindings).where(eq(schema.lorebookBindings.id, w.bindingOf(w.mara).id))
+		expect(frozen!.nodeState).toBe("active")
+		const versions = await db.select().from(schema.characterVersions).where(eq(schema.characterVersions.castMemberId, w.bindingOf(w.mara).id))
+		expect(versions.filter((v) => v.nodeState === "missing")).toHaveLength(1)
+		expect(versions.find((v) => v.nodeState === "missing")!.writtenBy).toBe("run:run-castver-1")
+		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+		await retractStateAnchoredTo(db as any, turn.id, "replaced")
+		expect(await stateOf(w, w.mara)).toBe("active")
+	})
+
+	test("a state the member already reads writes no second version", async () => {
+		const w = await world()
+		await act(w, "ties-vanish", w.wren, w.mara, null, "run-castver-2")
+		const count = async () => (await db.select().from(schema.characterVersions).where(eq(schema.characterVersions.castMemberId, w.bindingOf(w.mara).id))).length
+		const once = await count()
+		await actOnTurn(w, "ties-vanish", w.wren, w.mara, null, "run-castver-3")
+		expect(await count()).toBe(once)
+	})
+})
+
+async function actOnTurn(w: World, fnKey: string, actor: { id: number }, aimedAt: { id: number }, answer: unknown, runId: string) {
+	const [turn] = await db.insert(schema.messages).values({ sessionId: w.session.id, role: "character" }).returning()
+	const { resolveRulesetTurn } = await import("./resolve")
+	const res = await resolveRulesetTurn(
+		db as any,
+		{ owners: [`session:${w.session.id}`, w.key(w.wren), w.key(w.mara), w.key(w.dov)], mode: "apply", actions: { function: fnKey, actor: w.key(actor), aimedAt: w.key(aimedAt), answer } },
+		{ runId, turnMessageId: turn!.id }
+	)
+	if ("halt" in res) throw new Error(res.halt)
+	return { out: res.ok, turn: turn! }
+}
+
+describe("the line forks inside the write that makes a row (fork timing)", () => {
+	/** The world with its session riding a Fork of the book: it forks its own line on its first write. */
+	async function riding() {
+		const w = await world()
+		const [fork] = await db.insert(schema.lorebookBranches).values({ lorebookId: w.book.id, name: `Fork ${w.session.id}`, forkYear: 4 }).returning()
+		await db.update(schema.sessions).set({ lorebookBranchId: fork!.id, lineOnFirstWrite: true }).where(eq(schema.sessions.id, w.session.id))
+		return { w, fork: fork! }
+	}
+	const sessionOf = async (id: number) => (await db.select().from(schema.sessions).where(eq(schema.sessions.id, id)))[0]!
+	const linesOf = (bookId: number) => db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, bookId))
+
+	test("a refused tie (an end that is not on the lorebook) forks nothing", async () => {
+		const { w, fork } = await riding()
+		await db.delete(schema.lorebookBindings).where(eq(schema.lorebookBindings.id, w.bindingOf(w.dov).id))
+		const out = await act(w, "ties-befriend", w.wren, w.dov, { name: "Dov" })
+		expect((out.facts.landings as any[]).every((l) => typeof l.skipped === "string")).toBe(true)
+		const after = await sessionOf(w.session.id)
+		expect(after.lineOnFirstWrite).toBe(true)
+		expect(after.lorebookBranchId).toBe(fork.id)
+		expect(await linesOf(w.book.id)).toHaveLength(1)
+	})
+
+	test("the first accepted tie forks the line, and its row stands on the new line", async () => {
+		const { w, fork } = await riding()
+		const out = await act(w, "ties-befriend", w.wren, w.mara, { name: "Mara" })
+		const after = await sessionOf(w.session.id)
+		expect(after.lineOnFirstWrite).toBe(false)
+		expect(after.lorebookBranchId).not.toBe(fork.id)
+		expect(await linesOf(w.book.id)).toHaveLength(2)
+		const made = (out.facts.landings as any[]).filter((l) => l.made)
+		expect(made.length).toBeGreaterThan(0)
+		for (const l of made) expect((await rowOf(l.relationshipId))!.branchId).toBe(after.lorebookBranchId)
 	})
 })
 
@@ -704,8 +784,7 @@ describe("🚧 ★5: a book the session may not write — the notes' rule-fed ov
 
 		const gone = await act(w, "notes-vanish", w.wren, w.mara, null, "run-notes-2")
 		expect((gone.facts.landings as any[])[0]).toMatchObject({ kind: "attribute", attribute: "plight", bindingId: w.bindingOf(w.mara).id, overlaid: true, columns: [{ target: "cast-state", to: "missing" }] })
-		const [b] = await db.select().from(schema.lorebookBindings).where(eq(schema.lorebookBindings.id, w.bindingOf(w.mara).id))
-		expect(b!.nodeState).toBe("active")
+		expect(await stateOf(w, w.mara)).toBe("active")
 
 		const { ruleFedOverlayOf } = await import("./ties")
 		expect(await ruleFedOverlayOf(db, w.session.id)).toEqual({ entryFields: { [String(ribbon!.id)]: { worn: "worn" } }, castStates: { [String(w.bindingOf(w.mara).id)]: "missing" } })
@@ -718,8 +797,7 @@ describe("🚧 ★5: a book the session may not write — the notes' rule-fed ov
 		await db.update(schema.lorebooks).set({ loreWriteMode: "full" }).where(eq(schema.lorebooks.id, w.book.id))
 		const full = await act(w, "notes-vanish", w.wren, w.dov, null, "run-notes-3")
 		expect((full.facts.landings as any[])[0]).not.toHaveProperty("overlaid")
-		const [d] = await db.select().from(schema.lorebookBindings).where(eq(schema.lorebookBindings.id, w.bindingOf(w.dov).id))
-		expect(d!.nodeState).toBe("missing")
+		expect(await stateOf(w, w.dov)).toBe("missing")
 	})
 })
 
@@ -742,7 +820,7 @@ describe("🚧 RF fix 4: a moment's lorebook writes go back with its message", (
 		if ("halt" in res) throw new Error(res.halt)
 		return { out: res.ok, turn: turn! }
 	}
-	const retract = async (messageId: number) => (await import("$lib/server/state/write")).retractStateAnchoredTo(db as any, messageId)
+	const retract = async (messageId: number) => (await import("$lib/server/state/write")).retractStateAnchoredTo(db as any, messageId, "replaced")
 	const restore = async (taken: any) => (await import("$lib/server/state/write")).restoreRetractedState(db as any, taken)
 
 	test("the tie's words and its zone go back together, and come back on restore; words someone retyped since stay", async () => {
@@ -835,5 +913,145 @@ describe("🚧 RF fix 4: a moment's lorebook writes go back with its message", (
 		// The book kept its own all along.
 		const [still] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, ribbon!.id))
 		expect((still!.fields as any).worn).toBe("new")
+	})
+})
+
+/**
+ * 🚧 (sense-b4) **An entry or a row that lives in the session's own book is an
+ * own-book landing**, whatever the route: at Full on your own lorebook a place
+ * the run made in the own book gets its rules field, and a tie between two such
+ * places is a row of the own book — neither is skipped, and neither forks the
+ * line of a session riding its parent's.
+ */
+describe("🚧 sense-b4: a room that lives in the session's own book, at Full", () => {
+	const OWN = "test:ruleset/ties-own-book-int@1"
+	beforeAll(() => {
+		defineRuleset(OWN, {
+			name: { en: "Own Rooms" },
+			attributes: [
+				{ id: "mood", name: { en: "Mood" }, kind: "label", of: ["calm", "tense"], carriedBy: ["location"], readsOnto: "entry-field", prose: "How a room feels." }
+			],
+			entryTypes: [BOND],
+			zoneTypes: [bondsZone]
+		})
+	})
+
+	/** Full on the lorebook; the session rides a fork of it, and has two rooms of its own book. */
+	async function ownRooms() {
+		const w = await world(OWN)
+		await db.update(schema.lorebooks).set({ loreWriteMode: "full" }).where(eq(schema.lorebooks.id, w.book.id))
+		const [fork] = await db.insert(schema.lorebookBranches).values({ lorebookId: w.book.id, name: `Fork ${w.session.id}`, forkYear: 4 }).returning()
+		await db.update(schema.sessions).set({ lorebookBranchId: fork!.id, lineOnFirstWrite: true }).where(eq(schema.sessions.id, w.session.id))
+		const { ownBookFor, loreWriteTargetFor } = await import("$lib/server/lorebooks/ownBook")
+		const own = await ownBookFor(db as any, w.session.id)
+		expect(await loreWriteTargetFor(db as any, w.session.id, { fork: false })).toMatchObject({ route: "book", lorebookId: w.book.id })
+		const room = async (title: string, bookId = own.id) =>
+			(
+				await db
+					.insert(schema.lorebookEntries)
+					.values({ lorebookId: bookId, typeId: "core:entry/location", typeVersion: 1, title, content: "A room.", position: ++n, fields: { category: "Rooms" } } as any)
+					.returning()
+			)[0]!
+		return { w, fork: fork!, own, room }
+	}
+	const sessionOf = async (id: number) => (await db.select().from(schema.sessions).where(eq(schema.sessions.id, id)))[0]!
+	const rowsIn = (bookId: number) => db.select().from(schema.narrativeRelationships).where(eq(schema.narrativeRelationships.lorebookId, bookId))
+	const landing = (from: { id: number }, to: { id: number }) =>
+		({
+			kind: "tie" as const,
+			ownerKey: `location:${from.id}`,
+			zoneType: "bonds",
+			index: 0,
+			entry: { entryId: null, entryType: "bond", name: "", fields: { towards: `location:${to.id}`, standing: "warm" } },
+			entryType: "bond",
+			columns: [{ target: "relationship-type" as const, field: "standing", value: "warm", was: "wary" }],
+			moved: {},
+			made: true
+		})
+
+	test("a place's rules field is written in the own book, nothing in the lorebook, and the line is not forked", async () => {
+		const { w, fork, own, room } = await ownRooms()
+		const cellar = await room("The Cellar")
+		const loreRoom = await room("The Hall", w.book.id)
+		const { writeAttributeLandings } = await import("./ties")
+		const { getRuleset } = await import("@serene-pub/sdk")
+		const ctx = { sessionId: w.session.id, ruleset: getRuleset(OWN)!, runId: "run-own-1", messageId: w.message.id }
+		const slotId = rulesetAttributeSlotId(OWN, "mood")
+		const facts = await writeAttributeLandings(db, ctx, [{ owner: { kind: "session_location", id: cellar.id }, slotId, value: "tense" }])
+		expect(facts).toHaveLength(1)
+		expect(facts[0]!.skipped).toBeUndefined()
+		expect(facts[0]).toMatchObject({ entryId: cellar.id, lorebookId: own.id })
+		const [after] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, cellar.id))
+		expect((after!.fields as any).mood).toBe("tense")
+		const [lore] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, loreRoom.id))
+		expect((lore!.fields as any).mood).toBeUndefined()
+		const s = await sessionOf(w.session.id)
+		expect(s.lineOnFirstWrite).toBe(true)
+		expect(s.lorebookBranchId).toBe(fork.id)
+	})
+
+	test("a tie between two own-book rooms is a row of the own book, on no line, and forks nothing; a second landing finds it", async () => {
+		const { w, fork, own, room } = await ownRooms()
+		const a = await room("The Cellar")
+		const b = await room("The Stair")
+		const { writeLandings } = await import("./ties")
+		const { getRuleset } = await import("@serene-pub/sdk")
+		const ctx = { sessionId: w.session.id, ruleset: getRuleset(OWN)!, runId: "run-own-2", messageId: w.message.id }
+		const [fact] = await writeLandings(db, ctx, [landing(a, b)], [])
+		expect(fact!.skipped).toBeUndefined()
+		expect(fact).toMatchObject({ made: true, lorebookId: own.id })
+		const mine = await rowsIn(own.id)
+		expect(mine).toHaveLength(1)
+		expect(mine[0]).toMatchObject({ fromEntryId: a.id, toEntryId: b.id, branchId: null, relationshipType: "warm" })
+		expect(await rowsIn(w.book.id)).toHaveLength(0)
+		const s = await sessionOf(w.session.id)
+		expect(s.lineOnFirstWrite).toBe(true)
+		expect(s.lorebookBranchId).toBe(fork.id)
+		expect(await db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, w.book.id))).toHaveLength(1)
+		// The row is the session's own: a second landing finds it, never overlays it.
+		const [again] = await writeLandings(db, ctx, [{ ...landing(a, b), made: false }], [])
+		expect(again).toMatchObject({ relationshipId: mine[0]!.id })
+		expect(again!.made).toBeUndefined()
+		expect(again!.overlaid).toBeUndefined()
+		expect(await rowsIn(own.id)).toHaveLength(1)
+	})
+
+	test("a tie between an own-book room and a lorebook room is a row of the own book too", async () => {
+		const { w, own, room } = await ownRooms()
+		const a = await room("The Cellar")
+		const hall = await room("The Hall", w.book.id)
+		const { writeLandings } = await import("./ties")
+		const { getRuleset } = await import("@serene-pub/sdk")
+		const ctx = { sessionId: w.session.id, ruleset: getRuleset(OWN)!, runId: "run-own-3", messageId: w.message.id }
+		const [fact] = await writeLandings(db, ctx, [landing(a, hall)], [])
+		expect(fact!.skipped).toBeUndefined()
+		expect((await rowsIn(own.id)).map((r) => [r.fromEntryId, r.toEntryId, r.branchId])).toEqual([[a.id, hall.id, null]])
+		expect(await rowsIn(w.book.id)).toHaveLength(0)
+		expect((await sessionOf(w.session.id)).lineOnFirstWrite).toBe(true)
+	})
+
+	test("once both rooms are the lorebook's, the next landing makes the tie on the lorebook and the notes' row goes", async () => {
+		const { w, own, room } = await ownRooms()
+		const a = await room("The Cellar")
+		const b = await room("The Stair")
+		const { writeLandings } = await import("./ties")
+		const { getRuleset } = await import("@serene-pub/sdk")
+		const ctx = { sessionId: w.session.id, ruleset: getRuleset(OWN)!, runId: "run-own-4", messageId: w.message.id }
+		await writeLandings(db, ctx, [landing(a, b)], [])
+		expect(await rowsIn(own.id)).toHaveLength(1)
+		// The rooms are applied: an Apply moves the entries and leaves a ruleset's tie row behind.
+		await db
+			.update(schema.lorebookEntries)
+			.set({ lorebookId: w.book.id })
+			.where(inArray(schema.lorebookEntries.id, [a.id, b.id]))
+		const [again] = await writeLandings(db, ctx, [{ ...landing(a, b), made: false }], [])
+		expect(again!.skipped).toBeUndefined()
+		expect(again).toMatchObject({ lorebookId: w.book.id })
+		expect(await rowsIn(own.id)).toHaveLength(0)
+		const lore = await rowsIn(w.book.id)
+		expect(lore.map((r) => [r.fromEntryId, r.toEntryId, r.relationshipType])).toEqual([[a.id, b.id, "warm"]])
+		// And it is found there afterwards, never made twice.
+		await writeLandings(db, ctx, [{ ...landing(a, b), made: false }], [])
+		expect(await rowsIn(w.book.id)).toHaveLength(1)
 	})
 })

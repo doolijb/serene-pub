@@ -768,8 +768,15 @@ describe("a reorder is a permutation, and lands as one", () => {
 		const lorebook = await makeLorebook(user.id, "Iterate Book")
 
 		// Appended, one after another — the allocator an ordered type gets.
+		// One date each (a day has one history entry, ★H1 2026-11-10), with
+		// Year 2 left free for the next date to land on.
 		const dated = []
-		for (const content of ["one", "two", "three", "four"])
+		for (const [content, year] of [
+			["one", 1],
+			["two", 3],
+			["three", 4],
+			["four", 5]
+		] as const)
 			dated.push(
 				(
 					await createEntryHandler.handler(
@@ -779,7 +786,7 @@ describe("a reorder is a permutation, and lands as one", () => {
 								typeId: HISTORY,
 								lorebookId: lorebook.id,
 								content,
-								year: 1
+								year
 							} as any
 						},
 						noopEmit

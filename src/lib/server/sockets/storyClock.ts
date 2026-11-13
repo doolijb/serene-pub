@@ -78,7 +78,13 @@ export async function readSessionStoryClock(
 	if (!access.hasAccess)
 		throw new StoryClockRefusal("This session is not one you are in.")
 	const row = await clockRow(sessionId)
-	if (!row?.lorebookId)
+	// The session's reading: its line (a stale one reads main) with the
+	// ancestor chain and fork cuts — what its present is read on. A session
+	// on its own notes (no attached book) reads its own book the same way
+	// (★bk-fold-1, 2026-11-08).
+	const reading = row ? await sessionReadingOf(db, sessionId) : null
+	const book = row?.lorebookId ?? reading?.lorebookId ?? null
+	if (!row || book == null)
 		return {
 			lorebookId: null,
 			branchId: null,
@@ -88,22 +94,19 @@ export async function readSessionStoryClock(
 			calendar: null,
 			isOwner: access.isOwner
 		}
-	// The session's reading: its line (a stale one reads main) with the
-	// ancestor chain and fork cuts — what its present is read on.
-	const reading = await sessionReadingOf(db, sessionId)
 	const branchId = reading?.branchId ?? null
-	const lineNow = await storyNowOf(db, row.lorebookId, branchId, {
+	const lineNow = await storyNowOf(db, book, branchId, {
 		line: reading?.line ?? null
 	})
 	const own = clockOf(row)
 	const linePresent = lineNow ? clockOfNow(lineNow) : null
 	return {
-		lorebookId: row.lorebookId,
+		lorebookId: book,
 		branchId,
 		own,
 		present: own ?? linePresent,
 		linePresent,
-		calendar: await bookCalendarOf(db, row.lorebookId),
+		calendar: await bookCalendarOf(db, book),
 		isOwner: access.isOwner
 	}
 }

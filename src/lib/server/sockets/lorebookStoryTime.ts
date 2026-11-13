@@ -22,6 +22,7 @@
  *
  * ⚠ Ownership is checked on the BOOK, and a branch id must be one of its lines.
  */
+import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import { and, eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
@@ -220,6 +221,8 @@ export const lorebookSetCalendarHandler: Handler<
 	"lorebooks:setCalendar",
 	async (socket, params: Sockets.Lorebooks.SetCalendar.Params, emitToUser) => {
 		await assertOwnedBook(db, socket.user!.id, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, params.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 		// Throws with every fault named; a malformed calendar is never repaired.
 		const calendar = parseStoryCalendar(params.calendar ?? null)
 		await db.transaction(async (tx) => {
@@ -258,6 +261,8 @@ export const lorebookSetClockHandler: Handler<
 	"lorebooks:setClock",
 	async (socket, params: Sockets.Lorebooks.SetClock.Params, emitToUser) => {
 		await assertOwnedBook(db, socket.user!.id, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, params.lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
 		const branchId = params.branchId ?? null
 		if (branchId !== null) {
 			const [line] = await db

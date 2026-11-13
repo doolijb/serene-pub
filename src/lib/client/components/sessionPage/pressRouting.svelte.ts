@@ -7,9 +7,11 @@
  * (`emitFireAction`), and so is the narrator's divert (`narrate`).
  */
 import * as Icons from "@lucide/svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { runProgress } from "$lib/client/stores/runProgress.svelte"
 import { failureOnProgressCard } from "$lib/client/components/sessionPage/fireFailure"
+import { castNameOf } from "./projections/characters"
+import { seatRefOf } from "./projections/seatIdentity"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	actionIdentity,
@@ -325,12 +327,13 @@ export function createPressRouting(d: PressRoutingDeps) {
 	/** Fire, and say the run's name to whoever waits on its answer. */
 	function fireHeard(p: FiredPress, hearing?: PressHearing) {
 		const runId = emitFireAction(p)
-		if (hearing && typeof runId === "string") pressAnswers.wait(runId, p.identity ?? p.fn, hearing)
+		if (hearing && typeof runId === "string")
+			pressAnswers.wait(runId, p.identity ?? p.fn, hearing)
 	}
 
 	/** A press refused before it fired (S2): said, and nothing runs; the draft stays. */
 	function refusePress(reason: string, identity?: string | null) {
-		toaster.error({
+		notify.error({
 			title: runActionTitle(identity ?? undefined),
 			description: reason
 		})
@@ -359,7 +362,8 @@ export function createPressRouting(d: PressRoutingDeps) {
 			// notice about the one it displaced would be noise blaming them
 			// for a cancel they did not make.
 			if (msg.cancelledBy !== "system:superseded")
-				toaster.info({
+				notify.info({
+					source: "socket:sessions:fireAction",
 					title: runActionTitle(msg.action),
 					description: "Cancelled."
 				})
@@ -372,8 +376,11 @@ export function createPressRouting(d: PressRoutingDeps) {
 			// composer already, Inspect beside it, and its terminal frame
 			// arrived before this answer. Only a press refused before any run
 			// started, which has no card, is said here.
-			if (!failureOnProgressCard(msg, runProgress.lastFinished(sessionId)))
-				toaster.error({
+			if (
+				!failureOnProgressCard(msg, runProgress.lastFinished(sessionId))
+			)
+				notify.error({
+					source: "socket:sessions:fireAction",
 					title: runActionTitle(msg.action),
 					description: msg.error
 				})
@@ -570,14 +577,19 @@ export function createPressRouting(d: PressRoutingDeps) {
 		return (session?.sessionCharacters ?? [])
 			.filter((cc) => cc.character && cc.isActive && !cc.removedAt)
 			.map((cc) => {
-				const holds = holdsOf(
-					stateStore.state,
-					slotKey,
-					cc.character.id
-				)
+				// ⏳ `character:<card>` only while the seat carries no ref (a card-form
+				// payload, before the seat flip) — kept until S5 drops the card form.
+				const ref =
+					seatRefOf(cc, "character") ?? `character:${cc.character.id}`
+				const holds = holdsOf(stateStore.state, slotKey, ref)
 				return {
-					ref: `character:${cc.character.id}`,
-					name: resolveCharacterName(cc.character, cc.character.name),
+					ref,
+					name: castNameOf(
+						session ?? {},
+						cc.character.id,
+						cc.character,
+						cc.character.name
+					),
 					...(holds ? { holds } : {})
 				}
 			})
@@ -641,13 +653,16 @@ export function createPressRouting(d: PressRoutingDeps) {
 		 * (the modal's preview `{subject}`); empty when it names none.
 		 */
 		get collectSubject() {
-			const content = messageById(collecting?.args?.messageId)?.content ?? ""
+			const content =
+				messageById(collecting?.args?.messageId)?.content ?? ""
 			const flat = content.replace(/\s+/g, " ").trim()
 			return flat.length > 60 ? `${flat.slice(0, 60).trimEnd()}…` : flat
 		},
 		/** The key the modal remembers a collected text under: this session + the action's identity. */
 		get collectRememberKey() {
-			return collecting ? `sp:collect:${sessionId}:${collecting.identity}` : ""
+			return collecting
+				? `sp:collect:${sessionId}:${collecting.identity}`
+				: ""
 		},
 		get collectCast() {
 			return collectCast

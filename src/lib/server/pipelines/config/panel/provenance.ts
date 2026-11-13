@@ -30,7 +30,6 @@ export interface NameSets {
 	sampling: Array<{ id: number; label: string }>
 	promptRows: Map<number, { name?: string }>
 	contextTemplateRows: Map<number, { name?: string }>
-	variableTemplateRows: Map<number, { name?: string }>
 }
 
 const rowId = (v: unknown): number | null =>
@@ -68,8 +67,6 @@ export function valueNameOf(
 			return id != null ? sets.promptRows.get(id)?.name : undefined
 		case "context-template-ref":
 			return id != null ? sets.contextTemplateRows.get(id)?.name : undefined
-		case "variable-template-ref":
-			return id != null ? sets.variableTemplateRows.get(id)?.name : undefined
 		default:
 			return undefined
 	}

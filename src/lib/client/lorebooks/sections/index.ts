@@ -1,5 +1,5 @@
 import * as Icons from "@lucide/svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
@@ -20,6 +20,7 @@ import CharacterLoreRow from "./CharacterLoreRow.svelte"
 import DerivedEntryEditor from "./DerivedEntryEditor.svelte"
 import {
 	newRulesListEntryLabel,
+	otherRulesNameOf,
 	pieceProblem,
 	rulesListOf,
 	type PieceList
@@ -28,6 +29,7 @@ import GenericEntryEditor from "./GenericEntryEditor.svelte"
 import HistoryEditor from "./HistoryEditor.svelte"
 import HistoryRow from "./HistoryRow.svelte"
 import HistoryListActions from "./HistoryListActions.svelte"
+import HistoryUnfiledGroup from "./HistoryUnfiledGroup.svelte"
 import HistoryRowMenu from "./HistoryRowMenu.svelte"
 import ItemEditor from "./ItemEditor.svelte"
 import ItemRow from "./ItemRow.svelte"
@@ -131,10 +133,9 @@ const entryDraft = (source: PoolSource) => ({
 /** A named entry is nothing without its name — the list is a list of names. */
 function requireName(draft: Record<string, any>, warn?: boolean): boolean {
 	if (draft.name?.trim()) return true
-	if (warn) toaster.error({ title: "Name is required" })
+	if (warn) notify.error({ title: "Name is required" })
 	return false
 }
-
 
 const world: SectionDescriptor = {
 	id: "world",
@@ -210,6 +211,7 @@ const history: SectionDescriptor = {
 	editor: HistoryEditor,
 	rowMenu: HistoryRowMenu,
 	listActions: HistoryListActions,
+	listHead: HistoryUnfiledGroup,
 	inspector: [FIRES_TAB, REFERENCES_TAB, SCENES_TAB],
 	emptyCopy: {
 		title: "No history yet",
@@ -253,12 +255,11 @@ const history: SectionDescriptor = {
 	title: (source) => formatDate(source as any),
 	validate: (draft, siblings, warn) => {
 		if (!draft.year) {
-			if (warn) toaster.error({ title: "Year is required" })
+			if (warn) notify.error({ title: "Year is required" })
 			return false
 		}
 		if (!!draft.day && !draft.month) {
-			if (warn)
-				toaster.error({ title: "Month is required if day is set" })
+			if (warn) notify.error({ title: "Month is required if day is set" })
 			return false
 		}
 		if (draft.id == null) return true
@@ -266,7 +267,7 @@ const history: SectionDescriptor = {
 		const date = draft as any as StoryDate
 		if (bounds.min && compareDates(date, bounds.min) <= 0) {
 			if (warn)
-				toaster.error({
+				notify.error({
 					title: "Date would be out of order",
 					description: `Must be after ${formatDate(bounds.min)}`
 				})
@@ -274,7 +275,7 @@ const history: SectionDescriptor = {
 		}
 		if (bounds.max && compareDates(date, bounds.max) >= 0) {
 			if (warn)
-				toaster.error({
+				notify.error({
 					title: "Date would be out of order",
 					description: `Must be before ${formatDate(bounds.max)}`
 				})
@@ -321,7 +322,7 @@ const items: SectionDescriptor = {
 	validate: (draft, _siblings, warn) => {
 		if (!requireName(draft, warn)) return false
 		const problem = supplyProblem(draft)
-		if (problem && warn) toaster.error({ title: problem })
+		if (problem && warn) notify.error({ title: problem })
 		return !problem
 	}
 }
@@ -449,11 +450,18 @@ const all: SectionDescriptor = {
  * pool items of this door's kind under their own key space, as the cast's
  * rows are in Everything.
  */
-const rulesListDoors = new Map<string, { sig: string; door: SectionDescriptor }>()
+const rulesListDoors = new Map<
+	string,
+	{ sig: string; door: SectionDescriptor }
+>()
 
-export function rulesListDoor(list: PieceList): SectionDescriptor {
-	const sig = `${list.label}|${JSON.stringify(list.piece)}`
-	const held = rulesListDoors.get(list.typeId)
+export function rulesListDoor(
+	list: PieceList,
+	lorebookId: number | null
+): SectionDescriptor {
+	const otherRules = otherRulesNameOf(list.typeId, lorebookId)
+	const sig = `${list.label}|${JSON.stringify(list.piece)}|${otherRules ?? ""}`
+	const held = rulesListDoors.get(`${lorebookId}:${list.typeId}`)
 	if (held && held.sig === sig) return held.door
 	const typeId = list.typeId
 	const newLabel = newRulesListEntryLabel(list.label)
@@ -472,10 +480,13 @@ export function rulesListDoor(list: PieceList): SectionDescriptor {
 		inspector: [FIRES_TAB, REFERENCES_TAB],
 		emptyCopy: {
 			title: `Nothing in ${list.label} yet`,
-			body: `${list.label} is one of this book's rules lists. Add an entry here and the story can use it.`,
+			// 🚧 ★50 proposed copy: a list of other rules is listed, never added to.
+			body: otherRules
+				? `${list.label} comes from ${otherRules}, which this book is not told by. Its entries are listed here; add new ones in a book told by ${otherRules}.`
+				: `${list.label} is one of this book's rules lists. Add an entry here and the story can use it.`,
 			action: newLabel
 		},
-		creatable: true,
+		creatable: !otherRules,
 		newLabel,
 		newDraft: (lorebookId) => ({
 			...namedEntryDraft(lorebookId, typeId),
@@ -490,22 +501,25 @@ export function rulesListDoor(list: PieceList): SectionDescriptor {
 			if (!requireName(draft, warn)) return false
 			const problem = pieceProblem(draft, rulesListOf(typeId) ?? list)
 			if (problem) {
-				if (warn) toaster.error({ title: problem.message })
+				if (warn) notify.error({ title: problem.message })
 				return false
 			}
 			const supply = supplyProblem(draft)
-			if (supply && warn) toaster.error({ title: supply })
+			if (supply && warn) notify.error({ title: supply })
 			return !supply
 		}
 	}
-	rulesListDoors.set(typeId, { sig, door })
+	rulesListDoors.set(`${lorebookId}:${typeId}`, { sig, door })
 	return door
 }
 
 /** The door of a derived entry type the workspace has been told about. */
-function rulesListDoorOf(typeId: string): SectionDescriptor | undefined {
+function rulesListDoorOf(
+	typeId: string,
+	lorebookId?: number | null
+): SectionDescriptor | undefined {
 	const list = rulesListOf(typeId)
-	return list ? rulesListDoor(list) : undefined
+	return list ? rulesListDoor(list, lorebookId ?? null) : undefined
 }
 
 export const SECTION_DESCRIPTORS: SectionDescriptor[] = [
@@ -550,9 +564,12 @@ export function bookPoolItems(
 }
 
 /** The door a scope opens, or undefined for a scope that draws no pool. */
-export function descriptorFor(scope: LoreScope): SectionDescriptor | undefined {
+export function descriptorFor(
+	scope: LoreScope,
+	lorebookId?: number | null
+): SectionDescriptor | undefined {
 	const typeId = listScopeType(scope)
-	if (typeId) return rulesListDoorOf(typeId)
+	if (typeId) return rulesListDoorOf(typeId, lorebookId)
 	return SECTION_DESCRIPTORS.find((d) => d.id === scope)
 }
 
@@ -570,7 +587,8 @@ export const CHARACTER_LORE_DOOR = characters
 /** The door that curates one kind of row, wherever that row is listed. */
 export function descriptorForKind(kind: string): SectionDescriptor | undefined {
 	return (
-		SECTION_DESCRIPTORS.find((d) => d.kind === kind) ?? rulesListDoorOf(kind)
+		SECTION_DESCRIPTORS.find((d) => d.kind === kind) ??
+		rulesListDoorOf(kind)
 	)
 }
 

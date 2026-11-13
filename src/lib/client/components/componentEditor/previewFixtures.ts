@@ -65,8 +65,8 @@ export const PREVIEW_SESSION_STATE: SessionStateV1 = {
 	slots: SLOTS,
 	owners: [
 		{ key: "world", kind: "session", id: 1, label: "World", configs: {} },
-		{ key: "cast:11", kind: "session_cast", id: 11, label: "Mira", configs: CONFIGS },
-		{ key: "cast:12", kind: "session_cast", id: 12, label: "Wren", configs: CONFIGS }
+		{ key: "cast:11", kind: "session_cast", id: 11, label: "Mira", ref: "character:11", castMemberId: 41, configs: CONFIGS },
+		{ key: "cast:12", kind: "session_cast", id: 12, label: "Wren", ref: "character:12", castMemberId: 42, configs: CONFIGS }
 	],
 	resolved: {
 		world: {},
@@ -78,9 +78,13 @@ export const PREVIEW_SESSION_STATE: SessionStateV1 = {
 	}
 }
 
-const member = (characterId: number, name: string, isPersona: boolean) => ({
+// `ref` is the form a host emits today (`character:<cardId>`); `castMemberId`
+// and `cardId` are the host-filled identity a widget reads instead of parsing it.
+const member = (characterId: number, castMemberId: number, name: string, isPersona: boolean) => ({
 	ref: `character:${characterId}` as const,
 	characterId,
+	castMemberId,
+	cardId: characterId,
 	isPersona,
 	mine: isPersona,
 	name,
@@ -92,7 +96,7 @@ const member = (characterId: number, name: string, isPersona: boolean) => ({
 })
 
 export const PREVIEW_CHARACTERS: SessionCharactersV1 = {
-	members: [member(11, "Mira", false), member(12, "Wren", true)],
+	members: [member(11, 41, "Mira", false), member(12, 42, "Wren", true)],
 	sceneImages: { left: null, right: null }
 }
 

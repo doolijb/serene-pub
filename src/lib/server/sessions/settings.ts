@@ -64,7 +64,6 @@
  */
 
 import { annexWithoutPoints } from "$lib/server/sessions/annexChanges"
-import { annexForPipelines, coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -213,7 +212,7 @@ export async function resolveSessionSettings(
 	// The state only (R28): what the session chose is in `pipelines[slug]
 	// .rebinds`, and what it may choose is on the registry — the document
 	// carries no turn-order special case and keys on no spec slug.
-	const turnOrder = readTurnOrder(coreAnnexIn(session.annex))
+	const turnOrder = readTurnOrder(session)
 	// What the person's own lines are called (R4): the session's override
 	// (`metadata.playerLabel`), else the genre's, else absent — the one
 	// cascade the page and the prompt also resolve through.
@@ -249,8 +248,7 @@ export async function resolveSessionSettings(
 		// 🚧 Never the revision points (`annexWithoutPoints`): the legacy
 		// copies of the annex, which a script reading this document would
 		// carry into its sandbox on every evaluation.
-		// 🚧 Never the core runtime keys (`annexForPipelines`): host-held, never a pipeline's to read.
-		annex: annexForPipelines(annexWithoutPoints((session as { annex?: unknown }).annex)),
+		annex: annexWithoutPoints((session as { annex?: unknown }).annex),
 		// 🚧 The composer states (owner ruling 2026-10-15) — only when the
 		// genre has closed something, so a document with none is unchanged.
 		...(() => {
@@ -328,19 +326,21 @@ async function readCast(db: Db, sessionId: number): Promise<SessionCastV1> {
 }
 
 /**
- * 🚧 **Honour mode** (owner rulings 2026-10-15, 2026-10-16): the session's
- * `honorMode` field, a key core reads as it reads `autoAdvance`. `undefined`
- * when the session's genre does not declare it — nothing honour mode gates
- * applies there. The one read of it: the turn delete (`turnDeleteVerdict`)
- * and a player's own sheet (`assertSessionOwner`, `player_seat`) both ask here.
+ * 🚧 **Keep every turn** (owner rulings 2026-10-15, 2026-10-16; renamed from
+ * Honour mode 2026-11-05, ★sl-4): the session's `keepEveryTurn` field
+ * (`KEEP_EVERY_TURN_FIELD`), a key core reads as it reads `autoAdvance`.
+ * `undefined` when the session's genre does not declare it — nothing it gates
+ * applies there; otherwise `true` exactly when it is on. The one read of it:
+ * the turn delete (`turnDeleteVerdict`, `turnDeleteRefusedThrough`). Sheets
+ * are no longer its business — that is sheet latitude (`state/handEdits.ts`).
  */
-export async function sessionHonourMode(
+export async function sessionKeepsEveryTurn(
 	db: Db,
 	sessionId: number
 ): Promise<boolean | undefined> {
 	const doc = await resolveSessionSettings(db, sessionId)
-	const honour = (doc?.fields as Record<string, unknown> | undefined)?.honorMode
-	return honour === undefined ? undefined : honour === true
+	const keep = (doc?.fields as Record<string, unknown> | undefined)?.keepEveryTurn
+	return keep === undefined ? undefined : keep === true
 }
 
 /**

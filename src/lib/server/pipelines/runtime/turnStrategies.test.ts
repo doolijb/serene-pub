@@ -375,11 +375,32 @@ describe("the pool", () => {
 		expect(refs).not.toContain("envoy:oracle")
 	})
 
-	it("`characters: 'all'` admits one switched off in the cast", async () => {
-		const out = await pool({ characters: "all" })
-		expect(ordered(out).map((c: any) => c.ref)).toContain(
-			"character:12"
+	it("a benched character is not a candidate, with `characters: 'all'` or the default", async () => {
+		for (const params of [{ characters: "all" }, {}]) {
+			const out = await pool(params)
+			expect(ordered(out).map((c: any) => c.ref)).not.toContain("character:12")
+		}
+	})
+
+	it("a benched player seat, with a card or card-less, is not a candidate; an in-play one still is", async () => {
+		const withSeats = {
+			...cast,
+			sessionPersonas: [
+				...cast.sessionPersonas,
+				{ position: 1, removedAt: null, enabled: false, persona: { id: 8, name: "Benched", userId: 3 } },
+				{ position: 2, removedAt: null, enabled: false, persona: null, seatId: 4, seatName: "Ash", seatUserId: 5 },
+				{ position: 3, removedAt: null, enabled: true, persona: null, seatId: 6, seatName: "Bo", seatUserId: 7 }
+			]
+		}
+		const out = await bindings["core:task/turn-pool@1"]!(
+			{ cast: withSeats, messages: [], params: {} },
+			{}
 		)
+		const refs = ordered(out).map((c: any) => c.ref)
+		expect(refs).not.toContain("character:8")
+		expect(refs).not.toContain("player-seat:4")
+		expect(refs).toContain("character:7")
+		expect(refs).toContain("player-seat:6")
 	})
 
 	it("`characters: 'none'` admits none of them", async () => {

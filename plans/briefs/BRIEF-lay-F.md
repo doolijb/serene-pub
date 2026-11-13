@@ -1,0 +1,21 @@
+# BRIEF lay-F — docs, vocabulary, style guide
+
+Lane-supervisor (fresh, Opus). Read `plans/briefs/BRIEF-lay-common.md`, `RECON-layout-storage.md` §3 (the full list of docs/NOMENCLATURE/STYLE-GUIDE lines), PLAN §1–§3, and ALL lane reports `plans/REPORT-lay-{A,B,C,D,E}-2026-11-05.md` (their "names for §25" and queued rule changes). NOMENCLATURE §1, §23, §24, §25 first; STYLE-GUIDE §10 (writing) for copy.
+
+## Goal
+User docs, the vocabulary canon and the design canon describe the built behaviour exactly; every retired word and every new name is ledgered.
+
+## Build
+1. `docs/session-layout.md` — rewrite per RECON (Arrange; "Panels and the rail" → "Panels"; delete "The main panel" and the Rails preview paragraph; heights with Fit · Fill · Priority; the zone switch replacing tucked sides; phones; Full screen; Editing on a phone; the Settings section: settings only in the editor, the inspector, no gear in the session; Card → the layout's Backing · Opacity · Widget gap and the `--sp-widget-*` override for style authors; new Composer and Turn line widget rows in the widgets table with their settings; Scene Portraits Who; Author's note Scenario; Stats Characters sheet; R10 — remove every documented empty sentence except Messages' (lay-B's report lists them) and say once that an empty widget draws nothing; the genre default layouts as shipped by lay-B; storage + ids section: panels v2, the conversion on upgrade). Also docs/genre-lair.md:58-60, docs/genre-dungeon-crawler.md:45, docs/genre-story.md (World layout description), docs/sessions.md:132,583, docs/getting-around.md:170-178 (Full screen + side zones only; the app rail text stays), docs/component-authoring.md:166, `../serene-pub-sdk/guides/widgets.md` (:54 parts, :259-305 example → v2).
+2. NOMENCLATURE: retire into §23 (with date 2026-11-05 and "use instead"): primary panel, strip (of the middle), docked · in the rail, rail strip, the pin (live), pin rule `pinnedOf` (⏳ exported), host card (except pop-overs), message backing · backing mode, `--sp-backing`, Session panels (menu), tucked sides, the settings window. **Un-retire composer (the widget)**: amend its §23 row (2026-09-16 merge) with the 2026-11-05 R8 reversal, both quoted with dates. Amend §9: panel, panel tab, panel height, zone, turn line (now a widget), composer skin (on the Composer), primary floor, session layout (panels v2), widget. Add §9 rows: **Composer** (widget), **Turn line** (widget), **panel priority**, **zone switch**, **widget gap**, **backing** (layout setting; ⚠ not a *backdrop*), `--sp-widget-*` (🚧), `show-channel`, `session-scenario` / `set-session-scenario`, Scene Portraits **Who** (`whoKind`), `PanelLayoutV2` / `panelsV2Of` / `conversationSplitIds`. Also the app-internal names from lay-E (verbatim): `StoredPanelsKind`, `storedPanelsKind`, `LayoutStores`, `LayoutStoresV2`, `storedLayoutAsV2` (option `dropStale`), `presetLayoutAsV2`, `PanelsV2Report` (incl. `pending`), `convertPanelsToV2`, `panelLayoutWriteAsV2`, `SessionLayoutPanelsReport.version2`, and `syncWidgetSettings`'s `spare` option, `MESSAGES_MOVED_KEYS`. From lay-C (see its report): the zone switch's accessible name "Zone shown" (🚧, owner ★), its eight refusal sentences incl. "Only the session's owner can change the scenario.", and every other name in its §25 list. §26: Full screen, furled header. §25: one ledger row per change. Each row a charter per P6 (purpose, why, owns, doesn't own).
+3. STYLE-GUIDE §5.1 (:468-470 what Full screen hides), §5.3 (:622-707 zones, heights, zone switch, backing; remove rail/primary/flyouts/host card), §6.5 (:1188-1201 tab strip: no pin, no gear), §6.7 (:1280-1290 rail-strip drop targets go), §6.16 (:1822-1880 parts: `composer.*` / `turn-line.*` + the ⏳ `messages.compose*` / `messages.turn-line*` names), plus the Layout settings inspector pattern.
+4. Regenerate docs (`npm run docs:build`) and check the generated page renders.
+
+## Files owned
+`docs/**`, `NOMENCLATURE.md`, `STYLE-GUIDE.md`, `../serene-pub-sdk/guides/widgets.md`, `src/lib/generated/docs/**` (generated only).
+
+## Out of scope
+Code. Don't "fix" code to match docs; report mismatches.
+
+## Done means
+`npm run docs:build` clean; a docs test if one exists for links/anchors (find it) green. Report `plans/REPORT-lay-F-2026-11-05.md`.

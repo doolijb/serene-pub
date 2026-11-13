@@ -1,41 +1,52 @@
 /**
- * 🚧 **Clone with changes and attach** (pr-6, B §B-4, R-p): the session's attached book copied whole, the
- * session moved onto the copy, its own book's changes written into it. Owner of the session only.
+ * 🚧 **Merge ‹book› into these notes** (★B-2, 2026-11-08; the code says *fold*): the session's attached book
+ * copied into its own notes, which the session then reads alone. Owner of the session only.
  */
 import { db } from "$lib/server/db"
 import type { Handler } from "$lib/shared/events"
 import { refusable } from "./refusable"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import { cloneWithChanges } from "$lib/server/lorebooks/ownBook"
-import { SHARE_REFUSALS } from "$lib/shared/lorebooks/sessionNotes"
+import { foldInParent } from "$lib/server/lorebooks/foldInParent"
+import { FOLD_DONE, FOLD_REFUSALS } from "$lib/shared/lorebooks/sessionNotes"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 
-export const sessionsCloneWithChangesHandler: Handler<
-	Sockets.Sessions.CloneWithChanges.Params,
-	Sockets.Sessions.CloneWithChanges.Response
+export const sessionsFoldInParentHandler: Handler<
+	Sockets.Sessions.FoldInParent.Params,
+	Sockets.Sessions.FoldInParent.Response
 > = refusable(
-	"sessions:cloneWithChanges",
-	async (socket, params: Sockets.Sessions.CloneWithChanges.Params, emitToUser) => {
+	"sessions:foldInParent",
+	async (
+		socket,
+		params: Sockets.Sessions.FoldInParent.Params,
+		emitToUser
+	) => {
 		const userId = socket.user!.id
 		const sessionId = params.sessionId
 		const access = await checkSessionAccess(sessionId, userId)
-		if (!access.isOwner) throw new Error(SHARE_REFUSALS.notOwner)
-		const made = await cloneWithChanges(db, {
+		if (!access.isOwner) throw new Error(FOLD_REFUSALS.notOwner)
+		const folded = await foldInParent(db, { sessionId, userId })
+		// Committed: announce the re-pointed character seats (the one seat path, ★s4-seat-ev).
+		const { announceSeatChanges } = await import(
+			"$lib/server/sessions/seats"
+		)
+		await announceSeatChanges(
+			db,
+			socket.io,
+			{ sessionId, userId },
+			folded.seatChanges
+		)
+		const res: Sockets.Sessions.FoldInParent.Response = {
 			sessionId,
-			userId,
-			name: typeof params.name === "string" ? params.name : null
-		})
-		const res: Sockets.Sessions.CloneWithChanges.Response = {
-			sessionId,
-			lorebookId: made.lorebookId,
-			name: made.name
+			lorebookId: folded.lorebookId
 		}
-		emitToUser("sessions:cloneWithChanges", res)
+		emitToUser("sessions:foldInParent", res)
 		// The one toast, through the central `success` path (Layout).
 		emitToUser("success", {
-			title: `Cloned with this session's notes: ${made.name}`
+			title: FOLD_DONE(folded.foldedFrom.name)
 		} satisfies Sockets.Success.Response)
-		const { relistLorebooks, relistSessionNotes } = await import("./lorebooks")
+		const { relistLorebooks, relistSessionNotes } = await import(
+			"./lorebooks"
+		)
 		relistLorebooks(socket, emitToUser)
 		relistSessionNotes(socket, emitToUser)
 		const { pushSessionToParticipants } = await import("./sessions")
@@ -43,7 +54,7 @@ export const sessionsCloneWithChangesHandler: Handler<
 		broadcastSessionRow(socket.io, sessionId)
 		return res
 	},
-	"The lorebook could not be cloned with this session's notes.",
+	"The lorebook could not be merged into this session's notes.",
 	undefined,
 	(p) => ({ sessionId: (p as any)?.sessionId })
 )
@@ -57,5 +68,5 @@ export function registerOwnBookHandlers(
 		emitToUser: (event: string, data: any) => void
 	) => void
 ): void {
-	register(socket, sessionsCloneWithChangesHandler, emitToUser)
+	register(socket, sessionsFoldInParentHandler, emitToUser)
 }

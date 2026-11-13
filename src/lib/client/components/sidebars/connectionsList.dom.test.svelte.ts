@@ -85,8 +85,10 @@ vi.mock(
 vi.mock("$lib/client/components/connections/DownloadsView.svelte", () => ({
 	default: () => {}
 }))
+// Renders only the settings snippet it is handed, so the sidebar's own
+// settings (name field, Delete) can be asserted for a local ONNX row.
 vi.mock("$lib/client/components/connections/OnnxEndpointView.svelte", () => ({
-	default: () => {}
+	default: (anchor: any, props: any) => props.connectionSettings?.(anchor)
 }))
 vi.mock("$lib/client/components/connections/OnnxModelView.svelte", () => ({
 	default: () => {}
@@ -882,4 +884,116 @@ describe("a connection's Back", () => {
 		// The connection replaces the list at compact, so it has a Back.
 		expect(button(target, "Back to all connections")).toBeDefined()
 	})
+})
+
+describe("a local ONNX connection comes with Serene Pub", () => {
+	test("its name is read-only and it has no Delete connection", async () => {
+		hear("connections:list", {
+			connectionsList: [
+				row({
+					id: 7,
+					name: "Local embeddings",
+					type: "local-onnx",
+					modality: "embeddings",
+					baseUrl: null,
+					models: []
+				})
+			]
+		})
+		await settle()
+		const open = [...target.querySelectorAll("button")].find((b) =>
+			text(b).includes("Local embeddings")
+		)!
+		open.click()
+		await settle()
+		hear("connections:get", {
+			connection: {
+				id: 7,
+				name: "Local embeddings",
+				type: "local-onnx",
+				notes: ""
+			}
+		})
+		await settle()
+
+		const name = target.querySelector(
+			"#connection-name"
+		) as HTMLInputElement | null
+		expect(name !== null).toBe(true)
+		expect(name!.readOnly).toBe(true)
+		expect(name!.getAttribute("aria-readonly")).toBe("true")
+		expect(text(target)).toContain(
+			"Comes with Serene Pub. To free space, use Delete from disk on a model in its Models tab."
+		)
+		expect(button(target, "Delete connection Local embeddings")).toBe(
+			undefined
+		)
+		expect(text(target)).not.toContain("Delete connection")
+	}, 60_000)
+
+	test("also where the runtime can't load: still read-only, still no Delete", async () => {
+		unmount(view)
+		target.replaceChildren()
+		listeners.clear()
+		view = mount(ConnectionsSidebar, {
+			target,
+			context: new Map<string, unknown>([
+				...shell({
+					settings: {
+						localOnnxAvailability: {
+							available: false,
+							reason: "the Android app can't run the ONNX runtime"
+						}
+					},
+					capabilityDefaults: {}
+				}),
+				["koboldCppSettingsCtx", { settings: undefined }],
+				[
+					"panelsCtx",
+					{ digest: {}, openPanel: () => {}, closePanel: () => {} }
+				],
+				["userCtx", { user: { id: 1, isAdmin: true } }]
+			])
+		})
+		flushSync()
+		hear("connections:list", {
+			connectionsList: [
+				row({
+					id: 7,
+					name: "Local embeddings",
+					type: "local-onnx",
+					modality: "embeddings",
+					baseUrl: null,
+					models: []
+				})
+			]
+		})
+		await settle()
+		const open = [...target.querySelectorAll("button")].find((b) =>
+			text(b).includes("Local embeddings")
+		)!
+		open.click()
+		await settle()
+		hear("connections:get", {
+			connection: {
+				id: 7,
+				name: "Local embeddings",
+				type: "local-onnx",
+				notes: ""
+			}
+		})
+		await settle()
+
+		const name = target.querySelector(
+			"#connection-name"
+		) as HTMLInputElement | null
+		expect(name !== null).toBe(true)
+		expect(name!.readOnly).toBe(true)
+		expect(text(target)).toContain(
+			"Comes with Serene Pub. To free space, use Delete from disk on a model in its Models tab."
+		)
+		expect(button(target, "Delete connection Local embeddings")).toBe(
+			undefined
+		)
+	}, 60_000)
 })

@@ -18,12 +18,14 @@
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -41,7 +43,9 @@
 	const dirty = $derived(!!name.trim() || !!description.trim())
 	adminUnsavedEdits(() => dirty && !saving)
 
-	const copyCandidates = $derived(presets.filter((p) => p.genreId === genreId))
+	const copyCandidates = $derived(
+		presets.filter((p) => p.genreId === genreId)
+	)
 
 	let saving = $state(false)
 	let pendingIntent: AdminSaveIntent | null = null
@@ -51,19 +55,26 @@
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			interest.declareInterest<"sessionPresets:create">("sessionPresets:create", (res) => {
-				const intent = pendingIntent
-				if (!intent) return
-				pendingIntent = null
-				saving = false
-				if (!res.preset) return
-				toaster.success({ title: `Added ${res.preset.name}` })
-				name = ""
-				description = ""
-				if (intent === "save") void adminGoto("/admin/session-presets")
-				else if (intent === "continue")
-					void adminGoto(`/admin/session-presets/${res.preset.id}`, { replaceState: true })
-			}),
+			interest.declareInterest<"sessionPresets:create">(
+				"sessionPresets:create",
+				(res) => {
+					const intent = pendingIntent
+					if (!intent) return
+					pendingIntent = null
+					saving = false
+					if (!res.preset) return
+					notify.success({ title: `Added ${res.preset.name}` })
+					name = ""
+					description = ""
+					if (intent === "save")
+						void adminGoto("/admin/session-presets")
+					else if (intent === "continue")
+						void adminGoto(
+							`/admin/session-presets/${res.preset.id}`,
+							{ replaceState: true }
+						)
+				}
+			),
 			interest.declareInterest<"sessionPresets:create:error">(
 				"sessionPresets:create:error",
 				(res) => {
@@ -80,7 +91,8 @@
 				if (!genreId) {
 					const want = adminPage.url.searchParams.get("genre")
 					genreId =
-						(want && res.genres.find((g) => g.slug === want)?.slug) ||
+						(want &&
+							res.genres.find((g) => g.slug === want)?.slug) ||
 						res.genres[0]?.slug ||
 						""
 				}
@@ -89,7 +101,9 @@
 			interest.requestWithInterest("sessionPresets:list", {}, (res) => {
 				presets = res.presets
 				const from = adminPage.url.searchParams.get("from")
-				const src = from ? res.presets.find((p) => String(p.id) === from) : undefined
+				const src = from
+					? res.presets.find((p) => String(p.id) === from)
+					: undefined
 				if (src && !fromPresetId) {
 					genreId = src.genreId
 					fromPresetId = String(src.id)
@@ -132,14 +146,22 @@
 >
 	<AdminFieldset title="Preset">
 		<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
-			<AdminField id="preset-new-name" label="Name" required error={nameError}>
+			<AdminField
+				id="preset-new-name"
+				label="Name"
+				required
+				error={nameError}
+			>
 				<input
 					id="preset-new-name"
 					class="input"
 					type="text"
 					bind:value={name}
 					aria-invalid={!!nameError}
-					aria-describedby={describedBy("preset-new-name", !!nameError)}
+					aria-describedby={describedBy(
+						"preset-new-name",
+						!!nameError
+					)}
 				/>
 			</AdminField>
 			<AdminField
@@ -151,7 +173,10 @@
 				<Select
 					label="Genre"
 					labelHidden
-					options={genres.map((g) => ({ value: g.slug, label: g.name }))}
+					options={genres.map((g) => ({
+						value: g.slug,
+						label: g.name
+					}))}
 					value={genreId}
 					onValueChange={(v) => {
 						genreId = v
@@ -171,13 +196,20 @@
 					labelHidden
 					options={[
 						{ value: "", label: "Nothing — the genre's defaults" },
-						...copyCandidates.map((p) => ({ value: String(p.id), label: p.name }))
+						...copyCandidates.map((p) => ({
+							value: String(p.id),
+							label: p.name
+						}))
 					]}
 					bind:value={fromPresetId}
 					describedBy={describedBy("preset-new-from", false)}
 				/>
 			</AdminField>
-			<AdminField id="preset-new-description" label="Description" class="@min-[36rem]/content:col-span-2">
+			<AdminField
+				id="preset-new-description"
+				label="Description"
+				class="@min-[36rem]/content:col-span-2"
+			>
 				<textarea
 					id="preset-new-description"
 					class="textarea"

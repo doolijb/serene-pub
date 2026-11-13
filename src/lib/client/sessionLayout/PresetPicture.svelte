@@ -36,7 +36,6 @@
 			{#each z.cells as c (c.id)}
 				<span
 					class="pv-cell"
-					class:pv-rail={c.rail}
 					style={`grid-column:${c.x + 1}/span ${c.w};grid-row:${c.y + 1}/span ${c.h};`}
 				>
 					{#if c.tabs > 1}<span class="pv-tabs">{c.tabs}</span>{/if}
@@ -82,10 +81,6 @@
 			var(--color-surface-600) 55%,
 			transparent
 		);
-	}
-	/* A panel in the rail: there, but not taking the column. */
-	.pv-cell.pv-rail {
-		opacity: 0.45;
 	}
 	.pv-tabs {
 		display: block;

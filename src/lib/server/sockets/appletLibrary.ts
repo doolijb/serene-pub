@@ -12,7 +12,11 @@
  * (`personMay`, asked of every row returned or touched). The person is the
  * socket's signed-in user, never a param.
  */
-import { and, desc, eq, ilike, inArray, isNull, lt, or } from "drizzle-orm"
+import {
+	genuineProvidedMarkSql,
+	shownLorebook
+} from "$lib/server/plugins/providedMarks"
+import { and, desc, eq, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
@@ -20,11 +24,23 @@ import { mediaIdUrl } from "$lib/server/media"
 import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import { openAppletDoor, libraryGrantRefusal, type AppletDoor } from "$lib/server/plugins/appletDoor"
 import { personMay } from "$lib/server/auth/actingPerson"
-import { markedCharacter } from "$lib/server/plugins/providedMarks"
+import {
+	markedCharacter,
+	providedBooksReadableBy
+} from "$lib/server/plugins/providedMarks"
 import { sharedLorebookIdsFor } from "$lib/server/utils/shares"
 import { applyStrokesToCard } from "$lib/server/characters/strokes"
 import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBindingSync"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
+import {
+	ensureCardVersion,
+	updateCardVersion
+} from "$lib/server/characters/versions"
+import { greetingsWithOpener } from "$lib/server/characters/cardIO"
+import {
+	profileOf,
+	type CharacterProfileV1
+} from "$lib/shared/characters/profile"
 import { askerOf, refusable } from "./refusable"
 
 type Emit = (event: string, data: any) => void
@@ -109,6 +125,7 @@ export async function runLibraryCharacters(
 			and(
 				eq(schema.characters.userId, door.person.userId),
 				eq(schema.characters.isDeleted, false),
+				sql`NOT ${genuineProvidedMarkSql()}`,
 				q ? ilike(schema.characters.name, containsPattern(q)) : undefined,
 				cursor != null ? lt(schema.characters.id, cursor) : undefined
 			)
@@ -168,9 +185,8 @@ export async function runUpdateCharacter(
 	const [stored] = await db
 		.select({
 			id: schema.characters.id,
+			userId: schema.characters.userId,
 			uuid: schema.characters.uuid,
-			name: schema.characters.name,
-			description: schema.characters.description,
 			extensions: schema.characters.extensions
 		})
 		.from(schema.characters)
@@ -180,29 +196,64 @@ export async function runUpdateCharacter(
 	if (!stored || !may.ok) throw new Error(may.ok ? "Character not found." : may.reason)
 	// Ownership: the mark names THIS plugin AND is genuinely this row's (a
 	// duplicate carries the mark with a stale uuid and reads as no plugin's).
+	// The mark is ownership metadata and stays on `characters.extensions`.
 	const mark = markedCharacter(stored.extensions, stored.uuid)
 	if (!mark || mark.plugin !== door.pluginId) throw new Error(NOT_OURS)
+	if (stored.userId !== door.person.userId)
+		throw new Error("Character not found.")
 
-	const movesEmbeddedText =
-		(typeof set.name === "string" && set.name !== stored.name) ||
-		(typeof set.description === "string" && set.description !== stored.description)
-	// The same strokes rule `characters:update` applies to a save that writes prose.
-	const write = applyStrokesToCard(set as any)
+	// The write lands on the card's current version; the row keeps only the
+	// library facts (and the version's ⏳ copies, written by the versions module).
+	await db.transaction(async (tx) => {
+		const h = tx as unknown as Db
+		const version = await ensureCardVersion(h, id)
+		if (!version) throw new Error("Character not found.")
+		const current = profileOf(version)
+		const changes: Partial<CharacterProfileV1> = {}
+		if (set.name !== undefined) changes.name = set.name
+		if (set.nickname !== undefined) changes.nickname = set.nickname
+		if (set.description !== undefined) changes.description = set.description
+		if (set.personality !== undefined) changes.personality = set.personality
+		if (set.scenario !== undefined) changes.scenario = set.scenario
+		// ⏳ The wire still says `firstMessage` (the SDK contract moves in wave 3): the greetings' opener.
+		if (set.firstMessage !== undefined)
+			changes.greetings = greetingsWithOpener(
+				current.greetings,
+				set.firstMessage
+			)
+		const movesEmbeddedText =
+			(typeof set.name === "string" && set.name !== current.name) ||
+			(typeof set.description === "string" &&
+				set.description !== current.description)
+		// The same strokes rule `characters:update` applies to a save that writes prose.
+		const write = applyStrokesToCard(
+			changes as any
+		) as Partial<CharacterProfileV1>
+		await updateCardVersion(h, version.id, write)
+		await h
+			.update(schema.characters)
+			.set({
+				updatedAt: new Date(),
+				...(movesEmbeddedText
+					? {
+							embedding: null,
+							embeddingModel: null,
+							embeddingSourceHash: null,
+							vectorizedAt: null
+						}
+					: {})
+			})
+			.where(eq(schema.characters.id, id))
+	})
 	const [updated] = await db
-		.update(schema.characters)
-		.set({
-			...write,
-			updatedAt: new Date(),
-			...(movesEmbeddedText
-				? { embedding: null, embeddingModel: null, embeddingSourceHash: null, vectorizedAt: null }
-				: {})
-		})
-		.where(and(eq(schema.characters.id, id), eq(schema.characters.userId, door.person.userId)))
-		.returning(CHARACTER_COLUMNS)
+		.select(CHARACTER_COLUMNS)
+		.from(schema.characters)
+		.where(eq(schema.characters.id, id))
+		.limit(1)
 	if (!updated) throw new Error("Character not found.")
 
 	await syncLorebookBindingsForCharacter(id)
-	autoEnqueueCharacter(id, set.name ?? stored.name).catch(console.error)
+	autoEnqueueCharacter(id, updated.name).catch(console.error)
 	if (emitToUser) {
 		// The pushes `characters:update` sends: the refreshed list, then the card.
 		const { buildCharactersList } = await import("./characters")
@@ -239,20 +290,30 @@ export async function runLibraryLorebooks(
 	const { q, limit, cursor } = pageOf(p)
 	const userId = door.person.userId
 	// The set `lorebooks:list` shows: the person's own books and the books
-	// shared with them — never a session's own notes, never another's kit.
+	// shared with them, and the live provided books — never a session's own notes, never another's kit.
 	const sharedIds = await sharedLorebookIdsFor(db as unknown as Db, userId)
+	const providedIds = [
+		...(await providedBooksReadableBy(db as unknown as Db, userId))
+	]
 	const rows = await db
 		.select({ id: schema.lorebooks.id, name: schema.lorebooks.name })
 		.from(schema.lorebooks)
 		.where(
 			and(
 				isNull(schema.lorebooks.sessionId),
-				sharedIds.length
-					? or(
-							eq(schema.lorebooks.userId, userId),
-							and(inArray(schema.lorebooks.id, sharedIds), eq(schema.lorebooks.kind, "book"))
-						)
-					: eq(schema.lorebooks.userId, userId),
+				shownLorebook(), // 🚧 (M2e) a disabled provided book is hidden
+				or(
+					eq(schema.lorebooks.userId, userId),
+					sharedIds.length
+						? and(
+								inArray(schema.lorebooks.id, sharedIds),
+								eq(schema.lorebooks.kind, "book")
+							)
+						: undefined,
+					providedIds.length
+						? inArray(schema.lorebooks.id, providedIds)
+						: undefined
+				),
 				q ? ilike(schema.lorebooks.name, containsPattern(q)) : undefined,
 				cursor != null ? lt(schema.lorebooks.id, cursor) : undefined
 			)

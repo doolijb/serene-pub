@@ -1,0 +1,52 @@
+# BRIEF — s4-follow-a worker w5 (2026-11-09): own-or-follow for post-history instructions, creator notes and likeness — server and wire
+
+You are a `lane-worker` under supervisor lane `s4-follow-a`. Repo `/home/jody/github/serene-pub` (SvelteKit 5, TS, Vitest 4, Drizzle + PGlite). Use absolute paths.
+
+*This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work.*
+*Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`.*
+*Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`.*
+*Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'.* (You need no sdk:build.)
+
+## The model you are extending (read these first)
+
+- A cast member's profile lives on its **cast versions** (`character_versions`, NOMENCLATURE §8): a version holds every profile field (`CHARACTER_PROFILE_FIELDS`, `src/lib/shared/characters/profile.ts` ~l.71 — includes `postHistoryInstructions: string | null`, `creatorNotes: CharacterCreatorNotes | null` (`{ text, lang?, variants }`), `likeness: CharacterLikenessInput | null` (`{ imageMediaId?, prompt?, negative? }`)) and names in **`follows`** the fields it reads from its parent card version. NOMENCLATURE: "🚧 **follows** (`character_versions.follows text[]`) — the profile fields a cast version reads from its parent card version; every other field is its own value, which may be empty."
+- The member **form** still speaks in "member column" names with **retold flags** (NOMENCLATURE §8 "retold": "`true` reads the member's column, `false`/absent reads the card's through. Switching a field off **keeps** its text (hides, never discards)"). The one mapping version → form is `memberColumnsOfVersion` (`src/lib/server/lorebooks/retold.ts` ~l.170–280: "a field is **retold** exactly when its profile field is not in `follows`"); form → version is `castChangesOfMemberEdit` (~l.280–350) through `memberProfileOf` (`src/lib/server/characters/versions.ts` ~l.160–280).
+- Today `memberProfileOf` always pushes `postHistoryInstructions`, `creatorNotes`, `strokes`, `likeness`, `extensions` into `follows` for a carded member ("members have none of their own today"), so a member can't own them.
+- The member save is `lorebooks:updateBinding` in `src/lib/server/sockets/lorebooks.ts`: `FROZEN_MEMBER_KEYS` / `BOTH_WAYS_MEMBER_KEYS` (~l.1263–1290), `columnsOfRow` (~l.1315, a member with no base yet), `castMemberRowsOf` (the read), and the places those key lists are used (~l.1566, ~l.1685, ~l.2241, ~l.2505 — keys that are not `lorebook_bindings` columns are stripped before the row write).
+
+## Goal — ★cp-10 (owner approved 2026-11-09), server and wire half
+
+Owner note on sdk2-1: *"Character card and cast editors should be the same, with additions for whatever the lorebook might provide."* Cascade principle (owner 2026-11-09): *"Cast by default cascades."* · *"a card is a seed, not the sole carrier."*
+
+1. `src/lib/shared/lorebooks/retold.ts`: add `postHistoryInstructions`, `creatorNotes`, `likeness` to `RETOLD_FIELDS` (after `face`); update the header comment (they are retold like the prose fields; `likeness` is how to draw them — not the face). Leave `RETOLD_TEXT_FIELDS` alone unless a reader needs it (say which).
+2. `src/lib/server/characters/versions.ts` `memberProfileOf`: `MemberColumns` gains optional `postHistoryInstructions?: string | null`, `creatorNotes?: CharacterCreatorNotes | null`, `likeness?: CharacterLikenessInput | null`. Card-less: each is own (`?? null`). Carded: own when `retold.<field> === true` (value `?? null`), else followed — exactly the prose rule. `strokes` and `extensions` still always follow for a carded member. Update the JSDoc bullet. ⚠ The boot lift and `insertCastMember` call this with binding rows that have none of these keys and no such flags: their result must not change (test it).
+3. `src/lib/server/lorebooks/retold.ts`: `MemberColumnsOfVersion` gains `postHistoryInstructions: string | null`, `creatorNotes: CharacterCreatorNotes | null`, `likeness: CharacterLikenessInput | null` (one JSDoc sentence each: the version's own value, kept while followed); `RETOLD_PROFILE_FIELD` maps each to its same-named profile field; `memberColumnsOfVersion` fills them from the version's profile; `castChangesOfMemberEdit` marks each touched when its value or its flag differs (as `description` is).
+4. `src/lib/server/sockets/lorebooks.ts`: the three keys are **version-only** — never `lorebook_bindings` columns (no migration; do not add columns). Make sure they are read into the form columns (`castMemberRowsOf`, `columnsOfRow` → null for a member with no base), accepted on `lorebooks:updateBinding`, passed to `castChangesOfMemberEdit`, and **stripped** before any binding-row write (a private const beside `FROZEN_MEMBER_KEYS`, e.g. `VERSION_ONLY_MEMBER_KEYS`, used wherever `FROZEN_MEMBER_KEYS` is stripped/iterated — check all four sites and say what you did at each). Validate on save: `postHistoryInstructions` a string or null; `creatorNotes` null or `{ text: string, lang?: string, variants: Record<string,string> }`; `likeness` null or the likeness shape — reuse an existing likeness validator if there is one (`grep -rn "likenessOf\|validateLikeness\|parseLikeness" src/lib`); a bad value is refused in one sentence that says what to send instead.
+5. `src/lib/shared/sockets/types.ts` (**only** these types; another lane edits other parts of this file — if an `Edit` fails because the file changed, re-read that range and retry; never `Write` the whole file): `Lorebooks.CastVersionColumns` and `Lorebooks.CastRowVersion` (so `CastMemberRow` carries them; the row's own value = the shown version's) gain the three fields; `Lorebooks.UpdateBinding.Params.lorebookBinding` accepts them (beside `groupOnlyGreetings`). One JSDoc sentence each.
+6. Check every other reader of `RETOLD_FIELDS` / `retold` flags still works with three more keys: `sockets/lorebooks.ts` ~l.1916 (`retoldFieldList`) and ~l.2025 (`ownWords`), `src/lib/client/lorebooks/cast/memberDraft.ts` ~l.90 (`canonicalRetold`), `src/lib/client/components/characterForms/castBannerWords.ts` (`retoldFieldList` words — **not ours**: if it would show a raw field name like "postHistoryInstructions", report the exact words it needs). Fix only what is in your files.
+
+## Rules you must follow
+
+- "0.6 is in users' hands. A change to stored data or ids ships with a forward migration or boot pass and a test that a second boot changes nothing." — This goal must **not** change any stored row by itself: existing members keep following all three (no flag set). Prove it: `memberProfileOf` on a binding row without the new keys gives the same `follows` as before.
+- "Inside `db.transaction(async (tx) => …)` use only `tx`."
+- Modder rule (owner 2026-11-08): "one JSDoc sentence per new field"; "a refusal says what to do instead".
+- No new setting, event, table or migration. New names only as listed (the three fields, the flags, a private key list). Stop and report anything else.
+- It is a **session**, never a *chat*.
+- Do what is asked at the size asked; findings go under **Noticed, not done**.
+- Prettier: `npx prettier --check` changed files; **only `--write` the lines you changed** — never reformat a whole file. If a file fails only on lines you didn't touch, leave it.
+
+## Files owned (edit only these)
+
+`src/lib/shared/lorebooks/retold.ts`, `src/lib/server/lorebooks/retold.ts`, `src/lib/server/characters/versions.ts` (`memberProfileOf` + `MemberColumns` only), `src/lib/server/sockets/lorebooks.ts` (the member save/read keys only), `src/lib/shared/sockets/types.ts` (the three types above only), and tests next to them. Do **not** touch client files — the next worker builds the form on your wire.
+
+## Tests (Done means)
+
+- Unit/int tests: `memberProfileOf` — card-less owns all three; carded with flags owns them; carded without flags follows them (same `follows` as before for a row without the keys); `memberColumnsOfVersion` round trip (flag ⇔ not followed; value kept while followed); `castChangesOfMemberEdit` emits `{ follow: true }` when a flag goes off and the own value when on; an int test through `lorebooks:updateBinding` that turning **Use from card** off for post-history instructions (flag on + text) writes an own value on the base version and the member as read (`membersAsRead`) reads it, and turning it back on follows the card again with the member's text kept on the version; a bad `likeness` value is refused. Find the nearest existing files: `grep -rln "memberProfileOf\|memberColumnsOfVersion\|castChangesOfMemberEdit" src/lib/server --include=*.test.ts`; `grep -rln "updateBinding" src/lib/server/sockets --include=*.int.test.ts`.
+- Run, capped and logged (scratchpad `/tmp/claude-1000/-home-jody-github-serene-pub/9382c94a-1330-4480-b65e-0cfdb1f75e97/scratchpad/`):
+  `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 --quiet bash -c 'export NODE_OPTIONS=--max-old-space-size=4096; cd /home/jody/github/serene-pub; npx vitest run <files> --maxWorkers=2 > <scratchpad>/s4-follow-a-w5-tests.log 2>&1; echo test-exit=$? >> <scratchpad>/s4-follow-a-w5-tests.log'`
+  Files: your changed tests + every existing test that mentions `memberProfileOf`, `memberColumnsOfVersion`, `castChangesOfMemberEdit`, `retold`, `versionsLift`, `updateBinding` (list them in the report). Never pipe vitest into `head`. DB-in-`it` tests need a 60 s timeout.
+- `npx tsc --noEmit -p .` (12G scope, `NODE_OPTIONS=--max-old-space-size=8192`). Known errors from other lanes: `overhear-seat` in `sessionPage/requests/index.ts` / `overhearSeat.ts`, and `CharacterRow` `nickname` in three Characters-view tests. Report any others — client errors caused by the wider `RetoldFlags`/types are yours to list (not fix) for the next worker.
+
+## Report
+
+Final message: changed files, one line each; the exact wire shape of the three fields; what you did at each of the four `FROZEN_MEMBER_KEYS` sites; the refusal sentences; tests with pass/fail counts; tsc (and any client errors the next worker must fix); the `castBannerWords.ts` words needed, if any; Noticed, not done.

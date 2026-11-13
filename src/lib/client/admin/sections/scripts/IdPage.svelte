@@ -32,14 +32,19 @@
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { declareInterest, requestWithInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { notify } from "$lib/client/utils/notify"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 	import AdminInline from "$lib/client/components/admin/AdminInline.svelte"
 	import type { AdminChangelistColumn } from "$lib/client/components/admin/changelist"
 	import { scriptDeletion, useHref } from "./scriptsAdmin"
@@ -47,7 +52,10 @@
 
 	type Script = Sockets.Pipelines.Scripts.Script
 	type ScriptKind = Sockets.Pipelines.Scripts.ScriptKind
-	type Draft = Pick<Script, "name" | "source" | "enabled" | "varsIn" | "varsOut">
+	type Draft = Pick<
+		Script,
+		"name" | "source" | "enabled" | "varsIn" | "varsOut"
+	>
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -70,7 +78,9 @@
 	})
 	let draft = $state<Draft | undefined>(undefined)
 	// The declarations are sets: ticking in another order is no edit.
-	const edits = new UnsavedEdits(() => draft, { unordered: ["varsIn", "varsOut"] })
+	const edits = new UnsavedEdits(() => draft, {
+		unordered: ["varsIn", "varsOut"]
+	})
 	adminUnsavedEdits(() => edits.dirty)
 	$effect(() => {
 		if (loading || !row) return
@@ -85,12 +95,19 @@
 
 	/** Reads: the type's in-ports plus supplied extras. Writes: out-ports. */
 	const readChoices = $derived(
-		type ? [...type.varsIn, ...type.extras.filter((e) => !type!.varsIn.includes(e))] : []
+		type
+			? [
+					...type.varsIn,
+					...type.extras.filter((e) => !type!.varsIn.includes(e))
+				]
+			: []
 	)
 	function toggleVar(which: "varsIn" | "varsOut", value: string) {
 		if (readOnly || !draft) return
 		const list = draft[which]
-		draft[which] = list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
+		draft[which] = list.includes(value)
+			? list.filter((v) => v !== value)
+			: [...list, value]
 	}
 
 	// ── socket wiring ───────────────────────────────────────────────────
@@ -111,7 +128,7 @@
 			draft = toDraft(saved)
 			edits.markSaved()
 		}
-		toaster.success({ title: `Saved ${saved?.name ?? "the script"}` })
+		notify.success({ title: `Saved ${saved?.name ?? "the script"}` })
 		land(intent)
 	}
 	function handleUpdateError(res: { error?: string }) {
@@ -130,17 +147,22 @@
 		if (!deleting) return
 		deleting = false
 		edits.forget()
-		toaster.success({ title: "Script deleted" })
+		notify.success({ title: "Script deleted" })
 		void adminGoto("/admin/scripts", { replaceState: true })
 	}
 	function handleError(res: { error?: string }) {
 		if (deleting) {
 			deleting = false
 			formErrors = [res.error ?? "The script was not deleted."]
-		} else if (res.error) toaster.error({ title: res.error })
+		} else if (res.error)
+			notify.error({
+				source: "admin:scripts:refusal",
+				title: res.error
+			})
 	}
 	function handleExport(res: Sockets.Pipelines.ScriptShare.ExportResponse) {
-		if (res.blob && res.filename) downloadBlob(res as { blob: unknown; filename: string })
+		if (res.blob && res.filename)
+			downloadBlob(res as { blob: unknown; filename: string })
 	}
 
 	/**
@@ -152,14 +174,38 @@
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			declareInterest<"pipelines:updateScript">("pipelines:updateScript", handleUpdate),
-			declareInterest<"pipelines:updateScript:error">("pipelines:updateScript:error", handleUpdateError),
-			declareInterest<"pipelines:cloneScript">("pipelines:cloneScript", handleClone),
-			declareInterest<"pipelines:cloneScript:error">("pipelines:cloneScript:error", handleError),
-			declareInterest<"pipelines:deleteScript">("pipelines:deleteScript", handleDelete),
-			declareInterest<"pipelines:deleteScript:error">("pipelines:deleteScript:error", handleError),
-			declareInterest<"pipelines:exportScripts">("pipelines:exportScripts", handleExport),
-			declareInterest<"pipelines:exportScripts:error">("pipelines:exportScripts:error", handleError),
+			declareInterest<"pipelines:updateScript">(
+				"pipelines:updateScript",
+				handleUpdate
+			),
+			declareInterest<"pipelines:updateScript:error">(
+				"pipelines:updateScript:error",
+				handleUpdateError
+			),
+			declareInterest<"pipelines:cloneScript">(
+				"pipelines:cloneScript",
+				handleClone
+			),
+			declareInterest<"pipelines:cloneScript:error">(
+				"pipelines:cloneScript:error",
+				handleError
+			),
+			declareInterest<"pipelines:deleteScript">(
+				"pipelines:deleteScript",
+				handleDelete
+			),
+			declareInterest<"pipelines:deleteScript:error">(
+				"pipelines:deleteScript:error",
+				handleError
+			),
+			declareInterest<"pipelines:exportScripts">(
+				"pipelines:exportScripts",
+				handleExport
+			),
+			declareInterest<"pipelines:exportScripts:error">(
+				"pipelines:exportScripts:error",
+				handleError
+			),
 			requestWithInterest("pipelines:scripts", {}, (res) => {
 				view = res
 				loading = false
@@ -193,7 +239,7 @@
 	}
 	function duplicate() {
 		socket.emit("pipelines:cloneScript", { id })
-		toaster.success({ title: "Script duplicated" })
+		notify.success({ title: "Script duplicated" })
 		void adminGoto("/admin/scripts")
 	}
 
@@ -209,12 +255,14 @@
 			key: "where",
 			label: "Where",
 			primary: true,
-			text: (u) => (u.kind === "connection" ? u.connectionName : u.pipelineLabel)
+			text: (u) =>
+				u.kind === "connection" ? u.connectionName : u.pipelineLabel
 		},
 		{
 			key: "step",
 			label: "Step",
-			text: (u) => (u.kind === "connection" ? "Stop scripts" : u.stepLabel)
+			text: (u) =>
+				u.kind === "connection" ? "Stop scripts" : u.stepLabel
 		},
 		{
 			key: "seam",
@@ -230,14 +278,19 @@
 </script>
 
 {#if loading}
-	<div class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm" role="status">
+	<div
+		class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm"
+		role="status"
+	>
 		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
 		Loading script…
 	</div>
 {:else if !row || !draft}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
 		<p class="text-surface-600-400 text-sm">There is no script {id}.</p>
-		<a href="/admin/scripts" class="btn btn-sm preset-tonal-surface">All scripts</a>
+		<a href="/admin/scripts" class="btn btn-sm preset-tonal-surface">
+			All scripts
+		</a>
 	</div>
 {:else}
 	<AdminChangeForm
@@ -262,18 +315,25 @@
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface"
-				onclick={() => socket.emit("pipelines:exportScripts", { ids: [id] })}
+				onclick={() =>
+					socket.emit("pipelines:exportScripts", { ids: [id] })}
 			>
 				<Icons.Download size={16} aria-hidden="true" /> Export
 			</button>
-			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={duplicate}>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={duplicate}
+			>
 				<Icons.Copy size={16} aria-hidden="true" /> Duplicate
 			</button>
 		{/snippet}
 		{#snippet headerExtra()}
 			{#if type}
 				<div class="flex flex-wrap items-center gap-1.5 text-xs">
-					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span
+						class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+					>
 						{type.name}
 					</span>
 					<span
@@ -283,7 +343,9 @@
 						{type.blastRadius}
 					</span>
 					{#if readOnly}
-						<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+						<span
+							class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+						>
 							Built-in
 						</span>
 					{/if}
@@ -294,16 +356,28 @@
 		<AdminFieldset title="Script">
 			<div class="grid gap-4 @min-[36rem]/content:grid-cols-3">
 				{#if readOnly}
-					<AdminField id="script-admin-name" label="Name" value={draft.name} />
+					<AdminField
+						id="script-admin-name"
+						label="Name"
+						value={draft.name}
+					/>
 				{:else}
-					<AdminField id="script-admin-name" label="Name" required error={nameError}>
+					<AdminField
+						id="script-admin-name"
+						label="Name"
+						required
+						error={nameError}
+					>
 						<input
 							id="script-admin-name"
 							class="input"
 							type="text"
 							bind:value={draft.name}
 							aria-invalid={!!nameError}
-							aria-describedby={describedBy("script-admin-name", !!nameError)}
+							aria-describedby={describedBy(
+								"script-admin-name",
+								!!nameError
+							)}
 						/>
 					</AdminField>
 				{/if}
@@ -324,7 +398,10 @@
 							class="checkbox"
 							bind:checked={draft.enabled}
 							disabled={readOnly}
-							aria-describedby={describedBy("script-admin-enabled", false)}
+							aria-describedby={describedBy(
+								"script-admin-enabled",
+								false
+							)}
 						/>
 						Enabled
 					</label>
@@ -339,11 +416,17 @@
 			>
 				<div class="flex flex-col gap-1.5 text-sm">
 					<span class="font-medium">Reads</span>
-					<div class="flex flex-wrap gap-1.5" role="group" aria-label="Reads">
+					<div
+						class="flex flex-wrap gap-1.5"
+						role="group"
+						aria-label="Reads"
+					>
 						{#each readChoices as v (v)}
 							<button
 								type="button"
-								class="chip min-h-8 rounded-full px-3 text-xs {draft.varsIn.includes(v)
+								class="chip min-h-8 rounded-full px-3 text-xs {draft.varsIn.includes(
+									v
+								)
 									? 'preset-pressed'
 									: 'preset-tonal-surface'}"
 								aria-pressed={draft.varsIn.includes(v)}
@@ -358,11 +441,17 @@
 				{#if type.varsOut.length}
 					<div class="flex flex-col gap-1.5 text-sm">
 						<span class="font-medium">Rewrites</span>
-						<div class="flex flex-wrap gap-1.5" role="group" aria-label="Rewrites">
+						<div
+							class="flex flex-wrap gap-1.5"
+							role="group"
+							aria-label="Rewrites"
+						>
 							{#each type.varsOut as v (v)}
 								<button
 									type="button"
-									class="chip min-h-8 rounded-full px-3 text-xs {draft.varsOut.includes(v)
+									class="chip min-h-8 rounded-full px-3 text-xs {draft.varsOut.includes(
+										v
+									)
 										? 'preset-pressed'
 										: 'preset-tonal-surface'}"
 									aria-pressed={draft.varsOut.includes(v)}
@@ -376,7 +465,8 @@
 					</div>
 				{:else}
 					<FieldHelp>
-						A verdict type rewrites nothing — its return is consumed by the hook.
+						A verdict type rewrites nothing — its return is consumed
+						by the hook.
 					</FieldHelp>
 				{/if}
 			</AdminFieldset>

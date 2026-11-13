@@ -39,6 +39,7 @@ import {
 } from "$lib/server/state/entriesOnReading"
 import { onLineSql } from "$lib/server/state/lineSql"
 import { cosineSimilarity } from "./index"
+import { cardsNowAsSeatsRead } from "$lib/server/pipelines/prompt/seatCards"
 import { messageHasText } from "./messageText"
 import { channelWhere } from "$lib/server/messages/channels"
 
@@ -114,7 +115,7 @@ export async function getSessionRagContext(
 		personaIds,
 		lorebookId,
 		allLorebookIds,
-		reading: lorebookId ? await sessionReadingOf(db, sessionId) : null
+		reading: await sessionReadingOf(db, sessionId)
 	}
 }
 
@@ -788,13 +789,21 @@ export async function fetchScopedCandidates(
 			where
 		)
 
+		// What the prompt shows for a seated card is the member its seat
+		// seats, over the card's current version (never the row's copies).
+		const shown = await cardsNowAsSeatsRead(
+			db,
+			context.sessionId,
+			chars.map((c) => c.id)
+		)
 		for (const char of chars) {
 			if (!char.embedding) continue
+			const card = shown.get(char.id)
 			candidates.push({
 				source: "character",
 				id: char.id,
-				name: char.name,
-				description: char.description,
+				name: card?.name ?? char.name,
+				description: card?.description ?? char.description,
 				embedding: char.embedding,
 				embeddingModel: char.embeddingModel
 			})
@@ -846,13 +855,19 @@ export async function fetchScopedCandidates(
 				where
 			)
 
+			const shown = await cardsNowAsSeatsRead(
+				db,
+				context.sessionId,
+				ps.map((c) => c.id)
+			)
 			for (const p of ps) {
 				if (!p.embedding) continue
+				const card = shown.get(p.id)
 				candidates.push({
 					source: "persona",
 					id: p.id,
-					name: p.name,
-					description: p.description,
+					name: card?.name ?? p.name,
+					description: card?.description ?? p.description,
 					embedding: p.embedding,
 					embeddingModel: p.embeddingModel
 				})

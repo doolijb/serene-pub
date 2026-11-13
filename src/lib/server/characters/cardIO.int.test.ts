@@ -476,3 +476,15 @@ describe("strokes paused (STROKES_ENABLED off)", () => {
 		60_000
 	)
 })
+
+describe("the import plan keeps no second copy of the group-only greetings (cv-writers)", () => {
+	test("group_only_greetings is read into the greetings, so the kept extensions drop it; other keys stay", async () => {
+		const { planCardImport } = await import("$lib/server/characters/cardIO")
+		const plan = planCardImport({
+			name: "N",
+			description: "D",
+			extensions: { group_only_greetings: ["G"], risuai: { kept: true } }
+		})
+		expect(plan.fields.extensions).toEqual({ risuai: { kept: true } })
+	})
+})

@@ -3,7 +3,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		absorbCastMember,
 		notAbsorbedTitle
@@ -101,7 +101,10 @@
 					? err.message
 					: "The two cast members could not be merged."
 			if (gone || merging !== ask) {
-				toaster.error({ title: notAbsorbedTitle(name), description: sentence })
+				notify.error({
+					title: notAbsorbedTitle(name),
+					description: sentence
+				})
 				return
 			}
 			merging = null
@@ -160,8 +163,8 @@
 				{#if !selectedTarget}
 					<p class="text-surface-700-300 text-sm">
 						Pick the character <strong>{node.name}</strong>
-						is actually the same person as. Their relationships,
-						private lore, and scene appearances all move over; "{node.name}"
+						is actually the same person as. Their relationships, private
+						lore, and scene appearances all move over; "{node.name}"
 						becomes a recognized alias and this row is deleted.
 					</p>
 

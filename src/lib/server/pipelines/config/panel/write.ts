@@ -88,54 +88,9 @@ async function locate(
 }
 
 /**
- * The gate every variable-layout mutation passes first.
- *
- * A layout is shared across pipelines on purpose, so "does this row belong to
- * this spec" has no true answer for one — a gate asking it would quietly remove
- * cross-pipeline reuse while looking like consistency.
- *
- * What is checked instead is that the caller is operating a control this
- * pipeline actually offers them — the option handle resolves to one of this
- * spec's declarations, that declaration is a layout reference, and the viewer
- * may write it. The returned `variableId` is then what the caller matches the
- * target row against, which is the real rule: you may edit a layout through the
- * setting that renders it.
- *
- * All three `*OptionGate`s now take this shape. Prompts were the exception —
- * they were gated on ownership, because they were namespaced to a spec — and
- * pooling them by node made the ownership question as meaningless for a prompt
- * as it always was for a layout.
- */
-export async function variableOptionGate(
-	db: Db,
-	secret: string,
-	slug: string,
-	viewer: Viewer,
-	id: string
-): Promise<{ variableId: string }> {
-	const { decl } = await locate(db, secret, slug, id)
-	if (decl.control !== "variable-template-ref" || !decl.variableId)
-		throw new OptionNotFoundError(
-			"That setting does not choose a layout, so there is nothing here to " +
-				"edit."
-		)
-	// Same refusal the write path uses, rather than a second copy of the rule.
-	// `config` for an admin because editing a shared row is a structural act —
-	// passing the viewer's default scope would refuse an administrator inside
-	// a session on the grounds that layouts are not session-writable, when the row
-	// they are editing is the configuration's.
-	resolveWriteScope(
-		viewer,
-		viewer.isAdmin ? "config" : undefined,
-		decl.matrixSlot
-	)
-	return { variableId: decl.variableId }
-}
-
-/**
  * The gate every context-template mutation passes first.
  *
- * Same shape as `variableOptionGate`, for the same reason: a template is shared
+ * The same shape every option gate takes, for the same reason: a template is shared
  * across pipelines on purpose, so "does this row belong to this spec" has no
  * true answer. What is checked is
  * that the caller is operating a control this pipeline actually offers them —

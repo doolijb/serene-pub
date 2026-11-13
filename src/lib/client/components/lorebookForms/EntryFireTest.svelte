@@ -267,12 +267,12 @@
 	const row = $derived(
 		explanation ? signalRow(explanation, entryId) : undefined
 	)
-	// Switched off as the verdict's session reads it, where that is known.
 	const facts = $derived(
 		explanation
 			? signalFactsFrom(explanation, {
 					entryId,
-					enabled: marksHere ? !marksHere.off : enabled
+					enabled,
+					reading: marksHere
 				})
 			: null
 	)

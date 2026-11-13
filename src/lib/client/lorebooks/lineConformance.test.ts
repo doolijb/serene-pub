@@ -19,6 +19,9 @@
  * "not yet" (`amendmentsAheadOnLine`), and the session's history lists
  * (the Chronicle's `history-entries` answer, `SummarizeLoreModal`: `rowsReadingOnLine`).
  *
+ * It also runs the cast-version read (`versionInForce`, with
+ * `rowPassesSessionCut`) over `CASE_VERSIONS`.
+ *
  * A new shared reader belongs here; a new screen, in the screens file.
  */
 import { describe, expect, it } from "vitest"
@@ -26,22 +29,30 @@ import {
 	amendmentsAheadOnLine,
 	amendmentsOnLine,
 	lineOf,
+	MAIN_LINE,
+	rowPassesSessionCut,
 	rowReadsOnLine,
-	type Line
+	versionInForce,
+	type Line,
+	type LineCastVersion
 } from "$lib/shared/lorebooks/lineReading"
 import {
 	CASE_BRANCHES,
 	CASE_LINES,
 	CASE_MOMENTS,
 	CASE_ROWS,
-	type CaseRow
+	CASE_VERSIONS,
+	type CaseRow,
+	type CaseVersion
 } from "$lib/shared/lorebooks/lineReading.cases"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 import {
 	amendmentsAsOf,
+	amendmentsForAppearance,
 	compareLines,
 	entryAsOf,
-	type Amendment
+	type Amendment,
+	type LineAmendment
 } from "$lib/shared/lorebooks/amendments"
 import {
 	appearancesOf,
@@ -68,7 +79,9 @@ function canonical(
 	rows: readonly CaseRow[] = CASE_ROWS
 ): number[] {
 	return sorted(
-		rows.filter((r) => rowReadsOnLine(r, line, r.date, moment)).map((r) => r.id)
+		rows
+			.filter((r) => rowReadsOnLine(r, line, r.date, moment))
+			.map((r) => r.id)
 	)
 }
 
@@ -84,7 +97,7 @@ const PRESENCES: Presence[] = DATED.map((r) => ({
 	fromDay: r.date!.day ?? null
 }))
 
-const AMENDMENTS: Amendment[] = DATED.map((r) => ({
+const AMENDMENTS: LineAmendment[] = DATED.map((r) => ({
 	id: r.id,
 	branchId: r.branchId,
 	year: r.date!.year,
@@ -119,9 +132,13 @@ describe("presences", () => {
 
 	it("the Lives lens draws the same presences", () => {
 		for (const { name, line } of READINGS) {
-			const axis = buildAxis([{ id: 1, name: "V" }], PRESENCES, [], { line })
+			const axis = buildAxis([{ id: 1, name: "V" }], PRESENCES, [], {
+				line
+			})
 			expect(
-				sorted(axis.lanes.flatMap((l) => l.runs.map((r) => r.presenceId))),
+				sorted(
+					axis.lanes.flatMap((l) => l.runs.map((r) => r.presenceId))
+				),
 				name
 			).toEqual(canonical(line, null, DATED))
 		}
@@ -156,7 +173,11 @@ describe("links and history", () => {
 		for (const { name, line } of READINGS)
 			for (const moment of CASE_MOMENTS)
 				expect(
-					sorted(historyEntriesOnReading(history, line, moment).map((e) => e.id)),
+					sorted(
+						historyEntriesOnReading(history, line, moment).map(
+							(e) => e.id
+						)
+					),
 					`${name} @ ${at(moment)}`
 				).toEqual(canonical(line, moment))
 	})
@@ -168,11 +189,14 @@ describe("amendments", () => {
 			for (const moment of CASE_MOMENTS) {
 				const expected = amendmentsOnLine(AMENDMENTS, line, moment)
 				expect(
-					amendmentsAsOf(AMENDMENTS, { line, moment }).map((a) => a.id),
+					amendmentsAsOf(AMENDMENTS, { line, moment }).map(
+						(a) => a.id
+					),
 					`${name} @ ${at(moment)}`
 				).toEqual(expected.map((a) => a.id))
 				expect(
-					entryAsOf({ content: "base" }, AMENDMENTS, { line, moment }).content
+					entryAsOf({ content: "base" }, AMENDMENTS, { line, moment })
+						.content
 				).toBe(expected.at(-1)?.fields.content ?? "base")
 			}
 	})
@@ -180,9 +204,15 @@ describe("amendments", () => {
 	it("what is still ahead (`amendmentsAheadOnLine`, the amendments list's “not yet”) is what the head applies and the moment does not", () => {
 		for (const { name, line } of READINGS)
 			for (const moment of CASE_MOMENTS) {
-				const applied = new Set(amendmentsOnLine(AMENDMENTS, line, moment).map((a) => a.id))
+				const applied = new Set(
+					amendmentsOnLine(AMENDMENTS, line, moment).map((a) => a.id)
+				)
 				expect(
-					sorted(amendmentsAheadOnLine(AMENDMENTS, line, moment).map((a) => a.id)),
+					sorted(
+						amendmentsAheadOnLine(AMENDMENTS, line, moment).map(
+							(a) => a.id
+						)
+					),
 					`${name} @ ${at(moment)}`
 				).toEqual(
 					sorted(
@@ -203,7 +233,13 @@ describe("amendments", () => {
 				}).content
 				const applied = amendmentsOnLine(AMENDMENTS, line, moment)
 				expect(
-					maskingAmendment("content", winning, AMENDMENTS, line, moment)?.id ?? null,
+					maskingAmendment(
+						"content",
+						winning,
+						AMENDMENTS,
+						line,
+						moment
+					)?.id ?? null,
 					`${name} @ ${at(moment)}`
 				).toBe(applied.at(-1)?.id ?? null)
 			}
@@ -216,17 +252,19 @@ describe("compare with main (`compareLines`)", () => {
 	it("a row the line has and main does not is one the line READS — never one past its fork cut", () => {
 		for (const { name, line } of READINGS) {
 			const only = compareLines(CASE_ROWS, () => [], { line }, dateOf)
-			expect(
-				sorted(only.map((d) => d.id)),
-				name
-			).toEqual(
+			expect(sorted(only.map((d) => d.id)), name).toEqual(
 				sorted(
 					canonical(line, null).filter(
-						(id) => CASE_ROWS.find((r) => r.id === id)!.branchId !== null
+						(id) =>
+							CASE_ROWS.find((r) => r.id === id)!.branchId !==
+							null
 					)
 				)
 			)
-			expect(only.every((d) => d.kind === "only"), name).toBe(true)
+			expect(
+				only.every((d) => d.kind === "only"),
+				name
+			).toBe(true)
 		}
 	})
 
@@ -234,15 +272,25 @@ describe("compare with main (`compareLines`)", () => {
 		for (const { name, line } of READINGS) {
 			const head = compareLines(CASE_ROWS, () => [], { line }, dateOf)
 			for (const moment of CASE_MOMENTS) {
-				const listed = compareLines(CASE_ROWS, () => [], { line, moment }, dateOf)
-				expect(sorted(listed.map((d) => d.id)), `${name} @ ${at(moment)}`).toEqual(
-					sorted(head.map((d) => d.id))
+				const listed = compareLines(
+					CASE_ROWS,
+					() => [],
+					{ line, moment },
+					dateOf
 				)
+				expect(
+					sorted(listed.map((d) => d.id)),
+					`${name} @ ${at(moment)}`
+				).toEqual(sorted(head.map((d) => d.id)))
 				const reached = new Set(canonical(line, moment))
 				expect(
 					sorted(listed.filter((d) => d.later).map((d) => d.id)),
 					`${name} @ ${at(moment)}: later`
-				).toEqual(sorted(listed.map((d) => d.id).filter((id) => !reached.has(id))))
+				).toEqual(
+					sorted(
+						listed.map((d) => d.id).filter((id) => !reached.has(id))
+					)
+				)
 			}
 		}
 	})
@@ -254,17 +302,88 @@ describe("compare with main (`compareLines`)", () => {
 			const overlays = (id: number): Amendment[] =>
 				line.branchId === null
 					? []
-					: [{ id, branchId: line.branchId, year: 0, fields: { content: "here" } }]
-			const differs = compareLines(CASE_ROWS, overlays, { line }, dateOf).filter(
-				(d) => d.kind === "differs"
-			)
+					: [
+							{
+								id,
+								branchId: line.branchId,
+								year: 0,
+								fields: { content: "here" }
+							}
+						]
+			const differs = compareLines(
+				CASE_ROWS,
+				overlays,
+				{ line },
+				dateOf
+			).filter((d) => d.kind === "differs")
 			expect(sorted(differs.map((d) => d.id)), name).toEqual(
 				line.branchId === null
 					? []
 					: canonical(line, null).filter(
-							(id) => CASE_ROWS.find((r) => r.id === id)!.branchId === null
+							(id) =>
+								CASE_ROWS.find((r) => r.id === id)!.branchId ===
+								null
 						)
 			)
 		}
 	})
+})
+
+describe("cast versions — versionInForce", () => {
+	const asVersion = (r: CaseVersion): LineCastVersion => ({
+		id: r.id,
+		branchId: r.branchId,
+		year: r.date?.year ?? null,
+		month: r.date?.month ?? null,
+		day: r.date?.day ?? null,
+		personalPosition: r.personalPosition,
+		writeOrder: r.writeOrder,
+		retiredOrder: r.retiredOrder,
+		sourceSessionId: r.sourceSessionId,
+		sourceMessageId: r.sourceMessageId,
+		overlayDepth: r.overlayDepth
+	})
+
+	for (const scenario of CASE_VERSIONS) {
+		describe(scenario.name, () => {
+			for (const reading of scenario.readings) {
+				it(reading.reader, () => {
+					const line: Line = {
+						...lineOf(reading.line, CASE_BRANCHES),
+						sessionCuts: reading.sessionCuts
+					}
+					const rows = scenario.rows.map(asVersion)
+					const date = (r: LineCastVersion): StoryDate | null =>
+						r.year == null
+							? null
+							: { year: r.year, month: r.month, day: r.day }
+					const read = rows.filter(
+						(r) =>
+							rowReadsOnLine(
+								r,
+								r.overlayDepth != null ? MAIN_LINE : line,
+								date(r),
+								reading.moment
+							) && rowPassesSessionCut(r, line)
+					)
+					expect(
+						sorted(
+							amendmentsForAppearance(
+								read,
+								reading.appearance
+							).map((r) => r.id)
+						)
+					).toEqual(reading.candidates)
+					expect(
+						versionInForce(
+							rows,
+							line,
+							reading.moment,
+							reading.appearance
+						)?.id ?? null
+					).toBe(reading.inForce)
+				})
+			}
+		})
+	}
 })

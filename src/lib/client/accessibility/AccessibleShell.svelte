@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { adoptAccountTimeZone } from "$lib/client/utils/realTime.svelte"
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
+	import { provideCharacterRows } from "$lib/client/contexts/characterRows.svelte"
 	import { provideSessionOutcomes } from "$lib/client/contexts/sessionOutcomes.svelte"
 	import { provideConnections } from "$lib/client/contexts/connections.svelte"
 	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
@@ -78,6 +79,7 @@
 	// The one subscriber to the card-import events; views take the outcome
 	// from this context (contexts/characterImports.svelte.ts).
 	provideCharacterImports()
+	provideCharacterRows()
 	// Share to ‹book› with nothing waiting, and Close out started: said once, here (contexts/sessionOutcomes.svelte.ts).
 	provideSessionOutcomes()
 	// The connections list and the one way to choose a model

@@ -10,6 +10,7 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	historyValues,
 	insertSessionMessageRow
@@ -98,6 +99,19 @@ async function makeWorld(
 	return { user, lorebook, history, vell, session }
 }
 
+async function historyEntryCount(lorebookId: number) {
+	const rows = await testDb
+		.select({ id: schema.lorebookEntries.id })
+		.from(schema.lorebookEntries)
+		.where(
+			and(
+				eq(schema.lorebookEntries.lorebookId, lorebookId),
+				eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+			)
+		)
+	return rows.length
+}
+
 async function say(
 	sessionId: number,
 	content: string,
@@ -150,7 +164,7 @@ describe("the message write stamp", () => {
 })
 
 describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
-	test("open files under the entry dated at the clock, names the scene, writes the cast", async () => {
+	test("open files nothing (§0-B): the scene is unfiled and no history entry is made; it names the scene and writes the cast", async () => {
 		const { sceneOpenHandler } = await import("./scenes")
 		const w = await makeWorld()
 		const m1 = await say(w.session.id, "We go tonight.", {
@@ -165,8 +179,9 @@ describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
 		)
 		expect(res.requestId).toBe("r1")
 		expect(res.sessionId).toBe(w.session.id)
-		expect(res.scene.historyEntryId).toBe(w.history.id)
-		expect(res.createdHistoryEntry).toBe(false)
+		expect(res.scene.historyEntryId).toBeNull()
+		expect(res.scene.nameIsDefault).toBe(true)
+		expect(await historyEntryCount(w.lorebook.id)).toBe(1)
 		expect(res.scene.channel).toBe("main")
 		expect(res.scene.openedAtMessageId).toBe(m1.id)
 		expect(res.scene.closedAtMessageId).toBeNull()
@@ -179,7 +194,7 @@ describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
 		expect(emits.map((e) => e.event)).toContain("scenes:open")
 	}, 60_000)
 
-	test("a clock past the newest entry's day creates the entry dated at the clock", async () => {
+	test("a clock past the newest entry's day still creates no history entry on open", async () => {
 		const { sceneOpenHandler } = await import("./scenes")
 		const w = await makeWorld({ year: 5, month: 1, day: 9 })
 		const m1 = await say(w.session.id, "Days later.")
@@ -188,13 +203,9 @@ describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
 			{ sessionId: w.session.id, atMessageId: m1.id },
 			() => {}
 		)
-		expect(res.createdHistoryEntry).toBe(true)
-		expect(res.scene.historyEntryId).not.toBe(w.history.id)
-		const [entry] = await testDb
-			.select()
-			.from(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.id, res.scene.historyEntryId))
-		expect(entry.fields).toMatchObject({ year: 5, month: 1, day: 9 })
+		expect(res.scene.historyEntryId).toBeNull()
+		expect(res.scene.nameIsDefault).toBe(true)
+		expect(await historyEntryCount(w.lorebook.id)).toBe(1)
 	}, 60_000)
 
 	test("opening again closes the open scene before the new boundary; one open scene per channel", async () => {
@@ -390,6 +401,83 @@ describe("scenes:open / scenes:close / scenes:moveBoundary", () => {
 		)
 		expect(scene.openedAtMessageId).toBeNull()
 		expect(scene.selectedMessageIds).toEqual([m1.id])
+	}, 60_000)
+
+	test("a scene is numbered by its position: Mark as scene before the open scene is Scene 1; the open scene keeps its stored name", async () => {
+		const { sceneOpenHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const m: { id: number }[] = []
+		for (let i = 0; i < 6; i++) m.push(await say(w.session.id, `Line ${i}.`))
+		const open: any = await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id, atMessageId: m[3].id },
+			() => {}
+		)
+		const storedBefore = open.scene.name
+		expect(storedBefore).toMatch(/^Scene 1/)
+		const early: any = await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{
+				sessionId: w.session.id,
+				atMessageId: m[0].id,
+				closeAt: m[1].id
+			},
+			() => {}
+		)
+		// No scene before it on the lane, so its day is named too (sceneNameFor).
+		expect(early.scene.name).toMatch(/^Scene 1( · |$)/)
+		const [row] = await testDb
+			.select()
+			.from(schema.scenes)
+			.where(eq(schema.scenes.id, open.scene.id))
+		expect(row.name).toBe(storedBefore)
+	}, 60_000)
+
+	test("a session on a branch of another book is refused on open, with the line sentence, and no scene row is written", async () => {
+		const { sceneOpenHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const other = await makeWorld()
+		const [foreign] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: other.lorebook.id, name: "Elsewhere" })
+			.returning()
+		await testDb
+			.update(schema.sessions)
+			.set({ lorebookBranchId: foreign.id })
+			.where(eq(schema.sessions.id, w.session.id))
+		const m1 = await say(w.session.id, "One.")
+
+		await expect(
+			sceneOpenHandler.handler(
+				fakeSocket(w.user.id),
+				{ sessionId: w.session.id, atMessageId: m1.id },
+				() => {}
+			)
+		).rejects.toThrow("This session's line is not one of this lorebook's.")
+		const rows = await testDb
+			.select({ id: schema.scenes.id })
+			.from(schema.scenes)
+			.where(eq(schema.scenes.sessionId, w.session.id))
+		expect(rows).toHaveLength(0)
+	}, 60_000)
+
+	test("a new scene opened after two existing ones is Scene 3", async () => {
+		const { sceneOpenHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const m: { id: number }[] = []
+		for (let i = 0; i < 6; i++) m.push(await say(w.session.id, `Line ${i}.`))
+		for (const at of [m[0], m[2]])
+			await sceneOpenHandler.handler(
+				fakeSocket(w.user.id),
+				{ sessionId: w.session.id, atMessageId: at.id },
+				() => {}
+			)
+		const third: any = await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id, atMessageId: m[4].id },
+			() => {}
+		)
+		expect(third.scene.name).toBe("Scene 3")
 	}, 60_000)
 })
 
@@ -609,5 +697,133 @@ describe("the summarize span and spec resolution", () => {
 			.from(schema.scenes)
 			.where(and(eq(schema.scenes.sessionId, w.session.id)))
 		expect(rows).toHaveLength(0)
+	}, 60_000)
+})
+
+describe("the history list follows scene writes (Compile's gate)", () => {
+	const resolved = async (
+		emits: Array<{ event: string; data: any }>,
+		event: string
+	) => {
+		const out: any[] = []
+		for (const e of emits.filter((x) => x.event === event))
+			out.push(typeof e.data === "function" ? await e.data() : e.data)
+		return out
+	}
+
+	test("scenes:open re-lists the history with the day's unfiled count", async () => {
+		const { sceneOpenHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const m1 = await say(w.session.id, "We go tonight.")
+		const { emits, emit } = recorder()
+		await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id, atMessageId: m1.id },
+			emit
+		)
+		const lists = await resolved(emits, "entries:list")
+		expect(lists.length).toBeGreaterThan(0)
+		const list = lists[lists.length - 1]
+		expect(list.lorebookId).toBe(w.lorebook.id)
+		expect(list.typeId).toBe(HISTORY_TYPE_ID)
+		const row = list.entryList.find((r: any) => r.id === w.history.id)
+		expect(row.unfiledSceneCount).toBe(1)
+	}, 60_000)
+
+	test("scenes:create re-lists the history of its book", async () => {
+		const { sceneCreateHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const m1 = await say(w.session.id, "Picked.")
+		const { emits, emit } = recorder()
+		await sceneCreateHandler.handler(
+			fakeSocket(w.user.id),
+			{
+				scene: {
+					lorebookId: w.lorebook.id,
+					sessionId: w.session.id,
+					historyEntryId: w.history.id,
+					selectedMessageIds: [m1.id]
+				}
+			} as any,
+			emit
+		)
+		const lists = await resolved(emits, "entries:list")
+		expect(lists.length).toBeGreaterThan(0)
+		expect(lists[0].lorebookId).toBe(w.lorebook.id)
+		expect(lists[0].typeId).toBe(HISTORY_TYPE_ID)
+	}, 60_000)
+
+	test("scenes:delete of the unfiled scene re-lists the history without the count", async () => {
+		const { sceneOpenHandler, sceneDeleteHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const m1 = await say(w.session.id, "We go tonight.")
+		const opened: any = await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id, atMessageId: m1.id },
+			() => {}
+		)
+		const { emits, emit } = recorder()
+		await sceneDeleteHandler.handler(
+			fakeSocket(w.user.id),
+			{ id: opened.scene.id } as any,
+			emit
+		)
+		const lists = await resolved(emits, "entries:list")
+		expect(lists.length).toBeGreaterThan(0)
+		const list = lists[lists.length - 1]
+		expect(list.lorebookId).toBe(w.lorebook.id)
+		const row = list.entryList.find((r: any) => r.id === w.history.id)
+		expect("unfiledSceneCount" in row).toBe(false)
+	}, 60_000)
+})
+
+describe("scene rows carry openedBecause (★S-4)", () => {
+	test("scenes:list and scenes:listByLorebook rows carry it for a placed scene and have no key for a hand-opened one", async () => {
+		const { sceneOpenHandler, sceneListHandler, sceneListByLorebookHandler } =
+			await import("./scenes")
+		const w = await makeWorld()
+		const m1 = await say(w.session.id, "By hand.")
+		const m2 = await say(w.session.id, "A new day.")
+		const byHand: any = await sceneOpenHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id, atMessageId: m1.id },
+			() => {}
+		)
+		const [placed] = await testDb
+			.insert(schema.scenes)
+			.values({
+				lorebookId: w.lorebook.id,
+				sessionId: w.session.id,
+				channel: "main",
+				name: "Placed",
+				openedAtMessageId: m2.id,
+				closedAtMessageId: m2.id
+			} as any)
+			.returning()
+		await testDb.insert(schema.sceneCues).values({
+			sessionId: w.session.id,
+			channel: "main",
+			atMessageId: m2.id,
+			trigger: "dayCrossed",
+			state: "placed"
+		} as any)
+
+		const sessionList: any = await sceneListHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id },
+			() => {}
+		)
+		const bookList: any = await sceneListByLorebookHandler.handler(
+			fakeSocket(w.user.id),
+			{ lorebookId: w.lorebook.id },
+			() => {}
+		)
+		for (const rows of [sessionList.sceneList, bookList.sceneList]) {
+			const placedRow = rows.find((r: any) => r.id === placed.id)
+			const handRow = rows.find((r: any) => r.id === byHand.scene.id)
+			expect(typeof placedRow.openedBecause).toBe("string")
+			expect(placedRow.openedBecause.length).toBeGreaterThan(0)
+			expect("openedBecause" in handRow).toBe(false)
+		}
 	}, 60_000)
 })

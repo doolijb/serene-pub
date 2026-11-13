@@ -276,12 +276,14 @@ describe("lorebooks:share", () => {
 describe("jump — shared items reach the recipient", () => {
 	test("characters and lorebooks shared with the asker are found", async () => {
 		const { jumpSearch } = await import("./jump")
+		const { insertCard } = await import("$lib/server/characters/versions")
 		const { owner, nia, stranger, k } = await people()
 		const name = `Quillon${k}`
-		const [c] = await db
-			.insert(schema.characters)
-			.values({ userId: owner.id, name, description: "" })
-			.returning()
+		const { card: c } = await insertCard(db, {
+			userId: owner.id,
+			name,
+			description: ""
+		})
 		const [book] = await db
 			.insert(schema.lorebooks)
 			.values({ userId: owner.id, name })

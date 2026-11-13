@@ -10,20 +10,26 @@ import {
 	clockPastDeleted,
 	forkPastDeleted,
 	forksThrough,
+	historyOwnerStep,
 	isOnLine,
 	lineOf,
 	MAIN_LINE,
+	type Line,
 	type LineBranch,
+	type LineCastVersion,
+	rowPassesSessionCut,
 	rowReadsOnLine,
 	rowsReadingOnLine,
 	survivingLineOf,
-	uncutLine
+	uncutLine,
+	versionInForce
 } from "./lineReading"
 import { amendmentsAsOf, compareLines, entryAsOf } from "./amendments"
 import { appearancesOf } from "./presence"
 import {
 	CASE_BRANCHES,
 	CASE_EXPECTED_AT_HEAD,
+	CASE_HISTORY_OWNERS,
 	CASE_LINES,
 	CASE_MOMENTS,
 	CASE_ROWS
@@ -115,11 +121,19 @@ describe("lineOf — the ancestor chain", () => {
 			{ id: 1, forkedFromBranchId: 2 },
 			{ id: 2, forkedFromBranchId: 1 }
 		]
-		expect(lineOf(1, ring).steps.map((s) => s.branchId)).toEqual([1, 2, null])
+		expect(lineOf(1, ring).steps.map((s) => s.branchId)).toEqual([
+			1,
+			2,
+			null
+		])
 	})
 
 	it("uncutLine lifts every cut (a pipeline's whole-line read)", () => {
-		expect(uncutLine(lineOf(3, CASE_BRANCHES)).steps.every((s) => s.cut === null)).toBe(true)
+		expect(
+			uncutLine(lineOf(3, CASE_BRANCHES)).steps.every(
+				(s) => s.cut === null
+			)
+		).toBe(true)
 	})
 })
 
@@ -131,7 +145,9 @@ describe("rowReadsOnLine — the table of cases", () => {
 					? null
 					: CASE_BRANCHES.find((b) => b.name === lineName)!.id
 			const line = lineOf(id, CASE_BRANCHES)
-			const seen = CASE_ROWS.filter((r) => rowReadsOnLine(r, line, r.date))
+			const seen = CASE_ROWS.filter((r) =>
+				rowReadsOnLine(r, line, r.date)
+			)
 			expect(seen.map((r) => r.id).sort((a, b) => a - b)).toEqual(
 				[...expected].sort((a, b) => a - b)
 			)
@@ -141,8 +157,12 @@ describe("rowReadsOnLine — the table of cases", () => {
 
 	it("a moment cuts the line's own rows and tightens every ancestor's cut", () => {
 		const line = lineOf(3, CASE_BRANCHES)
-		const seen = rowsReadingOnLine(CASE_ROWS, line, (r) => r.date, { year: 6 })
-		expect(seen.map((r) => r.id).sort((a, b) => a - b)).toEqual([1, 2, 4, 7, 9, 11])
+		const seen = rowsReadingOnLine(CASE_ROWS, line, (r) => r.date, {
+			year: 6
+		})
+		expect(seen.map((r) => r.id).sort((a, b) => a - b)).toEqual([
+			1, 2, 4, 7, 9, 11
+		])
 	})
 
 	it("membership alone ignores dates", () => {
@@ -155,15 +175,27 @@ describe("rowReadsOnLine — the table of cases", () => {
 	})
 
 	it("membership reads the whole chain: a grandparent's rows too", () => {
-		const rows = [{ branchId: null }, { branchId: 1 }, { branchId: 3 }, { branchId: 2 }]
-		expect(rowsReadingOnLine(rows, lineOf(3, CASE_BRANCHES))).toHaveLength(3)
+		const rows = [
+			{ branchId: null },
+			{ branchId: 1 },
+			{ branchId: 3 },
+			{ branchId: 2 }
+		]
+		expect(rowsReadingOnLine(rows, lineOf(3, CASE_BRANCHES))).toHaveLength(
+			3
+		)
 		expect(isOnLine({ branchId: 1 }, lineOf(4, CASE_BRANCHES))).toBe(true)
 		expect(isOnLine({ branchId: 1 }, MAIN_LINE)).toBe(false)
 	})
 })
 
 describe("amendmentsOnLine — which overlays apply, in apply order", () => {
-	const a = (id: number, branchId: number | null, year: number, month?: number) => ({
+	const a = (
+		id: number,
+		branchId: number | null,
+		year: number,
+		month?: number
+	) => ({
 		id,
 		branchId,
 		year,
@@ -195,17 +227,23 @@ describe("amendmentsOnLine — which overlays apply, in apply order", () => {
 
 	it("the moment cuts on top of the forks", () => {
 		const line = lineOf(1, CASE_BRANCHES)
-		expect(amendmentsOnLine(all, line, { year: 5 }).map((x) => x.id)).toEqual([1])
+		expect(
+			amendmentsOnLine(all, line, { year: 5 }).map((x) => x.id)
+		).toEqual([1])
 		expect(amendmentsOnLine(all, line).map((x) => x.id)).toEqual([1, 3, 4])
 	})
 
 	it("main reads main's only, all of it at the head", () => {
-		expect(amendmentsOnLine(all, MAIN_LINE).map((x) => x.id)).toEqual([1, 7, 2])
+		expect(amendmentsOnLine(all, MAIN_LINE).map((x) => x.id)).toEqual([
+			1, 7, 2
+		])
 	})
 
 	it("amendmentsAsOf reads the line it is handed; with none it reads main", () => {
 		expect(
-			amendmentsAsOf(all, { line: lineOf(3, CASE_BRANCHES) }).map((x) => x.id)
+			amendmentsAsOf(all, { line: lineOf(3, CASE_BRANCHES) }).map(
+				(x) => x.id
+			)
 		).toEqual([1, 3, 5])
 		expect(amendmentsAsOf(all).map((x) => x.id)).toEqual([1, 7, 2])
 	})
@@ -229,7 +267,9 @@ describe("compareLines reads through the chain", () => {
 			{ id: 3, branchId: 2 },
 			{ id: 4, branchId: 3 }
 		]
-		const out = compareLines(rows, () => [], { line: lineOf(3, CASE_BRANCHES) })
+		const out = compareLines(rows, () => [], {
+			line: lineOf(3, CASE_BRANCHES)
+		})
 		expect(out.map((d) => [d.id, d.kind])).toEqual([
 			[2, "only"],
 			[4, "only"]
@@ -248,7 +288,9 @@ describe("presences read through the chain", () => {
 
 	it("an ancestor's presence counts only if it began by the fork cut", () => {
 		const presences = [p(1, null, 1), p(2, null, 6), p(3, 1, 2), p(4, 2, 1)]
-		const here = appearancesOf(9, presences, { line: lineOf(3, CASE_BRANCHES) })
+		const here = appearancesOf(9, presences, {
+			line: lineOf(3, CASE_BRANCHES)
+		})
 		expect(here.map((a) => a.presenceId)).toEqual([1, 3])
 	})
 })
@@ -257,7 +299,10 @@ describe("forkPastDeleted — deleting a line keeps its children's past", () => 
 	type Branch = (typeof CASE_BRANCHES)[number] | LineBranch
 
 	/** The book's lines once `gone` is deleted, its children moved past it. */
-	function without(gone: number, fork: (child: Branch, deleted: Branch) => Partial<LineBranch>) {
+	function without(
+		gone: number,
+		fork: (child: Branch, deleted: Branch) => Partial<LineBranch>
+	) {
 		const deleted = CASE_BRANCHES.find((b) => b.id === gone)!
 		return CASE_BRANCHES.filter((b) => b.id !== gone).map((b) =>
 			b.forkedFromBranchId === gone ? { ...b, ...fork(b, deleted) } : b
@@ -265,9 +310,19 @@ describe("forkPastDeleted — deleting a line keeps its children's past", () => 
 	}
 
 	/** What a line reads, the deleted line's own rows left out (they go with it). */
-	function reading(line: number, branches: readonly Branch[], gone: number, moment: StoryDate | null) {
+	function reading(
+		line: number,
+		branches: readonly Branch[],
+		gone: number,
+		moment: StoryDate | null
+	) {
 		const rows = CASE_ROWS.filter((r) => r.branchId !== gone)
-		return rowsReadingOnLine(rows, lineOf(line, branches), (r) => r.date, moment).map((r) => r.id)
+		return rowsReadingOnLine(
+			rows,
+			lineOf(line, branches),
+			(r) => r.date,
+			moment
+		).map((r) => r.id)
 	}
 
 	it("a child leaves from the deleted line's parent, at the earlier fork date", () => {
@@ -286,24 +341,68 @@ describe("forkPastDeleted — deleting a line keeps its children's past", () => 
 			forkDay: null
 		})
 		// D forked A at now: it takes A's own date, not "now" off main.
-		expect(forkPastDeleted(CASE_BRANCHES[3], CASE_BRANCHES[0])).toMatchObject({
+		expect(
+			forkPastDeleted(CASE_BRANCHES[3], CASE_BRANCHES[0])
+		).toMatchObject({
 			forkedFromBranchId: null,
 			forkYear: 5
 		})
 	})
 
 	it("the earlier date keeps its month and day; a later one's are dropped with it", () => {
-		const parent = { id: 20, forkedFromBranchId: null, forkYear: 5, forkMonth: 3, forkDay: 9 }
+		const parent = {
+			id: 20,
+			forkedFromBranchId: null,
+			forkYear: 5,
+			forkMonth: 3,
+			forkDay: 9
+		}
 		expect(
-			forkPastDeleted({ id: 21, forkedFromBranchId: 20, forkYear: 5, forkMonth: 3, forkDay: 2 }, parent)
-		).toEqual({ forkedFromBranchId: null, forkYear: 5, forkMonth: 3, forkDay: 2 })
+			forkPastDeleted(
+				{
+					id: 21,
+					forkedFromBranchId: 20,
+					forkYear: 5,
+					forkMonth: 3,
+					forkDay: 2
+				},
+				parent
+			)
+		).toEqual({
+			forkedFromBranchId: null,
+			forkYear: 5,
+			forkMonth: 3,
+			forkDay: 2
+		})
 		expect(
-			forkPastDeleted({ id: 21, forkedFromBranchId: 20, forkYear: 5, forkMonth: 4, forkDay: 1 }, parent)
-		).toEqual({ forkedFromBranchId: null, forkYear: 5, forkMonth: 3, forkDay: 9 })
+			forkPastDeleted(
+				{
+					id: 21,
+					forkedFromBranchId: 20,
+					forkYear: 5,
+					forkMonth: 4,
+					forkDay: 1
+				},
+				parent
+			)
+		).toEqual({
+			forkedFromBranchId: null,
+			forkYear: 5,
+			forkMonth: 3,
+			forkDay: 9
+		})
 		// Two forks at now stay at now: the child keeps following.
 		expect(
-			forkPastDeleted({ id: 21, forkedFromBranchId: 20 }, { id: 20, forkedFromBranchId: 7 })
-		).toEqual({ forkedFromBranchId: 7, forkYear: null, forkMonth: null, forkDay: null })
+			forkPastDeleted(
+				{ id: 21, forkedFromBranchId: 20 },
+				{ id: 20, forkedFromBranchId: 7 }
+			)
+		).toEqual({
+			forkedFromBranchId: 7,
+			forkYear: null,
+			forkMonth: null,
+			forkDay: null
+		})
 	})
 
 	it("every other line reads what it read before, at every moment, whichever line goes", () => {
@@ -344,34 +443,63 @@ describe("forksThrough — what deleting a line hands each of its children", () 
 		...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((year) => ({ year })),
 		{ year: 5, month: 2, day: 1 }
 	]
-	const MOMENTS: (StoryDate | null)[] = [...CASE_MOMENTS, ...DATES.filter((d) => d != null)]
+	const MOMENTS: (StoryDate | null)[] = [
+		...CASE_MOMENTS,
+		...DATES.filter((d) => d != null)
+	]
 
 	it("a row of the deleted line moved onto a child it read on reads where it read before, and nowhere else", () => {
 		for (const gone of CASE_BRANCHES.map((b) => b.id)) {
 			const deleted = CASE_BRANCHES.find((b) => b.id === gone)!
 			const after = CASE_BRANCHES.filter((b) => b.id !== gone).map((b) =>
-				b.forkedFromBranchId === gone ? { ...b, ...forkPastDeleted(b, deleted) } : b
+				b.forkedFromBranchId === gone
+					? { ...b, ...forkPastDeleted(b, deleted) }
+					: b
 			)
 			for (const [child, group] of forksThrough(gone, CASE_BRANCHES))
 				for (const date of DATES) {
 					const row = { branchId: gone }
-					if (!rowReadsOnLine(row, lineOf(child, CASE_BRANCHES), date, null)) {
+					if (
+						!rowReadsOnLine(
+							row,
+							lineOf(child, CASE_BRANCHES),
+							date,
+							null
+						)
+					) {
 						// Not kept: no line of the group ever read it, so none loses it.
 						for (const line of group)
 							for (const moment of MOMENTS)
-								expect(rowReadsOnLine(row, lineOf(line, CASE_BRANCHES), date, moment)).toBe(false)
+								expect(
+									rowReadsOnLine(
+										row,
+										lineOf(line, CASE_BRANCHES),
+										date,
+										moment
+									)
+								).toBe(false)
 						continue
 					}
 					const moved = { branchId: child }
 					for (const line of [null, ...after.map((b) => b.id)])
 						for (const moment of MOMENTS)
 							expect(
-								rowReadsOnLine(moved, lineOf(line, after), date, moment),
+								rowReadsOnLine(
+									moved,
+									lineOf(line, after),
+									date,
+									moment
+								),
 								`${name(gone)} deleted, row at ${JSON.stringify(date)} kept by ${name(child)}: ${line == null ? "main" : name(line)} at ${JSON.stringify(moment)}`
 							).toBe(
 								line != null &&
 									group.includes(line) &&
-									rowReadsOnLine(row, lineOf(line, CASE_BRANCHES), date, moment)
+									rowReadsOnLine(
+										row,
+										lineOf(line, CASE_BRANCHES),
+										date,
+										moment
+									)
 							)
 				}
 		}
@@ -386,7 +514,8 @@ describe("survivingLineOf — where a session goes when its line is deleted", ()
 		{ id: 3, forkedFromBranchId: 2 },
 		{ id: 9, forkedFromBranchId: null }
 	]
-	const without = (...ids: number[]) => lines.filter((b) => !ids.includes(b.id))
+	const without = (...ids: number[]) =>
+		lines.filter((b) => !ids.includes(b.id))
 
 	it("a line still there keeps its sessions", () => {
 		expect(survivingLineOf(3, lines, without(2))).toBe(3)
@@ -410,8 +539,19 @@ describe("survivingLineOf — where a session goes when its line is deleted", ()
 
 describe("clockPastDeleted — the clock a session keeps when its line is deleted", () => {
 	// The deleted line left its parent at Year 3, Mo. 2, Day 10.
-	const deleted: LineBranch = { id: 2, forkedFromBranchId: 1, forkYear: 3, forkMonth: 2, forkDay: 10 }
-	const clock = (year: number, month: number | null = null, day: number | null = null, hour: number | null = null) => ({
+	const deleted: LineBranch = {
+		id: 2,
+		forkedFromBranchId: 1,
+		forkYear: 3,
+		forkMonth: 2,
+		forkDay: 10
+	}
+	const clock = (
+		year: number,
+		month: number | null = null,
+		day: number | null = null,
+		hour: number | null = null
+	) => ({
 		year,
 		month,
 		day,
@@ -421,16 +561,201 @@ describe("clockPastDeleted — the clock a session keeps when its line is delete
 
 	it("a line forked at now cut nothing, so every clock stays", () => {
 		const late = clock(90, 1, 1, 12)
-		expect(clockPastDeleted(late, { id: 2, forkedFromBranchId: 1 })).toBe(late)
+		expect(clockPastDeleted(late, { id: 2, forkedFromBranchId: 1 })).toBe(
+			late
+		)
 	})
 	it("a clock at or before the fork date stays as it is, its time of day included", () => {
-		for (const kept of [clock(1), clock(3, 2), clock(3, 2, 10), clock(3, 2, 10, 23)])
+		for (const kept of [
+			clock(1),
+			clock(3, 2),
+			clock(3, 2, 10),
+			clock(3, 2, 10, 23)
+		])
 			expect(clockPastDeleted(kept, deleted)).toBe(kept)
 	})
 	it("a clock after it goes back to the fork date: the parent reads the same up to there, and not past it", () => {
 		expect(clockPastDeleted(clock(9), deleted)).toEqual(clock(3, 2, 10))
-		expect(clockPastDeleted(clock(3, 2, 11, 6), deleted)).toEqual(clock(3, 2, 10))
+		expect(clockPastDeleted(clock(3, 2, 11, 6), deleted)).toEqual(
+			clock(3, 2, 10)
+		)
 		// A year-only fork date is the start of that year: a month in it is later.
-		expect(clockPastDeleted(clock(3, 5), { id: 2, forkYear: 3 })).toEqual(clock(3))
+		expect(clockPastDeleted(clock(3, 5), { id: 2, forkYear: 3 })).toEqual(
+			clock(3)
+		)
+	})
+})
+
+describe("cast versions — units", () => {
+	const row = (
+		id: number,
+		rest: Partial<LineCastVersion> = {}
+	): LineCastVersion => ({
+		id,
+		branchId: null,
+		year: 5,
+		personalPosition: null,
+		writeOrder: 1,
+		retiredOrder: null,
+		sourceSessionId: null,
+		sourceMessageId: null,
+		...rest
+	})
+
+	it("uncutLine keeps the session cuts", () => {
+		const sessionCuts = [{ sessionId: 101, through: 10, mark: 50 }]
+		const line = { ...lineOf(1, CASE_BRANCHES), sessionCuts }
+		const lifted = uncutLine(line)
+		expect(lifted.sessionCuts).toEqual(sessionCuts)
+		expect(lifted.steps.every((s) => s.cut === null)).toBe(true)
+		expect(uncutLine(MAIN_LINE).sessionCuts).toBeUndefined()
+	})
+
+	it("the first cut for a session counts over a later duplicate", () => {
+		const line: Line = {
+			...MAIN_LINE,
+			sessionCuts: [
+				{ sessionId: 101, through: 5, mark: 10 },
+				{ sessionId: 101, through: 99, mark: 99 }
+			]
+		}
+		const src = { sourceSessionId: 101, retiredOrder: null }
+		expect(
+			rowPassesSessionCut(
+				{ ...src, sourceMessageId: 5, writeOrder: 10 },
+				line
+			)
+		).toBe(true)
+		expect(
+			rowPassesSessionCut(
+				{ ...src, sourceMessageId: 6, writeOrder: 10 },
+				line
+			)
+		).toBe(false)
+		expect(
+			rowPassesSessionCut(
+				{ ...src, sourceMessageId: 5, writeOrder: 11 },
+				line
+			)
+		).toBe(false)
+	})
+
+	it("versionInForce answers null with no candidate", () => {
+		expect(versionInForce([], MAIN_LINE, null, null)).toBeNull()
+		// Not on the line, and ahead of the moment.
+		expect(
+			versionInForce(
+				[row(1, { branchId: 9 }), row(2, { year: 9 })],
+				MAIN_LINE,
+				{ year: 5 },
+				null
+			)
+		).toBeNull()
+	})
+
+	it("two rows tied on everything but id: the higher id", () => {
+		const rows = [row(7), row(9), row(8)]
+		expect(versionInForce(rows, MAIN_LINE, null, null)).toBe(rows[1])
+	})
+
+	it("an overlay row on a non-null branch is not a candidate", () => {
+		const bad = row(2, { branchId: 1, overlayDepth: 0 })
+		const line = lineOf(1, CASE_BRANCHES)
+		expect(versionInForce([bad], line, null, null)).toBeNull()
+		const base = row(1, { year: null })
+		expect(versionInForce([base, bad], line, null, null)).toBe(base)
+	})
+})
+
+describe("historyOwnerStep — rule C: a line owns a day only after its fork", () => {
+	const idOf = (n: string) =>
+		n === "main" ? null : CASE_BRANCHES.find((b) => b.name === n)!.id
+	for (const c of CASE_HISTORY_OWNERS) {
+		it(`${c.line} at ${JSON.stringify(c.date)} -> ${c.owner}`, () => {
+			const line = lineOf(idOf(c.line), CASE_BRANCHES)
+			expect(historyOwnerStep(line, c.date).branchId).toBe(idOf(c.owner))
+		})
+	}
+
+	it("a partial fork date: the fork day itself and everything before it is main's", () => {
+		const branches = [
+			{
+				id: 7,
+				forkedFromBranchId: null,
+				forkYear: 2,
+				forkMonth: 5,
+				forkDay: 3
+			}
+		]
+		const line = lineOf(7, branches)
+		const owner = (d: StoryDate) => historyOwnerStep(line, d).branchId
+		expect(owner({ year: 2 })).toBeNull()
+		expect(owner({ year: 2, month: 5 })).toBeNull()
+		expect(owner({ year: 2, month: 5, day: 3 })).toBeNull()
+		expect(owner({ year: 2, month: 5, day: 4 })).toBe(7)
+		expect(owner({ year: 2, month: 6 })).toBe(7)
+		expect(owner({ year: 3 })).toBe(7)
+	})
+})
+
+describe("held amendments — the session's own, laid on last", () => {
+	const line = (id: number, year: number | null, anchor: number | null, extra = {}) => ({
+		id,
+		branchId: null,
+		year,
+		month: null,
+		day: null,
+		fields: { content: `#${id}` },
+		held: { anchor },
+		...extra
+	})
+	const dated = (id: number, branchId: number | null, year: number) => ({
+		id,
+		branchId,
+		year,
+		month: null,
+		day: null,
+		fields: { content: `#${id}` }
+	})
+
+	it("come last after every line step, by anchor (null first), then id", () => {
+		const rows = [
+			line(20, null, 9),
+			line(21, null, 3),
+			line(22, null, null),
+			line(23, null, 3),
+			dated(1, null, 4),
+			dated(2, 3, 1)
+		]
+		const out = amendmentsOnLine(rows, lineOf(3, CASE_BRANCHES))
+		expect(out.map((x) => x.id)).toEqual([1, 2, 22, 21, 23, 20])
+	})
+
+	it("a dated one is out before its date, in at and after it, in at the head", () => {
+		const rows = [line(30, 5, 1)]
+		const at = (year: number) => amendmentsOnLine(rows, MAIN_LINE, { year }).map((x) => x.id)
+		expect(at(4)).toEqual([])
+		expect(at(5)).toEqual([30])
+		expect(at(6)).toEqual([30])
+		expect(amendmentsOnLine(rows, MAIN_LINE, null).map((x) => x.id)).toEqual([30])
+	})
+
+	it("an undated one is always in", () => {
+		const rows = [line(31, null, 1)]
+		expect(amendmentsOnLine(rows, MAIN_LINE, { year: 1 }).map((x) => x.id)).toEqual([31])
+	})
+
+	it("a fork cut never cuts one", () => {
+		// C forks from A at Y7: main is cut at the earlier cut, yet a held one dated Y9 or undated stays.
+		const rows = [line(32, 9, 1), line(33, null, 2)]
+		const out = amendmentsOnLine(rows, lineOf(3, CASE_BRANCHES))
+		expect(out.map((x) => x.id)).toEqual([32, 33])
+	})
+
+	it("ahead never lists one", () => {
+		const rows = [line(34, 9, 1), dated(8, null, 9)]
+		expect(
+			amendmentsAheadOnLine(rows, MAIN_LINE, { year: 2 }).map((x) => x.id)
+		).toEqual([8])
 	})
 })

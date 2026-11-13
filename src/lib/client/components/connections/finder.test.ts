@@ -23,6 +23,10 @@ import {
 	pickDestination,
 	primaryRowIndex,
 	quantFit,
+	hubRepoOf,
+	withHubFileSizes,
+	fitBar,
+	modelPageFacts,
 	quantsFromKcpp,
 	quantsFromOllama,
 	rankHub,
@@ -137,6 +141,27 @@ describe("destinationsFor — only somewhere a file could actually land", () => 
 		expect(
 			destinationsFor("entities", rows).map((d) => d.connectionId)
 		).toEqual([5])
+	})
+
+	test("the app-made local connections are destinations, no door needed", () => {
+		const ner = destinationsFor("entities", [
+			{
+				id: 7,
+				name: "Local named entities",
+				type: CONNECTION_TYPE.LOCAL_ONNX_NER
+			}
+		])
+		expect(ner.map((d) => [d.kind, d.connectionId])).toEqual([["onnx", 7]])
+		const embed = destinationsFor("embeddings", [
+			{
+				id: 8,
+				name: "Local embeddings",
+				type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
+			}
+		])
+		expect(embed.map((d) => [d.kind, d.connectionId])).toEqual([
+			["onnx", 8]
+		])
 	})
 
 	test("an API host is never a destination", () => {
@@ -302,6 +327,104 @@ describe("headlineBytes", () => {
 	test("null when nothing quoted a size", () => {
 		expect(headlineBytes([{ label: "Q4_K_M" }])).toBeNull()
 		expect(headlineBytes([])).toBeNull()
+	})
+})
+
+describe("image rows are offered in fit order for the person's card", () => {
+	// The six files of koboldcpp/imgmodel as the Hub lists them (its order),
+	// with the drawing figures image.yaml gives them. The bundle the one file
+	// cannot run carries no figure (the server withholds it).
+	const img = (name: string, sizeGb: number, recommendedVram?: number) => ({
+		name,
+		ollamaName: name,
+		description: name,
+		recommendedVram,
+		pullOptions: [
+			{
+				label: "",
+				filename: `${name}.gguf`,
+				downloadUrl: `https://hf/${name}.gguf`,
+				sizeBytes: sizeGb * GB
+			}
+		]
+	})
+	const models = [
+		img("dreamshaperXL_v2_q4_k", 2.8, 8),
+		img("hidream_o1_image_dev_q5_1", 6.3),
+		img("imgmodel_ftuned_q4_0", 1.6, 3),
+		img("imgmodel_xl_q4_0", 2.6, 8),
+		img("picx_real_q8_0", 1.8, 4),
+		img("sdxs-512-tinySDdistilled_Q8_0", 0.7, 2)
+	]
+	const names = (tier: RowContext["tier"]) =>
+		kcppRecommendedRows(models, ctx({ tier, kcppKind: "image" })).map(
+			(r) => r.name
+		)
+
+	test("an 8 GB card is offered SDXL first, then SD 1.5, the incomplete bundle last", () => {
+		expect(names("8gb")).toEqual([
+			"dreamshaperXL_v2_q4_k",
+			"imgmodel_xl_q4_0",
+			"picx_real_q8_0",
+			"imgmodel_ftuned_q4_0",
+			"sdxs-512-tinySDdistilled_Q8_0",
+			"hidream_o1_image_dev_q5_1"
+		])
+		const rows = kcppRecommendedRows(models, ctx({ tier: "8gb", kcppKind: "image" }))
+		expect(primaryRowIndex(rows)).toBe(0)
+	})
+
+	test("a 4 GB card leads with SD 1.5; SDXL follows as the next step up rather than the gold pick", () => {
+		expect(names("4gb")).toEqual([
+			"picx_real_q8_0",
+			"imgmodel_ftuned_q4_0",
+			"sdxs-512-tinySDdistilled_Q8_0",
+			"dreamshaperXL_v2_q4_k",
+			"imgmodel_xl_q4_0",
+			"hidream_o1_image_dev_q5_1"
+		])
+		const rows = kcppRecommendedRows(models, ctx({ tier: "4gb", kcppKind: "image" }))
+		expect(rows[0].tier).toEqual({ label: "Budget", matches: true })
+		expect(rows[3].tier).toEqual({ label: "Mainstream", matches: false })
+		expect(primaryRowIndex(rows)).toBe(0)
+	})
+
+	test("the gold Get is judged by the memory a model needs to draw, never by its file size", () => {
+		// All three SD 1.5-class files already on disk: the 2.8 GB SDXL file
+		// would "fit" a 4 GB card by size, and cannot draw on one.
+		const onDisk = new Set([
+			"picx_real_q8_0.gguf",
+			"imgmodel_ftuned_q4_0.gguf",
+			"sdxs-512-tinySDdistilled_Q8_0.gguf"
+		])
+		const four = kcppRecommendedRows(
+			models,
+			ctx({ tier: "4gb", kcppKind: "image", present: onDisk })
+		)
+		expect(primaryRowIndex(four)).toBe(-1)
+		expect(four.find((r) => r.name === "dreamshaperXL_v2_q4_k")?.fit).toBe("too_big")
+		// Every complete model on disk on a big card: the bundle without a
+		// figure is "unknown", never gold.
+		const all = new Set(models.filter((m) => m.recommendedVram).map((m) => `${m.name}.gguf`))
+		const big = kcppRecommendedRows(
+			models,
+			ctx({ tier: "24gb", kcppKind: "image", present: all })
+		)
+		expect(primaryRowIndex(big)).toBe(-1)
+		expect(big.find((r) => r.name === "hidream_o1_image_dev_q5_1")?.fit).toBe("unknown")
+	})
+
+	test("no tier given: lightest first, and no gold Get is promised", () => {
+		expect(names("unsure")[0]).toBe("sdxs-512-tinySDdistilled_Q8_0")
+		expect(names("unsure").at(-1)).toBe("hidream_o1_image_dev_q5_1")
+		const rows = kcppRecommendedRows(models, ctx({ tier: "unsure", kcppKind: "image" }))
+		expect(primaryRowIndex(rows)).toBe(-1)
+	})
+
+	test("text rows keep the list's own order", () => {
+		const rows = kcppRecommendedRows(models, ctx({ tier: "8gb", kcppKind: "text" }))
+		expect(rows[0].name).toBe("dreamshaperXL_v2_q4_k")
+		expect(rows[1].name).toBe("hidream_o1_image_dev_q5_1")
 	})
 })
 
@@ -1420,5 +1543,207 @@ describe("presence", () => {
 			tag: "hf.co/org/r:Q4"
 		})
 		expect(presenceQueryFor("e", undefined, [])).toEqual({ key: "e" })
+	})
+})
+
+describe("hubRepoOf", () => {
+	test("hub rows drop the host and tag", () => {
+		expect(hubRepoOf({ key: "hub:a/b", name: "a/b" })).toBe("a/b")
+		expect(hubRepoOf({ key: "hub:x", name: "hf.co/a/b:Q4_K_M" })).toBe(
+			"a/b"
+		)
+		expect(hubRepoOf({ key: "hub:x", name: "huggingface.co/a/b" })).toBe(
+			"a/b"
+		)
+	})
+	test("kcpp rows are the name", () => {
+		expect(hubRepoOf({ key: "kcpp:a/b", name: "a/b" })).toBe("a/b")
+	})
+	test("ollama rows: hf.co pull yes, library name no", () => {
+		expect(hubRepoOf({ key: "ollama:hf.co/a/b:Q4_K_M", name: "x" })).toBe(
+			"a/b"
+		)
+		expect(hubRepoOf({ key: "ollama:huggingface.co/a/b", name: "x" })).toBe(
+			"a/b"
+		)
+		expect(
+			hubRepoOf({ key: "ollama:llama3.2:3b", name: "llama3.2" })
+		).toBeNull()
+	})
+	test("onnx, audio and unknown keys are null", () => {
+		expect(hubRepoOf({ key: "onnx:a/b", name: "a/b" })).toBeNull()
+		expect(hubRepoOf({ key: "audio:a/b", name: "a/b" })).toBeNull()
+		expect(hubRepoOf({ key: "zzz:a/b", name: "a/b" })).toBeNull()
+	})
+	test("the shape guard", () => {
+		expect(hubRepoOf({ key: "hub:x", name: "a/../b" })).toBeNull()
+		expect(hubRepoOf({ key: "kcpp:x", name: "nonslash" })).toBeNull()
+		expect(hubRepoOf({ key: "kcpp:x", name: "a/b/c" })).toBeNull()
+	})
+})
+
+describe("withHubFileSizes", () => {
+	const q = (over: Partial<import("./finder").QuantFile>) => ({
+		name: "Q4_K_M",
+		recommended: false,
+		...over
+	})
+	test("empty or absent files return the input", () => {
+		const quants = [q({})]
+		expect(withHubFileSizes(quants, null)).toEqual(quants)
+		expect(withHubFileSizes(quants, [])).toEqual(quants)
+	})
+	test("exact filename wins; a known size is never overwritten", () => {
+		const out = withHubFileSizes(
+			[q({ filename: "m-Q4_K_M.gguf" }), q({ name: "Q8_0", bytes: 5 })],
+			[
+				{ rfilename: "m-Q4_K_M.gguf", size: 100 },
+				{ rfilename: "m-Q8_0.gguf", size: 999 }
+			]
+		)
+		expect(out[0].bytes).toBe(100)
+		expect(out[1].bytes).toBe(5)
+	})
+	test("label match, case-insensitive, with the UD- prefix", () => {
+		const out = withHubFileSizes(
+			[q({ name: "q4_k_m" }), q({ name: "UD-Q2_K_XL" })],
+			[
+				{ rfilename: "dir/m-Q4_K_M.gguf", size: 10 },
+				{ rfilename: "m-UD-Q2_K_XL.gguf", size: 20 }
+			]
+		)
+		expect(out.map((x) => x.bytes)).toEqual([10, 20])
+	})
+	test("split parts get no guessed size", () => {
+		const out = withHubFileSizes(
+			[q({})],
+			[
+				{ rfilename: "a/m-Q4_K_M.gguf", size: 1 },
+				{ rfilename: "b/m-Q4_K_M.gguf", size: 2 }
+			]
+		)
+		expect(out[0].bytes).toBeUndefined()
+	})
+	test("mmproj and MTP files are ignored", () => {
+		const out = withHubFileSizes(
+			[q({})],
+			[
+				{ rfilename: "m-Q4_K_M.gguf", size: 7 },
+				{ rfilename: "mmproj-Q4_K_M.gguf", size: 1 },
+				{ rfilename: "m-MTP-Q4_K_M.gguf", size: 2 }
+			]
+		)
+		expect(out[0].bytes).toBe(7)
+	})
+})
+
+describe("fitBar", () => {
+	test("null for Not sure and for no size", () => {
+		expect(
+			fitBar({ name: "Q4", bytes: 2 * GB, recommended: false }, "unsure")
+		).toBeNull()
+		expect(fitBar({ name: "Q4", recommended: false }, "8gb")).toBeNull()
+	})
+	test("percent of the budget with quantFit's tone", () => {
+		const quant = { name: "Q4_K_M", bytes: 2 * GB, recommended: false }
+		const bar = fitBar(quant, "8gb")
+		expect(bar?.tone).toBe(quantFit(quant, "8gb")?.tone)
+		expect(bar?.percent).toBeGreaterThan(1)
+		expect(bar?.percent).toBeLessThan(100)
+	})
+	test("clamps to 1 and 100", () => {
+		expect(
+			fitBar({ name: "Q4_K_M", bytes: 1, recommended: false }, "8gb")
+				?.percent
+		).toBe(1)
+		expect(
+			fitBar(
+				{ name: "Q4_K_M", bytes: 500 * GB, recommended: false },
+				"8gb"
+			)?.percent
+		).toBe(100)
+	})
+})
+
+describe("modelPageFacts", () => {
+	const fmt = (iso: string) => (iso === "bad" ? "" : `on ${iso}`)
+	test("nothing known is empty", () => {
+		expect(modelPageFacts({}, fmt)).toEqual([])
+		expect(modelPageFacts({ card: null }, fmt)).toEqual([])
+	})
+	test("a recommended list's own facts fill the strip; the card wins", () => {
+		const listFacts = {
+			license: "apache-2.0",
+			languages: "About 100 languages",
+			parameters: "22M"
+		}
+		expect(modelPageFacts({ listFacts }, fmt)).toEqual([
+			{ label: "Parameters", value: "22M" },
+			{ label: "Licence", value: "apache-2.0" },
+			{ label: "Languages", value: "About 100 languages" }
+		])
+		expect(
+			modelPageFacts(
+				{
+					listFacts,
+					card: { license: "mit", languages: ["en"] }
+				},
+				fmt
+			)
+		).toEqual([
+			{ label: "Parameters", value: "22M" },
+			{ label: "Licence", value: "mit" },
+			{ label: "Languages", value: "en" }
+		])
+	})
+	test("all facts in order", () => {
+		expect(
+			modelPageFacts(
+				{
+					parameters: "8B",
+					card: {
+						baseModel: "mistralai/Mistral-Nemo-Base-2407",
+						contextLength: 131072,
+						license: "mit",
+						languages: ["en", "fr", "de", "es", "it"],
+						downloads: 12_000,
+						lastModified: "2026-01-02"
+					}
+				},
+				fmt
+			)
+		).toEqual([
+			{ label: "Parameters", value: "8B" },
+			{ label: "Base model", value: "mistralai/Mistral-Nemo-Base-2407" },
+			{ label: "Context", value: "128k tokens" },
+			{ label: "Licence", value: "mit" },
+			{ label: "Languages", value: "en, fr, de +2 more" },
+			{ label: "Downloads", value: "12k" },
+			{ label: "Updated", value: "on 2026-01-02" }
+		])
+	})
+	test("context grouping, licence from tags, downloads fallback", () => {
+		const facts = modelPageFacts(
+			{
+				card: { contextLength: 40000, languages: ["en", "fr"] },
+				tags: ["license:apache-2.0"],
+				downloads: 431
+			},
+			fmt
+		)
+		expect(facts).toEqual([
+			{ label: "Context", value: "40,000 tokens" },
+			{ label: "Licence", value: "apache-2.0" },
+			{ label: "Languages", value: "en, fr" },
+			{ label: "Downloads", value: "431" }
+		])
+	})
+	test("an unparseable date drops the fact", () => {
+		expect(modelPageFacts({ card: { lastModified: "bad" } }, fmt)).toEqual(
+			[]
+		)
+		expect(modelPageFacts({ card: { lastModified: "nonsense" } })).toEqual(
+			[]
+		)
 	})
 })

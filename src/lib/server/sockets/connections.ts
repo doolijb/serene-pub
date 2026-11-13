@@ -87,6 +87,7 @@ import {
 	onnxModalityOf
 } from "$lib/server/localModels/onnxCache"
 import { localOnnxRefusal } from "$lib/server/localModels/onnxRuntime"
+import { LOCAL_ONNX_CONNECTION_NAME } from "$lib/server/connections/localOnnxConnections"
 import {
 	allConnectionModels as listAllConnectionModels,
 	connectionModelById,
@@ -238,13 +239,26 @@ function ollamaHostTakenError(
 
 async function connectionNameTaken(
 	name: string,
-	exceptId?: number
+	exceptId?: number,
+	type?: string
 ): Promise<boolean> {
 	const want = name.trim().toLowerCase()
 	if (!want) return false
 	const rows = await db
 		.select({ id: schema.connections.id, name: schema.connections.name })
 		.from(schema.connections)
+	// The two fixed local ONNX names belong to those two types alone — for a
+	// NEW claim. A row of another type that already bore the name before
+	// 2026-11-04 keeps saving under it (its name is unchanged, not taken).
+	const own =
+		exceptId !== undefined ? rows.find((r) => r.id === exceptId) : undefined
+	const unchanged = (own?.name ?? "").trim().toLowerCase() === want
+	if (!unchanged)
+		for (const [ownerType, fixed] of Object.entries(
+			LOCAL_ONNX_CONNECTION_NAME
+		)) {
+			if (fixed.toLowerCase() === want && type !== ownerType) return true
+		}
 	return rows.some(
 		(r) => r.id !== exceptId && (r.name ?? "").trim().toLowerCase() === want
 	)
@@ -512,13 +526,31 @@ export const connectionsCreate: Handler<
 		// is not a name: two connections from one preset would otherwise read
 		// the same in every picker. Refused here rather than only in the
 		// sidebar, because the wizard and the document-view page create too.
-		const desiredName = String((data as any).name ?? "").trim()
+		const createType = String((data as any).type ?? "")
+		let desiredName = String((data as any).name ?? "").trim()
+		const onnxName = LOCAL_ONNX_CONNECTION_NAME[createType]
+		if (onnxName) {
+			// Serene Pub keeps one row per local ONNX type, under a fixed name.
+			const existing = await db.query.connections.findFirst({
+				where: (c, { eq }) => eq(c.type, createType),
+				columns: { name: true }
+			})
+			if (existing) {
+				const error = `Serene Pub already has "${existing.name}". Download models into it instead.`
+				emitToUser("connections:create:error", { error })
+				throw new Error(error)
+			}
+			desiredName = onnxName
+		}
 		if (!desiredName) {
 			const error = "Connection name is required."
 			emitToUser("connections:create:error", { error })
 			throw new Error(error)
 		}
-		if (await connectionNameTaken(desiredName)) {
+		if (
+			!onnxName &&
+			(await connectionNameTaken(desiredName, undefined, createType))
+		) {
 			const error = `A connection named "${desiredName}" already exists.`
 			emitToUser("connections:create:error", { error })
 			throw new Error(error)
@@ -570,7 +602,10 @@ export const connectionsCreate: Handler<
 		// row would carry another server's checks): `imageGen/comfy/serverCheck`.
 		// The key's credit tier is likewise the server's
 		// (`connections/openRouterKey`).
-		if ((data as any).extraJson && typeof (data as any).extraJson === "object") {
+		if (
+			(data as any).extraJson &&
+			typeof (data as any).extraJson === "object"
+		) {
 			delete (data as any).extraJson.comfy
 			delete (data as any).extraJson[OPENROUTER_KEY_FACTS_KEY]
 		}
@@ -660,7 +695,24 @@ export const connectionsUpdate: Handler<
 				emitToUser("connections:update:error", { error })
 				throw new Error(error)
 			}
-			if (await connectionNameTaken(desiredName, id)) {
+			const storedForName = await db.query.connections.findFirst({
+				where: (c, { eq }) => eq(c.id, id),
+				columns: { type: true, name: true }
+			})
+			if (
+				storedForName &&
+				LOCAL_ONNX_CONNECTION_NAME[storedForName.type] &&
+				desiredName !== (storedForName.name ?? "").trim()
+			) {
+				const error = `"${storedForName.name}" comes with Serene Pub and keeps its name.`
+				emitToUser("connections:update:error", { error })
+				throw new Error(error)
+			}
+			const nameType =
+				"type" in editable
+					? String(editable.type ?? "")
+					: storedForName?.type
+			if (await connectionNameTaken(desiredName, id, nameType)) {
 				const error = `A connection named "${desiredName}" already exists.`
 				emitToUser("connections:update:error", { error })
 				throw new Error(error)
@@ -692,6 +744,19 @@ export const connectionsUpdate: Handler<
 		})
 		const nextType =
 			typeof editable.type === "string" ? editable.type : stored?.type
+		// The two app-made local ONNX rows are one per type and Serene Pub's own
+		// (owner 2026-11-04): a row never becomes one, and one never becomes
+		// something else — create and delete refuse the same way.
+		if (
+			typeof editable.type === "string" &&
+			stored &&
+			editable.type !== stored.type &&
+			(onnxModalityOf(editable.type) || onnxModalityOf(stored.type))
+		) {
+			const error = "A local ONNX connection keeps its type: Serene Pub makes it, one per type."
+			emitToUser("connections:update:error", { error })
+			throw new Error(error)
+		}
 
 		// A second Ollama connection to a host is refused here as at create.
 		// ⚠ Only when the host CHANGES (or the row becomes Ollama). Installs that
@@ -756,7 +821,9 @@ export const connectionsUpdate: Handler<
 			updateData.extraJson = {
 				...rest,
 				...(storedComfy ? { comfy: storedComfy } : {}),
-				...(storedTier ? { [OPENROUTER_KEY_FACTS_KEY]: storedTier } : {})
+				...(storedTier
+					? { [OPENROUTER_KEY_FACTS_KEY]: storedTier }
+					: {})
 			}
 		}
 		// The endpoint row carries no model — strip a legacy `model` field off
@@ -1019,6 +1086,22 @@ export const connectionsDelete: Handler<
 			)
 		}
 
+		// The two local ONNX rows come with Serene Pub and are not deleted;
+		// a person frees space by removing a model's files. They stay on
+		// every device (owner ★C-4, 2026-11-04): where the runtime can't load
+		// they read Unavailable, and their models' files can still be removed.
+		const doomed = await db.query.connections.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id),
+			columns: { type: true, name: true }
+		})
+		if (doomed && onnxModalityOf(doomed.type)) {
+			// No `connections:delete:error` event type exists; "error" is
+			// the one the admin check above uses.
+			const error = `"${doomed.name}" comes with Serene Pub and can't be deleted. To free space, use Delete from disk on one of its models instead.`
+			emitToUser("error", { error })
+			throw new Error(error)
+		}
+
 		// No clear-on-delete dance. `connection_defaults.connection_id` is
 		// ON DELETE SET NULL, so deleting a connection releases every capability
 		// it held, in one statement, for capabilities this handler has never
@@ -1036,7 +1119,9 @@ export const connectionsDelete: Handler<
 		// has a consequence: the queue must stop and the model unload, rather
 		// than stay resident until its TTL (plan A10).
 		await withStarConsequences(db, () =>
-			db.delete(schema.connections).where(eq(schema.connections.id, params.id))
+			db
+				.delete(schema.connections)
+				.where(eq(schema.connections.id, params.id))
 		)
 		await emitToUser("connections:list", () => buildConnectionsList())
 		const res: Sockets.Connections.Delete.Response = { id: params.id }
@@ -1145,11 +1230,29 @@ export const connectionsSetDefault: Handler<
 			[params.capability]
 		)
 
+		// An image pair's sampling preset: swapped from what the model FILE
+		// says, or said to have stayed (`imageSamplingFamily.ts`). Before the
+		// reply, so the sentence rides in it; never a reason the write fails.
+		let samplingNote: string | null = null
+		if (params.id != null && params.capability === "text->image") {
+			try {
+				const { settleImageSamplingAfterUse } = await import(
+					"$lib/server/connections/imageSamplingFamily"
+				)
+				samplingNote = await settleImageSamplingAfterUse(db, params.capability, {
+					connectionId: params.id,
+					connectionModelId: params.modelId ?? null
+				})
+			} catch (e) {
+				console.warn("[connections:setDefault] sampling preset not settled:", e)
+			}
+		}
 		const res: Sockets.Connections.SetDefault.Response = {
 			ok: true,
 			capability: params.capability,
 			id: params.id,
-			modelId: params.id == null ? null : (params.modelId ?? null)
+			modelId: params.id == null ? null : (params.modelId ?? null),
+			...(samplingNote ? { samplingNote } : {})
 		}
 		emitToUser("connections:setDefault", res)
 
@@ -1313,7 +1416,11 @@ export const connectionsTest: Handler<
 						const { recordComfyTest } = await import(
 							"$lib/server/imageGen/comfy/serverCheck"
 						)
-						await recordComfyTest(db, params.connection.id, (result as any).extra)
+						await recordComfyTest(
+							db,
+							params.connection.id,
+							(result as any).extra
+						)
 					}
 					await syncConnectionModels(db, params.connection.id, {
 						models,
@@ -1333,7 +1440,8 @@ export const connectionsTest: Handler<
 				error = result.error || "Connection failed."
 			}
 			// The `/object_info` summary is the row's cache, never the reply's.
-			if ((result as any).extra?.comfy) delete (result as any).extra.comfy.objectInfo
+			if ((result as any).extra?.comfy)
+				delete (result as any).extra.comfy.objectInfo
 			const res: Sockets.Connections.Test.Response = {
 				ok: result.ok,
 				error: error || null,
@@ -1465,7 +1573,8 @@ export const modelsRefreshSpeech: Handler<
 	event: "models:refreshSpeech",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
-			const msg = "Access denied. Only admin users can refresh speech facts."
+			const msg =
+				"Access denied. Only admin users can refresh speech facts."
 			emitToUser("error", {
 				error: msg,
 				connectionId: params?.connectionId,
@@ -1852,7 +1961,6 @@ function modelPayload(input: unknown): {
 	return { values }
 }
 
-
 /** A modality as a sentence names it: "chat", "embeddings". */
 const modalityWord = (modality: string): string =>
 	sectionForModality(modality)?.starVerb ?? modalityLabel(modality)
@@ -2172,7 +2280,8 @@ export const connectionsUpdateModel: Handler<
 		// the single column keeps its answer; an embedding or NER model
 		// keeps its one modality and states no sets.
 		if (values!.reads !== undefined || values!.writes !== undefined) {
-			const currentModality = (values!.modality as string | null | undefined) ?? row.modality
+			const currentModality =
+				(values!.modality as string | null | undefined) ?? row.modality
 			if (currentModality && SINGLE_MODALITIES.has(currentModality))
 				return fail(
 					`This model is for ${modalityWord(currentModality)} — one thing only, so it has nothing else to choose here.`
@@ -2211,7 +2320,9 @@ export const connectionsUpdateModel: Handler<
 			if (values!.writes !== undefined && filed !== row.modality)
 				values!.modality = filed
 			const refusal = await modalityChangeRefusal(params.id, row.id, {
-				modality: (values!.modality as string | null | undefined) ?? row.modality,
+				modality:
+					(values!.modality as string | null | undefined) ??
+					row.modality,
 				...nextFields
 			})
 			if (refusal) return fail(refusal)

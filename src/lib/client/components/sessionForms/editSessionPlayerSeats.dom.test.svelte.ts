@@ -64,7 +64,7 @@ function deliver(key: string, msg: unknown) {
 
 const GENRE = "test:genre/crawl@1"
 
-async function openForm(viewerId = 1) {
+async function openForm(viewerId = 1, boHasNoLinesBenched = false) {
 	app = mount(EditSessionForm, {
 		target: document.body,
 		props: { editSessionId: 7, showEditSessionForm: true },
@@ -85,7 +85,15 @@ async function openForm(viewerId = 1) {
 			sessionCharacters: [],
 			sessionPersonas: [
 				{ id: 11, personaId: null, persona: null, userId: 1, seatName: "Ann", removedAt: null },
-				{ id: 12, personaId: null, persona: null, userId: 2, seatName: "Bo", removedAt: null }
+				{
+					id: 12,
+					personaId: null,
+					persona: null,
+					userId: 2,
+					seatName: "Bo",
+					removedAt: null,
+					...(boHasNoLinesBenched ? { isActive: false, hasLines: false } : {})
+				}
 			],
 			sessionGuests: [],
 			tags: []
@@ -114,13 +122,22 @@ describe("Edit Session — card-less player seats", () => {
 		expect(seatInput(12)?.value).toBe("Bo")
 	})
 
-	test("a rename and a removal go with Save; the seats meet the persona floor", async () => {
-		await openForm()
+	test("a rename and the removal of an unused benched seat go with Save; the seats meet the persona floor", async () => {
+		await openForm(1, true)
 		const ann = seatInput(11)!
 		ann.value = "Ann the Bold"
 		ann.dispatchEvent(new Event("input", { bubbles: true }))
 		flushSync()
-		;(document.querySelector('button[aria-label="Remove Bo from the session"]') as HTMLButtonElement).click()
+		;(document.querySelector('button[aria-label="More actions for Bo"]') as HTMLButtonElement).click()
+		await tick()
+		flushSync()
+		const item = [...document.querySelectorAll("[role=menuitem]")].find(
+			(el) => el.textContent?.trim() === "Remove"
+		) as HTMLElement
+		item.dispatchEvent(
+			new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" })
+		)
+		item.click()
 		flushSync()
 		expect(seatInput(12)).toBeNull()
 		const sent = save()
@@ -137,6 +154,7 @@ describe("Edit Session — card-less player seats", () => {
 		await openForm(2)
 		expect(seatInput(11)?.disabled).toBe(true)
 		expect(seatInput(12)?.disabled).toBe(false)
-		expect(document.querySelector('button[aria-label="Remove Ann from the session"]')).toBeNull()
+		expect(document.querySelector('button[aria-label="Bench Ann"]') === null).toBe(true)
+		expect(document.querySelector('button[aria-label="Bench Bo"]') === null).toBe(false)
 	})
 })

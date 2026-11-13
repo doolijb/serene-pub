@@ -55,7 +55,14 @@ const seam = vi.hoisted(() => {
 	 */
 	function chain(label: string, result: any = []) {
 		const self: any = {
-			from: () => self,
+			from: (table?: any) => {
+				// A `result` function answers by the table read from.
+				if (typeof result === "function")
+					result = result(
+						String(table?.[Symbol.for("drizzle:Name")] ?? "")
+					)
+				return self
+			},
 			where: () => self,
 			limit: () => self,
 			orderBy: () => self,
@@ -149,7 +156,20 @@ const seam = vi.hoisted(() => {
 					}
 				}
 			},
-			select: () => chain("select"),
+			// The persona read is `cardsNow` (`seatedCast`): the library row
+			// from `characters` and the current version row from
+			// `selectDistinctOn` — one `cardsNow(persona)` per read.
+			select: () =>
+				chain("select", (name: string) =>
+					name === "characters" && rows.persona ? [rows.persona] : []
+				),
+			selectDistinctOn: () =>
+				chain(
+					"cardsNow(persona)",
+					rows.persona
+						? [{ cardId: rows.persona.id, name: rows.persona.name }]
+						: []
+				),
 			update: () => chain("update"),
 			insert: () => chain("insert"),
 			delete: () => chain("delete"),
@@ -449,7 +469,7 @@ describe("sessions:typing — the persona read behind the push", () => {
 		// The access check still ran; the payload's own read did not, and
 		// neither did the roster behind the broadcast.
 		expect(seam.queries).toContain("sessions.findFirst(columns)")
-		expect(seam.queries).not.toContain("characters.findFirst(persona)")
+		expect(seam.queries).not.toContain("cardsNow(persona)")
 		expect(seam.queries).not.toContain("sessionGuests.findMany")
 		expect(h.emits).toEqual([])
 	})
@@ -462,7 +482,7 @@ describe("sessions:typing — the persona read behind the push", () => {
 		await owner.fire("sessions:typing", { sessionId: 1, personaId: 5 })
 
 		expect(
-			seam.queries.filter((q) => q === "characters.findFirst(persona)")
+			seam.queries.filter((q) => q === "cardsNow(persona)")
 		).toHaveLength(1)
 		expect(h.emits).toHaveLength(1)
 		expect(h.emits[0].target).toBe("s1")
@@ -483,7 +503,7 @@ describe("sessions:typing — the persona read behind the push", () => {
 
 		await owner.fire("sessions:typing", { sessionId: 1, personaId: 5 })
 
-		expect(seam.queries).toContain("characters.findFirst(persona)")
+		expect(seam.queries).toContain("cardsNow(persona)")
 		expect(h.emits).toEqual([])
 	})
 })

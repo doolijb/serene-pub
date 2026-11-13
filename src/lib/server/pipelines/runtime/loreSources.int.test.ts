@@ -243,11 +243,28 @@ describe("create-lore-entry — match", () => {
 			expect(hit.id).toBe(gateId)
 			expect(hit.matched).toBe(true)
 			expect(hit.written).toBe(false)
+			// An entry of the attached lorebook: the change is a held amendment of this session; the lorebook's row stays.
 			const [row] = await db
 				.select()
 				.from(schema.lorebookEntries)
 				.where(eq(schema.lorebookEntries.id, gateId))
-			expect(row!.content).toBe("rebuilt")
+			expect(row!.content).toBe("old")
+			const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+			const own = await ownBookFor(db as any, sessionId)
+			const held = (
+				await db
+					.select()
+					.from(schema.entryAmendments)
+					.where(eq(schema.entryAmendments.lorebookId, own.id))
+			).filter((r) => r.entryId === gateId && r.base != null)
+			expect(held).toHaveLength(1)
+			expect(held[0]!.fields).toEqual({ content: "rebuilt" })
+			const { sessionReadingOf } = await import("$lib/server/state/reading")
+			const { entryOverlaysFor, entryAt } = await import("$lib/server/state/entriesOnReading")
+			const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
+			const reading = (await sessionReadingOf(db as any, sessionId))!
+			const overlays = await entryOverlaysFor(db as any, bookId, reading, [gateId])
+			expect((entryAt(toEntryRow(row!), overlays, reading) as any).content).toBe("rebuilt")
 
 			const made = (await h.commit!(
 				{ name: "Brand New", content: "fresh", match: { name: "Brand New" } },

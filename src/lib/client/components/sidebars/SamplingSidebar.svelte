@@ -52,9 +52,12 @@
 		type SamplingNewSeed,
 		type SamplingPipelineUse
 	} from "./samplingList"
-	import { openInLoadouts, openInPipelines } from "$lib/client/admin/railDoors"
+	import {
+		openInLoadouts,
+		openInPipelines
+	} from "$lib/client/admin/railDoors"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { z } from "zod"
 	import { S } from "@serene-pub/sdk"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
@@ -79,7 +82,9 @@
 	/** Whether `samplingConfigs:list` has answered: until then empty is "not yet". */
 	let listLoaded = $state(false)
 	let filterText = $state("")
-	const groups = $derived(groupSamplingConfigs(samplingConfigsList, filterText))
+	const groups = $derived(
+		groupSamplingConfigs(samplingConfigsList, filterText)
+	)
 
 	// ── What picks each config ───────────────────────────────────────────────
 	let usedBy = $state<Sockets.SamplingConfigs.UsedBy.Response | null>(null)
@@ -403,7 +408,10 @@
 	) {
 		if (!saving || message.sampling?.id !== selectedId) return
 		saving = false
-		toaster.success({ title: `Saved ${message.sampling.name}` })
+		notify.success({
+			source: "socket:samplingConfigs:update",
+			title: `Saved ${message.sampling.name}`
+		})
 	}
 	/**
 	 * A refused rename: filed under `name`, where the field is, rather than
@@ -424,7 +432,10 @@
 		newOpen = false
 		newError = undefined
 		openConfig(message.sampling.id)
-		toaster.success({ title: "Sampling config created" })
+		notify.success({
+			source: "socket:samplingConfigs:create",
+			title: "Sampling config created"
+		})
 	}
 	/**
 	 * A refused create — a name already taken within this modality is the one
@@ -440,7 +451,10 @@
 	function handleSamplingConfigsDelete() {
 		if (!deleting) return
 		deleting = false
-		toaster.success({ title: "Sampling config deleted" })
+		notify.success({
+			source: "socket:samplingConfigs:delete",
+			title: "Sampling config deleted"
+		})
 		requestUsedBy()
 	}
 	function handleSamplingConfigsSetDefaultFor(
@@ -457,7 +471,8 @@
 			names.length <= 1
 				? names.join("")
 				: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
-		toaster.success({
+		notify.success({
+			source: "socket:samplingConfigs:setDefaultFor",
 			title: "Loadout sampling updated",
 			description: `The ${list} ${names.length === 1 ? "loadout uses" : "loadouts use"} ${name} now.`
 		})
@@ -682,7 +697,7 @@
 											class="flex min-w-0 items-center gap-1.5"
 										>
 											<span
-												class="truncate text-lead font-medium"
+												class="text-lead truncate font-medium"
 											>
 												{row.name}
 											</span>
@@ -825,7 +840,7 @@
 						<div class="min-w-0 flex-1"></div>
 						<!-- The count at the header's right edge, 11px (polish
 						     parity L5), before the one action. -->
-						<span class="text-surface-600-400 truncate text-meta">
+						<span class="text-surface-600-400 text-meta truncate">
 							{sentSummary.on} of {sentSummary.total} sent
 						</span>
 						<button

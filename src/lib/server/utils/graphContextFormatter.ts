@@ -2,15 +2,13 @@ import { db as defaultDb } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import { membersAsRead, type MemberAsRead } from "$lib/server/cast/memberAsRead"
 import {
 	nearestTieVersions,
 	type TieVersionLike
 } from "$lib/shared/lorebooks/tieVersions"
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm"
-import type {
-	NodeVisibility,
-	RelationshipVisibility
-} from "$lib/server/db/schema"
+import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import type { RelationshipVisibility } from "$lib/server/db/schema"
 
 // Round-12 audit fix (MEDIUM): these are the only structural markers
 // separating one section/entry from another in the context string below,
@@ -181,33 +179,37 @@ interface NodeInfo {
 	aliases: string[]
 }
 
-/** A member as the session's reading has them — see `sessionLine`. */
-type MemberAt = <T extends { id: number; characterId?: number | null }>(member: T) => T
+/** Members as the session's reading has them (one batched call) — see `sessionLine`. */
+type MembersAt = (ids: readonly number[]) => Promise<Map<number, MemberAsRead>>
 
-async function fetchNodeMap(db: Db, nodeIds: number[], memberAt: MemberAt) {
+async function fetchNodeMap(db: Db, nodeIds: number[], membersAt: MembersAt) {
 	if (nodeIds.length === 0) return new Map<number, NodeInfo>()
-	const nodes = await db.query.lorebookBindings.findMany({
-		where: inArray(schema.lorebookBindings.id, nodeIds),
-		columns: {
-			id: true,
-			name: true,
-			nodeState: true,
-			nodeVisibility: true,
-			parentNodeId: true,
-			aliases: true
-		}
-	})
+	const [nodes, members] = await Promise.all([
+		db.query.lorebookBindings.findMany({
+			where: inArray(schema.lorebookBindings.id, nodeIds),
+			columns: { id: true, parentNodeId: true }
+		}),
+		membersAt(nodeIds)
+	])
+	// A member with no version in force is absent from `members` (logged there).
 	return new Map(
-		nodes.map(memberAt).map((n) => [
-			n.id,
-			{
-				name: n.name,
-				nodeState: n.nodeState,
-				nodeVisibility: n.nodeVisibility,
-				parentNodeId: n.parentNodeId,
-				aliases: Array.isArray(n.aliases) ? n.aliases : []
-			}
-		])
+		nodes.flatMap((n) => {
+			const m = members.get(n.id)
+			return m
+				? [
+						[
+							n.id,
+							{
+								name: m.shownName,
+								nodeState: m.nodeState,
+								nodeVisibility: m.nodeVisibility,
+								parentNodeId: n.parentNodeId,
+								aliases: m.aliases
+							}
+						] as [number, NodeInfo]
+					]
+				: []
+		})
 	)
 }
 
@@ -312,23 +314,22 @@ interface GraphLayers {
  * acknowledged one it inherited, and a query that left it out would read the
  * inherited one in its place.
  *
- * `memberAt` is each member as the same reading has them (plan A25): the cast
- * amendments on the line by the session's story now applied — a visibility
- * (hidden, legendary), a name, aliases, a state or a summary set from a date.
- * The card stays the member's own (`keepCard`). With no reading of this book,
- * main at its head.
+ * `membersAt` is each member as the same reading has them (plan A25): the one
+ * character version in force (`membersAsRead`) — a visibility (hidden,
+ * legendary), a name, aliases, a state or a summary set from a date. With no
+ * reading of this book, main at its head. One batched call per use; a member
+ * with no version in force is absent from the map.
  */
 async function sessionLine(db: Db, sessionId: number, lorebookId: number) {
 	const { sessionReadingOf, rowsOnReading } = await import(
 		"$lib/server/state/reading"
 	)
-	const { MAIN_HEAD, castOverlaysFor, castMemberAt } = await import(
+	const { MAIN_HEAD } = await import(
 		"$lib/server/state/entriesOnReading"
 	)
 	const found = await sessionReadingOf(db, sessionId)
 	const reading = found && found.lorebookId === lorebookId ? found : null
 	const castReading = reading ?? MAIN_HEAD
-	const overlays = await castOverlaysFor(db, lorebookId, castReading)
 	const onLine = async <T extends TieVersionLike>(rows: T[]): Promise<T[]> =>
 		reading
 			? nearestTieVersions(
@@ -338,16 +339,17 @@ async function sessionLine(db: Db, sessionId: number, lorebookId: number) {
 			: rows.filter((r) => r.branchId == null)
 	// 🚧 ★5 (ties T3): a member's state the rules fed while the session may not write this book — its notes' rule-fed overlay.
 	const fed = (await (await import("$lib/server/rulesets/ties")).ruleFedOverlayOf(db, sessionId))?.castStates ?? null
-	const memberAt: MemberAt = (member) => {
-		const m = castMemberAt(member, overlays, castReading, { keepCard: true })
-		const state = fed?.[String(member.id)]
-		return state && "nodeState" in m ? { ...m, nodeState: state } : m
+	const membersAt: MembersAt = async (ids) => {
+		const read = await membersAsRead(db, ids, { reading: castReading })
+		if (!fed) return read
+		return new Map(
+			[...read].map(([id, m]) => {
+				const state = fed[String(id)]
+				return [id, state ? { ...m, nodeState: state as MemberAsRead["nodeState"] } : m]
+			})
+		)
 	}
-	/** Members some overlay on the line gives a visibility. */
-	const visibilityAmended = [...overlays]
-		.filter(([, list]) => list.some((a) => "nodeVisibility" in a.fields))
-		.map(([memberId]) => memberId)
-	return { onLine, memberAt, visibilityAmended }
+	return { onLine, membersAt }
 }
 
 /** The visibilities a row may carry to be read, as a filter. */
@@ -391,7 +393,7 @@ async function collectGraphLayers(params: {
 	const { sessionId, lorebookId, speakerCharacterId, speakerPersonaId } =
 		params
 	const db = params.db ?? defaultDb
-	const { onLine, memberAt, visibilityAmended } = await sessionLine(
+	const { onLine, membersAt } = await sessionLine(
 		db,
 		sessionId,
 		lorebookId
@@ -434,7 +436,7 @@ async function collectGraphLayers(params: {
 			...speakerRels.map((r) => r.toNodeId)
 		])
 	]
-	const l1NodeMap = await fetchNodeMap(db, l1NodeIds, memberAt)
+	const l1NodeMap = await fetchNodeMap(db, l1NodeIds, membersAt)
 
 	// For alias-aware filtering: collect parentNodeIds of alias targets
 	const aliasTargetParentIds = new Set<number>()
@@ -620,34 +622,26 @@ async function collectGraphLayers(params: {
 			...l2Rels.map((r) => r.toNodeId)
 		])
 	]
-	const l2NodeMap = await fetchNodeMap(db, l2NodeIds, memberAt)
+	const l2NodeMap = await fetchNodeMap(db, l2NodeIds, membersAt)
 
 	// ── Layer 3: legendary nodes (nodeVisibility = "legendary") + public relationships ──
-	// Legendary as the reading has them: stored so, or made so (or made
-	// otherwise) by a cast amendment by the session's story now. The five
-	// most recently changed.
-	const legendaryNodes = (
-		await db.query.lorebookBindings.findMany({
-			where: and(
-				eq(schema.lorebookBindings.lorebookId, lorebookId),
-				or(
-					eq(
-						schema.lorebookBindings.nodeVisibility,
-						"legendary" as NodeVisibility
-					),
-					visibilityAmended.length
-						? inArray(schema.lorebookBindings.id, visibilityAmended)
-						: undefined
-				)
-			),
-			orderBy: [
-				desc(schema.lorebookBindings.updatedAt),
-				desc(schema.lorebookBindings.id)
-			]
+	// Legendary as the reading has them: the members whose version in force
+	// reads `legendary`. The five most recently changed (binding `updatedAt`,
+	// then id).
+	const bookMembers = await db
+		.select({ id: schema.lorebookBindings.id })
+		.from(schema.lorebookBindings)
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
+		.orderBy(
+			desc(schema.lorebookBindings.updatedAt),
+			desc(schema.lorebookBindings.id)
+		)
+	const bookRead = await membersAt(bookMembers.map((m) => m.id))
+	const legendaryNodes = bookMembers
+		.flatMap((m) => {
+			const read = bookRead.get(m.id)
+			return read && read.nodeVisibility === "legendary" ? [read] : []
 		})
-	)
-		.map(memberAt)
-		.filter((n) => n.nodeVisibility === "legendary")
 		.slice(0, 5)
 
 	// Each figure with the rows behind it, in the order the query returned
@@ -660,7 +654,7 @@ async function collectGraphLayers(params: {
 					where: and(
 						eq(schema.narrativeRelationships.lorebookId, lorebookId),
 						castEdgeOnly,
-						eq(schema.narrativeRelationships.fromNodeId, node.id)
+						eq(schema.narrativeRelationships.fromNodeId, node.castMemberId)
 					)
 				})
 			)
@@ -668,19 +662,19 @@ async function collectGraphLayers(params: {
 			.filter(isCastEdge)
 			.filter(visibleAs(["public"]))
 		const l3NodeIds = [
-			...new Set([node.id, ...pubRels.map((r) => r.toNodeId)])
+			...new Set([node.castMemberId, ...pubRels.map((r) => r.toNodeId)])
 		]
-		const l3NodeMap = await fetchNodeMap(db, l3NodeIds, memberAt)
-		l3NodeMap.set(node.id, {
-			name: node.name,
+		const l3NodeMap = await fetchNodeMap(db, l3NodeIds, membersAt)
+		l3NodeMap.set(node.castMemberId, {
+			name: node.shownName,
 			nodeState: node.nodeState,
 			nodeVisibility: "legendary",
 			parentNodeId: null,
-			aliases: Array.isArray(node.aliases) ? node.aliases : []
+			aliases: node.aliases
 		})
 		legendary.push({
-			nodeId: node.id,
-			header: nodeName(l3NodeMap.get(node.id), node.name),
+			nodeId: node.castMemberId,
+			header: nodeName(l3NodeMap.get(node.castMemberId), node.shownName),
 			summary: node.summary,
 			nodeState: node.nodeState,
 			rels: pubRels,
@@ -1011,7 +1005,7 @@ export async function buildCastRelationshipRows(params: {
 }): Promise<GraphRelationshipRow[] | null> {
 	const { sessionId, lorebookId } = params
 	const db = params.db ?? defaultDb
-	const { onLine, memberAt } = await sessionLine(db, sessionId, lorebookId)
+	const { onLine, membersAt } = await sessionLine(db, sessionId, lorebookId)
 
 	// The cast, as `collectGraphLayers`' layer 2 reads it: `removedAt`, not
 	// `isActive`, and characters and voiced characters in one id space.
@@ -1069,7 +1063,7 @@ export async function buildCastRelationshipRows(params: {
 	const nodeMap = await fetchNodeMap(
 		db,
 		[...new Set(held.flatMap((r) => [r.fromNodeId, r.toNodeId]))],
-		memberAt
+		membersAt
 	)
 	// Layer 1's alias rule, per holder: a tie to an alias is dropped when the
 	// same holder also ties the real node it is an alias of.

@@ -9,10 +9,12 @@ import {
 	addToCast,
 	applyPresetFill,
 	autoSessionName,
+	bookRulesFit,
 	buildCreatePayload,
 	castCountHint,
 	castOptions,
 	defaultGenreId,
+	draftSessionName,
 	enabledPresetsFor,
 	filterPickRows,
 	finalSessionName,
@@ -34,6 +36,7 @@ import {
 	type PresetRow
 } from "./createSession.svelte"
 import { INITIAL_PRESET_FILLABLE_FIELDS } from "./applyPresetDefaults"
+import { rigourFor } from "$lib/shared/rulesets/rulesOffer"
 
 function genre(genreId: string, over: Partial<GenreRow> = {}): GenreRow {
 	return {
@@ -73,7 +76,13 @@ describe("buildCreatePayload", () => {
 			scenario: "  A stall of lanterns.  ",
 			tags: ["noir"],
 			genreFields: { showDice: true },
-			swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
+			swaps: [
+				{
+					spec: "core:spec/story-turn-order",
+					node: "strategy",
+					definition: "core:task/turn-manual@1"
+				}
+			],
 			lorebookId: 3
 		})
 
@@ -81,7 +90,13 @@ describe("buildCreatePayload", () => {
 			session: {
 				name: "Night market",
 				scenario: "A stall of lanterns.",
-				swaps: [{ spec: "core:spec/story-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
+				swaps: [
+					{
+						spec: "core:spec/story-turn-order",
+						node: "strategy",
+						definition: "core:task/turn-manual@1"
+					}
+				],
 				lorebookId: 3,
 				genreId: "core:genre/story@2",
 				presetId: 7,
@@ -243,7 +258,6 @@ describe("participantFloors", () => {
 		})
 	})
 })
-
 
 /**
  * A one-click start — the wizard's character card — creates directly. An
@@ -480,6 +494,107 @@ describe("autoSessionName", () => {
 	})
 })
 
+describe("draftSessionName", () => {
+	it("names the session for where the persona draft is, when a book is chosen", () => {
+		expect(draftSessionName("Mia", "Porto Alto")).toBe("Mia in Porto Alto")
+	})
+
+	it("names it for who, with no book — never 'New session'", () => {
+		expect(draftSessionName("Mia", null)).toBe("Session as Mia")
+	})
+})
+
+describe("StartSessionFlow — the persona draft (M3b)", () => {
+	const GAME = "acme.cards:genre/solitaire"
+	function flowOn(shape: GenreRow["shape"]) {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre(GAME, { shape })]
+		flow.rawPresets = [preset({ id: 1, genreId: GAME })]
+		flow.presetsLoaded = true
+		flow.chooseGenre(GAME)
+		flow.choosePreset(1)
+		return flow
+	}
+
+	it("counts as the one persona a personas.min: 1 genre needs, and never rides sessions:create", () => {
+		const flow = flowOn({ personas: { min: 1, max: 1 } })
+		expect(flow.startBlocker).toBe("Choose who you play as.")
+		flow.personaDraft = { name: "Mia", description: "A pilot." }
+		expect(flow.startBlocker).toBeNull()
+		expect(flow.canStart).toBe(true)
+		const body = flow.payload("x")
+		expect(body.personaIds).toEqual([])
+		expect(JSON.stringify(body)).not.toContain("Mia")
+	})
+
+	it("is dropped when the genre's shape takes no persona", () => {
+		const flow = flowOn({ personas: { min: 0, max: 1 } })
+		flow.personaDraft = { name: "Mia" }
+		flow.reconcile()
+		expect(flow.personaDraft).not.toBeNull()
+		flow.rawGenres = [
+			genre(GAME, { shape: { personas: { min: 0, max: 0 } } })
+		]
+		flow.reconcile()
+		expect(flow.personaDraft).toBeNull()
+	})
+
+	it("is replaced when the person plays as an existing persona", () => {
+		const flow = flowOn({ personas: { min: 1, max: 1 } })
+		flow.personaDraft = { name: "Mia" }
+		flow.playAs(9)
+		expect(flow.personaDraft).toBeNull()
+		expect(flow.personaIds).toEqual([9])
+	})
+})
+
+describe("StartSessionFlow — prefilled answers (gate walk 2026-11-05)", () => {
+	const GAME = "acme.cards:genre/solitaire"
+	const ASK = {
+		key: "deck",
+		label: "Deck",
+		control: "text" as const,
+		value: "Default"
+	}
+
+	it("count as the person's answers, survive a preset change, and clear with the genre", () => {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [
+			genre(GAME, {
+				shape: {
+					fields: { deck: { type: "text", label: "Deck" } }
+				} as GenreRow["shape"]
+			})
+		]
+		flow.rawPresets = [
+			preset({ id: 1, genreId: GAME, asks: [ASK] }),
+			preset({ id: 2, genreId: GAME, asks: [ASK] })
+		]
+		flow.presetsLoaded = true
+		flow.chooseGenre(GAME)
+		flow.choosePreset(1)
+		// The applet's prefill, as the start form applies it.
+		flow.fields.genreFields = {
+			...flow.fields.genreFields,
+			deck: "Classic"
+		}
+		flow.prefillAnswers = { deck: "Classic" }
+		flow.askAnswers = { ...flow.askAnswers, deck: "Classic" }
+		expect(flow.sentGenreFields().deck).toBe("Classic")
+
+		flow.choosePreset(2)
+		expect(flow.askAnswers.deck).toBe("Classic")
+		expect(flow.sentGenreFields().deck).toBe("Classic")
+
+		flow.setAsk("deck", "Mine")
+		expect(flow.sentGenreFields().deck).toBe("Mine")
+
+		flow.chooseGenre(STANDARD_GENRE_ID)
+		expect(flow.prefillAnswers).toEqual({})
+		expect(flow.askAnswers).toEqual({})
+	})
+})
+
 describe("genreFacts", () => {
 	it("says what the genre's shape allows", () => {
 		expect(
@@ -497,7 +612,9 @@ describe("genreFacts", () => {
 	it("says what it forbids", () => {
 		expect(
 			genreFacts({ characters: { min: 0, max: 0 }, composer: "none" })
-		).toBe("no characters · no character you play · you don't type messages")
+		).toBe(
+			"no characters · no character you play · you don't type messages"
+		)
 	})
 
 	it("says one seat as the character you play", () => {
@@ -631,9 +748,9 @@ describe("castOptions — the cast picker (note 33)", () => {
 	})
 
 	it("offers everyone when nobody is played yet", () => {
-		expect(castOptions([{ id: 1 }, { id: 2 }], []).map((r) => r.id)).toEqual([
-			1, 2
-		])
+		expect(
+			castOptions([{ id: 1 }, { id: 2 }], []).map((r) => r.id)
+		).toEqual([1, 2])
 	})
 
 	it("with playAsOptions, no row is ever offered on both sides", () => {
@@ -721,7 +838,12 @@ describe("StartSessionFlow — adding and ordering the cast", () => {
 
 describe("filterPickRows — both pickers' filter", () => {
 	const rows = [
-		{ id: 1, name: "Mara", nickname: "The Fox", characterTags: [{ tag: { name: "noir" } }] },
+		{
+			id: 1,
+			name: "Mara",
+			nickname: "The Fox",
+			characterTags: [{ tag: { name: "noir" } }]
+		},
 		{ id: 2, name: "Aldo", nickname: null, characterTags: [] }
 	]
 
@@ -809,9 +931,9 @@ describe("firstUnmetStartRule", () => {
 	})
 
 	it("says when the genre has no preset to start from", () => {
-		expect(
-			firstUnmetStartRule({ ...ready, noPresetsForGenre: true })
-		).toBe("No preset is available for this genre.")
+		expect(firstUnmetStartRule({ ...ready, noPresetsForGenre: true })).toBe(
+			"No preset is available for this genre."
+		)
 	})
 
 	it("asks for the cast the floor needs, counted", () => {
@@ -842,12 +964,22 @@ describe("preselectsDefaultPersona", () => {
 	it("never preselects unless the genre says so outright (ruled 2026-10-19)", () => {
 		expect(preselectsDefaultPersona(null)).toBe(false)
 		expect(preselectsDefaultPersona({ personas: { min: 0 } })).toBe(false)
-		expect(preselectsDefaultPersona({ personas: { min: 1, max: 1 } })).toBe(false)
-		expect(preselectsDefaultPersona({ personas: { min: 0, preselectDefault: true } })).toBe(true)
+		expect(preselectsDefaultPersona({ personas: { min: 1, max: 1 } })).toBe(
+			false
+		)
 		expect(
-			preselectsDefaultPersona({ personas: { min: 0, preselectDefault: false } })
+			preselectsDefaultPersona({
+				personas: { min: 0, preselectDefault: true }
+			})
+		).toBe(true)
+		expect(
+			preselectsDefaultPersona({
+				personas: { min: 0, preselectDefault: false }
+			})
 		).toBe(false)
-		expect(preselectsDefaultPersona({ personas: { min: 0, max: 0 } })).toBe(false)
+		expect(preselectsDefaultPersona({ personas: { min: 0, max: 0 } })).toBe(
+			false
+		)
 		expect(preselectsDefaultPersona({})).toBe(false)
 	})
 })
@@ -864,12 +996,21 @@ describe("StartSessionFlow — Rules beside a book, and a preset's How strict (f
 	const LAIR = "core:genre/lair"
 	const RULES = {
 		choices: [
-			{ id: FREEFORM, name: "Freeform", subtitle: "", recommended: true, rigours: ["prose"] },
+			{
+				id: FREEFORM,
+				name: "Freeform",
+				subtitle: "",
+				recommended: true,
+				rigours: ["prose"]
+			},
 			{ id: VIS, name: "Vis Itineris", subtitle: "", recommended: true }
 		],
 		only: false,
 		defaultId: FREEFORM,
-		rigour: { options: ["prose", "mechanics", "scripts"], default: "mechanics" }
+		rigour: {
+			options: ["prose", "mechanics", "scripts"],
+			default: "mechanics"
+		}
 	}
 
 	function lairFlow(settings: Record<string, unknown> | null = null) {
@@ -902,7 +1043,10 @@ describe("StartSessionFlow — Rules beside a book, and a preset's How strict (f
 		flow.lorebookRules = VIS
 		flow.rulesPick = FREEFORM
 		expect(flow.adoptedRules).toBe(VIS)
-		expect(flow.rulesShown).toEqual({ value: VIS, fromLorebook: "From the lorebook: Vis Itineris" })
+		expect(flow.rulesShown).toEqual({
+			value: VIS,
+			fromLorebook: "From the lorebook: Vis Itineris"
+		})
 		const { session } = flow.payload("Into the deep")
 		expect(session.primaryRuleset).toBeUndefined()
 		expect(session.rigour).toBe("mechanics")
@@ -912,9 +1056,412 @@ describe("StartSessionFlow — Rules beside a book, and a preset's How strict (f
 		const flow = lairFlow({ rigour: { value: "scripts", lock: true } })
 		expect(flow.presetRigour).toBe("scripts")
 		expect(flow.rulesNowId).toBe(VIS)
-		expect(flow.payload("Into the deep").session).toMatchObject({ primaryRuleset: VIS, rigour: "scripts" })
+		expect(flow.payload("Into the deep").session).toMatchObject({
+			primaryRuleset: VIS,
+			rigour: "scripts"
+		})
 		// A bare string still reads.
 		expect(lairFlow({ rigour: "prose" }).presetRigour).toBe("prose")
 		expect(lairFlow().presetRigour).toBeNull()
+	})
+})
+
+/**
+ * 🚧 The book pick (§22, 2026-11-05): one card for a genre with a lorebook
+ * step and a rules offer. The three rows are today's three request shapes.
+ */
+describe("StartSessionFlow — the book pick (§22)", () => {
+	const FREEFORM = "core:ruleset/freeform@1"
+	const VIS = "core:ruleset/vis-itineris@1"
+	const OTHER = "core:ruleset/other@1"
+	const THIRD = "core:ruleset/third@1"
+	const STORY = "core:genre/story"
+
+	const offer = (over: Record<string, unknown> = {}) =>
+		({
+			choices: [
+				{
+					id: FREEFORM,
+					name: "Freeform",
+					subtitle: "",
+					recommended: true,
+					rigours: ["prose"]
+				},
+				{
+					id: VIS,
+					name: "Vis Itineris",
+					subtitle: "",
+					recommended: true
+				}
+			],
+			only: false,
+			defaultId: FREEFORM,
+			rigour: {
+				options: ["prose", "mechanics", "scripts"],
+				default: "mechanics"
+			},
+			...over
+		}) as any
+
+	function bookFlow(
+		over: Partial<GenreRow> = { rules: offer() } as Partial<GenreRow>
+	) {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [
+			genre(STORY, {
+				shape: { lorebook: "optional" },
+				...over
+			} as Partial<GenreRow>)
+		]
+		flow.rawPresets = [preset({ id: 1, genreId: STORY })]
+		flow.presetsLoaded = true
+		flow.chooseGenre(STORY)
+		flow.choosePreset(1)
+		flow.toggleCharacter(1)
+		return flow
+	}
+
+	describe("bookRulesFit", () => {
+		it("rules the offer lists: that row, no refusal", () => {
+			const o = offer()
+			const fit = bookRulesFit(o, VIS, "Story")
+			expect(fit.rulesId).toBe(VIS)
+			expect(fit.choice).toBe(o.choices[1])
+			expect(fit.refusal).toBeNull()
+		})
+
+		it("Freeform and none bring no rules of their own", () => {
+			for (const rules of [FREEFORM, null, undefined]) {
+				expect(bookRulesFit(offer(), rules, "Story")).toEqual({
+					rulesId: null,
+					choice: null,
+					refusal: null
+				})
+			}
+		})
+
+		it("an only offer refuses rules it doesn't list, naming the genre or not", () => {
+			const two = offer({ only: true })
+			expect(bookRulesFit(two, OTHER, "Story").refusal).toBe(
+				"Story plays only by Freeform or Vis Itineris rules."
+			)
+			expect(bookRulesFit(two, OTHER).refusal).toBe(
+				"This genre plays only by Freeform or Vis Itineris rules."
+			)
+			expect(bookRulesFit(two, OTHER).choice).toBeNull()
+			const three = offer({
+				only: true,
+				choices: [
+					{ id: FREEFORM, name: "A", subtitle: "" },
+					{ id: VIS, name: "B", subtitle: "" },
+					{ id: THIRD, name: "C", subtitle: "" }
+				]
+			})
+			expect(bookRulesFit(three, OTHER, "Lair").refusal).toBe(
+				"Lair plays only by A, B or C rules."
+			)
+			const one = offer({
+				only: true,
+				choices: [{ id: VIS, name: "Vis Itineris", subtitle: "" }]
+			})
+			expect(bookRulesFit(one, OTHER, "Lair").refusal).toBe(
+				"Lair plays only by Vis Itineris rules."
+			)
+			// Listed rules are never refused, only or not.
+			expect(bookRulesFit(two, VIS, "Story").refusal).toBeNull()
+		})
+
+		it("a genre that doesn't lock leaves unlisted rules unrefused and unlisted", () => {
+			expect(bookRulesFit(offer(), OTHER, "Story")).toEqual({
+				rulesId: OTHER,
+				choice: null,
+				refusal: null
+			})
+		})
+	})
+
+	describe("bookPick", () => {
+		it("is null without a lorebook step (Dungeon Crawler-like) and without a rules offer (Chat-like)", () => {
+			const crawler = new StartSessionFlow()
+			crawler.rawGenres = [
+				genre("core:genre/crawl", {
+					rules: offer()
+				} as Partial<GenreRow>)
+			]
+			crawler.chooseGenre("core:genre/crawl")
+			expect(crawler.bookPick).toBeNull()
+			const chat = new StartSessionFlow()
+			chat.rawGenres = [
+				genre("core:genre/chat", {
+					shape: { lorebook: "optional" }
+				} as Partial<GenreRow>)
+			]
+			chat.chooseGenre("core:genre/chat")
+			expect(chat.bookPick).toBeNull()
+		})
+
+		it("is blank with nothing chosen, on the genre's default rules", () => {
+			expect(bookFlow().bookPick).toEqual({
+				kind: "blank",
+				rulesId: FREEFORM,
+				rulesFromBook: false
+			})
+		})
+
+		it("a book on its own rules: book, the book's rules", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 8
+			flow.lorebookRules = VIS
+			expect(flow.bookPick).toEqual({
+				kind: "book",
+				rulesId: VIS,
+				rulesFromBook: true
+			})
+		})
+
+		it("a book on Freeform: book, the person's pick", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 7
+			flow.lorebookRules = FREEFORM
+			flow.rulesPick = VIS
+			expect(flow.bookPick).toEqual({
+				kind: "book",
+				rulesId: VIS,
+				rulesFromBook: false
+			})
+		})
+
+		it("a starter lorebook: starter", () => {
+			const flow = bookFlow()
+			flow.starterKit = { primerId: "core:primer/x" }
+			expect(flow.bookPick?.kind).toBe("starter")
+			flow.lorebookRules = VIS
+			expect(flow.bookPick).toEqual({
+				kind: "starter",
+				rulesId: VIS,
+				rulesFromBook: true
+			})
+		})
+	})
+
+	describe("pickBlank", () => {
+		it("clears the book, the starter lorebook and the book's rules, and sets the pick", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 8
+			flow.lorebookRules = FREEFORM
+			flow.starterKit = { lorebookId: 3 }
+			flow.pickBlank(VIS)
+			expect(flow.fields.lorebookId).toBeNull()
+			expect(flow.starterKit).toBeNull()
+			expect(flow.lorebookRules).toBeNull()
+			expect(flow.rulesPick).toBe(VIS)
+			expect(flow.bookPick).toEqual({
+				kind: "blank",
+				rulesId: VIS,
+				rulesFromBook: false
+			})
+		})
+	})
+
+	describe("payload — today's three request shapes", () => {
+		it("untouched: no book, the default rules", () => {
+			const { session, starterKit } = bookFlow().payload("N")
+			expect(session.lorebookId).toBeNull()
+			expect(session.primaryRuleset).toBe(FREEFORM)
+			expect(starterKit).toBeUndefined()
+		})
+
+		it("a book on its own rules: lorebookId, no primaryRuleset, How strict follows its rules", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 8
+			flow.lorebookRules = VIS
+			flow.rulesPick = FREEFORM
+			const { session } = flow.payload("N")
+			expect(session.lorebookId).toBe(8)
+			expect(session.primaryRuleset).toBeUndefined()
+			expect(session.rigour).toBe(rigourFor(offer(), VIS, null))
+		})
+
+		it("a Freeform book and a pick: lorebookId and primaryRuleset", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 7
+			flow.lorebookRules = FREEFORM
+			flow.rulesPick = VIS
+			const { session } = flow.payload("N")
+			expect(session.lorebookId).toBe(7)
+			expect(session.primaryRuleset).toBe(VIS)
+			expect(session.rigour).toBe(rigourFor(offer(), VIS, null))
+		})
+
+		it("a blank pick: lorebookId null and primaryRuleset, How strict follows the rules", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 7
+			flow.pickBlank(VIS)
+			const { session, starterKit } = flow.payload("N")
+			expect(session.lorebookId).toBeNull()
+			expect(session.primaryRuleset).toBe(VIS)
+			expect(session.rigour).toBe(rigourFor(offer(), VIS, null))
+			expect(starterKit).toBeUndefined()
+			// Freeform plays Words only.
+			flow.pickBlank(FREEFORM)
+			expect(flow.payload("N").session.rigour).toBe(
+				rigourFor(offer(), FREEFORM, null)
+			)
+			expect(flow.payload("N").session.rigour).toBe("prose")
+		})
+
+		it("a starter lorebook: starterKit, lorebookId null, its rules adopted server-side", () => {
+			const flow = bookFlow()
+			flow.fields.lorebookId = 7
+			flow.starterKit = { primerId: "core:primer/x" }
+			flow.lorebookRules = VIS
+			const { session, starterKit } = flow.payload("N")
+			expect(starterKit).toEqual({ primerId: "core:primer/x" })
+			expect(session.lorebookId).toBeNull()
+			expect(session.primaryRuleset).toBeUndefined()
+		})
+	})
+})
+
+/**
+ * s22-L (owner 2026-11-05): a genre always refuses rules it rates Incompatible
+ * (no setting), and a preset's ruleset is the pre-chosen default, never a lock.
+ */
+describe("Incompatible rules are refused; a preset's ruleset is a default (s22-L)", () => {
+	const FREEFORM = "core:ruleset/freeform@1"
+	const VIS = "core:ruleset/vis-itineris@1"
+	const BAD = "core:ruleset/bad@1"
+	const STORY = "core:genre/story"
+	const fit = (rating: string, reason: string) => ({ rating, group: 0, reason, rows: [], unused: [] })
+	const offer = (over: Record<string, unknown> = {}) =>
+		({
+			choices: [
+				{ id: FREEFORM, name: "Freeform", subtitle: "", recommended: true, rigours: ["prose"] },
+				{ id: VIS, name: "Vis Itineris", subtitle: "", fit: fit("good", "it plays most of this") },
+				{ id: BAD, name: "Dice Only", subtitle: "", fit: fit("incompatible", "it has no way to tell the story") }
+			],
+			only: false,
+			defaultId: FREEFORM,
+			rigour: { options: ["prose", "mechanics"], default: "prose" },
+			...over
+		}) as any
+
+	describe("bookRulesFit", () => {
+		it("refuses a choice rated Incompatible, in the server's words", () => {
+			expect(bookRulesFit(offer(), BAD, "Story").refusal).toBe(
+				"Story can't play Dice Only: it has no way to tell the story."
+			)
+			expect(bookRulesFit(offer(), BAD).refusal).toBe(
+				"This genre can't play Dice Only: it has no way to tell the story."
+			)
+			expect(bookRulesFit(offer(), BAD, "Story").choice?.id).toBe(BAD)
+		})
+
+		it("rules rated above Incompatible stay pickable", () => {
+			expect(bookRulesFit(offer(), VIS, "Story").refusal).toBeNull()
+		})
+
+		it("only keeps priority and its words", () => {
+			const only = offer({ only: true })
+			expect(bookRulesFit(only, "core:ruleset/unlisted@1", "Story").refusal).toBe(
+				"Story plays only by Freeform, Vis Itineris or Dice Only rules."
+			)
+		})
+
+		it("a Freeform book is never refused, even where Freeform is rated Incompatible", () => {
+			const o = offer()
+			o.choices[0].fit = fit("incompatible", "no")
+			expect(bookRulesFit(o, FREEFORM, "Story").refusal).toBeNull()
+			expect(bookRulesFit(o, null, "Story").refusal).toBeNull()
+		})
+	})
+
+	describe("the preset's ruleset, pre-chosen", () => {
+		function flowOn(settings: Record<string, unknown> | null, rules = offer()) {
+			const flow = new StartSessionFlow()
+			flow.rawGenres = [genre(STORY, { rules } as Partial<GenreRow>)]
+			flow.rawPresets = [preset({ id: 1, genreId: STORY, settings } as any)]
+			flow.presetsLoaded = true
+			flow.chooseGenre(STORY)
+			flow.choosePreset(1)
+			return flow
+		}
+
+		it("starts on a plain stored value", () => {
+			const flow = flowOn({ ruleset: VIS })
+			expect(flow.presetRules).toBe(VIS)
+			expect(flow.rulesNowId).toBe(VIS)
+		})
+
+		it("reads an old stored lock the same: a default, not a lock", () => {
+			const flow = flowOn({ ruleset: { value: VIS, lock: true } })
+			expect(flow.presetRules).toBe(VIS)
+			expect(flow.rulesNowId).toBe(VIS)
+			flow.rulesPick = FREEFORM
+			expect(flow.rulesNowId).toBe(FREEFORM)
+		})
+
+		it("gives way to the person's pick", () => {
+			const flow = flowOn({ ruleset: VIS })
+			flow.rulesPick = FREEFORM
+			expect(flow.rulesNowId).toBe(FREEFORM)
+		})
+
+		it("falls back to the genre's default when the ruleset is rated Incompatible", () => {
+			const flow = flowOn({ ruleset: BAD })
+			expect(flow.presetRules).toBe(BAD)
+			expect(flow.rulesNowId).toBe(FREEFORM)
+		})
+
+		it("falls back to the genre's default when the genre doesn't offer it", () => {
+			const flow = flowOn({ ruleset: "core:ruleset/unoffered@1" })
+			expect(flow.rulesNowId).toBe(FREEFORM)
+		})
+
+		it("a preset with no ruleset leaves today's default", () => {
+			const flow = flowOn(null)
+			expect(flow.presetRules).toBeNull()
+			expect(flow.rulesNowId).toBe(FREEFORM)
+		})
+
+		it("goes first, before the preset's How strict", () => {
+			const flow = flowOn({ ruleset: VIS, rigour: "mechanics" })
+			expect(flow.rulesNowId).toBe(VIS)
+		})
+	})
+})
+
+describe("StartSessionFlow — card-less members (★s4-seat-1)", () => {
+	const GAME = "acme.cards:genre/solitaire"
+	function flowOn(shape: GenreRow["shape"]) {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre(GAME, { shape })]
+		flow.rawPresets = [preset({ id: 1, genreId: GAME })]
+		flow.presetsLoaded = true
+		flow.chooseGenre(GAME)
+		flow.choosePreset(1)
+		return flow
+	}
+
+	it("sends castMemberIds on create, apart from characterIds, and counts them toward the floor", () => {
+		const flow = flowOn({ characters: { min: 1, max: 2 } })
+		expect(flow.startBlocker).toBe("Add at least one character.")
+		flow.characterIds = [5]
+		flow.addCastMembers([5, 8])
+		expect(flow.castMemberIds).toEqual([5])
+		const body = flow.payload("x")
+		expect(body.characterIds).toEqual([5])
+		expect(body.castMemberIds).toEqual([5])
+		flow.characterIds = []
+		expect(flow.startBlocker).toBeNull()
+	})
+
+	it("sends none for a new world, and keeps only the members the book holds", () => {
+		const flow = flowOn({ characters: { min: 0 } })
+		flow.addCastMembers([3, 4])
+		flow.keepCastMembersIn(new Set([4]))
+		expect(flow.payload("x").castMemberIds).toEqual([4])
+		flow.mode = "new-world"
+		expect(flow.payload("x").castMemberIds).toBeUndefined()
 	})
 })

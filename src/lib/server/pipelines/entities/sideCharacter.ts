@@ -31,12 +31,15 @@
 
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { cardsAsSeatsRead } from "$lib/server/pipelines/prompt/seatCards"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { ensureCardVersion } from "$lib/server/characters/versions"
+import { profileOf } from "$lib/shared/characters/profile"
 import { sessionReadingOf } from "$lib/server/state/reading"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import { membersAsRead } from "$lib/server/cast/memberAsRead"
 import {
 	MAIN_HEAD,
-	castMemberAt,
-	castOverlaysFor,
 	entryAt,
 	entryOnReadingSql,
 	entryOverlaysFor,
@@ -110,23 +113,31 @@ async function lorebookNames(
 	const names = new Set<string>()
 	const characterIds = new Set<number>()
 
-	const castOverlays = await castOverlaysFor(db, lorebookId, reading)
-	const bindings = ((await db
-		.select()
+	const bindings = await db
+		.select({
+			id: schema.lorebookBindings.id,
+			characterId: schema.lorebookBindings.characterId,
+			absorbedAliases: schema.lorebookBindings.absorbedAliases
+		})
 		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))) as any[]).map(
-		// The card stays the member's own: it is who is seated.
-		(b) => castMemberAt(b, castOverlays, reading, { keepCard: true })
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
+	// Names and aliases as the session's reading has them (the version in
+	// force); absorbed aliases are the member's row's own.
+	const reads = await membersAsRead(
+		db,
+		bindings.map((b) => b.id),
+		{ reading }
 	)
 	// Every card of a member's is a card the book knows: the linked one, and
-	// each a dated change draws them with (plan A25).
+	// each a cast version draws them with (plan A25).
 	for (const card of (await castMemberCards(db, lorebookId)).memberOf.keys())
 		characterIds.add(card)
 	for (const b of bindings) {
 		if (typeof b.characterId === "number") characterIds.add(b.characterId)
+		const read = reads.get(b.id)
 		for (const n of [
-			b.name,
-			...(Array.isArray(b.aliases) ? b.aliases : []),
+			read?.name,
+			...(read?.aliases ?? []),
 			...(Array.isArray(b.absorbedAliases) ? b.absorbedAliases : [])
 		]) {
 			const k = norm(n)
@@ -182,7 +193,10 @@ export async function resolveSideCharacter(
 		typeof pick.characterId === "number" ? pick.characterId : null
 
 	if (typed.length > 120)
-		return { ok: false, error: "That name is too long (max 120 characters)." }
+		return {
+			ok: false,
+			error: "That name is too long (max 120 characters)."
+		}
 
 	const [session] = (await db
 		.select({ lorebookId: schema.sessions.lorebookId })
@@ -194,13 +208,7 @@ export async function resolveSideCharacter(
 	let card: SideCharacterCard | null = null
 	if (pickedId != null) {
 		const [row] = (await db
-			.select({
-				id: schema.characters.id,
-				name: schema.characters.name,
-				nickname: schema.characters.nickname,
-				description: schema.characters.description,
-				personality: schema.characters.personality
-			})
+			.select({ id: schema.characters.id })
 			.from(schema.characters)
 			.where(
 				and(
@@ -229,7 +237,16 @@ export async function resolveSideCharacter(
 					"That character is somebody's presence in this session — a person speaks as " +
 					"them, so the narrator cannot. Pick another character, or type a name."
 			}
-		card = row as SideCharacterCard
+		const profile = profileOf((await ensureCardVersion(db, pickedId)) ?? {})
+		// The picked card's name and nickname as its current version has them.
+		const now = (await cardsNow(db, [pickedId])).get(pickedId)
+		card = {
+			id: row.id,
+			name: now?.name ?? "",
+			nickname: now?.nickname ?? null,
+			description: profile.description,
+			personality: profile.personality
+		} as SideCharacterCard
 	}
 
 	// The typed name wins over the card's, so somebody may pick a character and
@@ -255,7 +272,12 @@ export async function resolveSideCharacter(
 	if (!session.lorebookId)
 		return {
 			ok: true,
-			speaker: { name, characterId: pickedId, known: true, character: card }
+			speaker: {
+				name,
+				characterId: pickedId,
+				known: true,
+				character: card
+			}
 		}
 
 	const { names, characterIds } = await lorebookNames(
@@ -264,7 +286,8 @@ export async function resolveSideCharacter(
 		(await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
 	)
 	const known =
-		(pickedId != null && characterIds.has(pickedId)) || names.has(norm(name))
+		(pickedId != null && characterIds.has(pickedId)) ||
+		names.has(norm(name))
 
 	return {
 		ok: true,
@@ -312,17 +335,39 @@ export async function listSideCharacterOptions(
 	)
 	for (const id of await livePresenceIds(db, sessionId)) seated.add(id)
 
-	const rows = (await db
-		.select({
-			id: schema.characters.id,
-			name: schema.characters.name,
-			nickname: schema.characters.nickname
-		})
+	const owned = await db
+		.select({ id: schema.characters.id })
 		.from(schema.characters)
-		.where(eq(schema.characters.userId, userId))) as any[]
+		.where(eq(schema.characters.userId, userId))
+	// The offered cards are library cards: named as their current version has them.
+	const nowById = await cardsNow(
+		db,
+		owned.map((r) => r.id)
+	)
+	const rows = owned.flatMap((r) => {
+		const now = nowById.get(r.id)
+		return now ? [{ id: r.id, name: now.name, nickname: now.nickname }] : []
+	}) as any[]
 
-	return rows
-		.filter((r) => !seated.has(r.id))
+	const offered = rows.filter((r) => !seated.has(r.id))
+	// A removed member offered again (a card a seat holds, departed) reads
+	// as the cast member their seat seats (seat-cast S2) — their own name
+	// and nickname — wherever the member lives. Every other offered card
+	// (no seat holds it) keeps its card name and nickname.
+	const heldBySeat = new Set<number>(
+		cast
+			.map((c) => c.characterId)
+			.filter((id: unknown): id is number => typeof id === "number")
+	)
+	const heldRead = await cardsAsSeatsRead(
+		db,
+		sessionId,
+		offered.filter((r) => heldBySeat.has(r.id))
+	)
+	const heldReadById = new Map(heldRead.map((r) => [r.id, r]))
+	const read = offered.map((r) => heldReadById.get(r.id) ?? r)
+	return read
+		.map((r) => ({ id: r.id, name: r.name, nickname: r.nickname }))
 		.sort((a, b) => String(a.name).localeCompare(String(b.name)))
 }
 

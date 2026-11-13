@@ -68,8 +68,19 @@ import {
 	renderTemplate,
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
+import Handlebars from "handlebars"
 import { strokeList } from "$lib/shared/utils/strokeList"
-import { getVariable } from "@serene-pub/sdk"
+import { getVariable, VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
+import { variableLayoutCalls } from "@serene-pub/sdk/template-check"
+import {
+	LAYOUT_RENDERS_CONTEXT_KEY,
+	layoutRenderKey
+} from "$lib/shared/utils/contextHandlebarsHelpers"
+import { CONTEXT_TEMPLATE_CHECK } from "$lib/shared/utils/templateCheckOptions"
+import {
+	CORE_LIQUID_ENGINE,
+	CORE_TEMPLATE_ENGINE as CORE_HANDLEBARS_ENGINE
+} from "$lib/shared/pipelines/templateEngines"
 import { STROKES_ENABLED } from "$lib/shared/characters/strokesFlag"
 
 /**
@@ -997,9 +1008,26 @@ export type ResolvedLayouts = Record<
 			name?: string
 			/** Whose row it is, for the receipt (`LayoutOrigin`). */
 			origin?: LayoutOrigin
+			/** Why this layout (or the floor) is the one — for the receipt. */
+			reason?: LayoutReason
+			/**
+			 * 🚧 The layouts a context template at this step names by reference
+			 * (`layout <key> "<reference>"`), resolved ahead of the render by
+			 * `world.ts` — by reference, within this variable. Absent when no
+			 * template at the step names one.
+			 */
+			references?: Record<string, ReferencedLayout>
 	  }
 	| undefined
 >
+
+/** One layout a template names by reference, as the render needs it. */
+export interface ReferencedLayout {
+	engine: string
+	source: string
+	name: string
+	origin: LayoutOrigin
+}
 
 /**
  * Whose layout row rendered a key: one Serene Pub ships, one a package ships
@@ -1007,6 +1035,31 @@ export type ResolvedLayouts = Record<
  * instance wrote.
  */
 export type LayoutOrigin = "shipped" | "package" | "own"
+
+/**
+ * 🚧 Why a value was written out with the layout it used (PLAN
+ * variable-layouts 2026-11-10, Render item 5), for the run inspector:
+ *
+ *  · `leftover` — ⏳ a per-step pick the 0.6 upgrade kept (leftover pick);
+ *  · `preset` — the session's preset's variable layout;
+ *  · `pub` — the pub's layout;
+ *  · `template` — the context template named it (`layout key "ref"`);
+ *  · `authored` — the layout the pipeline's author named for this step;
+ *  · `default` — the variable's own default row, when it is not the automatic one;
+ *  · `automatic` — that default row is the variable's automatic object layout;
+ *  · `no-layout` — no row at all: the variable's in-code default wrote it.
+ *
+ * Words are the client's; this is the fact.
+ */
+export type LayoutReason =
+	| "leftover"
+	| "preset"
+	| "pub"
+	| "template"
+	| "authored"
+	| "default"
+	| "automatic"
+	| "no-layout"
 
 /**
  * What one key rendered through, as the receipt says it (owner ruling
@@ -1018,6 +1071,15 @@ export interface LayoutUse {
 	variableId: string | null
 	layout: string | null
 	origin: LayoutOrigin | null
+	/** Why that layout: what the inspector says beside it. Null for a hand-built set. */
+	reason: LayoutReason | null
+	/**
+	 * 🚧 Set on a call's line when the template named a layout reference that
+	 * no row answers at run time: `layout` and `reason` are then the layout the
+	 * variable was in fact written out with (its in-use one), and this is the
+	 * reference that was asked for. Absent otherwise.
+	 */
+	missingReference?: string
 }
 
 /** The receipt line for one key. */
@@ -1032,7 +1094,8 @@ export function layoutUseOf(
 		variableId: variableOfKey(layouts, key) ?? null,
 		// A row with no name is still a row, never the floor.
 		layout: row ? (row.name ?? "unnamed layout") : null,
-		origin: row ? (row.origin ?? null) : null
+		origin: row ? (row.origin ?? null) : null,
+		reason: chosen?.reason ?? null
 	}
 }
 
@@ -1045,6 +1108,21 @@ export const variableOfKey = (
 	key: string
 ): string | undefined =>
 	layouts?.[key]?.variableId ?? definitionByKey.get(key)?.variableId
+
+/**
+ * A laid-out value, marked safe for core's Handlebars engine (★6, 2026-11-10):
+ * a layout is the author's own markup, fences and quotes included, so `{{x}}`
+ * must print what `{{{x}}}` does. A non-empty string becomes a
+ * `Handlebars.SafeString`; **an empty string stays `""`**, so `{{#if x}}` is
+ * still false (an empty SafeString object would be truthy); anything else is
+ * returned as it came. Apply it to a laid-out key's value only, and only for a
+ * template core's Handlebars engine renders — Liquid never escapes, and a
+ * plugin engine receives plain strings.
+ */
+export const laidOutForHandlebars = (value: unknown): unknown =>
+	typeof value === "string" && value !== ""
+		? new Handlebars.SafeString(value)
+		: value
 
 export class VariableLayoutError extends Error {}
 
@@ -1136,8 +1214,291 @@ export async function renderVariable(
 	} catch (err: any) {
 		throw new VariableLayoutError(
 			`the layout selected for '${key}' could not be rendered: ` +
-				`${err?.message ?? err}. Fix it in the pipeline's settings, or ` +
-				`switch that setting back to the one Serene Pub ships.`
+				`${err?.message ?? err}. Fix it on its variable's page in Admin › Variable layouts, ` +
+				`which also says who chose it.`
 		)
 	}
 }
+
+
+// ── 🚧 explicit layout references (PLAN variable-layouts 2026-11-10, Render item 6) ──
+
+const HANDLEBARS_ID = "[^\\s!\"#%&'()*+,./;<=>@\\[\\\\\\]^`{|}~]+"
+/** `{{layout k "r"}}`, `{{{layout k "r"}}}`, `(layout k "r")` — the helper's name, a key, a quoted reference. */
+const HANDLEBARS_CALL = new RegExp(
+	`(\\{\\{\\{?~?\\s*|\\(\\s*)${VARIABLE_LAYOUT_HELPER}(\\s+)(${HANDLEBARS_ID})(\\s+)(["'])([^"']*)\\5`,
+	"g"
+)
+/** `k | layout: "r"` — a bare variable whose first filter is `layout`. */
+const LIQUID_CALL = new RegExp(
+	`(?<![\\w.\\]$-])([A-Za-z_][\\w-]*)(\\s*\\|\\s*${VARIABLE_LAYOUT_HELPER}\\s*:\\s*)(["'])([^"']*)\\3`,
+	"g"
+)
+
+/**
+ * The layout a reference names **within one variable**, as the render needs it
+ * — by variable, never by key (a layout is the same row wherever the variable
+ * renders). Undefined when no row answers: the reference is unknown, withdrawn,
+ * or its row was written for another variable. The one lookup the world
+ * (`world.ts`) and the template preview share.
+ */
+export async function referencedLayoutOf(
+	db: Db,
+	variableId: string,
+	reference: string
+): Promise<ReferencedLayout | undefined> {
+	const { layoutByReference, resolveVariableTemplate } = await import(
+		"$lib/server/pipelines/entities/variableTemplates"
+	)
+	const id = await layoutByReference(db, variableId, reference)
+	if (id == null) return undefined
+	const row = await resolveVariableTemplate(db, id)
+	if (!row || row.variableId !== variableId) return undefined
+	return {
+		engine: row.engine,
+		source: row.source,
+		name: row.name,
+		origin: row.origin
+	}
+}
+
+/**
+ * The layouts a draft template names, as a preview's `ResolvedLayouts`: for
+ * each key a `layout <key> "<reference>"` call reads, an entry for core's
+ * variable of that key carrying the references that resolve
+ * (`referencedLayoutOf`). Core's Handlebars and Liquid only; anything else, or
+ * a draft with no call, names none. A key core has no variable for is left out
+ * (the preview then refuses the call in words, as a run would).
+ */
+export async function draftReferenceLayouts(
+	db: Db,
+	engine: string,
+	source: string
+): Promise<ResolvedLayouts> {
+	const out: ResolvedLayouts = {}
+	if (
+		(engine !== CORE_HANDLEBARS_ENGINE && engine !== CORE_LIQUID_ENGINE) ||
+		!source.includes(VARIABLE_LAYOUT_HELPER)
+	)
+		return out
+	for (const { key, reference } of variableLayoutCalls(
+		engine,
+		source,
+		CONTEXT_TEMPLATE_CHECK
+	)) {
+		const variableId = variableOfKey(undefined, key)
+		if (!variableId) continue
+		const found = await referencedLayoutOf(db, variableId, reference)
+		const entry = out[key] ?? { variableId, engine: CORE_HANDLEBARS_ENGINE, references: {} }
+		if (found) entry.references![reference] = found
+		out[key] = entry
+	}
+	return out
+}
+
+/**
+ * The context field the builder (`buildTemplateContext`) puts its keys' named
+ * layouts under, for Assemble to read and strip. Plain JSON (strings and
+ * numbers only): the builder's output crosses a port and is recorded in the
+ * run, so it cannot carry the NUL-keyed map the render context does.
+ */
+export const NAMED_LAYOUTS_FIELD = "namedLayouts"
+
+/**
+ * What a step that lays a key out ahead of Assemble hands on for templates that
+ * name a layout for it: per key, the receipt line of the layout in use, and per
+ * reference the text it wrote and the receipt line for that call. A key appears
+ * only when some template of the spec names a layout for it.
+ */
+export type NamedLayouts = Record<
+	string,
+	{
+		inUse: LayoutUse
+		references: Record<string, { text: string; use: LayoutUse }>
+	}
+>
+
+export interface ExplicitLayoutPrepass {
+	/** The template to render: each call's key rewritten to its name as a string literal. */
+	template: string
+	/** The text each call renders to, by `layoutRenderKey`; absent when the template names no layout. */
+	renders?: Record<string, string>
+	/** One receipt line per distinct call, in source order. */
+	uses: LayoutUse[]
+}
+
+/**
+ * Rewrite every `layout` call of a template so its first argument is the
+ * key's name as a string (`layout "characters" "core/json@1"`), and say which
+ * calls there are. Core's Handlebars and Liquid only; any other engine, and a
+ * template with no call, come back as they were.
+ *
+ * Every call the SDK's parser lists must have been rewritten at least once,
+ * else this throws naming it — never a silent miss that would print the call
+ * raw. A call the parser does not list (written wrongly; the template check
+ * refuses it) is left as written, and the helper then refuses it at render.
+ */
+export function rewriteLayoutCalls(
+	engine: string,
+	template: string
+): { template: string; calls: { key: string; reference: string }[] } {
+	const none = { template, calls: [] as { key: string; reference: string }[] }
+	if (
+		(engine !== CORE_HANDLEBARS_ENGINE && engine !== CORE_LIQUID_ENGINE) ||
+		!template.includes(VARIABLE_LAYOUT_HELPER)
+	)
+		return none
+	const listed = variableLayoutCalls(engine, template, CONTEXT_TEMPLATE_CHECK)
+	if (!listed.length) return none
+	const wanted = new Set(listed.map((c) => layoutRenderKey(c.key, c.reference)))
+	const done = new Set<string>()
+	const note = (key: string, reference: string): boolean => {
+		const at = layoutRenderKey(key, reference)
+		if (!wanted.has(at)) return false
+		done.add(at)
+		return true
+	}
+	const rewritten =
+		engine === CORE_HANDLEBARS_ENGINE
+			? template.replace(
+					HANDLEBARS_CALL,
+					(m, open, gap1, key, gap2, quote, reference) =>
+						note(key, reference)
+							? `${open}${VARIABLE_LAYOUT_HELPER}${gap1}"${key}"${gap2}${quote}${reference}${quote}`
+							: m
+				)
+			: template.replace(LIQUID_CALL, (m, key, mid, quote, reference) =>
+					note(key, reference)
+						? `"${key}"${mid}${quote}${reference}${quote}`
+						: m
+				)
+	for (const c of listed)
+		if (!done.has(layoutRenderKey(c.key, c.reference)))
+			throw new VariableLayoutError(
+				`the template's \`${VARIABLE_LAYOUT_HELPER} ${c.key} "${c.reference}"\` could not be read ` +
+					`to be written out ahead of the render. Write it as ` +
+					(engine === CORE_HANDLEBARS_ENGINE
+						? `\`{{{${VARIABLE_LAYOUT_HELPER} ${c.key} "${c.reference}"}}}\``
+						: `\`{{ ${c.key} | ${VARIABLE_LAYOUT_HELPER}: "${c.reference}" }}\``) +
+					`, with the variable's name unbracketed and the reference in plain quotes.`
+			)
+	return {
+		template: rewritten,
+		calls: listed.filter(
+			(c, i) =>
+				listed.findIndex(
+					(d) => d.key === c.key && d.reference === c.reference
+				) === i
+		)
+	}
+}
+
+/**
+ * The render pre-pass: write out, ahead of the template, every layout it names
+ * by reference — each through `renderVariable`, one after the other (so a
+ * plugin's engine and a cancelled run behave as they do for the ordinary
+ * values), and hand back the rewritten template with the texts.
+ *
+ * **An unknown reference at run time never throws.** The variable's in-use
+ * layout renders (`inUse`, the ordinary laid-out text), and the receipt line
+ * for that call carries `missingReference` beside the layout actually used.
+ * A key this step does not lay out is a different fault (the check refuses
+ * it) and throws, naming the call.
+ */
+export async function prepareExplicitLayouts(input: {
+	engine: string
+	template: string
+	layouts: ResolvedLayouts | undefined
+	/** The raw value the step holds for a key, before any layout. */
+	valueOf: (key: string) => unknown
+	/**
+	 * The text the key renders to through its in-use layout. Also answers for a
+	 * key laid out upstream (the context builder's), which `layouts` does not
+	 * hold: a string says the key is known, `undefined` that it is not.
+	 */
+	inUse: (key: string) => string | undefined
+	/**
+	 * What a step upstream wrote out for the keys it lays out (`NamedLayouts`).
+	 * An entry of Assemble's own `layouts` wins over one here.
+	 */
+	upstream?: NamedLayouts
+	run?: RenderRun
+}): Promise<ExplicitLayoutPrepass> {
+	const { template, calls } = rewriteLayoutCalls(input.engine, input.template)
+	if (!calls.length) return { template, uses: [] }
+	const renders: Record<string, string> = {}
+	const uses: LayoutUse[] = []
+	for (const { key, reference } of calls) {
+		const chosen = input.layouts?.[key]
+		if (!chosen && (input.upstream?.[key] || input.inUse(key) !== undefined)) {
+			const named = input.upstream?.[key]
+			const written = named?.references[reference]
+			if (written) {
+				renders[layoutRenderKey(key, reference)] = written.text
+				uses.push(written.use)
+			} else {
+				renders[layoutRenderKey(key, reference)] = input.inUse(key) ?? ""
+				uses.push({
+					...(named?.inUse ?? {
+						key,
+						variableId: variableOfKey(undefined, key) ?? null,
+						layout: null,
+						origin: null,
+						reason: null
+					}),
+					missingReference: reference
+				})
+			}
+			continue
+		}
+		if (!chosen)
+			throw new VariableLayoutError(
+				`the template's \`${VARIABLE_LAYOUT_HELPER} ${key} "${reference}"\` names '${key}', ` +
+					`which this step does not write out with a layout.`
+			)
+		const variableId = variableOfKey(input.layouts, key)
+		const row = chosen.references?.[reference]
+		if (!row) {
+			renders[layoutRenderKey(key, reference)] = input.inUse(key) ?? ""
+			uses.push({ ...layoutUseOf(input.layouts, key), missingReference: reference })
+			continue
+		}
+		try {
+			renders[layoutRenderKey(key, reference)] = await renderVariable(
+				{
+					[key]: {
+						variableId,
+						engine: row.engine,
+						source: row.source,
+						name: row.name,
+						origin: row.origin,
+						reason: "template"
+					}
+				},
+				key,
+				input.valueOf(key),
+				input.run
+			)
+		} catch (err: any) {
+			throw new VariableLayoutError(
+				`the layout "${reference}" the template names for '${key}' could not be rendered: ` +
+					`${err?.message ?? err}`
+			)
+		}
+		uses.push({
+			key,
+			variableId: variableId ?? null,
+			layout: row.name,
+			origin: row.origin,
+			reason: "template"
+		})
+	}
+	return { template, renders, uses }
+}
+
+/** The render context with the pre-pass's texts in it, when there are any. */
+export const withExplicitLayouts = <T extends Record<string, unknown>>(
+	scope: T,
+	renders: Record<string, string> | undefined
+): T =>
+	renders ? { ...scope, [LAYOUT_RENDERS_CONTEXT_KEY]: renders } : scope

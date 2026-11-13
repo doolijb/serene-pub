@@ -1,80 +1,16 @@
 /**
- * Free placement's two open owner questions (layout plan M.7), built with the
- * plan's RECOMMENDED defaults (brief 7a). If the owner rules the other way,
- * flip the constant in ./placementRules and these tests say what changed.
- *
- * QE (1): when the conversation is not in the middle, the phone and Stage
- * only show the first unclaimed Messages as the stage, wherever it sits.
+ * Where the log is, and the zone a phone or full screen opens on (PLAN
+ * 2026-11-05 ★3).
  */
 import { describe, expect, test } from "vitest"
-import {
-	STAGE_FOLLOWS_CONVERSATION,
-	primaryLogPick,
-	stageOf
-} from "./placementRules"
+import { fullscreenActive, openingZone, primaryLogPick } from "./placementRules"
 
 const noClaims = new Map<string, string>()
 const lairClaims = new Map([["messages#sanctum", "sanctum"]])
+const isMessages = (id: string) => id === "messages" || id.startsWith("messages#")
 
-describe("QE — the stage follows the conversation (recommended (1))", () => {
-	test("is the default in force", () => {
-		expect(STAGE_FOLLOWS_CONVERSATION).toBe(true)
-	})
-
-	test("the conversation in the middle: the middle is the stage, as it always was", () => {
-		expect(
-			stageOf({ middle: ["world-state", "messages"], left: ["stats"], right: [], claims: noClaims, primaryId: "messages" })
-		).toEqual({ id: "messages", zone: "middle" })
-	})
-
-	test("the conversation moved into the left column: the left column is the stage", () => {
-		expect(
-			stageOf({ middle: ["world-state"], left: ["stats", "messages"], right: [], claims: noClaims, primaryId: "messages" })
-		).toEqual({ id: "messages", zone: "left" })
-	})
-
-	test("the Lair swapped — the Sanctum in the middle, the story in a side: the story is the stage", () => {
-		// The first UNCLAIMED Messages, wherever it sits: the Sanctum claims
-		// its channel, so it is not the session's log.
-		expect(
-			stageOf({
-				middle: ["messages#sanctum"],
-				left: ["stats"],
-				right: ["world-state", "messages"],
-				claims: lairClaims,
-				primaryId: "messages"
-			})
-		).toEqual({ id: "messages", zone: "right" })
-	})
-
-	test("every copy claims a channel: the first one is the stage", () => {
-		expect(
-			stageOf({ middle: ["board"], left: [], right: ["messages#sanctum"], claims: lairClaims, primaryId: "messages" })
-		).toEqual({ id: "messages#sanctum", zone: "right" })
-	})
-
-	test("no conversation placed at all (R-B): the primary panel is the stage", () => {
-		expect(
-			stageOf({ middle: ["world-state"], left: ["stats"], right: [], claims: noClaims, primaryId: "messages" })
-		).toEqual({ id: "world-state", zone: "middle" })
-	})
-
-	test("no conversation and nothing in the middle: the first side panel is the stage; nothing at all, none", () => {
-		expect(
-			stageOf({ middle: [], left: [], right: ["map"], claims: noClaims, primaryId: "messages" })
-		).toEqual({ id: "map", zone: "right" })
-		expect(stageOf({ middle: [], left: [], right: [], claims: noClaims, primaryId: "messages" })).toBeNull()
-	})
-
-	test("an R71 genre's own primary is its stage", () => {
-		expect(
-			stageOf({ middle: ["map"], left: ["acme.game:board"], right: [], claims: noClaims, primaryId: "acme.game:board" })
-		).toEqual({ id: "acme.game:board", zone: "left" })
-	})
-})
-
-describe("primaryLogPick — where the log IS, whatever QE draws", () => {
-	test("in a side, it names that side (the desktop keeps that side docked)", () => {
+describe("primaryLogPick — where the log IS", () => {
+	test("in a side, it names that side", () => {
 		expect(
 			primaryLogPick({ middle: ["world-state"], left: [], right: ["stats", "messages"], claims: noClaims, primaryId: "messages" })
 		).toEqual({ id: "messages", zone: "right" })
@@ -84,5 +20,84 @@ describe("primaryLogPick — where the log IS, whatever QE draws", () => {
 		expect(
 			primaryLogPick({ middle: ["messages#sanctum"], left: ["messages"], right: [], claims: lairClaims, primaryId: "messages" })
 		).toEqual({ id: "messages", zone: "left" })
+	})
+
+	test("every copy claims a channel: the first one is the log", () => {
+		expect(
+			primaryLogPick({ middle: ["board"], left: [], right: ["messages#sanctum"], claims: lairClaims, primaryId: "messages" })
+		).toEqual({ id: "messages#sanctum", zone: "right" })
+	})
+
+	test("no conversation placed: none", () => {
+		expect(
+			primaryLogPick({ middle: ["world-state"], left: ["stats"], right: [], claims: noClaims, primaryId: "messages" })
+		).toBeNull()
+	})
+})
+
+describe("openingZone — the zone a phone or full screen opens on (★3)", () => {
+	const open = (
+		o: { middle?: string[]; left?: string[]; right?: string[]; claims?: Map<string, string>; primaryId?: string }
+	) =>
+		openingZone({
+			middle: o.middle ?? [],
+			left: o.left ?? [],
+			right: o.right ?? [],
+			claims: o.claims ?? noClaims,
+			primaryId: o.primaryId ?? "messages",
+			isMessages
+		})
+
+	test("the conversation in the middle: the middle", () => {
+		expect(open({ middle: ["world-state", "messages"], left: ["stats"] })).toBe("middle")
+	})
+
+	test("the conversation moved into a side: that side", () => {
+		expect(open({ middle: ["world-state"], left: ["stats", "messages"] })).toBe("left")
+		expect(open({ middle: ["world-state"], right: ["messages"] })).toBe("right")
+	})
+
+	test("the Lair swapped — the Sanctum in the middle, the story in a side: the story's side", () => {
+		expect(
+			open({
+				middle: ["messages#sanctum"],
+				left: ["stats"],
+				right: ["world-state", "messages"],
+				claims: lairClaims
+			})
+		).toBe("right")
+	})
+
+	test("every copy claims a channel: the first one's zone", () => {
+		expect(open({ middle: ["board"], right: ["messages#sanctum"], claims: lairClaims })).toBe("right")
+	})
+
+	test("an R71 genre's primary that is placed leads, even beside a Messages copy", () => {
+		expect(
+			open({ middle: ["messages"], left: ["acme.game:board"], primaryId: "acme.game:board" })
+		).toBe("left")
+	})
+
+	test("an R71 primary not placed: the first zone holding a Messages copy, middle first", () => {
+		expect(
+			open({ left: ["messages#a"], right: ["messages#b"], primaryId: "acme.game:board" })
+		).toBe("left")
+		expect(
+			open({ middle: ["map"], right: ["messages#b"], primaryId: "acme.game:board" })
+		).toBe("right")
+	})
+
+	test("no Messages anywhere, or nothing placed: the middle", () => {
+		expect(open({ middle: ["world-state"], left: ["stats"] })).toBe("middle")
+		expect(open({ right: ["map"] })).toBe("middle")
+		expect(open({})).toBe("middle")
+	})
+})
+
+describe("fullscreenActive", () => {
+	test("follows the session control", () => {
+		expect(fullscreenActive({ fullscreen: true })).toBe(true)
+		expect(fullscreenActive({ fullscreen: false })).toBe(false)
+		expect(fullscreenActive(undefined)).toBe(false)
 	})
 })

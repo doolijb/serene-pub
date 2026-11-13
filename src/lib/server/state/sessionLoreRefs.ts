@@ -19,9 +19,14 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import { isSlotLoreRef } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 /** The owner kinds whose session values can hold another owner's entries. */
 const HOLDER_KINDS = ["session", "session_cast"] as const
+
+/** 🚧 ⏳ Flip on (`memberForm.ts`): a seat's values are `seated_member` (character seat) / `player_seat` (carded player seat) rows, which hold entries as its card's `session_cast` did. */
+const holderKinds = (): string[] =>
+	memberFormOn() ? [...HOLDER_KINDS, "seated_member", "player_seat"] : [...HOLDER_KINDS]
 
 /** One stored value that holds at least one of the book's entries. */
 interface SessionLoreRefHolder {
@@ -66,7 +71,7 @@ export async function sessionLoreRefHolders(
 		.where(
 			and(
 				isNotNull(v.sessionId),
-				inArray(v.ownerKind, [...HOLDER_KINDS]),
+				inArray(v.ownerKind, holderKinds()),
 				// Only a value that holds a reference at all is read whole.
 				sql`${v.value}::text LIKE '%"entryId"%'`
 			)

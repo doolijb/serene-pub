@@ -1,24 +1,30 @@
 /**
- * 🚧 M2c: the Sessions view's **Apps** group. An applet is a plugin whose
- * genres declare `applet: true` and whose `view` is the plugin id;
- * one plugin is ONE row however many applet genres it offers. A genre is
- * listed only when the server sent its `appletTitle` — the launcher's own test
- * (`appletMount`) passed — so a row never opens "Not available".
+ * 🚧 M2d: the Apps view and Home's Apps section read this. An applet is a
+ * plugin whose genres declare `applet: true` and whose `view` is the plugin
+ * id; one plugin is ONE row however many applet genres it offers. A genre is
+ * listed only when the server sent its `appletCard` — the launcher's own test
+ * (`appletMount`) passed — so a card never opens "Not available".
  */
 export interface AppletGenreLike {
 	genreId: string
 	name: string
-	/** The launcher's title (`sessions:genres`): present exactly when `/apps/<view>` mounts. */
-	appletTitle?: string
+	/** The applet card (`sessions:genres`): present exactly when `/apps/<view>` mounts. */
+	appletCard?: {
+		title: string
+		poster?: string
+		logo?: string
+		blurb?: string
+	}
 	shape?: { applet?: boolean; view?: string } | null
 }
 
 export interface AppletRow {
 	/** The plugin id — the `/apps/<pluginId>` address. */
 	pluginId: string
-	label: string
-	/** A short line naming the plugin's applet genres. */
-	subtitle: string
+	title: string
+	poster?: string
+	logo?: string
+	blurb?: string
 	genres: Array<{ genreId: string; name: string }>
 }
 
@@ -31,7 +37,7 @@ export function appletOwner(
 
 /** The launcher a genre starts in (`/apps/<pluginId>`), or null: an applet genre the server vouched for. */
 export function appletLauncher(g: AppletGenreLike | null | undefined): string | null {
-	return g?.appletTitle ? appletOwner(g.shape) : null
+	return g?.appletCard ? appletOwner(g.shape) : null
 }
 
 export function appletRows(genres: readonly AppletGenreLike[]): AppletRow[] {
@@ -41,17 +47,15 @@ export function appletRows(genres: readonly AppletGenreLike[]): AppletRow[] {
 		if (!owner) continue
 		let row = byPlugin.get(owner)
 		if (!row) {
-			row = { pluginId: owner, label: g.appletTitle!, subtitle: "", genres: [] }
+			// All rows of one plugin carry the same card: the first one wins.
+			const { title, poster, logo, blurb } = g.appletCard!
+			row = { pluginId: owner, title, poster, logo, blurb, genres: [] }
 			byPlugin.set(owner, row)
 		}
 		if (!row.genres.some((x) => x.genreId === g.genreId))
 			row.genres.push({ genreId: g.genreId, name: g.name })
 	}
-	const rows = [...byPlugin.values()]
-	for (const r of rows) {
-		r.subtitle = r.genres.map((g) => g.name).join(" · ")
-	}
-	return rows.sort((a, b) => a.label.localeCompare(b.label))
+	return [...byPlugin.values()].sort((a, b) => a.title.localeCompare(b.title))
 }
 
 /** The genre names a `sessionsGenres` filter stands for (unknown ids are dropped). */

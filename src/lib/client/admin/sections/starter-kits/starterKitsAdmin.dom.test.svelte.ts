@@ -241,3 +241,155 @@ describe("Admin › Starter lorebooks", () => {
 		])
 	})
 })
+
+describe("Admin › Starter lorebooks, provided books (M2e)", () => {
+	const PRIMER = {
+		id: "book:7",
+		source: "core",
+		name: "Ninth Mile",
+		description: "",
+		rulesId: "core:ruleset/freeform@1",
+		rulesName: "Freeform",
+		counts: { entries: 2, places: 0, cast: 0 },
+		provided: {
+			pluginId: "core",
+			slug: "core:primer/ninth-mile@1",
+			disabled: false
+		}
+	}
+	const sw = () =>
+		document.querySelector<HTMLInputElement>(
+			'input[role="switch"][aria-label="Enabled: Ninth Mile"]'
+		)!
+
+	test("a primer row has an Enabled switch and no Delete; pressing it emits at once", async () => {
+		await render()
+		feed("starterKits:list", { kits: [PRIMER, ...KITS] })
+		await settle()
+		expect(actionsOf("book:7")).toEqual(["clone"])
+		expect(sw().checked).toBe(true)
+		sw().click()
+		await settle()
+		expect(emitted).toContainEqual([
+			"plugins:disableProvidedBook",
+			{ pluginId: "core", slug: "core:primer/ninth-mile@1" }
+		])
+	})
+
+	test("a disabled primer reads Disabled and Enable emits enable", async () => {
+		await render()
+		feed("starterKits:list", {
+			kits: [
+				{ ...PRIMER, provided: { ...PRIMER.provided, disabled: true } }
+			]
+		})
+		await settle()
+		expect(sw().checked).toBe(false)
+		expect(
+			document
+				.querySelector('[data-kit-actions="book:7"]')!
+				.textContent!.includes("Disabled")
+		).toBe(true)
+		sw().click()
+		await settle()
+		expect(emitted).toContainEqual([
+			"plugins:enableProvidedBook",
+			{ pluginId: "core", slug: "core:primer/ninth-mile@1" }
+		])
+	})
+
+	describe("a refused switch says why", () => {
+		const errs = () =>
+			Array.from(
+				document.querySelectorAll<HTMLElement>(
+					"[data-kit-switch-error]"
+				)
+			)
+
+		test("the pressing tab shows the server's sentence in the row, only there", async () => {
+			await render()
+			feed("starterKits:list", { kits: [PRIMER, ...KITS] })
+			await settle()
+			sw().click()
+			await settle()
+			feed("plugins:disableProvidedBook:error", {
+				error: "Only admin users can manage plugins."
+			})
+			await settle()
+			const found = errs()
+			expect(found.length).toBeGreaterThan(0)
+			const first = found[0]
+			expect(first.getAttribute("role")).toBe("alert")
+			expect(first.textContent).toContain(
+				"Only admin users can manage plugins."
+			)
+			const actions = document.querySelector(
+				'[data-kit-actions="book:7"]'
+			)!
+			expect(actions.parentElement!.contains(first)).toBe(true)
+			for (const e of found) {
+				expect(
+					e.parentElement!.querySelector(
+						'[data-kit-actions="book:7"]'
+					)
+				).not.toBeNull()
+			}
+		})
+
+		test("the next successful answer clears it", async () => {
+			await render()
+			feed("starterKits:list", { kits: [PRIMER, ...KITS] })
+			await settle()
+			sw().click()
+			await settle()
+			feed("plugins:disableProvidedBook:error", { error: "no" })
+			await settle()
+			expect(errs().length).toBeGreaterThan(0)
+			sw().click()
+			await settle()
+			feed("plugins:disableProvidedBook", {
+				pluginId: "core",
+				slug: PRIMER.provided.slug,
+				disabled: true,
+				lorebookId: 7
+			})
+			await settle()
+			expect(errs()).toEqual([])
+		})
+
+		test("another tab's refusal shows nothing here", async () => {
+			await render()
+			feed("starterKits:list", { kits: [PRIMER, ...KITS] })
+			await settle()
+			feed("plugins:enableProvidedBook:error", { error: "x" })
+			await settle()
+			expect(errs()).toEqual([])
+		})
+
+		test("an error with no sentence falls back to the server's own", async () => {
+			await render()
+			feed("starterKits:list", {
+				kits: [
+					{
+						...PRIMER,
+						provided: { ...PRIMER.provided, disabled: true }
+					}
+				]
+			})
+			await settle()
+			sw().click()
+			await settle()
+			feed("plugins:enableProvidedBook:error", {})
+			await settle()
+			expect(errs()[0].textContent).toContain(
+				"The lorebook could not be enabled."
+			)
+		})
+	})
+
+	test("an admin kit has no switch and keeps Delete", async () => {
+		await render()
+		expect(document.querySelector("[data-kit-switch]")).toBeNull()
+		expect(actionsOf("book:42")).toEqual(["clone", "delete"])
+	})
+})

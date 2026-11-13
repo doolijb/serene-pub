@@ -46,6 +46,7 @@ import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { storyRespondSpec, STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 import {
 	historyValues,
+	insertDatedCardVersion,
 	worldLoreValues
 } from "$lib/server/pipelines/testing/fixtures"
 
@@ -114,9 +115,11 @@ beforeAll(async () => {
 	const burnedCard = await card("Burned Card", true)
 	speakerCharacterId = amara
 
-	const [amaraM, kiranM, ashguard, , king, widow, stranger, novice, ghost] = await db
-		.insert(schema.lorebookBindings)
-		.values([
+	// Each member through the one writer, so each has its base version.
+	const { insertCastMember, writeCastVersion } = await import(
+		"$lib/server/characters/versions"
+	)
+	const memberRows: Array<typeof schema.lorebookBindings.$inferInsert> = [
 			{
 				lorebookId: book.id,
 				binding: "{{char:1}}",
@@ -160,57 +163,58 @@ beforeAll(async () => {
 				name: "Ghost",
 				characterId: ghostCard
 			}
-		])
-		.returning()
+	]
+	const members: Array<typeof schema.lorebookBindings.$inferSelect> = []
+	for (const row of memberRows)
+		members.push((await insertCastMember(db as any, row)).member)
+	const [amaraM, kiranM, ashguard, , king, widow, stranger, novice, ghost] =
+		members
 	await db.insert(schema.sessionCharacters).values([
 		{ sessionId, characterId: amara, position: 0 },
 		{ sessionId, characterId: kiran, position: 1 }
 	] as any)
 
-	await db.insert(schema.castAmendments).values([
-		{
-			lorebookId: book.id,
-			lorebookBindingId: ashguard.id,
-			year: 5,
-			fields: { name: "Warden Ashe" }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: kiranM.id,
-			year: 10,
-			fields: { nodeVisibility: "hidden" }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: king.id,
-			year: 10,
-			fields: { nodeVisibility: "legendary" }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: widow.id,
-			year: 9,
-			fields: { characterId: null, name: "The Widow" }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: stranger.id,
-			year: 9,
-			fields: { characterId: keeperCard }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: novice.id,
-			year: 9,
-			fields: { characterId: oldKeeperCard }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: ghost.id,
-			year: 9,
-			fields: { characterId: burnedCard }
-		}
-	])
+	// Dated changes to a member's name and visibility are versions now.
+	const datedChange = (
+		member: number,
+		year: number,
+		changes: Parameters<typeof writeCastVersion>[1]["changes"]
+	) =>
+		writeCastVersion(db as any, {
+			member,
+			changes,
+			writtenBy: `user:${userId}`,
+			at: { branchId: null, date: { year }, personalPosition: null }
+		})
+	await datedChange(ashguard.id, 5, { name: "Warden Ashe" })
+	await datedChange(kiranM.id, 10, { nodeVisibility: "hidden" })
+	await datedChange(king.id, 10, { nodeVisibility: "legendary" })
+	// Dated cards, from year 9, are cast versions parented on that card's
+	// version: Aria is unlinked and renamed (own words, no parent); the
+	// others follow the card's name.
+	const datedCard = async (
+		member: number,
+		cardId: number | null,
+		changes: Partial<typeof schema.characterVersions.$inferInsert>
+	) => {
+		const [row] = await insertDatedCardVersion(
+			db as any,
+			member,
+			cardId ?? aria,
+			9
+		).then((r) => [r])
+		await db
+			.update(schema.characterVersions)
+			.set({
+				parentVersionId: cardId == null ? null : row.parentVersionId,
+				...changes
+			})
+			.where(eq(schema.characterVersions.id, row.id))
+	}
+	await datedCard(widow.id, null, { name: "The Widow", follows: [] })
+	await datedCard(stranger.id, keeperCard, { follows: ["name"] })
+	await datedCard(novice.id, oldKeeperCard, { follows: ["name"] })
+	await datedCard(ghost.id, burnedCard, { name: "Ghost", follows: [] })
 
 	await db.insert(schema.narrativeRelationships).values([
 		{

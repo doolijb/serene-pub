@@ -446,14 +446,6 @@ export async function namespaceView(
 				? sets.promptRows.get(value)
 				: undefined
 
-		// The same ride-along, for the same reason: a name in a dropdown does
-		// not answer "what does this produce", and the source is the thing
-		// being chosen.
-		const variableTemplateRow =
-			d.control === "variable-template-ref" && typeof value === "number"
-				? sets.variableTemplateRows.get(value)
-				: undefined
-
 		const contextTemplateRow =
 			d.control === "context-template-ref" && typeof value === "number"
 				? sets.contextTemplateRows.get(value)
@@ -581,17 +573,6 @@ export async function namespaceView(
 					? await connStopsFor(d.nodeKey)
 					: undefined
 			),
-			...(variableTemplateRow
-				? {
-						variableTemplate: {
-							id: variableTemplateRow.id,
-							name: variableTemplateRow.name,
-							source: (variableTemplateRow.source ??
-								"") as string,
-							readOnly: !!variableTemplateRow.isImmutable
-						}
-					}
-				: {}),
 			...(contextTemplateRow
 				? {
 						contextTemplate: {

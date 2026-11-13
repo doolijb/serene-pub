@@ -8,6 +8,7 @@ import { db } from "$lib/server/db"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import {
 	DEFAULT_MANAGED_CONFIG,
+	clearTtl,
 	resetTtl,
 	getLoadedSignature
 } from "$lib/server/koboldcpp/modelManager"
@@ -23,6 +24,7 @@ import {
 import { rereadDetectedTextModels } from "$lib/server/koboldcpp/rereadDetectedKinds"
 import { catalogueFor } from "$lib/shared/speech/catalogues"
 import { isWavTokenizerFile } from "$lib/server/koboldcpp/ttsTokenizer"
+import { isVisionProjectorFile } from "$lib/server/koboldcpp/visionProjector"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -45,13 +47,18 @@ import * as schema from "$lib/server/db/schema"
  */
 class KoboldCppManagedAdapter extends KoboldCppAdapter {
 	/**
-	 * Overrides KoboldCppAdapter.generateText() only to reset the managed
-	 * subprocess's TTL unload timer once generation actually completes —
-	 * resetTtl() otherwise only ever runs during preflight (before
-	 * generation starts), so a response slower than ttlSecs (default 300s)
-	 * could have its model unloaded mid-stream by this app's own timer.
+	 * Overrides KoboldCppAdapter.generateText() only to keep the managed
+	 * subprocess's TTL unload timer out of a generation: the timer the load
+	 * armed is HELD while processing runs and armed again once it finishes
+	 * (owner ruling, 2026-11-08). Re-arming afterwards alone left the
+	 * load-time timer live, so a response slower than ttlSecs (default 300s)
+	 * still had its model unloaded mid-stream by this app's own timer.
 	 *
-	 * The reset is conditioned on a fresh liveness check, not unconditional:
+	 * The timer is keyed by the settings' base URL, the one the loader arms
+	 * with (`preflight()` copies it onto this row, so the two agree; read from
+	 * settings here so they cannot drift).
+	 *
+	 * The re-arm is conditioned on a fresh liveness check, not unconditional:
 	 * if the TTL timer is what killed the model mid-generation (the exact
 	 * bug this fixes) or the subprocess crashed, the stream errors out, and
 	 * blindly resetting here would re-arm an unload timer for a model
@@ -64,11 +71,9 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			const settings = await db.query.koboldCppSettings.findFirst()
 			if (!settings) return
 			// Mirrors managedPreflight.attemptLoad's own isAlive construction —
-			// only trust process liveness when we actually spawned/own the
-			// subprocess.
+			// process liveness counts only for a process we spawned.
 			const isAlive =
-				settings.koboldCppManagedMode === "managed" &&
-				!subprocessManager.isExternal()
+				settings.koboldCppManagedMode === "managed"
 					? subprocessManager.isRunning()
 					: true
 			if (!isAlive) return
@@ -77,7 +82,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			// re-arm a timer for a model already considered gone.
 			if (!getLoadedSignature()) return
 			resetTtl(
-				this.connection.baseUrl!,
+				settings.koboldCppManagerBaseUrl,
 				settings.koboldCppManagedAdminPassword ?? "",
 				settings.koboldCppManagedModelTtlSecs ?? 300
 			)
@@ -85,6 +90,9 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 
 		let result: TextGenResult
 		try {
+			// `super.generateText()` runs the preflight (which arms the timer)
+			// and then the request; `preflight()` below holds the timer the
+			// moment the load is confirmed, before the first token.
 			result = await super.generateText()
 		} catch (err) {
 			// A non-streaming failure (or a setup error before the streaming
@@ -167,6 +175,9 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		// in-memory connection here means generateText()/getContextTokenLimit()
 		// (inherited unchanged from KoboldCppAdapter) automatically pick this up.
 		this.connection = { ...this.connection, baseUrl }
+		// Loaded: processing follows. Hold the idle-unload timer the load armed
+		// until `generateText()` re-arms it when the generation finishes.
+		clearTtl(baseUrl)
 	}
 }
 
@@ -293,6 +304,10 @@ async function listTextModels(
 				extensionAllowedForKind(name, "text") &&
 				// A codec file (Qwen3-TTS / OuteTTS wav tokenizer) is no model.
 				!isWavTokenizerFile(name) &&
+				// A vision projector is a part of a model, offered in the model
+				// view's projector field — never a model row with Use in… of
+				// its own (walk 2026-11-10, "Mmproj · F16").
+				!isVisionProjectorFile(name) &&
 				!imageLane.has(name) &&
 				!incomplete.has(name)
 		)

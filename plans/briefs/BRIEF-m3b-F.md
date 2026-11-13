@@ -1,0 +1,26 @@
+# BRIEF m3b-F — a member's provided lorebook row says "Comes with <plugin>" (owner ruling 2026-11-05, evening)
+
+You are a `lane-supervisor` (fresh). Read `.claude/guides/multi-agent.md` first, then this brief, then plan `plans/PLAN-sdk-creation-seams-2026-10-30.md` §21 (the m3-core bullet: provided books pub-wide) and §23's status bullet, and `plans/REPORT-m3-core-2026-11-05.md` (item 1: `providedBooksReadableBy`, the share projection in `buildLorebooksList`). Lane id **m3b-F**. One worker (two at most). Work from `/home/jody/github/serene-pub`. Other programmes edit this tree: re-read a shared file immediately before every edit; additive hunks; never reformat a file that is dirty at HEAD (`npx prettier --check` on new files only).
+
+## Ruling
+A member sees a plugin's provided lorebook (readable pub-wide since m3-core) in the Lorebooks view under **Shared with you** with _From admin_ / _Shared by admin_ — the share projection's words. Owner (2026-11-05): it should say **"Comes with Mundi"** — the plugin's name, as the admin's Starter lorebooks page already says "Comes with Serene Pub" for a core primer. The admin who enabled it is not the point; the plugin is.
+
+## Items
+1. **Server** (`src/lib/server/sockets/lorebooks.ts` `buildLorebooksList` ~327–410, the third `or` arm and the row projection; `src/lib/shared/sockets/types.ts` ~7664 `provided?: { pluginId; slug; disabled }`, ~7859 `readOnly?: { pluginName }`): the list row's `provided` gains **`pluginName: string | null`** (the plugin's display name, as `readOnly.pluginName` already resolves it for primer rows — reuse that lookup; one query, not per row). Also `sockets/appletLibrary.ts` `runLibraryLorebooks` if it projects `provided` (m3-core touched it). No new event.
+2. **Client** (`src/lib/client/lorebooks/LorebooksWorkspace.svelte` ~2787 `Shared by ${ownerName}` / "Shared with you · read", ~3169 the list group `label="Shared with you"`; and any other place a provided row is drawn with the share words — grep `isSharedWithMe` / `ownerName` across `src/lib/client/**` including the start and edit forms' book pickers (`sessionForms/StartSessionForm.svelte`, `EditSessionForm.svelte`) and the applet library): a row with `provided` says **_Comes with <pluginName>_** (fallback _Comes with a plugin_ when the name is null) instead of _Shared by …_ / _From …_; **★ propose** (one recommendation with its trade-off, in the report — build the recommendation): whether provided rows keep the **Shared with you** group or get their own group **Comes with plugins** (the primer rows on the admin's shelf are the precedent). Copy per STYLE-GUIDE §10; NOMENCLATURE R3 (qualify).
+3. **Tests**: server — a member's list row for a live provided book carries `provided.pluginName` (`src/lib/server/plugins/providedBooksPubWide.int.test.ts` is the home; extend, 60 s timeouts); client — a dom test that a provided row draws _Comes with Mundi_ and not _Shared by_ (the Lorebooks list component's existing dom test, or `providedBooks.dom`).
+4. **Docs/vocabulary**: `docs/lorebooks.md` one sentence where shared rows are described (a plugin's book says Comes with <plugin>); NOMENCLATURE §25 one row (the words, the field). Re-read NOMENCLATURE.md §1, §24 and the lorebooks group section right before editing.
+
+## Files owned
+`src/lib/server/sockets/lorebooks.ts`, `src/lib/server/sockets/appletLibrary.ts`, `src/lib/server/plugins/providedMarks.ts`, `src/lib/shared/sockets/types.ts` (additive), `src/lib/client/lorebooks/**`, `src/lib/client/components/sessionForms/**` (the picker words only), `src/lib/client/components/lorebooks/**`, `docs/lorebooks.md`, `NOMENCLATURE.md` (§25 row). Shared: `sockets/lorebooks.ts` and `StartSessionForm.svelte` are edited by other programmes — re-read before every edit, additive only.
+## Out of scope
+No change to who may read a provided book; no change to the admin's Starter lorebooks page; no new setting; no migration; no SDK edit.
+## Rules (quote into the worker brief)
+CLAUDE.md Principles/Decisions/Hard rules; NOMENCLATURE R1–R6, §24; STYLE-GUIDE §10 (copy); sockets: one domain context toasts, views never call `toaster`; `SvelteSet`/`SvelteMap`; `tx` only inside `db.transaction`; targeted tests only; never pipe vitest into `head`; 60 s int timeouts; delete only your own `/tmp/serene-pub-vitest-*` dirs by name.
+Every implementation brief adds, verbatim:
+- *"This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work."*
+- *"Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`."*
+- *"Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`."*
+- *"Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'."*
+## Done means
+The tests above green; `npx tsc --noEmit -p .` clean on lane files. Report `plans/REPORT-m3b-F-2026-11-05.md`: changed files, the ★ group proposal, tests, the §25 row, Noticed, not done.

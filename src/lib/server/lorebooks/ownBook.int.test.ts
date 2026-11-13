@@ -174,15 +174,21 @@ describe("the session's own notes", () => {
 		const { ownBookFor, purgeOwnBookOf } = await import("./ownBook")
 		const notes = await ownBookFor(testDb as any, w.session.id)
 		await place(notes.id, "The cellar")
-		await purgeOwnBookOf(testDb as any, w.session.id)
 		await testDb.delete(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		await purgeOwnBookOf(testDb as any, w.session.id)
 		expect(
 			await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, notes.id))
 		).toHaveLength(0)
-		// The FK alone cascades too.
+		// No FK cascades any more (plan §33.3): a row deleted raw leaves its
+		// notes, which the boot sweep removes once nobody rides them.
 		const v = await world()
 		const other = await ownBookFor(testDb as any, v.session.id)
 		await testDb.delete(schema.sessions).where(eq(schema.sessions.id, v.session.id))
+		expect(
+			await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, other.id))
+		).toHaveLength(1)
+		const { purgeKeptOwnBooks } = await import("./ownBook")
+		await purgeKeptOwnBooks(testDb as any)
 		expect(
 			await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, other.id))
 		).toHaveLength(0)

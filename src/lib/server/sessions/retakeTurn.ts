@@ -160,7 +160,9 @@ export async function retakeTurn(
  * `message-deleted` per row with an `edit` cause — so auto-advance never
  * fires off it. 🚧 Also the delete of a whole latest story turn in a genre
  * that keeps its turns (`turnDeleteRefusal`, owner rulings 2026-10-15): the
- * same rows go, and nothing is fired again.
+ * same rows go, and nothing is fired again. Scene boundaries at its rows are
+ * taken by the one rule (`takeSceneBoundariesAt`; a scene with a later line
+ * outside the yield stays).
  */
 export async function deleteTurnYield(
 	db: Db,
@@ -175,6 +177,7 @@ export async function deleteTurnYield(
 	)
 	let deleted: Awaited<ReturnType<typeof deleteLegacyWhere>>
 	let clockMoved = false
+	const seatChanges: import("$lib/server/sessions/seats").SeatChange[] = []
 	try {
 		deleted = await db.transaction(async (tx) => {
 			const t = tx as unknown as Db
@@ -201,18 +204,28 @@ export async function deleteTurnYield(
 			// real book by the one rule (RF fix 4) — goes with it inside the
 			// store's delete below (`deleteLegacyWhere`): their anchors are
 			// plain ints, so the message cascade cannot take them.
-			// 🚧 The annex deltas anchored to the turn go with it, newest first
-			// (`annexChanges.ts`): what the turn wrote there — a genre's last
-			// telling, its leads — goes back unless a later writer stands.
-			const { retractAnnexDeltasAnchoredTo } = await import(
-				"$lib/server/sessions/annexChanges"
-			)
-			for (const id of [...ids].sort((a, b) => b - a)) await retractAnnexDeltasAnchoredTo(t, id)
-			return deleteLegacyWhere(t, inArray(schema.sessionMessages.id, ids))
+			// 🚧 What the turn changed on its session (annex writes, a draw, a bench, a
+			// conversion — `session_imprints`) goes with it: the store's delete below
+			// (`deleteLegacyWhere` → `retractLoreOf`) takes every row anchored to them.
+			// 🚧 And its scene boundaries, newest first, by the one rule: a scene
+			// with a later live line on its channel outside the yield stays.
+			const { takeSceneBoundariesAt } = await import("$lib/server/scenes/liveScenes")
+			for (const id of [...ids].sort((a, b) => b - a))
+				await takeSceneBoundariesAt(t, id, { leavingWith: ids })
+			return deleteLegacyWhere(t, inArray(schema.sessionMessages.id, ids), { seatChanges })
 		})
 	} catch (e) {
 		if (e instanceof StoryClockRefusal) return { ok: false, error: e.message }
 		throw e
+	}
+	if (opts.io && seatChanges.length) {
+		const { announceSeatChanges } = await import("$lib/server/sessions/seats")
+		await announceSeatChanges(
+			db,
+			opts.io,
+			{ sessionId: opts.sessionId, userId: opts.userId },
+			seatChanges
+		)
 	}
 	if (clockMoved && opts.io) {
 		const { broadcastSessionRow } = await import("$lib/server/sessions/rowPush")

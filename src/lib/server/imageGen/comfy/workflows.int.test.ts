@@ -7,7 +7,12 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import { seedWorkflows, STARTER_WORKFLOWS } from "./starters"
+import {
+	STARTER_FOR_SAMPLING,
+	seedWorkflows,
+	starterWorkflowForSampling,
+	STARTER_WORKFLOWS
+} from "./starters"
 import {
 	deleteWorkflow,
 	duplicateWorkflow,
@@ -31,6 +36,29 @@ const INFO = {
 	classes: ["CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "EmptyLatentImage", "VAEDecode", "SaveImage"],
 	enums: { "CheckpointLoaderSimple.ckpt_name": ["sd_xl_base_1.0.safetensors"] }
 }
+
+describe("the starter an empty workflow slot draws with", () => {
+	it("pairs each core diffusion preset with a shipped text-to-image starter, by seed key", async () => {
+		// Code decides, from two seed keys (P1): the same loadout always draws
+		// with the same workflow, and every pairing names a starter that ships.
+		await seedWorkflows(db as any)
+		const shipped = new Set(STARTER_WORKFLOWS.map((w) => w.seedKey))
+		for (const key of Object.values(STARTER_FOR_SAMPLING)) expect(shipped.has(key)).toBe(true)
+		expect((await starterWorkflowForSampling(db as any, "sampling-image-sdxl"))?.name).toBe(
+			"SDXL text-to-image"
+		)
+		expect((await starterWorkflowForSampling(db as any, "sampling-image-default"))?.name).toBe(
+			"SD 1.5 text-to-image"
+		)
+	})
+	it("chooses nothing for a family with no plain starter, or a person's own sampling", async () => {
+		await seedWorkflows(db as any)
+		expect(await starterWorkflowForSampling(db as any, "sampling-image-sd3")).toBeNull()
+		expect(await starterWorkflowForSampling(db as any, "sampling-image-turbo")).toBeNull()
+		expect(await starterWorkflowForSampling(db as any, null)).toBeNull()
+		expect(await starterWorkflowForSampling(db as any, "sampling-mine")).toBeNull()
+	})
+})
 
 describe("workflows", () => {
 	it("seeds the six starters by key, idempotently, and refuses to edit or delete them", async () => {

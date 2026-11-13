@@ -32,9 +32,7 @@ import {
 } from "$lib/server/state/write"
 import {
 	bookCalendarOf,
-	clockOf,
-	clockOfNow,
-	sessionStoryNowOf
+	storyMoveStartOf
 } from "$lib/server/state/storyTime"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { stateVersionOf } from "$lib/server/state/resolve"
@@ -72,8 +70,9 @@ export function clockAskRefusal(asked: unknown): string | null {
 /**
  * Why this session's clock could not move by this step now, as the clock's
  * own sentence — or null when it could. A dry run of
- * `advanceSessionStoryClock`: no book, no present to start from, a result
- * that does not land. Asked when the move is RESOLVED, so a proposal nothing
+ * `advanceSessionStoryClock`: no book, or a result that does not land. A
+ * story with no clock and no present starts on its first day
+ * (`storyMoveStartOf`), as every move does. Asked when the move is RESOLVED, so a proposal nothing
  * could accept is never shown; an accept asks again, under its lock.
  */
 export async function clockMoveProblem(
@@ -98,11 +97,8 @@ export async function clockMoveProblem(
 	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
 	const book = row.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
 	if (book == null) return `There is no session ${sessionId}.`
-	const start =
-		clockOf(row) ??
-		(await sessionStoryNowOf(db, sessionId).then((n) => (n ? clockOfNow(n) : null)))
-	if (!start)
-		return "This session's lorebook has no present to start from: nothing on its line is dated and no clock is set, so the keeper's clock move has nowhere to start."
+	// Where every move starts, asked of the one reader the move itself uses.
+	const { start } = await storyMoveStartOf(db, sessionId, row)
 	const moved = advanceStoryTime(start, by, unit, await bookCalendarOf(db, book))
 	return moved.problem ?? null
 }

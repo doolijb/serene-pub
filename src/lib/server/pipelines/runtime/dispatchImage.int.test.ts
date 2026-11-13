@@ -75,7 +75,7 @@ let allReqs: any[] = []
 let concurrent = 0
 let maxConcurrent = 0
 /** `batch` is a backend that returns more than one image for one request. */
-let mode: "ok" | "abort" | "empty" | "slow" | "batch" = "ok"
+let mode: "ok" | "abort" | "empty" | "slow" | "batch" | "throw-second" = "ok"
 
 class FakeAdapter {
 	connection: any
@@ -106,6 +106,10 @@ class FakeAdapter {
 				}
 			if (mode === "empty")
 				return { media: [], isAborted: false, applied: [], ignored: [] }
+			// The backend dies under the SECOND call of a series (a process
+			// restarted beneath it): the first picture has already landed.
+			if (mode === "throw-second" && allReqs.length === 2)
+				throw new Error("fetch failed")
 			const one = {
 				kind: "image",
 				mime: "image/png",
@@ -409,6 +413,20 @@ beforeEach(() => {
 	withModel(2, "kobold-text")
 })
 
+describe("a rendered tag list", () => {
+	it("closes the seams an empty placeholder leaves, and only those", async () => {
+		const { tidyTagList } = await import("./dispatchImage")
+		expect(tidyTagList(", text, watermark, blurry")).toBe("text, watermark, blurry")
+		expect(tidyTagList("red hair, , green coat,")).toBe("red hair, green coat")
+		expect(tidyTagList("a woman, portrait, looking at viewer")).toBe(
+			"a woman, portrait, looking at viewer"
+		)
+		expect(tidyTagList("A lighthouse at dusk. Rain on the rocks.")).toBe(
+			"A lighthouse at dusk. Rain on the rocks."
+		)
+	})
+})
+
 describe("dispatchImage — what comes back", () => {
 	it("returns references, never bytes", async () => {
 		const out = await dispatch()
@@ -686,6 +704,38 @@ describe("dispatchImage — one render at a time per connection", () => {
 		await Promise.all([dispatch(), dispatch(), dispatch()])
 		expect(maxConcurrent).toBe(1)
 		expect(created).toHaveLength(3)
+	})
+
+	it("keeps the pictures already drawn when a later call of the series throws", async () => {
+		// Seen 2026-11-08: a three-sprite fill drew its first picture, the
+		// second call died ("fetch failed") and the WHOLE step failed — the
+		// finished picture was thrown away and every label said "No picture
+		// came back". Now the drawn picture is filed, the rest are missing,
+		// and the plan says why it stopped.
+		mode = "throw-second"
+		const out = await dispatch({
+			// Distinct prompts, so the series is one call per item.
+			prompts: { positive: "{{prompt}}, {{labelPhrase}}" },
+			series: [
+				{ key: "a", vars: { labelPhrase: "smiling" } },
+				{ key: "b", vars: { labelPhrase: "scowling" } },
+				{ key: "c", vars: { labelPhrase: "calm" } }
+			]
+		})
+		expect(out.plan.packing).not.toBe("batch")
+		expect(out.media.map((m) => m.key)).toEqual(["a"])
+		expect(created).toHaveLength(1)
+		expect(out.plan.missing?.map((m) => m.key)).toEqual(["b", "c"])
+		expect(out.plan.stoppedOn).toEqual({ call: 1, error: "fetch failed" })
+		expect(out.plan.calls[1].error).toBe("fetch failed")
+		expect(out.plan.calls).toHaveLength(3)
+	})
+
+	it("a first call that throws still fails the step", async () => {
+		mode = "throw-second"
+		// One picture per call; a single-item series makes the throw the first call.
+		allReqs.push({} as any) // the next render is "the second" to the fake
+		await expect(dispatch()).rejects.toThrow(/fetch failed/)
 	})
 
 	it("a failed render does not block the next one", async () => {
@@ -1089,5 +1139,114 @@ describe("previewImageRun — what the form says before the run", () => {
 		})
 		expect(out).toMatchObject({ ok: false })
 		expect((out as any).refusal).toMatch(/transparent background/)
+	})
+})
+
+describe("an empty workflow slot on a template-payload pair", () => {
+	// A ComfyUI pair whose loadout names no workflow. Until 2026-11-08 this
+	// refused "Choose a workflow for this step" on a fresh install — neither
+	// Use nor Fill for me fills the slot. Now: the shipped text-to-image
+	// starter paired with the sampling preset's seed key, said before the
+	// run and recorded on the plan; a sampling with no pairing still refuses.
+	const comfyConnection = {
+		id: 3,
+		type: "comfyui",
+		name: "Comfy",
+		modality: "image-gen",
+		baseUrl: "http://comfy:8188",
+		extraJson: {}
+	}
+	const SDXL_STARTER = {
+		id: 61,
+		name: "SDXL text-to-image",
+		dialect: "comfyui",
+		document: "{}",
+		variables: [],
+		outputNode: "9"
+	}
+	let pickedFor: unknown[] = []
+
+	const arrange = (samplingSeedKey: string | null) => {
+		pickedFor = []
+		connectionsById = { 3: comfyConnection }
+		samplingById = {
+			10: { ...imageSampling, name: "SDXL", seedKey: samplingSeedKey }
+		}
+		capabilityDefaults = {
+			"text->image": {
+				capability: "text->image",
+				...withModel(3, "sd_xl_base_1.0.safetensors"),
+				samplingConfigId: 10
+			}
+		}
+		vi.doMock("$lib/server/utils/getImageAdapter", () => ({
+			getImageAdapter: async () => ({
+				Adapter: FakeAdapter,
+				sheet: { ...TEST_SHEET, payload: "template" },
+				sheetForWorkflow: async () => ({ ...TEST_SHEET, payload: "template" })
+			})
+		}))
+		vi.doMock("$lib/server/imageGen/comfy/starters", () => ({
+			starterWorkflowForSampling: async (_db: unknown, key: unknown) => {
+				pickedFor.push(key)
+				return key === "sampling-image-sdxl"
+					? { id: SDXL_STARTER.id, name: SDXL_STARTER.name }
+					: null
+			}
+		}))
+		vi.doMock("$lib/server/imageGen/comfy/workflows", () => ({
+			getWorkflowDocument: async (_db: unknown, id: number) =>
+				id === SDXL_STARTER.id ? SDXL_STARTER : null
+		}))
+		vi.doMock("$lib/server/imageGen/comfy/serverCheck", () => ({
+			checkWorkflowOnConnection: async () => ({ problem: null })
+		}))
+	}
+
+	it("draws with the starter paired to the sampling preset, and says so", async () => {
+		arrange("sampling-image-sdxl")
+		const { previewImageRun } = await import("./dispatchImage")
+		const out = (await previewImageRun(fakeDb as any, {
+			prompt: "a fox",
+			userId: 7
+		})) as any
+		expect(out.ok).toBe(true)
+		expect(pickedFor).toEqual(["sampling-image-sdxl"])
+		expect(out.plan.workflow).toEqual({
+			id: 61,
+			name: "SDXL text-to-image",
+			chosen: "for-sampling"
+		})
+		expect(out.preRunNotices.join(" ")).toMatch(
+			/built-in "SDXL text-to-image" workflow, chosen because the step's sampling is SDXL/
+		)
+	})
+
+	it("keeps the refusal, pointing at the loadout, when nothing is paired", async () => {
+		arrange("sampling-mine")
+		const { previewImageRun } = await import("./dispatchImage")
+		const out = (await previewImageRun(fakeDb as any, {
+			prompt: "a fox",
+			userId: 7
+		})) as any
+		expect(out).toMatchObject({ ok: false })
+		expect(out.refusal).toMatch(/Choose a workflow for this step in its loadout/)
+	})
+
+	it("a named slot is used as named, and recorded as the slot's", async () => {
+		arrange("sampling-image-default")
+		const { previewImageRun } = await import("./dispatchImage")
+		const out = (await previewImageRun(fakeDb as any, {
+			prompt: "a fox",
+			userId: 7,
+			workflowId: 61
+		})) as any
+		expect(out.ok).toBe(true)
+		expect(pickedFor).toEqual([])
+		expect(out.plan.workflow).toEqual({
+			id: 61,
+			name: "SDXL text-to-image",
+			chosen: "slot"
+		})
 	})
 })

@@ -369,9 +369,63 @@ async function send(userId: number, sessionId: number, content: string, channel 
 
 const tableRows = async (sessionId: number) => (await rowsOf(sessionId)).filter((r) => r.channel === "table").map((r) => r.content)
 
+/** The session's story clock (`sessions.story_clock_*`); null when it has none. */
+async function storyClockOf(sessionId: number) {
+	const [row] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+	if (row!.storyClockHour == null) return null
+	return { day: row!.storyClockDay, hour: row!.storyClockHour, minute: row!.storyClockMinute ?? 0 }
+}
+
+/** The `deceased` cast versions this session wrote for a cast member. */
+async function deceasedVersions(sessionId: number, castMemberId: number) {
+	return db
+		.select()
+		.from(schema.characterVersions)
+		.where(and(eq(schema.characterVersions.castMemberId, castMemberId), eq(schema.characterVersions.nodeState, "deceased"), eq(schema.characterVersions.sourceSessionId, sessionId)))
+}
+
+/** The clock moves the session's state ledger holds (applied, newest last): minutes moved and why. */
+async function clockMoves(sessionId: number) {
+	const rows = await db
+		.select()
+		.from(schema.stateProposals)
+		.where(and(eq(schema.stateProposals.sessionId, sessionId), eq(schema.stateProposals.kind, "clock"), eq(schema.stateProposals.status, "applied")))
+		.orderBy(asc(schema.stateProposals.id))
+	return rows.map((r) => r.payload as { by: number; unit: string; cause: string })
+}
+
+describe("the story clock (hist-D2, 2026-11-10)", () => {
+	it("create sets the session's story clock to 08:00 on a fresh session, as one move by the action", async () => {
+		const sessionId = await createSession("clock at create")
+		await settle()
+		expect(await storyClockOf(sessionId)).toMatchObject({ hour: 8, minute: 0 })
+		const moves = await clockMoves(sessionId)
+		expect(moves.length).toBeLessThanOrEqual(1)
+		for (const m of moves) expect(m.cause).toBe("action")
+	})
+
+	it("a rest moves the story clock forward by its length: one move, cause action", async () => {
+		const { sessionId } = await madeTable("clock at rest")
+		planQueue.length = 0
+		const before = await storyClockOf(sessionId)
+		const movesBefore = (await clockMoves(sessionId)).length
+		const { setRoutinesEnabled } = await import("$lib/server/pipelines/routines/runs")
+		setRoutinesEnabled(true)
+		const rested = await fire(ownerId, sessionId, "core:spec/rules-action#rest", undefined, undefined, {}).finally(() => setRoutinesEnabled(false))
+		expect(rested?.error, rested?.error).toBeUndefined()
+		const after = await storyClockOf(sessionId)
+		const moves = (await clockMoves(sessionId)).slice(movesBefore)
+		expect(moves).toHaveLength(1)
+		expect(moves[0]).toMatchObject({ unit: "minutes", cause: "action" })
+		const minutes = (c: any) => c.day * 1440 + c.hour * 60 + c.minute
+		expect(minutes(after) - minutes(before)).toBe(moves[0]!.by)
+		expect(moves[0]!.by).toBeGreaterThan(0)
+	})
+})
+
 describe("death's door (A7) and retaking a death (A8)", () => {
 	it("a healthy seat never rolls; a seat left at 0 health does; a death retaken brings the seat back and leaves no stale form", async () => {
-		const { sessionId, ref, owner } = await madeTable("deaths door", { difficulty: "brutal" })
+		const { sessionId, ref, owner, seat: seatOf0 } = await madeTable("deaths door", { difficulty: "brutal" })
 		planQueue.length = 0
 		// The Planner names a healthy Ann for death's door — a field the turn
 		// no longer has: nobody rolls.
@@ -396,9 +450,11 @@ describe("death's door (A7) and retaking a death (A8)", () => {
 		const annex = await annexOf(sessionId)
 		const owed = annex["dungeon-crawler-progress"].arrivals as any[]
 		expect(owed).toEqual([{ who: `user:${ownerId}`, fallen: "Ann the Bold", where: "The Sunken Gate", left: 2 }])
-		expect((await ownLore(sessionId, "core:entry/history")).map((e) => e.content)).toEqual([
-			expect.stringMatching(/^Here lies Ann the Bold, Ranger, level 1, who fell in The Sunken Gate\.$/)
-		])
+		// Moved 2026-11-10 (hist-D1/D2): a death writes no cairn (no history row): the seat's cast member is
+		// marked `deceased` (a cast version) and the fallen is listed in the progress annex.
+		expect(await ownLore(sessionId, "core:entry/history")).toEqual([])
+		expect(await deceasedVersions(sessionId, seatOf0.castMemberId!)).toHaveLength(1)
+		expect(annex["dungeon-crawler-progress"].fallen).toEqual([{ name: "Ann the Bold", where: "The Sunken Gate", seat: ref, castMemberId: seatOf0.castMemberId }])
 		const newCharacter = (await formsOn(sessionId, "parley")).find((f) => f.block.referent === "new-character")
 		expect(newCharacter).toBeTruthy()
 		// Solo and dead: nobody is left to declare, so no line fires a round.
@@ -427,6 +483,38 @@ describe("death's door (A7) and retaking a death (A8)", () => {
 		expect((await send(ownerId, sessionId, "I walk on.")).error).toBeUndefined()
 		expect(await respondRuns(sessionId)).toBe(runs + 1)
 	})
+
+	it("a death turn swiped or retaken and killed again leaves one deceased version and one clock move for the turn", async () => {
+		const { sessionId, ref, owner, seat } = await madeTable("deaths retaken", { difficulty: "brutal" })
+		planQueue.length = 0
+		const MINUTES = 7
+		const kill = () => plan({ clock: { minutes: MINUTES }, deltas: [delta({ owner: ref, op: "spend", slot: "hp", value: "99", reason: "the fall" })] })
+		// Take the fall until the dice kill Ann (a survivor is on 1 health: she falls again).
+		// `baseline`: the moves standing before the death turn (earlier turns' moves stay).
+		let attempts = 0
+		let baseline = 0
+		while ((await value(sessionId, owner, "core:slot/fate@1")) !== "dead" && attempts++ < 10) {
+			baseline = (await clockMoves(sessionId)).length
+			await turn(sessionId, ref, "I leap the chasm.", kill())
+		}
+		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("dead")
+
+		// Retake until the dice kill her again: each retaken turn takes the last one's death back.
+		const { retakeTurn } = await import("$lib/server/sessions/retakeTurn")
+		let retakes = 0
+		do {
+			planQueue.push(kill())
+			const retaken = await retakeTurn(db as any, { sessionId, userId: ownerId })
+			await settle()
+			expect(retaken.error, retaken.error).toBeUndefined()
+		} while ((await value(sessionId, owner, "core:slot/fate@1")) !== "dead" && retakes++ < 20)
+		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("dead")
+		expect(await deceasedVersions(sessionId, seat.castMemberId!)).toHaveLength(1)
+		// One move for the death turn, by the action: the retaken turn's, not the first take's too.
+		const one = (await clockMoves(sessionId)).slice(baseline)
+		expect(one).toHaveLength(1)
+		expect(one[0]).toMatchObject({ by: MINUTES, unit: "minutes", cause: "action" })
+	})
 })
 
 describe("a new character after a death (A9)", () => {
@@ -450,7 +538,7 @@ describe("a new character after a death (A9)", () => {
 		expect((await own({ choice: "cleric" })).error).toBeUndefined()
 		expect((await own({ choice: "surprise" })).error).toBeUndefined()
 		// 🚧 A NEW seat (owner ruling 2026-10-18, the 100-turn walk's P3-1): the
-		// fallen's stays dead, retired from the table, its cairn standing.
+		// fallen's stays dead, retired from the table, its cast member `deceased`.
 		expect(await value(sessionId, owner, "core:slot/fate@1")).toBe("dead")
 		const cassSeat = (await db.select().from(schema.sessionPersonas).where(eq(schema.sessionPersonas.sessionId, sessionId))).find((s) => s.seatName === "Cass")!
 		expect(cassSeat.id).not.toBe(owner.id)

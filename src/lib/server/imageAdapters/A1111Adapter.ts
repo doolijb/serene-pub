@@ -43,8 +43,10 @@ import {
 } from "./BaseImageAdapter"
 import type { SettingsSchema } from "@serene-pub/sdk"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 
-const DEFAULT_BASE_URL = "http://localhost:5001"
+// What an A1111, Forge or SD.Next listens on; the row's own URL wins when set.
+const DEFAULT_BASE_URL = "http://localhost:7860"
 
 /** How often to ask how far along a render is. */
 const POLL_MS = 750
@@ -57,17 +59,21 @@ const PROFILE_SCHEMA: SettingsSchema = {
 			"Runs the face-restoration pass, where the backend has one.",
 		default: false
 	},
+	// `json` (stored parsed, which is what the render reads), not `text` with
+	// `format: "json"`: that is a STRING holding JSON, which the Settings tab
+	// rendered from the object default as "[object Object]" and the render
+	// would have spread as characters (seen 2026-11-08; Horde's `loras` too).
 	overrideSettings: {
-		type: "text",
-		format: "json",
+		type: "json",
+		maxBytes: 65536,
 		label: "Override settings",
 		description:
 			"A1111 `override_settings`, as JSON — applied for this request only. For anything the shared parameters have no name for.",
 		default: {}
 	},
 	alwaysonScripts: {
-		type: "text",
-		format: "json",
+		type: "json",
+		maxBytes: 65536,
 		label: "Always-on scripts",
 		description:
 			"A1111 `alwayson_scripts`, as JSON — ControlNet, IP-Adapter and the like, sent with every render from this connection.",
@@ -166,10 +172,9 @@ export function a1111SheetFor(connection: {
 }
 
 function authHeaders(connection: SelectConnection): Record<string, string> {
-	const key = (connection.extraJson as any)?.apiKey
-	return typeof key === "string" && key
-		? { Authorization: `Bearer ${key}` }
-		: {}
+	// Encrypted at rest on a stored row, plain on a draft: read either here.
+	const key = decryptApiKeyField((connection.extraJson as any)?.apiKey)
+	return key ? { Authorization: `Bearer ${key}` } : {}
 }
 
 function base(connection: SelectConnection): string {
@@ -490,9 +495,17 @@ class A1111Adapter extends BaseImageAdapter {
 						0,
 						Math.min(100, (p.progress ?? 0) * 100)
 					)
+					// A server that answers the endpoint with nothing in it
+					// (KoboldCPP: progress 0, no step count, for the whole
+					// render) is drawing all the same; say so rather than
+					// leave "0%" standing for minutes.
+					const silent = !(pct > 0) && !p.state?.sampling_steps
 					onProgress({
 						stage: "sampling",
 						percent: pct,
+						...(silent
+							? { message: "Drawing… this server does not say how far along it is." }
+							: {}),
 						...(p.state?.sampling_step != null
 							? { step: p.state.sampling_step }
 							: {}),

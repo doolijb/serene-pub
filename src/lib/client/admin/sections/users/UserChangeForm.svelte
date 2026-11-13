@@ -20,9 +20,12 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { adminGoto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
+	import {
+		adminGoto,
+		adminUnsavedEdits
+	} from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		passphraseSchema,
 		PASSPHRASE_RULE_HINT
@@ -31,7 +34,9 @@
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 	import { randomPassphrase, roleWord, userDeletion } from "./usersAdmin"
 
 	interface Props {
@@ -77,15 +82,21 @@
 	let passphraseError = $state<string | null>(null)
 	let formErrors = $state<string[]>([])
 	function validate(): boolean {
-		usernameError = draft.username.trim() ? null : "A user needs a username."
+		usernameError = draft.username.trim()
+			? null
+			: "A user needs a username."
 		passphraseError = null
 		if (mode === "add" && !draft.passphrase)
 			passphraseError = "A new account needs a passphrase."
 		else if (draft.passphrase) {
-			if (draft.passphrase !== draft.confirm) passphraseError = "The two passphrases differ."
+			if (draft.passphrase !== draft.confirm)
+				passphraseError = "The two passphrases differ."
 			else {
 				const r = passphraseSchema.safeParse(draft.passphrase)
-				if (!r.success) passphraseError = r.error.errors[0]?.message ?? "That passphrase is too weak."
+				if (!r.success)
+					passphraseError =
+						r.error.errors[0]?.message ??
+						"That passphrase is too weak."
 			}
 		}
 		return !usernameError && !passphraseError
@@ -111,12 +122,17 @@
 				...base,
 				passphrase: draft.passphrase || undefined
 			})
-		else socket.emit("users:create", { ...base, passphrase: draft.passphrase })
+		else
+			socket.emit("users:create", {
+				...base,
+				passphrase: draft.passphrase
+			})
 	}
 	function land(intent: AdminSaveIntent, id: number) {
 		if (intent === "save") void adminGoto("/admin/users")
 		else if (intent === "another") void adminGoto("/admin/users/new")
-		else if (mode === "add") void adminGoto(`/admin/users/${id}`, { replaceState: true })
+		else if (mode === "add")
+			void adminGoto(`/admin/users/${id}`, { replaceState: true })
 	}
 	function saved(u: SelectUser) {
 		const intent = pendingIntent
@@ -125,7 +141,7 @@
 		saving = false
 		draft = toDraft(u)
 		edits.markSaved()
-		toaster.success({ title: `Saved ${u.username}` })
+		notify.success({ title: `Saved ${u.username}` })
 		socket.emit("users:list", {})
 		land(intent, u.id)
 	}
@@ -158,7 +174,7 @@
 		if (!deleting) return
 		deleting = false
 		edits.forget()
-		toaster.success({ title: "Account deleted" })
+		notify.success({ title: "Account deleted" })
 		socket.emit("users:list", {})
 		void adminGoto("/admin/users", { replaceState: true })
 	})
@@ -179,9 +195,11 @@
 	async function copy() {
 		try {
 			await navigator.clipboard.writeText(draft.passphrase)
-			toaster.success({ title: "Passphrase copied" })
+			notify.success({ title: "Passphrase copied" })
 		} catch {
-			toaster.error({ title: "Could not reach the clipboard. Select the text and copy it." })
+			notify.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
 		}
 	}
 
@@ -200,7 +218,9 @@
 	}
 
 	const title = $derived(
-		mode === "add" ? "Add user" : draft.username.trim() || user?.username || "User"
+		mode === "add"
+			? "Add user"
+			: draft.username.trim() || user?.username || "User"
 	)
 </script>
 
@@ -216,19 +236,28 @@
 	dirty={edits.dirty}
 	{saving}
 	errors={formErrors}
-	fieldErrors={{ "user-admin-username": usernameError, "user-admin-passphrase": passphraseError }}
-	deletion={user && !isSelf ? () => userDeletion([user!], userCtx?.user?.id) : undefined}
+	fieldErrors={{
+		"user-admin-username": usernameError,
+		"user-admin-passphrase": passphraseError
+	}}
+	deletion={user && !isSelf
+		? () => userDeletion([user!], userCtx?.user?.id)
+		: undefined}
 	onDelete={user && !isSelf ? remove : undefined}
 	onSave={save}
 >
 	{#snippet headerExtra()}
 		{#if user}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span
+					class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+				>
 					{roleWord(user)}
 				</span>
 				{#if isSelf}
-					<span class="preset-tonal-primary rounded-full px-2 py-0.5">You</span>
+					<span class="preset-tonal-primary rounded-full px-2 py-0.5">
+						You
+					</span>
 				{/if}
 				<span class="text-surface-600-400">
 					{user.lastLoginAt
@@ -255,7 +284,10 @@
 					autocomplete="off"
 					bind:value={draft.username}
 					aria-invalid={!!usernameError}
-					aria-describedby={describedBy("user-admin-username", !!usernameError)}
+					aria-describedby={describedBy(
+						"user-admin-username",
+						!!usernameError
+					)}
 				/>
 			</AdminField>
 			<AdminField
@@ -302,11 +334,17 @@
 
 	<AdminFieldset
 		title="Passphrase"
-		description={mode === "add" ? undefined : "Leave both empty to keep the current passphrase."}
+		description={mode === "add"
+			? undefined
+			: "Leave both empty to keep the current passphrase."}
 	>
 		{#snippet aside()}
 			<div class="flex shrink-0 gap-2">
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={generate}>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={generate}
+				>
 					<Icons.Dices size={14} aria-hidden="true" /> Generate
 				</button>
 				<button
@@ -335,15 +373,22 @@
 						autocomplete="new-password"
 						bind:value={draft.passphrase}
 						aria-invalid={!!passphraseError}
-						aria-describedby={describedBy("user-admin-passphrase", !!passphraseError)}
+						aria-describedby={describedBy(
+							"user-admin-passphrase",
+							!!passphraseError
+						)}
 					/>
 					<button
 						type="button"
 						class="text-surface-600-400 hover:text-surface-950-50 absolute top-1/2 right-2 -translate-y-1/2"
-						aria-label={show ? "Hide passphrase" : "Show passphrase"}
+						aria-label={show
+							? "Hide passphrase"
+							: "Show passphrase"}
 						onclick={() => (show = !show)}
 					>
-						{#if show}<Icons.EyeOff size={18} />{:else}<Icons.Eye size={18} />{/if}
+						{#if show}<Icons.EyeOff size={18} />{:else}<Icons.Eye
+								size={18}
+							/>{/if}
 					</button>
 				</div>
 			</AdminField>

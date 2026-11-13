@@ -237,6 +237,8 @@ export type HostTable =
 	| "graph_relationships"
 	| "graph_entry_links"
 	| "cast_presences"
+	/** 🚧 One cast member as the session reads it (`core:query/cast-member@1`). */
+	| "cast_member"
 	| "likeness_images"
 	/** 🚧 One row as a line to speak (`core:query/message-line@1`, speech ★1). */
 	| "message_line"

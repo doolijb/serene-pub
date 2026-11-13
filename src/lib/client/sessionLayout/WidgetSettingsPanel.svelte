@@ -110,7 +110,8 @@
 			{#if overridden}
 				<button
 					class="wsx-reset"
-					title="Drop your changes and use what this widget ships"
+					title="Put this widget's settings back to their defaults; its style stays."
+					aria-label="Reset settings"
 					onclick={() => resetWidgetSettings(widgetId)}
 				>
 					<Icons.RotateCcw size={11} />

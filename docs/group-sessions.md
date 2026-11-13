@@ -13,11 +13,13 @@ In the Lair, a guest takes a seat by naming the character they'll play (or bring
 
 In [Dungeon Crawler](./genre-dungeon-crawler.md) each person at the table plays one seat, and a guest needs no persona: the Planner's interview names their character on their own Planner tab. Until that character is made, their Story composer and **Continue** are greyed with what they wait on (*Waiting: Make your character on the Planner tab first.*), never *add a persona first*. See [Rounds with friends](./genre-dungeon-crawler.md#rounds-with-friends).
 
+A cast member seated with no character card takes turns like any character: **Continue**, **Pick who speaks** and the turn order name it, and its reply is its own, not the narrator's.
+
 ## The basics
 
 Add more than one character when you start a session, or later in **Edit session › Participants**. That's all it takes to make a group session. (A Story on the **Minimal** preset can also start with nobody at all: add characters whenever you like.)
 
-After you send a message, the characters answer in turn: by default each active character speaks once, in the order they're listed, and then it's your turn again. Drag the characters in **Participants** to change that order.
+After you send a message, the characters answer in turn: by default each character in play speaks once, in the order they're listed, and then it's your turn again. Drag the characters in **Participants** to change that order.
 
 :::tip You should see
 After the last character has spoken, the turn line above the composer reads *Your turn*. If you'd rather have someone speak again, press **Continue** or **Pick who speaks**.
@@ -37,7 +39,7 @@ It hides while you have a draft or while you're editing a message. While a reply
 
 When it's your turn, you also get a notification in [Activity](./getting-around.md#activity), such as *Your turn in The Guard Room*, so you know even when the session isn't open. It clears once you take your turn.
 
-In the Messages widget's settings, **Who is due next** chooses how much the line shows: **Who speaks next** (the default), **Who speaks next and after them** (adds *Then Mira, Tobin*), or **Nothing**, which hides that half of the turn line. Who is typing still shows. See [Session layout](./session-layout.md).
+In the **Turn line** widget's settings, **Who is due next** chooses how much the line shows: **Who speaks next** (the default), **Who speaks next and after them** (adds *Then Mira, Tobin*), or **Nothing**, which hides that half of the turn line. Who is typing still shows. See [The Composer and the Turn line](./session-layout.md#the-composer-and-the-turn-line).
 
 To see the whole order at once, add the **Turn order** widget from the layout tray: the same line, then everyone lined up after it, with **Continue** and **Pick who speaks**. Unlike the turn line, it stays up while you write. See [Session layout](./session-layout.md#the-widgets).
 
@@ -54,16 +56,16 @@ Neither starts anything by itself: each press is one turn.
 
 The turn order is set in **Edit session › Settings**, under **How replies are made**, on the Story turn order's **Strategy**. **Pipeline default (Round robin)** is what you get if you change nothing. Choose another and press **Apply now** (it applies at once, not with **Save**):
 
-- **Round robin**: after each of your messages, every active character speaks once, in order. The default.
+- **Round robin**: after each of your messages, every character in play speaks once, in order. The default.
 - **Round robin by user**: the characters belonging to whoever sent the last message go first. Only useful with several people in one session; alone, it's the same as round robin.
-- **Random**: a random active character speaks.
+- **Random**: a random character in play speaks.
 - **Scripted**: round robin, with scripts in charge. An administrator attaches [scripts](./scripts.md) at the seam on the turn order's **Order the turns** step, in that step's Advanced box in **Admin › Pipelines**; the first script to name someone wins, and if none does, round robin decides.
 - **Manual**: nobody replies by themselves. Use **Pick who speaks** or **Continue** each time.
 - **Narrator replies**: a narrator answers each of your messages instead of a character.
 
 A plugin can add strategies of its own to this list.
 
-Who may take a turn at all, and how far back a mention moves someone up, are the turn order's own settings, on the **Turn order** card in the same place: **Characters** (active ones, all, or none), **Personas**, **Envoys** and **Messages scanned**. Each applies at once (see [Pipeline settings in a session](./sessions.md#pipeline-settings-in-a-session)).
+Who may take a turn at all, and how far back a mention moves someone up, are the turn order's own settings, on the **Turn order** card in the same place: **Characters** (active ones, all, or none; a benched character is out of the turns whichever is picked), **Personas**, **Envoys** and **Messages scanned**. Each applies at once (see [Pipeline settings in a session](./sessions.md#pipeline-settings-in-a-session)).
 
 ### Let the model decide
 
@@ -87,13 +89,15 @@ Only your own message starts this. Editing or deleting a message, or changing se
 
 The Lair has no Auto-advance setting: each message you send gets one turn, and in the Lair each delver the Castellan named follows by themselves.
 
-## Bench a character
+## Bench a seat
 
-Each character in **Edit session › Participants** has a switch. Turn it off to **bench** the character: they stay in the session and keep their messages, but they stop speaking, drop out of the list of character names the model sees, and aren't offered as choices. Turn it on again to bring them back. A guest can bench and unbench their own characters.
+Each saved seat in **Edit session › Participants** has a **Bench** button (envoys keep their switch). A benched seat stays in the session and keeps its lines, but it is out of the turns: it stops speaking, drops out of the list of character names the model sees, isn't offered as a choice, and its character's private lore goes to the narrator, as a background member's does. Benched seats wait in the **Benched** section, under **Characters** and **Players**. Press **Bring back**, or drag the row up to the seated list, to return one to the end of its list; dragging a seated row down benches it. Changes wait for **Save**. A guest can bench and bring back their own seats.
 
-Benching is better than removing someone you'll want back, because nothing about them is lost.
+Nothing about a benched seat is lost. **Remove**, in a benched row's **⋯** menu, appears only on a seat with no lines; one with lines stays benched.
 
-A benched character leaves the **Scene Portraits** widget too. The **Turn order** widget can list them under the order: turn on **Show benched characters** in its settings (see [Session layout](./session-layout.md#the-widgets)).
+A benched seat leaves the **Scene Portraits** widget too. The **Turn order** widget can list benched characters under the order: turn on **Show benched characters** in its settings (see [Session layout](./session-layout.md#the-widgets)).
+
+Serene Pub never benches a seat by itself: a person does, or a genre that opts in (the Dungeon Crawler benches a companion who dies in the story).
 
 ## Character detail
 
@@ -107,7 +111,7 @@ The speaker's own card is always sent in full. Less detail leaves more room for 
 
 ## Narrator Response
 
-A **Narrator Response** is a message from the world itself rather than any character: weather, scenery, a shopkeeper, a monster. You ask for one; it never happens by itself and never counts as anyone's turn. It's offered in Chat.
+A **Narrator Response** is a message from the world itself rather than any character: weather, scenery, a shopkeeper, a monster. You ask for one; it never happens by itself and never counts as anyone's turn. It's offered in Chat. (In Story, **Narrator's turn** can give the narrator a turn of its own every round or two: see [What runs between turns](./genre-story.md#what-runs-between-turns).)
 
 ### Ask for one
 

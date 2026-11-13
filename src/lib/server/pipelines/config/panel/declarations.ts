@@ -18,7 +18,6 @@ import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 import {
 	WRITE_MATRIX,
-	getVariable,
 	clauseSettingsSlotFor,
 	envoyPromptsSlotFor,
 	ENVOY_CONFIG_PREFIX,
@@ -35,7 +34,11 @@ import {
 	type SlotDecl,
 	type ScriptPointDecl
 } from "@serene-pub/sdk"
-import { type Decl } from "$lib/server/pipelines/config/panel/types"
+import { acceptedEnginesOf } from "$lib/shared/pipelines/templateEngines"
+import {
+	type Decl,
+	type VariableKey
+} from "$lib/server/pipelines/config/panel/types"
 import { isUnreadSlot } from "$lib/server/pipelines/boot/unreadAllowList"
 import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
 import {
@@ -338,6 +341,29 @@ export function unplacedChainDecls(
 }
 
 /**
+ * The keys a `variables` slot renders, each with the variable it renders.
+ *
+ * Not settings: a variable is written out by its variable layout, chosen once
+ * for the pub, so no per-step option is declared. The run still needs the
+ * mapping — per key, which variable — to resolve a layout by variable and to
+ * learn which bands to render at the top level (`bandKeys`, `rendersAt`).
+ */
+function variableKeysOf(
+	nodeKey: string,
+	slotName: string,
+	decl: SlotDecl & { bandKeys?: readonly string[] }
+): VariableKey[] {
+	return Object.entries(decl.renders ?? {}).map(([key, variableId]) => ({
+		nodeKey,
+		slot: slotName,
+		path: key,
+		variableId: variableId as string,
+		engines: acceptedEnginesOf(decl),
+		...(decl.bandKeys?.includes(key) ? { band: true as const } : {})
+	}))
+}
+
+/**
  * Expand one slot declaration into its addressable settings.
  *
  * A `prompts` or `parameters` slot is many settings, one per declared field, and
@@ -411,39 +437,6 @@ function declsForSlot(
 				control: "prompts-ref"
 			}
 		]
-
-	// One option per key the slot renders, each pointing at a swappable layout
-	// row. Expanded here rather than addressed as one slot value because the
-	// keys are independent decisions — someone rendering characters as prose
-	// has said nothing about their personas, and per-path resolution is what
-	// keeps those separate (F20).
-	if (decl.kind === "variables")
-		return Object.entries(decl.renders ?? {}).map(([key, variableId]) => {
-			// A band declared upstream (typed templates P2) — `declarations()`
-			// has already opened `renders` to include it (`rendersAt`).
-			const band = (decl as { bandKeys?: readonly string[] }).bandKeys?.includes(
-				key
-			)
-			// The registry is a fact about the running build; the declaration
-			// came from a row. A variable whose plugin is disabled is therefore
-			// normal, not an error — it falls back to the humanized key rather
-			// than showing a raw id or vanishing from a panel that still has a
-			// stored value for it.
-			const v = getVariable(variableId as string)
-			const description =
-				i18nText(v?.description) ??
-				i18nText(v?.i18n?.description) ??
-				slotDescription
-			return {
-				...base,
-				path: key,
-				variableId: variableId as string,
-				label: i18nText(v?.i18n?.name) ?? humanizeCamel(key),
-				...(description ? { description } : {}),
-				...(band ? { band: true as const } : {}),
-				control: "variable-template-ref"
-			}
-		})
 
 	// A `settings` slot is the same shape one kind over — declared fields,
 	// one option each — and renders through the same branch, which is what
@@ -811,6 +804,20 @@ export async function declarations(
 	db: Db,
 	specVersionId: number
 ): Promise<Decl[]> {
+	return (await declarationsAndVariableKeys(db, specVersionId)).decls
+}
+
+/**
+ * `declarations()` and, from the same walk, the keys every `variables` slot
+ * renders (`VariableKey`). The run reads both: the settings to resolve, the
+ * keys to know which variable each `variables` key is laid out by. A variables
+ * slot declares no setting, so its keys are never in `decls`.
+ */
+export async function declarationsAndVariableKeys(
+	db: Db,
+	specVersionId: number
+): Promise<{ decls: Decl[]; variableKeys: VariableKey[] }> {
+	const variableKeys: VariableKey[] = []
 	const nodes = await db
 		.select()
 		.from(schema.pipelineNodes)
@@ -924,17 +931,26 @@ export async function declarations(
 				!Object.keys(forThisNode.schema ?? {}).length
 			)
 				continue
+			if (forThisNode.kind === "variables") {
+				// Opened when bands reach it, and when the spec says what one
+				// of its keys means here (`renders` on the node, 2026-10-13):
+				// either way the declaration's own `renders` is not the answer.
+				variableKeys.push(
+					...variableKeysOf(
+						node.nodeKey,
+						slotName,
+						forThisNode.rendersBands || node.renders
+							? await openRenders(docOf, node.nodeKey, forThisNode, byPin)
+							: forThisNode
+					)
+				)
+				continue
+			}
 			out.push(
 				...declsForSlot(
 					node.nodeKey,
 					slotName,
-					// Opened when bands reach it, and when the spec says what one
-					// of its keys means here (`renders` on the node, 2026-10-13):
-					// either way the declaration's own `renders` is not the answer.
-					forThisNode.kind === "variables" &&
-					(forThisNode.rendersBands || node.renders)
-						? await openRenders(docOf, node.nodeKey, forThisNode, byPin)
-						: forThisNode.kind === "template"
+					forThisNode.kind === "template"
 							? {
 									...forThisNode,
 									...(await templateScopeDetailFor(
@@ -1104,5 +1120,5 @@ export async function declarations(
 	}
 	for (const d of out) d.stepHeading = headingOf.get(d.nodeKey) ?? d.typeLabel
 
-	return disambiguate(out)
+	return { decls: disambiguate(out), variableKeys }
 }

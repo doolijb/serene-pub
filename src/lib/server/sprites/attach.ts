@@ -7,15 +7,18 @@
  * for (an empty sprite first, else a variant — never a replacement); an
  * unkeyed picture is ignored; a key that brought no picture is `missing`.
  *
- * Refused unless the person the run acts as owns the card or is an admin.
- * A picture must be the run person's own file or already the card's — a
+ * Refused unless the person the run acts as owns the card or is an admin
+ * (for a cast member: may edit its lorebook, `canEditCastMember`). A picture
+ * must be the run person's own file or already the card's (the member's) — a
  * media reference is an address anyone could type, and a sprite would
- * re-publish whatever it names under the card's visibility.
+ * re-publish whatever it names under the card's visibility. A member's
+ * pictures are its book owner's files, the book as provenance.
  */
 
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { getMediaByUuid } from "$lib/server/media"
+import { fileForOwner, getMediaByUuid } from "$lib/server/media"
+import { canEditCastMember } from "$lib/server/cast/memberAccess"
 import {
 	ensureDefaultSpriteSet,
 	findSpriteSetByName,
@@ -26,7 +29,10 @@ import { normalizeSpriteName } from "$lib/shared/sprites"
 export class AttachSpriteRefusal extends Error {}
 
 export interface AttachSpritesInput {
-	characterId: number
+	/** The card to fill — name this or `castMemberId`, never both. */
+	characterId?: number
+	/** 🚧 The cast member to fill — name this or `characterId`, never both. */
+	castMemberId?: number
 	/** The set to fill, by name; blank or gone = the default set. */
 	setName?: string | null
 	/** The pictures — `MediaRef`s, each with the series `key` it was drawn for. */
@@ -83,15 +89,31 @@ export async function attachGeneratedSprites(
 	db: Db,
 	input: AttachSpritesInput
 ): Promise<AttachSpritesResult> {
-	if (!(await mayFillSprites(db, input.userId, input.characterId)))
+	if ((input.characterId == null) === (input.castMemberId == null))
+		throw new AttachSpriteRefusal(
+			"name a character or a cast member, not both."
+		)
+	const member =
+		input.castMemberId != null
+			? await canEditCastMember(db, input.castMemberId, input.userId)
+			: null
+	if (input.castMemberId != null) {
+		if (!member)
+			throw new AttachSpriteRefusal(
+				"only someone who can edit this cast member's lorebook can add sprites to it."
+			)
+	} else if (!(await mayFillSprites(db, input.userId, input.characterId!)))
 		throw new AttachSpriteRefusal(
 			"only the card's owner or an admin can add sprites to it."
 		)
+	const owner = member
+		? { castMemberId: member.id }
+		: { characterId: input.characterId! }
 
 	const set =
 		(input.setName
-			? await findSpriteSetByName(db, input.characterId, input.setName)
-			: null) ?? (await ensureDefaultSpriteSet(db, input.characterId))
+			? await findSpriteSetByName(db, owner, input.setName)
+			: null) ?? (await ensureDefaultSpriteSet(db, owner))
 
 	const byKey = labelsByKey(input.series)
 	const items = Array.isArray(input.media)
@@ -113,21 +135,51 @@ export async function attachGeneratedSprites(
 		if (!label || typeof ref.uuid !== "string") continue
 		const file = await getMediaByUuid(db, ref.uuid)
 		if (!file) continue
-		if (file.userId !== input.userId && file.characterId !== input.characterId)
-			throw new AttachSpriteRefusal(
-				"a picture handed to it is neither yours nor this card's."
-			)
-		// Provenance: the picture becomes the card's file (its visibility,
-		// its gallery rule). Only a file nobody else claims is stamped.
-		if (file.characterId == null)
-			await db
-				.update(schema.files)
-				.set({ characterId: input.characterId })
-				.where(
-					and(eq(schema.files.id, file.id), isNull(schema.files.characterId))
+		let fileId = file.id
+		if (member) {
+			const isMembers =
+				file.userId === member.bookOwnerId &&
+				file.lorebookId === member.lorebookId
+			if (file.userId !== input.userId && !isMembers)
+				throw new AttachSpriteRefusal(
+					"a picture handed to it is neither yours nor this cast member's."
 				)
-		const row = await placeSpriteFile(db, set.id, label, file.id, "generated")
-		attached.push({ label, spriteId: row.id, fileId: file.id })
+			if (file.userId !== member.bookOwnerId)
+				// The run person is not the book's owner (a session's notes
+				// editor): the member's picture is the owner's own copy.
+				fileId = await fileForOwner(db, file.id, {
+					userId: member.bookOwnerId,
+					lorebookId: member.lorebookId
+				})
+			else if (file.characterId == null && file.lorebookId == null)
+				// The owner's own file nobody else claims: the book is its provenance.
+				await db
+					.update(schema.files)
+					.set({ lorebookId: member.lorebookId })
+					.where(
+						and(
+							eq(schema.files.id, file.id),
+							isNull(schema.files.characterId),
+							isNull(schema.files.lorebookId)
+						)
+					)
+		} else {
+			if (file.userId !== input.userId && file.characterId !== input.characterId)
+				throw new AttachSpriteRefusal(
+					"a picture handed to it is neither yours nor this card's."
+				)
+			// Provenance: the picture becomes the card's file (its visibility,
+			// its gallery rule). Only a file nobody else claims is stamped.
+			if (file.characterId == null)
+				await db
+					.update(schema.files)
+					.set({ characterId: input.characterId })
+					.where(
+						and(eq(schema.files.id, file.id), isNull(schema.files.characterId))
+					)
+		}
+		const row = await placeSpriteFile(db, set.id, label, fileId, "generated")
+		attached.push({ label, spriteId: row.id, fileId })
 		got.add(key)
 	}
 

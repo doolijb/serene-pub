@@ -17,10 +17,11 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { openJumpHit } from "$lib/client/shell/openJumpHit"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import AdminDeleteConfirm from "$lib/client/components/admin/AdminDeleteConfirm.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	import NewNameModal from "$lib/client/components/modals/NewNameModal.svelte"
 	import type {
 		AdminChangelistColumn,
@@ -33,6 +34,7 @@
 		kitSourceLine
 	} from "$lib/client/lorebooks/starterKitCards"
 
+	// A primer row carries `provided` (M2e); admin kits have none.
 	type Row = Sockets.StarterKits.Card
 
 	const userCtx: { user?: SelectUser | null } | undefined =
@@ -49,6 +51,10 @@
 	let cloneError = $state("")
 	/** This tab's clone in flight, by the card it copies. */
 	let pendingClone: string | null = null
+	/** 🚧 (M2e) The `row.id` of the switch this tab pressed; only this tab claims a refusal. */
+	let pendingSwitch: string | null = null
+	/** 🚧 (M2e) The server's refusal of that switch, shown beside its row. */
+	let switchError = $state<{ rowId: string; text: string } | null>(null)
 	/** The kit whose delete is being confirmed. */
 	let deleting = $state<Row | null>(null)
 	let pendingDelete: number | null = null
@@ -57,17 +63,50 @@
 		if (!userCtx?.user?.isAdmin) return
 		const releases = [
 			// BARE and STANDING: a save, clone or delete anywhere re-sends it.
-			interest.requestWithInterest("starterKits:list", {}, (res) => {
-				rows = res?.kits ?? []
-				loading = false
-			}),
+			// 🚧 (M2e) `includeDisabled`: the admin page draws a disabled primer row with its switch.
+			interest.requestWithInterest(
+				"starterKits:list",
+				{ includeDisabled: true },
+				(res) => {
+					rows = res?.kits ?? []
+					loading = false
+				}
+			),
+			// 🚧 (M2e) The switch is a one-shot act: the server's re-send of
+			// `starterKits:list` is what shows it, so the answers only need hearing.
+			interest.declareInterest<"plugins:disableProvidedBook">(
+				"plugins:disableProvidedBook",
+				clearSwitch
+			),
+			interest.declareInterest<"plugins:enableProvidedBook">(
+				"plugins:enableProvidedBook",
+				clearSwitch
+			),
+			interest.declareInterest<"plugins:disableProvidedBook:error">(
+				"plugins:disableProvidedBook:error",
+				(res) =>
+					refuseSwitch(
+						res?.error,
+						"The lorebook could not be disabled."
+					)
+			),
+			interest.declareInterest<"plugins:enableProvidedBook:error">(
+				"plugins:enableProvidedBook:error",
+				(res) =>
+					refuseSwitch(
+						res?.error,
+						"The lorebook could not be enabled."
+					)
+			),
 			interest.declareInterest<"starterKits:clone">(
 				"starterKits:clone",
 				(res) => {
 					if (pendingClone === null || !res?.kit) return
 					pendingClone = null
 					cloning = null
-					toaster.success({
+					// 🚧 (M2e) The server's re-send after a clone leaves disabled rows out; this page wants them.
+					socket.emit("starterKits:list", { includeDisabled: true })
+					notify.success({
 						title: "Starter lorebook cloned",
 						description: `"${res.kit.name}" is ready. Open it in Lorebooks to make it your own.`
 					})
@@ -79,7 +118,8 @@
 					if (pendingClone === null) return
 					pendingClone = null
 					cloneError =
-						res?.error || "The starter lorebook could not be cloned. Try again."
+						res?.error ||
+						"The starter lorebook could not be cloned. Try again."
 				}
 			),
 			interest.declareInterest<"starterKits:delete">(
@@ -91,7 +131,9 @@
 					)
 						return
 					pendingDelete = null
-					toaster.success({ title: "Starter lorebook deleted" })
+					// 🚧 (M2e) As after a clone: ask again with the disabled rows.
+					socket.emit("starterKits:list", { includeDisabled: true })
+					notify.success({ title: "Starter lorebook deleted" })
 				}
 			),
 			interest.declareInterest<"starterKits:delete:error">(
@@ -158,6 +200,33 @@
 		},
 		{ key: "rules", label: "Rules", values: (r) => r.rulesName || null }
 	]
+
+	/** 🚧 (M2e) A switch answered: this tab's pending press is done, and a shown refusal is stale. */
+	function clearSwitch() {
+		if (pendingSwitch === null) return
+		pendingSwitch = null
+		if (switchError) switchError = null
+	}
+
+	/** 🚧 (M2e) A switch was refused: only the tab that pressed shows why. */
+	function refuseSwitch(error: string | undefined, fallback: string) {
+		if (pendingSwitch === null) return
+		switchError = { rowId: pendingSwitch, text: error || fallback }
+		pendingSwitch = null
+	}
+
+	/** 🚧 (M2e) Disable or enable a primer row, when pressed. */
+	function setDisabled(row: Row, disabled: boolean) {
+		if (!row.provided) return
+		pendingSwitch = row.id
+		const { pluginId, slug } = row.provided
+		socket.emit(
+			disabled
+				? "plugins:disableProvidedBook"
+				: "plugins:enableProvidedBook",
+			{ pluginId, slug }
+		)
+	}
 
 	function openInLorebooks(row: Row) {
 		const id = kitBookId(row)
@@ -226,54 +295,86 @@
 	>
 		{#snippet cell(row, col)}
 			{#if col.key === "actions"}
-				<span
-					class="inline-flex justify-end gap-1"
-					data-kit-actions={row.id}
-				>
-					{#if row.source === "admin" && row.mine}
+				<div class="flex flex-col items-end gap-1">
+					<span
+						class="inline-flex justify-end gap-1"
+						data-kit-actions={row.id}
+					>
+						{#if row.provided}
+							{@const off = row.provided.disabled}
+							<label
+								class="inline-flex min-h-11 items-center gap-1.5 text-sm pointer-fine:min-h-0"
+								title={off
+									? "Show this book again"
+									: "Hide this book everywhere without deleting it"}
+							>
+								<input
+									type="checkbox"
+									role="switch"
+									class="checkbox"
+									aria-label="Enabled: {row.name}"
+									data-kit-switch
+									checked={!off}
+									onchange={(e) => {
+										const want = !e.currentTarget.checked
+										// The row shows it once the server's list says so.
+										e.currentTarget.checked = !want
+										setDisabled(row, want)
+									}}
+								/>
+								{off ? "Disabled" : "Enabled"}
+							</label>
+						{/if}
+						{#if row.source === "admin" && row.mine}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-surface whitespace-nowrap"
+								aria-label="Open {row.name} in Lorebooks"
+								data-kit-open
+								onclick={(e) => {
+									e.stopPropagation()
+									openInLorebooks(row)
+								}}
+							>
+								<Icons.BookOpen size={14} aria-hidden="true" />
+								Open in Lorebooks
+							</button>
+						{/if}
 						<button
 							type="button"
 							class="btn btn-sm preset-tonal-surface whitespace-nowrap"
-							aria-label="Open {row.name} in Lorebooks"
-							data-kit-open
+							aria-label="Clone {row.name}"
+							data-kit-clone
 							onclick={(e) => {
 								e.stopPropagation()
-								openInLorebooks(row)
+								startClone(row)
 							}}
 						>
-							<Icons.BookOpen size={14} aria-hidden="true" />
-							Open in Lorebooks
+							<Icons.Copy size={14} aria-hidden="true" />
+							Clone
 						</button>
+						{#if row.source === "admin"}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-surface text-error-600-400 whitespace-nowrap"
+								aria-label="Delete {row.name}"
+								data-kit-delete
+								onclick={(e) => {
+									e.stopPropagation()
+									deleting = row
+								}}
+							>
+								<Icons.Trash2 size={14} aria-hidden="true" />
+								Delete
+							</button>
+						{/if}
+					</span>
+					{#if switchError?.rowId === row.id}
+						<InlineError data-kit-switch-error>
+							{switchError.text}
+						</InlineError>
 					{/if}
-					<button
-						type="button"
-						class="btn btn-sm preset-tonal-surface whitespace-nowrap"
-						aria-label="Clone {row.name}"
-						data-kit-clone
-						onclick={(e) => {
-							e.stopPropagation()
-							startClone(row)
-						}}
-					>
-						<Icons.Copy size={14} aria-hidden="true" />
-						Clone
-					</button>
-					{#if row.source === "admin"}
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal-surface text-error-600-400 whitespace-nowrap"
-							aria-label="Delete {row.name}"
-							data-kit-delete
-							onclick={(e) => {
-								e.stopPropagation()
-								deleting = row
-							}}
-						>
-							<Icons.Trash2 size={14} aria-hidden="true" />
-							Delete
-						</button>
-					{/if}
-				</span>
+				</div>
 			{/if}
 		{/snippet}
 	</AdminChangelist>

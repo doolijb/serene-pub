@@ -311,3 +311,15 @@ describe("castTagName", () => {
 		expect(castTagName({ name: null, character: null })).toBe("")
 	})
 })
+
+describe("castTagName reads the member as read", () => {
+	test("prefers the member's shown name (nickname first) over a card's", () => {
+		expect(
+			castTagName({
+				shownName: "Warden Ashe",
+				name: "The Ashguard",
+				character: { name: "Card", nickname: null }
+			})
+		).toBe("Warden Ashe")
+	})
+})

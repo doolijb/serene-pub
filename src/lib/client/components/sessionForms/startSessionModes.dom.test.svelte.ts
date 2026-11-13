@@ -112,6 +112,7 @@ async function render(opts: { propose?: string; twoGenres?: boolean } = {}) {
 	document.body.append(host)
 	app = mount(StartSessionForm, {
 		target: host,
+		context: new Map([["userSettingsCtx", { settings: { showAdvancedControls: true } }]]),
 		props: { onCreated: () => {}, onCancel: () => {}, sessions: SESSIONS as any }
 	})
 	await settle()
@@ -212,5 +213,87 @@ describe("Start a session › How it starts", () => {
 		startButton().click()
 		flushSync()
 		expect(createdParams()[0]).toMatchObject({ mode: "next-chapter", from: 11 })
+	})
+})
+
+describe("Start a session › a surfaced book (owner 2026-11-09, own: start on; shared: copy)", () => {
+	const RULESET = "core:ruleset/freeform@1"
+	async function renderWithBooks() {
+		await render()
+		feed("lorebooks:list", {
+			lorebookList: [
+				{ id: 31, name: "Ordinary", kind: "book", primaryRuleset: RULESET },
+				{ id: 32, name: "Harbour story", kind: "book", primaryRuleset: RULESET, surfacedFromSessionId: 11 },
+				{
+					id: 33,
+					name: "Their tale",
+					kind: "book",
+					primaryRuleset: RULESET,
+					surfacedFromSessionId: 21,
+					isSharedWithMe: true,
+					ownerName: "Wren"
+				}
+			]
+		})
+		await settle()
+	}
+	const pick = async (id: number) => {
+		host.querySelector<HTMLButtonElement>(`[data-book-row="${id}"]`)!.click()
+		await settle()
+	}
+	const startRow = (which: string) => host.querySelector<HTMLButtonElement>(`[data-surfaced-start] [data-start="${which}"]`)!
+
+	test("an own surfaced book lists under Your lorebooks; picking it keeps the new mode and shows the two starts", async () => {
+		await renderWithBooks()
+		expect(host.textContent).toContain("Harbour story")
+		expect(host.querySelector('[data-surfaced-books] [data-book-row="32"]')).toBeNull()
+		expect(host.querySelectorAll('[data-book-row="32"]')).toHaveLength(1)
+		expect(host.querySelector("[data-surfaced-start]")).toBeNull()
+		await pick(32)
+		expect(mode("new").getAttribute("aria-checked")).toBe("true")
+		expect(host.querySelector("[data-surfaced-start]")!.textContent).toContain("How it starts")
+		expect(startRow("continue").getAttribute("aria-checked")).toBe("true")
+		expect(startRow("branch-off").getAttribute("aria-checked")).toBe("false")
+		// An ordinary book shows no start choice.
+		await pick(31)
+		expect(host.querySelector("[data-surfaced-start]")).toBeNull()
+	})
+
+	test("Continue sends no line and no flag", async () => {
+		await renderWithBooks()
+		await pick(32)
+		startButton().click()
+		flushSync()
+		const sent = created()[0]
+		expect(sent.lorebookId).toBe(32)
+		expect(sent).not.toHaveProperty("lineOnFirstWrite")
+		expect(sent).not.toHaveProperty("lorebookBranchId")
+		expect(createdParams()[0].mode ?? "new").toBe("new")
+	})
+
+	test("Branch off shows the line and clock controls and sends the flag and the line", async () => {
+		await renderWithBooks()
+		await pick(32)
+		expect(host.querySelector('[data-testid="session-lorebook-reading"]')).toBeNull()
+		startRow("branch-off").click()
+		await settle()
+		expect(host.querySelector('[data-surfaced-start] [data-testid="session-lorebook-reading"]')).not.toBeNull()
+		startButton().click()
+		flushSync()
+		expect(created()[0]).toMatchObject({ lorebookId: 32, lineOnFirstWrite: true, lorebookBranchId: null })
+	})
+
+	test("a shared surfaced book lists in the shared group and picking it starts in the copy mode", async () => {
+		await renderWithBooks()
+		const group = host.querySelector("[data-surfaced-books]")!
+		expect(group.textContent).toContain("Shared by Wren")
+		expect(group.textContent).toContain("Their session's lorebook")
+		expect([...group.querySelectorAll("[data-book-row]")].map((b) => b.getAttribute("data-book-row"))).toEqual(["33"])
+		expect(host.querySelectorAll('[data-book-row="33"]')).toHaveLength(1)
+		await pick(33)
+		expect(mode("new-world").getAttribute("aria-checked")).toBe("true")
+		startButton().click()
+		flushSync()
+		expect(createdParams()[0]).toMatchObject({ mode: "new-world", session: { lorebookId: 33 } })
 	})
 })

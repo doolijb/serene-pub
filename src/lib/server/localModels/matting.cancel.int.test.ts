@@ -51,7 +51,10 @@ vi.mock("@huggingface/transformers", async () => {
 	const fs = await import("node:fs/promises")
 	const path = await import("node:path")
 	return {
-		AutoConfig: { from_pretrained: vi.fn(async () => ({})) },
+		// As published: the backbone's name, which transformers.js does not map.
+		AutoConfig: {
+			from_pretrained: vi.fn(async () => ({ model_type: "swin" }))
+		},
 		ModelRegistry: {
 			get_pipeline_files: vi.fn(async () => ["config.json", "onnx/model.onnx"])
 		},
@@ -173,5 +176,19 @@ describe("cancelling the background remover's download", () => {
 		expect((await mattingModelState(db)).state).toBe("on_disk")
 		expect((await mattingRow(db))?.status).toBe("complete")
 		expect(MATTING_MODEL_ID).toContain("BiRefNet")
+	})
+
+	test("the published `swin` config reaches the loader retyped as birefnet", async () => {
+		const { AutoModelForImageSegmentation, ModelRegistry } = (await import(
+			"@huggingface/transformers"
+		)) as any
+		const run = downloadMattingModel(db, { userId: 1 })
+		await gate.reached
+		gate.open()
+		await run
+		const loadOpts = AutoModelForImageSegmentation.from_pretrained.mock.calls.at(-1)?.[1]
+		expect(loadOpts?.config?.model_type).toBe("birefnet")
+		const filesOpts = ModelRegistry.get_pipeline_files.mock.calls.at(-1)?.[2]
+		expect(filesOpts?.config?.model_type).toBe("birefnet")
 	})
 })

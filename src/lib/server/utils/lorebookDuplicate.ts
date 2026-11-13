@@ -18,8 +18,10 @@
  *   endpoint kinds, scenes and their cast, tags, the story calendar and clock,
  *   the attribute rows the book and its members own at the template layer,
  *   dismissed duplicate pairs, binding suggestions, entry vectors, entry
- *   annotations (an `entry:<id>` entity key names the copy's entry) and the
- *   stat sheets the book and its members hold.
+ *   annotations (an `entry:<id>` entity key names the copy's entry), the
+ *   stat sheets the book and its members hold, and the members' own sprite
+ *   sets, sprites and gallery (a file the copy's owner does not own is stored
+ *   again as theirs).
  *
  * Which rows those are, and how each table is copied, is the lorebook table
  * registry's (`lorebooks/tableRegistry.ts`, plan B1): this copies the book
@@ -87,7 +89,8 @@ export async function duplicateLorebookRows(
 	} = source
 	const [book] = await tx
 		.insert(schema.lorebooks)
-		.values({ ...bookColumns, name, userId })
+		// A copy is nobody's surfaced book (★B-3): it starts ordinary.
+		.values({ ...bookColumns, name, userId, surfacedFromSessionId: null })
 		.returning({ id: schema.lorebooks.id })
 	const newId = book.id
 

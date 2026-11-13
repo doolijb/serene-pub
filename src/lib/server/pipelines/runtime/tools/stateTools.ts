@@ -32,6 +32,7 @@ import {
 	type ToolContext
 } from "$lib/server/pipelines/runtime/tools"
 import { slotKey } from "$lib/server/state/keys"
+import { castOwnerOf } from "$lib/server/state/owners"
 import { inventoryChange } from "$lib/server/state/inventory"
 import { unseenSentence } from "$lib/shared/lorebooks/placeSight"
 import { tieSentence } from "$lib/shared/lorebooks/describingRow"
@@ -55,7 +56,10 @@ const same = (a: string, b: string) =>
 export async function ownerFor(
 	ctx: ToolContext,
 	who: string
-): Promise<{ kind: "session" | "session_cast" | "session_location"; id: number }> {
+): Promise<{
+	kind: "session" | "session_cast" | "seated_member" | "session_location"
+	id: number
+}> {
 	// The world owner: what nobody is carrying, and where weather lives.
 	if (!who || same(who, "world") || same(who, "the world")) {
 		if (!ctx.sessionId)
@@ -87,7 +91,17 @@ export async function ownerFor(
 		same(castName(r), who)
 	)
 	const id = match?.character?.id ?? match?.id
-	if (typeof id === "number") return { kind: "session_cast", id }
+	// ⏳ The seat's owner as the session stores it: `seated_member` by the row's
+	// member once `state/memberForm.ts` is on, else (and for a member-less seat)
+	// its card's `session_cast`. Only character seats are named here.
+	if (typeof id === "number") {
+		const owner = castOwnerOf({
+			characterId: id,
+			seatMemberId:
+				typeof match?.castMemberId === "number" ? match.castMemberId : null
+		})
+		return owner as { kind: "session_cast" | "seated_member"; id: number }
+	}
 	// 🚧 A place (attributes phase 4): a location of the session's world holds
 	// state too — "the key is left in the crypt". Asked after the cast, so a
 	// character and a place sharing a name resolve to the character.

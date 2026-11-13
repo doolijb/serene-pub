@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
+	import { seatCardAsShown } from "$lib/client/components/sessionPage/projections/characters"
 	import { onMount, getContext } from "svelte"
 	import PipelineCards from "$lib/client/components/sessionForms/PipelineCards.svelte"
 	import { page } from "$app/state"
@@ -246,8 +247,9 @@
 		name = c.name || ""
 		scenario = c.scenario || ""
 		tags = c.tags || []
-		selectedCharacters = (c.sessionCharacters || []).map(
-			(cc) => cc.character
+		// Each seat's card as its cast member shows it.
+		selectedCharacters = (c.sessionCharacters || []).map((cc) =>
+			seatCardAsShown(c, cc.character)
 		)
 		selectedPersonas = (c.sessionPersonas || []).map((cp) => cp.persona)
 		genreFields = { ...(((c as any).genreFields ?? {}) as Record<string, unknown>) }

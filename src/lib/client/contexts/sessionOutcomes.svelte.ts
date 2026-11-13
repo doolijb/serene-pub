@@ -25,7 +25,20 @@ export function closeOutToast(scenes: number): { title: string; description: str
 
 export function createSessionOutcomes(): void {
 	useInterest<"sessions:applyOverlay">("sessions:applyOverlay", (msg) => {
-		if (!msg?.error && Array.isArray(msg?.applied) && msg.applied.length === 0)
+		// Nothing at all was waiting: no note applied, no held change applied or left held.
+		if (
+			!msg?.error &&
+			Array.isArray(msg?.applied) &&
+			msg.applied.length === 0 &&
+			!(
+				msg.appliedChanges?.length ||
+				msg.stillHeld?.length ||
+				msg.appliedLinks?.length ||
+				msg.mergedDays?.length ||
+				msg.droppedLinks?.length ||
+				msg.heldDays?.length
+			)
+		)
 			notify.info({ ...SHARE_NOTHING_PENDING, source: "sessions:applyOverlay" })
 	})
 	useInterest<"sessions:closeOut">("sessions:closeOut", (msg) => {

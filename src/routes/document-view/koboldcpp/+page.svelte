@@ -671,24 +671,40 @@
 		</div>
 	{/if}
 
-	<form onsubmit={saveBaseUrl}>
+	{#if managedMode === "managed"}
+		<!-- In Managed mode the server makes the address from the port and
+		     refuses a typed one, so it is words here, as the sidebar's settings
+		     tab shows it. The stored address is the one every writer makes. -->
 		<div class="a11y-field">
-			<label for="a11y-kcpp-base-url">KoboldCPP Server URL</label>
-			<input
-				id="a11y-kcpp-base-url"
-				type="text"
-				bind:value={baseUrl}
-				disabled={savingField === "baseUrl"}
-			/>
+			<p>
+				<strong>KoboldCPP Server URL:</strong>
+				{koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? ""}
+			</p>
+			<p class="a11y-hint">
+				Follows the port. Change the port in KoboldCPP's settings in the
+				usual interface.
+			</p>
 		</div>
-		<button
-			type="submit"
-			class="a11y-btn a11y-btn-small"
-			disabled={savingField === "baseUrl"}
-		>
-			{savingField === "baseUrl" ? "Saving…" : "Save URL"}
-		</button>
-	</form>
+	{:else}
+		<form onsubmit={saveBaseUrl}>
+			<div class="a11y-field">
+				<label for="a11y-kcpp-base-url">KoboldCPP Server URL</label>
+				<input
+					id="a11y-kcpp-base-url"
+					type="text"
+					bind:value={baseUrl}
+					disabled={savingField === "baseUrl"}
+				/>
+			</div>
+			<button
+				type="submit"
+				class="a11y-btn a11y-btn-small"
+				disabled={savingField === "baseUrl"}
+			>
+				{savingField === "baseUrl" ? "Saving…" : "Save URL"}
+			</button>
+		</form>
+	{/if}
 
 	<form onsubmit={saveModelsDir}>
 		<div class="a11y-field">
@@ -734,8 +750,6 @@
 		<div class="a11y-status">
 			<p>
 				Subprocess status: {subprocessStatus?.status || "unknown"}
-				{#if subprocessStatus?.isExternal}(an existing instance was
-					found on this port, not started by this manager){/if}
 			</p>
 			<div class="a11y-list-item-actions">
 				<button

@@ -239,6 +239,46 @@ export function rememberRulesLists(lists: readonly PieceList[]): void {
 	rememberRulesListLabels(lists)
 }
 
+/**
+ * 🚧 ★50 `OTHER_RULES`: the lists a book holds entries of but is not
+ * told by, by derived entry type, to the name of the rules they come from.
+ * What it is: the mark that makes a list's door read-only (no Add). What it
+ * is not: a second list registry — `RULES_LISTS` still holds the shapes.
+ * Keyed by book (lorebookId), each book's marks replaced whole on every
+ * `entries:types` reply, so two workspaces never read each other's.
+ */
+const OTHER_RULES = new SvelteMap<number, Map<string, string>>()
+
+/**
+ * Replaces one book's marks: its lists of other rules, by rules name. The
+ * inner map is built fresh and set whole (it is not reactive); an empty
+ * `groups` stores an empty map.
+ */
+export function rememberOtherRules(
+	lorebookId: number,
+	groups: readonly { rulesName: string; types: readonly PieceList[] }[]
+): void {
+	const marks = new Map<string, string>()
+	for (const group of groups)
+		for (const list of group.types) marks.set(list.typeId, group.rulesName)
+	OTHER_RULES.set(lorebookId, marks)
+}
+
+/**
+ * 🚧 Drops one book's other-rules marks when its workspace unmounts or
+ * leaves the book.
+ */
+export function forgetOtherRules(lorebookId: number): void {
+	OTHER_RULES.delete(lorebookId)
+}
+
+/** The rules a list comes from when the given book is not told by them. */
+export const otherRulesNameOf = (
+	typeId: string,
+	lorebookId: number | null | undefined
+): string | undefined =>
+	lorebookId == null ? undefined : OTHER_RULES.get(lorebookId)?.get(typeId)
+
 /** The rules list a derived entry type belongs to, once told about it. */
 export const rulesListOf = (typeId: string): PieceList | undefined =>
 	RULES_LISTS.get(typeId)

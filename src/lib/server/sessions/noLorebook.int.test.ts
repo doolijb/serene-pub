@@ -106,9 +106,14 @@ describe("a session with no shared lorebook", () => {
 		expect(scene.lorebookId).toBe(w.own.id)
 	}, 60_000)
 
-	test("sessionReadingOf stays the SHARED book's line: null with none (the own book is every union's own half)", async () => {
+	test("sessionReadingOf is the own book's reading when none is attached (★bk-fold-1)", async () => {
 		const { sessionReadingOf } = await import("$lib/server/state/reading")
 		const w = await world()
-		expect(await sessionReadingOf(testDb as any, w.session.id)).toBeNull()
+		expect(await sessionReadingOf(testDb as any, w.session.id)).toMatchObject({
+			lorebookId: w.own.id,
+			branchId: null,
+			moment: null,
+			onOwnBook: true
+		})
 	}, 60_000)
 })

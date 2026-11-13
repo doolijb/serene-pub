@@ -15,10 +15,13 @@
  * cast member's sprite-set pick (`spriteSetOverrides` — the `session_cast`
  * sprite-set value, DESIGN-sprites §2.3), and the face a lorebook cast member
  * retells (`castFaces`, a `files` id by character id) — present, it is the
- * face; absent, the card's avatar is. Personas are voiced, not cast, so
- * neither overlay touches them. The name is the one the session shows
+ * face; absent, the card's avatar is. A persona's seat reads its cast member
+ * the same way (s27 S2c) — the payload's maps are keyed by the seated card's
+ * id for a persona as for a character — except for the sprite-set pick, which
+ * stays a character's (it is voiced, not seated). The name is the one the session shows
  * everywhere else (nickname over name, as the header's cast discs and the
- * log's speaker labels have it); a retold name is not on this payload.
+ * log's speaker labels have it), the seat's cast member's own where it has
+ * one (`castNames`, s27 S2), and its own sprite sets likewise (`castSpriteSets`).
  *
  * Every URL is resolved here exactly as the native Scene Portraits widget
  * resolves it (`avatarSrc`/`spriteSrc`, full size), so a pinned portrait is
@@ -32,21 +35,26 @@
  *    `server/sockets/sprites.ts`): a seated character — never a persona,
  *    which is voiced, not seated — whose session or card the viewer owns.
  */
+import {
+	memberShownName,
+	withMemberNames
+} from "$lib/shared/lorebooks/memberIdentity"
 import type {
 	SessionCharacterV1,
 	SessionCharactersV1,
 	SessionSceneImageV1
 } from "@serene-pub/sdk"
 import { avatarSrc } from "$lib/client/utils/media"
+import { seatRefOf, type PayloadSeat } from "./seatIdentity"
 import {
 	currentSpriteIn,
 	resolveSprite,
 	shownSpriteOf,
 	spriteSrc,
-	type HasSprites
+	type HasSprites,
+	type SessionSpriteSet
 } from "$lib/client/utils/sprites"
 import type { ShownSprite } from "$lib/shared/sprites"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 /** A character card as the session payload joins it (a persona's too). */
 export interface CharacterCard extends HasSprites {
@@ -72,17 +80,23 @@ export interface CharactersSourceMessage {
 export interface CharactersSourceSession {
 	/** The session's owner. */
 	userId?: number | null
-	sessionCharacters?: readonly {
-		isActive?: boolean | null
-		removedAt?: unknown
-		position?: number | null
-		character?: CharacterCard | null
-	}[] | null
-	sessionPersonas?: readonly {
-		removedAt?: unknown
-		position?: number | null
-		persona?: CharacterCard | null
-	}[] | null
+	sessionCharacters?:
+		| readonly (PayloadSeat & {
+				isActive?: boolean | null
+				/** The seat's cast member (s27 S1); null while the seat holds only a card. */
+				castMemberId?: number | null
+				character?: CharacterCard | null
+		  })[]
+		| null
+	sessionPersonas?:
+		| readonly (PayloadSeat & {
+				persona?: CharacterCard | null
+				/** 🚧 False = the player seat is benched (owner 2026-11-10). */
+				isActive?: boolean | null
+				/** 🚧 The player's name for their seat in this session; wins over the member's name. */
+				seatName?: string | null
+		  })[]
+		| null
 	/** The cast's sprite-set picks, by character id (DESIGN-sprites §2.3). */
 	spriteSetOverrides?: Readonly<Record<number, string>> | null
 	/**
@@ -90,6 +104,18 @@ export interface CharactersSourceSession {
 	 * `files` id, present only for a seat whose cast member retells its face.
 	 */
 	castFaces?: Readonly<Record<number, number>> | null
+	/**
+	 * The names the session's lorebook cast gives a seat in this book only,
+	 * by character id; absent for a seat that keeps the card's.
+	 */
+	castNames?: Readonly<
+		Record<number, { ownName: string | null; ownNickname: string | null }>
+	> | null
+	/**
+	 * 🚧 The sprite sets the seat's cast member has of its own (with an image),
+	 * by character id; absent for a seat that draws from the card's.
+	 */
+	castSpriteSets?: Readonly<Record<number, readonly SessionSpriteSet[]>> | null
 	sessionMessages?: readonly CharactersSourceMessage[] | null
 }
 
@@ -114,6 +140,51 @@ export interface CharactersSource {
 	 * (`lastSpokeOf`); absent, it is read off the log.
 	 */
 	lastSpoke?: ReadonlyMap<number, number | null>
+	/**
+	 * The line a Dialogue box's reader is on (`show-line`), a message id: used
+	 * to cut the log for the sprites, last lines and speaker this projection
+	 * works out itself. Absent or null, the whole log.
+	 */
+	shownMessageId?: number | null
+	/**
+	 * The card id of who is speaking, when the caller has worked it out already
+	 * (`speakerOf`); absent, it is read off the log.
+	 */
+	speakerId?: number | null
+}
+
+/**
+ * The log as of the shown line: the rows at or before it. One ordering for the
+ * cut — message id, the order the reading place moves in. A shown line that is
+ * not among the loaded rows cuts nothing (the same array comes back): the cut
+ * needs the line in the window.
+ */
+export function messagesAsOf<T extends { id: number }>(
+	messages: readonly T[],
+	shownMessageId: number | null | undefined
+): readonly T[] {
+	if (shownMessageId == null) return messages
+	if (!messages.some((m) => m.id === shownMessageId)) return messages
+	return messages.filter((m) => m.id <= shownMessageId)
+}
+
+/**
+ * Who is speaking, as a card id: the writer (`characterId ?? personaId`) of
+ * the shown line when one is shown and loaded — hidden or not, it is the line
+ * on screen — else of the newest visible loaded line by id. Null when there is
+ * none or the line names no card.
+ */
+export function speakerOf(
+	messages: readonly CharactersSourceMessage[],
+	shownMessageId?: number | null
+): number | null {
+	let line: CharactersSourceMessage | undefined
+	if (shownMessageId != null)
+		line = messages.find((m) => m.id === shownMessageId)
+	if (!line)
+		for (const m of messages)
+			if (!m.isHidden && (!line || m.id > line.id)) line = m
+	return line?.characterId ?? line?.personaId ?? null
 }
 
 /**
@@ -142,7 +213,12 @@ export function currentSpritesOf(
 /** A line's time in ms; null for one with no readable time. */
 function msOf(at: CharactersSourceMessage["createdAt"]): number | null {
 	if (at == null) return null
-	const ms = typeof at === "number" ? at : at instanceof Date ? at.getTime() : Date.parse(at)
+	const ms =
+		typeof at === "number"
+			? at
+			: at instanceof Date
+				? at.getTime()
+				: Date.parse(at)
 	return Number.isFinite(ms) ? ms : null
 }
 
@@ -170,7 +246,9 @@ export function lastSpokeOf(
 }
 
 /** Every card id the section seats, characters and personas alike. */
-export function castIdsOf(session: CharactersSourceSession | null | undefined): number[] {
+export function castIdsOf(
+	session: CharactersSourceSession | null | undefined
+): number[] {
 	const ids: number[] = []
 	for (const link of session?.sessionCharacters ?? [])
 		if (typeof link.character?.id === "number") ids.push(link.character.id)
@@ -180,12 +258,15 @@ export function castIdsOf(session: CharactersSourceSession | null | undefined): 
 }
 
 /** Stable by `position`; a row without one keeps its place in the payload. */
-function byPosition<T extends { position?: number | null }>(rows: readonly T[]): T[] {
+function byPosition<T extends { position?: number | null }>(
+	rows: readonly T[]
+): T[] {
 	return rows
 		.map((row, at) => ({ row, at }))
 		.sort(
 			(a, b) =>
-				(a.row.position ?? a.at) - (b.row.position ?? b.at) || a.at - b.at
+				(a.row.position ?? a.at) - (b.row.position ?? b.at) ||
+				a.at - b.at
 		)
 		.map(({ row }) => row)
 }
@@ -210,38 +291,151 @@ export function castFaceOf(
 	return avatarSrc({ avatarMediaId: mediaId }, opts) ?? null
 }
 
+/**
+ * The name a seated character is shown by: the cast member's own name in
+ * this book, else the card's (`memberShownName`).
+ */
+export function castNameOf(
+	session: CharactersSourceSession,
+	id: number,
+	card: { name?: string | null; nickname?: string | null } | null | undefined,
+	fallback = ""
+): string {
+	return memberShownName(session.castNames?.[id], card, fallback)
+}
+
+/**
+ * 🚧 The seat's card as its cast member shows it (s27 S2): the member's own
+ * name and nickname over the card's (`withMemberNames`), its own sprite sets
+ * in place of the card's, and its retold face as the avatar. Keyed by the
+ * seated card's id, as the payload is. The SAME object when the seat has
+ * nothing of the member's. A persona seat's card goes through it as a
+ * character seat's does (s27 S2c).
+ */
+export function seatCardAsShown<
+	T extends HasSprites & {
+		id?: number | null
+		name?: string | null
+		nickname?: string | null
+	}
+>(
+	session:
+		| Pick<
+				CharactersSourceSession,
+				"castNames" | "castFaces" | "castSpriteSets"
+		  >
+		| null
+		| undefined,
+	card: T
+): T {
+	const id = card.id
+	if (typeof id !== "number") return card
+	const named = withMemberNames(card, session?.castNames?.[id])
+	const sets = session?.castSpriteSets?.[id]
+	const face = session?.castFaces?.[id]
+	if (named === card && !Array.isArray(sets) && typeof face !== "number")
+		return card
+	return {
+		...named,
+		...(Array.isArray(sets)
+			? { spriteSets: sets as SessionSpriteSet[] }
+			: {}),
+		// As `withPortrait`: a stored media row, a preview or a baked URL
+		// would each win over the id, so the face takes their place.
+		...(typeof face === "number"
+			? {
+					avatarMediaId: face,
+					avatarMedia: null,
+					avatar: null,
+					_avatar: null
+				}
+			: {})
+	}
+}
+
+/**
+ * 🚧 The session's character seats' cards, each as its cast member shows it
+ * (`seatCardAsShown`), in payload order; a seat whose card is gone is left
+ * out. Personas are not here: its callers list the cast a speaker is picked
+ * from.
+ */
+export function seatCardsAsShown<C extends CharacterCard>(
+	session:
+		| (Pick<
+				CharactersSourceSession,
+				"castNames" | "castFaces" | "castSpriteSets"
+		  > & {
+				sessionCharacters?:
+					| readonly { character?: C | null }[]
+					| null
+		  })
+		| null
+		| undefined
+): C[] {
+	const out: C[] = []
+	for (const link of session?.sessionCharacters ?? [])
+		if (link.character) out.push(seatCardAsShown(session, link.character))
+	return out
+}
+
 interface Seat {
+	/** The payload seat row this seat was read from, and the table it sits in (s27 S3). */
+	row: PayloadSeat
+	form: "character" | "player"
 	card: CharacterCard & { id: number }
+	/** The card as the seat's cast member shows it, a persona's seat included. */
+	shown: CharacterCard & { id: number }
 	isPersona: boolean
 	/** Switched off in Participants: in the session, out of the turns (W6). */
 	benched: boolean
+	/** A persona seat's seat name, which wins over its cast member's name (★pT-1). */
+	seatName?: string | null
+}
+
+/**
+ * 🚧 The ref a seat answers to: the seat's own (`seatRefOf` — the host-filled
+ * one, else today's form); ⏳ `character:<card id>` for a row that carries no
+ * seat fields at all — a card-form payload, kept until S5 drops the card form.
+ */
+function refOfSeat({ row, form, card }: Seat): string {
+	return seatRefOf(row, form) ?? `character:${card.id}`
 }
 
 function memberOf(
-	{ card, isPersona, benched }: Seat,
+	seat: Seat,
 	session: CharactersSourceSession,
 	viewerUserId: number | null,
 	voiced: number | null,
 	sprites: ReadonlyMap<number, ShownSprite | null>,
 	lastSpoke: ReadonlyMap<number, number | null>
 ): SessionCharacterV1 {
+	const { card, shown, isPersona, benched, seatName, row } = seat
 	const id = card.id
 	const picked = isPersona ? null : (session.spriteSetOverrides?.[id] ?? null)
-	const castFace = isPersona ? null : castFaceOf(session, id)
+	const castFace = castFaceOf(session, id)
 	const wanted = currentSpriteIn(sprites.get(id) ?? null, picked)
 	const viewer = viewerUserId
 	return {
-		ref: `character:${id}`,
+		ref: refOfSeat(seat) as SessionCharacterV1["ref"],
+		// The seat's member, only where the payload row says (`castMemberId`);
+		// the card the member shows is the SDK's `cardId`, which only the host knows.
+		...("castMemberId" in row ? { castMemberId: row.castMemberId ?? null } : {}),
+		...(row.cardId !== undefined ? { cardId: row.cardId } : {}),
 		characterId: id,
 		isPersona,
 		mine: isPersona && voiced === id,
-		name: resolveCharacterName(card, ""),
-		face: castFace ?? avatarSrc(card, { full: true }) ?? null,
-		sprite: resolveSprite(card, wanted)
-			? (spriteSrc(card, wanted, { full: true }) ?? null)
+		// A seat name wins over the member's name (★pT-1); with no member
+		// name in play the card's name stands, as before.
+		name:
+			isPersona && seatName?.trim() && session.castNames?.[id]
+				? seatName.trim()
+				: castNameOf(session, id, card),
+		face: castFace ?? avatarSrc(shown, { full: true }) ?? null,
+		sprite: resolveSprite(shown, wanted)
+			? (spriteSrc(shown, wanted, { full: true }) ?? null)
 			: null,
-		spriteSets: (card.spriteSets ?? []).map((s) => s.name),
-		spriteSet: picked || cardSetOf(card),
+		spriteSets: (shown.spriteSets ?? []).map((s) => s.name),
+		spriteSet: picked || cardSetOf(shown),
 		spriteSetOverride: picked || null,
 		canChangeSpriteSet:
 			!isPersona &&
@@ -269,61 +463,91 @@ function pinOf(
 ): SessionSceneImageV1 | null {
 	if (!src) return null
 	const seat = cards.find(
-		({ card, isPersona }) =>
+		({ card }) =>
 			avatarSrc(card, { full: true }) === src ||
 			avatarSrc(card) === src ||
-			(!isPersona &&
-				(castFaceOf(session, card.id) === src ||
-					castFaceOf(session, card.id, {}) === src))
+			castFaceOf(session, card.id) === src ||
+			castFaceOf(session, card.id, {}) === src
 	)
-	return { src, ref: seat ? `character:${seat.card.id}` : null }
+	return {
+		src,
+		ref: seat ? (refOfSeat(seat) as SessionSceneImageV1["ref"]) : null
+	}
 }
 
 /**
  * The section for the page's session: its characters still seated — a
  * benched one included, marked `benched` (W6: a reader that means "in the
- * scene" leaves it out) — then its personas still voiced, each once.
+ * scene" leaves it out) — then its personas still voiced, each once, a
+ * benched player seat marked `benched` the same way (owner 2026-11-10).
  */
-export function projectCharacters(source: CharactersSource): SessionCharactersV1 {
+export function projectCharacters(
+	source: CharactersSource
+): SessionCharactersV1 {
 	const session = source.session ?? {}
 	const seats: Seat[] = []
 	const seen = new Set<number>()
 	const seat = (
+		row: PayloadSeat,
 		card: CharacterCard | null | undefined,
 		isPersona: boolean,
-		benched = false
+		benched = false,
+		seatName: string | null = null
 	) => {
 		if (typeof card?.id !== "number" || seen.has(card.id)) return
 		seen.add(card.id)
-		seats.push({ card: card as Seat["card"], isPersona, benched })
+		const seated = card as Seat["card"]
+		seats.push({
+			row,
+			form: isPersona ? "player" : "character",
+			card: seated,
+			shown: seatCardAsShown(session, seated),
+			isPersona,
+			benched,
+			seatName
+		})
 	}
 	for (const link of byPosition(session.sessionCharacters ?? []))
-		if (!link.removedAt) seat(link.character, false, link.isActive === false)
+		if (!link.removedAt)
+			seat(link, link.character, false, link.isActive === false)
 	for (const link of byPosition(session.sessionPersonas ?? []))
-		if (!link.removedAt) seat(link.persona, true)
+		if (!link.removedAt) seat(link, link.persona, true, link.isActive === false, link.seatName ?? null)
 
 	const viewer = source.viewerUserId
 	const theirs = seats.filter(
 		(s) => s.isPersona && viewer != null && s.card.userId === viewer
 	)
 	const voiced =
-		(theirs.find((s) => s.card.id === source.voicedPersonaId) ?? theirs[0])?.card.id ?? null
+		(theirs.find((s) => s.card.id === source.voicedPersonaId) ?? theirs[0])
+			?.card.id ?? null
+	const asOf = messagesAsOf(
+		session.sessionMessages ?? [],
+		source.shownMessageId
+	)
 	const sprites =
 		source.currentSprites ??
 		currentSpritesOf(
 			seats.map((s) => s.card.id),
-			session.sessionMessages ?? []
+			asOf
 		)
 	const lastSpoke =
 		source.lastSpoke ??
 		lastSpokeOf(
 			seats.map((s) => s.card.id),
-			session.sessionMessages ?? []
+			asOf
 		)
+	const speaker =
+		source.speakerId !== undefined
+			? source.speakerId
+			: speakerOf(session.sessionMessages ?? [], source.shownMessageId)
+	const speaking = seats.find((s) => s.card.id === speaker)
 	return {
 		members: seats.map((s) =>
 			memberOf(s, session, viewer, voiced, sprites, lastSpoke)
 		),
+		speakerRef: speaking
+			? (refOfSeat(speaking) as SessionCharactersV1["speakerRef"])
+			: null,
 		sceneImages: {
 			left: pinOf(source.sceneImages.left, seats, session),
 			right: pinOf(source.sceneImages.right, seats, session)

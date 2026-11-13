@@ -995,6 +995,111 @@
       "when": 1793448073514,
       "tag": "0141_m2c_library_write_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1793826868943,
+      "tag": "0142_scenes_unfiled_default_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "7",
+      "when": 1793829076346,
+      "tag": "0143_lorebook_bindings_own_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1793832414417,
+      "tag": "0144_local_models_per_modality_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1793900788883,
+      "tag": "0145_seat_cast_members",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1793964915000,
+      "tag": "0146_character_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1794135543443,
+      "tag": "0147_cast_member_files",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1794166698995,
+      "tag": "0148_wonderful_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1794331865218,
+      "tag": "0149_familiar_silk_fever",
+      "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1794362432342,
+      "tag": "0150_chief_starjammers",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1794364626824,
+      "tag": "0151_shallow_marvel_zombies",
+      "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1794376756326,
+      "tag": "0152_overjoyed_magik",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1794399650855,
+      "tag": "0153_loving_kingpin",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1794439193974,
+      "tag": "0154_red_the_watchers",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1794454456953,
+      "tag": "0155_chubby_lockjaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1794465710551,
+      "tag": "0156_nappy_paladin",
+      "breakpoints": true
     }
   ]
 }

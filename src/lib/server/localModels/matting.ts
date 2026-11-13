@@ -34,7 +34,7 @@
  * bytes go through the jimp/jsquash codecs in `media/convert/codecs.ts`.
  */
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	cacheDirFor,
@@ -88,8 +88,8 @@ export type MattingProgress = (p: { percent: number | null }) => void
 /**
  * Write (or re-file) the one `local_models` row for the matting model.
  *
- * Upsert on `filename`, the table's unique key — the same key the connection
- * lanes file their ONNX rows under (`beginRegistryRow`).
+ * Upsert on an ONNX row's unique key, (`filename`, `modality`) — the same key
+ * the connection lanes file their ONNX rows under (`beginRegistryRow`).
  */
 export async function ensureMattingRow(
 	db: Db,
@@ -119,7 +119,8 @@ export async function ensureMattingRow(
 		.insert(schema.localModels)
 		.values(values)
 		.onConflictDoUpdate({
-			target: schema.localModels.filename,
+			target: [schema.localModels.filename, schema.localModels.modality],
+			targetWhere: sql`"format" = 'onnx'`,
 			set: values
 		})
 }
@@ -227,6 +228,31 @@ export async function mattingModelState(db: Db): Promise<MattingState> {
 }
 
 /**
+ * The model type transformers.js knows BiRefNet by. The upstream
+ * `config.json` of `onnx-community/BiRefNet_lite-ONNX` says `swin` (its
+ * backbone), and transformers.js 4.2 maps only `birefnet` to an image
+ * segmentation model, so a load from the file as published stops at
+ * "Unsupported model type: swin" before the `.onnx` is even fetched (seen
+ * 2026-11-08 on ComfyUI and KoboldCPP alike — no sprite had ever been filed).
+ */
+const MATTING_MODEL_TYPE = "birefnet"
+
+/**
+ * The model's config with its `model_type` set to what transformers.js maps —
+ * handed to every loader here, so the download and the pipeline read the same
+ * corrected config instead of the published one.
+ */
+async function mattingConfig(
+	AutoConfig: any,
+	source: string,
+	cache_dir: string
+): Promise<any> {
+	const config = await AutoConfig.from_pretrained(source, { cache_dir })
+	config.model_type = MATTING_MODEL_TYPE
+	return config
+}
+
+/**
  * Fetch the files the background-removal pipeline reads into the matting
  * cache, the way `fetchModelFiles` does for the connection lanes and for the
  * same reason: `pipeline()`'s file discovery reads `config.json` through
@@ -244,9 +270,7 @@ async function fetchFiles(
 		ModelRegistry
 	} = (await import("@huggingface/transformers")) as any
 	const cache_dir = cacheDirFor("matting")
-	const config = await AutoConfig.from_pretrained(MATTING_MODEL_ID, {
-		cache_dir
-	})
+	const config = await mattingConfig(AutoConfig, MATTING_MODEL_ID, cache_dir)
 	if (signal?.aborted) return
 	const files: string[] = await ModelRegistry.get_pipeline_files(
 		"background-removal",
@@ -416,7 +440,9 @@ async function loadSegmenter(
 		if (refusal) throw new Error(refusal)
 		if (!(await isCached(MATTING_MODEL_ID, "matting")))
 			await downloadMattingModel(db, opts)
-		const { pipeline } = (await import("@huggingface/transformers")) as any
+		const { pipeline, AutoConfig } = (await import(
+			"@huggingface/transformers"
+		)) as any
 		// By DIRECTORY, not by repo id — the only way it loads offline and the
 		// only way `env.cacheDir` is never consulted (see `ner/index.ts`).
 		const dir = mattingModelDir()
@@ -424,9 +450,12 @@ async function loadSegmenter(
 			dir && (await isCached(MATTING_MODEL_ID, "matting"))
 				? dir
 				: MATTING_MODEL_ID
+		const cache_dir = cacheDirFor("matting")
+		const config = await mattingConfig(AutoConfig, source, cache_dir)
 		const loaded = (await pipeline("background-removal", source, {
-			cache_dir: cacheDirFor("matting"),
-			dtype: MATTING_DTYPE
+			cache_dir,
+			dtype: MATTING_DTYPE,
+			config
 		})) as Segmenter
 		// The disk is the fact; the row follows it (see the header).
 		await ensureMattingRow(db, {

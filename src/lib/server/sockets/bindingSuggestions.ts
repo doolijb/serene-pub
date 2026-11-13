@@ -39,6 +39,7 @@ import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { insertBackgroundBinding, relistBindings } from "./lorebooks"
 import { refusable as refusableHandler } from "./refusable"
 import { assertOwnedBook } from "$lib/server/utils/ownedBook"
+import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 
 /** Every refusal here reaches the person as its own sentence (see `refusable`). */
 const refusable = <P, R>(
@@ -142,6 +143,8 @@ export const bindingSuggestionsIgnoreHandler = refusable<
 	const userId = socket.user!.id
 	const row = await findOwnedSuggestion(db, params.id, userId)
 	if (!row) throw new Error("Suggestion not found.")
+	const primerProblem = await primerRowEditProblem(db, row.lorebookId)
+	if (primerProblem) throw new Error(primerProblem)
 	if (row.status === "added")
 		throw new Error("That suggestion has already been added as a binding.")
 
@@ -169,6 +172,8 @@ export const bindingSuggestionsUnignoreHandler = refusable<
 	const userId = socket.user!.id
 	const row = await findOwnedSuggestion(db, params.id, userId)
 	if (!row) throw new Error("Suggestion not found.")
+	const primerProblem = await primerRowEditProblem(db, row.lorebookId)
+	if (primerProblem) throw new Error(primerProblem)
 	if (row.status === "added")
 		throw new Error(
 			"That suggestion was added as a binding. Delete the binding to undo it."
@@ -203,12 +208,12 @@ export const bindingSuggestionsUnignoreHandler = refusable<
  *
  * ## Why `added` has to be its own suppressor
  *
- * ⚠ An unbound binding contributes **nothing** to the gazetteer —
- * `annotations/loadVocabulary` says so in as many words, because `EntityRef`
- * names a character, a persona or an entry and a background row is none of
- * those. So the name keeps coming back out of the open tier on every scan for as
- * long as the transcript says it. `status = 'added'` is the only thing between
- * the user and being asked to add what they just added.
+ * ⚠ A member minted under the name the transcript uses answers to it
+ * (`cast_member`) from the next annotation on, so that name leaves the open
+ * tier. One minted under another name (the add takes a renamed `name`) does
+ * not: the transcript's spelling stays open-tier on every scan, and
+ * `status = 'added'` is the only thing between the user and being asked to
+ * add what they just added.
  */
 export const bindingSuggestionsAddHandler = refusable<
 	Sockets.BindingSuggestions.Add.Params,
@@ -217,6 +222,8 @@ export const bindingSuggestionsAddHandler = refusable<
 	const userId = socket.user!.id
 	const row = await findOwnedSuggestion(db, params.id, userId)
 	if (!row) throw new Error("Suggestion not found.")
+	const primerProblem = await primerRowEditProblem(db, row.lorebookId)
+	if (primerProblem) throw new Error(primerProblem)
 	if (row.status === "added")
 		throw new Error("That suggestion has already been added as a binding.")
 

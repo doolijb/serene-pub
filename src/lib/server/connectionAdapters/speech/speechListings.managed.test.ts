@@ -24,7 +24,7 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 vi.mock("$lib/server/koboldcpp/subprocessManager", () => ({
 	start: vi.fn(), suspendHealthCheck: vi.fn(), resumeHealthCheck: vi.fn(),
-	pingActivity: vi.fn(), isExternal: vi.fn(() => false), isRunning: () => true
+	pingActivity: vi.fn(), isRunning: () => true
 }))
 vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 	ensureModelLoaded: vi.fn(),

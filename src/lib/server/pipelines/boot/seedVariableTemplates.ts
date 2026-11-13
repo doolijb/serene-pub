@@ -24,7 +24,10 @@ import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
 } from "$lib/server/pipelines/entities/variableLayouts"
-import { coreObjectLayouts } from "$lib/server/pipelines/entities/objectVariableLayouts"
+import {
+	coreLayoutReferenceFor,
+	coreObjectLayouts
+} from "$lib/server/pipelines/entities/objectVariableLayouts"
 
 export interface VariableTemplateSeedResult {
 	created: string[]
@@ -174,7 +177,84 @@ export async function seedVariableTemplates(
 		result.created.push(seedKey)
 	}
 
+	await stampCoreLayoutReferences(db)
 	return result
+}
+
+/**
+ * 🚧 Give a row its **layout reference** — only if it has none and no other row
+ * of its variable already goes by it (PLAN variable-layouts 2026-11-10, Data
+ * item 2). A reference is fixed once set, so this never rewrites one; a
+ * collision leaves the row without, and says so once, naming both rows, rather
+ * than letting the unique index stop the boot. True when it stamped.
+ */
+export async function stampReferenceIfFree(
+	db: Db,
+	row: { id: number; variableId: string; name: string },
+	reference: string
+): Promise<boolean> {
+	const [holder] = await db
+		.select({
+			id: schema.pipelineVariableTemplates.id,
+			name: schema.pipelineVariableTemplates.name
+		})
+		.from(schema.pipelineVariableTemplates)
+		.where(
+			and(
+				eq(schema.pipelineVariableTemplates.variableId, row.variableId),
+				eq(schema.pipelineVariableTemplates.reference, reference)
+			)
+		)
+		.limit(1)
+	if (holder) {
+		console.warn(
+			`[pipelines] variable layout '${row.name}' (#${row.id}) cannot go by '${reference}' — ` +
+				`'${holder.name}' (#${holder.id}) already does — so it stays without a reference`
+		)
+		return false
+	}
+	try {
+		await db
+			.update(schema.pipelineVariableTemplates)
+			.set({ reference })
+			.where(
+				and(
+					eq(schema.pipelineVariableTemplates.id, row.id),
+					isNull(schema.pipelineVariableTemplates.reference)
+				)
+			)
+		return true
+	} catch (e) {
+		console.warn(
+			`[pipelines] variable layout '${row.name}' (#${row.id}) could not be given '${reference}': ${
+				e instanceof Error ? e.message : String(e)
+			}`
+		)
+		return false
+	}
+}
+
+/**
+ * Stamp core's shipped rows (hand-written, the catalogue's, the automatic
+ * ones) with their layout reference, by seed key, where it is still NULL.
+ * Names come from code (`coreLayoutReferenceFor`), never from the stored name.
+ * In id order, so a collision resolves the same way every boot.
+ */
+async function stampCoreLayoutReferences(db: Db): Promise<void> {
+	const rows = await db
+		.select({
+			id: schema.pipelineVariableTemplates.id,
+			variableId: schema.pipelineVariableTemplates.variableId,
+			name: schema.pipelineVariableTemplates.name,
+			seedKey: schema.pipelineVariableTemplates.seedKey
+		})
+		.from(schema.pipelineVariableTemplates)
+		.where(isNull(schema.pipelineVariableTemplates.reference))
+		.orderBy(asc(schema.pipelineVariableTemplates.id))
+	for (const row of rows) {
+		const reference = coreLayoutReferenceFor(row.seedKey)
+		if (reference) await stampReferenceIfFree(db, row, reference)
+	}
 }
 
 /**

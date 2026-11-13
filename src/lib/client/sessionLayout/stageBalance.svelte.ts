@@ -2,19 +2,38 @@
  * The centred stage (ruled 2026-09-27; ./tuckedSides), measured. The live
  * layout (./SessionLayoutRender) calls it during initialisation
  * (its effect and its mount are the renderer's) and hands the balance to the
- * middle zone, and `flowEdge` to the tucked flyouts.
+ * middle zone.
  */
 import { onMount, untrack } from "svelte"
 import { balancedGutters, stagePlanPx, type Gutters } from "./tuckedSides"
-import {
-	BODY_GAP_PX,
-	type SessionLayoutModel
-} from "./sessionLayoutModel.svelte"
+import { type SessionLayoutModel } from "./sessionLayoutModel.svelte"
 
 export interface StageBalanceInput {
 	readonly model: SessionLayoutModel
 	/** `.layout-center`, the middle zone that carries the balance. */
 	readonly centerEl: HTMLElement | null
+}
+
+/**
+ * How far the middle zone sits from each of the body's CONTENT edges, and the
+ * content's width. The widget gap pads the body (PLAN 2026-11-05 ★9), and
+ * that padding is not a side: measured from the border edge, a body with no
+ * side in the flow read its padding as one, the middle reached over it, the
+ * distance fell to 0, the reach came off — and the layout flipped every frame.
+ */
+export function middleEdgesPx(o: {
+	body: { left: number; right: number }
+	center: { left: number; right: number }
+	padStart: number
+	padEnd: number
+}): { start: number; end: number; bodyPx: number } {
+	const left = o.body.left + o.padStart
+	const right = o.body.right - o.padEnd
+	return {
+		start: Math.max(0, Math.round(o.center.left - left)),
+		end: Math.max(0, Math.round(right - o.center.right)),
+		bodyPx: Math.round(right - left)
+	}
 }
 
 export function createStageBalance(input: StageBalanceInput) {
@@ -39,8 +58,6 @@ export function createStageBalance(input: StageBalanceInput) {
 	let scrollbarPx = $state(0)
 	let stagePlan = $derived(stagePlanPx(scrollbarPx))
 	let gutters = $state<Gutters>({ start: 0, end: 0 })
-	/** Body edge → the middle zone's edge: where a tucked flyout stops, against its rail. */
-	let flowEdge = $state<Gutters>({ start: 0, end: 0 })
 	/**
 	 * Which ends of the middle zone have a side in the flow next to them. The
 	 * middle reaches over the body gap on those ends (a negative margin of the
@@ -57,8 +74,13 @@ export function createStageBalance(input: StageBalanceInput) {
 		const b = bodyEl.getBoundingClientRect()
 		const c = centerEl.getBoundingClientRect()
 		if (!(b.width > 0) || !(c.width > 0)) return
-		const start = Math.max(0, Math.round(c.left - b.left))
-		const end = Math.max(0, Math.round(b.right - c.right))
+		const cs = getComputedStyle(bodyEl)
+		const { start, end, bodyPx } = middleEdgesPx({
+			body: b,
+			center: c,
+			padStart: Number.parseFloat(cs.paddingLeft) || 0,
+			padEnd: Number.parseFloat(cs.paddingRight) || 0
+		})
 		// What the box just measured was drawn with: the gap already covered
 		// or not yet.
 		const drawn = middleOverGap
@@ -66,24 +88,13 @@ export function createStageBalance(input: StageBalanceInput) {
 		if (over.start !== drawn.start || over.end !== drawn.end)
 			middleOverGap = over
 		const next = balancedGutters({
-			bodyPx: Math.round(b.width),
+			bodyPx,
 			startPx: start,
 			endPx: end,
 			stagePx: stagePlan
 		})
 		if (next.start !== gutters.start || next.end !== gutters.end)
 			gutters = next
-		// A tucked flyout stops at the middle's edge, past the gap as well —
-		// never at the balance. The balance is inside the middle ("the whole
-		// panel scrolls"), so stopping there floated the flyout inside the
-		// conversation, a whole balance away from the rail that opened it
-		// (264px with Chat's empty left column at 2540px, 2026-10-13).
-		const edge = {
-			start: start + (drawn.start ? BODY_GAP_PX : 0),
-			end: end + (drawn.end ? BODY_GAP_PX : 0)
-		}
-		if (edge.start !== flowEdge.start || edge.end !== flowEdge.end)
-			flowEdge = edge
 	}
 	$effect(() => {
 		const body = input.model.bodyEl
@@ -110,19 +121,12 @@ export function createStageBalance(input: StageBalanceInput) {
 		probe.remove()
 	})
 	/**
-	 * The balance the middle zone hands the conversation's column. Only a
-	 * one-column middle has one column to centre: a middle arranged across
-	 * has no single column, so it takes its whole width unbalanced — either
-	 * way nothing between the sides is left outside a widget.
+	 * The balance the middle zone hands the conversation's column. The middle
+	 * is always one column, so it always has one column to centre.
 	 */
-	let stageBalance = $derived<Gutters>(
-		input.model.middleOneColumn ? gutters : { start: 0, end: 0 }
-	)
+	let stageBalance = $derived<Gutters>(gutters)
 
 	return {
-		get flowEdge() {
-			return flowEdge
-		},
 		get middleOverGap() {
 			return middleOverGap
 		},

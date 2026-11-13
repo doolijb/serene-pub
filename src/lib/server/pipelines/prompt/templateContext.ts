@@ -30,7 +30,11 @@ import type { TemplateContext } from "$lib/server/pipelines/prompt/promptTypes"
 import type { VarValue } from "@serene-pub/sdk"
 import type { TEMPLATE_CONTEXT_SCHEMA } from "@serene-pub/contracts"
 import {
+	NAMED_LAYOUTS_FIELD,
+	layoutUseOf,
 	renderVariable,
+	variableOfKey,
+	type NamedLayouts,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
@@ -205,6 +209,27 @@ function genreFields(fields: unknown): Record<string, unknown> {
 }
 
 /**
+ * The context keys `buildTemplateContext` lays out through a variable layout —
+ * the ones Assemble marks safe for core's Handlebars engine (`laidOutForHandlebars`)
+ * so `{{x}}` and `{{{x}}}` print alike. Every key written `await layout(...)`
+ * below, and no other: `char`, `scenario`'s siblings the plain texts, the
+ * structures and `state` keep the engine's escaping.
+ */
+export const LAID_OUT_CONTEXT_KEYS = [
+	"instructions",
+	"relationshipsPerspectives",
+	"relationshipsKnown",
+	"characters",
+	"personas",
+	"characterNames",
+	"personaNames",
+	"likenesses",
+	"scenario",
+	"exampleDialogue",
+	"postHistoryInstructions"
+] as const
+
+/**
  * Build the context a context template renders against.
  *
  * Returns the legacy `TemplateContext` shape exactly, minus
@@ -215,7 +240,7 @@ function genreFields(fields: unknown): Record<string, unknown> {
  */
 export async function buildTemplateContext(
 	input: BuildContextInput
-): Promise<TemplateContext> {
+): Promise<TemplateContext & { namedLayouts?: NamedLayouts }> {
 	const interpolation = new InterpolationEngine()
 	const texts = input.texts ?? {}
 
@@ -305,13 +330,58 @@ export async function buildTemplateContext(
 	 * user's template. Presentation moves into the layout; the type on the way
 	 * out does not move at all.
 	 */
-	const layout = (key: string, value: unknown) =>
-		renderVariable(input.variables, key, value, input)
+	//
+	// 🚧 **Layouts a template names for a key written out here** (`layout
+	// characters "core/json@1"`). The key reaches Assemble as text, so the
+	// reference is written out in this same sequential pass, from the raw value,
+	// through the row `world.ts` resolved for it by variable (`references`), and
+	// handed on beside the context (`NAMED_LAYOUTS_FIELD`) — Assemble places it
+	// where the template calls for it and records the receipt line. Nothing is
+	// emitted when no template names a layout for any key.
+	const named: NamedLayouts = {}
+	const layout = async (key: string, value: unknown) => {
+		const text = await renderVariable(input.variables, key, value, input)
+		const references = input.variables?.[key]?.references
+		if (!references) return text
+		const variableId = variableOfKey(input.variables, key)
+		const written: NamedLayouts[string]["references"] = {}
+		for (const [reference, row] of Object.entries(references)) {
+			written[reference] = {
+				text: await renderVariable(
+					{
+						[key]: {
+							variableId,
+							engine: row.engine,
+							source: row.source,
+							name: row.name,
+							origin: row.origin,
+							reason: "template"
+						}
+					},
+					key,
+					value,
+					input
+				),
+				use: {
+					key,
+					variableId: variableId ?? null,
+					layout: row.name,
+					origin: row.origin,
+					reason: "template"
+				}
+			}
+		}
+		named[key] = {
+			inUse: layoutUseOf(input.variables, key),
+			references: written
+		}
+		return text
+	}
 
 	// Held to the builder's declared out-port schema (typed templates P3):
 	// `satisfies` refuses a key the declaration lacks and a declared key this
 	// leaves out, so the template editor's scope and what renders cannot part.
-	return {
+	const context = {
 		instructions: await layout(
 			"instructions",
 			interpolate(texts.instructions)
@@ -402,6 +472,9 @@ export async function buildTemplateContext(
 		user: input.personaName,
 		persona: input.personaName
 	} satisfies VarValue<typeof TEMPLATE_CONTEXT_SCHEMA>
+	return Object.keys(named).length
+		? { ...context, [NAMED_LAYOUTS_FIELD]: named }
+		: context
 }
 
 /** `{ state }` when the resolved state projects to one, else nothing. */

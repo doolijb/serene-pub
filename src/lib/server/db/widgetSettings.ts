@@ -44,11 +44,33 @@ export interface DroppedWidgetSetting {
 }
 
 /**
+ * The keys of a Messages copy that moved to the Composer and Turn line
+ * widgets (the converter in `sessionLayoutPanels` carries them). Until a
+ * session's row is converted, the prune must not delete them.
+ */
+export const MESSAGES_MOVED_KEYS = [
+	"composer",
+	"otherTabsComposer",
+	"showActions",
+	"nextUp",
+	"composerPosition",
+	"showComposer",
+	"showMessages",
+	"showNudge"
+] as const
+
+/**
  * Prune stored settings for the given widgets against their current
  * declarations. Idempotent: safe to run every boot.
+ *
+ * `opts.spare` names (user, session) pairs whose layout is not yet converted
+ * to panels version 2: on their Messages copies the prune keeps
+ * {@link MESSAGES_MOVED_KEYS} (the startup task moves them; the next boot's
+ * prune clears any leftovers) and prunes everything else as usual.
  */
 export async function syncWidgetSettings(
-	decls: WidgetDecl[]
+	decls: WidgetDecl[],
+	opts?: { spare?: ReadonlyArray<{ userId: number; sessionId: number }> }
 ): Promise<DroppedWidgetSetting[]> {
 	const widgetIds = decls.map((d) => d.id)
 	if (!widgetIds.length) return []
@@ -71,6 +93,9 @@ export async function syncWidgetSettings(
 	)
 	const declsById = new Map(decls.map((d) => [d.id, d] as const))
 	const dropped: DroppedWidgetSetting[] = []
+	const spared = new Set(
+		(opts?.spare ?? []).map((p) => `${p.userId}:${p.sessionId}`)
+	)
 
 	for (const row of rows) {
 		const widget = widgetOfInstance(row.widgetInstanceId)
@@ -82,6 +107,19 @@ export async function syncWidgetSettings(
 				: schemas.get(widget)
 		if (!fields) continue
 		const result = pruneWidgetSettings(fields, row.values)
+		if (
+			widget === "messages" &&
+			spared.has(`${row.userId}:${row.sessionId}`) &&
+			row.values &&
+			typeof row.values === "object"
+		) {
+			const stored = row.values as Record<string, unknown>
+			for (const key of MESSAGES_MOVED_KEYS) {
+				if (!Object.hasOwn(stored, key)) continue
+				result.values[key] = stored[key]
+				result.dropped = result.dropped.filter((d) => d.key !== key)
+			}
+		}
 		for (const d of result.dropped)
 			dropped.push({
 				widgetInstanceId: row.widgetInstanceId,

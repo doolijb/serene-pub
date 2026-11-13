@@ -27,6 +27,10 @@
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm"
 import { sortKeysDeep } from "$lib/server/utils/contentHash"
+import {
+	CAST_VERSION_TAG_COLUMNS,
+	writeCastVersionTagText
+} from "$lib/server/characters/versions"
 
 /** The stored spelling. Built fresh per use: a `/g` regex carries `lastIndex`. */
 const CAST_TAG_SOURCE = String.raw`\{\{char:(\d+)\}\}`
@@ -225,7 +229,22 @@ function tagPositions(value: unknown): { around: string; tags: number[] } {
  * member. Add a column here when a lore text column is added. (A merge log's
  * saved copy of a member is lore text too, kept apart: `narrativeGraph.ts`
  * `rewriteMergeLogCastTags`.)
+ *
+ * A site may carry a `write` delegate: the table's one writer, which both the
+ * rewrite and the undo then call instead of a plain `UPDATE` (`castVersion`:
+ * the versions module owns `character_versions`). Reach it through a lambda so
+ * the `castTags ↔ db/schema` import cycle cannot bite at module load.
  */
+interface CastTagSiteSpec {
+	table: unknown
+	columns: readonly string[]
+	write?: (
+		tx: Db,
+		id: number,
+		set: Record<string, unknown>
+	) => Promise<unknown>
+}
+
 const CAST_TAG_SITES = {
 	/** Every entry type: the body, its title, its keys, its typed fields. */
 	entry: {
@@ -235,11 +254,6 @@ const CAST_TAG_SITES = {
 	/** A dated overlay of an entry's writable columns. */
 	entryAmendment: {
 		table: schema.entryAmendments,
-		columns: ["fields"]
-	},
-	/** A dated overlay of a cast member (their summary, name, aliases). */
-	castAmendment: {
-		table: schema.castAmendments,
 		columns: ["fields"]
 	},
 	castMember: {
@@ -262,8 +276,18 @@ const CAST_TAG_SITES = {
 	lorebook: {
 		table: schema.lorebooks,
 		columns: ["description"]
+	},
+	/**
+	 * A cast member's version: dated changes and the member's own words.
+	 * Owner `lorebook_id` (a card version has none, so is never read).
+	 */
+	castVersion: {
+		table: schema.characterVersions,
+		columns: CAST_VERSION_TAG_COLUMNS,
+		write: (tx: Db, id: number, set: Record<string, unknown>) =>
+			writeCastVersionTagText(tx, id, set)
 	}
-} as const
+} satisfies Record<string, CastTagSiteSpec>
 
 export type CastTagSite = keyof typeof CAST_TAG_SITES
 
@@ -331,7 +355,8 @@ export async function rewriteBookCastTags(
 	for (const site of Object.keys(CAST_TAG_SITES) as CastTagSite[]) {
 		const ids = only?.[site]
 		if (only && !ids?.length) continue
-		const { table, columns } = CAST_TAG_SITES[site]
+		const spec: CastTagSiteSpec = CAST_TAG_SITES[site]
+		const { table, columns } = spec
 		const t = table as any
 		const mentions = columns.map(
 			(c) => sql`${t[c]}::text LIKE ${"%char:%"}`
@@ -361,11 +386,25 @@ export async function rewriteBookCastTags(
 				rewrites.push({ site, id: row.id, column, from, to, before })
 			}
 			if (Object.keys(set).length === 0) continue
-			await tx.update(t).set(set).where(eq(t.id, row.id))
+			await writeSite(tx, spec, row.id, set)
 			if (site === "entry") entryTypeIds.add(row.typeId)
 		}
 	}
 	return { rewrites, entryTypeIds }
+}
+
+/** One row's write: the site's own writer when it has one, else a plain update. */
+async function writeSite(
+	tx: Db,
+	spec: CastTagSiteSpec,
+	id: number,
+	set: Record<string, unknown>
+): Promise<void> {
+	if (spec.write) await spec.write(tx, id, set)
+	else {
+		const t = spec.table as any
+		await tx.update(t).set(set).where(eq(t.id, id))
+	}
 }
 
 /** Two stored values the same, whatever order a `jsonb` read gave the keys. */
@@ -400,7 +439,7 @@ export async function revertCastTagRewrites(
 	const unrestored = new Set<string>()
 	const entryTypeIds = new Set<string>()
 	for (const note of notes) {
-		const spec = CAST_TAG_SITES[note.site]
+		const spec: CastTagSiteSpec | undefined = CAST_TAG_SITES[note.site]
 		if (!spec || !(spec.columns as readonly string[]).includes(note.column))
 			continue
 		const t = spec.table as any
@@ -434,10 +473,7 @@ export async function revertCastTagRewrites(
 		const value = rewriteCastTagsDeep(sortKeysDeep(row.value), () =>
 			at.has(i++) ? back : null
 		)
-		await tx
-			.update(t)
-			.set({ [note.column]: value })
-			.where(eq(t.id, note.id))
+		await writeSite(tx, spec, note.id, { [note.column]: value })
 		if (note.site === "entry") entryTypeIds.add(row.typeId)
 	}
 	return { unrestored: unrestored.size, entryTypeIds }

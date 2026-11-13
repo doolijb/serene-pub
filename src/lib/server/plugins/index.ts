@@ -292,7 +292,9 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 	// the admin who enabled it. Outside the sandbox gate: nothing of it runs in
 	// one. Idempotent, best-effort, and never stalls the boot.
 	try {
-		const { syncProvidedBooks } = await import("./providedBooks")
+		const { syncProvidedBooks, turnTombstonesIntoDisabled } = await import("./providedBooks")
+		// 🚧 (M2e) First: M2c's tombstones become disabled marks the sync below honours.
+		await turnTombstonesIntoDisabled(db)
 		const { plugins: pluginsTable } = await import("$lib/server/db/schema")
 		const { eq } = await import("drizzle-orm")
 		const on = await db
@@ -302,6 +304,17 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		for (const { pluginId } of on) await syncProvidedBooks(db, pluginId)
 	} catch (e) {
 		console.warn("[plugins] provided-book sync failed:", e)
+	}
+
+	// 🚧 (M2e, ★M2e-1) Core's primers (and a plugin's, were any declared) as
+	// immutable starter-lorebook rows, owned by the first live admin. Outside
+	// the sandbox gate too; after the catalogue's primers and entry types are
+	// registered (the pipelines stage runs first). Idempotent, best-effort.
+	try {
+		const { syncProvidedPrimers } = await import("./providedPrimers")
+		await syncProvidedPrimers(db)
+	} catch (e) {
+		console.warn("[plugins] provided-primer sync failed:", e)
 	}
 
 	// In-app genres (PLAN-pipeline-canvas-and-genre-authoring §6.1), back in

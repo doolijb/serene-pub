@@ -77,8 +77,20 @@ export const LOGBOOK_OBJECT_TYPES = {
 		href: at("/admin/context-templates")
 	},
 	"variable-template": {
-		label: "variable template",
-		href: at("/admin/variable-templates")
+		label: "variable layout",
+		/**
+		 * The record's id is a layout row id (digits) or a variable id (when
+		 * the pub went back to its default). A variable id opens the variable's
+		 * page. The logbook doesn't know a row's variable, so a row id links the
+		 * old address, which the router redirects to that row's own form
+		 * (`LegacyIdRedirect.svelte`).
+		 */
+		href: (id) =>
+			id == null
+				? "/admin/variable-layouts"
+				: /^\d+$/.test(id)
+					? `/admin/variable-templates/${id}`
+					: `/admin/variable-layouts/${encodeURIComponent(id)}`
 	},
 	script: { label: "script", href: at("/admin/scripts") },
 	theme: { label: "pub theme" },

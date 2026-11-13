@@ -31,6 +31,7 @@ import {
 	sql
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { genuineProvidedMarkSql } from "$lib/server/plugins/providedMarks"
 import {
 	CONVERSATION_BODY_MAX,
 	CONVERSATION_NOT_FOUND,
@@ -58,6 +59,7 @@ import {
 } from "$lib/server/notifications/store"
 import { pushToUser } from "$lib/server/sockets/utils/userPush"
 import { canViewCharacter } from "$lib/server/utils/sessionAccess"
+import { sessionsDrawingCard } from "$lib/server/cast/seatedCast"
 import { canViewLorebook } from "$lib/server/utils/ownedBook"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import {
@@ -81,7 +83,8 @@ export const BODY_TOO_LONG = `A message can be at most ${CONVERSATION_BODY_MAX.t
 export const BODY_EMPTY = "Write something, or attach something, to send."
 export const NOT_HOST = "Only the conversation's host can do that."
 export const NOT_GROUP = "Only a group conversation can do that."
-export const ATTACHMENT_GONE = "An attachment is no longer available. Send without it."
+export const ATTACHMENT_GONE =
+	"An attachment is no longer available. Send without it."
 export const PICKS_MAX = 10
 export const NAME_MAX = 100
 export const ATTACHABLE_MAX = 25
@@ -113,13 +116,17 @@ async function requireMember(
 	conversationId: unknown,
 	userId: number
 ): Promise<{ member: MemberRow; conversation: ConversationRow }> {
-	if (!Number.isInteger(conversationId)) throw new Error(CONVERSATION_NOT_FOUND)
+	if (!Number.isInteger(conversationId))
+		throw new Error(CONVERSATION_NOT_FOUND)
 	const [row] = await db
 		.select({ member: M, conversation: C })
 		.from(M)
 		.innerJoin(C, eq(C.id, M.conversationId))
 		.where(
-			and(eq(M.conversationId, conversationId as number), eq(M.userId, userId))
+			and(
+				eq(M.conversationId, conversationId as number),
+				eq(M.userId, userId)
+			)
 		)
 		.limit(1)
 	if (!row) throw new Error(CONVERSATION_NOT_FOUND)
@@ -136,7 +143,11 @@ async function memberIdsOf(db: Db, conversationId: number): Promise<number[]> {
 }
 
 /** The ids that are live accounts other than `userId` — the people roster's test. */
-async function assertPeople(db: Db, userId: number, ids: unknown): Promise<number[]> {
+async function assertPeople(
+	db: Db,
+	userId: number,
+	ids: unknown
+): Promise<number[]> {
 	if (!Array.isArray(ids)) throw new Error(PERSON_NOT_AVAILABLE)
 	const wanted = [...new Set(ids)]
 	if (wanted.some((id) => !Number.isInteger(id) || id === userId))
@@ -222,7 +233,10 @@ async function summariesFor(
 			.from(CM)
 			.innerJoin(
 				M,
-				and(eq(M.conversationId, CM.conversationId), eq(M.userId, userId))
+				and(
+					eq(M.conversationId, CM.conversationId),
+					eq(M.userId, userId)
+				)
 			)
 			.where(
 				and(
@@ -268,11 +282,16 @@ async function summariesFor(
 			}
 		})
 		.sort((a, b) =>
-			(b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt)
+			(b.lastMessageAt ?? b.createdAt).localeCompare(
+				a.lastMessageAt ?? a.createdAt
+			)
 		)
 }
 
-export async function listFor(db: Db, userId: number): Promise<ConversationSummary[]> {
+export async function listFor(
+	db: Db,
+	userId: number
+): Promise<ConversationSummary[]> {
 	await assertMessagingOn(db)
 	return summariesFor(db, userId)
 }
@@ -381,7 +400,10 @@ export function pushChangedTo(
 	for (const id of memberIds)
 		pushToUser(id, "conversations:changed", { conversationId })
 	for (const id of removedIds)
-		pushToUser(id, "conversations:changed", { conversationId, removed: true })
+		pushToUser(id, "conversations:changed", {
+			conversationId,
+			removed: true
+		})
 }
 
 /* --- open -------------------------------------------------------------- */
@@ -390,14 +412,25 @@ export async function open(
 	db: Db,
 	userId: number,
 	params: { conversationId: number; before?: number; limit?: number }
-): Promise<{ conversationId: number; messages: ConversationMessageRow[]; hasEarlier: boolean }> {
+): Promise<{
+	conversationId: number
+	messages: ConversationMessageRow[]
+	hasEarlier: boolean
+}> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireMember(db, params?.conversationId, userId)
+	const { conversation } = await requireMember(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const raw = Number(params.limit)
-	const limit = Number.isInteger(raw) && raw > 0
-		? Math.min(raw, CONVERSATION_PAGE_MAX)
-		: CONVERSATION_PAGE_DEFAULT
-	const before = Number.isInteger(params.before) ? (params.before as number) : null
+	const limit =
+		Number.isInteger(raw) && raw > 0
+			? Math.min(raw, CONVERSATION_PAGE_MAX)
+			: CONVERSATION_PAGE_DEFAULT
+	const before = Number.isInteger(params.before)
+		? (params.before as number)
+		: null
 	const rows = await db
 		.select()
 		.from(CM)
@@ -410,9 +443,13 @@ export async function open(
 		.limit(limit + 1)
 	const hasEarlier = rows.length > limit
 	const page = rows.slice(0, limit).reverse()
-	const atts = await attachmentsByMessage(db, page.map((m) => m.id))
+	const atts = await attachmentsByMessage(
+		db,
+		page.map((m) => m.id)
+	)
 	const messages: ConversationMessageRow[] = []
-	for (const m of page) messages.push(await rowFor(db, m, atts.get(m.id) ?? [], userId))
+	for (const m of page)
+		messages.push(await rowFor(db, m, atts.get(m.id) ?? [], userId))
 	return { conversationId: conversation.id, messages, hasEarlier }
 }
 
@@ -432,7 +469,9 @@ export async function create(
 	if (!others.length) throw new Error("Pick at least one person.")
 	const name = typeof params.name === "string" ? params.name.trim() : ""
 	if (name.length > NAME_MAX)
-		throw new Error(`A conversation name can be at most ${NAME_MAX} characters.`)
+		throw new Error(
+			`A conversation name can be at most ${NAME_MAX} characters.`
+		)
 
 	if (others.length === 1 && !name) {
 		const other = others[0]
@@ -476,7 +515,12 @@ export async function create(
 			.returning({ id: C.id })
 		await t
 			.insert(M)
-			.values([userId, ...others].map((u) => ({ conversationId: row.id, userId: u })))
+			.values(
+				[userId, ...others].map((u) => ({
+					conversationId: row.id,
+					userId: u
+				}))
+			)
 		return row.id
 	})
 	pushChangedTo(others, id)
@@ -498,7 +542,9 @@ function normalisePicks(raw: unknown): ConversationAttachmentPick[] {
 	for (const p of raw) {
 		if (!p || !isAttachmentKind(p.kind) || !Number.isInteger(p.subjectId))
 			throw new Error(ATTACHMENT_GONE)
-		if (!picks.some((q) => q.kind === p.kind && q.subjectId === p.subjectId))
+		if (
+			!picks.some((q) => q.kind === p.kind && q.subjectId === p.subjectId)
+		)
 			picks.push({ kind: p.kind, subjectId: p.subjectId })
 	}
 	if (picks.length > PICKS_MAX)
@@ -513,7 +559,12 @@ async function gateRefusal(
 	senderId: number,
 	blockedBy: number[]
 ): Promise<string> {
-	const card = await attachmentCardFor(pick.kind, pick.subjectId, senderId, db)
+	const card = await attachmentCardFor(
+		pick.kind,
+		pick.subjectId,
+		senderId,
+		db
+	)
 	if (!card.available) return ATTACHMENT_GONE
 	const people = await db
 		.select({ id: U.id, username: U.username, displayName: U.displayName })
@@ -546,13 +597,20 @@ export async function send(
 	params: SendInput
 ): Promise<{ conversationId: number; message: ConversationMessageRow }> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireMember(db, params?.conversationId, userId)
+	const { conversation } = await requireMember(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const body = normaliseBody(params.body)
 	const picks = normalisePicks(params.attachments)
-	const { normaliseTrayItemIds } = await import("$lib/server/attachments/send")
+	const { normaliseTrayItemIds } = await import(
+		"$lib/server/attachments/send"
+	)
 	const { TRAY_ITEM_GONE } = await import("$lib/server/attachments/tray")
 	const trayItemIds = normaliseTrayItemIds(params.trayItemIds)
-	if (!body && !picks.length && !trayItemIds.length) throw new Error(BODY_EMPTY)
+	if (!body && !picks.length && !trayItemIds.length)
+		throw new Error(BODY_EMPTY)
 
 	const memberIds = await memberIdsOf(db, conversation.id)
 	if (conversation.kind === "direct") {
@@ -564,17 +622,26 @@ export async function send(
 				.where(eq(U.id, otherId))
 				.limit(1)
 			if (!other || other.isDeleted)
-				throw new Error("That person's account was deleted, so this conversation is read-only.")
+				throw new Error(
+					"That person's account was deleted, so this conversation is read-only."
+				)
 		}
 	}
 
 	// §5 — every pick, for every current member (the sender included).
 	for (const pick of picks) {
-		const verdict = await canAttach(pick.kind, pick.subjectId, memberIds, db)
+		const verdict = await canAttach(
+			pick.kind,
+			pick.subjectId,
+			memberIds,
+			db
+		)
 		if (!verdict.ok) {
 			if (verdict.gone || verdict.blockedBy.includes(userId))
 				throw new Error(ATTACHMENT_GONE)
-			throw new Error(await gateRefusal(db, pick, userId, verdict.blockedBy))
+			throw new Error(
+				await gateRefusal(db, pick, userId, verdict.blockedBy)
+			)
 		}
 	}
 
@@ -593,11 +660,15 @@ export async function send(
 		: []
 	if (tray.length !== trayItemIds.length) throw new Error(TRAY_ITEM_GONE)
 	tray.sort(
-		(a, b) => a.position - b.position || a.createdAt.getTime() - b.createdAt.getTime()
+		(a, b) =>
+			a.position - b.position ||
+			a.createdAt.getTime() - b.createdAt.getTime()
 	)
 	for (const item of tray) {
 		if (item.status === "uploading")
-			throw new Error("An attachment is still uploading — wait for it to finish, then send.")
+			throw new Error(
+				"An attachment is still uploading — wait for it to finish, then send."
+			)
 		if (item.status !== "ready" || item.fileId == null)
 			throw new Error(item.refusal ?? TRAY_ITEM_GONE)
 	}
@@ -606,12 +677,20 @@ export async function send(
 		// A dedupe hit already stamped with ANOTHER conversation cannot be
 		// re-stamped; it has to pass the gate as it stands.
 		const files = await db
-			.select({ id: schema.files.id, conversationId: schema.files.conversationId })
+			.select({
+				id: schema.files.id,
+				conversationId: schema.files.conversationId
+			})
 			.from(schema.files)
 			.where(inArray(schema.files.id, trayFileIds))
-		if (files.length !== new Set(trayFileIds).size) throw new Error(TRAY_ITEM_GONE)
+		if (files.length !== new Set(trayFileIds).size)
+			throw new Error(TRAY_ITEM_GONE)
 		for (const f of files) {
-			if (f.conversationId == null || f.conversationId === conversation.id) continue
+			if (
+				f.conversationId == null ||
+				f.conversationId === conversation.id
+			)
+				continue
 			const verdict = await canAttach("file", f.id, memberIds, db)
 			if (!verdict.ok) throw new Error(ATTACHMENT_GONE)
 		}
@@ -621,7 +700,10 @@ export async function send(
 		...picks,
 		...trayFileIds
 			.filter((id, i, a) => a.indexOf(id) === i)
-			.filter((id) => !picks.some((p) => p.kind === "file" && p.subjectId === id))
+			.filter(
+				(id) =>
+					!picks.some((p) => p.kind === "file" && p.subjectId === id)
+			)
 			.map((id) => ({ kind: "file" as const, subjectId: id }))
 	]
 
@@ -630,7 +712,9 @@ export async function send(
 		const [still] = await t
 			.select({ userId: M.userId })
 			.from(M)
-			.where(and(eq(M.conversationId, conversation.id), eq(M.userId, userId)))
+			.where(
+				and(eq(M.conversationId, conversation.id), eq(M.userId, userId))
+			)
 			.limit(1)
 		if (!still) throw new Error(CONVERSATION_NOT_FOUND)
 		const now = new Date()
@@ -658,11 +742,19 @@ export async function send(
 				.update(schema.files)
 				.set({ conversationId: conversation.id })
 				.where(
-					and(inArray(schema.files.id, trayFileIds), isNull(schema.files.conversationId))
+					and(
+						inArray(schema.files.id, trayFileIds),
+						isNull(schema.files.conversationId)
+					)
 				)
 			const gone = await t
 				.delete(schema.trayItems)
-				.where(inArray(schema.trayItems.id, tray.map((r) => r.id)))
+				.where(
+					inArray(
+						schema.trayItems.id,
+						tray.map((r) => r.id)
+					)
+				)
 				.returning({ id: schema.trayItems.id })
 			if (gone.length !== tray.length) throw new Error(TRAY_ITEM_GONE)
 		}
@@ -673,12 +765,20 @@ export async function send(
 		await t
 			.update(M)
 			.set({ lastReadMessageId: m.id })
-			.where(and(eq(M.conversationId, conversation.id), eq(M.userId, userId)))
+			.where(
+				and(eq(M.conversationId, conversation.id), eq(M.userId, userId))
+			)
 		return m.id
 	})
 
 	pushMessage(db, memberIds, conversation.id, messageId, "new")
-	await notifyMembers(db, conversation, userId, body, allAttachments.length > 0)
+	await notifyMembers(
+		db,
+		conversation,
+		userId,
+		body,
+		allAttachments.length > 0
+	)
 	return {
 		conversationId: conversation.id,
 		message: await messageRowFor(db, messageId, userId)
@@ -719,7 +819,8 @@ async function notifyMembers(
 						? conversation.name?.trim() || "a group conversation"
 						: authorName,
 				excerpt:
-					excerptOf(body, 140) ?? (hasAttachments ? "Sent an attachment" : "")
+					excerptOf(body, 140) ??
+					(hasAttachments ? "Sent an attachment" : "")
 			}
 		},
 		db
@@ -733,7 +834,10 @@ async function ownMessage(db: Db, userId: number, messageId: unknown) {
 	const [row] = await db
 		.select({ message: CM })
 		.from(CM)
-		.innerJoin(M, and(eq(M.conversationId, CM.conversationId), eq(M.userId, userId)))
+		.innerJoin(
+			M,
+			and(eq(M.conversationId, CM.conversationId), eq(M.userId, userId))
+		)
 		.where(eq(CM.id, messageId as number))
 		.limit(1)
 	if (!row) throw new Error(CONVERSATION_NOT_FOUND)
@@ -763,8 +867,17 @@ export async function edit(
 			.update(CM)
 			.set({ body, isEdited: true, updatedAt: new Date() })
 			.where(eq(CM.id, m.id))
-	pushMessage(db, await memberIdsOf(db, m.conversationId), m.conversationId, m.id, "edited")
-	return { conversationId: m.conversationId, message: await messageRowFor(db, m.id, userId) }
+	pushMessage(
+		db,
+		await memberIdsOf(db, m.conversationId),
+		m.conversationId,
+		m.id,
+		"edited"
+	)
+	return {
+		conversationId: m.conversationId,
+		message: await messageRowFor(db, m.id, userId)
+	}
 }
 
 /** A tombstone: body emptied, attachments dropped, the row keeps its place. */
@@ -778,11 +891,23 @@ export async function remove(
 	await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
 		const now = new Date()
-		await t.update(CM).set({ body: "", deletedAt: now, updatedAt: now }).where(eq(CM.id, m.id))
+		await t
+			.update(CM)
+			.set({ body: "", deletedAt: now, updatedAt: now })
+			.where(eq(CM.id, m.id))
 		await t.delete(CA).where(eq(CA.messageId, m.id))
 	})
-	pushMessage(db, await memberIdsOf(db, m.conversationId), m.conversationId, m.id, "removed")
-	return { conversationId: m.conversationId, message: await messageRowFor(db, m.id, userId) }
+	pushMessage(
+		db,
+		await memberIdsOf(db, m.conversationId),
+		m.conversationId,
+		m.id,
+		"removed"
+	)
+	return {
+		conversationId: m.conversationId,
+		message: await messageRowFor(db, m.id, userId)
+	}
 }
 
 /* --- read marker, mute ------------------------------------------------- */
@@ -793,7 +918,11 @@ export async function markRead(
 	params: { conversationId: number; upTo: number }
 ): Promise<{ conversationId: number; lastReadMessageId: number }> {
 	await assertMessagingOn(db)
-	const { member, conversation } = await requireMember(db, params?.conversationId, userId)
+	const { member, conversation } = await requireMember(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const upTo = Number.isInteger(params.upTo) ? params.upTo : 0
 	const [{ maxId }] = await db
 		.select({ maxId: sql<number | null>`MAX(${CM.id})` })
@@ -805,7 +934,9 @@ export async function markRead(
 		await db
 			.update(M)
 			.set({ lastReadMessageId: next })
-			.where(and(eq(M.conversationId, conversation.id), eq(M.userId, userId)))
+			.where(
+				and(eq(M.conversationId, conversation.id), eq(M.userId, userId))
+			)
 	await clearNotifications(
 		{ regarding: regardingFor.conversation(conversation.id), userId },
 		"viewed",
@@ -820,7 +951,11 @@ export async function mute(
 	params: { conversationId: number; muted: boolean }
 ): Promise<ConversationSummary> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireMember(db, params?.conversationId, userId)
+	const { conversation } = await requireMember(
+		db,
+		params?.conversationId,
+		userId
+	)
 	await db
 		.update(M)
 		.set({ mutedAt: params.muted ? new Date() : null })
@@ -843,10 +978,16 @@ export async function rename(
 	params: { conversationId: number; name: string }
 ): Promise<ConversationSummary> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireHost(db, params?.conversationId, userId)
+	const { conversation } = await requireHost(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const name = typeof params.name === "string" ? params.name.trim() : ""
 	if (name.length > NAME_MAX)
-		throw new Error(`A conversation name can be at most ${NAME_MAX} characters.`)
+		throw new Error(
+			`A conversation name can be at most ${NAME_MAX} characters.`
+		)
 	await db
 		.update(C)
 		.set({ name: name || null, updatedAt: new Date() })
@@ -861,12 +1002,18 @@ export async function addMembers(
 	params: { conversationId: number; userIds: number[] }
 ): Promise<ConversationSummary> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireHost(db, params?.conversationId, userId)
+	const { conversation } = await requireHost(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const ids = await assertPeople(db, userId, params.userIds)
 	if (ids.length)
 		await db
 			.insert(M)
-			.values(ids.map((u) => ({ conversationId: conversation.id, userId: u })))
+			.values(
+				ids.map((u) => ({ conversationId: conversation.id, userId: u }))
+			)
 			.onConflictDoNothing()
 	pushChangedTo(await memberIdsOf(db, conversation.id), conversation.id)
 	return summaryFor(db, userId, conversation.id)
@@ -878,7 +1025,11 @@ export async function removeMember(
 	params: { conversationId: number; userId: number }
 ): Promise<ConversationSummary> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireHost(db, params?.conversationId, userId)
+	const { conversation } = await requireHost(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const target = params.userId
 	if (!Number.isInteger(target)) throw new Error(PERSON_NOT_AVAILABLE)
 	if (target === userId) throw new Error("Leave the conversation instead.")
@@ -888,11 +1039,16 @@ export async function removeMember(
 		.returning({ userId: M.userId })
 	if (!gone.length) throw new Error(PERSON_NOT_AVAILABLE)
 	await clearNotifications(
-		{ regarding: regardingFor.conversation(conversation.id), userId: target },
+		{
+			regarding: regardingFor.conversation(conversation.id),
+			userId: target
+		},
 		"superseded",
 		db
 	)
-	pushChangedTo(await memberIdsOf(db, conversation.id), conversation.id, [target])
+	pushChangedTo(await memberIdsOf(db, conversation.id), conversation.id, [
+		target
+	])
 	return summaryFor(db, userId, conversation.id)
 }
 
@@ -906,12 +1062,18 @@ export async function leave(
 	params: { conversationId: number }
 ): Promise<{ conversationId: number; left: true; deleted: boolean }> {
 	await assertMessagingOn(db)
-	const { conversation } = await requireMember(db, params?.conversationId, userId)
+	const { conversation } = await requireMember(
+		db,
+		params?.conversationId,
+		userId
+	)
 	const result = await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
 		await t
 			.delete(M)
-			.where(and(eq(M.conversationId, conversation.id), eq(M.userId, userId)))
+			.where(
+				and(eq(M.conversationId, conversation.id), eq(M.userId, userId))
+			)
 		const rest = await t
 			.select({ userId: M.userId })
 			.from(M)
@@ -934,12 +1096,19 @@ export async function leave(
 		db
 	)
 	pushChangedTo(result.rest, conversation.id, [userId])
-	return { conversationId: conversation.id, left: true, deleted: result.deleted }
+	return {
+		conversationId: conversation.id,
+		left: true,
+		deleted: result.deleted
+	}
 }
 
 /* --- people, attachable, person ---------------------------------------- */
 
-export async function people(db: Db, userId: number): Promise<ConversationPerson[]> {
+export async function people(
+	db: Db,
+	userId: number
+): Promise<ConversationPerson[]> {
 	await assertMessagingOn(db)
 	const rows = await db
 		.select({
@@ -996,7 +1165,10 @@ async function askerCandidates(
 			.where(
 				and(
 					or(eq(K.userId, userId), inArray(K.id, shared)),
-					like ? or(ilike(K.name, like), ilike(K.nickname, like)) : undefined
+					sql`NOT ${genuineProvidedMarkSql()}`,
+					like
+						? or(ilike(K.name, like), ilike(K.nickname, like))
+						: undefined
 				)
 			)
 			.orderBy(desc(K.updatedAt))
@@ -1033,17 +1205,27 @@ export async function attachable(
 	db: Db,
 	userId: number,
 	params: ConversationsAttachableParams
-): Promise<{ kind: ConversationAttachmentKind; candidates: ConversationAttachmentCard[] }> {
+): Promise<{
+	kind: ConversationAttachmentKind
+	candidates: ConversationAttachmentCard[]
+}> {
 	await assertMessagingOn(db)
 	const kind = params?.kind
 	if (kind !== "session" && kind !== "character" && kind !== "lorebook")
 		throw new Error("Pick a session, a character or a lorebook.")
 	let audience: number[]
 	if (params.conversationId != null) {
-		const { conversation } = await requireMember(db, params.conversationId, userId)
+		const { conversation } = await requireMember(
+			db,
+			params.conversationId,
+			userId
+		)
 		audience = await memberIdsOf(db, conversation.id)
 	} else {
-		audience = [userId, ...(await assertPeople(db, userId, params.userIds ?? []))]
+		audience = [
+			userId,
+			...(await assertPeople(db, userId, params.userIds ?? []))
+		]
 	}
 	const q = typeof params.q === "string" ? params.q.trim().slice(0, 100) : ""
 	const ids = await askerCandidates(db, userId, kind, q, 200)
@@ -1094,14 +1276,24 @@ export async function person(
 				eq(schema.sessionGuests.userId, viewerId)
 			)
 		)
-		.where(and(eq(S.userId, targetId), eq(S.sessionType, SessionTypes.ROLEPLAY)))
+		.where(
+			and(
+				eq(S.userId, targetId),
+				eq(S.sessionType, SessionTypes.ROLEPLAY)
+			)
+		)
 		.orderBy(desc(S.updatedAt))
 		.limit(PERSON_TAB_MAX)
 	const sessions: ConversationsPersonResponse["sessions"] = []
 	for (const { id } of sessionRows) {
 		const card = await attachmentCardFor("session", id, viewerId, db)
 		if (card.available && card.kind === "session")
-			sessions.push({ id, title: card.title, subtitle: card.subtitle, faces: card.faces })
+			sessions.push({
+				id,
+				title: card.title,
+				subtitle: card.subtitle,
+				faces: card.faces
+			})
 	}
 
 	// Characters: theirs, that the viewer may see — prefiltered to the ones a
@@ -1125,17 +1317,70 @@ export async function person(
 		.where(
 			and(
 				eq(K.userId, targetId),
+				sql`NOT ${genuineProvidedMarkSql()}`,
 				or(
 					sql`EXISTS (SELECT 1 FROM ${schema.characterShares} WHERE ${schema.characterShares.characterId} = ${K.id} AND ${schema.characterShares.userId} = ${viewerId})`,
 					sql`${K.id} IN (SELECT ${schema.sessionCharacters.characterId} FROM ${schema.sessionCharacters} WHERE ${schema.sessionCharacters.sessionId} IN ${viewerSessions})`,
-					sql`${K.id} IN (SELECT ${schema.sessionPersonas.personaId} FROM ${schema.sessionPersonas} WHERE ${schema.sessionPersonas.sessionId} IN ${viewerSessions})`
+					sql`${K.id} IN (SELECT ${schema.sessionPersonas.personaId} FROM ${schema.sessionPersonas} WHERE ${schema.sessionPersonas.sessionId} IN ${viewerSessions})`,
+					sql`${K.id} IN (SELECT ${schema.lorebookBindings.characterId} FROM ${schema.lorebookBindings} WHERE ${schema.lorebookBindings.id} IN (SELECT ${schema.sessionCharacters.castMemberId} FROM ${schema.sessionCharacters} WHERE ${schema.sessionCharacters.sessionId} IN ${viewerSessions} UNION SELECT ${schema.sessionPersonas.castMemberId} FROM ${schema.sessionPersonas} WHERE ${schema.sessionPersonas.sessionId} IN ${viewerSessions}))`
 				)
 			)
 		)
 		.orderBy(asc(K.name))
 		.limit(PERSON_TAB_MAX * 2)
+	// The other ground: a viewer session draws the card as a seated member's
+	// active card (a dated card; owner ruling 2026-11-05). It can only ADD
+	// cards the query above did not match — prefiltered to the target's cards
+	// some cast version's parent draws, then confirmed per card against the viewer's
+	// sessions — and it has its own limit, so it never crowds out the rest.
+	const matched = new Set(charRows.map((c) => c.id))
+	const drawnRows = await db
+		.select({
+			id: K.id,
+			name: K.name,
+			nickname: K.nickname,
+			description: K.description,
+			isPersona: K.isPersona,
+			uuid: schema.files.uuid,
+			rev: schema.files.rev
+		})
+		.from(K)
+		.leftJoin(schema.files, eq(schema.files.id, K.avatarMediaId))
+		.where(
+			and(
+				eq(K.userId, targetId),
+				sql`NOT ${genuineProvidedMarkSql()}`,
+				sql`EXISTS (SELECT 1 FROM ${schema.characterVersions} AS cv INNER JOIN ${schema.characterVersions} AS pv ON pv.id = cv.parent_version_id WHERE cv.cast_member_id IS NOT NULL AND pv.card_id = ${K.id})`
+			)
+		)
+		.orderBy(asc(K.name))
+		.limit(PERSON_TAB_MAX * 2)
+	const extraRows: typeof charRows = []
+	if (drawnRows.some((c) => !matched.has(c.id))) {
+		const [owned, guested] = await Promise.all([
+			db.select({ id: S.id }).from(S).where(eq(S.userId, viewerId)),
+			db
+				.select({ id: schema.sessionGuests.sessionId })
+				.from(schema.sessionGuests)
+				.where(eq(schema.sessionGuests.userId, viewerId))
+		])
+		const viewerSessionIds = [...owned, ...guested].map((r) => r.id)
+		for (const c of drawnRows) {
+			if (matched.has(c.id)) continue
+			if (
+				(await sessionsDrawingCard(db, c.id, viewerSessionIds)).length >
+				0
+			)
+				extraRows.push(c)
+		}
+	}
+	const orderedChars = extraRows.length
+		? [...charRows, ...extraRows].sort((a, b) =>
+				a.name.localeCompare(b.name)
+			)
+		: charRows
 	const characters: ConversationsPersonResponse["characters"] = []
-	for (const c of charRows) {
+	for (const c of orderedChars) {
 		if (characters.length >= PERSON_TAB_MAX) break
 		if (!(await canViewCharacter(c.id, viewerId))) continue
 		characters.push({
@@ -1185,4 +1430,3 @@ export async function person(
 		directConversationId: direct?.id ?? null
 	}
 }
-

@@ -10,6 +10,7 @@
  * `resolve.ts` re-exports all three, because every existing caller imports them
  * from there and a key function has no business having two spellings.
  */
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 /**
  * `adventure:slot/weather@1` → `weather`.
@@ -49,6 +50,32 @@ export const locationOwnerKey = (name: string): string => `location:${castKey(na
  * card-less player seat, else its character id. One function, so `byId`, hearing
  * (`state/earshot.ts`), derivation seeds and the state owners' keys never
  * disagree.
+ *
+ * 🚧 ⏳ Once the flip is on (`memberForm.ts`, ★K-1): every player seat's entry
+ * carries `playerSeatId` and keys `player_seat:<id>`; a character seat keys by
+ * its seated member, `seated_member:<castMemberId>`; ⏳ a member-less seat keeps
+ * its character id (the `seat-keys` pass leaves its rows as they are).
  */
-export const castMemberKey = (entry: { id?: unknown; playerSeatId?: unknown }): string =>
-	typeof entry.playerSeatId === "number" ? `player_seat:${entry.playerSeatId}` : String(entry.id)
+export const castMemberKey = (entry: { id?: unknown; playerSeatId?: unknown; castMemberId?: unknown }): string =>
+	typeof entry.playerSeatId === "number"
+		? `player_seat:${entry.playerSeatId}`
+		: memberFormOn() && typeof entry.castMemberId === "number"
+			? `seated_member:${entry.castMemberId}`
+			: String(entry.id)
+
+/**
+ * 🚧 ⏳ The key a session's cast **link** (`resolve.ts` `CastMemberLink`) is
+ * indexed and heard by — `castMemberKey` of its entry. ⚠ A link's own
+ * `castMemberId` is the attached book's member, never the seat's: the seat's
+ * is `seatMemberId`, so a link is never passed to `castMemberKey` as it is.
+ */
+export const castLinkKey = (link: {
+	characterId: number
+	seatMemberId?: number | null
+	playerSeatId?: number | null
+}): string =>
+	castMemberKey({
+		id: link.characterId,
+		playerSeatId: link.playerSeatId ?? undefined,
+		castMemberId: link.seatMemberId ?? undefined
+	})

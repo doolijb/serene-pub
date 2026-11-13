@@ -91,6 +91,16 @@ export function compareDates(a: StoryDate, b: StoryDate): number {
 	return compareStoryTimes(a, b)
 }
 
+/** The day a date names: hour and minute dropped, a day without a month dropped too. The ONE day rule for history entries and the scenes they file — shared so the server's compile, the client's *Not yet compiled* grouping and the compile modal read the same rule. */
+export function dayOnly(date: StoryDate): StoryDate {
+	const month = date.month ?? null
+	return {
+		year: date.year,
+		month,
+		day: month != null ? (date.day ?? null) : null
+	}
+}
+
 /**
  * Where a month or a day sits inside its parent's hundred units: at its own
  * number up to 99, and past that squeezed toward 100 without reaching it

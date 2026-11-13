@@ -1,5 +1,9 @@
 import { CAST_KIND, type PoolItem } from "./poolFilter"
 import type { RetoldFlags } from "$lib/shared/lorebooks/retold"
+import {
+	hasOwnNames,
+	memberShownName
+} from "$lib/shared/lorebooks/memberIdentity"
 
 /**
  * The cast, as arithmetic.
@@ -27,6 +31,10 @@ export interface CastRow {
 	id: number
 	/** A background member's own name. Empty on a row that never had one. */
 	name?: string | null
+	/** The member's own name in this book; null = the card's. */
+	ownName?: string | null
+	/** The member's own nickname in this book; null = the card's. */
+	ownNickname?: string | null
 	/** The `{{char:N}}` tag content refers to this member by. */
 	binding?: string | null
 	aliases?: string[] | null
@@ -60,8 +68,22 @@ export interface CastRow {
 	/** Which card fields the member tells in their own words. */
 	retold?: RetoldFlags | null
 	characterId?: number | null
+	/** The cast version these columns are (the one in force at the book's present on main). */
+	castVersionId?: number | null
+	/** That version's own greetings marked for group sessions only. */
+	groupOnlyGreetings?: string[] | null
+	/** The member's base version, in column names: what they read before their first change. */
+	baseColumns?: Sockets.Lorebooks.CastVersionColumns | null
+	/** The card version the shown version reads from; null = card-less. */
+	cardVersion?: Sockets.Characters.CardVersionSummary | null
+	/** That card's current version; null = card-less. */
+	cardCurrentVersion?: Sockets.Characters.CardVersionSummary | null
+	/** The shown version reads an older version of its card than the current one. */
+	behindCard?: boolean
 	character?: {
 		id?: number | null
+		/** Whose card it is (the wire sends the full row). */
+		userId?: number | null
 		nickname?: string | null
 		name?: string | null
 		isPersona?: boolean | null
@@ -71,6 +93,8 @@ export interface CastRow {
 		scenario?: string | null
 		firstMessage?: string | null
 		alternateGreetings?: string[] | null
+		/** The card's greetings marked for group sessions only. */
+		groupOnlyGreetings?: string[] | null
 		/** An array on the card (one dialogue each); old cards hold a string. */
 		exampleDialogues?: string[] | string | null
 	} | null
@@ -108,8 +132,7 @@ export interface AnchoredLore {
 }
 
 function cardName(row: CastRow): string {
-	if (row.characterId)
-		return (row.character?.nickname || row.character?.name || "").trim()
+	if (row.characterId) return memberShownName(row, row.character).trim()
 	return ""
 }
 
@@ -181,7 +204,10 @@ export function castPoolItem(
 		key: `cast#${row.id}`,
 		id: row.id,
 		kind: CAST_KIND,
-		name: (row.characterId != null && cardName) || member.name,
+		// A member's own names win over the card they are drawn with.
+		name:
+			(row.characterId != null && !hasOwnNames(row) && cardName) ||
+			member.name,
 		content: [member.summary, ...member.aliases].filter(Boolean).join("\n"),
 		keys: [],
 		pinned: false,

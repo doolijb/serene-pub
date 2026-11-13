@@ -7,6 +7,9 @@
 	 * so this panel never merges a delta — it replaces `sets` on each reply.
 	 * The family is scoped on `characterId` (SCOPED_EVENTS), so the interest
 	 * keys are re-declared when the panel is pointed at another character.
+	 * The `owner` is a card (`{ characterId }`) or a cast member's own sets
+	 * (`{ castMemberId }`); a member owner draws too, for whoever may edit its
+	 * lorebook (`isOwner`).
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -15,8 +18,8 @@
 	} from "$lib/client/components/menus/RowMenu.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
-	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { interestKey, scopeOfPayload } from "$lib/shared/sockets/interest"
+	import { notify } from "$lib/client/utils/notify"
 	import { mediaRevUrl } from "$lib/client/utils/media"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
@@ -35,12 +38,41 @@
 	} from "$lib/shared/sprites"
 
 	interface Props {
-		characterId: number
+		owner: { characterId: number } | { castMemberId: number }
 		characterName: string
 		isOwner: boolean
 	}
 
-	let { characterId, characterName, isOwner }: Props = $props()
+	let { owner, characterName, isOwner }: Props = $props()
+
+	const cardId = $derived("characterId" in owner ? owner.characterId : null)
+	const memberId = $derived(
+		"castMemberId" in owner ? owner.castMemberId : null
+	)
+	/** The key every emit carries. */
+	const ownerKey = $derived(
+		memberId != null
+			? { castMemberId: memberId }
+			: { characterId: cardId as number }
+	)
+	/** Whether a reply or error is this owner's (a card reply has no `castMemberId`). */
+	function ours(msg: { characterId?: number; castMemberId?: number }) {
+		return memberId != null
+			? msg.castMemberId === memberId
+			: msg.characterId === cardId && msg.castMemberId == null
+	}
+	/**
+	 * A card's replies are scoped on its id, a member's on `member:<id>` where
+	 * `SCOPED_EVENTS` scopes that event for a member; the fill and express
+	 * replies stay card-scoped there, so a member hears them on the bare key.
+	 */
+	function replyKey(event: string) {
+		return memberId != null
+			? scopeOfPayload(event, { castMemberId: memberId }) != null
+				? interestKey(event, `member:${memberId}`)
+				: interestKey(event)
+			: interestKey(event, cardId)
+	}
 
 	const socket = useTypedSocket()
 
@@ -78,6 +110,36 @@
 		(activeSet?.sprites ?? []).filter((s) => s.media).length
 	)
 
+	/** 🚧 The card's sets, sent while the card draws this member; drawn read-only. */
+	let fromCard = $state<Sockets.Characters.ListSprites.Response["fromCard"]>()
+	let cardSetValue = $state<string | null>(null)
+	let cardSet = $derived(
+		fromCard?.sets.find((s) => String(s.id) === cardSetValue) ??
+			fromCard?.sets[0] ??
+			null
+	)
+	let cardSetOptions = $derived(
+		(fromCard?.sets ?? []).map((s) => ({
+			value: String(s.id),
+			label: s.isDefault ? `${s.name} (default)` : s.name
+		}))
+	)
+	/** The card set's sprites grouped by label, as `groups` does for the member's own. */
+	let cardGroups = $derived.by(() => {
+		const by = new Map<string, SpriteView[]>()
+		for (const sprite of cardSet?.sprites ?? []) {
+			const list = by.get(sprite.label) ?? []
+			list.push(sprite)
+			by.set(sprite.label, list)
+		}
+		return [...by.entries()]
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([label, sprites]) => ({
+				label,
+				sprites: sprites.sort((a, b) => a.position - b.position)
+			}))
+	})
+
 	// ── Upload ────────────────────────────────────────────────────────────
 	let bulkInput = $state<HTMLInputElement>()
 	let slotInput = $state<HTMLInputElement>()
@@ -86,13 +148,13 @@
 
 	async function sendFile(file: File, label: string) {
 		if (!file.type.startsWith("image/")) {
-			toaster.error({ title: `${file.name} is not an image` })
+			notify.error({ title: `${file.name} is not an image` })
 			return
 		}
 		pendingUploads++
 		const buffer = await file.arrayBuffer()
 		socket.emit("characters:uploadSprite", {
-			characterId,
+			...ownerKey,
 			setId: activeSet?.id,
 			label,
 			imageFile: new Uint8Array(buffer) as any,
@@ -128,7 +190,7 @@
 
 	function addStandardSet() {
 		socket.emit("characters:addStandardSprites", {
-			characterId,
+			...ownerKey,
 			setId: activeSet?.id
 		})
 	}
@@ -145,7 +207,7 @@
 			...group.sprites.filter((s) => s.id !== sprite.id).map((s) => s.id)
 		]
 		socket.emit("characters:reorderSprites", {
-			characterId,
+			...ownerKey,
 			setId: activeSet.id,
 			label,
 			spriteIds: ids
@@ -155,7 +217,7 @@
 	function moveTo(sprite: SpriteView, setId: number) {
 		menuOpenFor = null
 		socket.emit("characters:updateSprite", {
-			characterId,
+			...ownerKey,
 			spriteId: sprite.id,
 			setId
 		})
@@ -173,7 +235,7 @@
 		const label = normalizeSpriteName(relabelText)
 		if (!relabelFor || !label) return
 		socket.emit("characters:updateSprite", {
-			characterId,
+			...ownerKey,
 			spriteId: relabelFor.id,
 			label
 		})
@@ -188,7 +250,7 @@
 	function confirmDelete() {
 		if (!deleteFor) return
 		socket.emit("characters:deleteSprite", {
-			characterId,
+			...ownerKey,
 			spriteId: deleteFor.id
 		})
 		deleteFor = null
@@ -216,10 +278,10 @@
 		if (!name) return
 		if (nameDialog === "new") {
 			pendingNewSet = name
-			socket.emit("characters:createSpriteSet", { characterId, name })
+			socket.emit("characters:createSpriteSet", { ...ownerKey, name })
 		} else if (nameDialog === "rename" && activeSet) {
 			socket.emit("characters:updateSpriteSet", {
-				characterId,
+				...ownerKey,
 				setId: activeSet.id,
 				name
 			})
@@ -233,7 +295,7 @@
 		setMenuOpen = false
 		if (!activeSet) return
 		socket.emit("characters:updateSpriteSet", {
-			characterId,
+			...ownerKey,
 			setId: activeSet.id,
 			makeDefault: true
 		})
@@ -242,16 +304,22 @@
 		deleteSetOpen = false
 		if (!activeSet) return
 		socket.emit("characters:deleteSpriteSet", {
-			characterId,
+			...ownerKey,
 			setId: activeSet.id
 		})
 	}
 
 	// ── Replies ──────────────────────────────────────────────────────────
 	function handleList(msg: Sockets.Characters.ListSprites.Response) {
-		if (msg.characterId !== characterId) return
+		if (!ours(msg)) return
 		isLoading = false
 		sets = msg.sets
+		fromCard = memberId != null ? msg.fromCard : undefined
+		if (
+			fromCard &&
+			!fromCard.sets.some((s) => String(s.id) === cardSetValue)
+		)
+			cardSetValue = fromCard.sets[0] ? String(fromCard.sets[0].id) : null
 		if (pendingNewSet) {
 			const made = sets.find((s) => s.name === pendingNewSet)
 			if (made) activeSetValue = String(made.id)
@@ -262,30 +330,42 @@
 		}
 	}
 	function handleUploaded(msg: Sockets.Characters.UploadSprite.Response) {
-		if (msg.characterId !== characterId) return
+		if (!ours(msg)) return
 		pendingUploads = Math.max(0, pendingUploads - 1)
 		handleList(msg)
 	}
 	function handleStandard(
 		msg: Sockets.Characters.AddStandardSprites.Response
 	) {
-		if (msg.characterId !== characterId) return
+		if (!ours(msg)) return
 		handleList(msg)
-		toaster.success({
+		notify.success({
+			source: "socket:characters:addStandardSprites",
 			title:
 				msg.added > 0
 					? `Added ${msg.added} empty sprites`
 					: "The standard set is already here"
 		})
 	}
-	function handleError(msg: { error?: string; characterId?: number }) {
-		if (msg.characterId !== characterId) return
+	function handleError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
+		if (!ours(msg)) return
 		// A failed list must not leave the spinner up forever.
 		isLoading = false
-		toaster.error({ title: msg.error || "That did not work" })
+		notify.error({
+			source: "socket:characters:addStandardSprites:error",
+			title: msg.error || "That did not work"
+		})
 	}
-	function handleUploadError(msg: { error?: string; characterId?: number }) {
-		if (msg.characterId !== characterId) return
+	function handleUploadError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
+		if (!ours(msg)) return
 		pendingUploads = Math.max(0, pendingUploads - 1)
 		handleError(msg)
 	}
@@ -319,19 +399,20 @@
 	 * them on `characterId`.
 	 */
 	$effect(() => {
-		const id = characterId
+		const emitKey = ownerKey
+		const key = replyKey
 		isLoading = true
 		sets = []
 		const releases: (() => void)[] = [
 			...LIST_EVENTS.map((event) =>
-				declareInterest<any>(interestKey(event, id), handleList)
+				declareInterest<any>(key(event), handleList)
 			),
 			declareInterest<any>(
-				interestKey("characters:uploadSprite", id),
+				key("characters:uploadSprite"),
 				handleUploaded
 			),
 			declareInterest<any>(
-				interestKey("characters:addStandardSprites", id),
+				key("characters:addStandardSprites"),
 				handleStandard
 			),
 			...LIST_ERROR_EVENTS.map((event) =>
@@ -346,7 +427,7 @@
 				handleError
 			)
 		]
-		socket.emit("characters:listSprites", { characterId: id })
+		socket.emit("characters:listSprites", emitKey)
 		return () => {
 			for (const release of releases) release()
 		}
@@ -365,19 +446,19 @@
 		if (!text) return
 		testing = true
 		socket.emit("characters:testSprite", {
-			characterId,
+			...ownerKey,
 			setId: activeSet?.id,
 			text
 		})
 	}
 	function handleTest(msg: Sockets.Characters.TestSprite.Response) {
-		if (msg.characterId !== characterId) return
+		if (!ours(msg)) return
 		testing = false
 		testResult = msg
 	}
 	$effect(() => {
 		const release = declareInterest<any>(
-			interestKey("characters:testSprite", characterId),
+			replyKey("characters:testSprite"),
 			handleTest
 		)
 		return release
@@ -385,8 +466,10 @@
 
 	// ── Fill empty sprites (DESIGN-image-generation §6.3; I5) ────────────
 	/**
-	 * The card's owner or an admin may draw its sprites. Only the owner may
-	 * move one to another label (the sprite writes are the owner's).
+	 * A card's owner or an admin may draw its sprites; a cast member's sprites
+	 * are drawn by whoever may edit its lorebook (`isOwner`), no admin
+	 * exception. Only the owner may move one to another label (the sprite
+	 * writes are the owner's).
 	 */
 	const userCtx = (() => {
 		try {
@@ -397,7 +480,9 @@
 			return undefined
 		}
 	})()
-	let canFill = $derived(isOwner || !!userCtx?.user?.isAdmin)
+	let canFill = $derived(
+		memberId != null ? isOwner : isOwner || !!userCtx?.user?.isAdmin
+	)
 
 	let fillOpen = $state(false)
 	let fillSetValue = $state<string | null>(null)
@@ -427,13 +512,13 @@
 		}
 		previewing = true
 		socket.emit("characters:previewSpriteFill", {
-			characterId,
+			...ownerKey,
 			setId: fillSetValue ? Number(fillSetValue) : undefined,
 			labels: resetTicks ? undefined : [...fillSelected]
 		})
 	}
 	function handlePreview(msg: Sockets.Characters.PreviewSpriteFill.Response) {
-		if (msg.characterId !== characterId) return
+		if (!ours(msg)) return
 		previewing = false
 		fillPreview = msg
 		if (takeDefaultTicks) {
@@ -442,8 +527,12 @@
 			for (const l of msg.labels) fillSelected.add(l)
 		}
 	}
-	function handlePreviewError(msg: { error?: string; characterId?: number }) {
-		if (msg.characterId !== characterId) return
+	function handlePreviewError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
+		if (!ours(msg)) return
 		previewing = false
 		fillPreview = fillPreview
 			? {
@@ -473,6 +562,8 @@
 		active: string[]
 		phase: Sockets.Characters.SpriteFill.Progress["phase"] | "starting"
 		status: string
+		/** The backend's own word on the moment, shown after the status. */
+		detail: string
 		percent: number | null
 		error: string | null
 		drawn: Record<string, string>
@@ -507,6 +598,7 @@
 			active: [...labels],
 			phase: "starting",
 			status: "",
+			detail: "",
 			percent: null,
 			error: null,
 			drawn: keep(fillRun?.drawn ?? {}),
@@ -514,7 +606,7 @@
 			kept: same ? fillRun!.kept.filter((l) => !labels.includes(l)) : []
 		}
 		socket.emit("characters:fillSprites", {
-			characterId,
+			...ownerKey,
 			setId: setId ?? undefined,
 			labels,
 			runId
@@ -525,14 +617,14 @@
 		startFill([...fillSelected], fillSetValue ? Number(fillSetValue) : null)
 	}
 	function handleFillProgress(msg: Sockets.Characters.SpriteFill.Progress) {
-		if (
-			msg.characterId !== characterId ||
-			!fillRun ||
-			msg.runId !== fillRun.runId
-		)
-			return
+		if (!ours(msg) || !fillRun || msg.runId !== fillRun.runId) return
 		fillRun.phase = msg.phase
-		if (msg.status) fillRun.status = statusTextOf(msg.status as StatusText)
+		// A status once sent stands until the next; a backend message rides
+		// after it and never replaces it.
+		if (msg.status) {
+			fillRun.status = statusTextOf(msg.status as StatusText)
+			fillRun.detail = msg.message ?? ""
+		} else if (msg.message) fillRun.detail = msg.message
 		else if (msg.phase === "cutting")
 			fillRun.status = "Removing backgrounds…"
 		else if (msg.phase === "attaching")
@@ -548,14 +640,22 @@
 				`${n} ${n === 1 ? "sprite" : "sprites"} added` +
 				(missing ? `, ${missing} came back empty` : "")
 			fillRun.percent = null
+			// Done, but short, with a reason: the fill stopped on a failed
+			// call after some pictures had landed. Shown beside the kept tiles.
+			if (msg.error) fillRun.error = msg.error
 		}
 		if (msg.phase === "failed") {
 			fillRun.error = msg.error ?? "The fill stopped."
 			fillRun.status = ""
+			fillRun.detail = ""
 		}
 	}
-	function handleFillError(msg: { error?: string; characterId?: number }) {
-		if (msg.characterId !== characterId || !fillRun) return
+	function handleFillError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
+		if (!ours(msg) || !fillRun) return
 		fillRun.phase = "failed"
 		fillRun.error = msg.error ?? "The fill did not start."
 	}
@@ -572,7 +672,7 @@
 			([, id]) => id === spriteId
 		)?.[0]
 		socket.emit("characters:updateSprite", {
-			characterId,
+			...ownerKey,
 			spriteId,
 			label: toLabel
 		})
@@ -620,15 +720,16 @@
 	})
 
 	$effect(() => {
-		const id = characterId
+		// Re-run when the panel is pointed at another owner.
+		void ownerKey
 		fillRun = null
 		const releases = [
 			declareInterest<any>(
-				interestKey("characters:previewSpriteFill", id),
+				replyKey("characters:previewSpriteFill"),
 				handlePreview
 			),
 			declareInterest<any>(
-				interestKey("characters:spriteFill", id),
+				replyKey("characters:spriteFill"),
 				handleFillProgress
 			),
 			declareInterest<any>(
@@ -649,7 +750,7 @@
 	/**
 	 * Offered when the pair the card's sprites are drawn with says
 	 * `expressions` on its drawing sheet (NovelAI) — asked through
-	 * `images:drawingSheet` with this card's id, which a member owner may ask.
+	 * `images:drawingSheet` with this tab's owner (a card or a cast member).
 	 */
 	let expressionsOffered = $state(false)
 	/** Labels with a re-express in flight. */
@@ -676,45 +777,52 @@
 		if (reexpressing.has(label)) return
 		reexpressing.add(label)
 		socket.emit("characters:expressSprite", {
-			characterId,
+			...ownerKey,
 			setId: setId ?? undefined,
 			label
 		})
 	}
 	function handleExpressed(msg: Sockets.Characters.ExpressSprite.Response) {
-		if (msg.characterId !== characterId) return
+		if (!ours(msg)) return
 		if (msg.label) reexpressing.delete(msg.label)
 		else reexpressing.clear()
 		handleList(msg)
 	}
-	function handleExpressError(msg: { error?: string; characterId?: number }) {
-		if (msg.characterId !== characterId) return
+	function handleExpressError(msg: {
+		error?: string
+		characterId?: number
+		castMemberId?: number
+	}) {
+		if (!ours(msg)) return
 		reexpressing.clear()
 		handleError(msg)
 	}
-	function handleSheet(msg: { characterId?: number; expressions?: boolean }) {
-		if (msg?.characterId !== characterId) return
+	function handleSheet(msg: {
+		characterId?: number
+		castMemberId?: number
+		expressions?: boolean
+	}) {
+		if (!ours(msg)) return
 		expressionsOffered = msg.expressions === true
 	}
 
 	$effect(() => {
-		const id = characterId
-		const ask = canFill
+		void ownerKey
 		expressionsOffered = false
 		reexpressing.clear()
-		if (!ask) return
+		if (!canFill) return
 		const releases = [
 			declareInterest<any>(
-				interestKey("characters:expressSprite", id),
+				replyKey("characters:expressSprite"),
 				handleExpressed
 			),
 			declareInterest<any>(
 				"characters:expressSprite:error",
 				handleExpressError
-			),
-			declareInterest<any>("images:drawingSheet", handleSheet)
+			)
 		]
-		socket.emit("images:drawingSheet", { characterId: id })
+		releases.push(declareInterest<any>("images:drawingSheet", handleSheet))
+		socket.emit("images:drawingSheet", ownerKey)
 		return () => {
 			for (const release of releases) release()
 		}
@@ -802,6 +910,73 @@
 			<Icons.Loader2 class="text-surface-500 h-6 w-6 animate-spin" />
 			<span class="sr-only">Loading sprites</span>
 		</div>
+	{:else if sets.length === 0 && fromCard}
+		<p class="text-surface-600-400 text-xs">
+			From the card: {characterName} is drawn with these until they have sprites
+			of their own.
+		</p>
+		<Select
+			label="Card sprite set"
+			options={cardSetOptions}
+			bind:value={cardSetValue}
+			class="min-w-40"
+		/>
+		<ul class="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-2">
+			{#each cardGroups as group (group.label)}
+				<li class="panel-card space-y-1.5 p-2">
+					<p class="truncate text-sm font-medium" title={group.label}>
+						{group.label}
+					</p>
+					<div class="flex flex-wrap gap-1.5">
+						{#each group.sprites as sprite (sprite.id)}
+							{@const src = thumb(sprite)}
+							<div
+								class="border-surface-200-800 relative h-16 w-16 overflow-hidden rounded-md border"
+							>
+								{#if src}
+									<img
+										{src}
+										alt="{group.label} sprite"
+										class="h-full w-full object-cover"
+										loading="lazy"
+									/>
+								{:else}
+									<div
+										class="text-surface-500 flex h-full w-full items-center justify-center"
+										aria-label="No image yet"
+									>
+										<Icons.ImageOff
+											size={18}
+											aria-hidden="true"
+										/>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				</li>
+			{/each}
+		</ul>
+		{#if isOwner}
+			<div class="flex justify-center">
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500"
+					onclick={() => bulkInput?.click()}
+					disabled={pendingUploads > 0}
+				>
+					<Icons.Upload size={16} aria-hidden="true" />
+					Upload images
+				</button>
+			</div>
+			<p class="text-surface-600-400 text-center text-xs">
+				Or
+				<button type="button" class="anchor" onclick={addStandardSet}>
+					start from the standard set
+				</button>
+				of 28 empty emotions.
+			</p>
+		{/if}
 	{:else if sets.length === 0}
 		<EmptyState
 			icon={Icons.Drama}
@@ -821,6 +996,12 @@
 			</p>
 		{/if}
 	{:else}
+		{#if fromCard}
+			<p class="text-surface-600-400 text-xs">
+				Until these have pictures, {characterName} is drawn with the card's
+				sprites.
+			</p>
+		{/if}
 		<div class="flex flex-wrap items-end gap-2">
 			<Select
 				label="Sprite set"
@@ -911,7 +1092,9 @@
 			<SpriteContactSheet
 				{tiles}
 				{running}
-				statusText={fillRun.status}
+				statusText={fillRun.detail
+					? `${fillRun.status} · ${fillRun.detail}`
+					: fillRun.status}
 				percent={fillRun.percent}
 				error={fillRun.error}
 				canMove={isOwner}

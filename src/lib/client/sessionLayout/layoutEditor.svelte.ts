@@ -3,12 +3,12 @@
  * siblings under `<main>` rather than parent and child — nothing the session
  * page could `setContext` would ever reach the header, so a module-level
  * `$state` singleton is the simplest bridge, exactly as
- * mobileSidePanels.svelte.ts already bridges the same two subtrees.
+ * sessionZones.svelte.ts bridges the same two subtrees.
  *
  * Two things cross, both one-way:
  *
- *  - the header's "Layout" button ASKS for the editor (`requests`), which is
- *    the one way in at every width;
+ *  - the header's "Layout" button ASKS for the editor (`requests`), one of
+ *    the ways in, with the menus' *Customize layout*;
  *  - SessionLayout answers, and says whether the DESKTOP grid editor is open
  *    (`open`) — while it is, its toolbar owns the header's band, so the shell
  *    takes the session header and the Jump pill out of it.

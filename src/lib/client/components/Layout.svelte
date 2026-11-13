@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { lorebookIndexing } from "$lib/client/stores/lorebookIndexing.svelte"
 	import { adoptAccountTimeZone } from "$lib/client/utils/realTime.svelte"
 	import { provideCharacterImports } from "$lib/client/contexts/characterImports.svelte"
+	import { provideCharacterRows } from "$lib/client/contexts/characterRows.svelte"
 	import { provideSessionOutcomes } from "$lib/client/contexts/sessionOutcomes.svelte"
 	import { provideConnections } from "$lib/client/contexts/connections.svelte"
 	import { provideConversations } from "$lib/client/contexts/conversations.svelte"
@@ -31,6 +33,7 @@
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
 	import SessionsSidebar from "./sidebars/SessionsSidebar.svelte"
+	import AppsSidebar from "./sidebars/AppsSidebar.svelte"
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
 	import HelpSidebar from "./sidebars/HelpSidebar.svelte"
@@ -43,16 +46,17 @@
 		interestContextValue,
 		setInterestUser,
 		useInterest,
-		declareInterest
+		declareInterest,
+		requestWithInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import {
 		registerLanguageSocket,
 		setLanguage
 	} from "$lib/client/i18n/state.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
 	import { notify } from "$lib/client/utils/notify"
 	import { sayUnshownSceneRunFailure } from "$lib/client/components/modals/sceneRunShown"
+	import { compileEntryStateOf } from "$lib/client/components/modals/compileEntryState"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
@@ -65,6 +69,8 @@
 	import { page } from "$app/state"
 	import { goto, pushState, replaceState } from "$app/navigation"
 	import {
+		appsAddressVerdict,
+		isAppletLauncherPath,
 		nextWidth,
 		snapWidth,
 		viewForPath,
@@ -72,6 +78,10 @@
 		registerViewAddress,
 		type ViewWidth
 	} from "$lib/client/shell/viewRoutes"
+	import {
+		appletRows,
+		type AppletGenreLike
+	} from "$lib/client/sessions/appletRows"
 	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
 	import { adminHealth } from "$lib/client/admin/adminHealth.svelte"
 	import { createJumpCtx, JUMP_CONTEXT } from "$lib/client/shell/jump.svelte"
@@ -82,6 +92,7 @@
 		layoutEditor,
 		requestLayoutEditor
 	} from "$lib/client/sessionLayout/layoutEditor.svelte"
+	import { showsAdvancedControls } from "$lib/client/advancedControls"
 	import JumpPill from "$lib/client/components/shell/JumpPill.svelte"
 	import FullscreenExit from "./FullscreenExit.svelte"
 	import { useSessionFullscreen } from "$lib/client/sessions/fullscreen.svelte"
@@ -120,6 +131,12 @@
 	// double-toast (or override an intentional suppression) - see the
 	// wildcard error handling note near `handleAnyEvent`.
 	const HANDLED_ERROR_EVENTS = new Set<string>([
+		// Character versions (lane cv-member2): the member page, the cast line
+		// and the Data and backups card say these refusals inline, under the
+		// button that asked.
+		"lorebooks:updateMemberToCardVersion:error",
+		"admin:castLiftNotes:error",
+		"admin:castLiftFollowGreetings:error",
 		// Messages (PLAN-private-messages-2026-10-12): the conversations
 		// context rejects the caller's promise and the Messages view says the
 		// refusal INLINE where it was asked — under the composer, in the
@@ -144,6 +161,9 @@
 		"characters:importCard:error",
 		"characters:importFromLibrary:error",
 		"characters:importResolve:error",
+		// The characters-rows context toasts a refused page itself
+		// (contexts/characterRows.svelte.ts) and stays quiet on an out-of-date cursor.
+		"characters:page:error",
 		// The folder dialog shows the server's refusal (a name this user
 		// already has) INLINE under its name field, so a toast saying the same
 		// thing would be the same correction twice, in two places.
@@ -265,9 +285,24 @@
 		"pipelines:cloneContextTemplate:error",
 		"pipelines:updateContextTemplate:error",
 		"pipelines:deleteContextTemplate:error",
-		"pipelines:cloneVariableTemplate:error",
-		"pipelines:updateVariableTemplate:error",
-		"pipelines:deleteVariableTemplate:error",
+		// The pipeline panel and the template editor say these in place
+		// (variable layouts, W4/W5).
+		"pipelines:templateVariableLayouts:error",
+		"pipelines:leftoverPicks:error",
+		"pipelines:clearLeftoverPick:error",
+		"pipelines:moveLeftoversIntoTemplate:error",
+		// The variable layouts' views each say their own refusal in place
+		// (Admin › Writing › Variable layouts, a preset's Variable layouts
+		// fieldset, the template lists and forms).
+		"pipelines:libraryVariable:error",
+		"pipelines:librarySetPubLayout:error",
+		"pipelines:presetVariableLayouts:error",
+		"pipelines:setPresetVariableLayout:error",
+		"pipelines:stampVariableTemplateReference:error",
+		"pipelines:libraryCreateTemplate:error",
+		"pipelines:libraryCloneTemplate:error",
+		"pipelines:libraryUpdateTemplate:error",
+		"pipelines:libraryDeleteTemplate:error",
 		// Both panels that ask it — an entry's Test and the composer's "What
 		// would fire now" — say its refusal in place, each only its own press
 		// (`requestId`, plan B8).
@@ -688,15 +723,16 @@
 		// through getOrderedEntries) lists things in the same sequence the rail
 		// does rather than in its own.
 		leftNavOrder: [
-			"models",
-			"loadouts",
 			"connections",
+			"models",
 			"sampling",
+			"loadouts",
 			"settings",
 			"users"
 		],
 		rightNavOrder: [
 			"sessions",
+			"apps",
 			"characters",
 			"lorebooks",
 			"conversations",
@@ -765,7 +801,7 @@
 	)
 	// 🚧 M2c: an applet's launcher (`/apps/<pluginId>`) fills the window like a session's full screen:
 	// no rail, no header. It owns its own Leave control and Esc, and leaving navigates away.
-	const appletOn = $derived(page.url.pathname.startsWith("/apps/"))
+	const appletOn = $derived(isAppletLauncherPath(page.url.pathname))
 	const fullscreenOn = $derived(!!fullscreen?.on || appletOn)
 	$effect(() => {
 		if (!fullscreenOn) return
@@ -833,6 +869,25 @@
 	)
 	let hasUser = $derived(!!userCtx.user)
 	let shouldShowApp = $derived(isSettingsLoaded && hasUser)
+
+	// 🚧 M2d: the applets the Apps view lists. No shell store holds
+	// `sessions:genres`, so the shell asks once (the Sessions view and Home ask
+	// for themselves); the view takes `appletCards` as a prop and calls no
+	// socket of its own.
+	let appletGenres: AppletGenreLike[] = $state([])
+	let genresArrived = $state(false)
+	const appletCards = $derived(appletRows(appletGenres))
+	$effect(() => {
+		if (!shouldShowApp) return
+		return requestWithInterest(
+			"sessions:genres",
+			{},
+			(msg: Sockets.Sessions.Genres.Response) => {
+				appletGenres = (msg.genres || []) as AppletGenreLike[]
+				genresArrived = true
+			}
+		)
+	})
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
 
 	// The one subscriber to the `conversations:` family: the Messages list,
@@ -924,6 +979,14 @@
 			}
 		} else {
 			delete panelsCtx.rightNav.conversations
+		}
+
+		// 🚧 M2d ★N1 — Apps is registered only while an applet is listed, so a
+		// fresh install draws no empty rail item.
+		if (appletCards.length > 0) {
+			panelsCtx.rightNav.apps = { icon: Icons.LayoutGrid, title: "Apps" }
+		} else {
+			delete panelsCtx.rightNav.apps
 		}
 
 		// Administration is a view like any other (S3) — a registry entry, so
@@ -1281,6 +1344,18 @@
 		// before its address can open it, or the one edge is spent on
 		// nothing.
 		const addressed = viewForPath(path)
+		// 🚧 M2d: Apps registers only while an applet is listed, so a cold
+		// /apps with none goes Home instead of waiting for a view that never
+		// comes (and leaving a blank page).
+		if (
+			addressed === "apps" &&
+			shouldShowApp &&
+			appsAddressVerdict(genresArrived ? appletCards.length : null) ===
+				"home"
+		) {
+			untrack(() => void goto("/", { replaceState: true }))
+			return
+		}
 		const ready =
 			shouldShowApp &&
 			isSettingsLoaded &&
@@ -1598,6 +1673,7 @@
 	/** Activity lives at the foot of the rail, not among the content views. */
 	const CONTENT_ORDER = [
 		"sessions",
+		"apps",
 		"characters",
 		"lorebooks",
 		"conversations",
@@ -1606,8 +1682,8 @@
 	const SYSTEM_ORDER = [
 		"connections",
 		"models",
-		"loadouts",
 		"sampling",
+		"loadouts",
 		"settings"
 	]
 	/** The four the mobile bottom bar shows by name; the rest live under More. */
@@ -1699,23 +1775,23 @@
 		])) {
 			entries.push({ ...item, kind: "view", group: "system" })
 		}
-		// Help is the foot of Tune — so it is excluded from the loop above and
-		// pushed here rather than left to that loop's "anything registered
-		// later appends" tail, which would land it above Legacy.
-		const help = panelsCtx.leftNav.help
-		if (help) {
-			entries.push({
-				...help,
-				key: "help",
-				kind: "view",
-				group: "system"
-			})
-		}
 		const activity = panelsCtx.rightNav.activity
 		if (activity) {
 			entries.push({
 				...activity,
 				key: "activity",
+				kind: "view",
+				group: "foot"
+			})
+		}
+		// Help sits at the foot, under Activity (owner 2026-11-12; the last
+		// item of Tune before). It is excluded from the Tune loop above and
+		// pushed here, so it never lands among the managers.
+		const help = panelsCtx.leftNav.help
+		if (help) {
+			entries.push({
+				...help,
+				key: "help",
 				kind: "view",
 				group: "foot"
 			})
@@ -2212,6 +2288,7 @@
 	// The one subscriber to the card-import events; views take the outcome
 	// from this context (contexts/characterImports.svelte.ts).
 	provideCharacterImports()
+	provideCharacterRows()
 	// Share to ‹book› with nothing waiting, and Close out started: said once, here (contexts/sessionOutcomes.svelte.ts).
 	provideSessionOutcomes()
 	// The connections list, model sync and the one way to choose a model, for
@@ -2293,7 +2370,7 @@
 				const isAuthenticated = await checkAuthentication()
 				if (!isAuthenticated) {
 					// User is not authenticated, redirect to login
-					toaster.error({
+					notify.error({
 						title: "Authentication Required",
 						description:
 							"Please login to continue using the application."
@@ -2307,7 +2384,7 @@
 			initializeSocketConnection()
 		} catch (error) {
 			console.error("Failed to check authentication flow:", error)
-			toaster.error({
+			notify.error({
 				title: "Connection Error",
 				description:
 					"Failed to verify authentication. Please refresh the page."
@@ -2373,14 +2450,14 @@
 	}
 
 	function handleError(message: SocketEventMap["error"]["response"]) {
-		toaster.error({
+		notify.error({
 			title: message.error,
 			description: message.description
 		})
 	}
 
 	function handleSuccess(message: SocketEventMap["success"]["response"]) {
-		toaster.success({
+		notify.success({
 			title: message.title,
 			description: message.description
 		})
@@ -2413,6 +2490,7 @@
 
 		// Graph builds: every one, one per book (plan B8).
 		graphBuildsCtx.receive(activities)
+		lorebookIndexing.receive(activities)
 
 		// Scene summarizations: keep all
 		sceneSummarizesCtx.activities = sceneActivities.map((a: any) => ({
@@ -2459,23 +2537,8 @@
 		const compileActivities = activities.filter(
 			(a: any) => a.kind === "compile_history_entry"
 		)
-		compileEntriesCtx.activities = compileActivities.map((a: any) => ({
-			activityId: a.id,
-			userId: a.userId,
-			historyEntryId: a.historyEntryId,
-			historyEntryDate: a.historyEntryDate,
-			lorebookId: a.lorebookId,
-			lorebookLabel: a.lorebookLabel,
-			branchId: a.branchId ?? null,
-			moment: a.moment ?? null,
-			status: a.status,
-			phase: a.phase,
-			batch: a.batch,
-			totalBatches: a.totalBatches,
-			errorMessage: a.errorMessage,
-			pendingResult: a.pendingResult,
-			startedAt: a.startedAt
-		}))
+		compileEntriesCtx.activities =
+			compileActivities.map(compileEntryStateOf)
 	}
 
 	function handleNarrativeGraphBuildLog(
@@ -3451,7 +3514,9 @@
 				sessionName={openSessionCtx.sessionName}
 				notice={fullscreen.notice}
 				onExit={() => fullscreen.exit()}
-				onLayout={() => requestLayoutEditor()}
+				onLayout={showsAdvancedControls(userSettingsCtx.settings)
+					? () => requestLayoutEditor()
+					: undefined}
 				onDisplay={() => fullscreen.enter({ display: true })}
 				onNoticeShown={() => fullscreen.clearNotice()}
 			/>
@@ -3611,6 +3676,9 @@
 				bind:onclose={viewCloseGates[key]}
 				sessionId={sessionIdInView}
 			/>
+		{:else if key === "apps"}
+			<!-- 🚧 M2d: no `bind:onclose`: the list holds no unsaved work. -->
+			<AppsSidebar cards={appletCards} />
 		{:else if key === "lorebooks"}
 			<LorebooksSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "tags"}

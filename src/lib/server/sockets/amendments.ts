@@ -24,9 +24,11 @@
  * entry id and a character id, and neither is a capability: without the book
  * check a crafted id would write an overlay onto somebody else's entry.
  */
-import { and, eq, inArray } from "drizzle-orm"
+import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
+import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import type { CharacterProfileField } from "$lib/shared/characters/profile"
 import {
 	compareDates,
 	type StoryClock,
@@ -34,8 +36,6 @@ import {
 } from "$lib/shared/lorebooks/storyDate"
 import {
 	amendmentDateProblem,
-	amendmentsForAppearance,
-	castAsOf,
 	NEVER_AMENDED,
 	type AsOf
 } from "$lib/shared/lorebooks/amendments"
@@ -52,10 +52,31 @@ import {
 	withEverythingFiledUnder
 } from "$lib/server/utils/lorebookEntries"
 import type { KeyList } from "$lib/server/pipelines/ranking/signals"
-import { verifyBindingTargetAccess } from "./lorebooks"
+import { verifyBindingTargetAccess, versionOnlyProblem } from "./lorebooks"
 import { cardTakenBy, memberOfCard } from "$lib/server/utils/castMemberCards"
 import { parseRetoldFlags } from "$lib/shared/lorebooks/retold"
-import { faceMediaProblem } from "$lib/server/lorebooks/retold"
+import {
+	castChangesOfMemberEdit,
+	faceMediaProblem,
+	memberColumnsOfVersion,
+	type MemberColumnsOfVersion
+} from "$lib/server/lorebooks/retold"
+import {
+	deleteCastVersion,
+	ensureCardVersion,
+	isBaseVersion,
+	memberProfileOf,
+	reparentCastVersions,
+	updateCastVersion,
+	writeCastVersion,
+	type CastVersionChanges
+} from "$lib/server/characters/versions"
+import { castVersionsInForce } from "$lib/server/cast/memberAsRead"
+import {
+	profileOf,
+	type CharacterProfileV1
+} from "$lib/shared/characters/profile"
+import { providedCastProblem } from "$lib/server/lorebooks/castOwnNames"
 import type { NodeState, NodeVisibility } from "$lib/server/db/schema"
 import { assertAnchorEntry, assertAnchorInBook } from "$lib/server/utils/anchorEntry"
 import { foldRelationshipsUndatedBy } from "$lib/server/utils/relationshipGuards"
@@ -80,7 +101,11 @@ import {
 	clockPastDeleted,
 	forkPastDeleted,
 	forksThrough,
-	survivingLineOf
+	lineOf,
+	MAIN_LINE,
+	survivingLineOf,
+	versionInForce,
+	type Line
 } from "$lib/shared/lorebooks/lineReading"
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import { sessionEvents } from "@serene-pub/sdk"
@@ -92,18 +117,190 @@ import {
 } from "$lib/server/utils/ownedBook"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { bookLinesReply } from "./lorebookStoryTime"
+import { tellMemberSessions } from "$lib/server/sessions/memberSessions"
 
 const iso = (d: Date | null | undefined) =>
 	d instanceof Date ? d.toISOString() : new Date(0).toISOString()
 
+type VersionRow = typeof schema.characterVersions.$inferSelect
+
+/** A cast version in the member form's column names, with the card its parent version is a version of. */
+type VersionColumns = MemberColumnsOfVersion & { characterId: number | null }
+
+/** The sentence for a change that sets nothing a cast member can have at a date. */
+const NOTHING_A_MEMBER_HAS =
+	"That change sets nothing a cast member can have at a date: their name, other names, summary, state, visibility, card, sprite set, face, the card fields they retell (description, personality, scenario, first message, other greetings, example dialogues) or which of those they retell."
+
+const dateOfVersion = (v: VersionRow): StoryDate | null =>
+	v.year == null
+		? null
+		: { year: v.year, month: v.month ?? null, day: v.day ?? null }
+
+/** Positive when `a` is later than `b`: date (undated first), then write order, then id. */
+function versionOrder(a: VersionRow, b: VersionRow): number {
+	const da = dateOfVersion(a)
+	const db_ = dateOfVersion(b)
+	if (da == null || db_ == null) {
+		if (da != null) return 1
+		if (db_ != null) return -1
+	} else {
+		const byDate = compareDates(da, db_)
+		if (byDate) return byDate
+	}
+	return a.writeOrder - b.writeOrder || a.id - b.id
+}
+
+/** Two values as equal JSON, object keys in any order. */
+function sameJson(a: unknown, b: unknown): boolean {
+	const stable = (v: unknown) =>
+		JSON.stringify(v ?? null, (_k, x) =>
+			x && typeof x === "object" && !Array.isArray(x)
+				? Object.fromEntries(
+						Object.keys(x)
+							.sort()
+							.map((k) => [k, (x as Record<string, unknown>)[k]])
+					)
+				: x
+		)
+	return stable(a) === stable(b)
+}
+
+/** The card each parent card version (by id) is a version of. One query. */
+async function parentCardsOf(
+	h: Db,
+	versions: readonly VersionRow[]
+): Promise<Map<number, number>> {
+	const ids = [
+		...new Set(
+			versions
+				.map((v) => v.parentVersionId)
+				.filter((id): id is number => id != null)
+		)
+	]
+	if (!ids.length) return new Map()
+	const rows = await h
+		.select({
+			id: schema.characterVersions.id,
+			cardId: schema.characterVersions.cardId
+		})
+		.from(schema.characterVersions)
+		.where(inArray(schema.characterVersions.id, ids))
+	return new Map(
+		rows.filter((r) => r.cardId != null).map((r) => [r.id, r.cardId!])
+	)
+}
+
+/**
+ * The card change around a cast version `row` (read before it is deleted or
+ * moved): the version before it on its line, the card each of the two reads
+ * (null = card-less), and the date of the earliest later version on the row's
+ * own line whose card is not the row's.
+ */
+async function cardChangeAround(
+	tx: Db,
+	row: VersionRow,
+	lorebookId: number
+): Promise<{
+	prev: VersionRow | null
+	rowCard: number | null
+	prevCard: number | null
+	nextChange: StoryDate | undefined
+}> {
+	const versions = await versionsOfMember(tx, row.castMemberId!)
+	const prev = versionBefore(
+		versions,
+		row,
+		await lineOfBook(tx, lorebookId, row.branchId)
+	)
+	const cards = await parentCardsOf(tx, versions)
+	const cardOf = (v: VersionRow | null) =>
+		v?.parentVersionId != null ? (cards.get(v.parentVersionId) ?? null) : null
+	const rowCard = cardOf(row)
+	const next = versions
+		.filter(
+			(v) =>
+				(v.branchId ?? null) === (row.branchId ?? null) &&
+				v.year != null &&
+				v.id !== row.id &&
+				versionOrder(v, row) > 0 &&
+				cardOf(v) !== rowCard
+		)
+		.sort(versionOrder)[0]
+	return {
+		prev,
+		rowCard,
+		prevCard: cardOf(prev),
+		nextChange: next ? (dateOfVersion(next) ?? undefined) : undefined
+	}
+}
+
+/** A version in the member form's column names, and its card. */
+function columnsOfVersion(
+	version: VersionRow | null,
+	cards: ReadonlyMap<number, number>,
+	carded?: boolean
+): VersionColumns {
+	const isCarded = version
+		? version.parentVersionId != null
+		: (carded ?? false)
+	return {
+		...memberColumnsOfVersion(
+			version ?? { follows: [], nodeState: null, nodeVisibility: null },
+			{ carded: isCarded }
+		),
+		characterId:
+			version?.parentVersionId != null
+				? (cards.get(version.parentVersionId) ?? null)
+				: null
+	}
+}
+
+/**
+ * What changed from `prev` to `version`, in the member form's column names
+ * (the client still reads them), plus `characterId` when the card differs.
+ */
+function changeFields(
+	version: VersionColumns,
+	prev: VersionColumns
+): Record<string, unknown> {
+	const out: Record<string, unknown> = {}
+	for (const key of Object.keys(version) as (keyof VersionColumns)[])
+		if (!sameJson(version[key], prev[key])) out[key] = version[key]
+	return out
+}
+
+/**
+ * The version in force just before `row` on its own line: among the member's
+ * other versions that are earlier than it (`versions` is one member's, not
+ * retired), the one `versionInForce` takes at the row's date and life point.
+ */
+function versionBefore(
+	versions: readonly VersionRow[],
+	row: VersionRow,
+	line: Line
+): VersionRow | null {
+	return versionInForce(
+		versions.filter((v) => v.id !== row.id && versionOrder(v, row) < 0),
+		line,
+		dateOfVersion(row),
+		row.personalPosition
+	)
+}
+
 /**
  * Everything overlaying one book, plus its branches.
  *
- * ⚠ Cast amendments belong to the book by construction: a cast member IS one
- * of its rows (`lorebook_bindings`), so there is no "true everywhere" case to
- * exclude. That was the `character_amendments` shape, retired 2026-09-23 —
- * amending a character CARD would have changed them in every book sharing it,
- * which is never what a dated change in one story means.
+ * ⚠ The cast half lists **cast versions** (plan §32 §3 + ★CV-20): each row is
+ * one version of a member of this book that is not its base and not retired,
+ * and `fields` is what changed from the version before it, in the member
+ * form's column names. The old `cast_amendments` table is frozen and never
+ * read here. A cast member IS one of the book's rows (`lorebook_bindings`), so
+ * there is no "true everywhere" case to exclude — amending a character CARD
+ * would have changed them in every book sharing it, which is never what a
+ * dated change in one story means.
+ *
+ * A bounded number of queries for the whole book: entries, versions,
+ * presences, lines, and the parent cards.
  */
 export async function buildAmendmentsList(
 	userId: number,
@@ -112,15 +309,28 @@ export async function buildAmendmentsList(
 	// A read: owner, share recipient or admin (lane A3).
 	const book = await assertReadableBook(db, userId, lorebookId)
 
-	const [entries, cast, presences, branches] = await Promise.all([
+	const [entries, versions, presences, branches] = await Promise.all([
 		db
 			.select()
 			.from(schema.entryAmendments)
-			.where(eq(schema.entryAmendments.lorebookId, lorebookId)),
+			// A held amendment is a session's, not the book's dated list.
+			.where(
+				and(
+					eq(schema.entryAmendments.lorebookId, lorebookId),
+					isNull(schema.entryAmendments.base)
+				)
+			),
 		db
 			.select()
-			.from(schema.castAmendments)
-			.where(eq(schema.castAmendments.lorebookId, lorebookId)),
+			.from(schema.characterVersions)
+			.where(
+				and(
+					eq(schema.characterVersions.lorebookId, lorebookId),
+					isNotNull(schema.characterVersions.castMemberId),
+					isNull(schema.characterVersions.retiredOrder)
+				)
+			)
+			.orderBy(asc(schema.characterVersions.id)),
 		db
 			.select()
 			.from(schema.castPresences)
@@ -130,6 +340,25 @@ export async function buildAmendmentsList(
 			.from(schema.lorebookBranches)
 			.where(eq(schema.lorebookBranches.lorebookId, lorebookId))
 	])
+	const cards = await parentCardsOf(db, versions)
+	const byMember = new Map<number, VersionRow[]>()
+	for (const v of versions) {
+		const list = byMember.get(v.castMemberId!) ?? []
+		list.push(v)
+		byMember.set(v.castMemberId!, list)
+	}
+	const lines = new Map<number | null, Line>()
+	const lineFor = (branchId: number | null) => {
+		let line = lines.get(branchId)
+		if (!line) {
+			line = lineOf(branchId, branches)
+			lines.set(branchId, line)
+		}
+		return line
+	}
+	// A change that carries no date (a session's write before any clock) has
+	// no year to list it under, and the wire's `year` is a number.
+	const changes = versions.filter((v) => !isBaseVersion(v) && v.year != null)
 
 	return {
 		lorebookId,
@@ -137,7 +366,7 @@ export async function buildAmendmentsList(
 			id: a.id,
 			entryId: a.entryId,
 			branchId: a.branchId ?? null,
-			year: a.year,
+			year: a.year as number,
 			month: a.month ?? null,
 			day: a.day ?? null,
 			fields: (a.fields ?? {}) as Record<string, unknown>,
@@ -145,22 +374,34 @@ export async function buildAmendmentsList(
 			createdAt: iso(a.createdAt),
 			updatedAt: iso(a.updatedAt)
 		})),
-		cast: cast.map((a) => ({
-			id: a.id,
-			castId: a.lorebookBindingId,
-			lorebookId: a.lorebookId,
-			branchId: a.branchId ?? null,
-			year: a.year,
-			month: a.month ?? null,
-			day: a.day ?? null,
-			fields: (a.fields ?? {}) as Record<string, unknown>,
-			historyEntryId: a.historyEntryId ?? null,
-			// The personal axis: a change dated against her life applies
-			// only to appearances at or past this point (design §4d).
-			personalPosition: a.personalPosition ?? null,
-			createdAt: iso(a.createdAt),
-			updatedAt: iso(a.updatedAt)
-		})),
+		cast: changes.map((v) => {
+			const prev = versionBefore(
+				byMember.get(v.castMemberId!) ?? [],
+				v,
+				lineFor(v.branchId ?? null)
+			)
+			const columns = columnsOfVersion(v, cards)
+			return {
+				id: v.id,
+				castId: v.castMemberId!,
+				lorebookId,
+				branchId: v.branchId ?? null,
+				year: v.year!,
+				month: v.month ?? null,
+				day: v.day ?? null,
+				fields: changeFields(
+					columns,
+					columnsOfVersion(prev, cards, v.parentVersionId != null)
+				),
+				columns,
+				historyEntryId: v.historyEntryId ?? null,
+				// The personal axis: a change dated against her life applies
+				// only to appearances at or past this point (design §4d).
+				personalPosition: v.personalPosition ?? null,
+				createdAt: iso(v.createdAt),
+				updatedAt: iso(v.updatedAt)
+			}
+		}),
 		presences: presences.map((p) => ({
 			id: p.id,
 			castId: p.lorebookBindingId,
@@ -192,31 +433,38 @@ export async function buildAmendmentsList(
  *
  * ⚠ **One resolver, two server entry points — never a third.** Agreed with
  * the sprites session 2026-09-24: a face, a prompt block and a widget must all
- * be looking at the same person. The resolver is the pure `castAsOf` (and
- * `appearancesOf`), the same one the workspace uses, so the server and the
- * screen cannot drift. Its two server entry points differ in what they are
- * handed, not in how they resolve:
+ * be looking at the same person. The resolver is the cast version in force
+ * (`versionInForce`, through `castVersionsInForce` — the same pick
+ * `membersAsRead` reads and the versions writer copies), and the presences
+ * come from `appearancesOf`, the same one the workspace uses, so the server
+ * and the screen cannot drift. Its two server entry points differ in what they
+ * are handed, not in how they resolve:
  *
- * - **`cardMemberAt`** (this) — keyed on a CARD, reads its own overlays and
- *   the member's presences, and answers every appearance, each at its own
- *   point of their life. For a reader that DRAWS one seated person (sprites).
- * - **`castMemberAt`** (`state/entriesOnReading.ts`) — handed a member row and
- *   the book's overlays already read (`castOverlaysFor`), synchronous, at no
- *   particular point of their life. For readers that resolve the whole cast
- *   at once (prompt, state, graph context).
+ * - **`cardMemberAt`** (this) — keyed on a CARD, reads the member's versions
+ *   and presences, and answers every appearance, each at its own point of
+ *   their life. For a reader that DRAWS one seated person (sprites).
+ * - **`membersAsRead` / `castVersionsInForce`** (`cast/memberAsRead.ts`) — the
+ *   member-keyed whole-cast read: every member of a book as one reading has
+ *   them, at no particular point of their life. For readers that resolve the
+ *   whole cast at once (prompt, state, graph context).
  *
- * Renamed from `castMemberAsOf` (2026-10-02): the old docstring promised the
- * ONE server path while `castMemberAt` was a second; the names now say which
- * question each answers.
+ * Renamed from `castMemberAsOf` (2026-10-02): the names say which question
+ * each answers.
  *
  * ⚠ Keyed on the CARD, not on the member, because that is what a session holds
  * (`session_characters.character_id`). It is design §4bb's cascade, read
  * server-side: a book with a member for that card answers with the
  * member; a book without one, or no book at all, is not this function's
  * business — it answers null and the caller falls back to the card. Any card
- * of the member's finds them — the one they are linked to, or one a dated
- * change draws them with (`memberOfCard`, plan A25) — so a session seating
+ * of the member's finds them — the one they are linked to, or one a version of
+ * theirs draws them with (`memberOfCard`, plan A25) — so a session seating
  * the keeper's card is seating the same person as one seating the novice's.
+ *
+ * The answered `member` is the member row with the fields a version carries
+ * (name, other names, summary, the retold words and flags, face, voice,
+ * sprite set, state and visibility) read from the version in force, and
+ * `characterId` the **active card**: the card that version's parent is a
+ * version of. A member with no version at all is answered as its row.
  *
  * ⚠ Returns **appearances**, plural. A member placed twice at one moment is
  * two people, and a caller that takes `[0]` will silently show one of them.
@@ -252,27 +500,10 @@ export async function cardMemberAt(
 	})
 	if (!member) return null
 
-	const [overlays, presenceRows] = await Promise.all([
-		dbOrTx
-			.select()
-			.from(schema.castAmendments)
-			.where(eq(schema.castAmendments.lorebookBindingId, member.id)),
-		dbOrTx
-			.select()
-			.from(schema.castPresences)
-			.where(eq(schema.castPresences.lorebookBindingId, member.id))
-	])
-
-	// The personal position rides along so an appearance can narrow by it.
-	const amendments = overlays.map((a) => ({
-		id: a.id,
-		branchId: a.branchId ?? null,
-		year: a.year,
-		month: a.month ?? null,
-		day: a.day ?? null,
-		fields: (a.fields ?? {}) as Record<string, unknown>,
-		personalPosition: a.personalPosition ?? null
-	}))
+	const presenceRows = await dbOrTx
+		.select()
+		.from(schema.castPresences)
+		.where(eq(schema.castPresences.lorebookBindingId, member.id))
 	const presences = presenceRows.map((p) => ({
 		id: p.id,
 		castId: p.lorebookBindingId,
@@ -285,32 +516,77 @@ export async function cardMemberAt(
 		untilMonth: p.untilMonth ?? null,
 		untilDay: p.untilDay ?? null
 	}))
-
-	// The member as the line reads them, before any one appearance narrows it.
-	const resolved = castAsOf(member as Record<string, unknown>, amendments, at)
 	const here = appearancesOf(member.id, presences, at)
 
+	// ⚠ An appearance reads AGAIN at its own point of her life: two of her at
+	// one world moment may legitimately read differently, which is why this
+	// returns a list. A world-dated version applies to every appearance; a
+	// personally-dated one only from its point of her life (`versionInForce`'s
+	// `appearance`). The workspace's roster calls the same filter.
+	const reading = {
+		branchId: at.line?.branchId ?? null,
+		moment: at.moment ?? null,
+		forkedAt: null,
+		line: at.line ?? MAIN_LINE
+	}
+	const points = [
+		...new Set<number | null>([
+			null,
+			...here.map((a) => a.personalPosition)
+		])
+	]
+	const picks = new Map<number | null, VersionRow | null>()
+	for (const point of points)
+		picks.set(
+			point,
+			(
+				await castVersionsInForce(dbOrTx, [member.id], {
+					reading,
+					appearance: point
+				})
+			).get(member.id)?.version ?? null
+		)
+	const cards = await parentCardsOf(
+		dbOrTx,
+		[...picks.values()].filter((v): v is VersionRow => v != null)
+	)
+	const memberAt = (point: number | null): Record<string, unknown> => {
+		const version = picks.get(point) ?? null
+		if (!version) return member as Record<string, unknown>
+		const c = memberColumnsOfVersion(version, {
+			carded: version.parentVersionId != null
+		})
+		return {
+			...member,
+			name: c.name ?? c.ownName ?? member.name,
+			aliases: c.aliases,
+			summary: c.summary,
+			description: c.description,
+			personality: c.personality,
+			scenario: c.scenario,
+			firstMessage: c.firstMessage,
+			alternateGreetings: c.alternateGreetings,
+			exampleDialogues: c.exampleDialogues,
+			faceMediaId: c.faceMediaId,
+			retold: c.retold,
+			ownName: c.ownName,
+			ownNickname: c.ownNickname,
+			timbre: c.timbre,
+			spriteSet: c.spriteSet,
+			nodeState: c.nodeState,
+			nodeVisibility: c.nodeVisibility,
+			characterId:
+				version.parentVersionId != null
+					? (cards.get(version.parentVersionId) ?? null)
+					: null
+		}
+	}
+
 	return {
-		member: resolved,
+		member: memberAt(null),
 		appearances: here.map((a) => ({
 			personalPosition: a.personalPosition,
-			// ⚠ An appearance resolves AGAIN at its own point of her life: two
-			// of her at one world moment may legitimately read differently,
-			// which is why this returns a list.
-			member:
-				a.personalPosition == null
-					? resolved
-					: castAsOf(
-							member as Record<string, unknown>,
-							// World-dated overlays apply to every appearance;
-							// personally-dated ones only up to this point of
-							// her life. That is what lets the fifty-year-old
-							// and the thirty-four-year-old read differently at
-							// one world moment. The workspace's roster calls
-							// the same helper.
-							amendmentsForAppearance(amendments, a.personalPosition),
-							at
-						)
+			member: memberAt(a.personalPosition)
 		}))
 	}
 }
@@ -363,6 +639,8 @@ interface CastSubject {
 	kind: "cast"
 	lorebookId: number
 	memberId: number
+	/** On an update, the cast version being rewritten — its own projection is what it is compared to. */
+	amendmentId?: number
 }
 
 /**
@@ -393,9 +671,16 @@ export const CAST_AMENDABLE: ReadonlySet<string> = new Set([
 	"scenario",
 	"firstMessage",
 	"alternateGreetings",
+	"groupOnlyGreetings",
 	"exampleDialogues",
 	"faceMediaId",
-	"retold"
+	"retold",
+	// The version-only fields (cp-10): a dated save carries their text with
+	// their Use from card flag, which `retold` already dates (owner,
+	// 2026-11-10).
+	"postHistoryInstructions",
+	"creatorNotes",
+	"likeness"
 ])
 
 const CAST_STATES = {
@@ -498,10 +783,80 @@ async function cleanCastFields(
 		)
 	)
 		throw new Error("A cast member's other greetings are a list of greetings.")
+	if (
+		"groupOnlyGreetings" in fields &&
+		!(
+			Array.isArray(fields.groupOnlyGreetings) &&
+			fields.groupOnlyGreetings.every((g) => typeof g === "string")
+		)
+	)
+		throw new Error(
+			"A cast member's group-only greetings are a list of greetings."
+		)
+	// The member form's own rule for the version-only fields; it normalises
+	// `likeness` in place.
+	const versionOnly = await versionOnlyProblem(db, fields, userId)
+	if (versionOnly) throw new Error(versionOnly)
 	if ("retold" in fields) {
 		const parsed = parseRetoldFlags(fields.retold)
 		if (!parsed.ok) throw new Error(parsed.error)
 		fields.retold = parsed.retold
+	}
+	if ("faceMediaId" in fields || "retold" in fields) {
+		// A provided book keeps its cast's faces (§0-D): a dated face change
+		// answers with the cast sentence, before any picture is judged.
+		const [book] = await db
+			.select({
+				uuid: schema.lorebooks.uuid,
+				extraJson: schema.lorebooks.extraJson
+			})
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, subject.lorebookId))
+			.limit(1)
+		// What the member says now: the version being edited, else the member's
+		// base version (the frozen columns are never read).
+		const V = schema.characterVersions
+		const [held] = await db
+			.select()
+			.from(V)
+			.where(
+				subject.amendmentId !== undefined
+					? and(
+							eq(V.id, subject.amendmentId),
+							eq(V.castMemberId, subject.memberId)
+						)
+					: and(
+							eq(V.castMemberId, subject.memberId),
+							isNull(V.branchId),
+							isNull(V.year),
+							isNull(V.personalPosition),
+							isNull(V.sourceSessionId)
+						)
+			)
+			.limit(1)
+		// A member with no base is an error (the lift gave every member one); an
+		// empty `stored` would let the provided-book check pass blind.
+		if (!held)
+			throw new Error(
+				"That cast member hasn't been moved onto character versions yet; restart the server so the upgrade lifts them."
+			)
+		const read = memberColumnsOfVersion(held, {
+			carded: held.parentVersionId != null
+		})
+		const stored = {
+			ownName: read.ownName,
+			ownNickname: read.ownNickname,
+			faceMediaId: read.faceMediaId,
+			retold: read.retold as { face?: boolean } | null
+		}
+		const compare: Record<string, unknown> = {}
+		if ("faceMediaId" in fields)
+			compare.faceMediaId = cardIdOf(fields.faceMediaId)
+		if ("retold" in fields) compare.retold = fields.retold
+		const castProblem = book
+			? await providedCastProblem(db, book, stored, compare)
+			: null
+		if (castProblem) throw new Error(castProblem)
 	}
 	if ("faceMediaId" in fields && fields.faceMediaId !== null) {
 		const fileId = cardIdOf(fields.faceMediaId)
@@ -531,10 +886,7 @@ async function cleanCastFields(
 			throw new Error("That card is not one this cast member can be drawn with.")
 		fields.characterId = characterId
 	}
-	if (!Object.keys(fields).length)
-		throw new Error(
-			"That change sets nothing a cast member can have at a date: their name, other names, summary, state, visibility, card, sprite set, face, the card fields they retell (description, personality, scenario, first message, other greetings, example dialogues) or which of those they retell."
-		)
+	if (!Object.keys(fields).length) throw new Error(NOTHING_A_MEMBER_HAS)
 	return fields
 }
 
@@ -719,6 +1071,475 @@ async function assertBranch(
 	return branch.id
 }
 
+/** What a dated write to a cast member says about the later versions: how many took it and how many kept their own words. */
+type LaterVersions = NonNullable<
+	Sockets.Amendments.Create.Response["laterVersions"]
+>
+
+/** A member's frozen columns as stored, in the form's shape (for a member with no version yet). */
+function columnsOfMemberRow(
+	member: typeof schema.lorebookBindings.$inferSelect
+): VersionColumns {
+	const carded = member.characterId != null
+	return {
+		name: carded ? null : member.name,
+		aliases: member.aliases ?? [],
+		summary: member.summary,
+		description: member.description,
+		personality: member.personality,
+		scenario: member.scenario,
+		firstMessage: member.firstMessage,
+		alternateGreetings: member.alternateGreetings ?? [],
+		groupOnlyGreetings: [],
+		exampleDialogues: member.exampleDialogues,
+		faceMediaId: member.faceMediaId,
+		postHistoryInstructions: null,
+		creatorNotes: null,
+		likeness: null,
+		retold: member.retold ?? {},
+		ownName: member.ownName,
+		ownNickname: member.ownNickname,
+		timbre: member.timbre ?? null,
+		spriteSet: member.spriteSet,
+		nodeState: member.nodeState,
+		nodeVisibility: member.nodeVisibility,
+		characterId: member.characterId
+	}
+}
+
+/** A member's versions that are not retired, oldest id first. */
+async function versionsOfMember(
+	tx: Db,
+	memberId: number
+): Promise<VersionRow[]> {
+	return tx
+		.select()
+		.from(schema.characterVersions)
+		.where(
+			and(
+				eq(schema.characterVersions.castMemberId, memberId),
+				isNull(schema.characterVersions.retiredOrder)
+			)
+		)
+		.orderBy(asc(schema.characterVersions.id))
+}
+
+/** The card version a cast version has as its parent, or null (card-less). */
+async function parentVersionOf(
+	tx: Db,
+	version: VersionRow
+): Promise<VersionRow | null> {
+	if (version.parentVersionId == null) return null
+	const [parent] = await tx
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.id, version.parentVersionId))
+		.limit(1)
+	return parent ?? null
+}
+
+/** `columns` with an amendment's `fields` laid over them; a carded member's `name` is their own name, `retold` is laid whole. */
+function withFields(
+	columns: VersionColumns,
+	fields: Record<string, unknown>
+): VersionColumns {
+	const laid: Record<string, unknown> = { ...fields }
+	delete laid.characterId
+	const after = { ...columns, ...laid } as VersionColumns
+	if ("name" in fields) {
+		if (columns.characterId != null) {
+			after.name = null
+			after.ownName = fields.name as string
+		}
+	}
+	return after
+}
+
+/**
+ * `columns` as they are once the member is drawn with `cardId`, with an
+ * amendment's `fields` laid over them. A member leaving its card keeps the
+ * name it was shown under as its own name.
+ */
+function withFieldsOnCard(
+	columns: VersionColumns,
+	fields: Record<string, unknown>,
+	cardId: number | null
+): VersionColumns {
+	const moved: VersionColumns = { ...columns, characterId: cardId }
+	if (columns.characterId != null && cardId == null) {
+		moved.name = columns.ownName ?? columns.name
+		moved.ownName = null
+	}
+	return withFields(moved, fields)
+}
+
+/** The card a dated change draws the member with: `fields.characterId` when it names one, else the card it already has. */
+function cardAfter(
+	before: number | null,
+	fields: Record<string, unknown>
+): number | null {
+	return "characterId" in fields ? ((fields.characterId as number | null) ?? null) : before
+}
+
+/**
+ * A dated card change, finished after its version is written: the member's
+ * versions from `from` on (the written one included) read the new card's
+ * current card version. A member that had no card takes the `follows` the
+ * "unretold fields follow" rule gives; one swapping a card keeps each
+ * version's own `follows`. Earlier versions are untouched, and so are those
+ * after `bound.until`: the move runs up to the next card change on its line
+ * (the bound the undo uses); versions on another card than `bound.onCard`
+ * are left alone.
+ */
+async function moveCardFrom(
+	tx: Db,
+	memberId: number,
+	from: { branchId: number | null; date: StoryDate },
+	cardId: number | null,
+	after: VersionColumns,
+	card: CharacterProfileV1 | null,
+	wasCardless: boolean,
+	bound: { onCard: number | null; until: StoryDate | undefined }
+): Promise<void> {
+	await reparentCastVersions(tx, memberId, {
+		cardId,
+		follows:
+			wasCardless && cardId != null
+				? memberProfileOf({ ...after, name: after.name ?? "" }, card)
+						.follows
+				: undefined,
+		from,
+		onCard: bound.onCard,
+		until: bound.until
+	})
+}
+
+/** `changes` without the fields that follow: a member with no card has nothing to follow until the move gives it one. */
+function withoutFollows(changes: CastVersionChanges): CastVersionChanges {
+	return Object.fromEntries(
+		Object.entries(changes).filter(([, v]) => !isFollow(v))
+	) as CastVersionChanges
+}
+
+const isFollow = (value: unknown) =>
+	!!value &&
+	typeof value === "object" &&
+	(value as { follow?: unknown }).follow === true
+
+/**
+ * ★CV-13: the member's versions later than `written` on its line either keep
+ * their own words or take the same `changes`, each written in place at its own
+ * key. A version a session wrote, and (when `changes` follows a field) one with
+ * no card to follow, always keeps its words.
+ */
+async function writeToLaterVersions(
+	tx: Db,
+	written: VersionRow,
+	changes: CastVersionChanges,
+	writtenBy: string,
+	apply: boolean
+): Promise<LaterVersions> {
+	const out: LaterVersions = { changed: 0, kept: 0 }
+	const follows = Object.values(changes).some(isFollow)
+	const later = (await versionsOfMember(tx, written.castMemberId!))
+		.filter(
+			(v) =>
+				v.id !== written.id &&
+				!isBaseVersion(v) &&
+				v.year != null &&
+				(v.branchId ?? null) === (written.branchId ?? null) &&
+				versionOrder(v, written) > 0
+		)
+		.sort(versionOrder)
+	for (const v of later) {
+		if (
+			!apply ||
+			v.sourceSessionId != null ||
+			(follows && v.parentVersionId == null)
+		) {
+			out.kept++
+			continue
+		}
+		await writeCastVersion(tx, {
+			member: written.castMemberId!,
+			changes,
+			writtenBy,
+			at: {
+				branchId: v.branchId ?? null,
+				date: dateOfVersion(v),
+				historyEntryId: v.historyEntryId,
+				personalPosition: v.personalPosition
+			}
+		})
+		out.changed++
+	}
+	return out
+}
+
+/**
+ * A dated change to a cast member, written as a cast version (plan §32 §3,
+ * §9): the change is what `fields` would make of the version in force at that
+ * place (`castChangesOfMemberEdit` — only the fields it touches), written by
+ * the versions writer's author path. Runs on the write's transaction, after
+ * the book's lock.
+ */
+async function writeCastChange(
+	tx: Db,
+	subject: CastSubject,
+	fields: Record<string, unknown>,
+	at: {
+		branchId: number | null
+		date: StoryDate
+		historyEntryId: number | null
+		personalPosition: number | null
+	},
+	userId: number,
+	changeLater: boolean
+): Promise<LaterVersions> {
+	await assertCardFree(tx, subject, fields)
+	const inForce =
+		(
+			await castVersionsInForce(tx, [subject.memberId], {
+				reading: {
+					branchId: at.branchId,
+					moment: at.date,
+					forkedAt: null,
+					line: await lineOfBook(tx, subject.lorebookId, at.branchId)
+				},
+				appearance: at.personalPosition
+			})
+		).get(subject.memberId)?.version ?? null
+
+	let before: VersionColumns
+	let card: CharacterProfileV1 | null
+	if (inForce) {
+		const parent = await parentVersionOf(tx, inForce)
+		before = columnsOfVersion(
+			inForce,
+			new Map(parent?.cardId != null ? [[parent.id, parent.cardId]] : [])
+		)
+		card = parent ? profileOf(parent) : null
+	} else {
+		// A member with no version yet: the writer makes its base first.
+		const [member] = await tx
+			.select()
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, subject.memberId))
+			.limit(1)
+		before = columnsOfMemberRow(member)
+		const parent =
+			member.characterId != null
+				? await ensureCardVersion(tx, member.characterId)
+				: null
+		card = parent ? profileOf(parent) : null
+	}
+	const newCardId = cardAfter(before.characterId, fields)
+	const cardChange = newCardId !== before.characterId
+	let newCard: CharacterProfileV1 | null = card
+	if (cardChange) {
+		const parent =
+			newCardId != null ? await ensureCardVersion(tx, newCardId) : null
+		newCard = parent ? profileOf(parent) : null
+	}
+	const after = withFieldsOnCard(before, fields, newCardId)
+	let changes = castChangesOfMemberEdit(before, after, newCard)
+	if (changes && cardChange && before.characterId == null)
+		changes = withoutFollows(changes)
+	if (!changes && !cardChange) throw new Error(NOTHING_A_MEMBER_HAS)
+
+	const writtenBy = `user:${userId}`
+	const { version } = await writeCastVersion(tx, {
+		member: subject.memberId,
+		changes: changes ?? { nodeState: after.nodeState },
+		writtenBy,
+		at: {
+			branchId: at.branchId,
+			date: at.date,
+			historyEntryId: at.historyEntryId,
+			personalPosition: at.personalPosition
+		}
+	})
+	if (cardChange) {
+		const around = await cardChangeAround(tx, version, subject.lorebookId)
+		await moveCardFrom(
+			tx,
+			subject.memberId,
+			{ branchId: at.branchId, date: at.date },
+			newCardId,
+			after,
+			newCard,
+			before.characterId == null,
+			{ onCard: before.characterId, until: around.nextChange }
+		)
+	}
+	// A pure card change has no fields to carry onto later versions: the
+	// re-parent above already moved them.
+	return writeToLaterVersions(
+		tx,
+		version,
+		changes ?? {},
+		writtenBy,
+		changeLater && changes != null
+	)
+}
+
+/**
+ * Edits one cast version of the member, an authored one or one a session
+ * wrote (`updateCastVersion`): with `fields`, the version is made to read as
+ * the one before it plus `fields`, so a field the new set leaves out goes back
+ * to what the one before says; with `place`, it moves to that date.
+ */
+async function rewriteCastChange(
+	tx: Db,
+	row: VersionRow,
+	subject: CastSubject,
+	fields: Record<string, unknown> | undefined,
+	userId: number,
+	changeLater: boolean,
+	place?: StoryDate
+): Promise<LaterVersions> {
+	const placed = place
+		? {
+				branchId: row.branchId ?? null,
+				date: place,
+				historyEntryId: row.historyEntryId ?? null,
+				personalPosition: row.personalPosition
+			}
+		: undefined
+	const writtenBy = `user:${userId}`
+	const around = place
+		? await cardChangeAround(tx, row, subject.lorebookId)
+		: undefined
+	/** A dated card change moves its switch with its date. */
+	const moveSwitch = async (moved: VersionRow) => {
+		if (!place || !around || around.rowCard === around.prevCard) return
+		const oldDate = dateOfVersion(row)!
+		const branch = row.branchId ?? null
+		const byDate = compareDates(place, oldDate)
+		if (byDate > 0)
+			await reparentCastVersions(tx, row.castMemberId!, {
+				cardId: around.prevCard,
+				cardVersionId:
+					around.prevCard != null
+						? around.prev!.parentVersionId!
+						: undefined,
+				follows:
+					around.prevCard != null && around.rowCard == null
+						? (around.prev!.follows as CharacterProfileField[])
+						: undefined,
+				from: { branchId: branch, date: oldDate },
+				onCard: around.rowCard,
+				until:
+					around.nextChange &&
+					compareDates(around.nextChange, place) < 0
+						? around.nextChange
+						: place
+			})
+		else if (byDate < 0)
+			await reparentCastVersions(tx, row.castMemberId!, {
+				cardId: around.rowCard,
+				cardVersionId:
+					around.rowCard != null ? moved.parentVersionId! : undefined,
+				follows:
+					around.rowCard != null && around.prevCard == null
+						? (moved.follows as CharacterProfileField[])
+						: undefined,
+				from: { branchId: branch, date: place },
+				onCard: around.prevCard,
+				until: oldDate
+			})
+	}
+	if (!fields) {
+		const moved = await updateCastVersion(tx, row.id, { place: placed })
+		await moveSwitch(moved)
+		return { changed: 0, kept: 0 }
+	}
+	const prev = versionBefore(
+		await versionsOfMember(tx, row.castMemberId!),
+		row,
+		await lineOfBook(tx, subject.lorebookId, row.branchId)
+	)
+	const parent = await parentVersionOf(tx, row)
+	const cards = new Map<number, number>(
+		parent?.cardId != null ? [[parent.id, parent.cardId]] : []
+	)
+	const before = columnsOfVersion(row, cards)
+	const earlier = {
+		...columnsOfVersion(prev, cards, row.parentVersionId != null),
+		characterId: before.characterId
+	}
+	const newCardId = cardAfter(before.characterId, fields)
+	const cardChange = newCardId !== before.characterId
+	let newCard: CharacterProfileV1 | null = parent ? profileOf(parent) : null
+	if (cardChange) {
+		const next =
+			newCardId != null ? await ensureCardVersion(tx, newCardId) : null
+		newCard = next ? profileOf(next) : null
+	}
+	const after = withFieldsOnCard(earlier, fields, newCardId)
+	let changes = castChangesOfMemberEdit(before, after, newCard)
+	if (changes && cardChange && before.characterId == null)
+		changes = withoutFollows(changes)
+	if (!changes && !cardChange && !placed) throw new Error("Nothing to change.")
+
+	let version = row
+	if (changes || placed)
+		version = await updateCastVersion(tx, row.id, {
+			changes: changes ?? undefined,
+			place: placed
+		})
+	if (placed) await moveSwitch(version)
+	if (cardChange) {
+		const around = await cardChangeAround(tx, version, subject.lorebookId)
+		await moveCardFrom(
+			tx,
+			subject.memberId,
+			{
+				branchId: version.branchId ?? null,
+				date: dateOfVersion(version)!
+			},
+			newCardId,
+			after,
+			newCard,
+			before.characterId == null,
+			{ onCard: before.characterId, until: around.nextChange }
+		)
+	}
+	// A pure card change has no fields to carry onto later versions: the
+	// re-parent above already moved them.
+	return writeToLaterVersions(
+		tx,
+		version,
+		changes ?? {},
+		writtenBy,
+		changeLater && changes != null
+	)
+}
+
+/** One version of a member of this book that is a change, not the member's base; refused in the usual words when it is not. */
+async function castChangeInBook(
+	h: Db,
+	id: number,
+	lorebookId: number
+): Promise<VersionRow> {
+	const V = schema.characterVersions
+	const [row] = await h
+		.select()
+		.from(V)
+		.where(
+			and(
+				eq(V.id, id),
+				eq(V.lorebookId, lorebookId),
+				isNotNull(V.castMemberId),
+				isNull(V.retiredOrder)
+			)
+		)
+		.limit(1)
+	if (!row || isBaseVersion(row))
+		throw new Error("That amendment is not in this lorebook.")
+	return row
+}
+
 export const amendmentsListHandler: Handler<
 	Sockets.Amendments.List.Params,
 	Sockets.Amendments.List.Response
@@ -740,9 +1561,15 @@ export const amendmentsCreateHandler: Handler<
 	Sockets.Amendments.Create.Response
 > = refusable(
 	"amendments:create",
-	async (socket, params: Sockets.Amendments.Create.Params, emitToUser) => {
+	async (
+		socket,
+		params: Sockets.Amendments.Create.Params,
+		emitToUser
+	) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 
 		const { year, month, day } = assertDate(params)
 		/**
@@ -752,11 +1579,11 @@ export const amendmentsCreateHandler: Handler<
 		 * lock (`lockBookCalendar`, A18(d)), so a calendar is never declared
 		 * between the check and the row.
 		 */
-		const writeDated = (insert: (tx: Db) => Promise<unknown>) =>
+		const writeDated = <T>(insert: (tx: Db) => Promise<T>) =>
 			db.transaction(async (tx) => {
 				await lockBookCalendar(tx, params.lorebookId)
 				await assertDateLands(tx, params.lorebookId, { year, month, day })
-				await insert(tx)
+				return insert(tx)
 			})
 		const branchId = await assertBranch(params.branchId, params.lorebookId)
 		const historyEntryId = await assertHistoryEvent(
@@ -767,6 +1594,7 @@ export const amendmentsCreateHandler: Handler<
 		// Exactly one subject. Both, or neither, is a row no reader could place.
 		const hasEntry = params.entryId != null
 		const hasCast = params.castId != null
+		let laterVersions: LaterVersions | undefined
 		if (hasEntry === hasCast)
 			throw new Error(
 				"An amendment is about one entry or one cast member, not both."
@@ -828,30 +1656,35 @@ export const amendmentsCreateHandler: Handler<
 			}
 			const personalPosition = assertPersonalPosition(params.personalPosition)
 			const fields = await cleanFields(params.fields, subject, userId)
-			await writeDated(async (tx) => {
-				await assertCardFree(tx, subject, fields)
-				await tx.insert(schema.castAmendments).values({
-					lorebookBindingId: member.id,
-					lorebookId: params.lorebookId,
-					// The personal axis, when the author dated it against her
-					// life rather than against the world (design §4d).
-					personalPosition,
-					branchId,
-					year,
-					month,
-					day,
+			// The change is a cast version (plan §32 §3), written by the versions
+			// writer's author path; `cast_amendments` is frozen and never written.
+			laterVersions = await writeDated((tx) =>
+				writeCastChange(
+					tx,
+					subject,
 					fields,
-					historyEntryId
-				})
-			})
+					{
+						branchId,
+						date: { year, month, day },
+						historyEntryId,
+						personalPosition
+					},
+					userId,
+					params.changeLaterVersions === true
+				)
+			)
 		}
 
 		// The book's vocabulary reads amended names (plan C1): an amendment
 		// written, moved or gone re-annotates whatever its names change.
+		if (hasCast) await tellMemberSessions(socket.io, db, params.lorebookId, params.castId!)
 		enqueueLorebookAnnotation(book.id, book.name)
 		const res = await buildAmendmentsList(userId, params.lorebookId)
-		emitToUser("amendments:list", res)
-		return res
+		// The socket layer emits no handler return value: the cast reply's
+		// `laterVersions` reaches the client on this emit.
+		const reply = laterVersions ? { ...res, laterVersions } : res
+		emitToUser("amendments:list", reply)
+		return reply
 	},
 	"That amendment could not be saved."
 )
@@ -861,16 +1694,88 @@ export const amendmentsUpdateHandler: Handler<
 	Sockets.Amendments.Update.Response
 > = refusable(
 	"amendments:update",
-	async (socket, params: Sockets.Amendments.Update.Params, emitToUser) => {
+	async (
+		socket,
+		params: Sockets.Amendments.Update.Params,
+		emitToUser
+	) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
+
+		if (params.subject !== "entry") {
+			// A cast change is a cast version: `id` is the version's. ⚠ Scoped by
+			// lorebook as well as id, as an entry amendment is.
+			const row = await castChangeInBook(db, params.id, params.lorebookId)
+			// A re-date is merged over the stored date as an entry's is: a
+			// year-only patch keeps the month and day, clearing the month
+			// clears the day. The version keeps its line, life point and
+			// history entry, as an entry amendment's re-date does.
+			let place: StoryDate | undefined
+			if (
+				params.year !== undefined ||
+				params.month !== undefined ||
+				params.day !== undefined
+			) {
+				const month =
+					params.month !== undefined ? params.month : row.month
+				const day =
+					params.day !== undefined
+						? params.day
+						: params.month === null
+							? null
+							: row.day
+				const merged = assertDate({
+					year: params.year ?? row.year,
+					month,
+					day
+				})
+				if (
+					merged.year !== row.year ||
+					merged.month !== (row.month ?? null) ||
+					merged.day !== (row.day ?? null)
+				)
+					place = merged
+			}
+			if (params.fields === undefined && !place)
+				throw new Error("Nothing to change.")
+
+			const subject: CastSubject = {
+				kind: "cast",
+				lorebookId: params.lorebookId,
+				memberId: row.castMemberId!,
+				amendmentId: row.id
+			}
+			const fields =
+				params.fields === undefined
+					? undefined
+					: await cleanFields(params.fields, subject, userId)
+			const laterVersions = await db.transaction(async (tx) => {
+				await lockBookCalendar(tx, params.lorebookId)
+				if (place) await assertDateLands(tx, params.lorebookId, place)
+				if (fields) await assertCardFree(tx, subject, fields)
+				return rewriteCastChange(
+					tx,
+					row,
+					subject,
+					fields,
+					userId,
+					params.changeLaterVersions === true,
+					place
+				)
+			})
+			await tellMemberSessions(socket.io, db, params.lorebookId, row.castMemberId!)
+			enqueueLorebookAnnotation(book.id, book.name)
+			const res = await buildAmendmentsList(userId, params.lorebookId)
+			const reply = { ...res, laterVersions }
+			emitToUser("amendments:list", reply)
+			return reply
+		}
 
 		// ⚠ Scoped by lorebook as well as id: the id alone would let one book's
 		// amendment be edited from another book's screen.
-		const table =
-			params.subject === "entry"
-				? schema.entryAmendments
-				: schema.castAmendments
+		const table = schema.entryAmendments
 		const [stored] = await db
 			.select({
 				year: table.year,
@@ -878,7 +1783,8 @@ export const amendmentsUpdateHandler: Handler<
 				day: table.day
 			})
 			.from(table)
-			.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId)))
+			// A held amendment is one session's own change: never edited from the lorebook's screen.
+			.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId), isNull(table.base)))
 			.limit(1)
 		if (!stored) throw new Error("That amendment is not in this lorebook.")
 
@@ -904,44 +1810,30 @@ export const amendmentsUpdateHandler: Handler<
 				assertDate({ year: params.year ?? stored.year, month, day })
 			)
 		}
-		let subject: EntrySubject | CastSubject | null = null
+		let subject: EntrySubject | null = null
 		if (params.fields !== undefined) {
-			if (params.subject !== "entry") {
-				const [cast] = await db
-					.select({ memberId: schema.castAmendments.lorebookBindingId })
-					.from(schema.castAmendments)
-					.where(eq(schema.castAmendments.id, params.id))
-					.limit(1)
-				if (!cast) throw new Error("That amendment is not in this lorebook.")
-				subject = {
-					kind: "cast",
-					lorebookId: params.lorebookId,
-					memberId: cast.memberId
-				}
-			} else {
-				const [row] = await db
-					.select({
-						typeId: schema.lorebookEntries.typeId,
-						entryId: schema.entryAmendments.entryId,
-						amendmentBranchId: schema.entryAmendments.branchId,
-						entryBranchId: schema.lorebookEntries.branchId
-					})
-					.from(schema.entryAmendments)
-					.innerJoin(
-						schema.lorebookEntries,
-						eq(schema.lorebookEntries.id, schema.entryAmendments.entryId)
-					)
-					.where(eq(schema.entryAmendments.id, params.id))
-					.limit(1)
-				if (!row) throw new Error("That amendment is not in this lorebook.")
-				subject = {
-					kind: "entry",
-					typeId: row.typeId,
-					lorebookId: params.lorebookId,
-					entryId: row.entryId,
-					line: row.amendmentBranchId ?? row.entryBranchId ?? null,
-					amendmentId: params.id
-				}
+			const [row] = await db
+				.select({
+					typeId: schema.lorebookEntries.typeId,
+					entryId: schema.entryAmendments.entryId,
+					amendmentBranchId: schema.entryAmendments.branchId,
+					entryBranchId: schema.lorebookEntries.branchId
+				})
+				.from(schema.entryAmendments)
+				.innerJoin(
+					schema.lorebookEntries,
+					eq(schema.lorebookEntries.id, schema.entryAmendments.entryId)
+				)
+				.where(eq(schema.entryAmendments.id, params.id))
+				.limit(1)
+			if (!row) throw new Error("That amendment is not in this lorebook.")
+			subject = {
+				kind: "entry",
+				typeId: row.typeId,
+				lorebookId: params.lorebookId,
+				entryId: row.entryId,
+				line: row.amendmentBranchId ?? row.entryBranchId ?? null,
+				amendmentId: params.id
 			}
 			patch.fields = await cleanFields(params.fields, subject, userId)
 		}
@@ -953,8 +1845,6 @@ export const amendmentsUpdateHandler: Handler<
 			await lockBookCalendar(tx, params.lorebookId)
 			if ("year" in patch)
 				await assertDateLands(tx, params.lorebookId, patch as unknown as StoryDate)
-			if (subject?.kind === "cast")
-				await assertCardFree(tx, subject, patch.fields as Record<string, unknown>)
 			await assertOverlayAnchor(
 				tx,
 				subject,
@@ -984,21 +1874,64 @@ export const amendmentsDeleteHandler: Handler<
 	async (socket, params: Sockets.Amendments.Delete.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 
-		const table =
-			params.subject === "entry"
-				? schema.entryAmendments
-				: schema.castAmendments
-		const gone = await db
-			.delete(table)
-			.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId)))
-			.returning({ id: table.id })
-		// A delete that found nothing is not a success: an id from another
-		// book, or one already gone.
-		if (!gone.length) throw new Error("That amendment is not in this lorebook.")
+		let deletedCastId: number | null = null
+		if (params.subject !== "entry") {
+			// A cast change is a cast version; the versions module routes a
+			// session's write through retire-or-take and deletes an authored
+			// one. The base is refused there.
+			const row = await castChangeInBook(db, params.id, params.lorebookId)
+			deletedCastId = row.castMemberId
+			await db.transaction(async (tx) => {
+				await lockBookCalendar(tx, params.lorebookId)
+				const around = await cardChangeAround(
+					tx,
+					row,
+					params.lorebookId
+				)
+				await deleteCastVersion(tx, row.id)
+				// A dated card change takes its switch with it: the versions it
+				// moved go back to the card before, up to the next card change.
+				if (
+					dateOfVersion(row) != null &&
+					around.rowCard !== around.prevCard
+				)
+					await reparentCastVersions(tx, row.castMemberId!, {
+						cardId: around.prevCard,
+						cardVersionId:
+							around.prevCard != null
+								? around.prev!.parentVersionId!
+								: undefined,
+						follows:
+							around.prevCard != null && around.rowCard == null
+								? (around.prev!
+										.follows as CharacterProfileField[])
+								: undefined,
+						from: {
+							branchId: row.branchId ?? null,
+							date: dateOfVersion(row)!
+						},
+						onCard: around.rowCard,
+						until: around.nextChange
+					})
+			})
+		} else {
+			const table = schema.entryAmendments
+			const gone = await db
+				.delete(table)
+				// A held amendment is one session's own change: never deleted from the lorebook's screen.
+				.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId), isNull(table.base)))
+				.returning({ id: table.id })
+			// A delete that found nothing is not a success: an id from another
+			// book, or one already gone.
+			if (!gone.length) throw new Error("That amendment is not in this lorebook.")
+		}
 
 		// The book's vocabulary reads amended names (plan C1): an amendment
 		// written, moved or gone re-annotates whatever its names change.
+		if (deletedCastId != null) await tellMemberSessions(socket.io, db, params.lorebookId, deletedCastId)
 		enqueueLorebookAnnotation(book.id, book.name)
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
@@ -1033,6 +1966,8 @@ export const amendmentsForkHandler: Handler<
 	async (socket, params: Sockets.Amendments.Fork.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 
 		const name = assertBranchName(params.name)
 		// The line being left must be one of this book's, or main.
@@ -1096,6 +2031,8 @@ export const amendmentsRenameBranchHandler: Handler<
 	async (socket, params: Sockets.Amendments.RenameBranch.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 		const name = assertBranchName(params.name)
 		await assertBranch(params.id, params.lorebookId)
 
@@ -1137,9 +2074,13 @@ export const amendmentsDeleteBranchHandler: Handler<
 	async (socket, params: Sockets.Amendments.DeleteBranch.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 		await assertBranch(params.id, params.lorebookId)
 
-		// ⚠ The line's OWN rows go with it, by cascade: its amendments, the
+		// ⚠ The line's OWN rows go with it, by cascade: its entry amendments,
+		// its cast versions (`character_versions.branch_id` cascades; this
+		// handler never writes the frozen `cast_amendments`), the
 		// entries written on it, its scenes, its edges, its placements and
 		// its recorded stats. Shared rows have a NULL `branch_id` and are
 		// untouched. The places written on it take their stats from every
@@ -1353,10 +2294,10 @@ async function announceReadingMoved(
 /**
  * Tell every tab of the sessions a deleted line moved to the line it left
  * that their line moved (#136) — and their clock, when it went back to the
- * fork date or was cleared — the same `state:changed` + settings
- * `session-updated` pair `sessions:setLorebook` announces, and the session
- * row for the lists. Open settings forms and the lorebook workspace then stop
- * holding a dead line id. Best-effort: the delete has already landed.
+ * fork date or was cleared — a `state:changed` + settings
+ * `session-updated` pair, the session row for the lists, and the session
+ * itself pushed to its participants (its cast names read the line). Open
+ * settings forms and the lorebook workspace then stop holding a dead line id. Best-effort: the delete has already landed.
  */
 async function announceSessionsMoved(
 	io: any,
@@ -1389,6 +2330,19 @@ async function announceSessionsMoved(
 			console.warn("[amendments:deleteBranch] session-updated emit failed:", err)
 		}
 		broadcastSessionRow(io, sessionId)
+		try {
+			const [row] = await db
+				.select({ ownerId: schema.sessions.userId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, sessionId))
+				.limit(1)
+			if (row) {
+				const { pushSessionToParticipants } = await import("$lib/server/sockets/sessions")
+				await pushSessionToParticipants(io, sessionId, row.ownerId)
+			}
+		} catch (err) {
+			console.warn("[amendments:deleteBranch] session push failed:", err)
+		}
 	}
 }
 
@@ -1411,6 +2365,8 @@ export const amendmentsPlaceHandler: Handler<
 	async (socket, params: Sockets.Amendments.Place.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 		const member = await assertMember(params.castId, params.lorebookId)
 		const branchId = await assertBranch(params.branchId, params.lorebookId)
 
@@ -1465,6 +2421,8 @@ export const amendmentsPlaceHandler: Handler<
 			})
 		})
 
+		// A placement dates the member's presence, which the cast names a session reads.
+		await tellMemberSessions(socket.io, db, params.lorebookId, member.id)
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
 		return res
@@ -1480,9 +2438,11 @@ export const amendmentsUnplaceHandler: Handler<
 	async (socket, params: Sockets.Amendments.Unplace.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 		// ⚠ Scoped by book as well as id: the id alone would let one book's
 		// placement be removed from another book's screen.
-		await db
+		const gone = await db
 			.delete(schema.castPresences)
 			.where(
 				and(
@@ -1490,6 +2450,9 @@ export const amendmentsUnplaceHandler: Handler<
 					eq(schema.castPresences.lorebookId, params.lorebookId)
 				)
 			)
+			.returning({ castId: schema.castPresences.lorebookBindingId })
+		for (const { castId } of gone)
+			await tellMemberSessions(socket.io, db, params.lorebookId, castId)
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
 		return res

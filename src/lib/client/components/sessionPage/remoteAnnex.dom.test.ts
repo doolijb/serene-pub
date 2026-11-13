@@ -192,7 +192,7 @@ describe("core's remote Annex", () => {
 	)
 
 	test(
-		"never silent: no key, nothing written, nothing to see — each one line",
+		"no key says why (Pick a key in settings); a key with nothing written draws nothing",
 		{ timeout: 120_000 },
 		async () => {
 			const pick = await mountAnnex()
@@ -209,9 +209,9 @@ describe("core's remote Annex", () => {
 			const unwritten = await mountAnnex({
 				settings: { key: "acme.dice.score" }
 			})
-			expect(text(unwritten.query(part("empty")))).toBe(
-				"Nothing written yet"
-			)
+			// R10: a key with nothing written draws nothing — no sentence.
+			expect(unwritten.query(part("empty")) === null).toBe(true)
+			expect(text(unwritten.query(part("root")))).toBe("")
 
 			// A key whose `see` leaves the viewer out is absent from their view,
 			// as an unwritten one is; the Castellan's notes are the Castellan's.
@@ -219,7 +219,8 @@ describe("core's remote Annex", () => {
 				annex: {},
 				settings: { key: "core.castellan-scratchpad" }
 			})
-			expect(text(blank.query(part("empty")))).toBe("Nothing written yet")
+			expect(blank.query(part("empty")) === null).toBe(true)
+			expect(text(blank.query(part("root")))).toBe("")
 		}
 	)
 

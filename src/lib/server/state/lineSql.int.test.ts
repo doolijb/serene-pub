@@ -7,7 +7,9 @@
  * same cases: links (`rowsOnReading`), scenes (the `entries:counts` handler),
  * presences (`cardMemberAt`) and a line's present (`storyNowOf`) (the
  * client's readers: `lineConformance.test.ts`; its screens:
- * `lineConformance.screens.dom.test.ts`).
+ * `lineConformance.screens.dom.test.ts`). Last, the cast-version read: the
+ * session-cut SQL against real `character_versions` rows, then `versionInForce`
+ * over what it fetches, on `CASE_VERSIONS`.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -19,16 +21,21 @@ import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	amendmentsOnLine,
 	lineOf,
+	MAIN_LINE,
 	rowReadsOnLine,
 	rowsReadingOnLine,
-	type LineBranch
+	versionInForce,
+	type LineBranch,
+	type LineCastVersion
 } from "$lib/shared/lorebooks/lineReading"
 import {
 	CASE_BRANCHES,
 	CASE_LINES,
 	CASE_MOMENTS,
-	CASE_ROWS
+	CASE_ROWS,
+	CASE_VERSIONS
 } from "$lib/shared/lorebooks/lineReading.cases"
+import { amendmentsForAppearance } from "$lib/shared/lorebooks/amendments"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -247,7 +254,7 @@ describe("the line rule: pure and SQL agree", () => {
 					.from(am)
 					.where(eq(am.entryId, anchor.id))
 				const pureOverlays = amendmentsOnLine(
-					all.map((a) => ({ ...a, branchId: a.branchId ?? null })),
+					all.map((a) => ({ ...a, year: a.year as number, branchId: a.branchId ?? null })),
 					line,
 					moment
 				)
@@ -513,4 +520,147 @@ describe("server readers of a line read by the rule", () => {
 			storyNowOf(testDb as any, one.book.id, two.real(5))
 		).rejects.toBeInstanceOf(BranchRefusal)
 	}, 60_000)
+})
+
+describe("cast versions: the session-cut SQL and versionInForce agree with the table", () => {
+	let built: Awaited<ReturnType<typeof buildBook>>
+	let bindingNumber = 0
+
+	beforeAll(async () => {
+		built = await buildBook()
+	}, 60_000)
+
+	/** A cast member in `lorebookId`; answers its id. */
+	async function addMember(lorebookId: number): Promise<number> {
+		bindingNumber += 1
+		const [member] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId,
+				binding: `{{char:${bindingNumber}}}`,
+				name: `Member ${bindingNumber}`
+			} as any)
+			.returning()
+		return member.id
+	}
+
+	for (const scenario of CASE_VERSIONS) {
+		test(
+			scenario.name,
+			async () => {
+				const { lineOfBook } = await import("./reading")
+				const { onLineAtSql, sessionCutSql } = await import("./lineSql")
+				const { book, real } = built
+				const cv = schema.characterVersions
+
+				// The attached member, and one own book + member per overlay depth.
+				const attached = await addMember(book.id)
+				const depths = [
+					...new Set(
+						scenario.rows
+							.map((r) => r.overlayDepth)
+							.filter((d): d is number => d != null)
+					)
+				]
+				const holders = new Map<
+					number | null,
+					{ memberId: number; bookId: number }
+				>([[null, { memberId: attached, bookId: book.id }]])
+				for (const depth of depths) {
+					const [own] = await testDb
+						.insert(schema.lorebooks)
+						.values({ name: `Own ${depth}`, userId: book.userId })
+						.returning()
+					holders.set(depth, {
+						memberId: await addMember(own.id),
+						bookId: own.id
+					})
+				}
+
+				// Insert in case order, so real ids ascend with local ids.
+				const localOf = new Map<number, number>()
+				for (const r of scenario.rows) {
+					const holder = holders.get(r.overlayDepth ?? null)!
+					const [row] = await testDb
+						.insert(cv)
+						.values({
+							castMemberId: holder.memberId,
+							lorebookId: holder.bookId,
+							nodeState: "active",
+							nodeVisibility: "normal",
+							branchId:
+								r.overlayDepth != null
+									? null
+									: real(r.branchId),
+							year: r.date?.year ?? null,
+							month: r.date?.month ?? null,
+							day: r.date?.day ?? null,
+							personalPosition: r.personalPosition,
+							writeOrder: r.writeOrder,
+							retiredOrder: r.retiredOrder,
+							sourceSessionId: r.sourceSessionId,
+							sourceMessageId: r.sourceMessageId
+						})
+						.returning()
+					localOf.set(row.id, r.id)
+				}
+				const depthOf = new Map<number, number>() // member id -> depth
+				for (const [depth, h] of holders)
+					if (depth != null) depthOf.set(h.memberId, depth)
+
+				for (const reading of scenario.readings) {
+					const line = {
+						...(await lineOfBook(
+							testDb as any,
+							book.id,
+							real(reading.line)
+						)),
+						sessionCuts: reading.sessionCuts
+					}
+					const dateCols = {
+						year: cv.year,
+						month: cv.month,
+						day: cv.day
+					}
+					const fetched: LineCastVersion[] = []
+					for (const [depth, h] of holders) {
+						const rows = await testDb
+							.select()
+							.from(cv)
+							.where(
+								and(
+									eq(cv.castMemberId, h.memberId),
+									onLineAtSql(
+										cv.branchId,
+										dateCols,
+										depth == null ? line : MAIN_LINE,
+										reading.moment
+									),
+									sessionCutSql(cv, line)
+								)
+							)
+						for (const row of rows)
+							fetched.push({ ...row, overlayDepth: depth })
+					}
+					const label = `${scenario.name} — ${reading.reader}`
+					expect(
+						amendmentsForAppearance(fetched, reading.appearance)
+							.map((r) => localOf.get(r.id)!)
+							.sort((a, b) => a - b),
+						label
+					).toEqual(reading.candidates)
+					const picked = versionInForce(
+						fetched,
+						line,
+						reading.moment,
+						reading.appearance
+					)
+					expect(picked ? localOf.get(picked.id)! : null, label).toBe(
+						reading.inForce
+					)
+				}
+			},
+			60_000
+		)
+	}
 })

@@ -24,15 +24,21 @@
 import { and, desc, eq, isNull } from "drizzle-orm"
 import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import type { RotationMessage } from "$lib/server/pipelines/runtime/speakerRotation"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { cardsAsSeatsRead, hostSeatRefOf, seatCardsAsRead } from "$lib/server/pipelines/prompt/seatCards"
+import { storedSeatRef } from "$lib/server/state/seatRefs"
+import { seatInPlay } from "$lib/server/sessions/seats"
 
 /** What a planner's row stores as `metadata.turnPlan`. */
 export interface StoredTurnPlan {
 	/**
-	 * The participant references the plan names, in order — `character:<id>`
-	 * for a seated character or a persona seat, 🚧 `player-seat:<id>` for a
-	 * card-less player seat. A reference in `waits` is a person's turn.
+	 * The participant references the plan names, in order — `hostSeatRefOf`'s:
+	 * once the flip is on, `seated-member:<id>` for a character seat (⏳
+	 * `character:<card id>` when it has no member) and `player-seat:<id>` for
+	 * a player seat; ⏳ before it, `character:<card id>` for a character or
+	 * persona seat and `player-seat:<id>` for a card-less one. A reference in
+	 * `waits` is a person's turn.
 	 */
 	turns: string[]
 	/** The planner's document, as it answered. */
@@ -88,8 +94,8 @@ interface PlanSeat {
  * is somebody's.
  *
  * 🚧 **Seats a person plays are in the order too** (Lair rewrite D5): a
- * persona seat (`character:<persona id>`) and a card-less player seat
- * (`player-seat:<id>`, by its seat name) are resolved by the same name rule
+ * player seat (`player-seat:<id>` once the flip is on; ⏳ `character:<persona id>`
+ * before it, a card-less one always `player-seat:<id>`, by its seat name) are resolved by the same name rule
  * as a character, in the plan's order, and listed in `waits` — the port's
  * own `waits` (the turn script's reading) joining them. The turn order shows
  * such a turn as the person's and never generates it.
@@ -107,48 +113,110 @@ export async function storedTurnPlan(
 		db
 			.select({
 				id: schema.characters.id,
-				name: schema.characters.name,
-				nickname: schema.characters.nickname
+				seatId: schema.sessionCharacters.id,
+				castMemberId: schema.sessionCharacters.castMemberId
 			})
 			.from(schema.sessionCharacters)
 			.innerJoin(schema.characters, eq(schema.characters.id, schema.sessionCharacters.characterId))
 			.where(
 				and(
 					eq(schema.sessionCharacters.sessionId, sessionId),
-					isNull(schema.sessionCharacters.removedAt)
+					seatInPlay(schema.sessionCharacters)
 				)
 			),
 		db
 			.select({
 				seatId: schema.sessionPersonas.id,
 				personaId: schema.sessionPersonas.personaId,
-				seatName: schema.sessionPersonas.seatName,
-				name: schema.characters.name,
-				nickname: schema.characters.nickname
+				castMemberId: schema.sessionPersonas.castMemberId,
+				seatName: schema.sessionPersonas.seatName
 			})
 			.from(schema.sessionPersonas)
-			.leftJoin(schema.characters, eq(schema.characters.id, schema.sessionPersonas.personaId))
 			.where(
 				and(
 					eq(schema.sessionPersonas.sessionId, sessionId),
-					isNull(schema.sessionPersonas.removedAt)
+					seatInPlay(schema.sessionPersonas)
 				)
 			)
 	])
+	// 🚧 A character seat answers to the names of the member it seats (S2),
+	// read through the seat holding each card; a seat with no member, its card's.
+	// The cards' names are their current card version's (never the ⏳ copies).
+	const cardNow = await cardsNow(db, [
+		...characters.map((c) => c.id),
+		...personas.flatMap((p) => (p.personaId != null ? [p.personaId] : []))
+	])
+	const charactersRead = await cardsAsSeatsRead(
+		db,
+		sessionId,
+		characters.flatMap((c) => {
+			const card = cardNow.get(c.id)
+			return card ? [{ id: c.id, name: card.name, nickname: card.nickname }] : []
+		})
+	)
+	// 🚧 A player seat answers to its seat name, then the names of the member
+	// it seats (★pT-1, 2026-11-05: "Everything in session is cast -> active
+	// card"), read over the member's active card.
+	const personasRead = (
+		await seatCardsAsRead(
+			db,
+			sessionId,
+			personas.map((p) => {
+				const card = p.personaId != null ? cardNow.get(p.personaId) : undefined
+				return {
+					...p,
+					name: card?.name ?? null,
+					nickname: card?.nickname ?? null,
+					character: card
+						? { id: card.id, name: card.name, nickname: card.nickname }
+						: null
+				}
+			})
+		)
+	).map(({ character, ...p }) => ({
+		...p,
+		name: character ? (character as { name: string | null }).name : p.name,
+		nickname: character ? (character as { nickname: string | null }).nickname : p.nickname
+	}))
 	const names = (...n: Array<string | null | undefined>) =>
 		n.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().toLowerCase())
+	// ⏳ A seat's ref is `hostSeatRefOf`'s: the member form once the flip is on
+	// (`state/memberForm.ts`), else the card form (`player-seat:<id>` for a
+	// card-less player seat).
+	const refOfCharacter = new Map<number, string>()
+	for (const c of characters)
+		if (!refOfCharacter.has(c.id))
+			refOfCharacter.set(
+				c.id,
+				hostSeatRefOf({ kind: "character", seatId: c.seatId, castMemberId: c.castMemberId, cardId: c.id }) ??
+					`character:${c.id}`
+			)
 	const seats: PlanSeat[] = [
-		...characters.map((c) => ({ ref: `character:${c.id}`, id: c.id, names: names(c.name, c.nickname), person: false })),
-		...personas.map((p) =>
-			p.personaId != null
-				? { ref: `character:${p.personaId}`, id: p.personaId, names: names(p.seatName, p.name, p.nickname), person: true }
-				: { ref: `player-seat:${p.seatId}`, id: null, names: names(p.seatName), person: true }
-		)
+		...charactersRead.map((c) => ({
+			ref: refOfCharacter.get(c.id) ?? `character:${c.id}`,
+			id: c.id,
+			names: names(c.name, c.nickname),
+			person: false
+		})),
+		...personasRead.map((p) => ({
+			ref:
+				hostSeatRefOf({ kind: "player", seatId: p.seatId, castMemberId: p.castMemberId, cardId: p.personaId }) ??
+				`player-seat:${p.seatId}`,
+			id: p.personaId ?? null,
+			names: names(p.seatName, ...(p.personaId != null ? [p.name, p.nickname] : [])),
+			person: true
+		}))
 	]
 	const turns: string[] = []
+	// 🚧 A wait is stored in the form the session stores a seat in (`storedSeatRef`): the member form once the flip is on, else the card form.
+	const givenWaits = await Promise.all(
+		(Array.isArray(given.waits) ? given.waits : []).map(async (w) =>
+			typeof w === "string" ? await storedSeatRef(db, sessionId, w) : null
+		)
+	)
 	const waits = new Set<string>(
-		(Array.isArray(given.waits) ? given.waits : []).filter(
-			(w): w is string => typeof w === "string" && seats.some((s) => s.person && s.ref === w)
+		givenWaits.filter(
+			(w): w is string => w !== null && seats.some((s) => s.person && s.ref === w)
 		)
 	)
 	for (const fact of speakers) {
@@ -274,9 +342,12 @@ export async function standingPlanRowId(
 export async function skipWaitingTurn(
 	db: Db,
 	sessionId: number,
-	ref: string,
+	givenRef: string,
 	io?: import("$lib/server/pipelines/runtime/liveRow").SessionIo
 ): Promise<import("@serene-pub/sdk").TurnOrderV1 | null> {
+	// 🚧 The ref is skipped as the form the plan stores (`storedSeatRef`): the member form once the flip is on, else the card form.
+	const ref = await storedSeatRef(db, sessionId, givenRef)
+	if (ref === null) return null
 	const planRowId = await standingPlanRowId(db, sessionId)
 	if (planRowId === null) return null
 	const [row] = await db
@@ -297,11 +368,11 @@ export async function skipWaitingTurn(
 		.where(eq(schema.sessionMessages.id, planRowId))
 	const { readTurnOrder } = await import("@serene-pub/sdk")
 	const [session] = await db
-		.select({ annex: schema.sessions.annex })
+		.select({ turnOrder: schema.sessions.turnOrder, turnTally: schema.sessions.turnTally })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const core = coreAnnexIn(session?.annex)
+	const core = session ?? { turnOrder: null, turnTally: null }
 	const stored = readTurnOrder(core)
 	const next = {
 		...stored,

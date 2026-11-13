@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest"
 import Handlebars from "handlebars"
-import { registerContextHandlebarsHelpers } from "./contextHandlebarsHelpers"
+import {
+	registerContextHandlebarsHelpers,
+	LAYOUT_RENDERS_CONTEXT_KEY,
+	layoutRenderKey
+} from "./contextHandlebarsHelpers"
+import { createContextLiquid } from "./contextLiquid"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
 /**
@@ -147,5 +152,74 @@ describe("assemble's shapes render identically through the helper", () => {
 				speakerRelationships
 			})
 		).toBe(JSON.stringify(speakerRelationships, null, 1))
+	})
+})
+
+/**
+ * `layout "<key>" "<reference>"` reads the text the render pre-pass wrote out
+ * (`LAYOUT_RENDERS_CONTEXT_KEY`); with none it says so in words.
+ */
+describe("the layout helper and filter", () => {
+	const renders = { [layoutRenderKey("cast", "core/json@1")]: '{"a":"<b>"}' }
+	const scope = { [LAYOUT_RENDERS_CONTEXT_KEY]: renders, cast: "ignored" }
+
+	it("Handlebars: {{layout}} and {{{layout}}} print the same text, unescaped", () => {
+		const triple = render('{{{layout "cast" "core/json@1"}}}', scope)
+		expect(triple).toBe('{"a":"<b>"}')
+		expect(render('{{layout "cast" "core/json@1"}}', scope)).toBe(triple)
+	})
+
+	it("Handlebars: an empty text is falsy in {{#if}}", () => {
+		const empty = {
+			[LAYOUT_RENDERS_CONTEXT_KEY]: {
+				[layoutRenderKey("cast", "r@1")]: ""
+			}
+		}
+		expect(
+			render('{{#if (layout "cast" "r@1")}}Y{{else}}N{{/if}}', empty)
+		).toBe("N")
+	})
+
+	it("Handlebars: inside {{#each}} it still finds the map", () => {
+		expect(
+			render('{{#each xs}}{{{layout "cast" "core/json@1"}}}|{{/each}}', {
+				...scope,
+				xs: [1, 2]
+			})
+		).toBe('{"a":"<b>"}|{"a":"<b>"}|')
+	})
+
+	it("Handlebars: no text for the call is an error naming the key and reference", () => {
+		expect(() =>
+			render('{{{layout "cast" "core/nope@1"}}}', scope)
+		).toThrow(/layout cast "core\/nope@1".*not written out/s)
+		expect(() => render("{{{layout cast}}}", scope)).toThrow(
+			/needs a variable's name/
+		)
+	})
+
+	it("Liquid: the filter prints the text, and is not caught by the refused layout tag", () => {
+		const liquid = createContextLiquid({
+			promptFormat: PromptFormats.VICUNA
+		})
+		expect(
+			liquid.parseAndRenderSync(
+				'{{ "cast" | layout: "core/json@1" }}',
+				scope
+			)
+		).toBe('{"a":"<b>"}')
+		expect(() => liquid.parse("{% layout 'x' %}")).toThrow()
+	})
+
+	it("Liquid: no text for the call is an error in words", () => {
+		const liquid = createContextLiquid({
+			promptFormat: PromptFormats.VICUNA
+		})
+		expect(() =>
+			liquid.parseAndRenderSync(
+				'{{ "cast" | layout: "core/nope@1" }}',
+				scope
+			)
+		).toThrow(/layout cast "core\/nope@1"/)
 	})
 })

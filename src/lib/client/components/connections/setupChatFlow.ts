@@ -7,10 +7,10 @@
  * on the step the pub is actually at, and a runtime somebody installed
  * through the managed view counts exactly as one installed here.
  *
- * "First model becomes the model for Chat replies when none is set" is the
- * flow's one side effect, and `firstModelToRegister` is the whole of that
- * decision: it names a pair only while the chat default is unset, so a pub
- * that already answers with something is never re-pointed.
+ * The flow has no side effect. The server fills the Reply loadout when a
+ * downloaded model lands and Reply is empty (`fillReplyOnArrival.ts`), whether
+ * or not this dialog is open; the dialog only reads that and says what
+ * happened.
  */
 
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -45,6 +45,31 @@ export interface SetupChatFacts {
 		connectionId: number
 		connectionModelId?: number | null
 	} | null
+}
+
+/**
+ * The chat default AS REGISTERED, or null. `systemSettings:get` carries the
+ * default loadout's slots for every capability, so on a fresh pub the chat
+ * entry is a real object with `connectionId: null` — the Reply loadout is
+ * designated, nothing is on it. Read raw, that object counted as "a model is
+ * registered": the flow skipped registering the one it had just downloaded
+ * and the Done step said Reply was filled while the composer said it was
+ * empty (seen 2026-11-08 on a fresh managed KoboldCPP install).
+ */
+export function registeredChatDefault(
+	raw:
+		| {
+				connectionId?: number | null
+				connectionModelId?: number | null
+		  }
+		| null
+		| undefined
+): SetupChatFacts["chatDefault"] {
+	if (raw?.connectionId == null) return null
+	return {
+		connectionId: raw.connectionId,
+		connectionModelId: raw.connectionModelId ?? null
+	}
 }
 
 /** The managed KoboldCPP text connection among the list's rows, or null. */
@@ -100,23 +125,6 @@ export function setupChatStep(facts: SetupChatFacts): SetupChatStep {
 	return "done"
 }
 
-/**
- * The pair to register as the chat default, or null: the connection's first
- * present CHAT model, only while nothing is registered at all.
- */
-export function firstModelToRegister(
-	facts: SetupChatFacts
-): { connectionId: number; model: { id: number; name: string } } | null {
-	if (facts.chatDefault) return null
-	if (!facts.connection) return null
-	const [first] = chatModels(facts.connection)
-	if (!first) return null
-	return {
-		connectionId: facts.connection.id,
-		model: { id: first.id, name: first.name }
-	}
-}
-
 /** The three step labels, in order, for the header's dots. */
 export const SETUP_CHAT_STEPS: readonly {
 	value: SetupChatStep
@@ -127,18 +135,32 @@ export const SETUP_CHAT_STEPS: readonly {
 	{ value: "done", label: "Done" }
 ]
 
+/** Reply has a pair on it — the server put it there, or somebody chose it. */
+export function replyFilled(facts: SetupChatFacts): boolean {
+	return facts.chatDefault != null
+}
+
+/** The Done step's heading: "Chat is set up" only once Reply is filled. */
+export function doneHeading(facts: SetupChatFacts): string {
+	return replyFilled(facts) ? "Chat is set up" : "KoboldCPP is ready"
+}
+
 /**
- * What the Done step says, given what is now registered — the flow's one
- * side effect said out loud, in the same words as the toast after any other
- * Use (`chosenSentence`).
+ * What the Done step says, read from server state only: the model on the
+ * Reply loadout, by name, in the same words as the toast after any other Use
+ * (`chosenSentence`); or that Reply is empty and where to fill it.
  */
-export function doneSentence(
-	facts: SetupChatFacts,
-	registeredName: string | null
-): string {
-	if (registeredName) return chosenSentence(registeredName, [CHAT])
-	const [first] = presentModels(facts.connection)
-	if (facts.chatDefault && first)
-		return "The Reply loadout is filled — sessions can reply."
-	return "Sessions can reply."
+export function doneSentence(facts: SetupChatFacts): string {
+	const pair = facts.chatDefault
+	if (!pair) {
+		return "The Reply loadout is still empty. Open KoboldCPP and press Use in Reply on a model."
+	}
+	const model =
+		pair.connectionId === facts.connection?.id
+			? facts.connection.models.find(
+					(m) => m.id === pair.connectionModelId
+				)
+			: undefined
+	if (model) return chosenSentence(model.name, [CHAT])
+	return "The Reply loadout is filled — sessions can reply."
 }

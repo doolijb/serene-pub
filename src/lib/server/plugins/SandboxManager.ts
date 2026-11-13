@@ -23,6 +23,12 @@
  * backstop in `dispatch`.
  */
 
+import {
+	USER_ANNEX_CLOSED,
+	USER_STORAGE_CLOSED,
+	frameOpenFor,
+	type FrameCause
+} from "$lib/server/sockets/appletCause"
 import path from "node:path"
 import { QuickJsSandbox } from "./QuickJsSandbox"
 import { SesWorkerSandbox } from "./SesWorkerSandbox"
@@ -137,6 +143,14 @@ export interface CallOptions {
 	 * (`PluginDescriptor.settingsByUser`).
 	 */
 	user?: string
+	/**
+	 * 🚧 The applet whose mounted frame caused this call (`appletCause.ts`).
+	 * Beside `user`, and what the applet-group members derive from:
+	 * `ctx.annex('user')` and `ctx.storage.user` work only while it names the
+	 * plugin being called. Absent — an event or lifecycle hook, the schedule
+	 * tick, a routine run, an ordinary session-page send — they reject.
+	 */
+	frameCause?: FrameCause
 	/** The pipeline run this hook fired within, if any — the log's soft link. */
 	runId?: string
 	/**
@@ -931,7 +945,7 @@ export class SandboxManager {
 		let result: HookRunResult
 		try {
 			if (hookCtxGrants(opts.kind).annex) {
-				const annex = await this.annexJobFor(desc, opts.user)
+				const annex = await this.annexJobFor(desc, opts.user, opts.frameCause)
 				annexJob = annex.job
 				annexUser = annex.userId
 			}
@@ -953,9 +967,17 @@ export class SandboxManager {
 					maxOutputBytes: opts.maxOutputBytes,
 					// The acting person's own folder (M2b): from the call's
 					// host-side `user` and the grant — never from the input.
+					// Only while the plugin's own frame is open (`frameCause`);
+					// otherwise the sandbox rejects with the one closed sentence.
 					userStorageDir:
-						this.dataDir && desc.userStorageQuotaBytes
+						this.dataDir &&
+						desc.userStorageQuotaBytes &&
+						frameOpenFor(opts.frameCause, desc.id)
 							? userStorageDir(this.dataDir, desc.id, opts.user)
+							: undefined,
+					userStorageDenied:
+						desc.userStorageQuotaBytes && !frameOpenFor(opts.frameCause, desc.id)
+							? USER_STORAGE_CLOSED
 							: undefined,
 					userAnnexJob: annexJob,
 					// For the fetch bridge alone, host-side (R63): everything
@@ -1063,7 +1085,8 @@ export class SandboxManager {
 	 */
 	private async annexJobFor(
 		desc: PluginDescriptor,
-		user: string | undefined
+		user: string | undefined,
+		frameCause: FrameCause | undefined
 	): Promise<{ job: UserAnnexJob; userId?: number }> {
 		if (!desc.userAnnexGranted)
 			return {
@@ -1071,6 +1094,9 @@ export class SandboxManager {
 					denied: "annex('user'): this extension was not granted the user annex"
 				}
 			}
+		// The applet-group reach: only a call the plugin's own open frame caused.
+		if (!frameOpenFor(frameCause, desc.id))
+			return { job: { denied: `annex('user'): ${USER_ANNEX_CLOSED}` } }
 		const userId =
 			typeof user === "string" && /^[1-9][0-9]{0,15}$/.test(user)
 				? Number(user)

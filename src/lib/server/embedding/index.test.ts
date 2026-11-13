@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 const isAndroidWrapperMock = vi.fn(() => false)
 
+// `onnxRuntime.ts` reads the leaf (`utils/androidWrapper.ts`), not the barrel (M2e).
+vi.mock("$lib/server/utils/androidWrapper", async () => {
+	const barrel = await import("$lib/server/utils")
+	return { isAndroidWrapper: () => barrel.isAndroidWrapper() }
+})
 vi.mock("$lib/server/utils", () => ({
 	getAppDataDir: () => "/tmp/fake-app-data",
 	isAndroidWrapper: () => isAndroidWrapperMock()

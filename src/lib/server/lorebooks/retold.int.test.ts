@@ -1,12 +1,13 @@
 /**
  * Retold fields at the read seams (PLAN-cast-retold-fields-2026-10-13).
  *
- *  1. `applyRetold` is the card itself when nothing is retold.
+ *  1. (retired: the `applyRetold` overlay is gone; a seat's card is read by
+ *     `seatCardAsRead`, tested in `pipelines/prompt/seatCards.test.ts`.)
  *  2. `session_cast` with `retold = {}` hands out the card row untouched.
  *  3. A retold description reaches the prompt's card, and drops the strokes.
  *  4. A retold first message is the greeting.
- *  5. `retoldMembersForSession` carries a retold face; `faceMediaProblem`
- *     accepts a book upload or a gallery image of the card, nothing else.
+ *  5. `faceMediaProblem` accepts a book upload or a gallery image of the card,
+ *     nothing else.
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -17,7 +18,14 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
-import { applyRetold } from "./retold"
+import {
+	ensureCardVersion,
+	insertCharacterVersions,
+	isBaseVersion,
+	updateCastVersion,
+	writeCastVersion
+} from "$lib/server/characters/versions"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -65,19 +73,16 @@ async function cast(retold: Record<string, boolean> = {}, member: Partial<typeof
 		.insert(schema.lorebooks)
 		.values({ userId: user.id, name: `World ${suffix}` })
 		.returning()
-	const [binding] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId: lorebook.id,
-			characterId: card.id,
-			binding: `{{char:${suffix}}}`,
-			name: card.name,
-			description: "The member's description.",
-			firstMessage: "The member says hello.",
-			retold,
-			...member
-		})
-		.returning()
+	const { member: binding } = await insertCastMember(db(), {
+		lorebookId: lorebook.id,
+		characterId: card.id,
+		binding: `{{char:${suffix}}}`,
+		name: card.name,
+		description: "The member's description.",
+		firstMessage: "The member says hello.",
+		retold,
+		...member
+	})
 	const [session] = await testDb
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: false, name: `Run ${suffix}`, lorebookId: lorebook.id })
@@ -91,51 +96,18 @@ async function readCast(sessionId: number) {
 	return (await createHost(db(), { sessionId }).read!("session_cast", { sessionId }, node)) as any
 }
 
-describe("applyRetold", () => {
-	test("nothing retold is the card itself", () => {
-		const card = { description: "d", strokes: [] }
-		expect(applyRetold(card, { retold: {} })).toBe(card)
-		expect(applyRetold(card, { retold: { description: false, face: true } })).toBe(card)
-	})
-	test("a retold field reads the member's, empty as empty", () => {
-		const card = { description: "d", personality: "p", scenario: "s", strokes: [1] }
-		const out = applyRetold(card, {
-			retold: { personality: true, scenario: true, alternateGreetings: true },
-			personality: "mine",
-			scenario: null,
-			alternateGreetings: ["a"]
-		})
-		expect(out).toEqual({
-			description: "d",
-			personality: "mine",
-			scenario: "",
-			alternateGreetings: ["a"],
-			groupOnlyGreetings: [],
-			strokes: null
-		})
-	})
-	test("retold greetings replace the card's group-only ones too, so a group session uses the member's", () => {
-		const card = { firstMessage: "card", groupOnlyGreetings: ["group"] }
-		expect(
-			applyRetold(card, { retold: { firstMessage: true }, firstMessage: "mine" })
-		).toEqual({ firstMessage: "mine", groupOnlyGreetings: [] })
-		// Greetings left to the card keep its group-only ones.
-		expect(
-			applyRetold(card, { retold: { scenario: true }, scenario: "s" })
-		).toEqual({ firstMessage: "card", groupOnlyGreetings: ["group"], scenario: "s" })
-	})
-	test("retold example dialogues split on <START> into the card's array shape", () => {
-		const card = { exampleDialogues: ["card"] }
-		expect(
-			applyRetold(card, {
-				retold: { exampleDialogues: true },
-				exampleDialogues: "<START>\nA: hi\nB: hey\n\n<START>\nA: bye"
-			}).exampleDialogues
-		).toEqual(["A: hi\nB: hey", "A: bye"])
-		expect(
-			applyRetold(card, { retold: { exampleDialogues: true }, exampleDialogues: null })
-				.exampleDialogues
-		).toEqual([])
+describe("own names (§0-D)", () => {
+	test("the greeting speaks {{char}} as the member's own name", async () => {
+		const { collectSessionGreetings } = await import("$lib/server/sessions/greetings")
+		const c = await cast(
+			{ firstMessage: true, alternateGreetings: true },
+			{ ownName: "Maren", firstMessage: "{{char}} waves." }
+		)
+		expect((await collectSessionGreetings(db(), c.session.id)).entries[0].texts).toEqual([
+			"Maren waves."
+		])
+		const [row] = await testDb.select().from(schema.characters).where(eq(schema.characters.id, c.card.id))
+		expect(row.name).toBe(`Verity ${n}`)
 	})
 })
 
@@ -148,13 +120,15 @@ describe("session_cast", () => {
 		expect(read.sessionCharacters[0].character).toEqual(row)
 	})
 
-	test("a retold description reaches the prompt's card and drops the strokes", async () => {
+	// Moved 2026-11-06 ("Everything in session is cast -> active card.", lane cv-readers):
+	// the member's strokes as read reach the prompt; they are no longer dropped.
+	test("a retold description reaches the prompt's card, with the member's strokes as read", async () => {
 		const c = await cast({ description: true })
 		const read = await readCast(c.session.id)
 		const character = read.sessionCharacters[0].character
 		expect(character.description).toBe("The member's description.")
 		expect(character.personality).toBe("The card's personality.")
-		expect(character.strokes).toBeNull()
+		expect(character.strokes).not.toBeNull()
 		const { resolveContextInput } = await import("$lib/server/pipelines/prompt/promptFields")
 		const resolved: any = resolveContextInput({
 			sessionCharacters: read.sessionCharacters,
@@ -183,8 +157,8 @@ describe("greetings", () => {
 })
 
 describe("faces", () => {
-	test("a retold face is carried; only a book upload or a gallery image may be worn", async () => {
-		const { retoldMembersForSession, faceMediaProblem } = await import("./retold")
+	test("only a book upload or a gallery image may be worn", async () => {
+		const { faceMediaProblem } = await import("./retold")
 		const c = await cast()
 		const file = async (values: Partial<typeof schema.files.$inferInsert>) =>
 			(
@@ -204,8 +178,6 @@ describe("faces", () => {
 			.update(schema.lorebookBindings)
 			.set({ faceMediaId: upload.id, retold: { face: true } })
 			.where(eq(schema.lorebookBindings.id, c.binding.id))
-		const members = await retoldMembersForSession(db(), c.session.id, [c.card.id])
-		expect(members.get(c.card.id)?.faceMediaId).toBe(upload.id)
 
 		const ask = (fileId: number) =>
 			faceMediaProblem(db(), {
@@ -227,7 +199,7 @@ describe("faces", () => {
 describe("amendments", () => {
 	test("retold fields are amendable at a date, and refused when malformed", async () => {
 		const { amendmentsCreateHandler } = await import("$lib/server/sockets/amendments")
-		const { retoldMembersForSession } = await import("./retold")
+		const { memberAsRead } = await import("$lib/server/cast/memberAsRead")
 		const c = await cast()
 		const socket = { user: { id: c.user.id } } as any
 		const noop = () => {}
@@ -241,14 +213,17 @@ describe("amendments", () => {
 			} as any,
 			noop as any
 		)
-		// Before the date nobody retells; after it, the dated text is read.
+		// Before the date the member follows the card; after it, the dated text is read.
+		const asRead = () => memberAsRead(db(), c.binding.id, { sessionId: c.session.id })
 		await testDb.update(schema.sessions).set({ storyClockYear: 4 }).where(eq(schema.sessions.id, c.session.id))
-		expect((await retoldMembersForSession(db(), c.session.id)).size).toBe(0)
-		await testDb.update(schema.sessions).set({ storyClockYear: 6 }).where(eq(schema.sessions.id, c.session.id))
-		expect((await retoldMembersForSession(db(), c.session.id)).get(c.card.id)).toMatchObject({
-			description: "Older now.",
-			retold: { description: true }
+		expect(await asRead()).toMatchObject({
+			description: "The card's description.",
+			followsCard: expect.arrayContaining(["description"])
 		})
+		await testDb.update(schema.sessions).set({ storyClockYear: 6 }).where(eq(schema.sessions.id, c.session.id))
+		const after = await asRead()
+		expect(after).toMatchObject({ description: "Older now." })
+		expect(after!.followsCard).not.toContain("description")
 
 		await expect(
 			amendmentsCreateHandler.handler(
@@ -336,7 +311,13 @@ describe("sockets", () => {
 			noop
 		)
 		expect(banner.members).toEqual([
-			{ lorebookId: c.lorebook.id, lorebookName: c.lorebook.name, castId: c.binding.id, retold: ["face"] }
+			{ lorebookId: c.lorebook.id, lorebookName: c.lorebook.name, castId: c.binding.id, retold: ["face"],
+				followsCard: ["description", "personality", "scenario", "firstMessage", "alternateGreetings", "exampleDialogues", "postHistoryInstructions", "creatorNotes", "likeness"],
+				memberName: c.card.name,
+				// The card version the member's shown version reads (the card's v1, still current).
+				cardVersion: expect.objectContaining({ number: 1 }),
+				cardCurrentVersion: expect.objectContaining({ number: 1 }),
+				behindCard: false }
 		])
 	})
 })
@@ -355,12 +336,27 @@ describe("review fixes 2026-10-13", () => {
 			.returning()
 		const socket = { user: { id: c.user.id } } as any
 		const noop = (() => {}) as any
-		// Y20: the member is drawn with the older card.
-		await amendmentsCreateHandler.handler(
-			socket,
-			{ lorebookId: c.lorebook.id, castId: c.binding.id, year: 20, fields: { characterId: older.id } } as any,
-			noop
-		)
+		// Y20: the member is drawn with the older card (a card change at a date
+		// is not an amendment now: the version is made with its parent set).
+		const { version: base } = await writeCastVersion(db(), {
+			member: c.binding.id,
+			changes: { nodeState: "active" },
+			writtenBy: `user:${c.user.id}`,
+			at: { branchId: null, date: null, personalPosition: null }
+		})
+		const olderCard = await ensureCardVersion(db(), older.id)
+		await insertCharacterVersions(db(), [
+			{
+				castMemberId: c.binding.id,
+				lorebookId: c.lorebook.id,
+				parentVersionId: olderCard!.id,
+				follows: base.follows,
+				nodeState: "active",
+				nodeVisibility: "normal",
+				year: 20,
+				writtenBy: `user:${c.user.id}`
+			}
+		])
 		// Y25: a face from the older card's gallery, sent alone (as the form does).
 		await expect(
 			amendmentsCreateHandler.handler(
@@ -456,10 +452,16 @@ describe("review fixes 2026-10-13", () => {
 			.insert(schema.files)
 			.values({ userId: a.user.id, kind: "image", hash: `h${++n}`, lorebookId: a.lorebook.id })
 			.returning()
-		await testDb
-			.update(schema.lorebookBindings)
-			.set({ faceMediaId: file.id, retold: { face: true } })
-			.where(eq(schema.lorebookBindings.id, b.binding.id))
+		// The face is the member's base version's own (the column is frozen).
+		const [base] = (
+			await testDb
+				.select()
+				.from(schema.characterVersions)
+				.where(eq(schema.characterVersions.castMemberId, b.binding.id))
+		).filter(isBaseVersion)
+		await updateCastVersion(db(), base!.id, {
+			changes: { faceMediaId: file.id }
+		})
 		// B's owner can read B, not A: the face is visible through B.
 		expect(await canViewMedia(file, b.user.id, db())).toBe(true)
 		// A stranger reads neither book.

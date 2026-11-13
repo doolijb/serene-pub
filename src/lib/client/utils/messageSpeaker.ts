@@ -12,18 +12,48 @@
  *  `sessions:get` payload and a test fixture satisfy it. */
 import { messageEnvoySlug } from "@serene-pub/core-catalog/conversation"
 import { senderRefOf } from "@serene-pub/sdk"
+import {
+	seatCardAsShown,
+	type CharactersSourceSession
+} from "$lib/client/components/sessionPage/projections/characters"
+import {
+	seatOfMessage,
+	seatOfRef
+} from "$lib/client/components/sessionPage/projections/seatIdentity"
 
 /** The slug of an envoy's message — core's conversation reads it the same way. */
 export { messageEnvoySlug }
 
-export interface MessageSpeakerSource {
+export interface MessageSpeakerSource
+	extends Pick<
+		CharactersSourceSession,
+		"castNames" | "castFaces" | "castSpriteSets"
+	> {
+	/**
+	 * 🚧 Card-less seats shown as their cast member, by cast MEMBER id — never
+	 * a card id, so never read through the card-keyed maps above.
+	 */
+	cardlessSeatShown?: Record<
+		number,
+		{ name: string; nickname: string | null; faceMediaId: number | null }
+	>
 	sessionCharacters?: {
 		characterId?: number | null
+		/** The seat's cast member (s27 S1). */
+		castMemberId?: number | null
 		character?: SelectCharacter | null
 		removedName?: string | null
+		/** The seat fields `seatOfMessage` orders by. */
+		id?: number | null
+		envoySlug?: string | null
+		position?: number | null
+		removedAt?: unknown
 	}[]
 	sessionPersonas?: {
 		personaId?: number | null
+		/** The seat's cast member (s27 S1). */
+		castMemberId?: number | null
+		position?: number | null
 		/** A persona IS a character the user voices — same row shape. */
 		persona?: SelectCharacter | null
 		removedName?: string | null
@@ -77,6 +107,8 @@ export function messageSpeaker(
 	msg: {
 		characterId?: number | null
 		personaId?: number | null
+		/** The speaker's seat member, stamped at write (s27 S1). */
+		castMemberId?: number | null
 		metadata?: unknown
 	}
 ): SelectCharacter | undefined {
@@ -95,30 +127,92 @@ export function messageSpeaker(
 		} as unknown as SelectCharacter
 	}
 	if (msg.personaId) {
-		const cp = session?.sessionPersonas?.find(
-			(p) => p.personaId === msg.personaId
-		)
+		// The seat holding the line's cast member, else the one on its card.
+		const cp = seatOfMessage(session, msg)?.seat as
+			| NonNullable<MessageSpeakerSource["sessionPersonas"]>[number]
+			| undefined
 		// A seat name wins over the card's (the card still lends its face,
-		// unless the seat has a portrait of its own).
+		// unless the seat has a portrait of its own). The card is the card as
+		// its cast member shows it (s27 S2c, as a character seat's is): the
+		// member's own names and face over the card's, keyed by the card's id.
 		const seatName = cp?.seatName?.trim()
+		const shown = cp?.persona
+			? seatCardAsShown(session, cp.persona)
+			: undefined
 		const speaker = seatName
-			? ({ ...(cp?.persona ?? {}), name: seatName } as SelectCharacter)
-			: (cp?.persona ??
+			? ({
+					...(shown ?? {}),
+					name: seatName,
+					// The member's nickname would be read over the seat name.
+					...(typeof cp?.persona?.id === "number" &&
+					session?.castNames?.[cp.persona.id]
+						? { nickname: null }
+						: {})
+				} as SelectCharacter)
+			: (shown ??
 				(cp?.removedName
 					? ({ name: cp.removedName } as SelectCharacter)
 					: undefined))
 		return speaker ? withPortrait(speaker, cp?.portraitMediaId) : speaker
 	} else if (msg.characterId) {
-		const cc = session?.sessionCharacters?.find(
-			(c) => c.characterId === msg.characterId
-		)
+		const cc = seatOfMessage(session, msg)?.seat as
+			| NonNullable<MessageSpeakerSource["sessionCharacters"]>[number]
+			| undefined
+		// A seated character speaks as its cast member shows it (s27 S2:
+		// own name, face and sprite sets over the card's), keyed by card id.
 		return (
-			cc?.character ??
+			(cc?.character ? seatCardAsShown(session, cc.character) : undefined) ??
 			(cc?.removedName
 				? ({ name: cc.removedName } as SelectCharacter)
 				: undefined)
 		)
+	} else if (msg.castMemberId != null) {
+		// A card-less seat's line: no card column names it, so the seat does
+		// (`seatOfMessage`), and its member is read by MEMBER id — never
+		// through the card-keyed maps.
+		const found = seatOfMessage(session, msg)
+		if (!found) return undefined
+		if (found.form === "player") {
+			const seat = found.seat as NonNullable<
+				MessageSpeakerSource["sessionPersonas"]
+			>[number]
+			// A seat name is the line's (`seatNameOf`); the member's own
+			// name is for a seat with none.
+			if (seat.personaId != null || seat.seatName?.trim()) return undefined
+			const shown = cardlessShownOf(session, seat.castMemberId)
+			return shown ? withPortrait(shown, seat.portraitMediaId) : undefined
+		}
+		const seat = found.seat as NonNullable<
+			MessageSpeakerSource["sessionCharacters"]
+		>[number]
+		if (seat.character) return undefined
+		return (
+			cardlessShownOf(session, seat.castMemberId) ??
+			(seat.removedName
+				? ({ name: seat.removedName } as SelectCharacter)
+				: undefined)
+		)
 	}
+}
+
+/**
+ * The card-less seat's member as a speaker, in the character's shape so
+ * every render site reads it as it reads a card: its name, nickname and face
+ * (a media id, drawn as the card's face is). Undefined for no entry.
+ */
+function cardlessShownOf(
+	session: MessageSpeakerSource | null | undefined,
+	castMemberId: number | null | undefined
+): SelectCharacter | undefined {
+	const shown =
+		castMemberId != null ? session?.cardlessSeatShown?.[castMemberId] : undefined
+	if (!shown) return undefined
+	return {
+		name: shown.name,
+		nickname: shown.nickname,
+		description: "",
+		...(shown.faceMediaId != null ? { avatarMediaId: shown.faceMediaId } : {})
+	} as unknown as SelectCharacter
 }
 
 /**
@@ -132,6 +226,22 @@ export function withPortrait<C extends object>(speaker: C, portraitMediaId: numb
 }
 
 /**
+ * The player seat a person's line names (`metadata.speaker = player-seat:<id>`),
+ * looked up by the ref (`seatOfRef`), never by an id parsed out of it.
+ */
+function playerSeatNamedBy(
+	session: MessageSpeakerSource | null | undefined,
+	msg: { personaId?: number | null; metadata?: unknown }
+): NonNullable<MessageSpeakerSource["sessionPersonas"]>[number] | undefined {
+	const sender = senderRefOf(msg)
+	if (!sender?.startsWith("player-seat:")) return undefined
+	const found = seatOfRef(session, sender)
+	return found?.form === "player"
+		? (found.seat as NonNullable<MessageSpeakerSource["sessionPersonas"]>[number])
+		: undefined
+}
+
+/**
  * 🚧 The portrait of the card-less seat a person's line names
  * (`metadata.speaker = player-seat:<id>`), as a file id; undefined for any
  * other line or a seat with none.
@@ -140,11 +250,7 @@ export function seatPortraitOf(
 	session: MessageSpeakerSource | null | undefined,
 	msg: { personaId?: number | null; metadata?: unknown }
 ): number | undefined {
-	const sender = senderRefOf(msg)
-	if (!sender?.startsWith("player-seat:")) return undefined
-	const seatId = Number(sender.slice("player-seat:".length))
-	const seat = (session?.sessionPersonas ?? []).find((p) => p.id === seatId)
-	return seat?.portraitMediaId ?? undefined
+	return playerSeatNamedBy(session, msg)?.portraitMediaId ?? undefined
 }
 
 /**
@@ -157,10 +263,7 @@ export function seatNameOf(
 	session: MessageSpeakerSource | null | undefined,
 	msg: { personaId?: number | null; metadata?: unknown }
 ): string | undefined {
-	const sender = senderRefOf(msg)
-	if (!sender?.startsWith("player-seat:")) return undefined
-	const seatId = Number(sender.slice("player-seat:".length))
-	const seat = (session?.sessionPersonas ?? []).find((p) => p.id === seatId)
+	const seat = playerSeatNamedBy(session, msg)
 	return seat?.personaId == null ? seat?.seatName?.trim() || undefined : undefined
 }
 

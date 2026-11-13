@@ -325,3 +325,35 @@ export async function seedWorkflows(db: Db): Promise<void> {
 		else await db.insert(schema.workflows).values(data)
 	}
 }
+
+/**
+ * The starter a step draws with when its loadout names NO workflow, by the
+ * seed key of the step's sampling preset (`db/defaults.ts`): one plain
+ * text-to-image starter per diffusion family, and nothing for a family with
+ * no plain starter (SD 3.x, Turbo) or for a person's own sampling config.
+ *
+ * Decided here, in code, from two seed keys — never guessed from a model's
+ * name — so the same loadout always draws with the same workflow (P1). Until
+ * this existed a fresh ComfyUI connection refused its first Image with
+ * "Choose a workflow for this step": neither **Use** nor **Fill for me** fills
+ * the workflow slot (2026-11-08).
+ */
+export const STARTER_FOR_SAMPLING: Readonly<Record<string, string>> = {
+	"sampling-image-default": "workflow-comfyui-sd15-txt2img",
+	"sampling-image-sdxl": "workflow-comfyui-sdxl-txt2img",
+	"sampling-image-flux": "workflow-comfyui-flux-gguf-txt2img"
+}
+
+/** The starter row paired with a sampling preset, or null when none is. */
+export async function starterWorkflowForSampling(
+	db: Db,
+	samplingSeedKey: string | null | undefined
+): Promise<{ id: number; name: string } | null> {
+	const key = samplingSeedKey ? STARTER_FOR_SAMPLING[samplingSeedKey] : undefined
+	if (!key) return null
+	const row = await db.query.workflows.findFirst({
+		where: (w, { eq }) => eq(w.seedKey, key),
+		columns: { id: true, name: true }
+	})
+	return row ?? null
+}

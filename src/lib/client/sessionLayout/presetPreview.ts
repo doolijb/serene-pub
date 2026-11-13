@@ -13,20 +13,20 @@
  *
  * Input is an untrusted preset layout, stored verbatim and forward-compatible.
  * It is read the way the page reads its own (C5, one layout reader): as
- * panels (./primaryFloor `readStoredLayout`: the floor only for a blob with
+ * panels v2 (./primaryFloor `readStoredLayout`: the floor only for a blob with
  * no stored `panels`), then drawn by the SDK's `resolveDrawn` — so a retired
  * widget drawing nothing, and a layout holding no conversation drawn as it
  * is, are the page's answers, never a second reading of the
  * blob. Anything malformed degrades to the picture of a layout that saved
  * nothing — the conversation, filling the middle — rather than throwing.
  *
- * Each zone is its PANELS stacked top to bottom (PLAN-session-panels
- * 2026-10-14), each box as tall as its height says: a `{ share }` its
- * twelfths, `fit` and a panel in the rail a small box, `fill` (and the
- * middle's primary panel) an equal share of what is left. A panel holding
- * more than one tab says how many (`tabs`).
+ * Each zone — the middle too — is its PANELS stacked top to bottom, by one
+ * rule, each box as tall as its (declared or stored) height says: a
+ * `{ share }` its twelfths, `fit` a small box, `fill` an equal share of what
+ * is left. A panel holding more than one tab says how many (`tabs`).
  */
 import type { DrawnPanel } from "@serene-pub/sdk"
+import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 import { drawnOf, readStoredLayout } from "./primaryFloor"
 
 export interface PreviewCell {
@@ -42,8 +42,6 @@ export interface PreviewCell {
 	h: number
 	/** How many tabs the panel holds. */
 	tabs: number
-	/** A side panel in the rail (not docked). */
-	rail: boolean
 }
 
 export interface PreviewZone {
@@ -60,18 +58,15 @@ export interface LayoutPreview {
 
 /** The schematic's rows — twelve, so a `{ share }` is its own number of rows. */
 const ROWS = 12
-/** A content-sized box (`fit`, or a panel in the rail). */
+/** A content-sized box (`fit`). */
 const SMALL = 2
 
 /** A zone's panels as a stack, full width, top to bottom. */
 function stackOf(
 	panels: readonly DrawnPanel[],
-	label: (id: string) => string,
-	fills: (p: DrawnPanel) => boolean
+	label: (id: string) => string
 ): PreviewZone {
 	const fixed = panels.map((p) => {
-		if (fills(p)) return null
-		if (!p.pinned) return SMALL
 		const h = p.height
 		if (typeof h === "object") return Math.min(ROWS, Math.max(1, h.share))
 		return h === "fit" ? SMALL : null
@@ -94,8 +89,7 @@ function stackOf(
 			y,
 			w: 1,
 			h,
-			tabs: p.tabs.length,
-			rail: !p.pinned
+			tabs: p.tabs.length
 		}
 		y += h
 		return cell
@@ -115,19 +109,19 @@ export function previewOf(
 	labelOf: (id: string) => string = (id) => id,
 	primaryId = "messages"
 ): LayoutPreview {
-	const drawn = drawnOf(readStoredLayout(layout, primaryId))
-	const side = (panels: readonly DrawnPanel[]) =>
-		stackOf(panels, labelOf, () => false)
-	const primary = drawn.middle.primary
+	const drawn = drawnOf(
+		readStoredLayout(layout, primaryId),
+		{ inline: 0 },
+		{ widgets: CORE_WIDGETS }
+	)
+	const zone = (panels: readonly DrawnPanel[]) =>
+		stackOf(
+			panels.filter((p) => p.tabs.length > 0),
+			labelOf
+		)
 	return {
-		left: side(drawn.left.panels),
-		middle: stackOf(
-			[...drawn.middle.above, primary, ...drawn.middle.below].filter(
-				(p) => p.tabs.length > 0
-			),
-			labelOf,
-			(p) => p === primary
-		),
-		right: side(drawn.right.panels)
+		left: zone(drawn.left.panels),
+		middle: zone(drawn.middle.panels),
+		right: zone(drawn.right.panels)
 	}
 }

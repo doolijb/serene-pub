@@ -8,6 +8,7 @@
  * not drawn.
  */
 import { avatarSrc } from "$lib/client/utils/media"
+import { memberFaceMediaId } from "$lib/shared/lorebooks/memberIdentity"
 import type { RetoldFlags } from "$lib/shared/lorebooks/retold"
 
 /** As much of a member (row or draft) as their face reads. */
@@ -25,8 +26,9 @@ export function memberFaceSrc(
 	member: FaceSource,
 	opts: { full?: boolean } = { full: true }
 ): string | undefined {
-	if (member.retold?.face !== true || !member.faceMediaId) return undefined
-	return avatarSrc({ avatarMediaId: member.faceMediaId }, opts)
+	const id = memberFaceMediaId(member, null)
+	if (!id) return undefined
+	return avatarSrc({ avatarMediaId: id }, opts)
 }
 
 /**

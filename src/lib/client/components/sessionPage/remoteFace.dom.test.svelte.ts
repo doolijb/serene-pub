@@ -186,8 +186,8 @@ describe("how a refused face is drawn", () => {
 		faces.face(SVG_BASE64)
 		await settle()
 		expect(rasterize.mock.calls.map(([, drawing]) => drawing)).toEqual([
-			{ side: 304, type: "image/webp", quality: 0.8 },
-			{ side: 304, type: "image/webp", quality: 0.8 }
+			{ side: 480, type: "image/webp", quality: 0.8 },
+			{ side: 480, type: "image/webp", quality: 0.8 }
 		])
 		expect(REMOTE_FACE_DRAWING.side).toBe(REMOTE_FACE_PX * 2)
 	})
@@ -235,7 +235,7 @@ describe("how a refused face is drawn", () => {
 		)
 		// Square, at the side asked for, encoded as asked.
 		const drawn = await rasterizeFace(SVG_UTF8, REMOTE_FACE_DRAWING)
-		expect([canvas.width, canvas.height]).toEqual([304, 304])
+		expect([canvas.width, canvas.height]).toEqual([480, 480])
 		expect(toDataURL).toHaveBeenCalledTimes(1)
 		expect(toDataURL).toHaveBeenLastCalledWith("image/webp", 0.8)
 		expect(receiverAttribute("img", "src", drawn, "core")).toEqual({ value: drawn })

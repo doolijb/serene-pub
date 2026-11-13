@@ -15,6 +15,7 @@ import {
 	entityKey,
 	evidence,
 	extractEntities,
+	parseEntityKey,
 	rarity
 } from "$lib/server/pipelines/ranking/entities"
 
@@ -778,5 +779,19 @@ describe("smoothed rarity", () => {
 	it("falls as a term spreads", () => {
 		expect(rarity(1, 20)).toBeGreaterThan(rarity(10, 20))
 		expect(rarity(10, 20)).toBeGreaterThan(rarity(20, 20))
+	})
+})
+
+describe("parseEntityKey", () => {
+	it("is entityKey's inverse for every kind", () => {
+		for (const kind of ["character", "cast_member", "entry"] as const) {
+			const ref = { kind, id: 12 }
+			expect(parseEntityKey(entityKey(ref))).toEqual(ref)
+		}
+	})
+
+	it("is null for an open key, the sentinel and a malformed id", () => {
+		for (const key of ["open:x", "", "cast_member:0", "cast_member:abc"])
+			expect(parseEntityKey(key)).toBeNull()
 	})
 })

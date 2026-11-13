@@ -49,9 +49,12 @@
 	import AudioCppSettingsTab from "$lib/client/components/audiocppManager/AudioCppSettingsTab.svelte"
 
 	import { isLoopbackAddress } from "$lib/shared/connections/host"
-	import { declareInterest, onConnect } from "$lib/client/sockets/interest.svelte"
+	import {
+		declareInterest,
+		onConnect
+	} from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { downloads } from "./downloads.svelte"
 	import {
 		acppApplyLine,
@@ -442,7 +445,8 @@
 	/** Offline = switched off with the build kept: Start switches it back on. */
 	function acppStart() {
 		acppBusy = "start"
-		if (acppOffline) socket.emit("audiocpp:updateSettings", { enabled: true })
+		if (acppOffline)
+			socket.emit("audiocpp:updateSettings", { enabled: true })
 		socket.emit("audiocpp:start", {})
 	}
 	function acppStop() {
@@ -463,7 +467,7 @@
 	}
 	function saveAddress() {
 		if (!addressField.trim()) {
-			toaster.error({ title: "The address can't be empty" })
+			notify.error({ title: "The address can't be empty" })
 			return
 		}
 		savingAddress = true
@@ -517,19 +521,31 @@
 	}
 	function handleStartError(msg: { error?: string }) {
 		starting = false
-		toaster.error({ title: "Couldn't start", description: msg?.error })
+		notify.error({
+			source: "socket:koboldcpp:startSubprocess:error",
+			title: "Couldn't start",
+			description: msg?.error
+		})
 	}
 	function handleStopSubprocess(
 		msg: Sockets.KoboldCPP.StopSubprocess.Response
 	) {
 		stopping = false
 		if (!msg.success)
-			toaster.error({ title: "Couldn't stop", description: msg.error })
+			notify.error({
+				source: "socket:koboldcpp:stopSubprocess",
+				title: "Couldn't stop",
+				description: msg.error
+			})
 	}
 	function handleUnloadModel(msg: Sockets.KoboldCPP.UnloadModel.Response) {
 		unloading = false
 		if (msg.success) resident = null
-		else toaster.error({ title: "This build can't unload a model" })
+		else
+			notify.error({
+				source: "socket:koboldcpp:unloadModel",
+				title: "This build can't unload a model"
+			})
 	}
 	function handleKcppVersion(msg: Sockets.KoboldCPP.Version.Response) {
 		isTesting = false
@@ -541,7 +557,8 @@
 		isTesting = false
 		externalReachable = false
 		if (managedMode === "external" && externalConnected)
-			toaster.error({
+			notify.error({
+				source: "socket:koboldcpp:version:error",
 				title: "Couldn't reach KoboldCPP",
 				description: msg.error
 			})
@@ -549,10 +566,17 @@
 	function handleKcppSetBaseUrl(msg: Sockets.KoboldCPP.SetBaseUrl.Response) {
 		savingAddress = false
 		if (msg.success) {
-			toaster.success({ title: "Address updated" })
+			notify.success({
+				source: "socket:koboldcpp:setBaseUrl",
+				title: "Address updated"
+			})
 			showAddress = false
 			testAddress()
-		} else toaster.error({ title: "Couldn't save the address" })
+		} else
+			notify.error({
+				source: "socket:koboldcpp:setBaseUrl",
+				title: "Couldn't save the address"
+			})
 	}
 	function handleBinaryUpdate(
 		msg: Sockets.KoboldCPP.CheckManagedBinaryUpdate.Response
@@ -732,7 +756,9 @@
 		// Layout's catch-all `:error` toast has already said why.
 		acppBusy = null
 	}
-	function handleAcppInstallState(msg: Sockets.AudioCpp.InstallState.Response) {
+	function handleAcppInstallState(
+		msg: Sockets.AudioCpp.InstallState.Response
+	) {
 		acppInstalled = msg
 	}
 	/**
@@ -762,7 +788,10 @@
 				"audiocpp:subprocessStatus",
 				handleAcppStatus
 			),
-			declareInterest<"audiocpp:start">("audiocpp:start", handleAcppStatus),
+			declareInterest<"audiocpp:start">(
+				"audiocpp:start",
+				handleAcppStatus
+			),
 			declareInterest<"audiocpp:stop">("audiocpp:stop", handleAcppStatus),
 			declareInterest<"audiocpp:restart">(
 				"audiocpp:restart",
@@ -965,10 +994,7 @@
 							type="button"
 							class="btn btn-sm preset-tonal-error shrink-0"
 							onclick={stopProcess}
-							disabled={stopping || subStatus?.isExternal}
-							title={subStatus?.isExternal
-								? "Serene Pub didn't start this one, so it can't stop it"
-								: undefined}
+							disabled={stopping}
 						>
 							{#if stopping}
 								<Icons.Loader2 size={13} class="animate-spin" />
@@ -1021,6 +1047,11 @@
 						</button>
 					{/if}
 				</div>
+				{#if subStatus?.coLoadReason}
+					<p class="text-surface-600-400 pl-5.5 text-xs">
+						{subStatus.coLoadReason}
+					</p>
+				{/if}
 				{#if perfLine}
 					<div class="flex min-w-0 items-center gap-2">
 						<Icons.Gauge
@@ -1053,9 +1084,7 @@
 				{/if}
 				{#if binaryUpdateAvailable}
 					<div class="flex items-center gap-2">
-						<Badge tone="primary" size="sm">
-							Update available
-						</Badge>
+						<Badge tone="primary" size="sm">Update available</Badge>
 						<button
 							type="button"
 							class="btn btn-sm preset-tonal"
@@ -1172,7 +1201,7 @@
 						     (plan 2026-09-24 C4). -->
 						<button
 							type="button"
-							class="preset-tonal-primary shrink-0 rounded-full px-2 py-0.5 text-meta"
+							class="preset-tonal-primary text-meta shrink-0 rounded-full px-2 py-0.5"
 							onclick={() => (tab = "settings")}
 						>
 							Update available
@@ -1436,7 +1465,7 @@
 							     belong: dashed, because neither is a setting
 							     and both leave this screen behind. -->
 							<section
-								class="border-surface-300-700 flex flex-col gap-3 rounded-container border border-dashed p-4"
+								class="border-surface-300-700 rounded-container flex flex-col gap-3 border border-dashed p-4"
 								aria-label="Leaving {label}"
 							>
 								{#if isKcpp && isManaged}
@@ -1498,7 +1527,7 @@
 	     this is, the chip says what it IS. Teal-tonal for a runtime this pub
 	     runs, the same chip `ConnectionRow` wears in the index. -->
 	<span
-		class="preset-tonal-tertiary shrink-0 rounded-full px-1.5 py-0.5 text-meta"
+		class="preset-tonal-tertiary text-meta shrink-0 rounded-full px-1.5 py-0.5"
 	>
 		{label}
 	</span>

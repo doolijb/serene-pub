@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { LAIR_LAYOUT } from "@serene-pub/core-catalog"
+import { panelsV2Of } from "@serene-pub/sdk"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -45,12 +46,16 @@ const LAIR = "core:genre/lair"
 
 /**
  * 🚧 A layout as captured from a Lair session (lair fix 2, 2026-10-22): the
- * genre's layout sets the story's Messages settings (its tabs' composer), the
- * session holds them, and capturing packs them for the widget drawn.
+ * genre's layout sets the Composer's and the Cast's settings (since
+ * 2026-11-05 the Composer is its own widget), the session holds them, and
+ * capturing packs them for the widgets drawn.
  */
 const withStorySettings = <L extends Record<string, unknown>>(layout: L) => ({
 	...layout,
-	widgetSettings: { messages: LAIR_LAYOUT.widgetSettings!.messages }
+	widgetSettings: {
+		composer: LAIR_LAYOUT.widgetSettings!.composer,
+		stats: LAIR_LAYOUT.widgetSettings!.stats
+	}
 })
 const EVENT = "sessions:panelLayout:startedFromUpdated"
 const CHANGED_ELSEWHERE =
@@ -206,6 +211,12 @@ const TWO_COLUMNS = {
 		]
 	}
 }
+/** A layout as it is stored now: its old slots stay, `panels` version 2 is added. */
+const asV2 = <L extends object>(layout: L) => ({
+	...layout,
+	panels: panelsV2Of(layout as any).panels
+})
+
 const STATS_RIGHT = {
 	...TWO_COLUMNS,
 	zoneLayout: {
@@ -269,7 +280,7 @@ describe("Save changes to a layout this session reads as Updated", () => {
 				overwriteUpdated: true
 			})
 			expect(asked.ok).toBe(true)
-			expect((await presetRow(s.mine.id)).layout).toEqual(withStorySettings(STATS_LEFT))
+			expect((await presetRow(s.mine.id)).layout).toEqual(withStorySettings(asV2(STATS_LEFT)))
 			expect((await get(s.owner.id, s.a.id)).startedFromUpdated).toBe(false)
 			expect((await get(s.owner.id, s.b.id)).startedFromUpdated).toBe(true)
 		},
@@ -283,7 +294,7 @@ describe("Save changes to a layout this session reads as Updated", () => {
 			await set(s.owner.id, s.a.id, { layout: STATS_RIGHT })
 			const res = await update(s.owner.id, s.a.id, s.mine.id, STATS_RIGHT)
 			expect(res.ok).toBe(true)
-			expect((await presetRow(s.mine.id)).layout).toEqual(withStorySettings(STATS_RIGHT))
+			expect((await presetRow(s.mine.id)).layout).toEqual(withStorySettings(asV2(STATS_RIGHT)))
 		},
 		60_000
 	)
@@ -331,7 +342,7 @@ describe("Updated is pushed to the sessions that started from a layout", () => {
 			// Their own list: the layout is shared with them, not theirs.
 			expect(toD.presets.find((p: any) => p.id === s.mine.id).mine).toBe(false)
 			// Each session keeps its own layout: the push is a label only.
-			expect((await get(s.owner.id, s.b.id)).layout).toEqual(TWO_COLUMNS)
+			expect((await get(s.owner.id, s.b.id)).layout).toEqual(asV2(TWO_COLUMNS))
 		},
 		60_000
 	)
@@ -557,7 +568,7 @@ describe("what other people see of a shared layout follows it live", () => {
 			pushes = s.pushes()
 			expect(pushes.map((x) => x.to)).toEqual(["ash-a"])
 			expect(pushes[0].payload.presets.some((p: any) => p.id === s.layout.id)).toBe(false)
-			expect((await get(s.ash.id, s.a.id)).layout).toEqual(TWO_COLUMNS)
+			expect((await get(s.ash.id, s.a.id)).layout).toEqual(asV2(TWO_COLUMNS))
 
 			// A private layout renamed is nobody else's business: no push.
 			expect((await renameAs(s.wren.id, s.layout.id, "Harbour dark", s.io)).ok).toBe(true)

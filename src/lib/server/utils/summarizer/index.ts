@@ -332,17 +332,9 @@ export async function compileScenesForEntry(
 		partial: {}
 	})
 
-	if (drafts.length === 1) {
-		const content = drafts[0].draft
-		onProgress?.({
-			phase: "synthesizing",
-			batch: 1,
-			totalBatches: 1,
-			partial: { content }
-		})
-		return { content, name: undefined, raw: content, batchCount: 1 }
-	}
-
+	// Even one scene goes through the merge (owner, 2026-11-10: "Always merge
+	// via the model"), so its notes ("Noted in this scene:") become prose and
+	// never land in the history entry word for word.
 	const jsonDrafts = JSON.stringify(drafts, null, 2)
 	const synthesisPrompt = buildSynthesisPrompt({
 		jsonDrafts,

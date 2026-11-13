@@ -5,18 +5,21 @@
  * ACTING PERSON's own rights. This file answers the third term, once: who the
  * acting person is (`actingPersonFor`) and what they may do to a thing
  * (`personMay`). It mirrors what the app already lets that person do by
- * clicking — it delegates to the existing helpers where they take a `db`, and
- * carries a db-taking twin of `checkSessionAccess` where they do not. It is no
- * second rights table; per-handler checks stay as they are (convergence is a
- * later pass).
+ * clicking — it delegates to the existing helpers (`checkSessionAccess`,
+ * `canViewCharacter`, `lorebookAccessFor`, `findOwnedBook`), each taking the
+ * `db` it is given. `reply-run` is the one thing that is not a stored row: a
+ * waiting reply, answered by session access plus the run registry. It is no
+ * second rights table: handlers that decide the same question call it
+ * (M2d, ★B).
  *
  * Every function takes `db` — the module-level handle bypasses `vi.mock`, and
  * inside a transaction only `tx` may be used.
  */
-import { and, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { isSharedWith } from "$lib/server/utils/shares"
+import { canViewCharacter, checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { findOwnedBook, lorebookAccessFor } from "$lib/server/utils/ownedBook"
+import { runKindOf, runLineBoundOf, runSessionOf } from "$lib/server/pipelines/runtime/runRegistry"
 
 /** 🚧 (M2b) What caused the work: a press, a send, a view, a routine, an install. */
 export type ActingVia = "press" | "send" | "view" | "routine" | "install"
@@ -78,6 +81,7 @@ export type PersonThing =
 	| { kind: "session-annex"; sessionId: number }
 	| { kind: "lorebook-annex"; lorebookId: number }
 	| { kind: "user-annex"; userId: number }
+	| { kind: "reply-run"; sessionId: number; runId: string }
 export type PersonOp = "read" | "write" | "delete"
 /** `reason`: one plain sentence a person may read. */
 export type PersonAnswer = { ok: true } | { ok: false; reason: string }
@@ -88,41 +92,6 @@ const NOT_FOUND = {
 	session: "Session not found.",
 	character: "Character not found.",
 	lorebook: "Lorebook not found."
-}
-
-/** The db-taking twin of `checkSessionAccess` (utils/sessionAccess.ts): same two queries, same semantics. */
-async function sessionAccessOf(db: Db, sessionId: number, userId: number) {
-	const [s] = await db
-		.select({ userId: schema.sessions.userId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	if (!s) return { exists: false, isOwner: false, hasAccess: false }
-	const isOwner = s.userId === userId
-	const [guest] = await db
-		.select({ userId: schema.sessionGuests.userId })
-		.from(schema.sessionGuests)
-		.where(and(eq(schema.sessionGuests.sessionId, sessionId), eq(schema.sessionGuests.userId, userId)))
-		.limit(1)
-	return { exists: true, isOwner, hasAccess: isOwner || !!guest }
-}
-
-/** The twin of `canViewCharacter`: shared, or in (as cast or voice) a session the person can read. */
-async function canViewCharacterOf(db: Db, characterId: number, userId: number): Promise<boolean> {
-	if (await isSharedWith(db, "character", characterId, userId)) return true
-	const [asCast, asVoice] = await Promise.all([
-		db
-			.select({ sessionId: schema.sessionCharacters.sessionId })
-			.from(schema.sessionCharacters)
-			.where(eq(schema.sessionCharacters.characterId, characterId)),
-		db
-			.select({ sessionId: schema.sessionPersonas.sessionId })
-			.from(schema.sessionPersonas)
-			.where(eq(schema.sessionPersonas.personaId, characterId))
-	])
-	const ids = new Set<number>([...asCast, ...asVoice].map((r) => r.sessionId))
-	for (const id of ids) if ((await sessionAccessOf(db, id, userId)).hasAccess) return true
-	return false
 }
 
 /**
@@ -141,8 +110,8 @@ export async function personMay(
 		case "session":
 		case "session-annex": {
 			const id = thing.kind === "session" ? thing.id : thing.sessionId
-			const a = await sessionAccessOf(db, id, uid)
-			if (!a.exists || !a.hasAccess) return no(NOT_FOUND.session)
+			const a = await checkSessionAccess(id, uid, db)
+			if (!a.hasAccess) return no(NOT_FOUND.session)
 			if (thing.kind === "session" ? op === "read" : op !== "delete") return OK
 			return a.isOwner ? OK : no("Only the session's owner may do that.")
 		}
@@ -154,7 +123,7 @@ export async function personMay(
 				.limit(1)
 			if (!c) return no(NOT_FOUND.character)
 			if (c.userId === uid) return OK
-			if (op === "read" && (await canViewCharacterOf(db, thing.id, uid))) return OK
+			if (op === "read" && (await canViewCharacter(thing.id, uid, db))) return OK
 			return no(op === "read" ? NOT_FOUND.character : "Only the character's owner may do that.")
 		}
 		case "lorebook":
@@ -173,6 +142,20 @@ export async function personMay(
 				.where(eq(schema.lorebooks.id, id))
 				.limit(1)
 			return b && b.userId === uid ? OK : no(NOT_FOUND.lorebook)
+		}
+		case "reply-run": {
+			// A waiting reply is the room's: any session member may stop it
+			// (op "write"); `delete` stays the owner's, as a session-annex.
+			const a = await checkSessionAccess(thing.sessionId, uid, db)
+			if (!a.hasAccess) return no(NOT_FOUND.session)
+			if (
+				runSessionOf(thing.runId) !== thing.sessionId ||
+				runKindOf(thing.runId) !== "reply" ||
+				runLineBoundOf(thing.runId)
+			)
+				return no("Not your run.")
+			if (op !== "delete") return OK
+			return a.isOwner ? OK : no("Only the session's owner may do that.")
 		}
 		case "user-annex":
 			return thing.userId === uid ? OK : no("That belongs to someone else.")

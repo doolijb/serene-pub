@@ -21,7 +21,9 @@ let db: TestDb
 let dataDir: string
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-vitest-branch-clock-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-vitest-branch-clock-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	db = await createTestDb()
@@ -46,7 +48,11 @@ async function world(opts: { follows?: boolean } = {}) {
 		.returning()
 	await db
 		.insert(schema.lorebookEntries)
-		.values(historyValues([{ lorebookId: lorebook!.id, year: 412, month: 3, day: 1 }]))
+		.values(
+			historyValues([
+				{ lorebookId: lorebook!.id, year: 412, month: 3, day: 1 }
+			])
+		)
 	const [session] = await db
 		.insert(schema.sessions)
 		.values({
@@ -66,13 +72,25 @@ async function world(opts: { follows?: boolean } = {}) {
 		})
 		.returning()
 	const line = (content: string) =>
-		insertLegacy(asDb(), { sessionId: session!.id, userId: user.id, role: "assistant", content } as any)
+		insertLegacy(asDb(), {
+			sessionId: session!.id,
+			userId: user.id,
+			role: "assistant",
+			content
+		} as any)
 	return { user, lorebook: lorebook!, session: session!, line }
 }
 
 /** A recorded move, as *Advance story clock* makes one: the clock moves and its row files at `at`. */
-async function move(sessionId: number, at: number, by: number, unit: "hours" | "days") {
-	const { advanceSessionStoryClock } = await import("$lib/server/state/storyTime")
+async function move(
+	sessionId: number,
+	at: number,
+	by: number,
+	unit: "hours" | "days"
+) {
+	const { advanceSessionStoryClock } = await import(
+		"$lib/server/state/storyTime"
+	)
 	const { recordClockMove } = await import("$lib/server/state/clockMoves")
 	const done = await advanceSessionStoryClock(asDb(), sessionId, by, unit)
 	await recordClockMove(asDb(), {
@@ -105,7 +123,12 @@ const clockRows = (sessionId: number) =>
 	db
 		.select()
 		.from(schema.stateProposals)
-		.where(and(eq(schema.stateProposals.sessionId, sessionId), eq(schema.stateProposals.kind, "clock")))
+		.where(
+			and(
+				eq(schema.stateProposals.sessionId, sessionId),
+				eq(schema.stateProposals.kind, "clock")
+			)
+		)
 		.orderBy(schema.stateProposals.id)
 
 describe("a branch's clock is its parent's as of the fork", () => {
@@ -121,48 +144,98 @@ describe("a branch's clock is its parent's as of the fork", () => {
 		expect(await clockOf(w.session.id)).toMatchObject({ day: 6, hour: 14 })
 
 		// Forked at m2: m3's three hours never happened on the branch.
-		const atCamp = await branchSession(asDb(), { sessionId: w.session.id, fromMessageId: m2.id })
-		expect(await clockOf(atCamp.id)).toEqual({ year: 412, month: 3, day: 6, hour: 11, minute: 0 })
+		const atCamp = await branchSession(asDb(), {
+			sessionId: w.session.id,
+			fromMessageId: m2.id
+		})
+		expect(await clockOf(atCamp.id)).toEqual({
+			year: 412,
+			month: 3,
+			day: 6,
+			hour: 11,
+			minute: 0
+		})
 		expect(atCamp).toMatchObject({ storyClockDay: 6, storyClockHour: 11 })
 		// The moves up to the fork, under the copies of their lines.
 		const copies = await db
-			.select({ id: schema.sessionMessages.id, content: schema.sessionMessages.content })
+			.select({
+				id: schema.sessionMessages.id,
+				content: schema.sessionMessages.content
+			})
 			.from(schema.sessionMessages)
 			.where(eq(schema.sessionMessages.sessionId, atCamp.id))
 			.orderBy(schema.sessionMessages.id)
 		const copied = await clockRows(atCamp.id)
-		expect(copied.map((r) => [r.messageId, r.status, (r.payload as any).by, (r.payload as any).unit])).toEqual([
+		expect(
+			copied.map((r) => [
+				r.messageId,
+				r.status,
+				(r.payload as any).by,
+				(r.payload as any).unit
+			])
+		).toEqual([
 			[copies[0]!.id, "applied", 2, "hours"],
 			[copies[1]!.id, "applied", 1, "days"]
 		])
 
 		// Forked at m1: the day and the climb both come off.
-		const atStart = await branchSession(asDb(), { sessionId: w.session.id, fromMessageId: m1.id })
-		expect(await clockOf(atStart.id)).toEqual({ year: 412, month: 3, day: 5, hour: 11, minute: 0 })
-		expect((await clockRows(atStart.id)).map((r) => (r.payload as any).by)).toEqual([2])
+		const atStart = await branchSession(asDb(), {
+			sessionId: w.session.id,
+			fromMessageId: m1.id
+		})
+		expect(await clockOf(atStart.id)).toEqual({
+			year: 412,
+			month: 3,
+			day: 5,
+			hour: 11,
+			minute: 0
+		})
+		expect(
+			(await clockRows(atStart.id)).map((r) => (r.payload as any).by)
+		).toEqual([2])
 
 		// Forked at the newest line: nothing came after it — the parent's clock.
-		const atNewest = await branchSession(asDb(), { sessionId: w.session.id, fromMessageId: m3.id })
+		const atNewest = await branchSession(asDb(), {
+			sessionId: w.session.id,
+			fromMessageId: m3.id
+		})
 		expect(await clockOf(atNewest.id)).toEqual(await clockOf(w.session.id))
 		// The parent is untouched.
 		expect(await clockOf(w.session.id)).toMatchObject({ day: 6, hour: 14 })
 		expect(await clockRows(w.session.id)).toHaveLength(3)
 
 		// A copied move goes back with its copied line, off the branch's clock.
-		const { revertClockMovesAnchoredTo } = await import("$lib/server/state/clockMoves")
+		const { revertClockMovesAnchoredTo } = await import(
+			"$lib/server/state/clockMoves"
+		)
 		await revertClockMovesAnchoredTo(asDb(), [copies[1]!.id])
 		expect(await clockOf(atCamp.id)).toMatchObject({ day: 5, hour: 11 })
 	})
 
 	test("a parent that follows its line's present gives the branch the present: no clock of its own", async () => {
 		const { branchSession } = await import("./branch")
-		const { sessionStoryNowOf } = await import("$lib/server/state/storyTime")
+		const { sessionStoryNowOf } = await import(
+			"$lib/server/state/storyTime"
+		)
 		const w = await world({ follows: true })
 		const m1 = await w.line("Dawn.")
 		const m2 = await w.line("Noon.")
-		const branch = await branchSession(asDb(), { sessionId: w.session.id, fromMessageId: m1.id })
-		expect(await clockOf(branch.id)).toEqual({ year: null, month: null, day: null, hour: null, minute: null })
-		expect(await sessionStoryNowOf(asDb(), branch.id)).toMatchObject({ year: 412, month: 3, day: 1 })
+		const branch = await branchSession(asDb(), {
+			sessionId: w.session.id,
+			fromMessageId: m1.id
+		})
+		expect(await clockOf(branch.id)).toEqual({
+			year: null,
+			month: null,
+			day: null,
+			hour: null,
+			minute: null
+		})
+		expect(await sessionStoryNowOf(asDb(), branch.id)).toMatchObject({
+			year: 412,
+			month: 3,
+			day: 1
+		})
 		expect(m2.id).toBeGreaterThan(m1.id)
 	})
 })

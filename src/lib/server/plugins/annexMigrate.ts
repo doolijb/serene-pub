@@ -46,7 +46,7 @@ function readCoreCatalogVersion(): string | null {
 
 /**
  * The version of `owner` now running — a plugin's installed version, or core's — recorded on
- * every annex change it writes (`annex_deltas.owner_version`). `core` is the
+ * every annex change it writes (`session_imprints.owner_version`). `core` is the
  * `@serene-pub/core-catalog` package version; null when the owner is unknown.
  */
 export async function ownerVersionOf(db: Db, owner: string): Promise<string | null> {

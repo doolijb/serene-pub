@@ -25,7 +25,11 @@
 import { readFile, readdir, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { mimeForUiPath } from "./pluginMime"
-import { genreCreateSpecFindings, type SpecDocument } from "@serene-pub/sdk"
+import {
+	appletCardFindings,
+	genreCreateSpecFindings,
+	type SpecDocument
+} from "@serene-pub/sdk"
 import { isSafeUiPath } from "./frameHost"
 import { manifestDisplayTextFindings } from "./store"
 import { PLUGIN_BUILD_DIR } from "$lib/shared/plugins/packageManifest"
@@ -50,9 +54,15 @@ const positiveEnv = (name: string, fallback: number): number => {
 }
 
 /** The largest package this pub installs, in MB, counted as the files it unpacks to (`SP_PLUGIN_PACKAGE_MAX_MB`). */
-export const PLUGIN_PACKAGE_MAX_MB: number = positiveEnv("SP_PLUGIN_PACKAGE_MAX_MB", 512)
+export const PLUGIN_PACKAGE_MAX_MB: number = positiveEnv(
+	"SP_PLUGIN_PACKAGE_MAX_MB",
+	512
+)
 /** The most files one package may hold (`SP_PLUGIN_FILES_MAX`). */
-export const PLUGIN_FILES_MAX: number = positiveEnv("SP_PLUGIN_FILES_MAX", 10_000)
+export const PLUGIN_FILES_MAX: number = positiveEnv(
+	"SP_PLUGIN_FILES_MAX",
+	10_000
+)
 
 /** The refusal for a package whose files total too many bytes. */
 export const packageTooLargeSentence = (bytes: number): string =>
@@ -189,7 +199,11 @@ export function declaredComponentEntries(manifest: unknown): string[] {
 	const raw = (manifest as { components?: unknown } | null)?.components
 	if (!Array.isArray(raw)) return []
 	return raw
-		.map((c) => (c && typeof c === "object" ? (c as { entry?: unknown }).entry : undefined))
+		.map((c) =>
+			c && typeof c === "object"
+				? (c as { entry?: unknown }).entry
+				: undefined
+		)
 		.filter((e): e is string => typeof e === "string")
 }
 
@@ -253,12 +267,17 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 			`manifest.slug 'core' is the app's own — a plugin cannot take it. Choose a slug ` +
 				`of your own ('chariot.dice-tray').`
 		)
-	if (typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+/.test(manifest.version))
+	if (
+		typeof manifest.version !== "string" ||
+		!/^\d+\.\d+\.\d+/.test(manifest.version)
+	)
 		findings.push(
 			`manifest.version ${JSON.stringify(manifest.version)} is not semver. A plugin ` +
 				`upgrades by version comparison.`
 		)
-	findings.push(...manifestDisplayTextFindings(manifest as Record<string, unknown>))
+	findings.push(
+		...manifestDisplayTextFindings(manifest as Record<string, unknown>)
+	)
 
 	// The documents. One file per `pipelines` entry, named the way the packager
 	// names them — matched by name rather than by scanning the directory, so a
@@ -350,10 +369,18 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 	const wanted = new Set<string>()
 	for (const rel of await walk(join(root, "ui"))) wanted.add(`ui/${rel}`)
 	const componentEntries = new Set(declaredComponentEntries(manifest))
-	for (const entry of [...declaredSurfaceEntries(manifest), ...componentEntries]) {
-		const what = componentEntries.has(entry) ? "component entry" : "surface entry"
+	for (const entry of [
+		...declaredSurfaceEntries(manifest),
+		...componentEntries
+	]) {
+		const what = componentEntries.has(entry)
+			? "component entry"
+			: "surface entry"
 		if (!isSafeUiPath(entry)) {
-			findings.push(`${what} '${entry}' is not a servable path — relative, no '..', ` + `and under the package root.`)
+			findings.push(
+				`${what} '${entry}' is not a servable path — relative, no '..', ` +
+					`and under the package root.`
+			)
 			continue
 		}
 		// The worker imports a component as a module: the BUILT one. A manifest
@@ -379,22 +406,55 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 	// `lang/*.json` — the folder IS the declaration (SHAPES L5).
 	const assetPaths = new Set<string>()
 	const assetsDecl = (manifest as { assets?: unknown }).assets
-	if (assetsDecl && typeof assetsDecl === "object" && !Array.isArray(assetsDecl)) {
+	/** The declared assets folder once it passed the check below — the one the card rule reads too. */
+	let safeAssets: string | undefined
+	if (
+		assetsDecl &&
+		typeof assetsDecl === "object" &&
+		!Array.isArray(assetsDecl)
+	) {
 		const rawDir = (assetsDecl as { dir?: unknown }).dir
 		const dir = typeof rawDir === "string" ? rawDir : "assets"
 		const first = dir.split("/")[0]
-		if (!isSafeUiPath(dir) || first === "ui" || first === "dist" || first === "lang")
+		if (
+			!isSafeUiPath(dir) ||
+			first === "ui" ||
+			first === "dist" ||
+			first === "lang"
+		)
 			findings.push(
 				`manifest.assets.dir '${dir}' is not a servable folder — relative, no '..', ` +
 					`and not 'ui', 'dist' or 'lang', which the package already uses.`
 			)
-		else for (const rel of await walk(join(root, dir))) assetPaths.add(`${dir}/${rel}`)
+		else {
+			safeAssets = dir
+			for (const rel of await walk(join(root, dir)))
+				assetPaths.add(`${dir}/${rel}`)
+		}
 	}
 	try {
-		for (const e of await readdir(join(root, "lang"), { withFileTypes: true }))
-			if (e.isFile() && e.name.endsWith(".json")) assetPaths.add(`lang/${e.name}`)
+		for (const e of await readdir(join(root, "lang"), {
+			withFileTypes: true
+		}))
+			if (e.isFile() && e.name.endsWith(".json"))
+				assetPaths.add(`lang/${e.name}`)
 	} catch {
 		/* no lang folder */
+	}
+
+	// 🚧 M2d: the applet card — the packager's rule, repeated over the stored manifest.
+	{
+		for (const f of appletCardFindings(
+			(manifest as { appletCard?: unknown }).appletCard,
+			safeAssets,
+			(path) => assetPaths.has(path),
+			genres.some(
+				(g) =>
+					(g as { shape?: { applet?: unknown } } | null)?.shape
+						?.applet === true
+			)
+		))
+			findings.push(`${f.message} — ${f.fix}.`)
 	}
 
 	const files: PluginPackageFile[] = []
@@ -404,13 +464,22 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 		const source = join(root, path)
 		const size = (await stat(source)).size
 		bytes += size
-		files.push({ path, mime: mimeForUiPath(path), kind, bytes: size, source })
+		files.push({
+			path,
+			mime: mimeForUiPath(path),
+			kind,
+			bytes: size,
+			source
+		})
 	}
 	for (const path of [...wanted].sort()) await collect(path, "ui")
-	for (const path of [...assetPaths].sort()) if (!wanted.has(path)) await collect(path, "asset")
+	for (const path of [...assetPaths].sort())
+		if (!wanted.has(path)) await collect(path, "asset")
 
-	if (bytes > PLUGIN_PACKAGE_MAX_MB * MIB) findings.push(packageTooLargeSentence(bytes))
-	if (files.length > PLUGIN_FILES_MAX) findings.push(packageTooManyFilesSentence(files.length))
+	if (bytes > PLUGIN_PACKAGE_MAX_MB * MIB)
+		findings.push(packageTooLargeSentence(bytes))
+	if (files.length > PLUGIN_FILES_MAX)
+		findings.push(packageTooManyFilesSentence(files.length))
 
 	if (findings.length) throw new PluginPackageError(root, findings)
 	return { dir: root, manifest, documents, files }

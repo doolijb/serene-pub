@@ -21,6 +21,10 @@ import type { TestDb } from "$lib/server/utils/testDb"
 let testDb: TestDb
 let dataDir: string
 
+vi.mock("$lib/server/localModels/onnxRuntime", () => ({
+	localOnnxAvailability: async () => ({ available: true })
+}))
+
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	const db = await createTestDb()
@@ -166,6 +170,40 @@ describe("seeded rows are keyed by seedKey", () => {
 		}
 	})
 
+	test("the Reply sampling row is reasoning-off at 1024+ tokens, once, and a fresh install's Reply loadout points at it", async () => {
+		// ★47 (2026-11-04). The row is one seed literal with no id; the Reply
+		// loadout resolves it on INSERT, so sampling configs must seed before
+		// loadouts — this DB's first sync() is the fresh-install boot.
+		await sync()
+		await sync()
+		const rows = await testDb
+			.select()
+			.from(schema.samplingConfigs)
+			.where(eq(schema.samplingConfigs.seedKey, "sampling-reply"))
+		expect(rows).toHaveLength(1)
+		const reply = rows[0]!
+		expect(reply.name).toBe("Reply")
+		expect(reply.isImmutable).toBe(true)
+		expect(reply.values.responseTokens).toBeGreaterThanOrEqual(1024)
+		expect(reply.enabled).toContain("reasoning")
+		expect(reply.values).not.toHaveProperty("reasoning")
+
+		const [loadout] = await testDb
+			.select()
+			.from(schema.loadouts)
+			.where(eq(schema.loadouts.seedKey, "core:loadout/reply@1"))
+		expect(loadout!.samplingConfigId).toBe(reply.id)
+		const [tools] = await testDb
+			.select()
+			.from(schema.loadouts)
+			.where(eq(schema.loadouts.seedKey, "core:loadout/tool-calling@1"))
+		const [dflt] = await testDb
+			.select()
+			.from(schema.samplingConfigs)
+			.where(eq(schema.samplingConfigs.seedKey, "sampling-default"))
+		expect(tools!.samplingConfigId).toBe(dflt!.id)
+	}, 60_000)
+
 	test("every seeded row carries a seedKey, and user rows never do", async () => {
 		await sync()
 		const rows = await testDb.select().from(schema.samplingConfigs)
@@ -199,5 +237,30 @@ describe("seeded rows are keyed by seedKey", () => {
 			.where(eq(schema.samplingConfigs.seedKey, "sampling-default"))
 		expect(restored.name).toBe("Default")
 		expect(restored.id).toBe(def.id) // and it is the same row, not a new one
+	})
+})
+
+describe("the two local ONNX connections", () => {
+	test("sync() leaves one named row of each type, and a second changes none", async () => {
+		await sync()
+		await sync()
+		const first = await testDb
+			.select()
+			.from(schema.connections)
+			.orderBy(schema.connections.id)
+		await sync()
+		const again = await testDb
+			.select()
+			.from(schema.connections)
+			.orderBy(schema.connections.id)
+
+		const named = (type: string) => first.filter((c) => c.type === type)
+		expect(named("local-onnx").map((c) => c.name)).toEqual([
+			"Local embeddings"
+		])
+		expect(named("local-onnx-ner").map((c) => c.name)).toEqual([
+			"Local named entities"
+		])
+		expect(again).toEqual(first)
 	})
 })

@@ -92,10 +92,10 @@ export async function servedTransforms(db: Db): Promise<Set<string>> {
 	// to the tables is what counts.
 	const cacheOn = !(typeof process !== "undefined" && process.env?.VITEST)
 	if (cacheOn && served && served.db === (db as object) && now - served.at < TTL_MS) return served.set
-	const { capabilityDefaults } = await import("$lib/server/connections/capabilityDefaults")
+	const { resolvedCapabilityDefaults } = await import("$lib/server/connections/capabilityDefaults")
 	const set = new Set<string>()
 	try {
-		for (const [t, d] of Object.entries(await capabilityDefaults(db))) if (d?.connectionId != null) set.add(t)
+		for (const [t, d] of Object.entries(await resolvedCapabilityDefaults(db))) if (d?.connectionId != null) set.add(t)
 	} catch (err) {
 		console.warn("[registrations] the pub's served transforms could not be read:", err)
 	}
@@ -191,6 +191,13 @@ export interface PresetRecommendations {
 	unserved: string[]
 	/** "Needs: a text model · Better with: an image model" — the start card's line. */
 	words: string
+	/**
+	 * The unserved ones, named: "Until an administrator sets a speech model,
+	 * what needs one here is unavailable." Empty when everything is served.
+	 * It names the model so a pub with Images filled is not told "some of it"
+	 * is missing over speech alone (seen 2026-11-08).
+	 */
+	unservedWords: string
 }
 
 /** A preset's recommendations from its registrations in force (pure apart from the served set and the documents). */
@@ -214,7 +221,16 @@ export function recommendationsOf(
 	const n = sortT(needs)
 	const b = sortT(better)
 	const words = [n.length ? `Needs: ${nouns(n)}` : "", b.length ? `Better with: ${nouns(b)}` : ""].filter(Boolean).join(" · ")
-	return { needs: n, betterWith: b, unserved: [...n, ...b].filter((t) => !have.has(t)), words }
+	const unserved = [...n, ...b].filter((t) => !have.has(t))
+	const unservedNouns = [...new Set(unserved.map(transformNoun))]
+	const list =
+		unservedNouns.length <= 1
+			? unservedNouns[0]
+			: `${unservedNouns.slice(0, -1).join(", ")} and ${unservedNouns[unservedNouns.length - 1]}`
+	const unservedWords = unservedNouns.length
+		? `Until an administrator sets ${list}, what needs ${unservedNouns.length === 1 ? "one" : "them"} here is unavailable.`
+		: ""
+	return { needs: n, betterWith: b, unserved, words, unservedWords }
 }
 
 /** Each preset's recommendations (R56), for the presets list and the preset editor. */

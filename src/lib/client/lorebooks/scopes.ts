@@ -240,6 +240,31 @@ export function rulesListFacets(
 }
 
 /**
+ * 🚧 ★50 `OtherRulesGroup`: lists of OTHER rules than the book's that it
+ * holds entries of (`entries:types` `otherRules`), under those rules' own
+ * name. What it is: a group the rail draws after the book's own. What it is
+ * not: a list the book may add to (the server refuses it).
+ */
+export type OtherRulesGroup = { rulesName: string; types: RulesList[] }
+
+/**
+ * 🚧 ★50 The rail's groups for other rules: one per rules name, after the
+ * book's own group, each with one row per list that has something in it.
+ * A group with no list drawn is not drawn.
+ */
+export function otherRulesFacetGroups(
+	groups: readonly OtherRulesGroup[],
+	counts: Record<string, number> | null
+): { label: string; facets: ScopeFacet[] }[] {
+	return groups
+		.map((group) => ({
+			label: group.rulesName,
+			facets: rulesListFacets(group.types, counts)
+		}))
+		.filter((group) => group.facets.length > 0)
+}
+
+/**
  * What a scope is called on screen: a core scope's label, or a rules list's
  * own (its kind's label, `sections/kinds.ts`).
  */
@@ -327,30 +352,6 @@ export function matchSessionRoute(
 			{ type: "setBranch", branch: session.branchId ?? undefined }
 		),
 		{ type: "closeSettings" }
-	)
-}
-
-/** The verbs for reading a book into the open session (NOMENCLATURE §8). */
-export const READ_INTO_SESSION = "Read into this session"
-export const STOP_READING = "Stop reading"
-
-/** The one action a book offers the open session, named. */
-export function readingActionLabel(readingHere: boolean): string {
-	return readingHere ? STOP_READING : READ_INTO_SESSION
-}
-
-/**
- * The confirmation shown when reading this book would stop the session
- * reading another one — a session reads one book at a time.
- */
-export function replaceReadingSentence(
-	sessionName: string,
-	currentBook: string,
-	nextBook: string
-): string {
-	return (
-		`${sessionName} reads ${currentBook}. Reading ${nextBook} into it ` +
-		`instead stops reading ${currentBook}; nothing in either book changes.`
 	)
 }
 

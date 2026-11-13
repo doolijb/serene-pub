@@ -20,7 +20,7 @@ A context template is chosen per pipeline, in **Admin › Pipelines**, on the st
 
 Templates are **shared, not owned by one pipeline**. A template fits the _kind of step_ that renders it, so one written for session replies is just as selectable for the narrator. The picker groups templates by where they came from (this pipeline's, then the shipped ones, then everything else that fits), and hides nothing.
 
-Administrators see every template in **Admin › Context templates**, with a **Built-in** badge on the shipped ones and how many pipelines use each. **Admin › Variable templates** and **Admin › Completion templates** work the same way.
+Administrators see every template in **Admin › Context templates**, with a **Built-in** badge on the shipped ones and how many pipelines use each. **Admin › Completion templates** works the same way. Variable layouts have their own page, **Admin › Variable layouts**, listed by variable (see [Variable layouts](#variable-layouts-where-the-headings-and-fences-come-from)); an old **Variable templates** bookmark opens it.
 
 A pipeline that builds no prompt from the conversation, such as a summarizer or the graph builder, has no context template setting.
 
@@ -40,6 +40,7 @@ The template sits in a code editor: line numbers, undo and redo, **Ctrl+F** to s
 - **Hover.** Rest the caret on a name to see, under the field, its type, description and which step supplies it, or the name you probably meant.
 - **Lint.** A name nothing supplies is underlined: a red wave for an error, an ember one for a warning. Rest the pointer on the wave to read the finding, or read the list below the field, which says what is wrong and on which line and offers a fix such as **Use "message"** where there is an obvious near miss (**Ctrl+.** at the caret applies it). A template that doesn't parse is underlined once you stop typing, not on every keystroke. These are the same checks as saving and selecting, so the editor and the save never disagree.
 - **Variables available here.** Beside the text (below it when narrow): see the next section.
+- **Variable layouts.** Wherever a context template is edited (on a copy: a shipped template is read-only), the editor also helps with how each value is written out. With the caret on `{{{characters}}}`, the line under the field says how it is written now (_Written as Titled JSON block (this pub's choice)_) and offers one button per other layout, such as **Write as JSON here**, which rewrites that one tag to name it (see [A template may name one](#a-template-may-name-one)). **Layouts in this template**, above the field, has a row for each laid-out value the template reads, with a select (_The pub's layout_, each layout by name, or _Mixed — leave as it is_), plus **All bare** and **All titled**; **Apply** rewrites every occurrence in one edit, which one undo reverses. Inside `layout characters "` completion lists that value's references with their names, and lint marks a reference the value doesn't have, with a fix such as **Use "core/json@1"** for a near miss.
 
 The same editor edits a **variable layout** and, in **Admin › Scripts**, a script's source — there in JavaScript, offering the reads the script declares and marking a read it uses but hasn't declared.
 
@@ -174,11 +175,11 @@ Example dialogue:
 
 ### The variables
 
-All of these may be empty, so wrap each in `{{#if …}}`. Use triple braces, `{{{…}}}`, for every one: each value carries its own heading and fence, and double braces would turn the fence's quotes into `&quot;` in your prompt.
+All of these may be empty, so wrap each in `{{#if …}}`. Use triple braces, `{{{…}}}`, for every one. A value written out by a variable layout prints the same in `{{characters}}` and `{{{characters}}}`, but other text in double braces is escaped (a quote becomes `&quot;`), so triple braces stay the habit.
 
 - **`currentDate`**: the date in the story, from the session's [story clock](./pipelines.md#the-story-clock) or its lorebook's present. Empty when the session reads no dated lorebook. The Default template places it last in the system block: the top of the prompt is the part a model's server can reuse from one turn to the next, and the date is the one value there that changes on its own.
 - **`instructions`**: the step's prompt (see [Pipelines → Prompts](./pipelines.md#prompts)).
-- **`characters`**: a card for every character in the cast, including ones switched off, trimmed by the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)). At **Name and description**, cards other than the speaker's leave out personality; at **Only whoever is speaking**, only the speaker's card is there.
+- **`characters`**: a card for every seat in play, plus the speaker, trimmed by the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)). At **Name and description**, cards other than the speaker's leave out personality; at **Only whoever is speaking**, only the speaker's card is there.
 - **`personas`**: the cards of the people playing.
 - **`characterLore`**: the character lore chosen for this turn, as a list of entries, each with its title, the cast member it belongs to and its text. It holds only what the one speaking may know: their own private entries and those of characters a person plays. The narrator gets entries bound to nobody, or to cast members without a card. Character lore reaches the model **only because the template places `{{{characterLore}}}`**: nothing adds it to the cards, so a template that leaves it out sends no character lore at all.
 - **`scenario`**: the session's scenario.
@@ -197,20 +198,64 @@ Three blocks mark who is speaking: `systemBlock` for instructions and context, `
 
 ### Variable layouts: where the headings and fences come from
 
-The template above has no `Assistant Characters (AI-controlled):` heading and no ` ```json ` fence, just `{{{characters}}}`. Those come from a **variable layout**: a small template that writes out one value, chosen per pipeline in **Admin › Pipelines**.
+The template above has no `Assistant Characters (AI-controlled):` heading and no ` ```json ` fence, just `{{{characters}}}`. Those come from a **variable layout**: a small template that writes out one value.
 
-The template owns the _structure_ (blocks, order, `{{#if}}`, `{{#each}}`); a layout owns the _presentation_ (the heading, the fence, JSON or prose). So to write characters as prose, you don't rewrite the whole template: duplicate the **Titled JSON block** layout for `characters`, write prose instead, and select it. Layouts belong to the value they render, so the same one is offered to every pipeline that renders characters.
+The template owns the _structure_ (blocks, order, `{{#if}}`, `{{#each}}`); a layout owns the _presentation_ (the heading, the fence, JSON or prose). So to write characters as prose, you don't rewrite the whole template: write a prose layout for `characters` and use it. Layouts belong to the value they render, so the same one is offered wherever that value is written out.
+
+#### One choice for the whole pub
+
+**Admin › Writing › Variable layouts** lists the **variables**, not the layouts: each with its name, **Supplied by**, **Written as** and how many layouts it has. Filter by shelf (**Characters and personas**, **Lore**, …) or by text. There is no Add: a variable arrives with code. _How each variable is written out. One choice for the whole pub._
+
+Open a variable to see its layouts, each previewed against an example value. **In use** marks the one in use; **Use this** on another makes it the pub's layout at once. When the pub's choice isn't the default, **Back to the default** returns to it.
+
+**In use** is the pub's choice. Where something writes the variable out with another layout, the page lists it under **Where this differs**: each preset that chooses another, each context template that names another, each step that keeps a pick from before layouts moved, and, while the pub has no choice of its own, each step whose pipeline chose another. Each names its layout and links to where it is changed. When nothing differs, the list isn't shown.
 
 Two layouts ship for each wrapped value:
 
 - **Titled JSON block** / **Titled block** / **Sentence**: with a heading and fence. This is the default.
 - **JSON** / **As written**: the value alone, no heading.
 
-If your template writes its own headings and fences, select the bare **JSON** / **As written** layouts so nothing is written twice. A value with nothing in it renders nothing, heading included.
+A value with nothing in it renders nothing, heading included. Every value that holds an object or a list of them gets a layout; when nothing ships one (for example a plugin's own value), Serene Pub adds a plain automatic **JSON** layout for it. A variable with no layout at all reads _As written_: exactly what the pipeline gives. Shipped layouts can't be edited; duplicate one to write your own.
 
-Every value that holds an object or a list of them gets a layout. When nothing ships one (for example a plugin's own value), Serene Pub adds a plain **JSON** layout for it. Shipped layouts can't be edited; duplicate one to write your own.
+#### Writing your own
 
-**When a pipeline means something else by a name.** A plugin's pipeline can put its own data under a name core uses, such as a ranked list of lore under `characterLore`. The pipeline says so, and the setting then offers that data's layouts instead of core's: its plain **JSON** layout when the data is an object, or the built-in default when it is plain text. A layout you picked for core's version stops applying, and the configuration shows a notice that it was removed. The run inspector lists which layout each value used (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
+On a variable's page, **New layout** starts from the layout in use and **Duplicate** copies another (_‹name› (copy)_). The form asks for:
+
+- **Name**.
+- **Referenced as**: an **Owner slug** (prefilled with the last one you used) and a **Name to reference it by** (it follows the name until you edit it), shown together as `mypub/prose@1`. _Fixed once saved, so templates that name it keep working._
+- **Language**: Handlebars or Liquid, fixed once made.
+- The source, in the template editor, with **Variables available here** showing that value's own fields and a live **Preview** against the example.
+- **Use it everywhere** (a new layout only, off by default): _Every template that writes {{{characters}}} without naming a variable layout uses this one: N pipelines, M templates._ Left off, the layout is only offered on the variable's page with **Use this**.
+
+An older layout of yours with no reference is given one the next time you save it. **Edit** and **Delete** appear only on layouts made in this pub. Delete is refused, in words on the row, while the layout is the pub's choice, a preset's choice, named by a context template, or held by a leftover pick (see [Upgrading from 0.5](#upgrading-from-05)).
+
+#### A preset may differ
+
+A preset can choose its own layout for a variable, so only its sessions write it differently. See [Pipelines → Presets](./pipelines.md#presets).
+
+#### A template may name one
+
+A template can name a layout itself. In Handlebars, `{{{layout characters "core/json@1"}}}`; in Liquid, `{{ characters | layout: "core/json@1" }}`. That template writes the value that way whatever the preset or pub chose.
+
+A reference is `<owner>/<slug>@<major>`: Serene Pub's are `core/titled-json@1` (Titled JSON block), `core/json@1` (JSON), `core/titled@1`, `core/as-written@1`, `core/sentence@1` and so on; a plugin's look like `acme.dice/prose@1`; yours use your owner slug. A reference is unique within its value, so two values can each have a `core/json@1`.
+
+A bare `{{{characters}}}` is written out by the first of these that applies:
+
+1. A leftover pick on that step (upgrade only, see [Upgrading from 0.5](#upgrading-from-05)).
+2. The session's preset's layout for that value.
+3. The pub's layout for that value.
+4. The default: the one the pipeline's author chose for that step, else Serene Pub's shipped one, or the plugin's first.
+5. The automatic **JSON** layout, or plain text.
+
+A layout the template names itself comes before all of these. If it names one the value doesn't have, the template is refused when saved or selected (see [Templates are checked when you save them](#templates-are-checked-when-you-save-them)). A stored template that names a missing layout (a plugin was removed) keeps running with the value's layout in use, and the run inspector says so.
+
+#### Three examples
+
+- **Small models.** An administrator writes a **Prose** layout for Characters and one for Personas, then sets them on the **Small models** preset; other presets keep the pub's layout. The steps are in [Pipelines → Presets](./pipelines.md#presets).
+- **A plugin's value.** A plugin adds an `omens` value that has only the automatic JSON layout. Open it, press **New layout**, write prose, and turn on **Use it everywhere**. Later one copied template needs it as JSON: put the caret on `{{{omens}}}` and press **Write as JSON here**, which writes `{{{layout omens "acme/json@1"}}}`.
+- **A 0.5 template.** It writes its own headings and fences, so its copy names the bare layouts: see [Upgrading from 0.5](#upgrading-from-05).
+
+**When a pipeline means something else by a name.** A plugin's pipeline can put its own data under a name core uses, such as a ranked list of lore under `characterLore`. The pipeline says so, and that name is then written out by the plugin data's own variable layouts (its own row on **Admin › Variable layouts**), not core's: its plain **JSON** layout when the data is an object, or the built-in default when it is plain text. A leftover pick for core's version is removed, with a notice on the configuration. The run inspector lists which layout each value used (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
 
 **Reading a shipped layout.** Each one is written one tag or one JSON key per line, indented the way the value nests. Two Handlebars rules keep that layout out of the prompt. A tag alone on its line (`{{#each …}}`, `{{/if}}`) leaves nothing behind, not even its line break. Where the prompt has no line breaks at all, such as the minified world lore and history, a `~` inside a tag swallows the whitespace beside it: `{{~#each x~}}` on both sides, `{{~else}}` before it. So a line that starts with `{{~` continues the one above, and the indentation is for you, not the model. A duplicate keeps the same shape, and the same rules apply to anything you write in it.
 
@@ -354,6 +399,7 @@ Helpers become **filters**, with the same names and the same arguments:
 | `{{{jsonValue x}}}` / `{{{jsonValue x 4}}}` | `{{ x \| jsonValue }}` / `{{ x \| jsonValue: 4 }}` |
 | `{{{jsonValue x indent=1 offset=1}}}`       | `{{ x \| jsonValue: indent: 1, offset: 1 }}`       |
 | `{{pad n 2}}`                               | `{{ n \| pad: 2 }}`                                |
+| `{{{layout characters "core/json@1"}}}`     | `{{ characters \| layout: "core/json@1" }}`        |
 
 And the three block helpers become **tags**, spelled the same way:
 
@@ -375,7 +421,7 @@ And the three block helpers become **tags**, spelled the same way:
 
 ### What Liquid is not allowed to do
 
-`{% include %}`, `{% render %}` and `{% layout %}` are **refused when the template is saved**, naming the tag and the line. A template lives in the database, not in a folder, and a template able to open files could read the server's. Put shared text in the template itself. An unknown filter is refused the same way, so a misspelled `{{ x | jsonvalue }}` never quietly renders `x` unfiltered.
+`{% include %}`, `{% render %}` and `{% layout %}` are **refused when the template is saved**, naming the tag and the line. A template lives in the database, not in a folder, and a template able to open files could read the server's. Put shared text in the template itself. An unknown filter is refused the same way, so a misspelled `{{ x | jsonvalue }}` never quietly renders `x` unfiltered. The `layout` _filter_ is a different thing and is allowed; the refused one is the `{% layout %}` tag.
 
 ## Templates are checked when you save them
 
@@ -389,12 +435,16 @@ And the three block helpers become **tags**, spelled the same way:
 
 A name the step might still receive from something that doesn't declare its values only warns. Pipelines and plugins are held to the same rule when they are published or packaged.
 
+**A `layout` call must name a layout its value has.** One that doesn't is refused at save and select like an unknown name, and a stored one shows a notice on the configuration.
+
 **Choices already made are never undone.** At startup Serene Pub checks every stored choice. One that would be refused today keeps running as before; it is listed in the server log and shown as a notice on the configuration until it is fixed.
 
 The checks are careful not to cry wolf: loop items, names you `{% assign %}`, `@key`, `forloop.last` and built-in helpers and filters are never reported. Where a value's fields are known, a misspelled field is caught too, with the name you probably meant. Where they aren't known, nothing is guessed.
 
 ## Upgrading from 0.5
 
-0.6 does **not** carry 0.5's context templates across: after upgrading, every pipeline uses the shipped template. Any template you wrote is listed in the upgrade's notes (**Admin › History**, data upgrade), and its text is in the pre-upgrade backup in the data folder's `backups/`. Paste it into a new context template if you want it back, and pick the bare **JSON** / **As written** [layouts](#variable-layouts-where-the-headings-and-fences-come-from) for its pipelines, because a 0.5 template writes its own headings and fences. If it uses `narrativeGraph` or `speakerRelationships`, replace them with `relationshipsPerspectives` and `relationshipsKnown`: the old names no longer render anything.
+0.6 does **not** carry 0.5's context templates across: after upgrading, every pipeline uses the shipped template. Any template you wrote is listed in the upgrade's notes (**Admin › History**, data upgrade), and its text is in the pre-upgrade backup in the data folder's `backups/`. Paste it into a new context template if you want it back, and open **Layouts in this template** above the field, press **All bare**, then **Apply**: a 0.5 template writes its own headings and fences, so the copy now names the bare [layouts](#variable-layouts-where-the-headings-and-fences-come-from) itself. If it uses `narrativeGraph` or `speakerRelationships`, replace them with `relationshipsPerspectives` and `relationshipsKnown`: the old names no longer render anything.
 
 Your prompt text _is_ carried: each 0.5 prompt, narrator, summarizer and graph-build config becomes a prompt of the step it fed, picked where you had picked it (see [Pipelines → Upgrading from 0.5](./pipelines.md#upgrading-from-05)). Everything else the upgrade does is in [Upgrading from 0.5](./upgrading-from-0.5.md).
+
+**Layout picks made before layouts moved.** The upgrade folds each per-step pick in without changing any prompt: where every step agreed, it became the pub's layout; where every step a preset runs agreed, that preset's. Any other pick whose removal would change a prompt is kept and shown on its step as _Characters uses JSON here (set before layouts moved)._ with **Remove this pick**. What applies then is the next in the order above, which may be the session's preset's layout rather than the pub's. A pick made on another step, such as the one that builds the character cards, names that step: _Characters uses JSON (set on Build template context before layouts moved)._ When one variable has picks at more than one level, each line says whose it is: _Characters uses the genre's JSON here…_, _Characters uses the Small models preset's Prose here…_ When the step's template is the pub's own copy, **Move into the template** rewrites it to name those layouts itself and clears the picks, with the prompt unchanged. These leftover picks go away at 0.7.

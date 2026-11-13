@@ -39,5 +39,15 @@
         }
       }
     }
+  },
+  "mcp": {
+    "archex": {
+      "type": "local",
+      "command": [
+        "archex",
+        "mcp"
+      ],
+      "enabled": true
+    }
   }
 }

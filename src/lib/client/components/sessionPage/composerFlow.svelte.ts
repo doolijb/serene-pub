@@ -5,7 +5,7 @@
  * (the draft's, or a finished reply's).
  */
 import { onDestroy, onMount, untrack } from "svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { declareInterest, onConnect } from "$lib/client/sockets/interest.svelte"
 import { createComposerTray } from "$lib/client/components/sessionPage/attachments/composerTray.svelte"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
@@ -125,9 +125,13 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 			// The kept draft goes only once the message is saved — unless the
 			// person has started the next one meanwhile.
 			if (!untrack(() => newMessage).trim())
-				socket.emit("sessions:saveDraft", { sessionId: id, content: "" })
+				socket.emit("sessions:saveDraft", {
+					sessionId: id,
+					content: ""
+				})
 		},
-		say: (sentence) => toaster.error({ title: "Not sent", description: sentence })
+		say: (sentence) =>
+			notify.error({ title: "Not sent", description: sentence })
 	})
 
 	// ── Draft autosave ────────────────────────────────────────────────────────
@@ -278,8 +282,11 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 	 * to send) shapes `msg` and calls this. False while an earlier send is
 	 * still unanswered.
 	 */
-	function sendMessage(msg: Sockets.SessionMessages.SendPersonaMessage.Params): boolean {
-		if (!pendingSend.start(msg.sessionId, msg.content, d.userId())) return false
+	function sendMessage(
+		msg: Sockets.SessionMessages.SendPersonaMessage.Params
+	): boolean {
+		if (!pendingSend.start(msg.sessionId, msg.content, d.userId()))
+			return false
 		socket.emit("sessionMessages:sendPersonaMessage", msg)
 		// The box is empty (the composer cleared it on Send); the server's
 		// copy of the draft stays until the message is saved.
@@ -306,12 +313,17 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 	// still uploading, a channel the session lacks, the genre's save pipeline
 	// saying no) — then the text comes back and the sentence is said once.
 	// The tray stays on a refusal.
-	d.inbox.on("sessionMessages:sendPersonaMessage", (res) => pendingSend.answer(res))
+	d.inbox.on("sessionMessages:sendPersonaMessage", (res) =>
+		pendingSend.answer(res)
+	)
 	// The saved row reaching the page: the message landed.
-	d.inbox.on("sessionMessage", (msg) => pendingSend.pushed(msg?.sessionMessage))
+	d.inbox.on("sessionMessage", (msg) =>
+		pendingSend.pushed(msg?.sessionMessage)
+	)
 	d.inbox.on("attachments:removeFromMessage:error", (res) => {
 		if (res?.sessionId == null || res.sessionId === sessionId)
-			toaster.error({
+			notify.error({
+				source: "socket:attachments:removeFromMessage:error",
 				title: "Couldn't remove the attachment",
 				description: res.error
 			})

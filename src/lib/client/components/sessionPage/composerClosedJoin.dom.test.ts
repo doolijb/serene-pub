@@ -18,7 +18,7 @@ async function open(composer: Record<string, unknown>) {
 	const full = sections.scoped.session_full
 	const view = await mountComponent({
 		root: CORE_CATALOG,
-		entry: "dist/components/messages.js",
+		entry: "dist/components/composer.js",
 		owner: "core",
 		coreConversation: true,
 		timeoutMs: 60_000,
@@ -40,6 +40,18 @@ describe("a closed composer's reason wins over the join prompt", () => {
 			expect(view.query("sp-composer-field")?.getAttribute("placeholder")).toBe(
 				"Waiting: Ann is choosing her class"
 			)
+		} finally {
+			await view.unmount()
+		}
+	}, 120_000)
+
+	test("benched-only (2026-11-11): the bench sentence alone, no join, no Take a seat", async () => {
+		const sentence = "You're on the bench — the owner can bring you back."
+		const view = await open({ addPersona: false, closed: { "*": { reason: sentence, waits: false } } })
+		try {
+			expect(view.query(JOIN)).toBeNull()
+			expect(view.query('[data-widget-part~="messages.takeSeat"]')).toBeNull()
+			expect(view.query("sp-composer-field")?.getAttribute("placeholder")).toBe(sentence)
 		} finally {
 			await view.unmount()
 		}

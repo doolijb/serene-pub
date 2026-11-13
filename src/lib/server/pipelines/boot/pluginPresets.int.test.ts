@@ -106,7 +106,7 @@ beforeAll(async () => {
 }, 60_000)
 
 describe("plugin presets", () => {
-	it("projects a declaration into a row an administrator can enable", async () => {
+	it("projects a declaration into a row that is available on enable", async () => {
 		const report = await syncPluginPresets(db)
 		expect(report.projected).toEqual([SEED_KEY])
 
@@ -117,8 +117,8 @@ describe("plugin presets", () => {
 		expect(row.includedActions).toEqual(["acme.dice:spec/reroll#reroll"])
 		expect(
 			row.enabled,
-			"a package must not decide what this instance offers"
-		).toBe(false)
+			"enabling a plugin makes its presets available (★39, 2026-11-04)"
+		).toBe(true)
 		// Every genre has a default preset (owner ruling 2026-10-02): the
 		// first projected for a genre with none becomes it.
 		expect(row.isDefault).toBe(true)
@@ -143,12 +143,19 @@ describe("plugin presets", () => {
 	it("is idempotent, and never rewrites the administrator's switch", async () => {
 		await db
 			.update(schema.sessionPresets)
-			.set({ enabled: true })
+			.set({ enabled: false })
 			.where(eq(schema.sessionPresets.seedKey, SEED_KEY))
 
 		const again = await syncPluginPresets(db)
 		expect(again.projected).toEqual([])
-		expect((await presetRow()).enabled).toBe(true)
+		// An administrator's hide survives every sync.
+		expect((await presetRow()).enabled).toBe(false)
+		await syncPluginPresets(db)
+		expect((await presetRow()).enabled).toBe(false)
+		await db
+			.update(schema.sessionPresets)
+			.set({ enabled: true })
+			.where(eq(schema.sessionPresets.seedKey, SEED_KEY))
 	})
 
 	it("marks the row withdrawn when the plugin is disabled, and never deletes it", async () => {
@@ -196,13 +203,13 @@ describe("plugin presets", () => {
 		expect((await presetRow()).name).toBe("Dice Board")
 	})
 
-	it("honours a declaration that asks to be offered immediately", async () => {
+	it("offers a preset whether or not the declaration asks to be offered", async () => {
 		await db
 			.delete(schema.sessionPresets)
 			.where(eq(schema.sessionPresets.seedKey, SEED_KEY))
 		await install({
 			enabled: true,
-			manifest: manifest({ enabled: true })
+			manifest: manifest()
 		})
 		await syncPluginPresets(db)
 		expect((await presetRow()).enabled).toBe(true)

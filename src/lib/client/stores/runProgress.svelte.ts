@@ -107,7 +107,20 @@ export const runProgress = {
 			})
 			return
 		}
-		runs.set(event.runId, { ...(runs.get(event.runId) ?? {}), ...event })
+		const prev: Partial<RunProgress> = runs.get(event.runId) ?? {}
+		const next = { ...prev, ...event }
+		// A message describes the stage it came with ("Loading the image
+		// model…"); a later stage that brings none has outgrown it. Seen
+		// 2026-11-08: a KoboldCPP render read "sampling · 0% · Loading the
+		// image model…" for its whole three minutes.
+		if (
+			event.message === undefined &&
+			event.stage &&
+			prev.stage &&
+			event.stage !== prev.stage
+		)
+			delete (next as { message?: string }).message
+		runs.set(event.runId, next)
 	},
 
 	/**

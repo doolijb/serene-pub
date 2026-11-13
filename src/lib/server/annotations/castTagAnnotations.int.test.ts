@@ -6,8 +6,8 @@
  * as text, the tag named nobody, so an entry about a member written that way
  * was never linked to them by the entity mechanism. The annotation lane now
  * reads a tag as the member it names, by number: `character:<id>` for a
- * member bound to a live card, nothing for a background member (the
- * vocabulary has nothing for them to resolve to either).
+ * member bound to a live card, `cast_member:<id>` for a named member with no
+ * card, nothing for a tag with no member.
  *
  * The member's name is never read for it, so the stored-text hash stays the
  * whole of what can move the entry's own answer. What else can move it — the
@@ -169,14 +169,16 @@ describe("an entry that names a member by cast tag", () => {
 		)
 	}, 60_000)
 
-	it("names nobody for a background member or a tag with no member", async () => {
+	it("names a named background member as cast_member, and a tag with no member as nobody", async () => {
 		const { book, member, entry } = await makeBook()
-		await member(2, "The ferryman", null)
+		const ferryman = await member(2, "The ferryman", null)
 		const quay = await entry("Quay", "{{char:2}} and {{char:9}} argue.")
 		const { annotateLorebook } = await import("./index")
 		await annotateLorebook(testDb as any, book.id)
 		const keys = (await rowsFor(quay.id)).map((r) => r.entityKey)
 		expect(keys.filter((k) => k.startsWith("character:"))).toEqual([])
+		expect(keys).toContain(`cast_member:${ferryman.id}`)
+		expect(keys.filter((k) => k.startsWith("cast_member:"))).toHaveLength(1)
 	}, 60_000)
 })
 

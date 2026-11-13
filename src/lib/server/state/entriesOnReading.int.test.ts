@@ -74,11 +74,15 @@ beforeAll(async () => {
 		.returning()
 	verityId = verity!.id
 	olderVerityId = older!.id
-	const [member] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({ lorebookId: bookId, characterId: verityId, binding: "{{char:1}}", name: "Verity" })
-		.returning()
-	memberId = member!.id
+	const { insertCastMember, ensureCardVersion, insertCharacterVersions } =
+		await import("$lib/server/characters/versions")
+	const { member } = await insertCastMember(db(), {
+		lorebookId: bookId,
+		characterId: verityId,
+		binding: "{{char:1}}",
+		name: "Verity"
+	})
+	memberId = member.id
 
 	let position = 0
 	const entry = async (
@@ -104,12 +108,21 @@ beforeAll(async () => {
 		{ lorebookId: bookId, entryId: e.docks, year: 2, fields: { name: "The Burned Docks" } },
 		{ lorebookId: bookId, entryId: e.key, year: 2, fields: { supply: "unique" } }
 	])
-	await testDb.insert(schema.castAmendments).values({
-		lorebookId: bookId,
-		lorebookBindingId: memberId,
-		year: 2,
-		fields: { name: "Captain Verity", characterId: olderVerityId }
-	})
+	// The Y2 rename and card swap: a dated cast version on the older card.
+	const olderVersion = await ensureCardVersion(db(), olderVerityId)
+	await insertCharacterVersions(db(), [
+		{
+			castMemberId: memberId,
+			lorebookId: bookId,
+			parentVersionId: olderVersion!.id,
+			name: "Captain Verity",
+			follows: ["nickname", "description"],
+			nodeState: "active",
+			nodeVisibility: "normal",
+			year: 2,
+			writtenBy: "user:0"
+		}
+	])
 
 	const seat = async (values: Record<string, unknown>) =>
 		(
@@ -230,5 +243,80 @@ describe("a side character's name is known by the session's story", () => {
 		expect(await known(sessionEarly, "Captain Verity")).toBe(false)
 		// A shelved place is not a name the world still answers to.
 		expect(await known(sessionMain, "Old Ruin")).toBe(false)
+	})
+})
+
+describe("held amendments — the session's own change, read by that session only", () => {
+	let heldSessionA: number
+	let heldSessionB: number
+	let ownOnly: number
+	let ownBookA: number
+	let ownBookOnly: number
+
+	test("setup: two sessions on one lorebook, each with an own book, and one with only its own", async () => {
+		const { insertOwnBook } = await import("$lib/server/lorebooks/ownBook")
+		const session = async (values: Record<string, unknown>) =>
+			(
+				await testDb
+					.insert(schema.sessions)
+					.values({ userId, isGroup: false, ...values } as any)
+					.returning()
+			)[0]!.id
+		heldSessionA = await session({ lorebookId: bookId })
+		heldSessionB = await session({ lorebookId: bookId })
+		ownOnly = await session({})
+		const own = (sessionId: number) =>
+			insertOwnBook(db(), {
+				sessionId,
+				userId,
+				name: null,
+				overlayOf: null,
+				primaryRuleset: "core:ruleset/freeform@1",
+				rulesetVersion: null
+			})
+		ownBookA = (await own(heldSessionA)).id
+		await own(heldSessionB)
+		ownBookOnly = (await own(ownOnly)).id
+		// Session A holds a rename of the lorebook's entry E, undated.
+		await testDb.insert(schema.entryAmendments).values({
+			lorebookId: ownBookA,
+			entryId: e.docks,
+			year: null,
+			fields: { name: "The Held Docks" },
+			base: { name: { v: "The Docks" } },
+			sourceMessageId: 5
+		})
+	})
+
+	const names = async (reading: any, lorebook = bookId) => {
+		const { entriesAsRead } = await import("$lib/server/state/entriesOnReading")
+		return (await entriesAsRead(db(), lorebook, reading, "session", ["core:entry/location"]))
+			.filter((r) => r.entryId === e.docks)
+			.map((r) => r.name)
+	}
+
+	test("the holder's reading shows the held name; another session's and the book's own do not", async () => {
+		const { sessionReadingOf } = await import("$lib/server/state/reading")
+		expect(await names((await sessionReadingOf(db(), heldSessionA))!)).toEqual(["The Held Docks"])
+		expect(await names((await sessionReadingOf(db(), heldSessionB))!)).toEqual(["The Burned Docks"])
+		expect(await names(await readingOf(db(), bookId, {}))).toEqual(["The Burned Docks"])
+		expect(await names(MAIN_HEAD)).toEqual(["The Burned Docks"])
+	})
+
+	test("reading the own book itself never shows a held amendment", async () => {
+		const { entryOverlaysFor } = await import("$lib/server/state/entriesOnReading")
+		const { sessionReadingOf } = await import("$lib/server/state/reading")
+		const own = (await sessionReadingOf(db(), ownOnly))!
+		expect((await entryOverlaysFor(db(), ownBookOnly, own)).size).toBe(0)
+		const aReading = (await sessionReadingOf(db(), heldSessionA))!
+		expect((await entryOverlaysFor(db(), ownBookA, aReading)).size).toBe(0)
+	})
+
+	test("sessionReadingOf sets holderBookId for an attached session and not for an own-book-only one", async () => {
+		const { sessionReadingOf } = await import("$lib/server/state/reading")
+		expect((await sessionReadingOf(db(), heldSessionA))!.holderBookId).toBe(ownBookA)
+		const alone = (await sessionReadingOf(db(), ownOnly))!
+		expect(alone.holderBookId).toBeUndefined()
+		expect(alone.onOwnBook).toBe(true)
 	})
 })

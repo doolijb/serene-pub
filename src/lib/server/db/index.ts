@@ -774,10 +774,18 @@ async function runInitialisation(): Promise<void> {
 			{ pruneUndeclared: true }
 		)
 
+		// ⏳ Stored session layouts to panels version 2, carrying the Messages
+		// settings that moved to the Composer and Turn line widgets onto them —
+		// BEFORE the prune below, which would delete them as undeclared
+		// (PLAN-session-layout-simplify-2026-11-05 D5, D14). Deferred-imported
+		// for the same db-cycle reason as `sync` above.
+		const { convertPanelsToV2 } = await import("./sessionLayoutPanels")
+		const v2 = await convertPanelsToV2(db)
+
 		// Prune per-instance widget settings against the current declarations,
 		// so a field core stopped declaring stops being stored (PLAN 25).
 		const { syncWidgetSettings } = await import("./widgetSettings")
-		await syncWidgetSettings(CORE_WIDGETS)
+		await syncWidgetSettings(CORE_WIDGETS, { spare: v2.pending })
 	}
 }
 

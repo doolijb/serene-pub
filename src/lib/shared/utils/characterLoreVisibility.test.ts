@@ -101,3 +101,18 @@ describe("getCharacterLoreVisibility", () => {
 		expect(v.label).toBe("Private to this character")
 	})
 })
+
+describe("a member's own name in the book", () => {
+	test("the label says the own name", () => {
+		const v = getCharacterLoreVisibility(5, [
+			{
+				id: 5,
+				characterId: 9,
+				ownName: "Vera",
+				ownNickname: "",
+				character: { name: "Verity", nickname: "Vee" }
+			}
+		])
+		expect(v.label).toBe("Private to Vera")
+	})
+})

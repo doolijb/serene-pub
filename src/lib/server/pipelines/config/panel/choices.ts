@@ -247,31 +247,6 @@ export async function choiceSets(db: Db, specId: number) {
 		{ markForeign: true }
 	)
 
-	// Every layout on the instance, not this spec's — a layout is keyed by the
-	// variable it renders, so one written while configuring replies belongs in
-	// the narrator's picker too. Narrowed per option by `variableId` below.
-	const variableTemplates = (
-		await db
-			.select()
-			.from(schema.pipelineVariableTemplates)
-			.orderBy(asc(schema.pipelineVariableTemplates.id))
-	).filter((r) => !off.owns(r.ownerPluginId))
-
-	const byVariable = new Map<string, ChoiceList>()
-	for (const t of variableTemplates as any[]) {
-		const list = byVariable.get(t.variableId) ?? []
-		list.push({ id: t.id, label: t.name })
-		byVariable.set(t.variableId, list)
-	}
-	// Shipped first, matching `listVariableTemplates` — the picker's order is
-	// part of what "the default" means.
-	for (const [, list] of byVariable)
-		list.sort((a, b) => {
-			const rowA = (variableTemplates as any[]).find((t) => t.id === a.id)
-			const rowB = (variableTemplates as any[]).find((t) => t.id === b.id)
-			return Number(!!rowB?.isImmutable) - Number(!!rowA?.isImmutable)
-		})
-
 	// Every script on the instance, keyed by pinned type id. Like layouts, a
 	// script is deliberately not namespaced to a spec — a slop filter written
 	// while configuring replies belongs in the summarizer's picker too — so the
@@ -380,11 +355,6 @@ export async function choiceSets(db: Db, specId: number) {
 		/** The full rows, for the inline editor — same reason as `promptRows`. */
 		contextTemplateRows: new Map<number, any>(
 			(contextTemplateRows as any[]).map((t) => [t.id, t])
-		),
-		variableTemplatesBy: byVariable,
-		/** The full rows, for the inline editor — same reason as `promptRows`. */
-		variableTemplateRows: new Map<number, any>(
-			(variableTemplates as any[]).map((t) => [t.id, t])
 		),
 		scriptsByType,
 		/** The full rows, to hydrate a chain's entries — same reason as `promptRows`. */
@@ -573,10 +543,6 @@ export const choicesFor = (
 	// reported (ruling 13's per-workflow shape was reversed 2026-10-12).
 	if (d.control === "sampling-ref") return ofShape(sets.sampling, d.shape)
 	if (d.control === "workflow-ref") return sets.workflows
-	if (d.control === "variable-template-ref")
-		return d.variableId
-			? (sets.variableTemplatesBy.get(d.variableId) ?? [])
-			: []
 	// The union of the accepted pools, not one of them. The pool is still
 	// `(node definition, engine)` and rows never mix inside it; what a slot declaring
 	// several languages changes is how many pools feed this one picker. Each

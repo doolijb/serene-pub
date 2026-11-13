@@ -455,3 +455,124 @@ export async function importCardDowry(
 		}
 	}
 }
+
+/**
+ * 🚧 A card's template stats onto a cast member that is losing the card —
+ * **fill-only, the member's own win** (owner 2026-11-05: what cannot survive
+ * without the card is copied to the member). The card layer is what
+ * `buildCardDowry` reads: `owner_kind 'card'`, no session, no branch.
+ * `by.userId` is the member's book owner (the sheets writer check).
+ *
+ *  - Sheets: the member's own template-layer sheets in their order, then the
+ *    card's the member lacks, in the card's order (`setOwnerSheets`) — written
+ *    only when the card adds at least one.
+ *  - Configs and values: a card-layer row whose slot the member holds **no row
+ *    for at all** (any line or date, template layer) is inserted for the
+ *    member with the same slot, value, provenance and note, and no session,
+ *    branch, date or scene.
+ *
+ * A second call adds nothing. Everything runs on `tx`; the card's rows are
+ * never changed. Answers how many of each were added.
+ */
+export async function copyCardStatsToMember(
+	tx: Db,
+	cardId: number,
+	castMemberId: number,
+	by: { userId: number }
+): Promise<{ sheets: number; configs: number; values: number }> {
+	const sheetsOf = async (kind: "card" | "cast_member", id: number) =>
+		(
+			await tx
+				.select({ sheetId: schema.ownerSheets.sheetId })
+				.from(schema.ownerSheets)
+				.where(
+					and(
+						eq(schema.ownerSheets.ownerKind, kind),
+						eq(schema.ownerSheets.ownerId, id),
+						isNull(schema.ownerSheets.sessionId)
+					)
+				)
+				.orderBy(
+					asc(schema.ownerSheets.position),
+					asc(schema.ownerSheets.id)
+				)
+		).map((r) => r.sheetId)
+
+	const result = { sheets: 0, configs: 0, values: 0 }
+	const own = await sheetsOf("cast_member", castMemberId)
+	const have = new Set(own)
+	const added = (await sheetsOf("card", cardId)).filter((id) => !have.has(id))
+	if (added.length) {
+		await setOwnerSheets(
+			tx,
+			{ kind: "cast_member", id: castMemberId },
+			[...own, ...new Set(added)],
+			{ userId: by.userId }
+		)
+		result.sheets = new Set(added).size
+	}
+
+	for (const source of [schema.attributeConfigs, schema.attributeValues]) {
+		const held = new Set(
+			(
+				await tx
+					.select({ slotId: source.slotId })
+					.from(source)
+					.where(
+						and(
+							eq(source.ownerKind, "cast_member"),
+							eq(source.ownerId, castMemberId),
+							isNull(source.sessionId)
+						)
+					)
+			).map((r) => r.slotId)
+		)
+		const cardRows = (
+			await tx
+				.select()
+				.from(source)
+				.where(
+					and(
+						eq(source.ownerKind, "card"),
+						eq(source.ownerId, cardId),
+						isNull(source.sessionId),
+						isNull(source.branchId)
+					)
+				)
+				.orderBy(asc(source.id))
+		).filter((r) => !held.has(r.slotId))
+		if (!cardRows.length) continue
+		const base = (r: (typeof cardRows)[number]) => ({
+			ownerKind: "cast_member",
+			ownerId: castMemberId,
+			slotId: r.slotId,
+			sessionId: null,
+			branchId: null,
+			historyEntryId: null,
+			validFromMessageId: null,
+			sceneId: null,
+			updatedBy: r.updatedBy,
+			note: r.note
+		})
+		if (source === schema.attributeConfigs) {
+			await tx
+				.insert(schema.attributeConfigs)
+				.values(
+					(
+						cardRows as (typeof schema.attributeConfigs.$inferSelect)[]
+					).map((r) => ({ ...base(r), config: r.config }))
+				)
+			result.configs = cardRows.length
+		} else {
+			await tx
+				.insert(schema.attributeValues)
+				.values(
+					(
+						cardRows as (typeof schema.attributeValues.$inferSelect)[]
+					).map((r) => ({ ...base(r), value: r.value }))
+				)
+			result.values = cardRows.length
+		}
+	}
+	return result
+}

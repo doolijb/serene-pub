@@ -31,6 +31,7 @@ import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import { historyEntryDate } from "$lib/server/state/reading"
 import { bookCalendarOf } from "$lib/server/state/storyTime"
 import { inBookOfType, parkingFloor } from "$lib/server/utils/lorebookEntries"
+import { repointVersionHistory } from "$lib/server/characters/versions"
 import {
 	earlierCut,
 	forksThrough,
@@ -204,22 +205,34 @@ async function pointedAt(
 		.where(and(inArray(s.historyEntryId, ids), ofGroup(s.branchId, null, group, sessionIds))))
 		found.push(r.id)
 	const l = schema.narrativeRelationships
+	// A link kept in a session's notes is that session's own, not main's use of
+	// the entry: only the entries' own books' links (and the lorebooks') count.
+	const ownBooks = (
+		await tx
+			.select({ id: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(inArray(schema.lorebookEntries.id, ids))
+	).map((b) => b.id)
 	for (const r of await tx
 		.select({ from: l.fromEntryId, to: l.toEntryId, dated: l.historyEntryId })
 		.from(l)
+		.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, l.lorebookId))
 		.where(
 			and(
 				ofGroup(l.branchId, null, group, sessionIds),
+				or(isNull(schema.lorebooks.sessionId), inArray(l.lorebookId, ownBooks)),
 				or(inArray(l.fromEntryId, ids), inArray(l.toEntryId, ids), inArray(l.historyEntryId, ids))
 			)
 		))
 		found.push(r.from, r.to, r.dated)
+	// A held amendment (`base` set) is a session's own change, never a line's: it is left out here.
 	const e = schema.entryAmendments
 	for (const r of await tx
 		.select({ entry: e.entryId, dated: e.historyEntryId })
 		.from(e)
 		.where(
 			and(
+				isNull(e.base),
 				ofGroup(e.branchId, null, group, sessionIds),
 				or(inArray(e.entryId, ids), inArray(e.historyEntryId, ids))
 			)
@@ -230,6 +243,20 @@ async function pointedAt(
 		.select({ id: c.historyEntryId })
 		.from(c)
 		.where(and(inArray(c.historyEntryId, ids), ofGroup(c.branchId, null, group, sessionIds))))
+		found.push(r.id)
+	// A cast version dates itself by a history entry the same way (frozen
+	// amendments above are the old rows; the versions are the live ones).
+	const v = schema.characterVersions
+	for (const r of await tx
+		.select({ id: v.historyEntryId })
+		.from(v)
+		.where(
+			and(
+				isNotNull(v.castMemberId),
+				inArray(v.historyEntryId, ids),
+				ofGroup(v.branchId, null, group, sessionIds)
+			)
+		))
 		found.push(r.id)
 	for (const t of [schema.attributeValues, schema.attributeConfigs, schema.stateProposals] as const)
 		for (const r of await tx
@@ -330,17 +357,16 @@ async function pointOnto(
 			.update(l)
 			.set({ [column]: to, updatedAt: sql`${l.updatedAt}` })
 			.where(and(eq(l[column], from), ofGroup(l.branchId, null, group, sessionIds)))
+	// A held amendment (`base` set) is a session's own change, never a line's: it is left out here.
 	const e = schema.entryAmendments
 	for (const column of ["entryId", "historyEntryId"] as const)
 		await tx
 			.update(e)
 			.set({ [column]: to, updatedAt: sql`${e.updatedAt}` })
-			.where(and(eq(e[column], from), ofGroup(e.branchId, null, group, sessionIds)))
-	const c = schema.castAmendments
-	await tx
-		.update(c)
-		.set({ historyEntryId: to, updatedAt: sql`${c.updatedAt}` })
-		.where(and(eq(c.historyEntryId, from), ofGroup(c.branchId, null, group, sessionIds)))
+			.where(and(eq(e[column], from), isNull(e.base), ofGroup(e.branchId, null, group, sessionIds)))
+	// Cast versions (`character_versions`) are written only by
+	// `characters/versions.ts`, which has the function for this one.
+	await repointVersionHistory(tx, from, to, group)
 	for (const t of [schema.attributeValues, schema.attributeConfigs, schema.stateProposals] as const)
 		await tx
 			.update(t)
@@ -446,19 +472,41 @@ async function linesUsing(tx: Db, entryId: number): Promise<Set<number | null>> 
 	for (const r of await tx.select({ line: s.branchId }).from(s).where(eq(s.historyEntryId, entryId)))
 		lines.add(r.line)
 	const l = schema.narrativeRelationships
+	// A link in another session's notes is not main's use of the entry (see `pointedAt`).
+	const [entryBook] = await tx
+		.select({ id: schema.lorebookEntries.lorebookId })
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.id, entryId))
+		.limit(1)
 	for (const r of await tx
 		.select({ line: l.branchId })
 		.from(l)
-		.where(or(eq(l.fromEntryId, entryId), eq(l.toEntryId, entryId), eq(l.historyEntryId, entryId))))
+		.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, l.lorebookId))
+		.where(
+			and(
+				or(
+					isNull(schema.lorebooks.sessionId),
+					entryBook ? eq(l.lorebookId, entryBook.id) : undefined
+				),
+				or(eq(l.fromEntryId, entryId), eq(l.toEntryId, entryId), eq(l.historyEntryId, entryId))
+			)
+		))
 		lines.add(r.line)
+	// A held amendment (`base` set) is a session's own change, never a line's: it is left out here.
 	const e = schema.entryAmendments
 	for (const r of await tx
 		.select({ line: e.branchId })
 		.from(e)
-		.where(or(eq(e.entryId, entryId), eq(e.historyEntryId, entryId))))
+		.where(and(isNull(e.base), or(eq(e.entryId, entryId), eq(e.historyEntryId, entryId)))))
 		lines.add(r.line)
 	const c = schema.castAmendments
 	for (const r of await tx.select({ line: c.branchId }).from(c).where(eq(c.historyEntryId, entryId)))
+		lines.add(r.line)
+	const v = schema.characterVersions
+	for (const r of await tx
+		.select({ line: v.branchId })
+		.from(v)
+		.where(and(isNotNull(v.castMemberId), eq(v.historyEntryId, entryId))))
 		lines.add(r.line)
 	const p = schema.stateProposals
 	for (const r of await tx.select({ line: p.branchId }).from(p).where(eq(p.historyEntryId, entryId)))

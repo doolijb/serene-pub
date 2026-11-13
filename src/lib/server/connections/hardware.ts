@@ -247,3 +247,29 @@ export function machineHardware(): Promise<MachineHardware> {
 export function resetMachineHardwareForTests(): void {
 	cached = null
 }
+
+/**
+ * The graphics memory free RIGHT NOW, in GiB, on the largest NVIDIA card —
+ * `nvidia-smi --query-gpu=memory.free`. Null wherever there is no figure
+ * (no NVIDIA card, no nvidia-smi, a timeout): the caller treats null as "no
+ * room", never as a guess. Not cached: it is asked at the moment a load is
+ * planned (`koboldcpp/coLoad.ts`), and it changes with every load.
+ */
+export async function freeGpuMemoryGib(
+	run: HardwareProbeDeps["run"] = defaultRun
+): Promise<number | null> {
+	const out = await run!(
+		"nvidia-smi",
+		["--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+		HARDWARE_PROBE_TIMEOUT_MS
+	)
+	if (!out) return null
+	let best: number | null = null
+	for (const line of out.split("\n")) {
+		const mib = parseFloat(line.trim())
+		if (!Number.isFinite(mib) || mib <= 0) continue
+		const g = mib / 1024
+		if (best === null || g > best) best = g
+	}
+	return best
+}

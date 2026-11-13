@@ -148,12 +148,16 @@ export interface ComposeStopsInput {
 	template?: string | CompletionTemplate | null
 	characters: {
 		id?: number
+		/** 🚧 The member a card-less character seat (an entry with no `id`) seats — never a card id. */
+		castMemberId?: number | null
 		name?: string | null
 		nickname?: string | null
 	}[]
 	personas: { name?: string | null }[]
 	/** Whoever is speaking. Their own name must never end their own reply. */
 	currentCharacterId?: number | null
+	/** 🚧 The member speaking a card-less character seat (set only when `currentCharacterId` is null); matched to the `characters` entry with no `id`. */
+	currentCastMemberId?: number | null
 	/**
 	 * 🚧 The labels of the session's voices that nobody in the cast is (lair
 	 * fix 2, 2026-10-22): what the person's own lines are called — a genre's
@@ -205,6 +209,18 @@ function render(value: string, context: Record<string, string>): string {
 	}
 }
 
+/** A card-less seat's entry (no `id`) whose member is the one speaking. */
+function isCardlessSpeaker(
+	character: { id?: number; castMemberId?: number | null },
+	currentCastMemberId: number | null | undefined
+): boolean {
+	return (
+		currentCastMemberId != null &&
+		character.id === undefined &&
+		character.castMemberId === currentCastMemberId
+	)
+}
+
 /**
  * The `Name:` labels for everyone in the scene except the speaker.
  *
@@ -223,8 +239,9 @@ function speakerStops(input: ComposeStopsInput, all = false): string[] {
 		// fresh session has.
 		if (
 			!all &&
-			character.id !== undefined &&
-			character.id === input.currentCharacterId
+			((character.id !== undefined &&
+				character.id === input.currentCharacterId) ||
+				isCardlessSpeaker(character, input.currentCastMemberId))
 		)
 			continue
 		if (character.name) out.push(`${character.name}:`)
@@ -247,7 +264,7 @@ function speakerStops(input: ComposeStopsInput, all = false): string[] {
 }
 
 /** A name is free text a user typed, so it reaches a pattern escaped. */
-const escapeRegExp = (value: string) =>
+export const escapeRegExp = (value: string) =>
 	value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 /**
@@ -480,10 +497,10 @@ function emphasisedLabelAtLineStart(labels: readonly string[]): RegExp {
 }
 
 /** Markdown emphasis a model wraps its own label in: `**Verity:**`, `__Verity__:`. */
-const EMPHASIS = "(?:\\*\\*|__|\\*|_)?"
+export const EMPHASIS = "(?:\\*\\*|__|\\*|_)?"
 
 /** The whole spellings of one name's label, for the streaming hold-back. */
-const labelSpellings = (name: string) => [
+export const labelSpellings = (name: string) => [
 	`${name}:`,
 	`**${name}:**`,
 	`**${name}**:`,
@@ -613,7 +630,12 @@ export function seedLabelOf(compiled: unknown): string | undefined {
  */
 export function ownLabelsFor(
 	session:
-		| { sessionCharacters?: { character?: unknown }[] | null }
+		| {
+				sessionCharacters?: {
+					character?: unknown
+					castMemberId?: number | null
+				}[] | null
+		  }
 		| null
 		| undefined,
 	currentCharacterId: number | null | undefined,
@@ -625,7 +647,9 @@ export function ownLabelsFor(
 	 * no seed label and no character speaks, so it never adds to a turn the
 	 * seed already names (a Dungeon Crawler Planner's lane, 2026-10-15).
 	 */
-	replyLabel?: string | null
+	replyLabel?: string | null,
+	/** 🚧 The member speaking a card-less character seat; read only when `currentCharacterId` is null. */
+	currentCastMemberId?: number | null
 ): string[] {
 	const out: string[] = []
 	const seed = seedLabelOf(compiled)
@@ -639,6 +663,17 @@ export function ownLabelsFor(
 				nickname?: string | null
 			} | undefined)
 			.find((c) => c?.id === currentCharacterId)
+		if (character?.name) out.push(character.name)
+		if (character?.nickname) out.push(character.nickname)
+	} else if (currentCastMemberId != null) {
+		const character = (session?.sessionCharacters ?? [])
+			.filter((cc) => cc?.castMemberId === currentCastMemberId)
+			.map((cc) => cc?.character as {
+				id?: number
+				name?: string | null
+				nickname?: string | null
+			} | undefined)
+			.find((c) => c && c.id === undefined)
 		if (character?.name) out.push(character.name)
 		if (character?.nickname) out.push(character.nickname)
 	}
@@ -694,7 +729,10 @@ export function composeStopsFor(
 	connection: unknown,
 	session:
 		| {
-				sessionCharacters?: { character?: unknown }[] | null
+				sessionCharacters?: {
+					character?: unknown
+					castMemberId?: number | null
+				}[] | null
 				/** 🚧 A card-less player seat (`persona: null`) is stopped on by its seat name. */
 				sessionPersonas?: { persona?: unknown; seatName?: string | null }[] | null
 		  }
@@ -702,6 +740,8 @@ export function composeStopsFor(
 		| undefined,
 	opts: {
 		currentCharacterId?: number | null
+		/** 🚧 The member speaking a card-less character seat (`ComposeStopsInput.currentCastMemberId`). */
+		currentCastMemberId?: number | null
 		explicit?: unknown
 		/**
 		 * The payload about to go out, for the chat wire's inline-label
@@ -723,12 +763,19 @@ export function composeStopsFor(
 	return composeStops({
 		template: row.completionTemplate ?? promptFormatOf(row.promptFormat),
 		characters: (session?.sessionCharacters ?? [])
-			.map((cc) => cc?.character)
+			.map((cc) =>
+				cc?.character && (cc.character as { id?: number }).id === undefined
+					? { ...(cc.character as object), castMemberId: cc.castMemberId ?? null }
+					: cc?.character
+			)
 			.filter(Boolean) as ComposeStopsInput["characters"],
 		personas: (session?.sessionPersonas ?? [])
 			.map((cp) => cp?.persona ?? (cp?.seatName ? { name: cp.seatName } : null))
 			.filter(Boolean) as ComposeStopsInput["personas"],
 		currentCharacterId: opts.currentCharacterId ?? null,
+		...(opts.currentCastMemberId != null
+			? { currentCastMemberId: opts.currentCastMemberId }
+			: {}),
 		explicit: explicitStopsFrom(opts.explicit),
 		wire: row.wireMode ?? resolveWireMode(row as any),
 		messages: opts.messages ?? null,

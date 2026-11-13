@@ -63,7 +63,7 @@ These are the most anyone can set. Each person can set lower ones for their own 
 
 ### Lorebook writes from sessions
 
-How sessions may change the lorebooks they read (a stat a session records, a summary, a compiled history, a graph): **Full**, **Review changes** (the default) or **Off**, each with a line saying what it does. It's the default for everyone: a person who hasn't chosen their own in **Settings › User** follows it, and changes with it; anyone who has chosen keeps their choice. What each setting does to each kind of write is in [Lorebooks](./lorebooks.md#what-a-session-may-write) and [Stats and states](./stats-and-states.md#when-a-session-changes-the-lorebook).
+How sessions may change the lorebooks they read (a stat a session records, a summary, a compiled history, a graph): **Full** (the default), **Review changes** or **Off**, each with a line saying what it does. It's the default for everyone: a person who hasn't chosen their own in **Settings › User** follows it, and changes with it; anyone who has chosen keeps their choice. What each setting does to each kind of write is in [Lorebooks](./lorebooks.md#what-a-session-may-write) and [Stats and states](./stats-and-states.md#when-a-session-changes-the-lorebook).
 
 ### Embeddings
 
@@ -90,6 +90,8 @@ Tunnels are not available in the Android app; the card says so instead.
 The **Backup policy** card holds the two switches for the whole pub: **Back up daily** (on by default), which takes a copy of the database once a day on top of the one taken whenever an update is about to change the database, and **Include user files** (off by default), which archives media and avatars beside each backup. Neither ever deletes anything.
 
 Below it is the backups list: **Back up now** (with a one-off _include user files_ box), every backup with its size and date and a **Delete** button, and any databases set aside by a recovery. Backups are kept in your [data folder](./install.md#where-your-data-lives). Restoring isn't done here, because it has to happen while the database is closed: see [Database won't open](./troubleshooting.md#database-wont-open). The same list is on the **Data** tab of **Settings**.
+
+After the upgrade to character versions, a few cast members can read a little differently than before: an old dated change that couldn't be carried over exactly, or greetings of which only some were told in the member's own words. When there are any, the **Overview**'s Data and backups card counts them (_3 cast members read differently since the upgrade_) and opens the **Since the upgrade** card here. It lists each member with their lorebook and, for each difference, the line, the date and the parts that read differently. A member whose greetings became their own list has **Follow the card's greetings**, which sets them to read the card's greetings again.
 
 ## Diagnostics
 

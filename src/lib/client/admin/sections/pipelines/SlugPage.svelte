@@ -36,12 +36,16 @@
 		saveSummary,
 		type SaveStep
 	} from "$lib/client/admin/sequentialSave"
-	import { adminUnsavedEdits, adminGoto as goto, adminReplaceState as replaceState } from "$lib/client/admin/adminRouter.svelte"
+	import {
+		adminUnsavedEdits,
+		adminGoto as goto,
+		adminReplaceState as replaceState
+	} from "$lib/client/admin/adminRouter.svelte"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import CanvasPanel from "$lib/client/components/pipelines/workspace/canvas/CanvasPanel.svelte"
 	import {
@@ -165,7 +169,11 @@
 	}
 	const onDetailError = (res: { error?: string }) => {
 		loading = false
-		if (res?.error) toaster.error({ title: res.error })
+		if (res?.error)
+			notify.error({
+				source: "admin:pipelines:refusal",
+				title: res.error
+			})
 	}
 	const onRegisteredIn = (res: Sockets.Pipelines.RegisteredIn.Response) => {
 		if (res.slug === untrack(() => slug)) registeredIn = res.places ?? []
@@ -303,7 +311,9 @@
 
 	let pending = $state<Record<string, unknown>>({})
 	let pendingClears = $state<string[]>([])
-	const optionCount = $derived(Object.keys(pending).length + pendingClears.length)
+	const optionCount = $derived(
+		Object.keys(pending).length + pendingClears.length
+	)
 	const pendingCount = $derived(optionCount)
 
 	/** The raw (un-overlaid) option row, for "was it truly overridden". */
@@ -356,10 +366,12 @@
 	 * Save again resends them (re-setting what landed changes nothing).
 	 */
 	function sendOptions() {
-		const set = Object.entries($state.snapshot(pending)).map(([optionId, value]) => ({
-			optionId,
-			value
-		}))
+		const set = Object.entries($state.snapshot(pending)).map(
+			([optionId, value]) => ({
+				optionId,
+				value
+			})
+		)
 		const clear = [...pendingClears]
 		return awaitReply({
 			socket,
@@ -410,10 +422,10 @@
 		const name = spec?.name ?? slug
 		if (outcome.refused.length || outcome.skipped.length) {
 			formErrors = saveErrors(outcome)
-			toaster.warning({ title: saveSummary(outcome, name) })
+			notify.warning({ title: saveSummary(outcome, name) })
 			return
 		}
-		toaster.success({ title: saveSummary(outcome, name) })
+		notify.success({ title: saveSummary(outcome, name) })
 		land(intent)
 	}
 
@@ -555,8 +567,7 @@
 	const SPLIT_AT = 400 + 460
 	const sideBySide = $derived(navView === "map" && workspaceWidth >= SPLIT_AT)
 
-	const LEGEND =
-		"text-surface-600-400 text-xs font-medium"
+	const LEGEND = "text-surface-600-400 text-xs font-medium"
 
 	const TABS: { id: Tab; label: string; icon: keyof typeof Icons }[] = [
 		{ id: "configure", label: "Configure", icon: "SlidersHorizontal" },
@@ -596,65 +607,78 @@
 	onSave={save}
 >
 	{#snippet headerExtra()}
-			<p
-				class="text-surface-600-400 flex flex-wrap items-center gap-1.5 font-mono text-xs"
-			>
-				<span class="truncate">
-					{slug}{activeVersion ? ` · v${activeVersion.semver}` : ""}
+		<p
+			class="text-surface-600-400 flex flex-wrap items-center gap-1.5 font-mono text-xs"
+		>
+			<span class="truncate">
+				{slug}{activeVersion ? ` · v${activeVersion.semver}` : ""}
+			</span>
+			<!-- The catalogue claims (23 §4), worn where the version is. -->
+			{#if detail?.taxonomy?.zone}
+				<Badge size="sm" class="font-sans">
+					{detail.taxonomy.zone}
+				</Badge>
+			{/if}
+			{#if detail?.taxonomy?.role}
+				<span
+					class="{detail.taxonomy.role === 'primary'
+						? 'preset-tonal-primary'
+						: detail.taxonomy.role === 'action'
+							? 'preset-tonal-secondary'
+							: detail.taxonomy.role === 'create'
+								? 'preset-tonal-tertiary'
+								: 'preset-tonal-surface'} text-meta rounded-full px-1.5 py-0.5 font-sans"
+				>
+					{detail.taxonomy.role}
 				</span>
-				<!-- The catalogue claims (23 §4), worn where the version is. -->
-				{#if detail?.taxonomy?.zone}
-					<Badge size="sm" class="font-sans">
-						{detail.taxonomy.zone}
-					</Badge>
-				{/if}
-				{#if detail?.taxonomy?.role}
-					<span
-						class="{detail.taxonomy.role === 'primary'
-							? 'preset-tonal-primary'
-							: detail.taxonomy.role === 'action'
-								? 'preset-tonal-secondary'
-								: detail.taxonomy.role === 'create'
-									? 'preset-tonal-tertiary'
-									: 'preset-tonal-surface'} rounded-full px-1.5 py-0.5 font-sans text-meta"
-					>
-						{detail.taxonomy.role}
-					</span>
-				{/if}
-				{#if detail?.taxonomy?.role === "create" && detail?.taxonomy?.genre}
-					<!-- A create pipeline is its genre's required member (24 §3). -->
-					<a
-						class="preset-tonal-primary rounded-full px-1.5 py-0.5 font-sans text-meta hover:underline"
-						href="/admin/session-genres/{encodeURIComponent(
-							detail.taxonomy.genre
-						)}"
-						title="This pipeline creates sessions of this genre"
-					>
-						genre: {genreNames.get(detail.taxonomy.genre) ??
-							detail.taxonomy.genre}
-					</a>
-				{:else if detail?.taxonomy?.genre}
-					<Badge size="sm" class="font-sans" title={detail.taxonomy.genre}>
-						{genreNames.get(detail.taxonomy.genre) ??
-							detail.taxonomy.genre}
-					</Badge>
-				{/if}
-			</p>
-			<!-- The workspace is a two-pane tool; in the dock it stacks and
+			{/if}
+			{#if detail?.taxonomy?.role === "create" && detail?.taxonomy?.genre}
+				<!-- A create pipeline is its genre's required member (24 §3). -->
+				<a
+					class="preset-tonal-primary text-meta rounded-full px-1.5 py-0.5 font-sans hover:underline"
+					href="/admin/session-genres/{encodeURIComponent(
+						detail.taxonomy.genre
+					)}"
+					title="This pipeline creates sessions of this genre"
+				>
+					genre: {genreNames.get(detail.taxonomy.genre) ??
+						detail.taxonomy.genre}
+				</a>
+			{:else if detail?.taxonomy?.genre}
+				<Badge
+					size="sm"
+					class="font-sans"
+					title={detail.taxonomy.genre}
+				>
+					{genreNames.get(detail.taxonomy.genre) ??
+						detail.taxonomy.genre}
+				</Badge>
+			{/if}
+		</p>
+		<!-- The workspace is a two-pane tool; in the dock it stacks and
 			     still works, and this says where the room is. -->
-			<p class="text-surface-600-400 text-chip @min-[700px]/content:hidden">
-				Wider is easier: press the Focus button above.
-			</p>
+		<p class="text-surface-600-400 text-chip @min-[700px]/content:hidden">
+			Wider is easier: press the Focus button above.
+		</p>
 	{/snippet}
 	{#snippet saveRowExtra()}
 		{#if pendingCount}
 			<span class="text-surface-600-400 text-xs">
 				{pendingCount} change{pendingCount === 1 ? "" : "s"}
 			</span>
-			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (tab = "changes")}>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={() => (tab = "changes")}
+			>
 				Review
 			</button>
-			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={discardAll} disabled={saving}>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={discardAll}
+				disabled={saving}
+			>
 				Discard
 			</button>
 		{/if}
@@ -671,23 +695,38 @@
 		<!-- 🚧 Where its values come from (R38; lane 7): no configurations —
 		     what this page saves is the genre's defaults of each genre that
 		     registers it. -->
-		<section class="panel-card flex flex-col gap-1" aria-label="Where its values come from" data-testid="pipeline-values-scope">
+		<section
+			class="panel-card flex flex-col gap-1"
+			aria-label="Where its values come from"
+			data-testid="pipeline-values-scope"
+		>
 			<p class="text-sm">
 				{#if registeredIn.some((p) => p.scope === "genre")}
 					What you save here is the genre's defaults for
-					{[...new Set(registeredIn.filter((p) => p.scope === "genre").map((p) => p.genreName))].join(", ")}.
-					A preset changes them in Admin › Presets; a session's owner may change what the pipeline exposes.
+					{[
+						...new Set(
+							registeredIn
+								.filter((p) => p.scope === "genre")
+								.map((p) => p.genreName)
+						)
+					].join(", ")}. A preset changes them in Admin › Presets; a
+					session's owner may change what the pipeline exposes.
 				{:else if registeredIn.length}
-					A preset registers this pipeline: what you save here is its genres' defaults, under each preset's own
-					changes.
+					A preset registers this pipeline: what you save here is its
+					genres' defaults, under each preset's own changes.
 				{:else}
-					Nothing registers this pipeline yet. What you save here is this pub's own values for it.
+					Nothing registers this pipeline yet. What you save here is
+					this pub's own values for it.
 				{/if}
 			</p>
-			<button type="button" class="anchor self-start text-xs" onclick={() => (tab = "preset")}>Where it runs</button>
+			<button
+				type="button"
+				class="anchor self-start text-xs"
+				onclick={() => (tab = "preset")}
+			>
+				Where it runs
+			</button>
 		</section>
-
-
 
 		<!-- ── the workspace tabs (22) ───────────────────────────────── -->
 		<!-- Six labelled tabs share the row. Below ~560px of `content` (the
@@ -705,269 +744,271 @@
 			aria-labelledby="pipeline-workspace-{tab}-tab"
 			class="flex flex-col gap-4"
 		>
-
-		{#if tab === "configure"}
-			<!-- ── configure toolbar: find a setting, choose the navigator ── -->
-			<div class="flex flex-wrap items-center gap-2">
-				<div class="relative max-w-md min-w-0 flex-1 basis-48">
-					<Icons.Search
-						size={14}
-						class="text-surface-600-400 absolute top-1/2 left-2.5 -translate-y-1/2"
-					/>
-					<input
-						class="input pl-8 text-sm"
-						placeholder="Find a setting across every step…"
-						bind:value={optionQuery}
-						aria-label="Find a setting"
-					/>
-					{#if searchResults.length}
-						<div
-							class="bg-surface-50-950 border-surface-200-800 absolute top-full right-0 left-0 z-30 mt-1 max-h-80 overflow-y-auto rounded-base border p-1"
-						>
-							{#each searchResults as r (r.option.id)}
-								<button
-									type="button"
-									class="hover:bg-surface-200-800 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm"
-									onclick={() =>
-										jumpToOption(r.stepKey, r.option.id)}
-								>
-									<span class="min-w-0 flex-1 truncate">
-										{r.option.label}
-									</span>
-									<span
-										class="text-surface-600-400 shrink-0 text-xs"
+			{#if tab === "configure"}
+				<!-- ── configure toolbar: find a setting, choose the navigator ── -->
+				<div class="flex flex-wrap items-center gap-2">
+					<div class="relative max-w-md min-w-0 flex-1 basis-48">
+						<Icons.Search
+							size={14}
+							class="text-surface-600-400 absolute top-1/2 left-2.5 -translate-y-1/2"
+						/>
+						<input
+							class="input pl-8 text-sm"
+							placeholder="Find a setting across every step…"
+							bind:value={optionQuery}
+							aria-label="Find a setting"
+						/>
+						{#if searchResults.length}
+							<div
+								class="bg-surface-50-950 border-surface-200-800 rounded-base absolute top-full right-0 left-0 z-30 mt-1 max-h-80 overflow-y-auto border p-1"
+							>
+								{#each searchResults as r (r.option.id)}
+									<button
+										type="button"
+										class="hover:bg-surface-200-800 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm"
+										onclick={() =>
+											jumpToOption(
+												r.stepKey,
+												r.option.id
+											)}
 									>
-										{r.stepLabel}
-									</span>
-								</button>
-							{/each}
-						</div>
-					{:else if optionQuery.trim()}
-						<div
-							class="bg-surface-50-950 border-surface-200-800 text-surface-600-400 absolute top-full right-0 left-0 z-30 mt-1 rounded-base border p-3 text-sm"
+										<span class="min-w-0 flex-1 truncate">
+											{r.option.label}
+										</span>
+										<span
+											class="text-surface-600-400 shrink-0 text-xs"
+										>
+											{r.stepLabel}
+										</span>
+									</button>
+								{/each}
+							</div>
+						{:else if optionQuery.trim()}
+							<div
+								class="bg-surface-50-950 border-surface-200-800 text-surface-600-400 rounded-base absolute top-full right-0 left-0 z-30 mt-1 border p-3 text-sm"
+							>
+								Nothing matches.
+							</div>
+						{/if}
+					</div>
+
+					<div
+						class="border-surface-200-800 ml-auto flex overflow-hidden rounded-md border"
+						role="group"
+						aria-label="Step navigator"
+					>
+						<button
+							type="button"
+							class="btn btn-sm rounded-none {navView === 'list'
+								? 'preset-pressed'
+								: 'preset-tonal-surface'}"
+							aria-pressed={navView === "list"}
+							title="Compact step list"
+							onclick={() => rememberNavView("list")}
 						>
-							Nothing matches.
-						</div>
-					{/if}
+							<Icons.List size={15} /> List
+						</button>
+						<button
+							type="button"
+							class="btn btn-sm rounded-none {navView === 'map'
+								? 'preset-pressed'
+								: 'preset-tonal-surface'}"
+							aria-pressed={navView === "map"}
+							title="The full signal-path map"
+							onclick={() => rememberNavView("map")}
+						>
+							<Icons.Network size={15} /> Map
+						</button>
+					</div>
 				</div>
 
-				<div
-					class="border-surface-200-800 ml-auto flex overflow-hidden rounded-md border"
-					role="group"
-					aria-label="Step navigator"
-				>
-					<button
-						type="button"
-						class="btn btn-sm rounded-none {navView === 'list'
-							? 'preset-pressed'
-							: 'preset-tonal-surface'}"
-						aria-pressed={navView === "list"}
-						title="Compact step list"
-						onclick={() => rememberNavView("list")}
-					>
-						<Icons.List size={15} /> List
-					</button>
-					<button
-						type="button"
-						class="btn btn-sm rounded-none {navView === 'map'
-							? 'preset-pressed'
-							: 'preset-tonal-surface'}"
-						aria-pressed={navView === "map"}
-						title="The full signal-path map"
-						onclick={() => rememberNavView("map")}
-					>
-						<Icons.Network size={15} /> Map
-					</button>
-				</div>
-			</div>
-
-			<!-- ── backbone + inspector ──────────────────────────────────
+				<!-- ── backbone + inspector ──────────────────────────────────
 			     List mode gives the inspector the width (the rail is a
 			     navigator); map mode gives the map the width (the map is
 			     the subject there). -->
-			<div
-				bind:this={workspaceEl}
-				class="items-start gap-4 {navView === 'list'
-					? workspaceWidth >= 720
-						? 'grid grid-cols-[17rem_minmax(0,1fr)]'
-						: 'flex flex-col'
-					: sideBySide
-						? 'grid grid-cols-[minmax(0,1fr)_25rem]'
-						: 'flex flex-col'}"
-			>
-				<section
-					aria-label="Steps"
-					class="panel-card min-w-0 overflow-hidden !p-0"
+				<div
+					bind:this={workspaceEl}
+					class="items-start gap-4 {navView === 'list'
+						? workspaceWidth >= 720
+							? 'grid grid-cols-[17rem_minmax(0,1fr)]'
+							: 'flex flex-col'
+						: sideBySide
+							? 'grid grid-cols-[minmax(0,1fr)_25rem]'
+							: 'flex flex-col'}"
 				>
-					{#if navView === "map"}
-						<PipelineMap
-							{graph}
-							{steps}
-							activeKey={active?.key ?? null}
-							pendingFor={stepPendingByKey}
-							onSelect={selectStepFromMap}
-						/>
-					{:else}
-						<div
-							class="border-surface-200-800 flex items-baseline gap-2 border-b px-3 py-2"
-						>
-							<span class={LEGEND}>Steps</span>
-						</div>
-						<StepList
-							{steps}
-							activeKey={activeGroup ? null : (active?.key ?? null)}
-							activeGroup={activeGroup?.key ?? null}
-							pendingFor={stepPendingByKey}
-							onSelect={selectStep}
-							onSelectGroup={selectGroup}
-						/>
-					{/if}
-				</section>
+					<section
+						aria-label="Steps"
+						class="panel-card min-w-0 overflow-hidden !p-0"
+					>
+						{#if navView === "map"}
+							<PipelineMap
+								{graph}
+								{steps}
+								activeKey={active?.key ?? null}
+								pendingFor={stepPendingByKey}
+								onSelect={selectStepFromMap}
+							/>
+						{:else}
+							<div
+								class="border-surface-200-800 flex items-baseline gap-2 border-b px-3 py-2"
+							>
+								<span class={LEGEND}>Steps</span>
+							</div>
+							<StepList
+								{steps}
+								activeKey={activeGroup
+									? null
+									: (active?.key ?? null)}
+								activeGroup={activeGroup?.key ?? null}
+								pendingFor={stepPendingByKey}
+								onSelect={selectStep}
+								onSelectGroup={selectGroup}
+							/>
+						{/if}
+					</section>
 
-				<!-- Sticky: the inspector is a reference surface; one that
+					<!-- Sticky: the inspector is a reference surface; one that
 				     scrolls away while you read the graph it belongs to is one
 				     you keep scrolling back to. -->
-				<section
-					bind:this={inspectorEl}
-					aria-label="Settings"
-					class="min-w-0 scroll-mt-4 {sideBySide
-						? 'sticky top-4'
-						: ''}"
-				>
-					<div
-						class="border-surface-200-800 mb-2 flex items-baseline gap-2 border-b pb-1"
+					<section
+						bind:this={inspectorEl}
+						aria-label="Settings"
+						class="min-w-0 scroll-mt-4 {sideBySide
+							? 'sticky top-4'
+							: ''}"
 					>
-						<span class={LEGEND}>
-							{activeGroup ? "Agent" : "Step configuration"}
-						</span>
-					</div>
-
-					{#if activeGroup}
-						<div class="mb-2 flex flex-col gap-0.5">
-							<h2 class="text-lg font-semibold">
-								{activeGroup.heading ?? "This pipeline"}
-							</h2>
-							{#if activeGroup.purpose}
-								<FieldHelp>
-									{activeGroup.purpose}
-								</FieldHelp>
-							{/if}
-						</div>
-					{:else if active}
-						<div class="mb-2 flex items-baseline gap-2">
-							<h2 class="text-lg font-semibold">
-								{#if active.agent}
-									<button
-										type="button"
-										class="hover:underline"
-										title="Show what {active.agent} receives and carries out"
-										onclick={() => selectGroup(active.group)}
-									>
-										{active.agent}</button
-									> · {active.heading}
-								{:else}
-									{active.label}
-								{/if}
-							</h2>
-						</div>
-					{:else}
 						<div
-							class="panel-card text-surface-600-400 flex flex-col items-center gap-1 text-center text-sm"
+							class="border-surface-200-800 mb-2 flex items-baseline gap-2 border-b pb-1"
 						>
-							<Icons.MousePointerClick
-								size={20}
-								class="opacity-60"
-							/>
-							<span class="text-base font-medium">
-								No step selected
-							</span>
-							<span class="max-w-[40ch]">
-								Pick any card in the signal path.
+							<span class={LEGEND}>
+								{activeGroup ? "Agent" : "Step configuration"}
 							</span>
 						</div>
-					{/if}
 
-					<PortCards cards={portCards} />
+						{#if activeGroup}
+							<div class="mb-2 flex flex-col gap-0.5">
+								<h2 class="text-lg font-semibold">
+									{activeGroup.heading ?? "This pipeline"}
+								</h2>
+								{#if activeGroup.purpose}
+									<FieldHelp>
+										{activeGroup.purpose}
+									</FieldHelp>
+								{/if}
+							</div>
+						{:else if active}
+							<div class="mb-2 flex items-baseline gap-2">
+								<h2 class="text-lg font-semibold">
+									{#if active.agent}
+										<button
+											type="button"
+											class="hover:underline"
+											title="Show what {active.agent} receives and carries out"
+											onclick={() =>
+												selectGroup(active.group)}
+										>
+											{active.agent}
+										</button>
+										· {active.heading}
+									{:else}
+										{active.label}
+									{/if}
+								</h2>
+							</div>
+						{:else}
+							<div
+								class="panel-card text-surface-600-400 flex flex-col items-center gap-1 text-center text-sm"
+							>
+								<Icons.MousePointerClick
+									size={20}
+									class="opacity-60"
+								/>
+								<span class="text-base font-medium">
+									No step selected
+								</span>
+								<span class="max-w-[40ch]">
+									Pick any card in the signal path.
+								</span>
+							</div>
+						{/if}
 
-					{#if activeGroup}
-						<p class="text-surface-600-400 text-sm">
-							Pick a step for its settings.
-						</p>
-					{/if}
+						<PortCards cards={portCards} />
 
-					<!-- Stays mounted while an agent is picked: it is what
+						{#if activeGroup}
+							<p class="text-surface-600-400 text-sm">
+								Pick a step for its settings.
+							</p>
+						{/if}
+
+						<!-- Stays mounted while an agent is picked: it is what
 					     loads the page's view (`onLoaded`). -->
-					<div class:hidden={!!activeGroup}>
+						<div class:hidden={!!activeGroup}>
+							<PipelineConfigOptions
+								{slug}
+								stepKey={active?.key}
+								mode="builder"
+								{pending}
+								{pendingClears}
+								onDraftSet={draftSet}
+								onDraftClear={draftClear}
+								onLoaded={onConfigView}
+							/>
+						</div>
+					</section>
+				</div>
 
-					<PipelineConfigOptions
-						{slug}
-						stepKey={active?.key}
-						mode="builder"
-						{pending}
-						{pendingClears}
-						onDraftSet={draftSet}
-						onDraftClear={draftClear}
-						onLoaded={onConfigView}
-					/>
-					</div>
-				</section>
-			</div>
-
-			<p class="text-surface-600-400 flex items-start gap-2 text-xs">
-				<Icons.Construction size={14} class="mt-0.5 shrink-0" />
-				<span>
-					Changing what a pipeline <em>does</em>
-					— swapping a node, reordering, publishing a new version — is
-					the lens view and is not drafted yet. This page configures the
-					published backbone.
-				</span>
-			</p>
-		{:else if tab === "canvas"}
-			<!-- The pipeline canvas (PLAN-pipeline-canvas-and-genre-authoring P1):
+				<p class="text-surface-600-400 flex items-start gap-2 text-xs">
+					<Icons.Construction size={14} class="mt-0.5 shrink-0" />
+					<span>
+						Changing what a pipeline <em>does</em>
+						— swapping a node, reordering, publishing a new version —
+						is the lens view and is not drafted yet. This page configures
+						the published backbone.
+					</span>
+				</p>
+			{:else if tab === "canvas"}
+				<!-- The pipeline canvas (PLAN-pipeline-canvas-and-genre-authoring P1):
 			     the line, the minimap and the drawer. Its Settings tab is this
 			     page's draft, so a value changed there lands in the same save row. -->
-			<CanvasPanel
-				{slug}
-				versions={spec?.versions ?? []}
-				{graph}
-				runs={pipelineRuns}
-				{pending}
-				{pendingClears}
-				onDraftSet={draftSet}
-				onDraftClear={draftClear}
-				onLoaded={onConfigView}
-			/>
-		{:else if tab === "scripts"}
-			<ScriptMap
-				{slug}
-				{detail}
-				onLoaded={onConfigView}
-				onJump={openSeam}
-			/>
-		{:else if tab === "changes"}
-			<ChangesPanel
-				rows={changeRows}
-				onJump={jumpToOption}
-				onQueueReset={draftClear}
-			/>
-		{:else if tab === "runs"}
-			<FieldHelp>
-				This pipeline's recent run receipts. A halt is not a failure —
-				an aborted generation and an empty completion both halt, with
-				the reason recorded.
-			</FieldHelp>
-			<RunsPanel runs={pipelineRuns} loading={runsLoading} />
-		{:else if tab === "versions"}
-			<VersionsPanel versions={spec.versions} />
-		{:else if tab === "preset"}
-			<PresetPanel {slug} places={registeredIn} />
-		{/if}
+				<CanvasPanel
+					{slug}
+					versions={spec?.versions ?? []}
+					{graph}
+					runs={pipelineRuns}
+					{pending}
+					{pendingClears}
+					onDraftSet={draftSet}
+					onDraftClear={draftClear}
+					onLoaded={onConfigView}
+				/>
+			{:else if tab === "scripts"}
+				<ScriptMap
+					{slug}
+					{detail}
+					onLoaded={onConfigView}
+					onJump={openSeam}
+				/>
+			{:else if tab === "changes"}
+				<ChangesPanel
+					rows={changeRows}
+					onJump={jumpToOption}
+					onQueueReset={draftClear}
+				/>
+			{:else if tab === "runs"}
+				<FieldHelp>
+					This pipeline's recent run receipts. A halt is not a failure
+					— an aborted generation and an empty completion both halt,
+					with the reason recorded.
+				</FieldHelp>
+				<RunsPanel runs={pipelineRuns} loading={runsLoading} />
+			{:else if tab === "versions"}
+				<VersionsPanel versions={spec.versions} />
+			{:else if tab === "preset"}
+				<PresetPanel {slug} places={registeredIn} />
+			{/if}
 		</div>
 	{/if}
-
 </AdminChangeForm>
-
-
 
 <style>
 	/* The landing flash for a search/diff jump (22 §2.3). */

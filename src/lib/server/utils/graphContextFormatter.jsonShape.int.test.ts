@@ -16,6 +16,12 @@ import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
+
+/** A cast member through the one writer, so it has its base version. */
+async function bindMember(values: typeof schema.lorebookBindings.$inferInsert) {
+	const { insertCastMember } = await import("$lib/server/characters/versions")
+	return (await insertCastMember(testDb as any, values)).member
+}
 let dataDir: string
 
 vi.mock("$lib/server/db", async () => {
@@ -57,24 +63,18 @@ async function scenario(
 		.insert(schema.characters)
 		.values({ userId: user.id, name: "Amara", description: "" })
 		.returning()
-	const [speaker] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+	const [speaker] = [await bindMember({
 			lorebookId: lorebook.id,
 			name: "Amara",
 			binding: "{{char:1}}",
 			characterId: speakerChar.id
-		})
-		.returning()
-	const [other] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+		})]
+	const [other] = [await bindMember({
 			lorebookId: lorebook.id,
 			name: "Kiran",
 			binding: "{{char:2}}",
 			nodeState: (rels[0]?.targetState ?? "active") as any
-		})
-		.returning()
+		})]
 
 	for (const r of rels) {
 		await testDb.insert(schema.narrativeRelationships).values({

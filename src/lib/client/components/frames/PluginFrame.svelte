@@ -49,13 +49,14 @@
 	 * targetOrigin — which is safe *because* the channel port rides the
 	 * message: only the document inside this exact frame receives it.
 	 */
-	import { getContext, onDestroy } from "svelte"
+	import { getContext, onDestroy, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { SessionV1 } from "@serene-pub/sdk"
+	import type { FrontEndMount, SessionV1 } from "@serene-pub/sdk"
 	import type { ActionsV1, WidgetEventSource } from "$lib/shared/widgets/context"
 	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	import { frameInvokeVerdict, hasRecentActivation } from "./frameActivation"
 	import { frameOwnerOf } from "./frameOwner"
+	import { FRAME_FATAL_SENTENCE } from "./frameFatal"
 	import { frameStateKey, initMessage } from "./framePort"
 	import { frameAssetsBaseOf } from "./frameOwner"
 	import { createWidgetWire, type WireInputs } from "./widgetWire.svelte"
@@ -125,6 +126,12 @@
 		 * page (`/x/…`): `["ui"]`.
 		 */
 		apis?: WireInputs["apis"]
+		/** 🚧 M2d: the frame said `ready` on its current port (once per boot); carries nothing. */
+		onready?: () => void
+		/** 🚧 M2d: the frame reported a `fatal` error. Carries no text: the frame's own words never reach the app's UI. */
+		onfatal?: () => void
+		/** 🚧 m3: said in `init` — true on a session page, false for an applet's launcher; absent elsewhere. */
+		inSession?: boolean
 		class?: string
 	}
 
@@ -144,12 +151,17 @@
 		grants,
 		writeChannels,
 		apis,
+		onready,
+		onfatal,
+		inSession,
 		class: klass = ""
 	}: Props = $props()
 
 	let frame = $state<HTMLIFrameElement | null>(null)
 	/** Whose document this is — the plugin id its `/plugin-ui/<id>/…` address names, never `core`. */
 	const frameOwner = $derived(frameOwnerOf(src))
+	/** 🚧 M2c: what this frame is mounted as — the front-end API's asker, and `init`'s `mount`. */
+	const mount = $derived<FrontEndMount>(surface === "page" ? "page" : apis?.includes("applet") ? "applet" : "widget")
 
 	/**
 	 * What a `fatal` error said, once one has been reported — the flag the
@@ -222,7 +234,7 @@
 			writeChannels,
 			apis,
 			// 🚧 M2c: what is asking, for the front-end API's refusal sentences
-			mount: surface === "page" ? "page" : apis?.includes("applet") ? "applet" : "widget"
+			mount
 		}),
 		label: () => `PluginFrame "${title}" (${src})`,
 		gate: (action) =>
@@ -235,7 +247,15 @@
 				userActivationActive: navigator.userActivation?.isActive,
 				frameIsActiveElement: !!frame && document.activeElement === frame
 			}),
-		onFatal: (message) => (fatal = message)
+		onFatal: (message) => {
+			fatal = message
+			onfatal?.()
+		}
+	})
+
+	// 🚧 M2d: `ready` is the wire's own state; the callback only reports it.
+	$effect(() => {
+		if (wire.ready) untrack(() => onready?.())
 	})
 
 	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
@@ -250,7 +270,7 @@
 		// `initMessage`, which carries `FRAME_PROTOCOL` and never a literal.
 		// The post targets `"*"` by necessity — an opaque origin matches no
 		// targetOrigin — safe because the port rides the message.
-		frame?.contentWindow?.postMessage(initMessage(surface, frameAssetsBaseOf(src), !!panelsCtx?.fullscreen), "*", [channel.port2])
+		frame?.contentWindow?.postMessage(initMessage(surface, frameAssetsBaseOf(src), !!panelsCtx?.fullscreen, mount, inSession), "*", [channel.port2])
 	}
 
 	onDestroy(() => wire.detach())
@@ -285,11 +305,7 @@
 			role="alert"
 		>
 			<Icons.TriangleAlert size={20} class="text-error-600-400" />
-			<p class="text-surface-600-400 max-w-xs text-xs">
-				This surface stopped and can't show anything. Reload the page to
-				try it again — the extension's own message is in the browser
-				console.
-			</p>
+			<p class="text-surface-600-400 max-w-xs text-xs">{FRAME_FATAL_SENTENCE}</p>
 		</div>
 	{/if}
 </div>

@@ -66,7 +66,14 @@ function fakeSocket(userId: number) {
 
 let n = 0
 
-type Seated = { vell: { id: number }; ash: { id: number }; bram: { id: number }; suffix: string }
+type Seated = {
+	vell: { id: number }
+	ash: { id: number }
+	bram: { id: number }
+	ashSeat: { id: number }
+	bramSeat: { id: number }
+	suffix: string
+}
 
 /**
  * The owner, two guests with a presence each, and a model-voiced member.
@@ -86,6 +93,22 @@ async function table(extra?: (seated: Seated) => any[]) {
 	const ash = await card(guestA.id, `Ash ${suffix}`)
 	const bram = await card(guestB.id, `Bram ${suffix}`)
 
+	// The genre is registered after the seats exist: a derive expression can
+	// name a seat's member-form key, which is built from the seat row's id.
+	const GENRE = `test:genre/earshot-${suffix}`
+	const [session] = await testDb
+		.insert(schema.sessions)
+		.values({ userId: owner.id, isGroup: true, name: `Delve ${suffix}`, genreId: GENRE })
+		.returning()
+	const sessionId = session!.id
+	await testDb.insert(schema.sessionCharacters).values({ sessionId, characterId: vell.id })
+	const [ashSeat, bramSeat] = (await testDb
+		.insert(schema.sessionPersonas)
+		.values([
+			{ sessionId, personaId: ash.id, position: 0 },
+			{ sessionId, personaId: bram.id, position: 1 }
+		] as any)
+		.returning()) as Array<{ id: number }>
 	defineAttributeSlot(GRIT, {
 		type: "integer",
 		label: { en: "Stamina" },
@@ -94,23 +117,12 @@ async function table(extra?: (seated: Seated) => any[]) {
 		config: { min: 0, max: 20 },
 		default: 10
 	})
-	const GENRE = `test:genre/earshot-${suffix}`
 	genreKeeping(GENRE, {
 		name: { en: "Earshot" },
 		family: "test",
-		slots: [getAttributeSlot(WHISPER)!, getAttributeSlot(GRIT)!, ...(extra?.({ vell, ash, bram, suffix }) ?? [])],
+		slots: [getAttributeSlot(WHISPER)!, getAttributeSlot(GRIT)!, ...(extra?.({ vell, ash, bram, ashSeat, bramSeat, suffix }) ?? [])],
 		events: {}
 	})
-	const [session] = await testDb
-		.insert(schema.sessions)
-		.values({ userId: owner.id, isGroup: true, name: `Delve ${suffix}`, genreId: GENRE })
-		.returning()
-	const sessionId = session!.id
-	await testDb.insert(schema.sessionCharacters).values({ sessionId, characterId: vell.id })
-	await testDb.insert(schema.sessionPersonas).values([
-		{ sessionId, personaId: ash.id, position: 0 },
-		{ sessionId, personaId: bram.id, position: 1 }
-	] as any)
 	await testDb.insert(schema.sessionGuests).values([
 		{ sessionId, userId: guestA.id },
 		{ sessionId, userId: guestB.id },
@@ -137,7 +149,7 @@ async function table(extra?: (seated: Seated) => any[]) {
 			value: 12
 		})
 	}
-	return { sessionId, owner, guestA, guestB, watcher, vell, ash, bram }
+	return { sessionId, owner, guestA, guestB, watcher, vell, ash, bram, ashSeat: ashSeat!, bramSeat: bramSeat! }
 }
 
 type HandlerName = "stateGet" | "stateLedger" | "stateSet" | "stateConfigure" | "stateProposals" | "stateDecide"
@@ -169,12 +181,14 @@ async function refusal(name: HandlerName, userId: number, params: any): Promise<
 }
 
 /** The whisper a cast entry of `state` carries for `characterId`, under either key. */
+/** A cast entry found by its host-filled card `id`, whichever form its key is in. */
+const entryOf = (state: any, characterId: number) =>
+	(Object.values(state?.cast?.byId ?? {}) as any[]).find((e) => e.id === characterId)
 const whisperOf = (state: any, characterId: number) => {
-	const entry = state?.cast?.byId?.[String(characterId)] ?? {}
+	const entry = entryOf(state, characterId) ?? {}
 	return entry.whisper ?? entry.core_whisper
 }
-const gritOf = (state: any, characterId: number) =>
-	state?.cast?.byId?.[String(characterId)]?.stamina
+const gritOf = (state: any, characterId: number) => entryOf(state, characterId)?.stamina
 
 describe("state:get — each person hears their own character's whisper", () => {
 	test("a guest reads their own whisper and nobody else's, under any key or role", async () => {
@@ -248,14 +262,23 @@ describe("a write's reply is the writer's view", () => {
 
 	test("state:configure — the same", async () => {
 		const t = await table()
-		const a = await call("stateConfigure", t.guestA.id, {
+		// Moved 2026-11-05 (lane ed, plan §25): a configure is the session owner's alone (the one hand-edit
+		// decider, `state/handEdits.ts`) — a guest's is refused in words, and the owner's reply is the owner's view.
+		expect(
+			await refusal("stateConfigure", t.guestA.id, {
+				sessionId: t.sessionId,
+				owner: { kind: "session_cast", id: t.ash.id },
+				slotId: GRIT,
+				config: { max: 30 }
+			})
+		).toBe("Only the session owner changes how a stat is set up.")
+		const a = await call("stateConfigure", t.owner.id, {
 			sessionId: t.sessionId,
 			owner: { kind: "session_cast", id: t.ash.id },
 			slotId: GRIT,
 			config: { max: 30 }
 		})
-		expect(a.wire).not.toContain(TO_BRAM)
-		expect(a.wire).not.toContain(TO_VELL)
+		expect(whisperOf(a.res.state, t.ash.id)).toBe(TO_ASH)
 	})
 
 	test("state:proposals and state:decide — a pending change to someone else's whisper is not a guest's to read", async () => {
@@ -341,7 +364,9 @@ describe("a whisper is changed only by whoever may hear it", () => {
 			slotId: WHISPER,
 			config: { maxLength: 3 }
 		})
-		expect(refused).toMatch(/only the session's owner and whoever plays/i)
+		// Moved 2026-11-05 (lane ed, plan §25): a guest's configure is refused first as not theirs to set up
+		// (the SDK judge asks the role before the earshot); the whisper is just as unchanged.
+		expect(refused).toBe("Only the session owner changes how a stat is set up.")
 	})
 
 	test("state:decide — a pending change a guest cannot see is not theirs to accept or reject", async () => {
@@ -366,8 +391,15 @@ describe("a whisper is changed only by whoever may hear it", () => {
 
 	test("state:get — a guest is offered no whisper box on a character they do not hear", async () => {
 		const t = await table()
+		// Owner rows are found by the seat's `ref`: a player seat is `player-seat:<seatId>`,
+		// the model-voiced member's seat (no cast member) keeps `character:<cardId>`.
+		const refs: Record<number, string> = {
+			[t.ash.id]: `player-seat:${t.ashSeat.id}`,
+			[t.bram.id]: `player-seat:${t.bramSeat.id}`,
+			[t.vell.id]: `character:${t.vell.id}`
+		}
 		const configsOf = (res: any, id: number) =>
-			res.owners.find((o: any) => o.kind === "session_cast" && o.id === id)?.configs ?? {}
+			res.owners.find((o: any) => o.ref === refs[id])?.configs ?? {}
 		const a = await call("stateGet", t.guestA.id, { sessionId: t.sessionId })
 		expect(Object.hasOwn(configsOf(a.res, t.ash.id), WHISPER)).toBe(true)
 		expect(Object.hasOwn(configsOf(a.res, t.bram.id), WHISPER)).toBe(false)
@@ -398,11 +430,19 @@ describe("a value computed from a whisper is heard as the whisper is", () => {
 		expect(a.wire).not.toContain(TO_BRAM)
 		expect(a.wire).not.toContain(TO_VELL)
 		// Ash's own echo is Ash's to read.
-		expect(a.res.state.cast.byId[String(t.ash.id)][`echo-${n}`]).toBe(TO_ASH)
+		expect(entryOf(a.res.state, t.ash.id)[`echo-${n}`]).toBe(TO_ASH)
 		// And a prompt hears it only in the holder's own voice.
 		const { stateFor } = await import("$lib/server/state/resolve")
 		const { withinEarshot } = await import("$lib/server/pipelines/prompt/adventureContext")
-		const ashVoice = JSON.stringify(withinEarshot(await stateFor(testDb as any, t.sessionId), `character:${t.ash.id}`))
+		// A model voice is a character seat: Vell, voiced by the model, hears her own echo alone.
+		const full = await stateFor(testDb as any, t.sessionId)
+		const vellVoice = JSON.stringify(withinEarshot(full, `character:${t.vell.id}`))
+		expect(vellVoice).toContain(TO_VELL)
+		expect(vellVoice).not.toContain(TO_ASH)
+		expect(vellVoice).not.toContain(TO_BRAM)
+		// Ash's card voiced (a player seat when on: `holderOf` finds the seat holding
+		// the card) hears his own echo alone.
+		const ashVoice = JSON.stringify(withinEarshot(full, `character:${t.ash.id}`))
 		expect(ashVoice).toContain(TO_ASH)
 		expect(ashVoice).not.toContain(TO_BRAM)
 		expect(ashVoice).not.toContain(TO_VELL)
@@ -413,21 +453,21 @@ describe("a value computed from a whisper is heard as the whisper is", () => {
 	})
 
 	test("a slot computed from another member's whisper reaches no guest and no voice", async () => {
-		const t = await table(({ bram, suffix }) => [
+		const t = await table(({ bramSeat, suffix }) => [
 			// Every member repeats Bram's whisper; so does the world.
 			defineAttributeSlot(`test:slot/gossip-${suffix}@1`, {
 				type: "derived",
 				label: { en: "Gossip" },
 				descriptor: "What everyone heard about Bram.",
 				appliesTo: ["cast"],
-				derive: `state.cast.byId["${bram.id}"].whisper`
+				derive: `state.cast.byId["player_seat:${bramSeat.id}"].whisper`
 			} as any),
 			defineAttributeSlot(`test:slot/rumour-${suffix}@1`, {
 				type: "derived",
 				label: { en: "Rumour" },
 				descriptor: "What the town says.",
 				appliesTo: ["world"],
-				derive: `state.cast.byId["${bram.id}"].whisper`
+				derive: `state.cast.byId["player_seat:${bramSeat.id}"].whisper`
 			} as any)
 		])
 		// Bram's own player included: a value computed across members is the owner's.
@@ -435,8 +475,8 @@ describe("a value computed from a whisper is heard as the whisper is", () => {
 			const g = await call("stateGet", guest.id, { sessionId: t.sessionId })
 			const outsideBram = JSON.stringify({
 				world: g.res.state.world,
-				ash: g.res.state.cast.byId[String(t.ash.id)],
-				vell: g.res.state.cast.byId[String(t.vell.id)]
+				ash: entryOf(g.res.state, t.ash.id),
+				vell: entryOf(g.res.state, t.vell.id)
 			})
 			expect(outsideBram).not.toContain(TO_BRAM)
 		}
@@ -468,7 +508,8 @@ describe("a value computed from a whisper is heard as the whisper is", () => {
 		const gate = await applyChangeSet(
 			testDb as any,
 			{ sessionId: t.sessionId, updatedBy: "model" },
-			[{ owner: { kind: "session_cast", id: t.bram.id }, slotId: GRIT, value: 5 } as any],
+			// A library write is not translated by the door: it names the seat in member form.
+			[{ owner: { kind: "player_seat", id: t.bramSeat.id }, slotId: GRIT, value: 5 } as any],
 			{ mode: "apply", seed: "earshot-rule" }
 		)
 		expect(gate.refused).toEqual([])
@@ -517,8 +558,9 @@ describe("state:get — the viewer's own seat is marked `mine`", () => {
 			((await call("stateGet", userId, { sessionId: t.sessionId })).res.owners as any[])
 				.filter((o) => o.mine)
 				.map((o) => `${o.kind}:${o.id}`)
-		expect(await mine(t.guestA.id)).toEqual([`session_cast:${t.ash.id}`])
-		expect(await mine(t.guestB.id)).toEqual([`session_cast:${t.bram.id}`])
+		// A carded player seat is `player_seat:<seatId>` in member form.
+		expect(await mine(t.guestA.id)).toEqual([`player_seat:${t.ashSeat.id}`])
+		expect(await mine(t.guestB.id)).toEqual([`player_seat:${t.bramSeat.id}`])
 		expect(await mine(t.owner.id)).toEqual([`player_seat:${rook!.id}`])
 		expect(await mine(t.watcher.id)).toEqual([])
 	})

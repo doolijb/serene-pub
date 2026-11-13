@@ -216,3 +216,48 @@ describe("castPoolItem", () => {
 		expect(row.avatar).toBe("/avatar.png")
 	})
 })
+
+describe("a carded member's own names in this book (§0-D)", () => {
+	const card = { nickname: "Bram", name: "Bramwell Ashe" }
+	const mk = (own: Partial<CastRow> = {}) =>
+		row({ id: 9, characterId: 10, character: card, ...own })
+
+	it("reads the card's nickname, else name, when the member has no own names", () => {
+		expect(toCastMember(mk()).name).toBe("Bram")
+		expect(
+			toCastMember(mk({ ownName: null, ownNickname: null })).name
+		).toBe("Bram")
+		expect(toCastMember(mk({ character: { name: "Sable" } })).name).toBe(
+			"Sable"
+		)
+	})
+
+	it("an own name alone keeps the card's nickname (★L-3); with an own empty nickname it shows", () => {
+		expect(toCastMember(mk({ ownName: "Ash" })).name).toBe("Bram")
+		expect(toCastMember(mk({ ownName: "Ash", ownNickname: "" })).name).toBe(
+			"Ash"
+		)
+	})
+
+	it("an own empty nickname means no nickname in this book: the member shows by the card's NAME (★L-3b)", () => {
+		expect(toCastMember(mk({ ownName: null, ownNickname: "" })).name).toBe(
+			"Bramwell Ashe"
+		)
+	})
+
+	it("an own nickname wins", () => {
+		expect(toCastMember(mk({ ownNickname: "Brammy" })).name).toBe("Brammy")
+	})
+
+	it("own names win over castPoolItem's cardName argument; none reads as today", () => {
+		expect(
+			castPoolItem(mk({ ownName: "Ash", ownNickname: "" }), "Other card")
+				.name
+		).toBe("Ash")
+		expect(
+			castPoolItem(mk({ ownNickname: "Brammy" }), "Other card").name
+		).toBe("Brammy")
+		expect(castPoolItem(mk(), "Other card").name).toBe("Other card")
+		expect(castPoolItem(mk()).name).toBe("Bram")
+	})
+})

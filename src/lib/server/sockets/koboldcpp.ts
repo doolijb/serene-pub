@@ -5,10 +5,11 @@ import {
 } from "$lib/server/connections/recommendedGguf"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, and, inArray } from "drizzle-orm"
+import { eq, and, inArray, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { buildConnectionsList, connectionsSetDefault } from "./connections"
 import { buildSystemSettingsGet } from "./systemSettings"
+import { fillReplyIfEmpty } from "$lib/server/koboldcpp/fillReplyOnArrival"
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { flagsFrom, NO_FLAGS } from "$lib/server/koboldcpp/probeCapabilities"
@@ -66,6 +67,7 @@ import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
 import {
 	ensureManagedKoboldCppEndpoint,
+	managedBaseUrl,
 	managedKoboldCppEndpoint
 } from "$lib/server/koboldcpp/managedEndpoint"
 import {
@@ -106,6 +108,15 @@ export const koboldCppSetBaseUrl: Handler<
 				error: "Invalid URL protocol"
 			})
 			throw new Error("Invalid URL protocol")
+		}
+		// In Managed mode the address is made from the port (`managedBaseUrl`);
+		// an edit here would make the two disagree.
+		const stored = await db.query.koboldCppSettings.findFirst()
+		if (stored?.koboldCppManagedMode === "managed") {
+			const error =
+				"In Managed mode the address follows the port. Change the port instead."
+			emitToUser("koboldcpp:setBaseUrl:error", { error })
+			throw new Error(error)
 		}
 
 		await db
@@ -333,8 +344,9 @@ export async function buildKoboldCppListModels(): Promise<Sockets.KoboldCPP.List
 		for (const name of entries) {
 			if (!isModelFilename(name)) continue
 			if (incompleteFilenames.has(name)) continue
-			// `filename` is UNIQUE, so the same basename in both directories
-			// is ONE row, described by whichever directory the scan saw
+			// A GGUF's `filename` is UNIQUE (an ONNX row keys per modality),
+			// so the same basename in both directories is ONE row, described
+			// by whichever directory the scan saw
 			// last. Bounded to metadata: each connection still loads the
 			// copy in its own kind's directory, because resolveModelPath
 			// tries that one first.
@@ -413,6 +425,7 @@ export async function buildKoboldCppListModels(): Promise<Sockets.KoboldCPP.List
 						})
 						.onConflictDoUpdate({
 							target: schema.localModels.filename,
+							targetWhere: sql`"format" <> 'onnx'`,
 							set: { filename: name }
 						})
 						.returning()
@@ -1079,21 +1092,62 @@ async function fetchRecommendedImageModels(): Promise<
 	})
 	if (!resp.ok) throw new Error(`Hugging Face API error: ${resp.status}`)
 	const data = await resp.json()
+	// What our own list says about each file (owner ruling 2026-11-08): the
+	// family, one sentence, and the sampling preset it pairs with. Joined by
+	// file name; an unlisted file keeps the repo caveat alone.
+	const { recommendedImageEntries, imageFamilyLabel } = await import(
+		"$lib/server/connections/recommendedImageGguf"
+	)
+	const known = await recommendedImageEntries()
 
-	return imagePullOptions(IMGMODEL_REPO_ID, data?.siblings ?? []).map(
-		(option) => ({
-			name: option.filename.replace(MODEL_EXTENSION_RE, ""),
+	return imagePullOptions(IMGMODEL_REPO_ID, data?.siblings ?? []).map((option) => {
+		const entry = known.get(option.filename)
+		const bare = option.filename.replace(MODEL_EXTENSION_RE, "")
+		const description = entry
+			? [
+					`${entry.display_name} — ${imageFamilyLabel(entry.family)}. ${entry.description}`,
+					entry.single_file
+						? "One file is all it needs."
+						: "Needs Clip and T5-XXL files beside it, which this list does not cover.",
+					`Pairs with the ${presetName(entry.sampling)} sampling preset.`
+				].join(" ")
+			: IMGMODEL_CAVEAT
+		return {
+			// The file name stays the card's name: the finder's "On disk" match
+			// and the download row read it; the list's display name opens the
+			// description instead.
+			name: bare,
 			// `ollamaName` is required by RecommendedModel and means "the
 			// catalog's own name for this entry" — for a repo of loose files
 			// that is the filename, there being no ollama-style name to give.
-			ollamaName: option.filename.replace(MODEL_EXTENSION_RE, ""),
-			description: IMGMODEL_CAVEAT,
+			ollamaName: bare,
+			description,
 			url: `https://huggingface.co/${IMGMODEL_REPO_ID}`,
 			pullOptions: [option],
-			sdcpp: true
-		})
-	)
+			sdcpp: true,
+			...(entry ? { tags: [imageFamilyLabel(entry.family)] } : {}),
+			// The list's drawing figure, which the finder orders and marks the
+			// cards by. Withheld from a bundle the one file cannot run: with
+			// no tier to match it sorts after every complete model, so the
+			// gold Get never lands on a model that loads and then fails.
+			...(entry?.single_file && entry.recommended_vram
+				? { recommendedVram: entry.recommended_vram }
+				: {})
+		}
+	})
 }
+
+/** The core image preset's name for a seed key, as the presets are named in `db/defaults.ts`. */
+const presetName = (seedKey: string): string =>
+	(
+		({
+			"sampling-image-default": "SD 1.5",
+			"sampling-image-sdxl": "SDXL",
+			"sampling-image-sd3": "SD 3.x",
+			"sampling-image-flux": "Flux",
+			"sampling-image-turbo": "Turbo / Distilled"
+		}) as Record<string, string>
+	)[seedKey] ?? seedKey
 
 export const koboldCppRecommendedModelsHandler: Handler<
 	Sockets.KoboldCPP.RecommendedModels.Params,
@@ -1174,7 +1228,17 @@ export const koboldCppRecommendedModelsHandler: Handler<
 							undefined,
 						// The list's curated vocabulary. Both old parsers dropped
 						// it, so it was written and fetched and never shown.
-						tags: ym.tags
+						tags: ym.tags,
+						// The projector the list pairs with a vision model: Get
+						// fetches both, so a vision model never arrives blind.
+						...(ym.mmproj && !/[\\/]/.test(ym.mmproj)
+							? {
+									visionProjector: {
+										filename: ym.mmproj,
+										downloadUrl: `https://huggingface.co/${hf.name}/resolve/main/${ym.mmproj}`
+									}
+								}
+							: {})
 					}
 				}
 			)
@@ -1341,6 +1405,39 @@ export const koboldCppSearchModelsHandler: Handler<
 
 // --- PARALLEL CHUNKED DOWNLOAD HELPERS ---
 
+/**
+ * Projector downloads queued behind the text model they pair with (★A,
+ * 2026-11-11): projector filename → model filename. When the projector lands,
+ * `visionProjector` is set on the model's rows on every managed KoboldCPP, so
+ * a vision model fetched by Get reads pictures without a hand pairing.
+ */
+const projectorPairs = new Map<string, string>()
+
+/** Pair a landed projector onto its model's rows where none is set yet. */
+async function pairProjectorOntoModel(projector: string, model: string) {
+	const { withVisionProjector, takesVisionProjector } = await import(
+		"$lib/server/koboldcpp/visionProjector"
+	)
+	const endpoints = await db.query.connections.findMany({
+		columns: { id: true, type: true }
+	})
+	for (const endpoint of endpoints) {
+		if (!takesVisionProjector(endpoint.type)) continue
+		const rows = await db.query.connectionModels.findMany({
+			where: (m, { and, eq }) =>
+				and(eq(m.connectionId, endpoint.id), eq(m.model, model))
+		})
+		for (const row of rows) {
+			const extra = (row.extraJson ?? null) as Record<string, unknown> | null
+			if (extra?.mmproj) continue
+			await db
+				.update(schema.connectionModels)
+				.set({ extraJson: withVisionProjector(extra, projector) })
+				.where(eq(schema.connectionModels.id, row.id))
+		}
+	}
+}
+
 export const koboldCppDownloadModelHandler: Handler<
 	Sockets.KoboldCPP.DownloadModel.Params,
 	Sockets.KoboldCPP.DownloadModel.Response
@@ -1497,6 +1594,7 @@ export const koboldCppDownloadModelHandler: Handler<
 				})
 				.onConflictDoUpdate({
 					target: schema.localModels.filename,
+					targetWhere: sql`"format" <> 'onnx'`,
 					set: {
 						modelName,
 						modelUrl,
@@ -1661,6 +1759,32 @@ export const koboldCppDownloadModelHandler: Handler<
 						],
 						force: true
 					})
+					// A finished text model lands on an empty Reply, dialog open
+					// or not (fillReplyOnArrival.ts). Its own try: never a failure
+					// of the download. Reply goes out BEFORE the list so the
+					// client sees it filled no later than it sees the model.
+					if (
+						requestedKind !== "speech" &&
+						!projectorPairs.has(filename) &&
+						(corrected ? verdict.kind : kind) === "text"
+					) {
+						try {
+							const filled = await fillReplyIfEmpty(db, filename)
+							if (filled) {
+								console.log(
+									`[koboldcpp] Reply was empty; "${filled.name}" now fills it`
+								)
+								await emitToUser("systemSettings:get", () =>
+									buildSystemSettingsGet()
+								)
+							}
+						} catch (fillErr) {
+							console.error(
+								"[koboldcpp] filling Reply on arrival:",
+								fillErr
+							)
+						}
+					}
 					await emitToUser("connections:list", () =>
 						buildConnectionsList()
 					)
@@ -1670,6 +1794,42 @@ export const koboldCppDownloadModelHandler: Handler<
 						syncErr
 					)
 				}
+				// A projector queued behind this model: fetch it next, into
+				// the same folder, and pair it when it lands.
+				const projector = params.visionProjector
+				if (projector && kind === "text" && !projector.filename.includes("/")) {
+					projectorPairs.set(projector.filename, filename)
+					try {
+						await koboldCppDownloadModelHandler.handler(
+							socket,
+							{
+								modelName: `${modelName || filename} — vision projector`,
+								filename: projector.filename,
+								downloadUrl: projector.downloadUrl,
+								modelUrl,
+								description: `Vision projector for ${modelName || filename}: lets it read pictures.`,
+								sizeBytes: projector.sizeBytes,
+								kind: "text"
+							},
+							emitToUser
+						)
+					} catch (err) {
+						projectorPairs.delete(projector.filename)
+						console.error("[koboldcpp] projector download refused:", err)
+					}
+				}
+				const pairedModel = projectorPairs.get(filename)
+				if (pairedModel) {
+					projectorPairs.delete(filename)
+					try {
+						await pairProjectorOntoModel(filename, pairedModel)
+						await emitToUser("connections:list", () =>
+							buildConnectionsList()
+						)
+					} catch (err) {
+						console.error("[koboldcpp] pairing the projector:", err)
+					}
+				}
 				await notifySettled()
 			} catch (err: any) {
 				// Whatever ended the download — cancel or a genuine chunk
@@ -1677,6 +1837,7 @@ export const koboldCppDownloadModelHandler: Handler<
 				// is orphaned; destroy it rather than leave it dangling.
 				for (const req of inFlightRequests) req.destroy()
 				const isCancelled = err.message === "cancelled"
+				projectorPairs.delete(filename)
 				activeDownloads[filename].status = isCancelled
 					? "cancelled"
 					: "error"
@@ -1791,6 +1952,13 @@ export const koboldCppSetManagedMode: Handler<
 			.update(schema.koboldCppSettings)
 			.set({
 				koboldCppManagedMode: params.mode,
+				...(params.mode === "managed"
+					? {
+							koboldCppManagerBaseUrl: managedBaseUrl(
+								settings.koboldCppManagedPort
+							)
+						}
+					: {}),
 				...(adminPassword
 					? { koboldCppManagedAdminPassword: adminPassword }
 					: {})
@@ -1821,7 +1989,7 @@ export const koboldCppSetManagedPort: Handler<
 			.update(schema.koboldCppSettings)
 			.set({
 				koboldCppManagedPort: port,
-				koboldCppManagerBaseUrl: `http://localhost:${port}`
+				koboldCppManagerBaseUrl: managedBaseUrl(port)
 			})
 			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetManagedPort.Response = { success: true }
@@ -1887,6 +2055,28 @@ export const koboldCppSetModelTtl: Handler<
 			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetModelTtl.Response = { success: true }
 		emitToUser("koboldcpp:setModelTtl", res)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
+		return res
+	}
+}
+
+/**
+ * The admin's switch for keeping the text and the image model loaded together
+ * when the card has room (`koboldcpp/coLoad.ts`; owner ruling 2026-11-11).
+ */
+export const koboldCppSetCoLoad: Handler<
+	Sockets.KoboldCPP.SetCoLoad.Params,
+	Sockets.KoboldCPP.SetCoLoad.Response
+> = {
+	event: "koboldcpp:setCoLoad",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		await db
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppManagedCoLoad: !!params.enabled })
+			.where(eq(schema.koboldCppSettings.id, 1))
+		const res: Sockets.KoboldCPP.SetCoLoad.Response = { success: true }
+		emitToUser("koboldcpp:setCoLoad", res)
 		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
@@ -2051,7 +2241,7 @@ export const koboldCppDownloadBinary: Handler<
 				await db
 					.update(schema.koboldCppSettings)
 					.set({
-						koboldCppManagerBaseUrl: `http://localhost:${port}`
+						koboldCppManagerBaseUrl: managedBaseUrl(port)
 					})
 					.where(eq(schema.koboldCppSettings.id, 1))
 				await emitToUser("systemSettings:get", () =>
@@ -2406,6 +2596,7 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppSetManagedBinaryDir, emitToUser)
 	register(socket, koboldCppSetManagedAdminPassword, emitToUser)
 	register(socket, koboldCppSetModelTtl, emitToUser)
+	register(socket, koboldCppSetCoLoad, emitToUser)
 	register(socket, koboldCppSetSubprocessTimeout, emitToUser)
 	register(socket, koboldCppListBinaryVariants, emitToUser)
 	register(socket, koboldCppListReleaseVersions, emitToUser)

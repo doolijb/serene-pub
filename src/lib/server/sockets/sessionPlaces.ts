@@ -46,7 +46,8 @@ import {
 	MAIN_HEAD,
 	entriesAsRead,
 	entryAt,
-	entryOverlaysFor
+	entryOverlaysFor,
+	type EntryReading
 } from "$lib/server/state/entriesOnReading"
 import {
 	readGraphEntryLinks,
@@ -94,17 +95,21 @@ export async function readSessionPlaces(
 	if (!access.hasAccess)
 		throw new PlacesRefusal("This session is not one you are in.")
 	const reading = await sessionReadingOf(db, sessionId)
+	// The attached book's reading; a reading of the session's own notes is
+	// read below, as the notes, and never as a book.
+	const shared = reading && !reading.onOwnBook ? reading : null
+	const ownAt = reading?.onOwnBook ? reading : MAIN_HEAD
 	// 🚧 The session's own notes' places come after the book's, marked
 	// "this session only" (PLAN-rulesets §26) — and are all a session with
-	// no book has.
-	const own = await ownBookPlaces(sessionId)
+	// no attached book has.
+	const own = await ownBookPlaces(sessionId, ownAt)
 	const ownPlaces = own.places
-	const lorebookId = reading?.lorebookId ?? null
+	const lorebookId = shared?.lorebookId ?? null
 
-	const [bookPlaces, sessionPlaces] = reading
+	const [bookPlaces, sessionPlaces] = shared
 		? await Promise.all([
-				entriesAsRead(db, reading.lorebookId, reading, "book", [LOCATION_TYPE_ID]),
-				entriesAsRead(db, reading.lorebookId, reading, "session", [LOCATION_TYPE_ID])
+				entriesAsRead(db, shared.lorebookId, shared, "book", [LOCATION_TYPE_ID]),
+				entriesAsRead(db, shared.lorebookId, shared, "session", [LOCATION_TYPE_ID])
 			])
 		: [[], []]
 	const live = bookPlaces.filter((p) => !p.unseen).map((p) => p.entryId)
@@ -112,21 +117,21 @@ export async function readSessionPlaces(
 
 	// Each live place's category, as the line's amendments leave it by then.
 	const category = new Map<number, string>()
-	if (live.length && reading && lorebookId != null) {
+	if (live.length && shared && lorebookId != null) {
 		const e = schema.lorebookEntries
 		const [rows, overlays] = await Promise.all([
 			db
 				.select({ id: e.id, fields: e.fields })
 				.from(e)
 				.where(and(eq(e.lorebookId, lorebookId), inArray(e.id, live))),
-			entryOverlaysFor(db, lorebookId, reading, live)
+			entryOverlaysFor(db, lorebookId, shared, live)
 		])
 		for (const r of rows) {
 			const fields = (r.fields ?? {}) as Record<string, unknown>
 			const at = entryAt(
 				{ id: r.id, category: fields.category },
 				overlays,
-				reading
+				shared
 			)
 			const name = trimmed(at.category)
 			if (name) category.set(r.id, name)
@@ -170,11 +175,11 @@ export async function readSessionPlaces(
 		)
 	]
 	const farRead = [
-		...(reading && farEntryIds.length
-			? await entriesAsRead(db, reading.lorebookId, reading, "session", null, farEntryIds)
+		...(shared && farEntryIds.length
+			? await entriesAsRead(db, shared.lorebookId, shared, "session", null, farEntryIds)
 			: []),
 		...(own.ownBookId != null && farEntryIds.length
-			? await entriesAsRead(db, own.ownBookId, MAIN_HEAD, "session", null, farEntryIds)
+			? await entriesAsRead(db, own.ownBookId, ownAt, "session", null, farEntryIds)
 			: [])
 	]
 	const farTypes = new Map(
@@ -272,7 +277,10 @@ export async function readSessionPlaces(
  * session sees them, each `sessionOnly`. Their category is the entry's own;
  * the ways between them are drawn by the caller, from the union links read.
  */
-async function ownBookPlaces(sessionId: number): Promise<{
+async function ownBookPlaces(
+	sessionId: number,
+	ownAt: EntryReading
+): Promise<{
 	ownBookId: number | null
 	places: (PlaceV1 & { sessionOnly: true })[]
 }> {
@@ -280,7 +288,7 @@ async function ownBookPlaces(sessionId: number): Promise<{
 	const ownBook = await ownBookOf(db, sessionId)
 	if (!ownBook) return { ownBookId: null, places: [] }
 	const seen = (
-		await entriesAsRead(db, ownBook.id, MAIN_HEAD, "session", [LOCATION_TYPE_ID])
+		await entriesAsRead(db, ownBook.id, ownAt, "session", [LOCATION_TYPE_ID])
 	).filter((p) => !p.unseen)
 	if (!seen.length) return { ownBookId: ownBook.id, places: [] }
 	const e = schema.lorebookEntries

@@ -19,16 +19,8 @@ import { MediaVisibility } from "$lib/shared/constants/MediaVisibility"
 export { getAppDataDir } from "./appDataDir"
 import { getAppDataDir } from "./appDataDir"
 
-/**
- * True when running inside the bundled Android app wrapper (NodeService.kt sets
- * this env var before spawning the server). Used to hide features that don't
- * make sense in that sandbox — managed local model runners need a binary we
- * don't/can't bundle for Android, and on-device embedding models are an
- * unverified native-dependency risk there.
- */
-export function isAndroidWrapper() {
-	return process.env.SERENE_PUB_PLATFORM === "android"
-}
+// Re-exported for the same reason; see `./androidWrapper`.
+export { isAndroidWrapper } from "./androidWrapper"
 
 /**
  * Gates whether NSFW browsing is available at all — both the "include
@@ -108,10 +100,13 @@ export function getPersonaDataDir({
 
 export async function handleCharacterAvatarUpload({
 	character,
-	avatarFile
+	avatarFile,
+	cardVersionId
 }: {
 	character: { id: number; userId: number; avatarMediaId?: number | null }
 	avatarFile: Buffer
+	/** The card version whose face this is; absent: the card's current one. */
+	cardVersionId?: number
 }) {
 	// `createMedia` answers with the file and the original variant it just
 	// wrote (0182). An avatar pointer names the FILE — never a stored
@@ -122,10 +117,22 @@ export async function handleCharacterAvatarUpload({
 		characterId: character.id,
 		bytes: avatarFile
 	})
-	await db
-		.update(schema.characters)
-		.set({ avatarMediaId: created.file.id })
-		.where(eq(schema.characters.id, character.id))
+	// The face is a card version's (`face_media_id`): the one named, else the
+	// current one. The card's own `avatar_media_id` is the current version's
+	// ⏳ copy, which `updateCardVersion` writes only for that version.
+	const { ensureCardVersion, updateCardVersion } = await import(
+		"$lib/server/characters/versions"
+	)
+	await db.transaction(async (tx) => {
+		const versionId =
+			cardVersionId ??
+			(await ensureCardVersion(tx as unknown as Db, character.id))?.id
+		if (versionId == null)
+			throw new Error(`Character ${character.id} does not exist.`)
+		await updateCardVersion(tx as unknown as Db, versionId, {
+			faceMediaId: created.file.id
+		})
+	})
 	return created
 }
 

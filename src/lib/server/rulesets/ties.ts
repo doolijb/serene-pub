@@ -32,6 +32,8 @@
  * (★5, lane T3) a held thing's or a place's field and a cast member's state
  * by the notes' **rule-fed overlay** (`ruleFedOverlayOf`), which the
  * session's readers lay over the book's (the lore read, the graph's cast).
+ * 🚧 (sense-b4) Whatever the route, an entry or a row that lives in the
+ * session's own book is an own-book landing: written there directly, forking no line.
  */
 
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm"
@@ -51,6 +53,11 @@ import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import type { StateOwner } from "$lib/server/state/owners"
+import { loadSeatMap, memberFormOf, storedSeatOwner, storedSeatRef, type SeatMap } from "$lib/server/state/seatRefs"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { seatOf } from "$lib/server/sessions/seats"
 import { attributeSlotsOf, sectionsOf } from "./functionRun"
 import {
 	CARRIED,
@@ -226,8 +233,9 @@ interface Routing {
 	sessionId: number
 	books: number[]
 	attachedId: number | null
+	/** 🚧 The session's own book; an entry or row living there is an own-book landing. */
+	ownBookId: number | null
 	target: { route: "book" | "own-book"; lorebookId: number }
-	branchId: number | null
 }
 
 async function routingOf(
@@ -238,13 +246,15 @@ async function routingOf(
 	const { lorebooksReadBy, loreWriteTargetFor } = await import(
 		"$lib/server/lorebooks/ownBook"
 	)
-	const t = await loreWriteTargetFor(db, sessionId, { anchorMessageId })
+	// Routed only: a branch session's line forks inside the transaction of the
+	// write that makes a row (`rowForSide`), after its checks.
+	const t = await loreWriteTargetFor(db, sessionId, {
+		anchorMessageId,
+		fork: false
+	})
 	const books = await lorebooksReadBy(db, sessionId)
-	const [s] = await db
-		.select({ branchId: schema.sessions.lorebookBranchId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
+	// No line is read here: a first write to the book forks its own, so
+	// `rowForSide` takes the line `ensureSessionLine` answers for the row it makes.
 	const ids = books.ids.includes(t.lorebookId)
 		? books.ids
 		: [...books.ids, t.lorebookId]
@@ -252,8 +262,8 @@ async function routingOf(
 		sessionId,
 		books: ids,
 		attachedId: books.attachedId,
-		target: { route: t.route, lorebookId: t.lorebookId },
-		branchId: t.route === "book" ? (s?.branchId ?? null) : null
+		ownBookId: books.ownBookId,
+		target: { route: t.route, lorebookId: t.lorebookId }
 	}
 }
 
@@ -263,7 +273,27 @@ type End =
 	| { entryId: number; nodeId?: undefined }
 
 async function endOf(db: Db, key: string, r: Routing): Promise<End | null> {
-	const m = /^(character|location|entry):(\d+)$/.exec(String(key))
+	// 🚧 ⏳ Flip on (`memberForm.ts`): a `seated-member:<M>` end *is* the binding `M` (no card lookup); a `player-seat:<S>` end is its seat's member, else its card's binding. `character:` ends (stray rows) read as before.
+	if (memberFormOn() && typeof key === "string") {
+		const sm = /^seated-member:(\d+)$/.exec(key.trim())
+		if (sm) {
+			const [b] = await db
+				.select({ id: schema.lorebookBindings.id })
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.id, Number(sm[1])))
+				.limit(1)
+			return b ? { nodeId: b.id } : null
+		}
+		if (/^player-seat:\d+$/.test(key.trim())) {
+			const seat = await seatOf(db, r.sessionId, key.trim())
+			if (seat?.castMemberId != null) return endOf(db, `seated-member:${seat.castMemberId}`, r)
+			return seat?.cardId != null ? endOf(db, `character:${seat.cardId}`, r) : null
+		}
+	}
+	// 🚧 A `seated-member:<id>` end reads as its seat's stored key (plan §27 S2); a member with no seat is on no row.
+	const stored = typeof key === "string" && key.trim().startsWith("seated-member:") ? await storedSeatRef(db, r.sessionId, key) : key
+	if (stored === null) return null
+	const m = /^(character|location|entry):(\d+)$/.exec(String(stored))
 	if (!m) return null
 	const id = Number(m[2])
 	if (m[1] === "character") {
@@ -380,7 +410,27 @@ async function rowForSide(
 		const v = f ? landing.entry.fields[f] : undefined
 		return typeof v === "string" && v.trim() ? v.trim() : undefined
 	}
-	if (found && found.lorebookId === r.target.lorebookId)
+	// 🚧 A tie made in the notes for a room that has since been applied: both its
+	// entry ends are the lorebook's now and this session writes the lorebook, so
+	// the tie follows the room there (made on the lorebook, the notes' row gone).
+	// Without this the lorebook's room never gets its tie.
+	let retire: number | null = null
+	if (found && found.lorebookId === r.ownBookId && r.target.route === "book") {
+		const ends = [found.fromEntryId, found.toEntryId].filter((x): x is number => x != null)
+		if (ends.length) {
+			const where = await db
+				.select({ lorebookId: schema.lorebookEntries.lorebookId })
+				.from(schema.lorebookEntries)
+				.where(inArray(schema.lorebookEntries.id, ends))
+			if (!where.some((x: { lorebookId: number }) => x.lorebookId === r.ownBookId))
+				retire = found.id
+		}
+	}
+	if (
+		found &&
+		retire == null &&
+		(found.lorebookId === r.target.lorebookId || found.lorebookId === r.ownBookId)
+	)
 		return { id: found.id, made: false, overlaid: false }
 	// Made, or overlaid in the notes: a copy of the book's row, worded as the side now says.
 	const e = found
@@ -399,32 +449,57 @@ async function rowForSide(
 		}
 	const c = endColumns(e[0], e[1])
 	const castTie = c.fromNodeId != null && c.toNodeId != null
-	const [made] = await db
-		.insert(R)
-		.values({
-			lorebookId: r.target.lorebookId,
-			branchId: r.branchId,
-			...c,
-			relationshipType:
-				words("relationship-type") ??
-				found?.relationshipType ??
-				typeWords(decl),
-			title: words("relationship-name") ?? found?.title ?? "",
-			reverseRelationshipType: castTie
-				? null
-				: (found?.reverseRelationshipType ?? null),
-			description: found?.description ?? "",
-			visibility: found?.visibility ?? "acknowledged",
-			status: "active",
-			rulesRunId: runId
-		})
-		.returning({ id: R.id })
+	// 🚧 (sense-b4) A row with an end in the session's own book is made there,
+	// on no line: it forks nothing, whatever the route.
+	const entryEnds = [c.fromEntryId, c.toEntryId].filter((x): x is number => x != null)
+	const inOwnBook =
+		r.ownBookId != null &&
+		entryEnds.length > 0 &&
+		(
+			await db
+				.select({ lorebookId: schema.lorebookEntries.lorebookId })
+				.from(schema.lorebookEntries)
+				.where(inArray(schema.lorebookEntries.id, entryEnds))
+		).some((x: { lorebookId: number }) => x.lorebookId === r.ownBookId)
+	const writeBookId = inOwnBook ? r.ownBookId! : r.target.lorebookId
+	// One transaction for the fork and the row: the line forks only now, after
+	// the checks above, and a second first writer waits on the book's lock. A
+	// row for the session's notes (`own-book`) is on no line and forks nothing.
+	const { ensureSessionLine } = await import("$lib/server/lorebooks/sessionLine")
+	const made = await db.transaction(async (tx: Db) => {
+		const branchId =
+			r.target.route === "book" && !inOwnBook
+				? await ensureSessionLine(tx as unknown as Db, r.sessionId)
+				: null
+		if (retire != null) await tx.delete(R).where(eq(R.id, retire))
+		const [row] = await tx
+			.insert(R)
+			.values({
+				lorebookId: writeBookId,
+				branchId,
+				...c,
+				relationshipType:
+					words("relationship-type") ??
+					found?.relationshipType ??
+					typeWords(decl),
+				title: words("relationship-name") ?? found?.title ?? "",
+				reverseRelationshipType: castTie
+					? null
+					: (found?.reverseRelationshipType ?? null),
+				description: found?.description ?? "",
+				visibility: found?.visibility ?? "acknowledged",
+				status: "active",
+				rulesRunId: runId
+			})
+			.returning({ id: R.id })
+		return row
+	})
 	// 🚧 RF fix 4: a row the moment made goes with its message.
 	if (anchor) {
 		const { imprintMade } = await import("$lib/server/lorebooks/imprints")
-		await imprintMade(db, anchor, { lorebookId: r.target.lorebookId, subject: "relationship", subjectId: made.id })
+		await imprintMade(db, anchor, { lorebookId: writeBookId, subject: "relationship", subjectId: made.id })
 	}
-	return { id: made.id, made: !found, overlaid: !!found }
+	return { id: made.id, made: !found || retire != null, overlaid: !!found && retire == null }
 }
 
 // ── The notes' rule-fed overlay (★5) ────────────────────────────────────────
@@ -438,7 +513,10 @@ async function rowForSide(
  *  · `entryFields` — a held thing's source entry's field, or a place
  *    entry's (`entry-field`), by entry id;
  *  · `castStates` — a cast member's state on the graph (`cast-state`), by
- *    the book's member (its binding id).
+ *    the book's member (its binding id);
+ *  · 🚧 `placeValues` — a world-scope attribute value of the attached book's
+ *    place (★pl-1, owner 2026-11-05), by entry id then slot id; null is
+ *    cleared, and the book's own value is read.
  *
  * Kept on the notes' own row (`lorebooks.extra_json.ruleFed`), never as a
  * copied entry or member: a copy would be offered by *Apply to the lorebook*
@@ -448,6 +526,8 @@ async function rowForSide(
 export interface RuleFedOverlay {
 	entryFields: Record<string, Record<string, unknown>>
 	castStates: Record<string, string>
+	/** 🚧 (★pl-1) A world-scope value of the attached book's place: entry id → slot id → value. Absent until one is laid. */
+	placeValues?: Record<string, Record<string, unknown>>
 }
 
 const RULE_FED = "ruleFed"
@@ -456,14 +536,17 @@ const overlayOfJson = (raw: unknown): RuleFedOverlay => {
 	const o = isRecord(raw) ? raw : {}
 	return {
 		entryFields: isRecord(o.entryFields) ? (o.entryFields as RuleFedOverlay["entryFields"]) : {},
-		castStates: isRecord(o.castStates) ? (o.castStates as RuleFedOverlay["castStates"]) : {}
+		castStates: isRecord(o.castStates) ? (o.castStates as RuleFedOverlay["castStates"]) : {},
+		...(isRecord(o.placeValues) ? { placeValues: o.placeValues as NonNullable<RuleFedOverlay["placeValues"]> } : {})
 	}
 }
 
 /** One value's place on the overlay: `entryFields.<entry id>.<field>`, `castStates.<member id>`. */
 const overlayPath = {
 	entryField: (entryId: number | string, field: string) => `entryFields.${entryId}.${field}`,
-	castState: (bindingId: number | string) => `castStates.${bindingId}`
+	castState: (bindingId: number | string) => `castStates.${bindingId}`,
+	/** 🚧 (★pl-1) A slot id may hold `.`; `atOverlayPath` rejoins the rest. */
+	placeValue: (entryId: number | string, slotId: string) => `placeValues.${entryId}.${slotId}`
 }
 const atOverlayPath = (o: RuleFedOverlay, path: string): unknown => {
 	const [kind, id, ...rest] = path.split(".")
@@ -526,9 +609,47 @@ export async function ruleFedOverlayOf(
 	const raw = isRecord(notes?.extraJson) ? notes.extraJson[RULE_FED] : undefined
 	if (!isRecord(raw)) return null
 	const o = overlayOfJson(raw)
-	return Object.keys(o.entryFields).length || Object.keys(o.castStates).length
+	return Object.keys(o.entryFields).length ||
+		Object.keys(o.castStates).length ||
+		Object.keys(o.placeValues ?? {}).length
 		? o
 		: null
+}
+
+/**
+ * 🚧 (★pl-1, owner 2026-11-05: "In the notes' overlay, like the rules' place
+ * fields.") The world-scope values the notes hold for the attached book's
+ * places — a place's entry id, then a slot id, to the value — from the notes
+ * row's `extra_json`; `{}` when none. Pure, so a reader that already holds
+ * the notes row asks no second query.
+ */
+export function placeValuesOf(extraJson: unknown): Record<string, Record<string, unknown>> {
+	return overlayOfJson(isRecord(extraJson) ? extraJson[RULE_FED] : undefined).placeValues ?? {}
+}
+
+/**
+ * 🚧 (★pl-1) Lay one world-scope value of the attached book's place on the
+ * notes' overlay, keyed by the book's place (entry) id. `anchor` imprints it
+ * under its message so Back takes it; null imprints nothing. The only writer
+ * of `placeValues`.
+ */
+export async function layPlaceValue(
+	db: Db,
+	notesId: number,
+	entryId: number,
+	slotId: string,
+	value: unknown,
+	anchor: ImprintAnchor | null
+): Promise<void> {
+	await overlayInNotes(
+		db,
+		notesId,
+		(o) => {
+			const places = (o.placeValues ??= {})
+			places[String(entryId)] = { ...(places[String(entryId)] ?? {}), [slotId]: value }
+		},
+		{ anchor, paths: [overlayPath.placeValue(entryId, slotId)] }
+	)
 }
 
 // ── The one writer ──────────────────────────────────────────────────────────
@@ -632,23 +753,26 @@ async function writeColumn(
 		if (at.bindingId == null) return "the cast member is in no lorebook"
 		if (typeof value !== "string" || !NODE_STATES.has(value))
 			return `'${String(value)}' is no state a cast member is in`
-		const [was] = await db
-			.select({ lorebookId: schema.lorebookBindings.lorebookId, nodeState: schema.lorebookBindings.nodeState })
-			.from(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.id, at.bindingId))
-			.limit(1)
-		await db
-			.update(schema.lorebookBindings)
-			.set({ nodeState: value as schema.NodeState })
-			.where(eq(schema.lorebookBindings.id, at.bindingId))
-		if (anchor && was)
-			await imprintField(
-				db,
-				anchor,
-				{ lorebookId: was.lorebookId, subject: "member", subjectId: at.bindingId, field: "nodeState" },
-				was.nodeState ?? undefined,
-				value
-			)
+		// The state is a cast version's (the member's column is frozen): the one
+		// writer's story write, which routes itself (the book, or the session's
+		// overlay row), dates itself, anchors to the turn so Back takes it, and
+		// forks the line inside this transaction. Nothing is written when the
+		// member already reads so in this session.
+		if (!anchor) throw new Error("A cast member's state is written in a session.")
+		const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+		const { writeCastVersion } = await import("$lib/server/characters/versions")
+		const read = (await membersAsRead(db, [at.bindingId], { sessionId: anchor.sessionId })).get(at.bindingId)
+		if (read?.nodeState === value) return null
+		const memberId = at.bindingId
+		await db.transaction((tx: Db) =>
+			writeCastVersion(tx as unknown as Db, {
+				member: memberId,
+				changes: { nodeState: value as schema.NodeState },
+				// The run's, else the session's (as `durable.ts` files its rows).
+				writtenBy: anchor.runId ? `run:${anchor.runId}` : `session:${anchor.sessionId}`,
+				session: { id: anchor.sessionId, messageId: anchor.messageId }
+			})
+		)
 		return null
 	}
 	return `nothing reads onto '${String(target)}'`
@@ -812,7 +936,10 @@ export async function writeLandings(
 				fact.columns.push({ target: c.target, field: c.field, from: c.was, to: c.value })
 			facts.push({ ...fact, lorebookId: r.target.lorebookId })
 			continue
-		} else if (entry.lorebookId !== r.target.lorebookId)
+		} else if (
+			entry.lorebookId !== r.target.lorebookId &&
+			entry.lorebookId !== r.ownBookId
+		)
 			fact.skipped =
 				"this session does not write the lorebook its entry is in; the held copy keeps the change"
 		else
@@ -839,6 +966,19 @@ export async function writeLandings(
 		facts.push(fact)
 	}
 	return facts
+}
+
+/** 🚧 ⏳ Flip on: the owner a cast-state landing reads for a seat's owner — `seated_member` is the binding itself, `player_seat` its seat's member else its card; anything else as it is. */
+async function castStateOwnerOf(
+	db: Db,
+	sessionId: number,
+	owner: { kind?: string; id: number }
+): Promise<{ kind?: string; id: number }> {
+	if (owner.kind === "seated_member") return { kind: "cast_member", id: owner.id }
+	if (owner.kind !== "player_seat") return owner
+	const seat = await seatOf(db, sessionId, `player-seat:${owner.id}`)
+	if (seat?.castMemberId != null) return { kind: "cast_member", id: seat.castMemberId }
+	return seat?.cardId != null ? { kind: "session_cast", id: seat.cardId } : owner
 }
 
 /**
@@ -875,6 +1015,10 @@ export async function writeAttributeLandings(
 		r ??= await routingOf(db, ctx.sessionId, ctx.messageId)
 		anchor ??= await landingAnchor(db, ctx)
 		const value = isRecord(c.value) && "v" in c.value ? c.value.v : c.value
+		// 🚧 ⏳ Flip on: a seat's own owner reads as the cast member it stands for — a `seated_member` *is* the binding; a `player_seat` is its seat's member, else its card.
+		const owner: { kind?: string; id: number } = memberFormOn()
+			? await castStateOwnerOf(db, ctx.sessionId, { kind: c.owner.kind, id: c.owner.id })
+			: { kind: c.owner.kind, id: c.owner.id }
 		const fact: LandingFact = {
 			kind: "attribute",
 			owner: `${c.owner.kind}:${c.owner.id}`,
@@ -883,7 +1027,7 @@ export async function writeAttributeLandings(
 		}
 		if (
 			attr.readsOnto === "cast-state" &&
-			(c.owner.kind === "session_cast" || c.owner.kind === "cast_member")
+			(owner.kind === "session_cast" || owner.kind === "cast_member")
 		) {
 			const cols = {
 				id: schema.lorebookBindings.id,
@@ -891,11 +1035,11 @@ export async function writeAttributeLandings(
 			}
 			// The member in the book written to, else 🚧 (★5) in the attached book the notes overlay.
 			const [b] =
-				c.owner.kind === "cast_member"
+				owner.kind === "cast_member"
 					? await db
 							.select(cols)
 							.from(schema.lorebookBindings)
-							.where(eq(schema.lorebookBindings.id, c.owner.id))
+							.where(eq(schema.lorebookBindings.id, owner.id))
 							.limit(1)
 					: await db
 							.select(cols)
@@ -904,7 +1048,7 @@ export async function writeAttributeLandings(
 								and(
 									eq(
 										schema.lorebookBindings.characterId,
-										c.owner.id
+										owner.id
 									),
 									inArray(
 										schema.lorebookBindings.lorebookId,
@@ -1000,7 +1144,10 @@ export async function writeAttributeLandings(
 					from: undefined,
 					to: value
 				})
-			} else if (!e || e.lorebookId !== r.target.lorebookId)
+			} else if (
+				!e ||
+				(e.lorebookId !== r.target.lorebookId && e.lorebookId !== r.ownBookId)
+			)
 				fact.skipped =
 					"this session does not write the lorebook the place is in"
 			else {
@@ -1116,17 +1263,35 @@ function zoneForTie(
 /** An owner key as the zone store keys its owner. */
 function ownerOfKey(key: string, sessionId: number): StateOwner | null {
 	if (key === "world") return { kind: "session", id: sessionId } as StateOwner
-	const m = /^(character|location|player-seat):(\d+)$/.exec(key)
-	if (!m) return null
+	const m = /^(character|location|player-seat|seated-member):(\d+)$/.exec(key)
+	// ⏳ A `seated-member:` key is read only once the flip is on (`memberForm.ts`).
+	if (!m || (m[1] === "seated-member" && !memberFormOn())) return null
 	return {
 		kind:
 			m[1] === "character"
 				? "session_cast"
 				: m[1] === "player-seat"
 					? "player_seat"
-					: "session_location",
+					: m[1] === "seated-member"
+						? "seated_member"
+						: "session_location",
 		id: Number(m[2])
 	} as StateOwner
+}
+
+/**
+ * 🚧 ⏳ A row's end as the session keys it, flip on (`memberForm.ts`): the
+ * seat whose member *is* the binding (`seated-member:<M>` / `player-seat:<S>`),
+ * else the seat holding the end's card; no seat keeps the card-form key.
+ * Flip off: the key as it is.
+ */
+function seatEndKeyIn(map: SeatMap | null, end: { key: string; nodeId: number | null }): string {
+	if (!map) return end.key
+	if (end.nodeId != null) {
+		const seat = map.seats.find((x) => x.castMemberId === end.nodeId)
+		if (seat) return seat.kind === "player" ? `player-seat:${seat.seatId}` : `seated-member:${end.nodeId}`
+	}
+	return memberFormOf(map, end.key) ?? end.key
 }
 
 /** A row's end as an owner key: a cast member by their card, a place by its entry. */
@@ -1134,27 +1299,21 @@ async function keyOfEnd(
 	db: Db,
 	nodeId: number | null,
 	entryId: number | null
-): Promise<{ key: string; name: string; place: boolean } | null> {
+): Promise<{ key: string; name: string; place: boolean; nodeId: number | null } | null> {
 	if (nodeId != null) {
 		const [b] = await db
-			.select({
-				characterId: schema.lorebookBindings.characterId,
-				name: schema.lorebookBindings.name
-			})
+			.select({ characterId: schema.lorebookBindings.characterId })
 			.from(schema.lorebookBindings)
 			.where(eq(schema.lorebookBindings.id, nodeId))
 			.limit(1)
 		if (!b?.characterId) return null
-		let name = b.name as string
-		if (!name) {
-			const [c] = await db
-				.select({ name: schema.characters.name })
-				.from(schema.characters)
-				.where(eq(schema.characters.id, b.characterId))
-				.limit(1)
-			name = c?.name ?? `character ${b.characterId}`
-		}
-		return { key: `character:${b.characterId}`, name, place: false }
+		// The member as read on Main (a tie is drawn on the book, no session named), else the card's current version.
+		let name = (await memberAsRead(db, nodeId))?.name as string | undefined
+		if (!name)
+			name =
+				(await cardsNow(db, [b.characterId])).get(b.characterId)?.name ??
+				`character ${b.characterId}`
+		return { key: `character:${b.characterId}`, name, place: false, nodeId }
 	}
 	if (entryId != null) {
 		const [e] = await db
@@ -1170,10 +1329,27 @@ async function keyOfEnd(
 		return {
 			key: `${place ? "location" : "entry"}:${entryId}`,
 			name: e.title ?? `entry ${entryId}`,
-			place
+			place,
+			nodeId: null
 		}
 	}
 	return null
+}
+
+/**
+ * 🚧 A row's end named in one session: a cast member by the name they are
+ * read with there (`memberAsRead` — their own name, else their active
+ * card's), else the name the row's end already has.
+ */
+async function endNameIn(
+	db: Db,
+	sessionId: number,
+	end: { key: string; name: string },
+	nodeId: number | null
+): Promise<string> {
+	if (nodeId == null || !/^character:\d+$/.test(end.key)) return end.name
+	const read = await memberAsRead(db, nodeId, { sessionId })
+	return read?.name || end.name
 }
 
 /** The tie type a drawn row is: person to person, to a place, or to any entry — the first the ruleset says. */
@@ -1257,13 +1433,18 @@ export async function drawTieSides(
 			}
 			return out
 		}
+		// 🚧 ⏳ Flip on: each end is the seat's member-form key in this session.
+		const seatMap = memberFormOn() ? await loadSeatMap(db, s.id) : null
 		const sides = stampTieSides(
 			tie,
 			{ id: null, name: to.name },
 			{
-				from: from.key,
-				towards: to.key,
-				names: { from: to.name, towards: from.name }
+				from: seatEndKeyIn(seatMap, from),
+				towards: seatEndKeyIn(seatMap, to),
+				names: {
+					from: await endNameIn(db, s.id, to, to.nodeId),
+					towards: await endNameIn(db, s.id, from, from.nodeId)
+				}
 			},
 			{
 				from: {
@@ -1398,7 +1579,7 @@ export async function retireTieSides(
 			const ownerKey =
 				z.owner_kind === "session"
 					? "world"
-					: `${z.owner_kind === "session_cast" ? "character" : "location"}:${z.owner_id}`
+					: `${z.owner_kind === "session_cast" ? "character" : z.owner_kind === "seated_member" ? "seated-member" : memberFormOn() && z.owner_kind === "player_seat" ? "player-seat" : "location"}:${z.owner_id}`
 			await writeZones(
 				db,
 				{
@@ -1510,11 +1691,11 @@ export async function tieHistory(
 						at: new Date(run.started_at).getTime(),
 						sessionId: run.session_id,
 						owner: f.owner,
-						ownerName: await nameOfKey(db, f.owner),
+						ownerName: await nameOfKey(db, f.owner, run.session_id),
 						...(f.towards
 							? {
 									towards: f.towards,
-									towardsName: await nameOfKey(db, f.towards)
+									towardsName: await nameOfKey(db, f.towards, run.session_id)
 								}
 							: {}),
 						...(f.made ? { made: true as const } : {}),
@@ -1618,7 +1799,7 @@ export async function sidesOfRow(
 			f.e.sideOwner ??
 			(f.z.owner_kind === "session"
 				? "world"
-				: `${f.z.owner_kind === "session_cast" ? "character" : f.z.owner_kind === "player_seat" ? "player-seat" : "location"}:${f.z.owner_id}`)
+				: `${f.z.owner_kind === "session_cast" ? "character" : f.z.owner_kind === "player_seat" ? "player-seat" : f.z.owner_kind === "seated_member" ? "seated-member" : "location"}:${f.z.owner_id}`)
 		const own = all.filter((f) => String(f.e.fields.edge ?? "") === edge)
 		const back = own.flatMap((f) =>
 			tieSidesOf(ties.get(f.e.entryType)) === 2
@@ -1640,7 +1821,7 @@ export async function sidesOfRow(
 			out.push({
 				sessionId: s.id,
 				owner: ownerKey,
-				ownerName: await nameOfKey(db, ownerKey),
+				ownerName: await nameOfKey(db, ownerKey, s.id),
 				towards: String(e.fields.towards ?? ""),
 				zone: z.zone_type,
 				entryType: tie.id,
@@ -1675,17 +1856,35 @@ export async function sidesOfRow(
 	return []
 }
 
-/** An owner key's name: a cast member's card, a place's title. */
-async function nameOfKey(db: Db, key: string): Promise<string> {
+/**
+ * An owner key's name: a cast member's, a place's title. 🚧 In a session, a
+ * `character:<cardId>` key's name is its seat's cast member as read (their
+ * own name, else their card's); a seat with no member yet, or no session
+ * named, reads the card. A `seated-member:<id>` key is read as its seat's.
+ */
+async function nameOfKey(db: Db, key: string, sessionId: number | null = null): Promise<string> {
+	// 🚧 ⏳ Flip on (`memberForm.ts`): a `seated-member:<M>` / `player-seat:<S>` key is named as its member is read in the session, else by its seat's card.
+	if (memberFormOn() && sessionId != null && /^(seated-member|player-seat):\d+$/.test(key.trim())) {
+		const t = key.trim()
+		const seat = await seatOf(db, sessionId, t)
+		const memberId = t.startsWith("seated-member:") ? Number(t.slice("seated-member:".length)) : (seat?.castMemberId ?? null)
+		const read = memberId != null ? await memberAsRead(db, memberId, { sessionId }) : null
+		if (read?.name) return read.name
+		return seat?.cardId != null ? ((await cardsNow(db, [seat.cardId])).get(seat.cardId)?.name ?? key) : key
+	}
+	if (!memberFormOn() && sessionId != null && key.trim().startsWith("seated-member:")) key = (await storedSeatRef(db, sessionId, key)) ?? key
 	const m = /^(character|location|entry):(\d+)$/.exec(key)
 	if (!m) return key === "world" ? "The world" : key
 	if (m[1] === "character") {
-		const [c] = await db
-			.select({ name: schema.characters.name })
-			.from(schema.characters)
-			.where(eq(schema.characters.id, Number(m[2])))
-			.limit(1)
-		return c?.name ?? key
+		const cardId = Number(m[2])
+		const seat = sessionId != null ? await seatOf(db, sessionId, key) : null
+		if (seat?.castMemberId != null) {
+			const read = await memberAsRead(db, seat.castMemberId, {
+				sessionId: sessionId!
+			})
+			if (read?.name) return read.name
+		}
+		return (await cardsNow(db, [cardId])).get(cardId)?.name ?? key
 	}
 	const [e] = await db
 		.select({ title: schema.lorebookEntries.title })
@@ -1761,7 +1960,7 @@ export async function fileHeldFieldChange(
 			value: input.value
 		},
 		ownerLabel: side.ownerName,
-		towardsLabel: await nameOfKey(db, side.towards),
+		towardsLabel: await nameOfKey(db, side.towards, side.sessionId),
 		fieldLabel: num.label
 	}
 	const [row] = await db
@@ -1988,7 +2187,7 @@ export interface SheetOwner {
 	mine?: boolean
 }
 
-/** A sheet owner's key in the rules' own words: `character:4`, `player-seat:2`, `location:9`, `world`. */
+/** A sheet owner's key in the rules' own words: `character:4`, `player-seat:2`, `location:9`, `world` — 🚧 ⏳ and, once the flip is on (`memberForm.ts`), `seated-member:7` (a `seated_member` owner never exists before). */
 const rulesKeyOf = (o: { kind: string; id: number }): string =>
 	o.kind === "session"
 		? "world"
@@ -1996,7 +2195,9 @@ const rulesKeyOf = (o: { kind: string; id: number }): string =>
 			? `character:${o.id}`
 			: o.kind === "player_seat"
 				? `player-seat:${o.id}`
-				: `location:${o.id}`
+				: o.kind === "seated_member"
+					? `seated-member:${o.id}`
+					: `location:${o.id}`
 
 /**
  * 🚧 **The sheet's ties** (screen 2, T1/T5): each owner's tie sides as the
@@ -2071,7 +2272,7 @@ export async function tiesOnWire(
 			if (r.title) titles.set(r.id, r.title)
 	const byKey = new Map(owners.map((o) => [rulesKeyOf(o), o]))
 	const nameOf = async (key: string) =>
-		byKey.get(key)?.label ?? (await nameOfKey(db, key))
+		byKey.get(key)?.label ?? (await nameOfKey(db, key, sessionId))
 	const fieldRow = (tie: RulesetEntryTypeDecl, k: string, v: unknown) => {
 		const f = fieldsOf(tie)[k] as
 			| (FieldDecl & { min?: number; max?: number })
@@ -2209,7 +2410,16 @@ export async function setTieSideShown(
 	if (!ruleset) throw new Error("This session's rules are not installed.")
 	const tie = tieTypesOf(ruleset).get(input.entryType)
 	if (!tie) throw new Error("That is no tie these rules keep.")
-	const sideKey = rulesKeyOf(input.owner)
+	// 🚧 A `seated_member` owner / `seated-member:` far end reads as its seat's stored key (plan §27 S2); a member with no seat holds no side.
+	// ⏳ Flip on: a member-less character seat stays card form (the doors answer null for it), so its own key stands.
+	const owner =
+		(await storedSeatOwner(db, input.sessionId, input.owner)) ??
+		(memberFormOn() && input.owner.kind === "session_cast" ? input.owner : null)
+	const towards =
+		(await storedSeatRef(db, input.sessionId, input.towards)) ??
+		(memberFormOn() && /^character:\d+$/.test(input.towards.trim()) ? input.towards : null)
+	if (!owner || towards === null) throw new Error("That side of the tie is not held.")
+	const sideKey = rulesKeyOf(owner as { kind: string; id: number })
 	const holder = tieSidesOf(tie) === 1 ? "world" : sideKey
 	const holderOwner = ownerOfKey(holder, input.sessionId)
 	if (!holderOwner)
@@ -2238,7 +2448,7 @@ export async function setTieSideShown(
 			{
 				op: input.shown ? "reveal" : "hide",
 				owner: holder,
-				entry: { entryType: tie.id, towards: input.towards },
+				entry: { entryType: tie.id, towards },
 				key: "show-by-hand"
 			}
 		]

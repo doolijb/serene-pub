@@ -13,6 +13,10 @@
  *
  * ## A true fold, never a delete that drops references
  *
+ * The generic fold (models, foreign keys, pipeline slots, delete) lives in
+ * `connectionFold.ts`; this file keeps the two KoboldCPP-only parts: an image
+ * row's models becoming `image-gen`, and the `extraJson.profile` carry-over.
+ *
  * Connections are referenced by id from many places, and deleting a row
  * silently set-nulls or cascades all of them. So each extra row S is folded
  * into the managed endpoint T — the oldest `koboldcpp_managed` row — inside
@@ -41,15 +45,10 @@
  * Idempotent: a settled install has one managed row and does nothing.
  */
 
-import { and, eq, getTableColumns, inArray, is } from "drizzle-orm"
-import { getTableConfig, PgTable, type PgColumn } from "drizzle-orm/pg-core"
+import { eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-import {
-	connectionSlotValue,
-	slotConnectionId,
-	slotModelId
-} from "$lib/shared/connections/slotRef"
+import { foldConnectionInto } from "$lib/server/connections/connectionFold"
 
 export interface FoldResult {
 	/** Rows folded into the managed endpoint. */
@@ -59,27 +58,6 @@ export interface FoldResult {
 }
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
-
-/** Every foreign-key column that points at `target`'s `id`. */
-function referencesTo(
-	target: PgTable
-): { table: PgTable; key: string; column: PgColumn }[] {
-	const out: { table: PgTable; key: string; column: PgColumn }[] = []
-	for (const table of Object.values(schema)) {
-		if (!is(table, PgTable)) continue
-		const columns = getTableColumns(table) as Record<string, PgColumn>
-		for (const fk of getTableConfig(table).foreignKeys) {
-			const ref = fk.reference()
-			if (ref.foreignTable !== target || ref.columns.length !== 1) continue
-			const column = ref.columns[0]
-			const key = Object.keys(columns).find(
-				(k) => columns[k].name === column.name
-			)
-			if (key) out.push({ table, key, column })
-		}
-	}
-	return out
-}
 
 /** S becomes a managed endpoint where it stands; its models are image models. */
 async function renameInPlace(db: Db | Tx, id: number): Promise<void> {
@@ -100,94 +78,14 @@ async function foldOne(
 ): Promise<void> {
 	// An image row's models are image models; a managed row's say for
 	// themselves (and the next sync fills in any that do not).
-	const movedModality =
-		source.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-			? { modality: "image-gen" }
-			: {}
-	// 1. The models.
-	const sourceModels = await tx
-		.select()
-		.from(schema.connectionModels)
-		.where(eq(schema.connectionModels.connectionId, source.id))
-	const targetModels = await tx
-		.select({
-			id: schema.connectionModels.id,
-			model: schema.connectionModels.model
-		})
-		.from(schema.connectionModels)
-		.where(eq(schema.connectionModels.connectionId, target.id))
-	const targetByModel = new Map(targetModels.map((m) => [m.model, m.id]))
-	/** Source model id → the id that means the same model on the target. */
-	const mapped = new Map<number, number>()
-	const duplicates = new Map<number, number>()
-	for (const m of sourceModels) {
-		const existing = targetByModel.get(m.model)
-		if (existing != null) {
-			mapped.set(m.id, existing)
-			duplicates.set(m.id, existing)
-			continue
-		}
+	if (source.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE)
 		await tx
 			.update(schema.connectionModels)
-			.set({ connectionId: target.id, ...movedModality })
-			.where(eq(schema.connectionModels.id, m.id))
-		mapped.set(m.id, m.id)
-	}
+			.set({ modality: "image-gen" })
+			.where(eq(schema.connectionModels.connectionId, source.id))
 
-	// 2. Foreign keys. A script attached to both would break the pair's
-	// uniqueness when repointed, and the target already has it.
-	const targetScripts = await tx
-		.select({ scriptId: schema.connectionScripts.scriptId })
-		.from(schema.connectionScripts)
-		.where(eq(schema.connectionScripts.connectionId, target.id))
-	if (targetScripts.length)
-		await tx.delete(schema.connectionScripts).where(
-			and(
-				eq(schema.connectionScripts.connectionId, source.id),
-				inArray(
-					schema.connectionScripts.scriptId,
-					targetScripts.map((s) => s.scriptId)
-				)
-			)
-		)
-	for (const { table, key, column } of referencesTo(schema.connections)) {
-		// Its rows were moved above; the duplicates go with the source row.
-		if (table === schema.connectionModels) continue
-		await tx
-			.update(table)
-			.set({ [key]: target.id })
-			.where(eq(column, source.id))
-	}
-	for (const { table, key, column } of referencesTo(schema.connectionModels))
-		for (const [from, to] of duplicates)
-			await tx
-				.update(table)
-				.set({ [key]: to })
-				.where(eq(column, from))
-
-	// 3. Pipeline Connection slots.
-	const slots = await tx
-		.select({
-			id: schema.pipelineConfigValues.id,
-			value: schema.pipelineConfigValues.value
-		})
-		.from(schema.pipelineConfigValues)
-		.where(eq(schema.pipelineConfigValues.slot, "connection"))
-	for (const row of slots) {
-		if (slotConnectionId(row.value) !== source.id) continue
-		const modelId = slotModelId(row.value)
-		await tx
-			.update(schema.pipelineConfigValues)
-			.set({
-				value: connectionSlotValue(
-					target.id,
-					modelId == null ? null : (mapped.get(modelId) ?? null)
-				)
-			})
-			.where(eq(schema.pipelineConfigValues.id, row.id))
-	}
-
-	// 4. Image settings.
+	// Image settings (`extraJson.profile`) are kept when T has none. Written
+	// before the generic fold so it reads S while S still exists.
 	const sourceProfile = (source.extraJson as Record<string, unknown> | null)
 		?.profile
 	const targetExtra = (target.extraJson ?? {}) as Record<string, unknown>
@@ -197,10 +95,7 @@ async function foldOne(
 			.set({ extraJson: { ...targetExtra, profile: sourceProfile } })
 			.where(eq(schema.connections.id, target.id))
 
-	// 5. Nothing points at it any more.
-	await tx
-		.delete(schema.connections)
-		.where(eq(schema.connections.id, source.id))
+	await foldConnectionInto(tx, source, target)
 }
 
 export async function foldKoboldCppManagedImage(db: Db): Promise<FoldResult> {

@@ -26,8 +26,8 @@ import { holdsWidgetGrant } from "./askers"
 type Params = WidgetRequests["set-attribute-value"]["params"]
 type Value = Params["value"]
 
-/** The session layers a widget may write — the world's, a cast member's, 🚧 a card-less player seat's and 🚧 a place's (phase 4). */
-const SESSION_LAYERS = new Set(["session", "session_cast", "player_seat", "session_location"])
+/** The session layers a widget may write — the world's, a cast member's (🚧 by its card, or by `seated_member`), 🚧 a card-less player seat's and 🚧 a place's (phase 4). */
+const SESSION_LAYERS = new Set(["session", "session_cast", "seated_member", "player_seat", "session_location"])
 
 /** What this answer needs of the page's state store (`SessionStateHandle`). */
 export interface AttributeWriter {
@@ -91,13 +91,30 @@ export async function answerSetAttributeValue(
 		throw new Error("set-attribute-value takes a number, text, true/false, a list of items, or null to clear")
 	if (sessionId == null || store.sessionId !== sessionId || !store.loaded)
 		throw new Error("this session's stats have not loaded yet")
-	const row = [...store.owners.values()].find((o) => o.kind === owner.kind && o.id === owner.id)
+	// The asked seat's own row, never the other seat of a member who holds two
+	// (★K-2): an exact { kind, id } row wins; then, for a `seated_member`
+	// owner, the row whose host-filled `ref` is `seated-member:<id>`; then the
+	// row whose `castMemberId` it is — a non-`player_seat` row only, since a
+	// `seated_member` owner names a character seat. Looked up, never parsed.
+	// ⏳ A `session_cast` owner (an old tab or plugin) matches a row only while
+	// the host still emits card-form rows; from the flip it is refused here.
+	const rows = [...store.owners.values()]
+	const row =
+		rows.find((o) => o.kind === owner.kind && o.id === owner.id) ??
+		(owner.kind === "seated_member"
+			? (rows.find((o) => o.ref === `seated-member:${owner.id}`) ??
+				rows.find((o) => o.kind !== "player_seat" && o.castMemberId === owner.id))
+			: undefined)
 	if (!row) throw new Error("that owner is not in this session")
 	if (!Object.hasOwn(row.configs ?? {}, p.slotId))
 		throw new Error(`'${p.slotId}' is not a slot ${row.label} carries`)
 	// 🚧 A line the table hears when it lands (Give to…, 2026-10-18).
 	const say = typeof p.say === "string" ? p.say.trim().slice(0, 200) : ""
-	await store.set({ kind: owner.kind as Params["owner"]["kind"], id: owner.id }, p.slotId, p.value, {
+	// Written with the matched row's own { kind, id } — the owner as the page's
+	// state knows it (`seated_member` + member id from the flip; ⏳ `session_cast` + card id before), so the store's local
+	// bookkeeping and the server see the stored form. For today's owners the
+	// row's kind and id are the asked ones.
+	await store.set({ kind: row.kind, id: row.id }, p.slotId, p.value, {
 		ownError: true,
 		...(say ? { say } : {})
 	})

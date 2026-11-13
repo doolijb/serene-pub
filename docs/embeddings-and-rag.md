@@ -11,7 +11,7 @@ You'll have an embedding model set up, your lorebook indexed, and Search by mean
 ## Turning it on
 
 1. Open the **Loadouts** view from the rail and tap the **Embeddings** tile. That is the Embeddings [loadout](./connections.md#loadouts), the model on a connection that every embedding runs on. Its sheet lists every model you have that can embed; if one suits you, pick it and skip to the end.
-2. Otherwise, add a connection in the **Connections** view with **Add › A connection**. Most people should pick **Local embeddings (ONNX)**: it runs on your own computer, offline and free.
+2. Otherwise, most people should use **Local embeddings**: it runs on your own computer, offline and free, and Serene Pub makes the connection itself on any device that can run it.
 3. Choose a model from the recommended list (see [Choosing a local embedding model](#choosing-a-local-embedding-model)), download it, and press **Use in Embeddings** to put it in the Embeddings loadout.
 
 That's all. Indexing starts by itself, and **Search by meaning** is on its default, **Automatic**, which searches whenever the Embeddings loadout has a model.
@@ -22,7 +22,7 @@ The queue of the connection the Embeddings loadout uses reads **Running** while 
 
 :::warning If this didn't work
 - **The queue stays Idle with nothing done.** Press **Start** on the status card. If it says **Backend not loaded**, press **Load now**. See [Troubleshooting a stuck or empty queue](#troubleshooting-a-stuck-or-empty-queue).
-- **Local embeddings (ONNX) is greyed out.** This device can't run it (Android, and some desktop builds); the card in the **New connection** dialog says why. Use a service, or Ollama or another embeddings host on a computer on your network.
+- **Local embeddings is dimmed.** This device can't run it (Android, and some desktop builds); the connection's own page says why. Use a service, or Ollama or another embeddings host on a computer on your network.
 :::
 
 ## Embedding connections
@@ -31,7 +31,7 @@ An embedding connection is a connection like any other: a service, an address an
 
 | Service | Runs | Cost | Good for |
 | --- | --- | --- | --- |
-| **Local embeddings (ONNX)** | On this computer, offline | Free | Most people. Add it in the Connections view, then pick, download and **Use in Embeddings** a model. See [Local ONNX models](./connections.md#local-onnx-models). |
+| **Local embeddings** | On this computer, offline | Free | Most people. Serene Pub makes the connection itself; pick, download and **Use in Embeddings** a model. See [Local ONNX models](./connections.md#local-onnx-models). |
 | **Ollama** | In Ollama, on this computer or your network | Free | People already running Ollama: any embedding model it has pulled. |
 | **LM Studio** | In LM Studio, on this computer or your network | Free | People already running LM Studio: any embedding model it has downloaded. |
 | **KoboldCPP, run by Serene Pub** | On this computer | Free | People already chatting through it: put an embedding model in its Models directory and press **Use in Embeddings**. It loads beside the model that writes replies, on the processor, so neither unloads the other. See [Embeddings from the same connection](./connections.md#embeddings-from-the-same-connection). |
@@ -154,9 +154,10 @@ Once a session passes 10 messages, a quiet line can appear in the composer's bot
 
 - *Lorebook entries aren't indexed yet, so Search by meaning can't find them.*
 - *Lorebook entries were indexed with a different model and need re-indexing with ‹model›.*
-- *Indexing 12 of 40 lorebook entries.* While the queue isn't running, it says *12 of 40 lorebook entries are indexed. The rest are waiting to be indexed.*
 
-An administrator also gets the press the sentence calls for: **Re-index now** when entries need re-indexing, which puts the session at the front of the queue and re-indexes them with the current model; **Prioritize in queue** while entries are on their way, which moves the session to the front; and, when none is indexed yet, **Set up search by meaning** too, which opens **Admin › Models › Loadouts**, where the Embeddings loadout is filled. Other people see the sentence alone. **Hide for this session** hides the notice for everyone in the session; Search by meaning still searches whatever is indexed, and the crossed-out eye left in its place brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed.
+An administrator also gets the press the sentence calls for: **Re-index now** when entries need re-indexing, which puts the session at the front of the queue and re-indexes them with the current model; and, when none is indexed yet, **Prioritize in queue**, which moves the session to the front, and **Set up search by meaning**, which opens **Admin › Models › Loadouts**, where the Embeddings loadout is filled. Other people see the sentence alone. **Hide for this session** hides the notice for everyone in the session; Search by meaning still searches whatever is indexed, and the crossed-out eye left in its place brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed, and while indexing is under way: it says nothing about a lorebook that is part way there.
+
+Progress shows in **Activity** instead, as a card per lorebook (*Indexing for Search by meaning · 12 of 40 entries*), to administrators and to the book's owner for their own books. The count moves as each entry is indexed, and the card leaves once every entry is indexed or the queue stops.
 
 ### Why some short sessions never show an indexing notice
 
@@ -168,9 +169,9 @@ Lorebook entry rows and character rows carry a small icon for their own index st
 
 ## Named entities
 
-**Named entities** has its own loadout, **Entities**, with its own tile in the Loadouts view and one service, **Local named entities (ONNX)**. Its models, from a small English one (about 67 MB) to larger multilingual ones, find the people, places and things a message names. Download one and put it in the **Entities** loadout with **Use in Entities**.
+**Named entities** has its own loadout, **Entities**, with its own tile in the Loadouts view and one service, **Local named entities**, which Serene Pub makes itself, so the loadout's **Get a model…** lands there. Its models, from a small English one (about 67 MB) to larger multilingual ones, find the people, places and things a message names. Download one and press **Use in Entities**.
 
-It helps lore be matched by name even when nobody set a keyword, or when a scene writes a name in lower case. Without it, Serene Pub matches on the names the lorebook already knows and on capitalised words, which works well for most books.
+It helps lore be matched by name even when nobody set a keyword, or when a scene writes a name in lower case. Without it, Serene Pub matches on the names the lorebook already knows and on capitalised words, which works well for most books. The names it knows are its entry titles and its whole cast's names and aliases, background members without a character card included.
 
 Once downloaded, the model works without an internet connection. It reads a long entry or message all the way through, a piece at a time. While the model is loaded, it also reads the scene each reply is written from, so lore can be found by a name the scene has only just mentioned. When it has been unloaded after its [idle timeout](#model-idle-timeout), replies don't wait for it to load again: the scene is matched on known names and capitalised words, as it would be without a model.
 

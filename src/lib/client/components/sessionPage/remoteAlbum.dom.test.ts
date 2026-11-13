@@ -254,7 +254,7 @@ describe("core's remote Album", () => {
 	)
 
 	test(
-		"source and channel narrow it; empty says so in one line",
+		"source and channel narrow it; empty draws nothing (R10)",
 		{ timeout: 120_000 },
 		async () => {
 			const attached = await mountAlbum({
@@ -269,11 +269,10 @@ describe("core's remote Album", () => {
 			expect(srcs(sanctum, "grid")).toEqual(["/media/41?v=thumb"])
 
 			const empty = await mountAlbum({ messages: [LOG[2]!] })
-			expect(text(empty.query(part("empty")))).toBe(
-				"Nothing has been attached or generated in this session yet."
-			)
-			expect(empty.query(part("toolbar"))).toBeNull()
-			expect(empty.query(part("grid"))).toBeNull()
+			expect(empty.query(part("empty")) === null).toBe(true)
+			expect(text(empty.query(part("root"))) ?? "").toBe("")
+			expect(empty.query(part("toolbar")) === null).toBe(true)
+			expect(empty.query(part("grid")) === null).toBe(true)
 
 			// A new line's picture arrives with the log, first.
 			await empty.push("messages", [

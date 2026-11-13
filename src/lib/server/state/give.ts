@@ -3,20 +3,28 @@
  * a piece handed from one sheet to another — or put down at a place — as
  * ONE host decision, never two writes a widget strings together.
  *
- * - **Direct** when the giver may write both sheets (the session's owner;
- *   anybody putting a thing down at a place of the session): the piece
- *   leaves one list and joins the other in one transaction, merged into the
- *   receiver's own count of the same piece (`countPieces`, by its holding
- *   key — the walk's "holds each piece once… in it twice" is gone).
- * - **Offered** to a player's seat the giver may not write (a guest giving
- *   to the host, or to another guest): a pending change (`state_proposals`,
- *   kind `value`, `payload.offer`) that its player accepts or declines, and
- *   the giver may withdraw (`decideOffer`, through `decideProposal`). Nothing
+ * A give is **two sides**, each judged by the one hand-edit decider
+ * (`state/handEdits.ts`, plan §25 D): `take-from` on the giver — skipped
+ * when the giver is a place (a pick-up is the receiver's side only) — and
+ * `put-on` on the receiver — skipped when the receiver is a place (a drop is
+ * the giver's side only).
+ *
+ * - **Direct** when the giver's hand may take from the giver's sheet and put
+ *   on the receiver's (the session's owner by default; a player on their own
+ *   characters, or anyone's where their item-move level says so; anybody
+ *   putting a thing down at a place of the session): the piece leaves one
+ *   list and joins the other in one transaction, merged into the receiver's
+ *   own count of the same piece (`countPieces`, by its holding key — the
+ *   walk's "holds each piece once… in it twice" is gone).
+ * - **Offered** to a player's seat the giver may not put on (the receiver's
+ *   side refused as not theirs): a pending change (`state_proposals`, kind
+ *   `value`, `payload.offer`) that its player accepts or declines, and the
+ *   giver may withdraw (`decideOffer`, through `decideProposal`). Nothing
  *   moves until it is accepted; the giver's part is then written as the
  *   giver — their offer is their consent.
- * - **Refused** in words: more than is held, a sheet the giver may not
- *   change, and — from a player's character — a cast member nobody plays (a
- *   companion keeps no sheet a gift could land on: it is handed things in
+ * - **Refused** in words: more than is held, a side the decider refuses (its
+ *   sentence), and — from a player's character — a cast member nobody plays
+ *   (a companion keeps no sheet a gift could land on: it is handed things in
  *   the story instead).
  *
  * Each outcome hands back the one line the table hears.
@@ -34,12 +42,18 @@ import {
 	withPieceCount
 } from "$lib/server/state/write"
 import { qualifiedSlotKey, slotKey, stateFor } from "$lib/server/state/resolve"
+import { handEditJudge, handEditRefusal } from "$lib/server/state/handEdits"
+import { carryKeyOf } from "$lib/server/state/carries"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import type { StateOwner } from "$lib/server/state/owners"
 
 type Db = any
 
 /** The owners a piece moves between: a cast member, a player's seat, or a place. */
 const GIVE_KINDS: ReadonlySet<string> = new Set(["session_cast", "player_seat", "session_location"])
+
+/** 🚧 ⏳ S4: a `seated_member` (a character seat in member form) is one only once the flip is on (`memberForm.ts`). */
+const isGiveKind = (kind: string): boolean => GIVE_KINDS.has(kind) || (kind === "seated_member" && memberFormOn())
 
 /** What an offer holds beside the receiver's change (`state_proposals.payload.offer`). */
 export interface PieceOffer {
@@ -90,7 +104,12 @@ async function heldBy(
 	const { withPiecesRead } = await import("$lib/server/rulesets/read")
 	const state = await withPiecesRead(db, await stateFor(db, sessionId))
 	const index = owner.kind === "session_location" ? state.locations : state.cast
-	const key = owner.kind === "player_seat" ? `player_seat:${owner.id}` : String(owner.id)
+	const key =
+		owner.kind === "player_seat"
+			? `player_seat:${owner.id}`
+			: owner.kind === "seated_member"
+				? carryKeyOf(owner)
+				: String(owner.id)
 	const bag = (index as { byId?: Record<string, Record<string, unknown>> } | undefined)?.byId?.[key]
 	if (!bag) return null
 	const value = bag[qualifiedSlotKey(slotId)] ?? bag[slotKey(slotId)]
@@ -147,17 +166,35 @@ export async function givePiece(
 		slotId: string
 		index: number
 		count?: number
+		/**
+		 * 🚧 What the caller already knows, for the hand-edit judge: the socket
+		 * passes the hearing with the hidden stats it shows, so a seater gives
+		 * from (or to) a shown seat's holder-only list as they may set it
+		 * (★s4-fb-3, owner 2026-11-10).
+		 */
+		known?: Parameters<typeof handEditRefusal>[2]
 	}
 ): Promise<{ given: "direct" | "offered"; line: string; proposalId?: number }> {
 	const n = p.count ?? 1
 	if (!Number.isInteger(n) || n < 1) throw new StateRefusal("Give at least one.")
-	if (!GIVE_KINDS.has(p.from.kind) || !GIVE_KINDS.has(p.to.kind))
+	if (!isGiveKind(p.from.kind) || !isGiveKind(p.to.kind))
 		throw new StateRefusal("Things are given between characters and places.")
 	if (p.from.kind === p.to.kind && p.from.id === p.to.id) throw new StateRefusal("Give it to somebody else.")
 	await assertTracked(db, p.sessionId, p.slotId)
 	if (getAttributeSlot(p.slotId)?.type !== "list") throw new StateRefusal("Only a list's things can be given.")
-	// The giver's own sheet: what they may not change, they may not give from.
+	// The giver's side: what their hand may not take from, they may not give from. A place is the
+	// receiver's side only (a pick-up) — it need only be this session's.
 	await assertSessionOwner(db, p.sessionId, p.from, p.userId)
+	if (p.from.kind !== "session_location") {
+		const refused = await handEditRefusal(db, {
+			sessionId: p.sessionId,
+			userId: p.userId,
+			owner: p.from,
+			slotId: p.slotId,
+			act: "take-from"
+		}, p.known)
+		if (refused) throw new StateRefusal(refused.sentence)
+	}
 	const giver = await heldBy(db, p.sessionId, p.from, p.slotId)
 	const target = await heldBy(db, p.sessionId, p.to, p.slotId)
 	if (!giver || !target) throw new StateRefusal("That is not someone in this session.")
@@ -176,12 +213,22 @@ export async function givePiece(
 	if (!place && !toSeat && (await isPlayersSeat(db, p.sessionId, p.from)))
 		throw new StateRefusal(`${target.label} keeps no sheet you can give to: give it in the story instead.`)
 
+	// The receiver's side: judged `put-on` unless it is a place (a drop is the giver's side only).
+	// Refused as not theirs, on a player's seat: the seat's player is asked instead (an offer).
+	await assertSessionOwner(db, p.sessionId, p.to, p.userId)
 	let direct = true
-	try {
-		await assertSessionOwner(db, p.sessionId, p.to, p.userId)
-	} catch (e) {
-		if (!(e instanceof StateRefusal)) throw e
-		direct = false
+	if (!place) {
+		const refused = await handEditRefusal(db, {
+			sessionId: p.sessionId,
+			userId: p.userId,
+			owner: p.to,
+			slotId: p.slotId,
+			act: "put-on"
+		}, p.known)
+		if (refused) {
+			if (refused.cause !== "not-theirs" || !toSeat) throw new StateRefusal(refused.sentence)
+			direct = false
+		}
 	}
 	if (direct) {
 		const ctx = { sessionId: p.sessionId, updatedBy: "user" as const, userId: p.userId }
@@ -194,12 +241,6 @@ export async function givePiece(
 			line: place ? `${giver.label} leaves ${what} at ${target.label}.` : `${giver.label} gives ${what} to ${target.label}.`
 		}
 	}
-	if (place || !toSeat)
-		throw new StateRefusal(
-			place
-				? `${target.label} is not yours to leave things at.`
-				: `${target.label} keeps no sheet you can give to: give it in the story instead.`
-		)
 	const offer: PieceOffer = {
 		from: p.from,
 		item: one,
@@ -227,9 +268,10 @@ export async function givePiece(
 /**
  * Answer an offer, inside `decideProposal`'s transaction (`tx`, under the
  * session's state-version lock): accepted by whoever may write the
- * receiver's sheet — the giver's part written as the giver, the receiver's
- * as the one accepting, the piece merged into their count; declined by the
- * same hands, or withdrawn by the giver. An offer whose piece the giver no
+ * receiver's sheet (judged `put-on` by the hand-edit decider, as the one
+ * accepting) — the giver's part written as the giver, the receiver's as the
+ * one accepting, the piece merged into their count; declined by the session's
+ * owner or the receiver's own player, or withdrawn by the giver. An offer whose piece the giver no
  * longer holds is closed, said so, and nothing moves.
  */
 export async function decideOffer(
@@ -244,7 +286,17 @@ export async function decideOffer(
 	const what = counted(offer.itemName, offer.count)
 	const byGiver = userId != null && userId === offer.by
 	if (!accept) {
-		if (!byGiver) await assertSessionOwner(tx, proposal.sessionId, to, userId)
+		if (!byGiver) {
+			await assertSessionOwner(tx, proposal.sessionId, to, userId)
+			// Turning an offer down is the session's owner's, or the receiver's own player's; a
+			// watcher's never (no person at all keeps today's path).
+			if (userId != null) {
+				const judge = await handEditJudge(tx, proposal.sessionId, userId)
+				await judge.know(to)
+				if (!(judge.role === "owner" || (judge.role === "player" && judge.whose(to) === "own")))
+					throw new StateRefusal(judge.says(judge.role === "watcher" ? "watching" : "not-theirs", { owner: to, slotId }))
+			}
+		}
 		await mark("rejected")
 		return {
 			status: "rejected",
@@ -254,6 +306,17 @@ export async function decideOffer(
 		}
 	}
 	await assertSessionOwner(tx, proposal.sessionId, to, userId)
+	// The receiver's side, judged as the one accepting (`put-on`); nobody at all keeps today's path.
+	if (userId != null) {
+		const refused = await handEditRefusal(tx, { sessionId: proposal.sessionId, userId, owner: to, slotId, act: "put-on" })
+		if (refused) throw new StateRefusal(refused.sentence)
+	}
+	// The giver's side, re-judged at accept as the one who offered (`take-from`; scope review 2026-11-05:
+	// a level changed while the offer waited must still hold). A place gives freely.
+	if (offer.by != null && offer.from.kind !== "location" && offer.from.kind !== "session_location") {
+		const giverRefused = await handEditRefusal(tx, { sessionId: proposal.sessionId, userId: offer.by, owner: offer.from, slotId, act: "take-from" })
+		if (giverRefused) throw new StateRefusal(giverRefused.sentence)
+	}
 	const giver = await heldBy(tx, proposal.sessionId, offer.from, slotId)
 	if (!giver || holdingOf(giver.items, offer.item) < offer.count) {
 		await mark("rejected")

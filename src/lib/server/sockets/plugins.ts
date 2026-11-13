@@ -59,6 +59,8 @@ import {
 	type PluginUserSettingsRow
 } from "$lib/server/plugins/settingsHost"
 import { notCoreRow } from "$lib/server/plugins/frameHost"
+import { refusable } from "./refusable"
+import { pushToUser } from "./utils/userPush"
 import { registerPluginActionHandlers } from "./pluginActions"
 import { registerPluginCatalogHandlers } from "./pluginCatalogs"
 import { registerUserAnnexHandlers } from "./userAnnex"
@@ -555,6 +557,17 @@ export const pluginsInstall: Handler<
 				emitToUser("error", { error: msg })
 				throw new Error(msg)
 			}
+			// 🚧 A preset's variable layouts: the same refusal the package
+			// path makes (`plugins/install.ts`), in the SDK's sentence.
+			const { presetVariableLayoutFindings } = await import("@serene-pub/sdk")
+			const badLayouts = (((params.manifest as any)?.presets ?? []) as any[]).flatMap(
+				(p) => presetVariableLayoutFindings(p)
+			)
+			if (badLayouts.length) {
+				const msg = `This package cannot install: ${badLayouts.join("; ")}`
+				emitToUser("error", { error: msg })
+				throw new Error(msg)
+			}
 		}
 		// `backends` is a compiled fact: run the bundle on both sandboxes and
 		// take the set it actually loads on, ignoring any author claim.
@@ -673,6 +686,77 @@ export const pluginsSetEnabled: Handler<
 	}
 }
 
+/**
+ * 🚧 (M2e) Disable or enable a provided book (admin only). The mark sits on the
+ * book (`setProvidedBookDisabled` is its one writer); a slug with no row yet
+ * waits on the plugin's row. `pluginId: "core"` names core's primers. The asker
+ * gets `plugins:list` again (and `starterKits:list` when the book is a starter row, core's or a plugin's); the book's owner gets `lorebooks:list`.
+ */
+function providedBookDisabledHandler(
+	event: "plugins:disableProvidedBook" | "plugins:enableProvidedBook",
+	disabled: boolean
+): Handler<Sockets.Plugins.SetProvidedBookDisabled.Params, Sockets.Plugins.SetProvidedBookDisabled.Response> {
+	return refusable(
+		event,
+		async (socket, params: Sockets.Plugins.SetProvidedBookDisabled.Params, emitToUser) => {
+			if (!socket.user?.isAdmin) throw new Error("Access denied. Only admin users can manage plugins.")
+			if (typeof params?.pluginId !== "string" || typeof params?.slug !== "string")
+				throw new Error("No such provided book.")
+			const { setProvidedBookDisabled } = await import("$lib/server/plugins/providedBooks")
+			const { lorebookId, owner } = await setProvidedBookDisabled(
+				db as unknown as Db,
+				params.pluginId,
+				params.slug,
+				disabled,
+				socket.user.id
+			)
+			// A starter row is core's primer, or any book of kind "starter_kit" (a plugin's primer too).
+			let isStarterRow = params.pluginId === "core"
+			if (!isStarterRow && lorebookId != null) {
+				const [row] = await db
+					.select({ kind: schema.lorebooks.kind })
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, lorebookId))
+					.limit(1)
+				isStarterRow = row?.kind === "starter_kit"
+			}
+			if (isStarterRow) {
+				// A starter row's switch lives on the Starter lorebooks page: that list, with the switch's state, goes back.
+				const { starterKitCards } = await import("$lib/server/lorebooks/starterKits")
+				// Computed with the disabled rows, so it goes to the asking socket only.
+				socket.emit("starterKits:list", {
+					kits: await starterKitCards(db as unknown as Db, socket.user!.id, { includeDisabled: true })
+				})
+			}
+			if (params.pluginId !== "core") await emitList(emitToUser)
+			if (owner != null) {
+				const { buildLorebooksList } = await import("./lorebooks")
+				pushToUser(owner, "lorebooks:list", () => buildLorebooksList(owner))
+			}
+			if (lorebookId != null) {
+				// People the book is shared with keep no stale list.
+				const { buildLorebooksList } = await import("./lorebooks")
+				const { listSharedWith } = await import("$lib/server/utils/shares")
+				for (const p of await listSharedWith(db as unknown as Db, "lorebook", lorebookId))
+					if (p.id !== owner) pushToUser(p.id, "lorebooks:list", () => buildLorebooksList(p.id))
+			}
+			return { pluginId: params.pluginId, slug: params.slug, disabled, lorebookId }
+		},
+		disabled ? "The lorebook could not be disabled." : "The lorebook could not be enabled.",
+		undefined,
+		(raw) => {
+			const p = raw as { pluginId?: unknown; slug?: unknown } | null | undefined
+			return {
+				...(typeof p?.pluginId === "string" ? { pluginId: p.pluginId } : {}),
+				...(typeof p?.slug === "string" ? { slug: p.slug } : {})
+			}
+		}
+	)
+}
+
+export const pluginsDisableProvidedBook = providedBookDisabledHandler("plugins:disableProvidedBook", true)
+export const pluginsEnableProvidedBook = providedBookDisabledHandler("plugins:enableProvidedBook", false)
+
 export const pluginsSetBackend: Handler<
 	Sockets.Plugins.SetBackend.Params,
 	Sockets.Plugins.SetBackend.Response
@@ -756,6 +840,10 @@ export const pluginsUninstall: Handler<
 		if (params.providedBooks === "delete") {
 			const { deleteProvidedBooks } = await import("$lib/server/plugins/providedBooks")
 			await deleteProvidedBooks(db, params.pluginId)
+		} else {
+			// 🚧 (M2e) Kept books come back into view as ordinary books: nothing stays hidden with no page to switch it on.
+			const { clearDisabledOnKeptBooks } = await import("$lib/server/plugins/providedBooks")
+			await clearDisabledOnKeptBooks(db, params.pluginId)
 		}
 		// 🚧 (M2b) Each person's saved data (`ctx.annex('user')`), the same choice.
 		if (params.userAnnex === "delete") {
@@ -1404,6 +1492,8 @@ export function registerPluginHandlers(
 	register(socket, pluginsInstall, emitToUser)
 	register(socket, pluginsInstallLocal, emitToUser)
 	register(socket, pluginsSetEnabled, emitToUser)
+	register(socket, pluginsDisableProvidedBook, emitToUser)
+	register(socket, pluginsEnableProvidedBook, emitToUser)
 	register(socket, pluginsSetBackend, emitToUser)
 	register(socket, pluginsSetSequential, emitToUser)
 	register(socket, pluginsUninstall, emitToUser)

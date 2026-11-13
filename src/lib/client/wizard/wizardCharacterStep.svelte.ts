@@ -7,7 +7,7 @@
  * the person is picking the character the AI plays, not filling a
  * collection, so the Library detail's primary reads **Pick this character**
  * and its chip **Picked** while this says the step is active; everywhere
- * else they stay **Import** and **In your characters**.
+ * else they stay **Import** and **In your character cards**.
  *
  * A module store rather than a context: the Library is mounted by the shell
  * beside the page, not under it, so nothing the home page provides reaches

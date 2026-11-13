@@ -2,6 +2,55 @@ import type Handlebars from "handlebars"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter } from "./PromptBlockFormatter"
 import { strokeList } from "./strokeList"
+import { VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
+
+/**
+ * 🚧 The one reserved key of a render's context that carries the explicit
+ * layouts, already written out (PLAN variable-layouts 2026-11-10, Render item
+ * 6): a plain object `{ "<key>\u0000<reference>": text }`, filled by the
+ * render pre-pass (`prepareExplicitLayouts`) and read by the `layout` helper
+ * and filter. It starts with a NUL, which no template variable, helper
+ * argument or hash key a person types can begin with, and it is only ever put
+ * in the context of a template that calls `layout`.
+ */
+export const LAYOUT_RENDERS_CONTEXT_KEY = "\u0000layout-renders"
+
+/** The map's key for one call: the variable's key and the reference, as written. */
+export const layoutRenderKey = (key: string, reference: string): string =>
+	`${key}\u0000${reference}`
+
+/**
+ * The text the pre-pass wrote out for `layout <key> "<reference>"`, from the
+ * render's context. A call the pre-pass did not see (a preview that skipped
+ * it, a call written in a form the check refuses) is an error in plain words
+ * — never the raw call, never the variable's other layout.
+ */
+export function explicitLayoutText(
+	scope: unknown,
+	key: unknown,
+	reference: unknown
+): string {
+	const renders = (scope as Record<string, unknown> | null | undefined)?.[
+		LAYOUT_RENDERS_CONTEXT_KEY
+	] as Record<string, string> | undefined
+	const at =
+		typeof key === "string" && typeof reference === "string"
+			? layoutRenderKey(key, reference)
+			: undefined
+	if (
+		renders &&
+		at !== undefined &&
+		Object.prototype.hasOwnProperty.call(renders, at)
+	)
+		return renders[at]!
+	throw new Error(
+		typeof key === "string" && typeof reference === "string"
+			? `\`${VARIABLE_LAYOUT_HELPER} ${key} "${reference}"\` was not written out before the template ran, so there is no text for it. ` +
+				`Name a variable of this step and write the layout reference as a quoted literal.`
+			: `\`${VARIABLE_LAYOUT_HELPER}\` needs a variable's name and a quoted layout reference, ` +
+				`for example \`{{{${VARIABLE_LAYOUT_HELPER} characters "core/json@1"}}}\`.`
+	)
+}
 
 // Shared between the real prompt builder and the isolated preview compiler so both render identically.
 /**
@@ -130,6 +179,28 @@ export function registerContextHandlebarsHelpers(
 			strokeList(strokes, kind)
 		)
 
+	/**
+	 * `{{{layout characters "core/json@1"}}}` — a variable written out by the
+	 * layout the reference names, in this template only. The render pre-pass
+	 * has already rewritten the key to its name as a string and written the
+	 * text out (`LAYOUT_RENDERS_CONTEXT_KEY`); this reads it back. A
+	 * SafeString, so `{{layout …}}` and `{{{layout …}}}` print alike (★6).
+	 */
+	if (!handlebars.helpers[VARIABLE_LAYOUT_HELPER])
+		handlebars.registerHelper(
+			VARIABLE_LAYOUT_HELPER,
+			function (...args: any[]) {
+				const options = args.pop()
+				const [key, reference] = args
+				const text = explicitLayoutText(
+					options?.data?.root,
+					key,
+					reference
+				)
+				return text === "" ? "" : new handlebars.SafeString(text)
+			}
+		)
+
 	if (!handlebars.helpers.systemBlock) {
 		handlebars.registerHelper(
 			"systemBlock",
@@ -137,7 +208,7 @@ export function registerContextHandlebarsHelpers(
 				return PromptBlockFormatter.makeBlock({
 					format: promptFormat,
 					role: "system",
-					content: options.fn(this)
+					content: String(options.fn(this))
 				})
 			}
 		)
@@ -153,7 +224,7 @@ export function registerContextHandlebarsHelpers(
 				return PromptBlockFormatter.makeBlock({
 					format: promptFormat,
 					role: "assistant",
-					content: options.fn(this),
+					content: String(options.fn(this)),
 					includeClose: messageId !== -2
 				})
 			}
@@ -166,7 +237,7 @@ export function registerContextHandlebarsHelpers(
 				return PromptBlockFormatter.makeBlock({
 					format: promptFormat,
 					role: "user",
-					content: options.fn(this)
+					content: String(options.fn(this))
 				})
 			}
 		)

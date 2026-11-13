@@ -4,11 +4,9 @@
  * The side zones used to be written twice in the live render — once as an
  * in-flow flex child, once inside a fixed layer — and a flag swapped which
  * `{#if}` was live. Two call sites means two subtrees: Svelte destroyed one and
- * built the other, so every iframe in a side zone reloaded (the sample frame's
- * "alive for" counter reset to 0) and every native panel lost its local state.
- * That is exactly what the no-reload law forbids — the flyout, the mobile
- * overlay and the tab groups all keep the same element and only change where it
- * is drawn.
+ * built the other, so every iframe in a side zone reloaded and every native
+ * panel lost its local state. That is exactly what the no-reload law forbids —
+ * a side keeps the same element and only changes where it is drawn.
  *
  * So the mount is written ONCE and this decides its container:
  *
@@ -17,114 +15,77 @@
  *   stowed  — mounted, `display: none`: no layout space, no tab stop, no
  *             a11y tree — but the iframes keep running and the panels keep
  *             their state. This is the state that used to be an unmount.
- *   overlay — below the breakpoint, this side's sheet is open: the mount's own
- *             wrapper wears `.zone-flyout.mobile` and IS the dialog. This slot
- *             used to be "none" — the overlay rendered the side a SECOND time
- *             (`panelStack`), so the one mount had to stand down or the same
- *             panel would be live twice, and opening the sheet reloaded every
- *             iframe in it. The sheet's chrome (header, close, backdrop, focus
- *             trap) is unchanged; it just wraps the one mount now.
+ *   solo    — the zone switch (./sessionZones) or full screen shows THIS side
+ *             alone: the mount fills the body, and the other zones are
+ *             `stowed`.
  *
- * There was a fourth container, `margin`: a fixed layer a side was lifted into
- * to reclaim the dead space a closed sidebar still reserved in the two-sidebar
- * shell. The one-rail shell (2026-09-15) reserves no such space — `<main>`
- * spans everything right of the nav rail, and what was measured as the left
- * margin is the rail itself — so there was no margin left to lift a side into
- * and the slot was retired 2026-09-17. The no-reload law is unchanged: still
- * one mount, still this function choosing the container around it.
- *
- *   stage   — this side holds the conversation the phone and full screen draw
- *             as the stage (QE, ./placementRules `stageOf`; brief 7a free
- *             placement): the mount fills the body, showing that one widget,
- *             and its other widgets are `display: none` around their mounts.
- *             On the phone they are still reached from the panels menu, which
- *             opens the same mount as the `overlay` sheet (the stage widget
- *             hidden inside it).
- *
- * There is deliberately no "not rendered" value left: every state a side can be
- * in is a container, which is what makes the no-reload law hold by construction
+ * There is deliberately no "not rendered" value: every state a side can be in
+ * is a container, which is what makes the no-reload law hold by construction
  * rather than by remembering.
  */
 
-import { RAIL_PX } from "./sideRail"
+import type { ZoneId } from "./sessionZones.svelte"
 import { STAGE_MEASURE_PX } from "./tuckedSides"
-import type { ZoneRung } from "@serene-pub/sdk"
 
-/** A side's mode at this width: its ladder rung (`resolveDrawn`'s `rung`). */
-export type SideMode = ZoneRung["mode"]
-
-export type SideSlot = "inline" | "stowed" | "overlay" | "stage"
+export type SideSlot = "inline" | "stowed" | "solo"
 
 export interface SideSlotInput {
 	/** Below the app's 1024px breakpoint (P6): sides take no layout space. */
 	narrow: boolean
-	/** The mobile overlay is currently showing THIS side. */
-	overlayOwns: boolean
-	/**
-	 * This side holds the stage — the conversation the phone or full screen
-	 * draws full width, wherever the desktop placed it (QE). Absent = no.
-	 */
-	stage?: boolean
+	/** The zone the switch (or full screen) shows alone; null = all zones. */
+	shown: ZoneId | null
+	/** Which side this is. */
+	side: "left" | "right"
 }
 
 export function sideSlot(o: SideSlotInput): SideSlot {
-	if (o.overlayOwns) return "overlay"
-	if (o.stage) return "stage"
-	if (o.narrow) return "stowed"
-	return "inline"
+	if (o.shown === o.side) return "solo"
+	if (o.shown !== null) return "stowed"
+	return o.narrow ? "stowed" : "inline"
 }
 
 /* ── how wide a side is in the `inline` slot ─────────────────────────────
  *
- * A side column of panels (PLAN-session-panels-2026-10-14) is a grid, and a
- * grid has no width of its own: as a flex child of `.layout-body` it would
- * ask for the WHOLE body, and two of those plus the centre squeezed the chat
- * to 0. So a docked side takes the ladder's answer at the current container
- * width — `width × columns` of its rung (`DEFAULT_SIDE_RULES`) — and the
+ * A side column of panels is a stack, and a stack has no width of its own: as
+ * a flex child of `.layout-body` it would ask for the WHOLE body, and two of
+ * those plus the centre squeezed the chat to 0. So a side takes the width of
+ * its container (`sideWidthPx`: today's docked widths, one column) and the
  * centre takes the rest.
  *
- * The one refinement is the tight case. Two docked sides plus the centre can
- * exceed a narrow desktop, and there the CENTRE wins: the sides shrink
- * proportionally so `.layout-center` keeps `minCenterPx`
- * (`inlineSideWidths`).
+ * The one refinement is the tight case. Two sides plus the centre can exceed a
+ * narrow desktop, and there the CENTRE wins: the sides shrink proportionally
+ * so `.layout-center` keeps `minCenterPx` (`inlineSideWidths`).
  */
+
+/** A side's width at a body this many px wide — no ladder is drawn, one column. */
+export function sideWidthPx(bodyPx: number): number {
+	if (bodyPx >= 2400) return 344
+	if (bodyPx >= 1900) return 300
+	if (bodyPx >= 1440) return 264
+	return 248
+}
 
 export interface SideFlowInput {
 	/** Where this side's one mount currently lives. */
 	slot: SideSlot
 	/** The side draws at least one panel (`sidePopulated`). */
 	populated: boolean
-	/** Its rung's mode at this width (`rail` docks; `icons`/`drawer` are a rail of icons). */
-	mode: SideMode
-	/** The rung's footprint, `width × columns`. */
+	/** Its footprint (`sideWidthPx`). */
 	widthPx: number
-	/**
-	 * The side is TUCKED (./tuckedSides) or RAIL ONLY (every panel in the
-	 * rail): it draws only its icon rail, whose panels fly out over the
-	 * session.
-	 */
-	tucked?: boolean
 }
 
 /**
  * What a side occupies in `.layout-body`'s row. Only the `inline` slot is in
- * that row at all: a stowed side has no box in the flow and an overlay one is
- * a fixed sheet — neither may reserve width the centre would then not get.
+ * that row at all: a stowed side has no box in the flow and a solo one fills
+ * the body — neither may reserve width the centre would then not get.
  *
  * An EMPTY side draws nothing, so it is 0 here. Its column (ruled 2026-09-29)
  * is not a footprint but a softer ask made separately — `emptyColumnPx` /
- * `emptyColumnsPx`, below — so it never raises the tuck threshold, which is
- * read off this function.
- *
- * The flow counts only what is DOCKED: a side drawn as its rail — tucked,
- * every panel in the rail, or on a rung that does not dock (`icons`,
- * `drawer`) — takes `RAIL_PX`, never the ladder's column it does not draw
- * (lane E1; before, Adventure's left rail tucked the party's column at
- * 1280px). A `hidden` rung takes nothing.
+ * `emptyColumnsPx`, below — so it never raises the zone switch's threshold,
+ * which is read off this function.
  */
 export function sideFlowPx(o: SideFlowInput): number {
-	if (o.slot !== "inline" || !o.populated || o.mode === "hidden") return 0
-	if (o.tucked || o.mode !== "rail") return RAIL_PX
+	if (o.slot !== "inline" || !o.populated) return 0
 	return Math.max(0, o.widthPx)
 }
 
@@ -132,9 +93,9 @@ export function sideFlowPx(o: SideFlowInput): number {
 export const MIN_CENTER_PX = 360
 
 export interface InlineSideWidthsInput {
-	/** Left side's ladder footprint (`width × columns`), or 0 if it isn't an in-flow arranged grid. */
+	/** Left side's footprint (`sideWidthPx`), or 0 if it isn't in the flow. */
 	left: number
-	/** Right side's ladder footprint, or 0. */
+	/** Right side's footprint, or 0. */
 	right: number
 	/** Measured width of the row the sides and the centre share (`.layout-body`). */
 	bodyPx: number
@@ -168,8 +129,8 @@ export function inlineSideWidths(o: InlineSideWidthsInput): InlineSideWidths {
 
 /* ── the middle grows, the sides keep their width (ruled 2026-09-28) ─────
  *
- * A docked side is its ladder width (`DEFAULT_SIDE_RULES`, `width × columns`)
- * and nothing more; the MIDDLE takes every pixel the window adds. This
+ * A side is its width (`sideWidthPx`) and nothing more; the MIDDLE takes
+ * every pixel the window adds. This
  * reverses the 2026-09-27 fill rule (`sideFillPx`, retired), under which the
  * sides took half of what the stage's measure left and the middle stayed the
  * conversation's measure: widening the window widened the panels and left the
@@ -180,10 +141,11 @@ export function inlineSideWidths(o: InlineSideWidthsInput): InlineSideWidths {
  * ruled 2026-09-29); under Line width: Comfortable its column keeps its
  * measure inside it, centred on the session by the middle's balance
  * (./tuckedSides rule (1)), and the rest of the middle is the conversation's
- * scroll region, so the wheel works across it. The only time a side is narrower than its ladder is the tight case
- * `inlineSideWidths` already handles.
+ * scroll region, so the wheel works across it. The only time a side is
+ * narrower than `sideWidthPx` is the tight case `inlineSideWidths` already
+ * handles.
  *
- * An EMPTY side is one of the docked sides here whenever its column was
+ * An EMPTY side is one of the inline sides here whenever its column was
  * granted (`emptyColumnsPx`, below, ruled 2026-09-29): the caller passes that
  * width in the side's place, so the middle takes what is left after the empty
  * columns too, and never grows into one.
@@ -209,66 +171,48 @@ export function dockedZoneWidths(o: InlineSideWidthsInput): DockedZoneWidths {
  * side too, even with nothing in it: the middle never takes an empty side's
  * room while there is room to spare.
  *
- * Every declared side that DOCKS at this width — a pinned rail, or a
- * shipped-unpinned icon strip like the default Left — keeps an EMPTY COLUMN
- * while it holds nothing: a quiet box at the width its first widget will have
- * (the ladder's `width × columns`, the arranged footprint), so adding that
- * widget moves nothing. A HIDDEN zone, a side on its drawer rung, and a side
- * with no zone at all ask for nothing: there is nothing docked to keep.
+ * Every side that is `inline` keeps an EMPTY COLUMN while it holds nothing:
+ * a quiet box at the width its first widget will have (`sideWidthPx`), so
+ * adding that widget moves nothing. A side that is stowed or solo asks for
+ * nothing.
  *
  * The column is SOFT. It is not a footprint (`sideFlowPx` above stays 0 for
- * it), so it never raises the tuck threshold: it takes only room the
+ * it), so it never raises the zone switch's threshold: it takes only room the
  * populated sides and the stage's measure do not need, and gives way to 0
- * BEFORE any populated side would tuck. Two empty sides are kept together or
- * not at all, so the stage stays centred. Tucked, an empty side is nothing —
- * no column and no icon rail, because a rail with no icon has no panel to
- * open.
+ * BEFORE the switch would turn on. Two empty sides are kept together or not
+ * at all, so the stage stays centred.
  */
 
 export interface SidePopulatedInput {
-	/** The side's rung mode at this width. */
-	mode: SideMode
 	/**
 	 * What it draws that a person can open: its panels holding something this
-	 * session can draw, conversation copies included — the count the rail
-	 * draws and the phone's panels menu lists.
+	 * session can draw, conversation copies included.
 	 */
 	panels: number
 }
 
-/**
- * Does this side hold anything — a visible rung and at least one panel? The
- * one question the desktop (an empty column or not) and the phone (listed in
- * the panels menu or not) both ask, so the two cannot disagree about a side
- * holding only a conversation.
- */
+/** Does this side hold anything — at least one panel? */
 export function sidePopulated(o: SidePopulatedInput): boolean {
-	return o.mode !== "hidden" && o.panels > 0
+	return o.panels > 0
 }
 
 export interface EmptyColumnInput {
 	/** Where this side's one mount currently lives; only `inline` has a row. */
 	slot: SideSlot
-	/** The sides are tucked (./tuckedSides): an empty side is then nothing. */
-	tucked?: boolean
 	/** `sidePopulated`: a populated side takes its own footprint instead. */
 	populated: boolean
-	/** The side's rung mode at this width, DOCKED (before tucking). */
-	mode: SideMode
-	/** The rung's footprint, `width × columns`. */
+	/** The side's footprint (`sideWidthPx`). */
 	widthPx: number
 }
 
 /**
- * What an empty side ASKS for: its rung's `width × columns` when that rung
- * docks (`rail`, or the `icons` of a side whose panels would all be in the
- * rail), or 0 when it is not empty, not in the row, tucked, or on a rung
- * that does not dock (hidden, drawer). Whether it gets it is
+ * What an empty side ASKS for: its width when it is empty and in the row, or
+ * 0 when it is not empty or not in the row. Whether it gets it is
  * `emptyColumnsPx`.
  */
 export function emptyColumnPx(o: EmptyColumnInput): number {
-	if (o.slot !== "inline" || o.tucked || o.populated) return 0
-	return o.mode === "rail" || o.mode === "icons" ? Math.max(0, o.widthPx) : 0
+	if (o.slot !== "inline" || o.populated) return 0
+	return Math.max(0, o.widthPx)
 }
 
 export interface EmptyColumnsInput {
@@ -282,7 +226,7 @@ export interface EmptyColumnsInput {
 	bodyPx: number
 	/** The body's flex gap — one per side in the flow. */
 	gapPx: number
-	/** The stage's measure; defaults to `STAGE_MEASURE_PX`, as the tuck does. */
+	/** The stage's measure; defaults to `STAGE_MEASURE_PX`, as the zone switch does. */
 	stagePx?: number
 }
 
@@ -290,7 +234,7 @@ export interface EmptyColumnsInput {
  * The empty columns the session can afford: every one asked for when the
  * populated sides, their gaps, the stage's measure AND the empty columns with
  * a gap each fit in the body; none otherwise. An unmeasured body keeps them,
- * like every first-frame decision in this layout (`sidesTucked`).
+ * like every first-frame decision in this layout (`switchOn`).
  */
 export function emptyColumnsPx(o: EmptyColumnsInput): InlineSideWidths {
 	const hardL = Math.max(0, o.hardLeftPx)

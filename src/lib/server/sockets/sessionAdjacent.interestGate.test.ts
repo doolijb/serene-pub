@@ -59,6 +59,9 @@ const seam = vi.hoisted(() => {
 			from: (table: any) => {
 				const name = table?.[Symbol.for("drizzle:Name")]
 				if (typeof name === "string") read = `${label}:${name}`
+				// The cast versions in force (`pickVersions`) read rows shaped
+				// `{ version, overlayOf }`; no member here has any.
+				if (name === "character_versions") result = []
 				return self
 			},
 			innerJoin: () => self,

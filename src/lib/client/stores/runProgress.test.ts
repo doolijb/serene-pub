@@ -186,6 +186,21 @@ describe("runProgress", () => {
 		})
 	})
 
+	test("a stage's message does not outlive the stage", () => {
+		// The loader's sentence came with `loading`; a `sampling` frame that
+		// says nothing has outgrown it (a KoboldCPP render read "sampling ·
+		// 0% · Loading the image model…" for three minutes, 2026-11-08). A
+		// frame of the SAME stage without a message keeps it — the poller
+		// repeats its stage every tick.
+		runProgress.started({ runId: "r1", sessionId: SESSION, label: "image" })
+		runProgress.apply({ runId: "r1", stage: "loading", percent: 0, message: "Loading the image model…" })
+		runProgress.apply({ runId: "r1", stage: "loading", percent: 0 })
+		expect(runProgress.get("r1")?.message).toBe("Loading the image model…")
+		runProgress.apply({ runId: "r1", stage: "sampling", percent: 0 })
+		expect(runProgress.get("r1")?.message).toBeUndefined()
+		expect(runProgress.get("r1")).toMatchObject({ stage: "sampling", label: "image" })
+	})
+
 	/**
 	 * 🚧 Speech polish (owner ruling 2026-10-29): a speak-message run shows on
 	 * its own line only — the card listed it as *Read Aloud · Speaking*. Its

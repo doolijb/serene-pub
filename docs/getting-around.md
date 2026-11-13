@@ -9,9 +9,9 @@ _Written for Serene Pub 0.6. This is the last step of [Start here](./getting-sta
 The strip down the left edge is the **rail**. Hover an icon for its name, and for what its dot means when it has one. From the top:
 
 - **Home**.
-- **Play**: **Sessions**, **Characters**, **Lorebooks** and **Tags**, the things you make and play with.
-- **Tune**: **Connections**, **Models**, **Loadouts** and **Sampling** for administrators (Loadouts is where you choose what each kind of work runs on; see [Loadouts](./connections.md#loadouts)), then **Settings** for everyone, **Users** for administrators once [accounts](./users-and-accounts.md) are on, and **Help**, this documentation, last. A member's Tune is Settings and Help. Pipelines and their prompts have no icon of their own: they live in the [admin area](#the-admin-area), under **Admin › Pipelines**.
-- At the foot: **Activity** (your notifications), **Admin** (administrators only) and your account (opens **Settings**).
+- **Play**: **Sessions**, **Apps** (only once a plugin with a game of its own is installed), **Characters**, **Lorebooks** and **Tags**, the things you make and play with.
+- **Tune**: **Connections**, **Models**, **Sampling** and **Loadouts** for administrators (Loadouts is where you choose what each kind of work runs on; see [Loadouts](./connections.md#loadouts)), then **Settings** for everyone, **Users** for administrators once [accounts](./users-and-accounts.md) are on. A member's Tune is Settings. Pipelines and their prompts have no icon of their own: they live in the [admin area](#the-admin-area), under **Admin › Pipelines**.
+- At the foot: **Activity** (your notifications), **Help** (this documentation), **Admin** (administrators only) and your account (opens **Settings**).
 
 Click an icon and its **view** opens in the sidebar beside the rail; the icon gets a gold bar while its view is showing. The small button above your account widens the rail to show each icon's name, with the groups headed **Play** and **Tune**; press it again to hide them. This browser remembers your choice.
 
@@ -39,7 +39,7 @@ Only administrators see the Admin icon.
 | **Pub** | General, Users (once accounts are on), Network, Data and backups, Diagnostics, History, Updates ([Pub settings](./system-settings.md)) |
 | **Models** | Loadouts, Connections, Sampling |
 | **Play** | Sessions, Genres, Presets, Starter lorebooks ([Starter lorebooks](./lorebooks.md#starter-starter lorebooks)) |
-| **Writing** | Prompts, Context templates, Completion templates, Variable templates |
+| **Writing** | Prompts, Context templates, Completion templates, Variable layouts |
 | **Pipelines** | Pipelines, Events, Scripts |
 | **Extensions** | Plugins, Components |
 
@@ -132,6 +132,16 @@ the other people on the pub, one to one or in groups, with sessions, characters,
 files attached where everyone in the conversation may see them. A dot on the icon means something
 is unread. See [Messages](./messages.md).
 
+## Apps
+
+Some plugins come with a whole game of their own: a screen with New game, Continue and Load. Once one is installed, an **Apps** icon appears on the rail, right after Sessions; with no such plugin installed there is no icon. Its view is a grid of cards, one for each game, in alphabetical order. A card shows the game's picture, a small logo over its corner if the plugin has one, the game's name, a line saying what it is, and the session types it brings. Home shows the same cards in an **Apps** section, after _Pick up where you left off_.
+
+Pressing a card opens the game full screen, outside any session. While it loads you see its picture and _Loading …_ with a moving bar; if that takes a while, the words change to _Still loading…_ (the words are all that change; nothing gives up for you). **Leave** in the top-left corner, or **Esc**, brings you back to where you came from (the Apps view if you opened the game from Apps, Home if from Home, otherwise Sessions), and both work while the game is still loading. If the game fails to start, Serene Pub says so in its own words and offers **Leave**. Like Exit full screen, Leave slides out of the way after two seconds; point at the top-left edge to bring it back. Once you click into the game it has the keyboard, so Esc is the game's own; **Leave** always works.
+
+From there the game uses Serene Pub's own screens. New game opens the ordinary start form with the game's choices already filled in, and when nothing is left to ask it is a single **Start** press. A game may bring the person you play as: **Who you play as** shows it marked _New, from the game_, and the confirm reads _Playing as <name> (new)_. It becomes one of your personas only when you press **Start**, and then it is yours, kept like any persona you write; **Change…** lets you pick one of your own personas instead. A game whose world has its own people may seat them: the confirm then says _Who is in it: the world's own people_. Load opens the [Sessions](./sessions.md) list showing only the game's sessions, with a chip you can dismiss to see all. Deleting a save shows the usual delete confirm. Each save is an ordinary session: it is listed with the rest, keeps Back and Forward, history and panels, and opens straight into the session, never through the game's screen.
+
+Choosing one of these games under **New** in the Sessions view also opens its own screen. The card's **Use the start form** keeps the ordinary form instead.
+
 ## Widths: Dock, Half and Focus
 
 A view shows at one of three widths, picked with the three buttons at the top right of its
@@ -160,23 +170,23 @@ the session and whether a reply is being written. Click it to go back.
 ## Full screen
 
 Press **Ctrl Shift F** (**⌘ Shift F** on a Mac), or the **Full screen** button in the session's header (the **⋯** on a
-phone), to set everything else aside: the bars, the rail and the sidebar step away and the story has the window. Press
+phone), to set everything else aside: the bars, the rail and the sidebar step away, and the window shows the whole zone that holds the story (its Messages, Turn line and Composer, and anything stacked with them), with no **Left · Middle · Right** switch. Press
 **Esc** or **Exit full screen** in the corner to return. The corner control fades to a thin edge after
 two seconds and comes back when you point at it, touch it or tab to it; its **⋯** holds Back, Forward, Regenerate and
-Customize layout, and **Use the whole screen** also hides the browser's own bars. Full screen is remembered for each
+Customize layout (only with [advanced controls](./themes-and-settings.md#show-advanced-controls) on), and **Use the whole screen** also hides the browser's own bars. Full screen is remembered for each
 session, so a reload keeps it. Opening a sidebar view or the layout editor leaves it. On a phone, the corner control reads
 "Tap the corner to leave full screen." when it first appears. A session type with its own session view may open the session in full screen
 for you, with a one-line notice; your own choice wins after that.
 
-A plugin's game screen opened from **Apps** in the Sessions view is always full screen. **Leave** in its corner, or
-**Esc** (until you click into the game, which then has the keyboard), takes you back to Sessions (see
-[Apps](./sessions.md#apps)).
+A plugin's game screen opened from the **Apps** view is always full screen. **Leave** in its corner, or
+**Esc** (until you click into the game, which then has the keyboard), takes you back to where you came from: the Apps view, or Home if you
+opened it there, otherwise Sessions (see [Apps](#apps)).
 
 ## Help
 
 ![The Help view open in the sidebar, reading the Getting Around page beside the home screen.](../docs-assets/screenshots/help-sidebar.png){w=360}
 
-**Help** is the last item under Tune, and it opens this documentation in the sidebar beside
+**Help** is at the foot of the rail, under Activity, and it opens this documentation in the sidebar beside
 whatever you are doing. Pick a page from the list, or type in the search box at the top of it:
 the list turns into the matching sections, each with the page it is on, and picking one opens the
 page at that heading. Your search stays in the box, so going back returns you to the results.

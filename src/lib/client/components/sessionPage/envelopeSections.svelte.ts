@@ -18,6 +18,7 @@ import {
 	projectConversationDossier,
 	type DossierLineCache
 } from "$lib/client/components/sessionPage/sessionPageProjections"
+import { showsAdvancedControls } from "$lib/client/advancedControls"
 import type { ConversationDossierV1 } from "$lib/shared/widgets/conversation"
 import type { AttendanceV1, TurnOrderV1, ViewerV1 } from "@serene-pub/sdk"
 import type { SessionStateHandle } from "$lib/client/state/sessionState.svelte"
@@ -162,7 +163,8 @@ export function createEnvelopeSections(d: EnvelopeSectionsDeps) {
 				return {
 					userId: userCtx.user?.id ?? null,
 					isAdmin: !!userCtx.user?.isAdmin,
-					isGuest: d.data.isGuest
+					isGuest: d.data.isGuest,
+					advancedControls: showsAdvancedControls(d.userSettingsCtx.settings)
 				}
 			}
 		},

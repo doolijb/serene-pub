@@ -16,7 +16,7 @@
  *    as a per-world deviation in an owner's slot config (`configure` takes
  *    `descriptor`), dropped from every config copied here;
  *  - the resolver's cast index as the server holds it: `state.cast` is
- *    `{ byId: { <characterId>: entry }, <slug>: entry }`, and each entry
+ *    `{ byId: { <seat key>: entry }, <slug>: entry }` (`seated_member:<id>` / `player_seat:<id>` from the flip; ⏳ the card id before), and each entry
  *    carries `id`, `key` and `name` beside the values. A widget is promised
  *    each cast member's VALUES by owner key, so the cast is rebuilt from the
  *    owners, and only a slot's keys are copied out of an entry;
@@ -29,6 +29,7 @@ import type {
 	SessionStateSlotV1,
 	SessionStateV1
 } from "@serene-pub/sdk"
+import { castEntryOf, castEntryOfMember } from "./seatIdentity"
 
 /** What the page's store holds, as this projection reads it. */
 export interface SessionStateSource {
@@ -112,15 +113,22 @@ function ownerOf(o: Sockets.State.StateOwnerRow): SessionStateOwnerV1 {
 		kind: o.kind,
 		id: o.id,
 		label: o.label,
+		// 🚧 Seat-cast S3 (★S3-2): who the owner is, so a widget matches it to a
+		// person without card ids — only when the host sent them.
+		...(o.ref ? { ref: o.ref as SessionStateOwnerV1["ref"] } : {}),
+		...(o.castMemberId != null ? { castMemberId: o.castMemberId } : {}),
 		// 🚧 Not the viewer's to write (another player's seat): the widget
 		// draws its values without edit controls.
 		...(o.editable === false ? { editable: false } : {}),
+		// 🚧 Per slot, why the viewer may not change it by hand (plan §25, lane ed
+		// 2026-11-05): the widget draws the lock with the sentence.
+		...(o.handLocked && Object.keys(o.handLocked).length ? { handLocked: { ...o.handLocked } } : {}),
 		// 🚧 The viewer's own seat (`owners: 'mine'` on the stats widget).
-		// TODO: drop the cast once the SDK dist carries `SessionStateOwnerV1.mine`.
-		...(o.mine ? ({ mine: true } as unknown as Partial<SessionStateOwnerV1>) : {}),
+		...(o.mine ? { mine: true } : {}),
+		// 🚧 Show hidden stats: the viewer's AI seat, and whether they read it (host-sent only).
+		...(typeof o.showingHiddenStats === "boolean" ? { showingHiddenStats: o.showingHiddenStats } : {}),
 		// 🚧 Each repertoire its list stats hold — name and piece shape (§8).
-		// TODO: drop the cast once the SDK dist carries `SessionStateOwnerV1.repertoires`.
-		...(o.repertoires ? ({ repertoires: detached(o.repertoires) } as unknown as Partial<SessionStateOwnerV1>) : {}),
+		...(o.repertoires ? { repertoires: detached(o.repertoires) } : {}),
 		// 🚧 A player seat (`owners: 'seats'`, 2026-10-18).
 		...(o.seat ? { seat: true } : {}),
 		// 🚧 The owner's face (PLAN-sheet §12): the sheet head's and the
@@ -150,14 +158,31 @@ function castOf(
 	slots: readonly Sockets.State.SlotDescriptor[]
 ): Record<string, Record<string, unknown>> {
 	const valueKeys = new Set(slots.flatMap((s) => [s.qualifiedKey, s.key]))
-	// 🚧 A card-less player seat's owner key is its `byId` key (`player_seat:<id>`).
+	// A cast entry is found by what the owner row carries: its host-filled
+	// `ref` first, then its kind. Never by parsing a key. From the flip a
+	// seat's `byId` key is `seated_member:<id>` / `player_seat:<id>` (an
+	// opaque string; a carded player seat's owner `key` is the latter too);
+	// ⏳ until S5's card form (`session_cast`, card-id `byId`, slug keys) still
+	// reads through `cast[<slug>]`.
 	const byId = ((cast ?? {}) as Record<string, unknown>).byId as
 		| Record<string, Record<string, unknown>>
 		| undefined
 	const out: Record<string, Record<string, unknown>> = {}
 	for (const o of owners) {
-		if (o.kind !== "session_cast" && o.kind !== "player_seat") continue
-		const entry = (o.kind === "player_seat" ? byId?.[o.key] : (cast ?? {})[o.key]) ?? {}
+		if (
+			o.kind !== "session_cast" &&
+			o.kind !== "player_seat" &&
+			o.kind !== "seated_member"
+		)
+			continue
+		const entry =
+			castEntryOf(byId, o.ref) ??
+			(o.kind === "player_seat"
+				? byId?.[o.key]
+				: o.kind === "seated_member"
+					? ((cast ?? {})[o.key] ?? castEntryOfMember(byId, o.id))
+					: (cast ?? {})[o.key]) ??
+			{}
 		out[o.key] = detached(
 			Object.fromEntries(
 				Object.entries(entry).filter(([k]) => valueKeys.has(k))

@@ -61,8 +61,9 @@
  * what the outlet published, under the receipt's own retention.
  */
 
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import type {
 	CastChangePayload,
 	SessionChangePayload,
@@ -244,15 +245,111 @@ export async function consumeSessionChanges(
 
 /**
  * Who voiced a row, as a participant reference — what a deleted message's
- * `lost.speaker` carries. A persona line is the character the person voiced;
- * narration is nobody in particular.
+ * `lost.speaker` carries, the speech line's key and a settled line's speaker.
+ * Narration is nobody in particular.
+ *
+ * Flip off: the card form — a persona line is the character the person voiced
+ * (`character:<personaId>`), else `character:<characterId>`. Flip on
+ * (`state/memberForm.ts`): the seat's own ref as the stamp left it in
+ * `metadata.speaker` — a persona line its `player-seat:<id>`, else a
+ * `player-seat:<id>` speaker, else a character line its `seated-member:<id>`
+ * — ⏳ the card form where the row carries no stamp (an old line, a
+ * member-less seat). `metadata` is optional; a caller that omits it gets the
+ * card form in both modes.
  */
 export function speakerRefOf(row: {
 	characterId?: number | null
 	personaId?: number | null
 	isNarratorResponse?: boolean | null
+	metadata?: unknown
 }): string | null {
-	if (row.personaId != null) return `character:${row.personaId}`
-	if (row.characterId != null) return `character:${row.characterId}`
+	if (!memberFormOn())
+		return row.personaId != null
+			? `character:${row.personaId}`
+			: row.characterId != null
+				? `character:${row.characterId}`
+				: null
+	const said = (row.metadata as { speaker?: unknown } | null | undefined)?.speaker
+	const speaker = typeof said === "string" ? said.trim() : ""
+	const isPlayerSeat = /^player-seat:\d+$/.test(speaker)
+	if (row.personaId != null)
+		return isPlayerSeat ? speaker : `character:${row.personaId}`
+	if (isPlayerSeat) return speaker
+	if (row.characterId != null)
+		return /^seated-member:\d+$/.test(speaker) ? speaker : `character:${row.characterId}`
 	return null
+}
+
+/** 🚧 The highest ledger id of a session's `message-completed` row for one message (its latest landing); null when it has none. */
+export async function latestLandingId(
+	db: Db,
+	sessionId: number,
+	messageId: number
+): Promise<number | null> {
+	const c = schema.sessionChanges
+	const [row] = await db
+		.select({ id: sql<number | null>`max(${c.id})` })
+		.from(c)
+		.where(
+			and(
+				eq(c.sessionId, sessionId),
+				eq(c.event, "core:event/message-completed@1"),
+				eq(c.messageId, messageId)
+			)
+		)
+	return row?.id == null ? null : Number(row.id)
+}
+
+/** 🚧 The highest ledger id of a session recorded at or before `at`; null when none. */
+export async function latestChangeIdAtOrBefore(
+	db: Db,
+	sessionId: number,
+	at: Date
+): Promise<number | null> {
+	const c = schema.sessionChanges
+	const [row] = await db
+		.select({ id: sql<number | null>`max(${c.id})` })
+		.from(c)
+		.where(and(eq(c.sessionId, sessionId), lte(c.at, at)))
+	return row?.id == null ? null : Number(row.id)
+}
+
+/** 🚧 A seat-event ledger row as the turn's read takes it: its event id, the seat's `ref` and the `change`. */
+export interface SeatEventRow {
+	event: string
+	ref: string
+	change: string | null
+}
+
+/** 🚧 The `member-added` / `member-removed` / `cast-changed` rows of a session with ids in `(after, through]`, in id order; a row without a `ref` is left out. */
+export async function seatEventRowsBetween(
+	db: Db,
+	sessionId: number,
+	after: number,
+	through: number
+): Promise<SeatEventRow[]> {
+	const c = schema.sessionChanges
+	const rows = await db
+		.select({ event: c.event, payload: c.payload })
+		.from(c)
+		.where(
+			and(
+				eq(c.sessionId, sessionId),
+				sql`${c.id} > ${after}`,
+				sql`${c.id} <= ${through}`,
+				inArray(c.event, [
+					"core:event/member-added@1",
+					"core:event/member-removed@1",
+					"core:event/cast-changed@1"
+				])
+			)
+		)
+		.orderBy(c.id)
+	const out: SeatEventRow[] = []
+	for (const r of rows) {
+		const p = r.payload as { ref?: unknown; change?: unknown } | null
+		if (typeof p?.ref !== "string") continue
+		out.push({ event: r.event, ref: p.ref, change: typeof p.change === "string" ? p.change : null })
+	}
+	return out
 }

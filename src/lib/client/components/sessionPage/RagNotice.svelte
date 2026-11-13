@@ -4,21 +4,28 @@
 	 * `sockets/index.ts`'s `register` listens with a one-argument handler and
 	 * answers by EMITTING the request's own event back, so a three-argument
 	 * `socket.emit(event, params, callback)` is a callback nothing ever calls —
-	 * which is a notice that never paints. Every request is a
-	 * `requestWithInterest` whose handler IS the reply.
+	 * which is a notice that never paints. The status ask is a standing
+	 * scoped interest (`vectorization:checkRagStatus` for this session) plus
+	 * a plain `emit`, and the interest's handler IS the reply; the other
+	 * requests are each a `requestWithInterest` whose handler is the reply.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onDestroy, untrack } from "svelte"
 	import {
+		declareInterest,
+		onConnect,
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import {
 		markNoticeRead,
 		noticeRead,
 		ragNoticeActions,
 		ragNoticeSentence,
-		ragNoticeVariant
+		ragNoticeVariant,
+		statusAsker
 	} from "./ragNotice"
 
 	interface Props {
@@ -67,36 +74,85 @@
 		pending.add(release)
 	}
 
-	function fetchStatus() {
-		oneShot((done) =>
-			requestWithInterest(
-				"vectorization:checkRagStatus",
-				{ sessionId: id },
-				(res) => {
-					ragStatus = res
-					done()
-				}
-			)
-		)
+	const socket = useTypedSocket()
+
+	/**
+	 * One status ask in flight at a time (`statusAsker`): an older reply can
+	 * never be the last word.
+	 */
+	const asker = statusAsker(() =>
+		socket.emit("vectorization:checkRagStatus", { sessionId: id })
+	)
+
+	function onStatus(res: RagStatus) {
+		ragStatus = res
+		asker.answered()
 	}
 
+	// The standing scoped interest the reply is heard on. Declared BEFORE the
+	// effect that asks, so the key is held first on mount; re-declared when the
+	// session changes, released by the effect's return.
+	$effect(() =>
+		declareInterest<"vectorization:checkRagStatus">(
+			interestKey("vectorization:checkRagStatus", id),
+			onStatus
+		)
+	)
+
+	let askedFor: number | null = null
 	$effect(() => {
-		// Re-fetch whenever the session or its message count changes
-		id
+		// Ask whenever the session or its message count changes
+		const sid = id
 		messageCount
-		fetchStatus()
+		untrack(() => {
+			if (askedFor !== null && askedFor !== sid) {
+				// Another session's figures never show under this one.
+				asker.reset()
+				ragStatus = null
+			}
+			askedFor = sid
+			asker.now()
+		})
+	})
+
+	// The lorebook's indexing moves per entry: the owner is told after each
+	// one (scoped by lorebook), and the status is asked again, throttled.
+	// `as`: TS narrows the `let` to its initial null at the top level, since
+	// the assignments happen inside listeners.
+	const lorebookId = $derived((ragStatus as RagStatus | null)?.lorebookId ?? null)
+	$effect(() => {
+		if (lorebookId === null) return
+		return declareInterest<"vectorization:itemUpdated">(
+			interestKey("vectorization:itemUpdated", lorebookId),
+			() => asker.soon()
+		)
 	})
 
 	// Re-fetch when the queue reports a status change (items may have
-	// finished). Declared through the registry, so it is released on destroy
-	// rather than piling another listener on the socket per session shown.
-	useInterest<"vectorization:progress">("vectorization:progress", () => {
-		if (ragStatus?.applicable) {
-			fetchStatus()
+	// finished). Admin-only, so only an idle report: that is when counts settle.
+	useInterest<"vectorization:progress">("vectorization:progress", (data) => {
+		if (data?.status === "idle" && ragStatus?.applicable) {
+			asker.soon()
 		}
 	})
 
+	// A refused ask is toasted by Layout; never re-ask on it (that could loop).
+	// The refusal carries no session key, so another session's refusal also
+	// frees this flight: at worst one duplicate ask, never a stuck one.
+	useInterest<"vectorization:checkRagStatus:error">(
+		"vectorization:checkRagStatus:error",
+		() => asker.reset()
+	)
+
+	// A reply lost to a disconnect would freeze the single flight forever.
+	const releaseConnect = onConnect(() => {
+		asker.reset()
+		asker.now()
+	})
+
 	onDestroy(() => {
+		asker.dispose()
+		releaseConnect()
 		for (const release of [...pending]) release()
 		pending.clear()
 	})
@@ -110,7 +166,7 @@
 				() => {
 					done()
 					prioritizing = false
-					fetchStatus()
+					asker.now()
 				}
 			)
 		)
@@ -155,8 +211,8 @@
 
 	/**
 	 * What the lorebook's indexing has to say, hidden or not (`ragNoticeVariant`):
-	 * not indexed yet, needs re-indexing, or part way there. Null once every
-	 * entry is indexed.
+	 * not indexed yet or needs re-indexing. Null once every entry is indexed,
+	 * and part way there: that progress shows in Activity.
 	 */
 	let pendingVariant = $derived.by(() =>
 		ragStatus?.applicable ? ragNoticeVariant(totals) : null
@@ -184,10 +240,7 @@
 	let sentence = $derived.by(() =>
 		variant && ragStatus
 			? ragNoticeSentence(variant, {
-					modelName: ragStatus.activeModelName,
-					readyCount: totals?.readyCount ?? 0,
-					total: totals?.total ?? 0,
-					queueRunning: ragStatus.queueRunning
+					modelName: ragStatus.activeModelName
 				})
 			: ""
 	)
@@ -231,11 +284,7 @@
 		title={sentence}
 		onclick={() => (collapsed = false)}
 	>
-		{#if variant === "processing"}
-			<Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
-		{:else}
-			<Icons.AlertTriangle size={16} aria-hidden="true" />
-		{/if}
+		<Icons.AlertTriangle size={16} aria-hidden="true" />
 	</button>
 {:else if ragStatus?.applicable && variant}
 	<div
@@ -243,19 +292,11 @@
 		role="alert"
 		aria-live="polite"
 	>
-		{#if variant === "processing"}
-			<Icons.Loader
-				size={12}
-				class="text-warning-600 dark:text-warning-500 shrink-0 animate-spin"
-				aria-hidden="true"
-			/>
-		{:else}
-			<Icons.AlertTriangle
-				size={12}
-				class="text-warning-600 dark:text-warning-500 shrink-0"
-				aria-hidden="true"
-			/>
-		{/if}
+		<Icons.AlertTriangle
+			size={12}
+			class="text-warning-600 dark:text-warning-500 shrink-0"
+			aria-hidden="true"
+		/>
 
 		<span class="text-surface-600 dark:text-surface-400 min-w-0">
 			{sentence}

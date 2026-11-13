@@ -8,6 +8,7 @@
  * owner passes `findOwnedBook`); other admins clone it.
  */
 
+import { markedBook, primerRowEditProblem, providedOwnerPresent } from "$lib/server/plugins/providedMarks"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, isNull } from "drizzle-orm"
@@ -60,14 +61,9 @@ async function relistKits(socket: any, emitToUser: Emit) {
 	await relistLorebooks(socket, emitToUser)
 }
 
-/** A copy's after-commit work, then the asker's character list when cards came with it. */
-async function finishCopy(socket: any, emitToUser: Emit, copy: KitCopy) {
-	const userId = socket.user!.id
-	await afterKitCopy(copy, userId, ownerNameOf(socket))
-	if (copy.cards.length) {
-		const { buildCharactersList } = await import("./characters")
-		await emitToUser("characters:list", () => buildCharactersList(userId))
-	}
+/** A copy's after-commit work (its cover and its place in the search queue). */
+async function finishCopy(socket: any, _emitToUser: Emit, copy: KitCopy) {
+	await afterKitCopy(copy, socket.user!.id, ownerNameOf(socket))
 }
 
 /** `starterKits:list` — every kit anyone signed in may start from. */
@@ -76,11 +72,18 @@ export const starterKitsListHandler: Handler<
 	Sockets.StarterKits.List.Response
 > = refusable(
 	"starterKits:list",
-	async (socket, _params, emitToUser) => {
+	async (socket, params, emitToUser) => {
+		const includeDisabled =
+			params?.includeDisabled === true && !!socket.user?.isAdmin
 		const res: Sockets.StarterKits.List.Response = {
-			kits: await starterKitCards(db as unknown as Db, socket.user!.id)
+			kits: await starterKitCards(db as unknown as Db, socket.user!.id, {
+				// 🚧 (M2e) A disabled provided row is the admin page's to see.
+				includeDisabled
+			})
 		}
-		emitToUser("starterKits:list", res)
+		// A list with the disabled rows goes to the asking socket only: the pickers' plain list must not be overwritten by it.
+		if (includeDisabled) socket.emit("starterKits:list", res)
+		else emitToUser("starterKits:list", res)
 		return res
 	},
 	"The starter lorebooks could not be listed."
@@ -105,6 +108,9 @@ export const starterKitsSaveFromBookHandler: Handler<
 		).catch(() => {
 			throw new Error(STARTER_KIT_SENTENCES.saveOwnBook)
 		})
+		// A primer row is read-only (m2e-F-D): its sentence, not "save one of your own books".
+		const primerProblem = await primerRowEditProblem(db as unknown as Db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
 		const [row] = await db
 			.select({
 				kind: schema.lorebooks.kind,
@@ -131,7 +137,6 @@ export const starterKitsSaveFromBookHandler: Handler<
 		})
 		await finishCopy(socket, emitToUser, {
 			lorebookId: id,
-			cards: [],
 			coverFrom: book.id
 		})
 		const res: Sockets.StarterKits.SaveFromBook.Response = {
@@ -146,8 +151,7 @@ export const starterKitsSaveFromBookHandler: Handler<
 
 /**
  * `starterKits:clone` — admins: a new admin kit from any kit, shipped or an
- * admin's. A kit another admin owns gives its cast's cards to the clone's
- * owner as copies.
+ * admin's. The clone's cast is card-less, as every starter copy's is.
  */
 export const starterKitsCloneHandler: Handler<
 	Sockets.StarterKits.Clone.Params,
@@ -199,10 +203,15 @@ export const starterKitsDeleteHandler: Handler<
 		)
 		const deleted = await db.transaction(async (tx) => {
 			const [row] = await tx
-				.select({ id: schema.lorebooks.id })
+				.select({ id: schema.lorebooks.id, uuid: schema.lorebooks.uuid, extraJson: schema.lorebooks.extraJson })
 				.from(schema.lorebooks)
 				.where(kitRow)
 			if (!row) return false
+			// 🚧 (M2e) A primer imported as a row is disabled, never deleted.
+			// A mark is live only while its owner is present; a kept kit (plugin uninstalled) deletes like any book.
+			const mark = markedBook(row.extraJson, row.uuid)
+			if (mark && (await providedOwnerPresent(tx as unknown as Db, mark.plugin)))
+				throw new Error(STARTER_KIT_SENTENCES.shippedKeep)
 			await purgeLorebook(tx, row.id)
 			await tx.delete(schema.lorebooks).where(kitRow)
 			return true

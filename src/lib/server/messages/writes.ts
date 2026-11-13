@@ -116,6 +116,31 @@ export async function loreWriteRefusal(
 }
 
 /**
+ * 🚧 Refusal sentence when this session's genre does not let a pipeline bench
+ * or bring back seats (`set-seat-bench@1`, owner 2026-11-10), else `null`.
+ * **Absent is OFF** (P1): only an explicit `writes.seats === true` allows it, so
+ * a session with no genre, a genre that cannot be read, an absent key and
+ * `false` all refuse. Same posture as `libraryWriteRefusal`.
+ */
+export async function seatWriteRefusal(
+	db: Db,
+	sessionId: number
+): Promise<string | null> {
+	let genre: { name: string; shape: unknown } | null = null
+	try {
+		genre = await sessionGenre(db, sessionId)
+	} catch {
+		genre = null
+	}
+	const shape = genre?.shape
+	const declared =
+		shape && typeof shape === "object" ? (shape as any).writes : null
+	if (genre && declared && typeof declared === "object" && declared.seats === true)
+		return null
+	return `This session's genre ('${genre?.name ?? "none"}') does not bench or bring back seats.`
+}
+
+/**
  * Refusal sentence when this session's genre opens no scenes, else `null`.
  * Same posture as `loreWriteRefusal`.
  */
@@ -142,7 +167,7 @@ export async function sceneWriteRefusal(
 const LIBRARY_NEEDS = {
 	characters: "does not make or change characters.",
 	lorebooks: "does not make lorebooks.",
-	"lorebooks-into-sessions": "does not read lorebooks into sessions.",
+	/** ⏳ removed in S5, ★f-sdk-4. */
 	sessions: "does not read lorebooks into other sessions."
 } as const
 export type LibraryNeed = keyof typeof LIBRARY_NEEDS
@@ -247,6 +272,9 @@ export interface SessionLoreWrite {
  * The row lands where the session reads: on its line — never main for a
  * branch session, which would leak the branch's story onto every line — and,
  * when it is dated, at the session's story now (`historyDateOfSessionWrite`).
+ * `sessionLoreWrite` reads the line as it stands and forks nothing; its caller
+ * (`entries:create`) forks a riding branch session's own line inside its
+ * transaction, after every check, so a refused write forks nothing.
  */
 export async function sessionLoreWrite(
 	db: Db,

@@ -20,6 +20,7 @@
  * value reads the new one at once.
  */
 
+import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
@@ -73,7 +74,12 @@ async function scoped(
 		await assertReadableBook(db, socket.user?.id, lorebookId, {
 			isAdmin: !!socket.user?.isAdmin
 		})
-	else await assertOwnedBook(db, socket.user?.id, lorebookId)
+	else {
+		await assertOwnedBook(db, socket.user?.id, lorebookId)
+		// A primer row is read-only (m2e-F-D).
+		const primerProblem = await primerRowEditProblem(db, lorebookId)
+		if (primerProblem) throw new Error(primerProblem)
+	}
 	const owner = params?.owner as { kind?: unknown; id?: unknown } | undefined
 	if (owner?.kind !== "location")
 		throw new Error("Only a place's stats are set in the lorebook, for now.")

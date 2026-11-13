@@ -27,7 +27,7 @@
 	import type { MediaFrame } from "$lib/shared/media/frame"
 	import type { AvatarMedia } from "$lib/client/utils/media"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	interface Props {
 		/** The stored picture, as the tile shows it (the display form). */
@@ -181,7 +181,7 @@
 		}
 		socket.emit("media:setFrame", { mediaId, frame })
 		onStoredFrame?.(frame)
-		toaster.success({ title: "Crop updated" })
+		notify.success({ title: "Crop updated" })
 	}
 
 	function onCropCancelled() {

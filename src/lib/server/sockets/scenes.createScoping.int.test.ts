@@ -114,4 +114,27 @@ describe("scenes:create — historyEntryId scoping (PGlite integration)", () => 
 
 		expect(res.scene.historyEntryId).toBe(historyEntry.id)
 	})
+
+	test("stores a scene with no historyEntryId unfiled (§0-B)", async () => {
+		const { sceneCreateHandler } = await import("./scenes")
+		const owner = await makeUser("scene-create-unfiled")
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Unfiled Book", userId: owner.id })
+			.returning()
+
+		const res = await sceneCreateHandler.handler(
+			fakeSocket(owner.id),
+			{
+				scene: {
+					lorebookId: lorebook.id,
+					name: "Waiting scene",
+					summary: "Not yet compiled"
+				} as any
+			},
+			noopEmit
+		)
+
+		expect(res.scene.historyEntryId).toBeNull()
+	})
 })

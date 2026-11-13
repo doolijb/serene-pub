@@ -28,7 +28,7 @@ import * as schema from "$lib/server/db/schema"
  * Between the two sits `failsHealth`: the app keeps serving, but an instance
  * without this task is not one the launcher may call healthy — its health
  * route reports `failed` (`launcher/controlRoutes.ts`), so an update that
- * breaks it is rolled back instead of committed. Only `pipelines` is: without
+ * breaks it is rolled back instead of committed. `pipelines` is one: without
  * it nothing can generate, create a session or run an action.
  *
  * **Ordering is real, not incidental.** They run sequentially in array order:
@@ -266,6 +266,157 @@ export const startupTasks: StartupTask[] = [
 		}
 	},
 	{
+		/**
+		 * 🚧 plan §33.3: a deleted parent's own book stays while a branch
+		 * rides it and goes with the last one. This is the backstop for any
+		 * delete path that skips that purge: every own book whose session is
+		 * gone and that no live session's ancestry names is removed. Permanent;
+		 * a second boot finds nothing. Not `failsHealth`: a book left over
+		 * hides from every list and costs only space.
+		 */
+		name: "kept-own-books",
+		run: async () => {
+			const { purgeKeptOwnBooks } = await import("$lib/server/lorebooks/ownBook")
+			const n = await purgeKeptOwnBooks(db)
+			if (n) console.log(`[kept-own-books] ${n} orphaned session note book(s) removed`)
+		}
+	},
+	{
+		/**
+		 * ⏳ plan §27 v2, S1 (steps 1–2): every seat gets the cast member its
+		 * card is, and a session whose seats resolve to one member twice is
+		 * settled (the merge rule). One transaction per session; a session
+		 * that fails is logged and left, and the task reports it to the
+		 * launcher's health (`failsHealth`), not to the boot. Lives as long as
+		 * the attic does (its ETL writes seats without members); delete both
+		 * at the RC1 squash.
+		 */
+		name: "seat-members",
+		failsHealth: true,
+		run: async () => {
+			const { seatMembers } = await import("$lib/server/sessions/seatMembers")
+			const r = await seatMembers(db)
+			if (r.filled || r.minted || r.merged || r.unexplained)
+				console.log(
+					`[seat-members] ${r.filled} seat(s) given a cast member, ${r.minted} minted, ${r.merged} merged, ${r.unexplained} left without one`
+				)
+		}
+	},
+	{
+		/**
+		 * ⏳ plan §32 §8, §33.4: every card gets v1, every cast member a base
+		 * version and every cast amendment the complete versions today's read
+		 * needs (verified against it; what still reads differently is noted on
+		 * the member's base), and every character seat the person who seated
+		 * it. One transaction per card set and per book; a unit that fails is
+		 * logged and left, and the task reports it to the launcher's health.
+		 * Lives until the S5 drop.
+		 */
+		name: "character-versions",
+		failsHealth: true,
+		run: async () => {
+			const { liftCharacterVersions } = await import(
+				"$lib/server/characters/versionsLift"
+			)
+			const r = await liftCharacterVersions(db)
+			if (r.cards || r.members || r.versions || r.noted || r.seats)
+				console.log(
+					`[character-versions] ${r.cards} card(s) given v1, ${r.members} cast member(s) lifted (${r.versions} dated version(s)), ${r.noted} read differently since the upgrade (noted), ${r.seats} seat(s) given their seater`
+				)
+		}
+	},
+	{
+		/**
+		 * ⏳ ★RF-1 at startup (owner 2026-11-10): every cast member still linked
+		 * to a soft-deleted card (deleted before the ★3 card-less conversion, or
+		 * copied in by the attic) is made card-less with the card's content, by
+		 * the steps a card delete runs. After `seat-members` (seats are filled
+		 * with the linked member first) and `character-versions` (the words it
+		 * keeps are on versions). One transaction per card; a card that fails is
+		 * logged and left, and the task reports it to the launcher's health.
+		 * Delete at the RC1 squash, with the attic.
+		 */
+		name: "deleted-card-members",
+		failsHealth: true,
+		run: async () => {
+			const { deletedCardMembers } = await import(
+				"$lib/server/cast/deletedCardMembers"
+			)
+			const r = await deletedCardMembers(db)
+			if (r.members)
+				console.log(
+					`[deleted-card-members] ${r.members} cast member(s) of ${r.cards} deleted card(s) made card-less`
+				)
+		}
+	},
+	{
+		/**
+		 * ⏳ plan §34.1, seat-cast S4: every carded seat's stored keys move from
+		 * card form (`session_cast:<cardId>`, `character:<cardId>`) to member
+		 * form (`seated_member:<castMemberId>` / `seated-member:<id>` for a
+		 * character seat, `player_seat:<seatId>` / `player-seat:<id>` for a
+		 * player seat) — owner columns, proposals and the JSON stores holding
+		 * seat refs. After `seat-members` (every live carded seat has its
+		 * member) and `character-versions`. One transaction per session; a
+		 * session that fails is logged and left, and the task reports it to the
+		 * launcher's health (`failsHealth`). A restored backup reruns it. Lives
+		 * until S5 drops card form.
+		 */
+		name: "seat-keys",
+		failsHealth: true,
+		run: async () => {
+			const { seatKeys } = await import("$lib/server/sessions/seatKeys")
+			const r = await seatKeys(db)
+			const moved = Object.values(r.rekeyed).reduce((a, n) => a + n, 0)
+			if (moved || r.copied || r.dropped || r.left)
+				console.log(
+					`[seat-keys] ${r.sessions} session(s): ${moved} row(s) or document(s) moved to member form, ${r.copied} copied, ${r.dropped} dropped, ${r.left} left in card form`
+				)
+		}
+	},
+	{
+		/**
+		 * ⏳ hist-D2, plan `PLAN-history-one-per-date-2026-11-10` item 6:
+		 * each old Dungeon Crawler cairn (a history entry in the session's
+		 * own book) becomes a `deceased` cast version plus a
+		 * `progress.fallen` item, and the epitaph is retyped in place to
+		 * character lore bound to the matched member (world lore when none
+		 * matches). After `seat-keys` (seats in member form, every member
+		 * has a base version). One transaction per book; a book that fails
+		 * is logged and left, and the task reports it to the launcher's
+		 * health (`failsHealth`). Delete at the RC1 squash.
+		 */
+		name: "dc-cairns",
+		failsHealth: true,
+		run: async () => {
+			const { dcCairns } = await import("$lib/server/sessions/dcCairns")
+			const r = await dcCairns(db)
+			if (r.cairns)
+				console.log(
+					`[dc-cairns] ${r.cairns} cairn(s) in ${r.sessions} session(s): ${r.versions} death version(s) written, ${r.alreadyDeceased} already deceased, ${r.unanchored} without a turn, ${r.fallenAdded} fallen added, ${r.characterLore} became character lore, ${r.worldLore} world lore`
+				)
+		}
+	},
+	{
+		/**
+		 * ⏳ hist-D2, plan item 6: a Dungeon Crawler session with no story
+		 * clock gets its latest `crawl-time` value as the session clock,
+		 * parts verbatim. After `dc-cairns`. One update per session; a
+		 * session that fails is logged and left, and the task reports it to
+		 * the launcher's health (`failsHealth`). Delete at the RC1 squash.
+		 */
+		name: "dc-crawl-clock",
+		failsHealth: true,
+		run: async () => {
+			const { dcCrawlClock } = await import("$lib/server/sessions/dcCrawlClock")
+			const r = await dcCrawlClock(db)
+			if (r.clocksSet || r.noValue || r.unreadable)
+				console.log(
+					`[dc-crawl-clock] ${r.clocksSet} session clock(s) set, ${r.noValue} with no value, ${r.unreadable} unreadable`
+				)
+		}
+	},
+	{
 		// Plugins load after every core startup task, so a plugin sees a fully
 		// bootstrapped core. On unless SP_PLUGINS_ENABLED turns it off.
 		name: "plugins",
@@ -372,7 +523,11 @@ export const startupTasks: StartupTask[] = [
 		 * is made whole with exactly what the screen drew, then every stored
 		 * session layout and every person's own saved layout that holds only
 		 * the old slots gains `panels` (`panelsFromSlots`), the old slots left
-		 * on the row, inert. After BOTH reconcilers (`plugins` above runs
+		 * on the row, inert; then (step 3, PLAN-session-layout-simplify
+		 * 2026-11-05 D14) every row still at panels version 1, or completed by
+		 * step 1 this boot, is converted to panels version 2, carrying the
+		 * Messages settings that moved to the Composer and Turn line (most rows
+		 * converted earlier, in `dbReady`, before the settings prune). After BOTH reconcilers (`plugins` above runs
 		 * `syncPluginLayouts`; `layout-presets` just ran), because the
 		 * completion's base is one of their rows, and before sockets accept
 		 * (they await `appReady`). Idempotent: a finished row is never

@@ -18,7 +18,6 @@
 import { readTurnOrder, type TurnOrderV1 } from "@serene-pub/sdk"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { db } from "$lib/server/db"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
@@ -35,12 +34,12 @@ export async function turnOrderFrameOf(
 	if (turnOrder && typeof turnOrder === "object")
 		return { sessionId, turnOrder: readTurnOrder({ turnOrder }) }
 	const [row] = await db
-		.select({ annex: schema.sessions.annex })
+		.select({ turnOrder: schema.sessions.turnOrder })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!row) return null
-	return { sessionId, turnOrder: readTurnOrder(coreAnnexIn(row.annex)) }
+	return { sessionId, turnOrder: readTurnOrder(row) }
 }
 
 /**

@@ -148,6 +148,14 @@ export function sceneOf(input: unknown): Record<string, unknown> | null {
 		const val = pick(k)
 		if (val !== undefined) out[k] = val
 	}
+	// 🚧 The scene's notes (B2-3): the text of each, blanks dropped.
+	if (Array.isArray(scene.notes)) {
+		const notes = scene.notes
+			.map((n) => (typeof n === "string" ? n : (n as { text?: unknown } | null)?.text))
+			.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+			.map((t) => t.trim())
+		if (notes.length) out.notes = notes
+	}
 	return Object.keys(out).length ? out : null
 }
 

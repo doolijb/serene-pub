@@ -24,6 +24,14 @@ const base: LiveSceneRow = {
 }
 
 describe("conversationSceneOf", () => {
+	test("★S-4: the causes ride along only when the server sent them", () => {
+		const plain = conversationSceneOf(base)
+		expect("openedBecause" in plain).toBe(false)
+		expect("castCause" in plain).toBe(false)
+		const caused = conversationSceneOf({ ...base, openedBecause: "the day changed", castCause: "Story keeps the open scene's cast up to date from its lines. Set How scenes begin to Manual to stop it." })
+		expect(caused.openedBecause).toBe("the day changed")
+		expect(caused.castCause).toMatch(/^Story keeps/)
+	})
 	test("a live scene carries its lane, its boundaries, both clocks and its summary state", () => {
 		expect(
 			conversationSceneOf({

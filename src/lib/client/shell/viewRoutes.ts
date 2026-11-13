@@ -23,6 +23,7 @@
  */
 export const VIEW_ROUTES: Readonly<Record<string, string>> = {
 	sessions: "/sessions",
+	apps: "/apps",
 	characters: "/characters",
 	library: "/library",
 	lorebooks: "/lorebooks",
@@ -71,6 +72,27 @@ export function viewForPath(pathname: string): string | null {
 		if (TREE_VIEWS.has(key) && path.startsWith(route + "/")) return key
 	}
 	return null
+}
+
+/**
+ * 🚧 M2d: an applet's launcher (`/apps/<pluginId>`) is a page, not the Apps
+ * view: true only with a non-empty segment after `/apps/`.
+ */
+export function isAppletLauncherPath(pathname: string): boolean {
+	return pathname.startsWith("/apps/") && pathname.length > "/apps/".length
+}
+
+/**
+ * 🚧 M2d: what a cold load of `/apps` does. The Apps view registers only
+ * while an applet is listed, so the address cannot wait forever: `listed` is
+ * how many applets the genres list carries, null before it has arrived.
+ * `wait` — not known yet; `open` — focus the view; `home` — none listed, go
+ * Home rather than leave a blank page.
+ */
+export function appsAddressVerdict(
+	listed: number | null
+): "wait" | "open" | "home" {
+	return listed === null ? "wait" : listed > 0 ? "open" : "home"
 }
 
 /** The widths a view can be shown at. */

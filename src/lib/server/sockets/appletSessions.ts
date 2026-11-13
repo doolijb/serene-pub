@@ -19,6 +19,7 @@ import { openAppletDoor, libraryGrantRefusal, sessionGenreRefusal, type AppletDo
 import { personMay } from "$lib/server/auth/actingPerson"
 import { askerOf, refusable } from "./refusable"
 import { markAppletCall } from "./appletCause"
+import { declaredFieldRefusal } from "$lib/shared/sessions/declaredFieldRefusal"
 
 type Emit = (event: string, data: any) => void
 type Row = import("@serene-pub/sdk").AppletSessionV1
@@ -58,7 +59,7 @@ async function reachableSession(db: Db, door: AppletDoor, sessionId: unknown) {
 	if (!s || sessionGenreRefusal(door, s.genreId)) return null
 	// Owner only: personMay write on a session is the owner's alone.
 	const may = await personMay(db, door.person, "write", { kind: "session", id: s.id })
-	return may.ok && s.userId === door.person.userId ? s : null
+	return may.ok ? s : null
 }
 
 /** The keys the genre declares as fields; null when the genre is not registered. */
@@ -68,19 +69,9 @@ async function declaredFieldKeys(db: Db, genreId: string): Promise<string[] | nu
 	return genre ? Object.keys(((genre.shape as { fields?: Record<string, unknown> } | undefined)?.fields ?? {})) : null
 }
 
-/** A refusal when `fields` is not a plain object of the genre's DECLARED fields. Pure given the keys. */
-export function declaredFieldRefusal(fields: unknown, declared: string[] | null, genreId: string): string | null {
-	if (fields === undefined) return null
-	if (!fields || typeof fields !== "object" || Array.isArray(fields)) return "The fields are an object of values."
-	for (const key of Object.keys(fields)) {
-		if (!declared || !declared.includes(key)) return `'${key}' is not a field of the genre '${genreId}'.`
-	}
-	return null
-}
-
 /** A lorebook an extension may attach: its grant reads books and the person may read this one. */
 async function bookRefusal(db: Db, door: AppletDoor, lorebookId: unknown): Promise<string | null> {
-	if (!Number.isInteger(lorebookId)) return "The lorebook is named by its number, or null to detach."
+	if (!Number.isInteger(lorebookId)) return "The lorebook is named by its number."
 	const grant = libraryGrantRefusal(door, "lorebooks", "read")
 	if (grant) return grant
 	const may = await personMay(db, door.person, "read", { kind: "lorebook", id: lorebookId as number })
@@ -214,7 +205,7 @@ export const pluginsUpdateSession: Handler<
 			const refused = await bookRefusal(db, door, params.lorebookId)
 			if (refused) throw new Error(refused)
 		} else if (params.lorebookId !== undefined && params.lorebookId !== null) {
-			throw new Error("The lorebook is named by its number, or null to detach.")
+			throw new Error("The lorebook is named by its number.")
 		}
 		const session: Record<string, unknown> = { id: s.id }
 		if (params.name !== undefined) session.name = params.name

@@ -18,9 +18,9 @@
  * and message rows agree, and the identity of that vocabulary rides on every
  * row as `gazetteer_hash`.
  *
- * A session with no lorebook gets the empty vocabulary, which is a working
- * state rather than a broken one: both sides fall to the open tier and their
- * keys still agree.
+ * A null `lorebookId` — a caller with no book id to ask about — gets the empty
+ * vocabulary, which is a working state rather than a broken one: both sides
+ * fall to the open tier and their keys still agree.
  *
  * ## Freshness is a triple, and staleness is never silent
  *
@@ -41,7 +41,7 @@
  */
 
 import crypto from "crypto"
-import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm"
 import type { PgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -57,6 +57,8 @@ import {
 	type GazetteerName,
 	type ModelSpan
 } from "$lib/server/pipelines/ranking/entities"
+import { memberColumnsOfVersion } from "$lib/server/lorebooks/retold"
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 import {
 	castTag,
 	castTagNumber,
@@ -196,10 +198,11 @@ export interface AnnotationVocabulary {
 	gazetteer: Gazetteer
 	/**
 	 * What each cast tag (`{{char:N}}`) names: member number → the member's
-	 * character, for every member bound to a live card. An entry's stored
-	 * text names a member only by tag (the name is written in at the
-	 * pipeline's read), so this is how its annotation reaches them
-	 * (`entryEntities`).
+	 * ref: the card for a member bound to a live card, the member itself
+	 * (`cast_member`) for one without, and nothing for a member with no name
+	 * at all. An entry's stored text names a member only by tag (the name is
+	 * written in at the pipeline's read), so this is how its annotation
+	 * reaches them (`entryEntities`).
 	 */
 	castTags: ReadonlyMap<number, EntityRef>
 	/**
@@ -217,15 +220,24 @@ export const EMPTY_VOCABULARY: AnnotationVocabulary = {
 }
 
 /**
- * Every name the book's amendments give its cast members and entries, on any
- * line and at any date — what `loadVocabulary` adds to the stored names
- * (plan C1). A cast amendment's `name` and `aliases` (`CAST_AMENDABLE`), an
- * entry amendment's `name` (the wire row's title). Trimmed, empty dropped,
- * in amendment order (id), so the vocabulary is the same on every read.
+ * Every name the book's cast versions and entry amendments give its cast
+ * members and entries, on any line and at any date — what `loadVocabulary`
+ * adds to the stored names (plan C1). A cast version's own `name` and
+ * `aliases` (a field in its `follows` is the card's, already in the
+ * vocabulary through the card's member), an entry amendment's `name` (the wire
+ * row's title). A version that follows the card's `name` adds the names of its
+ * parent card version (`name`, `nickname`): the card as that version was
+ * written against, which a card edited since may not say. Trimmed, empty dropped, in write order (cast versions: write
+ * order, then id; entry amendments: id), so the vocabulary is the same on
+ * every read. A line's amendments only (`base IS NULL`); a held amendment's
+ * name is added only for the holder asking (`holderBookId`: the session's own
+ * book), so no other session's vocabulary hears it.
  */
 export async function amendedNamesOf(
 	db: Db,
-	lorebookId: number
+	lorebookId: number,
+	/** A session's own book: its held amendments on this book's entries give them names too, for that session alone. */
+	holderBookId?: number | null
 ): Promise<{
 	cast: Map<number, string[]>
 	entries: Map<number, string[]>
@@ -233,19 +245,43 @@ export async function amendedNamesOf(
 	const [castRows, entryRows] = await Promise.all([
 		db
 			.select({
-				memberId: schema.castAmendments.lorebookBindingId,
-				fields: schema.castAmendments.fields
+				memberId: schema.characterVersions.castMemberId,
+				name: schema.characterVersions.name,
+				aliases: schema.characterVersions.aliases,
+				follows: schema.characterVersions.follows,
+				parentVersionId: schema.characterVersions.parentVersionId
 			})
-			.from(schema.castAmendments)
-			.where(eq(schema.castAmendments.lorebookId, lorebookId))
-			.orderBy(asc(schema.castAmendments.id)),
+			.from(schema.characterVersions)
+			.where(
+				and(
+					eq(schema.characterVersions.lorebookId, lorebookId),
+					isNotNull(schema.characterVersions.castMemberId)
+				)
+			)
+			.orderBy(
+				asc(schema.characterVersions.writeOrder),
+				asc(schema.characterVersions.id)
+			),
 		db
 			.select({
 				entryId: schema.entryAmendments.entryId,
 				fields: schema.entryAmendments.fields
 			})
 			.from(schema.entryAmendments)
-			.where(eq(schema.entryAmendments.lorebookId, lorebookId))
+			.where(
+				or(
+					and(
+						eq(schema.entryAmendments.lorebookId, lorebookId),
+						isNull(schema.entryAmendments.base)
+					),
+					holderBookId != null && holderBookId !== lorebookId
+						? and(
+								eq(schema.entryAmendments.lorebookId, holderBookId),
+								isNotNull(schema.entryAmendments.base)
+							)
+						: undefined
+				)
+			)
 			.orderBy(asc(schema.entryAmendments.id))
 	])
 	const add = (into: Map<number, string[]>, id: number, raw: unknown) => {
@@ -254,17 +290,104 @@ export async function amendedNamesOf(
 		if (!list.includes(raw.trim())) list.push(raw.trim())
 		into.set(id, list)
 	}
+	const parentIds = [
+		...new Set(
+			castRows
+				.filter((r) => r.follows.includes("name"))
+				.map((r) => r.parentVersionId)
+				.filter((id): id is number => id != null)
+		)
+	]
+	const parentNames = new Map(
+		(parentIds.length
+			? await db
+					.select({
+						id: schema.characterVersions.id,
+						name: schema.characterVersions.name,
+						nickname: schema.characterVersions.nickname
+					})
+					.from(schema.characterVersions)
+					.where(inArray(schema.characterVersions.id, parentIds))
+			: []
+		).map((p) => [p.id, p])
+	)
 	const cast = new Map<number, string[]>()
 	for (const row of castRows) {
-		const fields = (row.fields ?? {}) as Record<string, unknown>
-		add(cast, row.memberId, fields.name)
-		if (Array.isArray(fields.aliases))
-			for (const alias of fields.aliases) add(cast, row.memberId, alias)
+		if (row.memberId == null) continue
+		if (!row.follows.includes("name")) add(cast, row.memberId, row.name)
+		else {
+			const parent =
+				row.parentVersionId != null
+					? parentNames.get(row.parentVersionId)
+					: undefined
+			add(cast, row.memberId, parent?.name)
+			add(cast, row.memberId, parent?.nickname)
+		}
+		if (!row.follows.includes("aliases"))
+			for (const alias of row.aliases) add(cast, row.memberId, alias)
 	}
 	const entries = new Map<number, string[]>()
 	for (const row of entryRows)
 		add(entries, row.entryId, ((row.fields ?? {}) as Record<string, unknown>).name)
 	return { cast, entries }
+}
+
+/**
+ * Each member's **base shown name**: its undated Main version's name as the
+ * member is shown by it (own name or nickname over the card version's it was
+ * written against; a card-less base's own `name`). One query for the bases,
+ * one for their parents. A member with no usable base is left out, as is a
+ * carded one whose base has no parent card version (the stored name speaks).
+ */
+async function baseShownNamesOf(
+	db: Db,
+	memberIds: number[],
+	carded: ReadonlySet<number>
+): Promise<Map<number, string>> {
+	const out = new Map<number, string>()
+	if (!memberIds.length) return out
+	const V = schema.characterVersions
+	const bases = await db
+		.select()
+		.from(V)
+		.where(
+			and(
+				inArray(V.castMemberId, memberIds),
+				isNull(V.cardId),
+				isNull(V.branchId),
+				isNull(V.year),
+				isNull(V.personalPosition),
+				isNull(V.sourceSessionId)
+			)
+		)
+	const parentIds = bases
+		.map((b) => b.parentVersionId)
+		.filter((id): id is number => id != null)
+	const parents = new Map(
+		(parentIds.length
+			? await db
+					.select({ id: V.id, name: V.name, nickname: V.nickname })
+					.from(V)
+					.where(inArray(V.id, parentIds))
+			: []
+		).map((p) => [p.id, p])
+	)
+	for (const base of bases) {
+		if (base.castMemberId == null) continue
+		const parent =
+			base.parentVersionId != null
+				? parents.get(base.parentVersionId)
+				: undefined
+		if (!parent && carded.has(base.castMemberId)) continue
+		const name = parent
+			? memberShownName(
+					memberColumnsOfVersion(base, { carded: true }),
+					parent
+				)
+			: base.name
+		if (name?.trim()) out.set(base.castMemberId, name.trim())
+	}
+	return out
 }
 
 /**
@@ -274,37 +397,52 @@ export async function amendedNamesOf(
  * of a name keep it and a character called "Vell" should resolve to the
  * character rather than to an entry titled after her.
  *
- * An unbound binding — a background NPC the graph minted, naming no character
- * — contributes nothing here. There is no row for it to resolve
- * *to*: `EntityRef` names a character or an entry, and inventing a
- * third kind is a schema decision this seam should not make on its own. Its
- * name is still extracted, as an open-tier string, which is exactly plan Part
- * 2's *"references that don't resolve yet"*. A member whose card was deleted
- * reads the same way (plan A25): a deleted card is nobody in a lorebook.
+ * A member with a live card resolves to that card (`character`). A member
+ * with no card — a background NPC the graph minted, or one whose card was
+ * deleted (plan A25) — resolves to itself (`cast_member`, owner ruling
+ * 2026-11-06): its names and its tag are the vocabulary's, stored as the
+ * entity key alone. A member with no name at all contributes nothing, names
+ * or tag. Names go in carded members first, card-less members next, so a
+ * card-less member never takes a name a carded one holds.
  *
  * **Amended names count (plan C1, owner ruling R1 "hybrid", 2026-09-30).** A
- * member renamed by a cast amendment, or an entry retitled by an entry
+ * member renamed by a cast version, or an entry retitled by an entry
  * amendment, answers to the new name too: on every line, at every date. One
  * vocabulary per BOOK, not per reading, because the rows it stamps are the
  * book's (an entry's annotations and the cast suggestions are read by every
  * session), and a hash that moved with the reader would mark them stale for
- * every other one. So the names are a union — every stored name first (cast,
+ * every other one. A member claims its stored names under its **base shown
+ * name** (its undated Main version's, as `syncLorebookBindingsForCharacter`
+ * computes it), not under `lorebook_bindings.name`: a dated rename is written
+ * back to that column for sort and search, and must not move who holds which
+ * name. So the names are a union — every stored name first (cast,
  * then entries, as before), then every name an amendment gives them, in
  * amendment order; the first claimant of a name still keeps it, so an
  * amended name never takes a name another member or entry already holds.
  * Without them a renamed member's new name read as nobody's, and the cast
  * suggestions offered it as a new member (plan A23(a)'s leftover).
  *
+ * **A holder's own book (`holderBookId`).** A session that reads this book
+ * through its own notes also answers to the notes' entries — named as amended
+ * on the notes — listed before the book's own, as the write path's match finds
+ * a session's own copy first. Another session's vocabulary, and the book's own
+ * reading (no holder), never hear them.
+ *
  * ⚠ Names only. What an entry SAYS for search by meaning stays its base text
  * (`embedding/ragContext.ts`); the ruling keeps content vectors on the base.
  */
 export async function loadVocabulary(
 	db: Db,
-	lorebookId: number | null | undefined
+	lorebookId: number | null | undefined,
+	opts?: { holderBookId?: number | null }
 ): Promise<AnnotationVocabulary> {
 	if (lorebookId == null) return EMPTY_VOCABULARY
 
-	const [bindings, entries] = await Promise.all([
+	const ownBookId =
+		opts?.holderBookId != null && opts.holderBookId !== lorebookId
+			? opts.holderBookId
+			: null
+	const [bindings, bookEntries, ownEntries] = await Promise.all([
 		db
 			.select({
 				id: schema.lorebookBindings.id,
@@ -329,27 +467,71 @@ export async function loadVocabulary(
 			})
 			.from(schema.lorebookEntries)
 			.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
-			.orderBy(asc(schema.lorebookEntries.id))
+			.orderBy(asc(schema.lorebookEntries.id)),
+		ownBookId != null
+			? db
+					.select({
+						id: schema.lorebookEntries.id,
+						title: schema.lorebookEntries.title
+					})
+					.from(schema.lorebookEntries)
+					.where(eq(schema.lorebookEntries.lorebookId, ownBookId))
+					.orderBy(asc(schema.lorebookEntries.id))
+			: []
 	])
-	const amendedNames = await amendedNamesOf(db, lorebookId)
+	// The session's own book first (its copy of a lorebook entry is found
+	// before the lorebook's), then the lorebook's.
+	const entries = [...ownEntries, ...bookEntries]
+	const amendedNames = await amendedNamesOf(db, lorebookId, opts?.holderBookId)
+	if (ownBookId != null) {
+		// The own book's entries, named as amended on the own book (its own
+		// non-held amendments); own book first, as the entries are.
+		const own = await amendedNamesOf(db, ownBookId)
+		const merged = new Map<number, string[]>()
+		for (const source of [own.entries, amendedNames.entries])
+			for (const [id, list] of source) {
+				const into = merged.get(id) ?? []
+				for (const name of list) if (!into.includes(name)) into.push(name)
+				merged.set(id, into)
+			}
+		amendedNames.entries = merged
+	}
+	const baseNames = await baseShownNamesOf(
+		db,
+		bindings.map((b) => b.id),
+		new Set(bindings.filter((b) => b.characterId != null).map((b) => b.id))
+	)
 
 	const names: GazetteerName[] = []
 	const castTags = new Map<number, EntityRef>()
-	const castRefs: Array<[number, EntityRef]> = []
+	const carded: Array<{ id: number; ref: EntityRef; stored: string[] }> = []
+	const cardless: Array<{ id: number; ref: EntityRef; stored: string[] }> = []
 	for (const binding of bindings) {
-		const ref =
-			binding.characterId != null && binding.cardDeleted !== true
-				? ({ kind: "character", id: binding.characterId } as const)
-				: null
-		if (!ref) continue
-		castRefs.push([binding.id, ref])
-		for (const name of bindingNames(binding)) names.push({ name, ref })
+		const live = binding.characterId != null && binding.cardDeleted !== true
+		const ref: EntityRef = live
+			? { kind: "character", id: binding.characterId as number }
+			: { kind: "cast_member", id: binding.id }
+		const stored = bindingNames({
+			...binding,
+			name: baseNames.get(binding.id) || binding.name
+		})
+		if (
+			!live &&
+			stored.length === 0 &&
+			(amendedNames.cast.get(binding.id) ?? []).length === 0
+		)
+			continue
+		;(live ? carded : cardless).push({ id: binding.id, ref, stored })
 		const n = castTagNumber(binding.tag)
 		if (n !== null) castTags.set(n, ref)
 	}
-	for (const [memberId, ref] of castRefs)
-		for (const name of amendedNames.cast.get(memberId) ?? [])
-			names.push({ name, ref })
+	for (const group of [carded, cardless]) {
+		for (const { ref, stored } of group)
+			for (const name of stored) names.push({ name, ref })
+		for (const { id, ref } of group)
+			for (const name of amendedNames.cast.get(id) ?? [])
+				names.push({ name, ref })
+	}
 	for (const entry of entries)
 		if (typeof entry.title === "string" && entry.title.trim())
 			names.push({
@@ -552,6 +734,7 @@ const valuesFor = (
 		surface: e.text,
 		normalized: e.text.toLowerCase().replace(/\s+/g, " ").trim(),
 		tier: e.tier,
+		// No column for a `cast_member` ref (the entity key alone carries it).
 		characterId: e.ref?.kind === "character" ? e.ref.id : null,
 		refEntryId: e.ref?.kind === "entry" ? e.ref.id : null,
 		confidence: e.confidence ?? CONFIDENCE[e.tier] ?? 0.5,
@@ -570,11 +753,12 @@ const valuesFor = (
  * `{{char:N}}` is written as the member's name only at the pipeline's read,
  * so the stored text the lane reads names a member by tag alone. Each tag is
  * read here as the member it names (`AnnotationVocabulary.castTags`), by
- * number, never through the name: `character:<id>`, a gazetteer answer, with
+ * number, never through the name: `character:<id>` (`cast_member:<id>` for a
+ * member with no card), a gazetteer answer, with
  * the tag as written for its surface and the tag's own offsets for its span.
  * A tag and the member's name in one entry are one entity, counted twice.
- * A background member's tag, or one with no member, names nobody, as the
- * vocabulary has nothing for them either.
+ * A tag with no member, or whose member has no name at all, names nobody, as
+ * the vocabulary has nothing for them either.
  *
  * Past the extractor's `MAX_ENTITIES`: a book has few members, and a tag is
  * the surest mention an entry can make.

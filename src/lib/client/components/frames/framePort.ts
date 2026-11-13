@@ -37,7 +37,7 @@
  * spelling is this host's, opaque by contract. A frame reads `nextCursor` and
  * hands it back; it never parses one.
  */
-import { FRAME_PROTOCOL, SAVE_STATE_MAX_BYTES, type HostFrameMessage } from "@serene-pub/sdk"
+import { FRAME_PROTOCOL, SAVE_STATE_MAX_BYTES, type HostFrameMessage, type FrontEndMount } from "@serene-pub/sdk"
 import { channelMatcher, type SurfaceMessage } from "$lib/shared/widgets/context"
 
 /** The rows this host pages over — the messages as the mount site holds them. */
@@ -229,13 +229,18 @@ export const frameStateKey = (
 export const initMessage = (
 	surface: FrameInitMessage["surface"],
 	assetsBase?: string,
-	fullscreen?: boolean
+	fullscreen?: boolean,
+	mount?: FrontEndMount,
+	/** 🚧 m3: true on a session page, false for an applet's launcher, absent elsewhere (`init.inSession`). */
+	inSession?: boolean
 ): FrameInitMessage => ({
 	t: "init",
 	protocol: FRAME_PROTOCOL,
 	surface,
 	...(assetsBase ? { assetsBase } : {}),
-	...(fullscreen !== undefined ? { fullscreen } : {})
+	...(fullscreen !== undefined ? { fullscreen } : {}),
+	...(mount ? { mount } : {}),
+	...(inSession !== undefined ? { inSession } : {})
 })
 
 /** The `page` reply to a `request`, echoing the frame's own `requestId`. */

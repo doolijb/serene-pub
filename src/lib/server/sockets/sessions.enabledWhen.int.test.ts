@@ -72,6 +72,19 @@ class FakeAdapter implements FakeTextAdapter {
 		}
 	}
 }
+// 🚧 `forms.modelAnswers` (P1, 2026-11-04): the AI's form answer is opt-in by
+// genre and no shipped genre declares it, so this file's AI-answer cases opt
+// the session's genre in (the same seam `sessions.forms.int.test.ts` uses).
+vi.mock("$lib/server/pipelines/entities/sessionGenres", async (importOriginal) => {
+	const real = await importOriginal<typeof import("$lib/server/pipelines/entities/sessionGenres")>()
+	return {
+		...real,
+		getSessionGenre: async (db: any, genreId: string) => {
+			const genre = await real.getSessionGenre(db, genreId)
+			return genre ? { ...genre, shape: { ...genre.shape, forms: { modelAnswers: true } } } : genre
+		}
+	}
+})
 vi.mock("$lib/server/utils/getConnectionAdapter", () => ({
 	getConnectionAdapter: async () => ({ Adapter: FakeAdapter })
 }))
@@ -435,7 +448,7 @@ describe("W1 · the oracle road", () => {
 		// The tree in order; its two recomputes run on the session's queue
 		// after their writers, so they land wherever they finish (PLAN §8 (27)).
 		const slugs = runs.map((r) => r.specSlug)
-		expect(slugs.filter((x) => !x.endsWith("-turn-order"))).toEqual([
+		expect(slugs.filter((x) => !x.endsWith("-turn-order") && x !== "core:spec/round-tick")).toEqual([
 			askId,
 			"core:spec/story-answer-form",
 			answerId
@@ -879,8 +892,11 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		expect((res as any)?.error).toBeUndefined()
 		expect(
 			(await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`).sort()
-			// The genre's own turn-order spec runs beside the test's (an Adventure's).
-		).toEqual(["core:spec/story-turn-order:ok", `${specId}:ok`].sort())
+			// The genre's own turn-order spec runs beside the test's (an Adventure's),
+			// and the round the answer ended fires the round's tick.
+		).toEqual(
+			["core:spec/round-tick:ok", "core:spec/story-turn-order:ok", `${specId}:ok`].sort()
+		)
 
 		// The state moved and was announced — after the run left the
 		// registry and the list went out, never before.

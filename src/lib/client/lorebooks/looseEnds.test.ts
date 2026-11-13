@@ -13,6 +13,7 @@ import {
 	nextLooseEnd
 } from "./looseEnds"
 import { CAST_KIND, SCENE_KIND, type PoolItem } from "./poolFilter"
+import { lineOf } from "$lib/shared/lorebooks/lineReading"
 
 const WORLD = "core:entry/world-lore"
 const CHARACTER = "core:entry/character-lore"
@@ -225,5 +226,129 @@ describe("the snapshot — nothing reshuffles while the reader works", () => {
 		expect(nextLooseEnd(before, onlyOne, before[0].id)).toBeNull()
 		expect(nextLooseEnd(before, [], null)).toBeNull()
 		expect(nextLooseEnd(before, before, null)?.id).toBe(before[0].id)
+	})
+})
+
+describe("looseEnds — history dates (★H3, rule C; owner 2026-11-10)", () => {
+	const d = (
+		year: number,
+		month: number | null = null,
+		day: number | null = null
+	) => ({
+		year,
+		month,
+		day
+	})
+	const hist = (
+		id: number,
+		date: ReturnType<typeof d> | null,
+		over: Partial<PoolItem> = {}
+	) => item({ id, kind: HISTORY, date, name: `H${id}`, ...over })
+	const rowsOf = (rows: ReturnType<typeof looseEnds>, chore: string) =>
+		rows.filter((r) => r.chore === chore)
+
+	it("a doubled date is one row on the lower id, with the other as also", () => {
+		const rows = rowsOf(
+			looseEnds({
+				items: [hist(7, d(2)), hist(3, d(2), { updatedAt: 99 })]
+			}),
+			"doubled-history-date"
+		)
+		expect(rows).toHaveLength(1)
+		expect(rows[0].target).toEqual({ kind: "entry", entryId: 3 })
+		expect(rows[0].alsoEntryIds).toEqual([7])
+		expect(rows[0].updatedAt).toBe(99)
+	})
+
+	it("three on one date are one row with two also-ids", () => {
+		const rows = rowsOf(
+			looseEnds({ items: [hist(9, d(2)), hist(4, d(2)), hist(6, d(2))] }),
+			"doubled-history-date"
+		)
+		expect(rows).toHaveLength(1)
+		expect(rows[0].target).toEqual({ kind: "entry", entryId: 4 })
+		expect(rows[0].alsoEntryIds).toEqual([6, 9])
+	})
+
+	it("partial dates are distinct, and undated rows are ignored", () => {
+		const rows = looseEnds({
+			items: [
+				hist(1, d(2)),
+				hist(2, d(2, 5)),
+				hist(3, d(2, 5, 3)),
+				hist(4, null),
+				hist(5, null)
+			]
+		})
+		expect(rowsOf(rows, "doubled-history-date")).toEqual([])
+	})
+
+	it("an archived twin still counts", () => {
+		const rows = looseEnds({
+			items: [hist(1, d(2)), hist(2, d(2), { archived: true })]
+		})
+		expect(rowsOf(rows, "doubled-history-date")).toHaveLength(1)
+	})
+
+	it("the row leaves once one is re-dated", () => {
+		const before = looseEnds({ items: [hist(1, d(2)), hist(2, d(2))] })
+		const after = looseEnds({ items: [hist(1, d(2)), hist(2, d(3))] })
+		expect(liveQueue(before, after)).toEqual([])
+	})
+
+	const FORK = [{ id: 1, forkedFromBranchId: null, forkYear: 5 }]
+	it("a line's own history before its fork is flagged; after, and main's, not", () => {
+		const line = lineOf(1, FORK)
+		const rows = looseEnds({
+			line,
+			items: [
+				hist(1, d(4), { branchId: 1 }),
+				hist(2, d(5), { branchId: 1 }),
+				hist(3, d(6), { branchId: 1 }),
+				hist(4, d(3), { branchId: null })
+			]
+		})
+		expect(
+			rowsOf(rows, "history-before-fork").map((r) => r.target)
+		).toEqual(
+			expect.arrayContaining([
+				{ kind: "entry", entryId: 1 },
+				{ kind: "entry", entryId: 2 }
+			])
+		)
+		expect(rowsOf(rows, "history-before-fork")).toHaveLength(2)
+	})
+
+	it("a dateless fork's own dated row is flagged", () => {
+		const line = lineOf(1, [{ id: 1, forkedFromBranchId: null }])
+		const rows = looseEnds({
+			line,
+			items: [hist(1, d(9), { branchId: 1 })]
+		})
+		expect(rowsOf(rows, "history-before-fork")).toHaveLength(1)
+	})
+
+	it("without a line there is no fork chore", () => {
+		const rows = looseEnds({ items: [hist(1, d(1), { branchId: 1 })] })
+		expect(rowsOf(rows, "history-before-fork")).toEqual([])
+	})
+
+	it("both chores group after Undated history", () => {
+		const line = lineOf(1, FORK)
+		const rows = looseEnds({
+			line,
+			items: [
+				hist(1, null),
+				hist(2, d(4), { branchId: 1 }),
+				hist(3, d(4), { branchId: 1 }),
+				item({ id: 4, content: "" })
+			]
+		})
+		expect(groupLooseEnds(rows).map((g) => g.chore.id)).toEqual([
+			"undated-history",
+			"doubled-history-date",
+			"history-before-fork",
+			"empty-content"
+		])
 	})
 })

@@ -10,6 +10,10 @@
 import { and, eq } from "drizzle-orm"
 import { checkValues } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { appletOfSession, frameCauseFor, type FrameCause } from "$lib/server/sockets/appletCause"
+import { actingPersonFor, personMay } from "$lib/server/auth/actingPerson"
+import { appletMount } from "./appletMount"
+import { listOfferedGenres } from "$lib/server/pipelines/entities/sessionGenres"
 import { megabytes } from "$lib/shared/imports/fileCaps"
 import { getManager } from "$lib/server/plugins"
 import { asHookResult } from "$lib/server/pipelines/runtime/pluginBindings"
@@ -32,6 +36,34 @@ interface ActionManifest extends PluginManifest {
 	hooks?: { nodeHandlers?: Record<string, unknown> }
 }
 
+/**
+ * 🚧 (M2e) The frame-origin cause of an invoke: present only when the request
+ * names the plugin's own applet mount AND the server's data agrees — the
+ * launcher (no session) when the plugin has a mount, or a session the person
+ * may open whose genre is the applet genre drawn by that plugin's frame.
+ */
+export async function frameCauseOfInvoke(
+	db: Db,
+	opts: {
+		pluginId: string
+		userId: number
+		plugin: Parameters<typeof appletMount>[1]
+		fromApplet?: { pluginId: string; sessionId?: number }
+	}
+): Promise<FrameCause | undefined> {
+	const { pluginId, userId, plugin, fromApplet } = opts
+	if (!fromApplet || fromApplet.pluginId !== pluginId) return undefined
+	if (fromApplet.sessionId !== undefined) {
+		const person = await actingPersonFor(db, { via: "view", userId })
+		if (!person || !(await personMay(db, person, "read", { kind: "session", id: fromApplet.sessionId })).ok)
+			return undefined
+		return (await appletOfSession(db, fromApplet.sessionId)) === pluginId
+			? frameCauseFor(pluginId)
+			: undefined
+	}
+	return appletMount(pluginId, plugin, await listOfferedGenres(db)) ? frameCauseFor(pluginId) : undefined
+}
+
 export async function invokePluginAction(
 	db: Db,
 	opts: {
@@ -40,6 +72,8 @@ export async function invokePluginAction(
 		input: Record<string, unknown>
 		userId: number
 		manager?: Pick<SandboxManager, "callHook">
+		/** 🚧 (M2e) The applet mount the request names; checked against server data, never trusted (`frameCauseOfInvoke`). */
+		fromApplet?: { pluginId: string; sessionId?: number }
 	}
 ): Promise<unknown> {
 	const { pluginId, action, input, userId } = opts
@@ -90,6 +124,11 @@ export async function invokePluginAction(
 		kind,
 		timeoutMs: Math.min(timeout, 120_000),
 		user: String(userId),
+		// The cause is set only for the plugin's applet mount, judged from
+		// server data (`frameCauseOfInvoke`); a widget's invoke, a plugin
+		// page and file pick/save get none, so the applet-group reach
+		// (`ctx.annex('user')`, `ctx.storage.user`) stays shut for them.
+		frameCause: await frameCauseOfInvoke(db, { pluginId, userId, plugin: row, fromApplet: opts.fromApplet }),
 		seedLabel: `plugin-action:${action}`
 	})
 	if (res.ok) {

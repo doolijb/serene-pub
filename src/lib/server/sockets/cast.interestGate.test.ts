@@ -75,7 +75,11 @@ const seam = vi.hoisted(() => {
 	 */
 	function chain(label: string, result: any = []) {
 		const self: any = {
-			from: () => self,
+			from: (table?: any) => {
+				// A `result` function answers by the table read from.
+				if (typeof result === "function") result = result(nameOf(table))
+				return self
+			},
 			innerJoin: () => self,
 			leftJoin: () => self,
 			where: () => self,
@@ -153,7 +157,16 @@ const seam = vi.hoisted(() => {
 					}
 				}
 			},
-			select: () => chain("select"),
+			// A select of `character_versions` answers the card's current
+			// version row: the face write (`setAvatar`) reads it through
+			// `ensureCardVersion` and `updateCardVersion` before it writes.
+			// Every other select (shares, …) finds nothing.
+			select: () =>
+				chain("select", (name: string) =>
+					name === "character_versions"
+						? [{ id: 11, cardId: 1, number: 1 }]
+						: []
+				),
 			update: (table: any) =>
 				chain(`update:${nameOf(table)}`, [
 					{ ...rows.character, avatarMediaId: 7 }
@@ -167,7 +180,17 @@ const seam = vi.hoisted(() => {
 						: [rows.character]
 				)
 			},
-			delete: () => chain("delete")
+			delete: () => chain("delete"),
+			// A new version's id is drawn from its sequence (`drawIds`).
+			execute: async () => ({ rows: [{ id: 11 }] }),
+			// `insertCard` runs inside `db.transaction`; the callback gets the
+			// same fake so the recorded queries still see the insert.
+			transaction: async function (
+				this: any,
+				cb: (tx: any) => Promise<any>
+			) {
+				return cb(this)
+			}
 		}
 	}
 })

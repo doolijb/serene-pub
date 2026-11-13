@@ -1,0 +1,20 @@
+# REPORT lay-F (2026-11-05; finished 2026-11-06)
+(Saved by the lead from the supervisor's final message — summary.)
+
+Status: done. `npm run docs:build` exit 0, 157 pages, no warnings (the link/anchor check); sdk-tests guideSnippets + widgetParts 4/4 (settles lay-B's widgetParts queue). No code edited. Workers BRIEF-lay-F-w{1,2,3}.md.
+
+## Changed
+- docs/session-layout.md rewritten: widgets table (Composer, Turn line rows; Messages = log; Scene Portraits Who; Stats Faces sheet + "empty draws nothing"; Author's note Scenario; R10 sentences removed, Messages keeps *Send a message to start*); new sections "The Composer and the Turn line" and "Layout settings"; Settings only in the inspector; Style → `--sp-widget-*`; Arrange (three stacks, Priority, divider); "Panels and the rail" + "The main panel" folded into "Panels"; Rails preview gone; heights per allocateZone; one-column sides 248/264/300/344; zone switch; Phones; Full screen; Editing on a phone; genre default layouts; storage (panels v2, boot conversion, composer#x/turn-line#x). Anchors: removed #the-main-panel, #panels-and-the-rail (no inbound links); added #the-composer-and-the-turn-line, #layout-settings, #panels.
+- Hunks: genre-lair, genre-dungeon-crawler, genre-story (+1 paragraph), sessions.md:451, getting-around (Full screen), component-authoring:166, themes-and-settings:77, group-sessions:40, rulesets:19.
+- NOMENCLATURE: §23 16 retirement rows (≈1599–1614) + composer un-retired (2026-09-16 merge vs R8 2026-11-05, both quoted); §9 amended (panel, panel tab, panel height, zone, turn line, composer skin, primary floor, session layout, widget, drawn layout, host card → pop-over sense, Arrange, genre default layout); §9 reduced to ⏳ pointers (primary panel, strip, docked · in the rail, rail strip, message backing); §9 new rows ≈499–512 (Composer, Turn line, panel priority, zone switch, widget gap, backing + opacity, --sp-widget-*, show-channel, session-scenario/set-session-scenario + refusal sentences, panels v2 words, boot conversion incl. pending/spare/MESSAGES_MOVED_KEYS, Arrange inspector, editor ops, live zone words); §22 Composer/Turn line need icons; §26 Full screen + furled header; §25 new subsection "session layouts, simplified — 2026-11-05" (~50 rows) before §26.
+- STYLE-GUIDE §2.8, §5.1, §5.3, §6.5, §6.7 (+R10 rule), §6.16, new §6.22 (inspector pattern), furled-header sentence.
+- SDK guides/widgets.md: parts block regenerated (gen:widget-parts, capped, exit 0); layout example → panels v2; "Carded or flush" → "The panel's backing".
+
+## Code vs plan (docs follow code)
+1 Priority orders only Fit panels and divider shares; Fill panels share the rest, so Messages (Fill, Low) keeps only its 160px floor — meets R8, but the editor hint "Low gives way first, then Normal. High keeps its height longest." overstates it for Fill (owner copy ★). 2 Composer fallback: first Messages in Middle, then Left, then Right (not reading order). 3 Chat ships no layout. 4 Some *.empty parts stay (Annex, Lore entries, Places, Scene Portraits, Stats — cause lines) and stats.trail-note. 5 Empty side column (emptyColumnsPx) and balancedGutters/columnInsetPx still live.
+
+## Open ★ (recorded, none decided)
+"Zone shown"; gap = outer padding (lay-C ★1); no 2-column side ≥2400px (lay-C ★2); whoKind no showIf (lay-B ★6); no Composer/Turn line glyph (lay-B ★7); desktop Fit/Fill warm `.on` tint; the priority hint copy.
+
+## Noticed, not done
+Dead files (owner deletion): PanelRail.svelte, PanelsMenu.svelte (imports deleted liveFlyouts/mobileSidePanels), messageBacking.ts (+test). simulator.ts (+test) imports deprecated zoneRungAt/DEFAULT_SIDE_RULES. Undocumented settings: Messages "Interleaved lines read as", "Line kinds"; Stats Whose stats Mine / Player seats. Stale history paragraphs: STYLE-GUIDE §6.20 ("composer pinned under the log"), parts of §6.16; NOMENCLATURE primary floor "Done refuses an empty middle". Two NOMENCLATURE one-line edits used read-replace-write (verified; tiny race window with cv). Pre-existing prettier drift.

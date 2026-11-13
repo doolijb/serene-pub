@@ -23,7 +23,7 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 	}
 }))
 
-import { entryChannel } from "./entryManager"
+import { entryChannel, substituteBindings } from "./entryManager"
 
 const fire = (key: string, data: any) =>
 	(handlersByKey.get(key) ?? []).forEach((h) => h(data))
@@ -188,5 +188,15 @@ describe("entryChannel — a refused reorder stops counting (Phase D leftover)",
 			typeId: "core:entry/world-lore"
 		})
 		expect(world.onReordered).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe("substituteBindings names a member by their own name", () => {
+	test("own name, else the card's", () => {
+		const bindings = [
+			{ binding: "{{char:1}}", characterId: 7, ownName: "Vera", ownNickname: "", character: { name: "Verity", nickname: "Vee" } },
+			{ binding: "{{char:2}}", characterId: 8, character: { name: "Tomas" } }
+		] as any
+		expect(substituteBindings("{{char:1}} and {{char:2}}", bindings)).toBe("Vera and Tomas")
 	})
 })

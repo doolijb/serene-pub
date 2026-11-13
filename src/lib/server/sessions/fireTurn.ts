@@ -32,10 +32,11 @@
  * order says who, and firing is a dispatch.
  */
 
-import { type TurnEntryV1 } from "@serene-pub/sdk"
+import { type ParticipantRef, type TurnEntryV1 } from "@serene-pub/sdk"
 import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { readStoredTurnOrder } from "$lib/server/sessions/turnOrder"
+import { storedSeatRef } from "$lib/server/state/seatRefs"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import type { EventCause } from "@serene-pub/sdk"
@@ -148,8 +149,11 @@ export async function entryIsPersons(
 	sessionId: number,
 	entry: TurnEntryV1
 ): Promise<boolean> {
-	const ref = entry.ref
-	if (typeof ref !== "string") return false
+	if (typeof entry.ref !== "string") return false
+	// 🚧 A `seated-member:<memberId>` ref (S2) is judged as its seat's card form;
+	// one nobody is seated as is nobody's turn to show.
+	const ref = await storedSeatRef(db, sessionId, entry.ref)
+	if (ref === null) return false
 	if (ref.startsWith("user:")) return true
 	// 🚧 A card-less player seat is a person's by definition (2026-10-14).
 	if (ref.startsWith("player-seat:")) return true
@@ -163,6 +167,8 @@ export async function entryIsPersons(
 		})
 		.from(schema.sessionPersonas)
 		.where(eq(schema.sessionPersonas.sessionId, sessionId))
+	// 🚧 Whose the seat is, not whether it is in play (benched seats, 2026-11-10):
+	// a benched persona's entry is still a person's, shown and never generated.
 	return rows.some((r) => r.personaId === id && !r.removedAt)
 }
 
@@ -190,7 +196,17 @@ export async function fireTurnEntry(
 		emitToUser?: (event: string, data: unknown) => void
 	}
 ): Promise<FireTurnResult> {
-	const { entry } = opts
+	// 🚧 An entry's ref goes through the door (`storedSeatRef`): card form
+	// while `memberFormSwitch` is off, member form once it is on (S4).
+	let entry = opts.entry
+	if (typeof entry.ref === "string") {
+		const cardRef = await storedSeatRef(db, opts.sessionId, entry.ref)
+		// Nobody is seated as that member: the state door's sentence (`state/write.ts`).
+		if (cardRef === null)
+			return { fired: false, reason: "that character is not in this session's cast." }
+		if (cardRef !== entry.ref)
+			entry = { ...entry, ref: cardRef as ParticipantRef }
+	}
 
 	// A person's turn is shown, never generated.
 	if (await entryIsPersons(db, opts.sessionId, entry))
@@ -200,9 +216,22 @@ export async function fireTurnEntry(
 
 	if (subject === RESPOND) {
 		const ref = typeof entry.ref === "string" ? entry.ref : null
+		// One `seatOf` for a member-form ref: its card when the seat has one, else
+		// the member-form ref itself names the speaker (a card-less seat).
+		const memberSeat =
+			ref && ref.startsWith("seated-member:")
+				? await (
+						await import("$lib/server/sessions/seats")
+					).seatOf(db, opts.sessionId, ref)
+				: null
 		const characterId =
 			ref && ref.startsWith("character:")
 				? Number(ref.slice("character:".length))
+				: (memberSeat?.cardId ?? null)
+		// A member-form ref whose seat has no card: the seat itself speaks.
+		const cardlessSpeaker =
+			memberSeat && memberSeat.cardId == null && ref
+				? (ref as `seated-member:${number}`)
 				: null
 		/**
 		 * The own voice off `main` is its fallback envoy TALKING (lair
@@ -240,7 +269,9 @@ export async function fireTurnEntry(
 					? { kind: "respond", characterId }
 					: ref && ref.startsWith("envoy:")
 						? { kind: "respond", speaker: ref as `envoy:${string}` }
-						: { kind: "respond" },
+						: cardlessSpeaker
+							? { kind: "respond", speaker: cardlessSpeaker }
+							: { kind: "respond" },
 			...(entry.channel ? { channel: entry.channel } : {}),
 			// How the entry was reached, for the inlet's `via` port (R8): a
 			// genre routes a `narrate` press ahead of everything else.
@@ -296,7 +327,7 @@ export async function fireTurnEntry(
 	if (!known) return { fired: false, reason: "action not enabled" }
 
 	/**
-	 * 🚧 The narrator's own line (lane 2, 2026-10-19: *Narrator asides*,
+	 * 🚧 The narrator's own line (lane 2, 2026-10-19: *Narrator's turn*,
 	 * `core:task/turn-unprompted@1`): Narrate has its own road — the reply
 	 * road's `narrate` turn, as the composer's Narrate takes it — never the
 	 * contributed-action door, which refuses it by name.

@@ -2,7 +2,8 @@
  * The line rule, as SQL.
  *
  * `$lib/shared/lorebooks/lineReading.ts` decides which rows and which
- * amendments are on the line being read; this is the same decision as a
+ * amendments (and which cast versions, by session cut) are on the line being
+ * read; this is the same decision as a
  * Drizzle predicate, so a server read can filter in the database instead of
  * loading every line's rows and dropping most of them. The two MUST agree —
  * `lineSql.int.test.ts` runs both over one table of cases.
@@ -14,12 +15,24 @@
  * main does not have, so an unfiltered read is not main's reading; it is every
  * line at once.
  */
-import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm"
+import {
+	and,
+	eq,
+	gt,
+	inArray,
+	isNull,
+	lte,
+	notInArray,
+	or,
+	sql,
+	type SQL
+} from "drizzle-orm"
 import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import {
 	earlierCut,
 	lineBranchIds,
-	type Line
+	type Line,
+	type SessionCut
 } from "$lib/shared/lorebooks/lineReading"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 
@@ -88,7 +101,9 @@ export function onLineAtSql(
  * non-integer declared field (`assertDeclaredFields`), so a stored string is
  * a legacy row, and reading it as undated keeps it visible rather than guessing.
  */
-export function historyDateColumns(fieldsColumn: AnyPgColumn | SQL): DateColumns {
+export function historyDateColumns(
+	fieldsColumn: AnyPgColumn | SQL
+): DateColumns {
 	// The key is one of three literals, never input: raw, so `->` resolves
 	// to the text-key operator rather than guessing a parameter's type.
 	const part = (key: "year" | "month" | "day") => {
@@ -96,4 +111,62 @@ export function historyDateColumns(fieldsColumn: AnyPgColumn | SQL): DateColumns
 		return sql`(case when jsonb_typeof(${fieldsColumn}->${k}) = 'number' then (${fieldsColumn}->>${k})::numeric::int end)`
 	}
 	return { year: part("year"), month: part("month"), day: part("day") }
+}
+
+/** A cast version's provenance and order, as columns (`characterVersions`). */
+export interface SessionCutColumns {
+	sourceSessionId: AnyPgColumn
+	sourceMessageId: AnyPgColumn
+	writeOrder: AnyPgColumn
+	retiredOrder: AnyPgColumn
+}
+
+/**
+ * The mirror of `rowPassesSessionCut`: a cast version survives the line's
+ * session cuts (the first cut per session counts, as in the pure `find`).
+ *
+ * No cuts: only rows that are not retired. Otherwise a row reads when it is
+ * from no cut session and not retired, or — per cut — from that session, its
+ * source message is null or at most `through` (a null `through` keeps only a
+ * null source message), its write order is at most the mark, and it is not
+ * retired or was retired after the mark.
+ *
+ * The caller composes it with `onLineAtSql(branch, date, line, moment)` for
+ * the attached book's rows and `onLineAtSql(branch, date, MAIN_LINE, moment)`
+ * for an own book's rows (the overlay chain). The life-point filter and the
+ * pick stay in TypeScript (`versionInForce`).
+ */
+export function sessionCutSql(cols: SessionCutColumns, line: Line): SQL {
+	const cuts: SessionCut[] = []
+	for (const c of line.sessionCuts ?? [])
+		if (!cuts.some((seen) => seen.sessionId === c.sessionId)) cuts.push(c)
+	const notRetired = isNull(cols.retiredOrder)
+	if (!cuts.length) return notRetired
+	const uncut = and(
+		notRetired,
+		or(
+			isNull(cols.sourceSessionId),
+			notInArray(
+				cols.sourceSessionId,
+				cuts.map((c) => c.sessionId)
+			)
+		)
+	)!
+	return or(
+		uncut,
+		...cuts.map(
+			(c) =>
+				and(
+					eq(cols.sourceSessionId, c.sessionId),
+					c.through == null
+						? isNull(cols.sourceMessageId)
+						: or(
+								isNull(cols.sourceMessageId),
+								lte(cols.sourceMessageId, c.through)
+							),
+					lte(cols.writeOrder, c.mark),
+					or(isNull(cols.retiredOrder), gt(cols.retiredOrder, c.mark))
+				)!
+		)
+	)!
 }

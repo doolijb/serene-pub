@@ -29,7 +29,7 @@
  * derived cull and the retention sweep look for spoken files by owner (lane C,
  * L4), and a member's reading of the owner's session is the owner's cache.
  */
-import { and, eq, isNull } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, or } from "drizzle-orm"
 import type {
 	Cue,
 	CueMap,
@@ -41,6 +41,10 @@ import type {
 } from "@serene-pub/sdk"
 import { SPOKEN_LINE_TEMPLATE_IDS } from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
+import { memberAsRead, type MemberAsRead } from "$lib/server/cast/memberAsRead"
+import { cardsNow, seatedCastOf } from "$lib/server/cast/seatedCast"
+import { cardsNowAsSeatsRead, hostSeatRefOf } from "$lib/server/pipelines/prompt/seatCards"
+import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
 import {
 	ComposedError,
 	connectionIdentity
@@ -348,18 +352,37 @@ const finite = (v: unknown): number | undefined =>
 	typeof v === "number" && Number.isFinite(v) ? v : undefined
 
 /** A character's or seat's display name, for the template's `speaker`. */
-async function nameOfRef(db: Db, ref: string | null): Promise<string | undefined> {
+async function nameOfRef(
+	db: Db,
+	ref: string | null,
+	sessionId: number | null
+): Promise<string | undefined> {
 	if (!ref) return undefined
+	const seatRef = parseSeatRef(ref)
+	// A seated speaker is named by the cast member as read (a player seat's own seat name first).
+	if (sessionId != null && seatRef) {
+		const seat = await seatOf(db, sessionId, ref)
+		if (seat?.castMemberId != null) {
+			const read = await memberAsRead(db, seat.castMemberId, { sessionId })
+			if (read) {
+				if (seat.kind === "player") {
+					const [row] = await db
+						.select({ seatName: schema.sessionPersonas.seatName })
+						.from(schema.sessionPersonas)
+						.where(eq(schema.sessionPersonas.id, seat.seatId))
+						.limit(1)
+					if (row?.seatName) return row.seatName
+				}
+				return read.name
+			}
+		}
+	}
 	const m = /^(character|player-seat):(\d+)$/.exec(ref)
 	if (!m) return undefined
 	const id = Number(m[2])
 	if (m[1] === "character") {
-		const [row] = await db
-			.select({ name: schema.characters.name })
-			.from(schema.characters)
-			.where(eq(schema.characters.id, id))
-			.limit(1)
-		return row?.name
+		// A card no seated member answers for reads its current card version.
+		return (await cardsNowAsSeatsRead(db, sessionId, [id])).get(id)?.name
 	}
 	const [seat] = await db
 		.select({ seatName: schema.sessionPersonas.seatName, personaId: schema.sessionPersonas.personaId })
@@ -368,15 +391,17 @@ async function nameOfRef(db: Db, ref: string | null): Promise<string | undefined
 		.limit(1)
 	if (seat?.seatName) return seat.seatName
 	if (seat?.personaId == null) return undefined
-	const [persona] = await db
-		.select({ name: schema.characters.name })
-		.from(schema.characters)
-		.where(eq(schema.characters.id, seat.personaId))
-		.limit(1)
-	return persona?.name
+	return (await cardsNowAsSeatsRead(db, sessionId, [seat.personaId])).get(
+		seat.personaId
+	)?.name
 }
 
-/** The session's cast by display name (lower-cased) → participant reference. */
+/**
+ * The session's live cast by display name (lower-cased) → participant
+ * reference. A seat with a cast member is named by the member as read (its own
+ * name and nickname, else the card's); a seat without one by its card. The
+ * refs stay `character:<cardId>` and `player-seat:<seatId>`.
+ */
 async function castRefs(db: Db, sessionId: number | null): Promise<Map<string, { ref: string; name: string }>> {
 	const out = new Map<string, { ref: string; name: string }>()
 	if (sessionId == null) return out
@@ -386,35 +411,77 @@ async function castRefs(db: Db, sessionId: number | null): Promise<Map<string, {
 			if (key && !out.has(key)) out.set(key, { ref, name })
 		}
 	}
+	const members = new Map<string, MemberAsRead | null>()
+	for (const e of await seatedCastOf(db, sessionId)) members.set(`${e.kind}:${e.seatId}`, e.asRead)
 	const chars = await db
 		.select({
-			id: schema.characters.id,
-			name: schema.characters.name,
-			nickname: schema.characters.nickname
+			seatId: schema.sessionCharacters.id,
+			castMemberId: schema.sessionCharacters.castMemberId,
+			id: schema.characters.id
 		})
 		.from(schema.sessionCharacters)
-		.innerJoin(schema.characters, eq(schema.characters.id, schema.sessionCharacters.characterId))
+		.leftJoin(schema.characters, eq(schema.characters.id, schema.sessionCharacters.characterId))
 		.where(
 			and(
 				eq(schema.sessionCharacters.sessionId, sessionId),
-				isNull(schema.sessionCharacters.removedAt)
+				isNull(schema.sessionCharacters.removedAt),
+				// The seat filter: not an envoy, and has a member or a card.
+				isNull(schema.sessionCharacters.envoySlug),
+				or(
+					isNotNull(schema.sessionCharacters.characterId),
+					isNotNull(schema.sessionCharacters.castMemberId)
+				)
 			)
 		)
-	for (const c of chars) add([c.name, c.nickname], `character:${c.id}`, c.name)
+	const cardNow = await cardsNow(
+		db,
+		chars.flatMap((c) => (c.id != null ? [c.id] : []))
+	)
+	for (const c of chars) {
+		const read = members.get(`character:${c.seatId}`)
+		// A card-less seat (no card id) is named from its member as read, and its
+		// ref is `seated-member:<castMemberId>` — never `character:<cardId>`.
+		if (c.id == null) {
+			const cardlessRef = hostSeatRefOf({
+				kind: "character",
+				seatId: c.seatId,
+				castMemberId: c.castMemberId,
+				cardId: null
+			})
+			if (read && cardlessRef) add([read.name, read.nickname], cardlessRef, read.name)
+			continue
+		}
+		const card = cardNow.get(c.id)
+		// ⏳ The seat's ref (`hostSeatRefOf`): the member form once the flip is on
+		// (`state/memberForm.ts`) — `character:<cardId>` for a member-less seat —
+		// else the card form.
+		const ref =
+			hostSeatRefOf({ kind: "character", seatId: c.seatId, castMemberId: c.castMemberId, cardId: c.id }) ??
+			`character:${c.id}`
+		if (read) add([read.name, read.nickname], ref, read.name)
+		else if (card) add([card.name, card.nickname], ref, card.name)
+	}
 	const seats = await db
 		.select({
 			seatId: schema.sessionPersonas.id,
 			seatName: schema.sessionPersonas.seatName,
-			name: schema.characters.name,
-			nickname: schema.characters.nickname
+			cardId: schema.sessionPersonas.personaId
 		})
 		.from(schema.sessionPersonas)
-		.leftJoin(schema.characters, eq(schema.characters.id, schema.sessionPersonas.personaId))
 		.where(
 			and(eq(schema.sessionPersonas.sessionId, sessionId), isNull(schema.sessionPersonas.removedAt))
 		)
-	for (const s of seats)
-		add([s.seatName, s.name, s.nickname], `player-seat:${s.seatId}`, s.seatName ?? s.name ?? "")
+	const seatCards = await cardsNow(
+		db,
+		seats.flatMap((s) => (s.cardId != null ? [s.cardId] : []))
+	)
+	for (const s of seats) {
+		const read = members.get(`player:${s.seatId}`)
+		const card = s.cardId != null ? seatCards.get(s.cardId) : undefined
+		if (read)
+			add([s.seatName, read.name, read.nickname], `player-seat:${s.seatId}`, s.seatName ?? read.name)
+		else add([s.seatName, card?.name, card?.nickname], `player-seat:${s.seatId}`, s.seatName ?? card?.name ?? "")
+	}
 	return out
 }
 
@@ -513,11 +580,11 @@ export async function dispatchSpeech(db: Db, call: SpeakCall): Promise<SpeakResu
 	for (const group of groups) {
 		call.signal?.throwIfAborted()
 		// A card marked silent is never spoken, whatever the session says.
-		if (await speakerSilent(db, group.speakerRef as ParticipantRef | null)) {
+		if (await speakerSilent(db, group.speakerRef as ParticipantRef | null, sessionId)) {
 			notes.push(`${group.speakerName ?? group.speakerRef ?? "speaker"} is silent on their card; not spoken`)
 			continue
 		}
-		const name = group.speakerName ?? (await nameOfRef(db, group.speakerRef))
+		const name = group.speakerName ?? (await nameOfRef(db, group.speakerRef, sessionId))
 		// The voice first (language is read off the group's own words): it names the loadout
 		// the group is spoken on, and that target's controls shape everything after.
 		const resolution = await resolveVoice(

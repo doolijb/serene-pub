@@ -240,6 +240,46 @@ describe("A1111Adapter — progress and cancel", () => {
 		expect(seen.at(-1)).toMatchObject({ stage: "saving", percent: 100 })
 	})
 
+	test("a server whose progress says nothing is told to be drawing, not stuck at 0%", async () => {
+		// KoboldCPP answers `/sdapi/v1/progress` with zeros for the whole
+		// render (seen 2026-11-08: "sampling · 0%" for three minutes). The
+		// render is held open past one poll tick so a tick lands.
+		let release!: () => void
+		const held = new Promise<void>((r) => (release = r))
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				if (url.includes("txt2img")) {
+					await held
+					return { ok: true, status: 200, json: async () => okRender.body, text: async () => "" } as any
+				}
+				if (url.includes("progress"))
+					return {
+						ok: true,
+						status: 200,
+						json: async () => ({
+							progress: 0,
+							eta_relative: 0,
+							state: { job_count: 0, sampling_step: 0, sampling_steps: 0 },
+							current_image: null
+						}),
+						text: async () => ""
+					} as any
+				return { ok: false, status: 404, json: async () => ({}), text: async () => "" } as any
+			})
+		)
+		const seen: ImageGenProgress[] = []
+		const run = new a1111.Adapter(conn()).generateImage(
+			{ prompt: "x" },
+			{ onProgress: (p) => seen.push(p) }
+		)
+		await new Promise((r) => setTimeout(r, 1100))
+		release()
+		await run
+		const sampling = seen.find((p) => p.stage === "sampling")
+		expect(sampling?.message).toMatch(/Drawing… this server does not say/)
+	}, 10_000)
+
 	test("an abort before submitting sends nothing at all", async () => {
 		// Submitting and then interrupting would, on a shared server, stop
 		// whatever else happened to be rendering.
@@ -360,5 +400,30 @@ describe("A1111Adapter — the action surface", () => {
 		// `generate` names nothing in either adapter family now. A revived alias
 		// would type-check, work, and quietly undo the reason for the rename.
 		expect(a1111.Adapter.prototype).not.toHaveProperty("generate")
+	})
+})
+
+describe("a stored key", () => {
+	// Encrypted at rest on a stored row, plain on a draft: the adapter reads
+	// either, so no caller can hand it an envelope and lose the auth header.
+	const authSeen = async (extraJson: Record<string, unknown>) => {
+		const calls = stubRoutes({ "sd-models": { body: [] } })
+		await a1111.listModels(conn({ extraJson }))
+		return (calls[0]?.init?.headers as Record<string, string> | undefined)
+			?.Authorization
+	}
+
+	test("is sent when the row holds it encrypted", async () => {
+		const { encryptApiKeyField } = await import(
+			"$lib/server/utils/tokenCrypto"
+		)
+		expect(await authSeen({ apiKey: encryptApiKeyField("s3cret") })).toBe(
+			"Bearer s3cret"
+		)
+	})
+
+	test("is sent when a draft holds it plain, and absent with no key", async () => {
+		expect(await authSeen({ apiKey: "s3cret" })).toBe("Bearer s3cret")
+		expect(await authSeen({})).toBeUndefined()
 	})
 })

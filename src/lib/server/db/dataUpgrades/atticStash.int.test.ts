@@ -85,7 +85,18 @@ describe("0.5.3 database", () => {
 			"0130_m0_sdk_gaps",
 			"0135_voicebank_loadout",
 			// Narration fallback 2026-10-30: the voicebank stars move onto their loadout's voice.
-			"0137_loadout_voices"
+			"0137_loadout_voices",
+			// Caught up by the lead 2026-11-10 (the list predated these two).
+			"0139_m2b_permission_model",
+			"0142_scenes_unfiled_default_names",
+			// Advanced controls 2026-11-10: show-all-character-fields carries into the new switch (no rows on a fresh stash).
+			"0149_familiar_silk_fever",
+			// Variable layouts 2026-11-10: per-step layout picks become the pub's or a preset's (no picks on a fresh stash).
+			"0151_shallow_marvel_zombies",
+			// Benched seats 2026-11-10: removed seats with lines become benched (none on a fresh stash).
+			"0152_overjoyed_magik",
+			// Session imprints 2026-11-11: runtime keys and annex deltas move (none on a fresh stash).
+			"0155_chubby_lockjaw"
 		])
 		expect(await atticExists(client)).toBe(true)
 		expect(await count(client, `${ATTIC_SCHEMA}.chats`)).toBe(1)

@@ -20,19 +20,24 @@
 	import { untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import {
 		adminGoto,
 		adminPage,
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 	import AdminInline from "$lib/client/components/admin/AdminInline.svelte"
 	import { pipelinesFitting, promptDeletion } from "./promptsAdmin"
 
@@ -46,13 +51,18 @@
 
 	let view = $state<Sockets.Pipelines.Library.Response>({})
 	let loading = $state(true)
-	const row = $derived(((view.prompts ?? []) as Prompt[]).find((r) => r.id === id))
+	const row = $derived(
+		((view.prompts ?? []) as Prompt[]).find((r) => r.id === id)
+	)
 	const readOnly = $derived(!!row?.isImmutable)
 
 	let draft = $state<Draft | undefined>(undefined)
 	const edits = new UnsavedEdits(() => draft)
 	adminUnsavedEdits(() => edits.dirty)
-	const toDraft = (r: Prompt): Draft => ({ name: r.name, fields: { ...r.fields } })
+	const toDraft = (r: Prompt): Draft => ({
+		name: r.name,
+		fields: { ...r.fields }
+	})
 
 	/**
 	 * Every push of the library moves the saved snapshot; only a clean form
@@ -94,26 +104,36 @@
 		saving = true
 		pendingIntent = intent
 		const snap = $state.snapshot(draft)
-		socket.emit("pipelines:libraryUpdatePrompt", { id, name: snap.name, fields: snap.fields })
+		socket.emit("pipelines:libraryUpdatePrompt", {
+			id,
+			name: snap.name,
+			fields: snap.fields
+		})
 	}
 	function land(intent: AdminSaveIntent) {
 		if (intent === "save") void adminGoto("/admin/prompts")
-		else if (intent === "another") void adminGoto(`/admin/prompts/new?from=${id}`)
+		else if (intent === "another")
+			void adminGoto(`/admin/prompts/new?from=${id}`)
 	}
-	useInterest<"pipelines:libraryUpdatePrompt">("pipelines:libraryUpdatePrompt", (res) => {
-		if (res.library) view = res.library
-		const mine = pendingIntent
-		if (!mine) return
-		pendingIntent = null
-		saving = false
-		const saved = ((res.library?.prompts ?? []) as Prompt[]).find((r) => r.id === id)
-		if (saved) {
-			draft = toDraft(saved)
-			edits.markSaved()
+	useInterest<"pipelines:libraryUpdatePrompt">(
+		"pipelines:libraryUpdatePrompt",
+		(res) => {
+			if (res.library) view = res.library
+			const mine = pendingIntent
+			if (!mine) return
+			pendingIntent = null
+			saving = false
+			const saved = ((res.library?.prompts ?? []) as Prompt[]).find(
+				(r) => r.id === id
+			)
+			if (saved) {
+				draft = toDraft(saved)
+				edits.markSaved()
+			}
+			notify.success({ title: `Saved ${saved?.name ?? "the prompt"}` })
+			land(mine)
 		}
-		toaster.success({ title: `Saved ${saved?.name ?? "the prompt"}` })
-		land(mine)
-	})
+	)
 	useInterest<"pipelines:libraryUpdatePrompt:error">(
 		"pipelines:libraryUpdatePrompt:error",
 		(res) => {
@@ -133,14 +153,17 @@
 		deleting = true
 		socket.emit("pipelines:libraryDeletePrompt", { id })
 	}
-	useInterest<"pipelines:libraryDeletePrompt">("pipelines:libraryDeletePrompt", (res) => {
-		if (res.library) view = res.library
-		if (!deleting) return
-		deleting = false
-		edits.forget()
-		toaster.success({ title: "Prompt deleted" })
-		void adminGoto("/admin/prompts", { replaceState: true })
-	})
+	useInterest<"pipelines:libraryDeletePrompt">(
+		"pipelines:libraryDeletePrompt",
+		(res) => {
+			if (res.library) view = res.library
+			if (!deleting) return
+			deleting = false
+			edits.forget()
+			notify.success({ title: "Prompt deleted" })
+			void adminGoto("/admin/prompts", { replaceState: true })
+		}
+	)
 	useInterest<"pipelines:libraryDeletePrompt:error">(
 		"pipelines:libraryDeletePrompt:error",
 		(res) => {
@@ -157,14 +180,18 @@
 	async function copyArchived(text: string) {
 		try {
 			await navigator.clipboard.writeText(text)
-			toaster.success({ title: "Copied to the clipboard" })
+			notify.success({ title: "Copied to the clipboard" })
 		} catch {
-			toaster.error({ title: "Could not reach the clipboard. Select the text and copy it." })
+			notify.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
 		}
 	}
 
 	const title = $derived(draft?.name.trim() || row?.name || "Prompt")
-	const fitting = $derived(row ? pipelinesFitting(row, (view.pipelines ?? []) as Pipeline[]) : [])
+	const fitting = $derived(
+		row ? pipelinesFitting(row, (view.pipelines ?? []) as Pipeline[]) : []
+	)
 	const archived = $derived(Object.entries(row?.archived ?? {}))
 </script>
 
@@ -181,7 +208,9 @@
 {:else if !row || !draft}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
 		<p class="text-surface-600-400 text-sm">There is no prompt {id}.</p>
-		<a href="/admin/prompts" class="btn btn-sm preset-tonal-surface">All prompts</a>
+		<a href="/admin/prompts" class="btn btn-sm preset-tonal-surface">
+			All prompts
+		</a>
 	</div>
 {:else}
 	<AdminChangeForm
@@ -203,18 +232,25 @@
 		onSave={save}
 	>
 		{#snippet headerActions()}
-			<a href="/admin/prompts/new?from={id}" class="btn btn-sm preset-tonal-surface">
+			<a
+				href="/admin/prompts/new?from={id}"
+				class="btn btn-sm preset-tonal-surface"
+			>
 				<Icons.Copy size={16} aria-hidden="true" />
 				Duplicate
 			</a>
 		{/snippet}
 		{#snippet headerExtra()}
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
-				<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+				<span
+					class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+				>
 					{row!.poolLabel}
 				</span>
 				{#if readOnly}
-					<span class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5">
+					<span
+						class="border-surface-200-800 text-surface-600-400 rounded-full border px-2 py-0.5"
+					>
 						Built-in
 					</span>
 				{/if}
@@ -224,7 +260,11 @@
 		<AdminFieldset title="Identity">
 			<div class="grid gap-4 @min-[36rem]/content:grid-cols-3">
 				{#if readOnly}
-					<AdminField id="prompt-admin-name" label="Name" value={draft.name} />
+					<AdminField
+						id="prompt-admin-name"
+						label="Name"
+						value={draft.name}
+					/>
 				{:else}
 					<AdminField
 						id="prompt-admin-name"
@@ -239,11 +279,18 @@
 							type="text"
 							bind:value={draft.name}
 							aria-invalid={!!nameError}
-							aria-describedby={describedBy("prompt-admin-name", !!nameError)}
+							aria-describedby={describedBy(
+								"prompt-admin-name",
+								!!nameError
+							)}
 						/>
 					</AdminField>
 				{/if}
-				<AdminField id="prompt-admin-step" label="Step" value={row.poolLabel} />
+				<AdminField
+					id="prompt-admin-step"
+					label="Step"
+					value={row.poolLabel}
+				/>
 				<AdminField
 					id="prompt-admin-origin"
 					label="Origin"
@@ -279,11 +326,17 @@
 			rows={fitting}
 			rowKey={(p) => p.slug}
 			columns={[
-				{ key: "name", label: "Pipeline", primary: true, text: (p) => p.label },
+				{
+					key: "name",
+					label: "Pipeline",
+					primary: true,
+					text: (p) => p.label
+				},
 				{
 					key: "genres",
 					label: "Genres",
-					text: (p) => (p.genres ?? []).map((g) => g.name).join(", ") || "—"
+					text: (p) =>
+						(p.genres ?? []).map((g) => g.name).join(", ") || "—"
 				},
 				{
 					key: "picks",

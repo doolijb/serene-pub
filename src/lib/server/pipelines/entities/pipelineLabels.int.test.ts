@@ -58,8 +58,10 @@ describe("pipelineLabelsById", () => {
 
 	it("leaves a pipeline every genre shares bare", async () => {
 		const labels = await pipelineLabelsById(db)
-		expect(labels.get(await idOf("core:spec/summarize-scene"))).toBe(
-			"Summarize scene"
+		// core:spec/summarize-scene is Chat's alone since 2026-11-10 (the
+		// Dungeon Crawler ships its own), so it reads "Summarize scene · Chat".
+		expect(labels.get(await idOf("core:spec/summarize-history"))).toBe(
+			"Summarize history entry"
 		)
 	}, 60_000)
 })

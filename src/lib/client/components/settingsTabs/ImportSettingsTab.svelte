@@ -4,7 +4,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { getContext } from "svelte"
 	import {
 		resolvePickedFolder,
@@ -92,7 +92,7 @@
 
 		const result = resolvePickedFolder(files)
 		if (!result || result.files.length === 0) {
-			toaster.error({
+			notify.error({
 				title: "No SillyTavern data found",
 				description:
 					"Couldn't find characters, sessions, groups, worlds, or settings.json in the selected folder. Please select your SillyTavern (or SillyTavern-Launcher) folder."
@@ -129,7 +129,7 @@
 		} catch (error) {
 			isScanning = false
 			uploadProgress = null
-			toaster.error({
+			notify.error({
 				title: "Upload failed",
 				description:
 					error instanceof Error
@@ -143,7 +143,7 @@
 		scanTimeout = setTimeout(() => {
 			if (isScanning) {
 				isScanning = false
-				toaster.error({
+				notify.error({
 					title: "Scan timed out",
 					description: "The server did not respond. Please try again."
 				})
@@ -310,7 +310,7 @@
 		} catch (error) {
 			isImporting = false
 			uploadProgress = null
-			toaster.error({
+			notify.error({
 				title: "Upload failed",
 				description:
 					error instanceof Error
@@ -324,7 +324,7 @@
 		importTimeout = setTimeout(() => {
 			if (isImporting) {
 				isImporting = false
-				toaster.error({
+				notify.error({
 					title: "Import timed out",
 					description: "The server did not respond. Please try again."
 				})
@@ -360,19 +360,22 @@
 				message.data.groupSessions.length +
 				message.data.lorebooks.length
 			if (total === 0) {
-				toaster.warning({
+				notify.warning({
+					source: "socket:import:sillytavern:scan",
 					title: "Nothing found",
 					description:
 						"The directory was found but contained no importable data. Make sure you're pointing at your SillyTavern root (or SillyTavern-Launcher) folder."
 				})
 			} else {
-				toaster.success({
+				notify.success({
+					source: "socket:import:sillytavern:scan",
 					title: "Scan completed",
 					description: `Found ${message.data.characters.length} characters, ${message.data.personas.length} personas, ${message.data.sessions.length + message.data.groupSessions.length} sessions, ${message.data.lorebooks.length} lorebooks`
 				})
 			}
 		} else {
-			toaster.error({
+			notify.error({
+				source: "socket:import:sillytavern:scan",
 				title: "Scan failed",
 				description: message.error || "Failed to scan directory"
 			})
@@ -400,8 +403,16 @@
 				title: completion.toast,
 				description: message.message || "Data imported successfully"
 			}
-			if (completion.tone === "success") toaster.success(toast)
-			else toaster.warning(toast)
+			if (completion.tone === "success")
+				notify.success({
+					...toast,
+					source: "socket:import:sillytavern:execute"
+				})
+			else
+				notify.warning({
+					...toast,
+					source: "socket:import:sillytavern:execute"
+				})
 			importComplete = {
 				completion,
 				message: message.message || "Data imported successfully",
@@ -415,7 +426,8 @@
 			importSessionId = null
 			confirmImport = false
 		} else {
-			toaster.error({
+			notify.error({
+				source: "socket:import:sillytavern:execute",
 				title: "Import failed",
 				description: message.error || "Failed to import data"
 			})

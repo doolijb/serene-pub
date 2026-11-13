@@ -57,6 +57,15 @@
 		refreshChecks()
 	})
 
+	// A Test re-checks every workflow against what it read from this server
+	// (`recordComfyTest`); the chips read that record, so they follow the
+	// test — the list itself did not change, so `workflows:list` is not
+	// re-sent. Until 2026-11-08 the tab kept "Not checked yet — press Test"
+	// after a passing Test until it was remounted.
+	useInterest<"connections:test">("connections:test", (res) => {
+		if (res.connectionId === connectionId) refreshChecks()
+	})
+
 	$effect(() => {
 		void connectionId
 		socket.emit("workflows:list", { dialect: "comfyui" })

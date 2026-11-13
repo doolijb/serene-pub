@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { z } from "zod"
@@ -219,13 +219,13 @@
 				setTimeout(() => {
 					copiedPassphrase = false
 				}, 2000)
-				toaster.success({
+				notify.success({
 					title: "Passphrase copied",
 					description:
 						"The passphrase has been copied to your clipboard"
 				})
 			} catch (error) {
-				toaster.error({
+				notify.error({
 					title: "Copy failed",
 					description: "Failed to copy passphrase to clipboard"
 				})
@@ -263,7 +263,7 @@
 
 	async function saveUser() {
 		if (!formUsername.trim()) {
-			toaster.error({
+			notify.error({
 				title: "Validation error",
 				description: "Username is required"
 			})
@@ -272,7 +272,7 @@
 
 		// Validate passphrase
 		if (isCreating && !formPassphrase) {
-			toaster.error({
+			notify.error({
 				title: "Validation error",
 				description: "Passphrase is required when creating a user"
 			})

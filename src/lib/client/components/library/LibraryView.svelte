@@ -42,7 +42,7 @@
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
@@ -501,7 +501,8 @@
 			} else {
 				loadMoreAutoContinueAttempts = 0
 				stillFiltering = false
-				toaster.error({
+				notify.error({
+					source: "socket:characters:searchLibrary:error",
 					title: msg.error || "Failed to load more characters"
 				})
 			}
@@ -523,7 +524,8 @@
 			)
 		}
 		if (!unreachable && !isRateLimited) {
-			toaster.error({
+			notify.error({
+				source: "socket:characters:searchLibrary:error",
 				title: msg.error || "Failed to search the library"
 			})
 		}
@@ -709,9 +711,13 @@
 		{/if}
 
 		{#if isCharaVault}
+			<!-- prettier-ignore -->
 			<p class="text-surface-600-400 text-xs leading-relaxed">
-				Try <code>tag:name</code>, <code>-exclude</code>,
-				<code>creator:name</code> and <code>"exact phrase"</code>, e.g.
+				Try <code>tag:name</code>,
+				<code>-exclude</code>,
+				<code>creator:name</code>
+				and
+				<code>"exact phrase"</code>, e.g.
 				<code>elf tag:fantasy -romance</code>.
 			</p>
 		{/if}
@@ -874,7 +880,9 @@
 	pick: (value: string) => void
 )}
 	<div class="flex flex-col gap-0.5" role="radiogroup" aria-label={label}>
-		<span class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs font-medium">
+		<span
+			class="text-surface-600-400 px-2.5 pt-1 pb-0.5 text-xs font-medium"
+		>
 			{label}
 		</span>
 		{#each options as option (option.value)}
@@ -905,7 +913,9 @@
 				{@render chip(`Creator: ${creatorFilter}`, clearCreatorFilter)}
 			{/if}
 			{#if showPopoutChips && activeSort !== DEFAULT_SORT}
-				{@render chip(`Sort: ${sortLabel}`, () => pickSort(DEFAULT_SORT))}
+				{@render chip(`Sort: ${sortLabel}`, () =>
+					pickSort(DEFAULT_SORT)
+				)}
 			{/if}
 			{#if showPopoutChips && hasBookOnly}
 				{@render chip("Only with a lorebook", () =>
@@ -917,7 +927,10 @@
 {/snippet}
 
 {#snippet chip(label: string, clear: () => void)}
-	<Badge size="md" class="text-surface-800-200 flex min-w-0 items-center gap-1">
+	<Badge
+		size="md"
+		class="text-surface-800-200 flex min-w-0 items-center gap-1"
+	>
 		<span class="min-w-0 truncate">{label}</span>
 		<button
 			type="button"
@@ -934,7 +947,11 @@
 {#snippet results()}
 	{#if isLoading}
 		<div class="text-surface-600-400 flex justify-center py-12">
-			<Icons.Loader2 size={24} class="animate-spin" aria-label="Loading" />
+			<Icons.Loader2
+				size={24}
+				class="animate-spin"
+				aria-label="Loading"
+			/>
 		</div>
 	{:else if unreachable}
 		<EmptyState

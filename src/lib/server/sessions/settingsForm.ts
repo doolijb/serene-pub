@@ -42,6 +42,7 @@
  * by construction, in a sentence, never by a second copy of the rules.
  */
 import { and, eq, inArray, isNull } from "drizzle-orm"
+import { NARRATOR_CADENCE_FIELD_KEY, narratorCadenceKey } from "$lib/shared/sessions/narratorCadence"
 import {
 	cadenceClock,
 	coreCadences,
@@ -60,6 +61,7 @@ import {
 	type EffectiveRegistration,
 	type FieldDecl,
 	type RegistrationDecl,
+	undescribedSettingParts,
 	type SettingValue
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
@@ -268,13 +270,17 @@ async function genreGroup(
 			label: text((s.decl as { label?: unknown }).label, humanize(s.key)),
 			...(text((s.decl as { description?: unknown }).description) ? { description: text((s.decl as { description?: unknown }).description) } : {}),
 			...controlOf(s.decl),
-			value: s.value,
-			inherited: s.inherited,
+			// The narrator's cadence: an older boolean reads as its key (item 7, 2026-11-04).
+			value: s.key === NARRATOR_CADENCE_FIELD_KEY ? narratorCadenceKey(s.value) : s.value,
+			inherited: s.key === NARRATOR_CADENCE_FIELD_KEY ? narratorCadenceKey(s.inherited) : s.inherited,
 			source: sourceOf(s.from),
 			...(s.lockedAt ? { lockedAt: s.lockedAt as Layer } : {}),
 			reach: s.reach,
 			...(s.fixed ? { fixed: true as const } : {}),
-			...((s.decl as { advanced?: boolean }).advanced ? { advanced: true as const } : {}),
+			// ★E-2: a declared fold, or a user-facing field without purpose, group or reach (the compiler's warning).
+			...((s.decl as { advanced?: boolean }).advanced || undescribedSettingParts(s.decl).length
+				? { advanced: true as const }
+				: {}),
 			editable,
 			...(editable
 				? {}
@@ -664,7 +670,12 @@ async function pipelineGroup(
 			...(r.lockedAt ? { lockedAt: r.lockedAt as Layer } : {}),
 			reach,
 			...(r.fixed ? { fixed: true as const } : {}),
-			...(!d.quick && !exposed && !fdecl?.reach ? { advanced: true as const } : {}),
+			// ★E-2: also a user-facing field with no sentence of purpose. A pipeline field's group is its step, always
+			// given, and its reach is the rule beside it, so only `description` is asked of the predicate here.
+			...((!d.quick && !exposed && !fdecl?.reach) ||
+			undescribedSettingParts({ description: d.description, group: "step", reach }, { reach: false }).length
+				? { advanced: true as const }
+				: {}),
 			editable,
 			...(editable
 				? {}

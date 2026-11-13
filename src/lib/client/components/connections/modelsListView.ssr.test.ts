@@ -133,4 +133,97 @@ describe("the Models list", () => {
 		const html = renderList([openRouter], { initialScope: "entities" })
 		expect(html).toContain("Nothing matches.")
 	})
+
+	test("grouped by where it lives: this machine before services; set-aside under Can't be used right now", () => {
+		const kobold = {
+			id: 2,
+			name: "Local Kobold",
+			type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			models: [
+				model(21, "Llama Local", ["text->text"]),
+				{
+					...model(22, "Old Local", ["text->text"]),
+					enabled: false
+				}
+			]
+		}
+		const html = renderList([openRouter, kobold])
+		const here = html.indexOf("On this machine")
+		const services = html.indexOf("Services")
+		const cant = html.indexOf("Can't be used right now")
+		expect(here).toBeGreaterThan(-1)
+		expect(services).toBeGreaterThan(here)
+		expect(cant).toBeGreaterThan(services)
+		expect(html.indexOf("Old Local")).toBeGreaterThan(cant)
+		expect(html).toContain("Switched off")
+	})
+
+	test("a local group's header carries the summed size", () => {
+		const sized = (id: number, name: string, sizeBytes: number) => ({
+			...model(id, name, ["text->text"]),
+			facts: { sizeBytes, source: "file" }
+		})
+		const kobold = {
+			id: 2,
+			name: "Local Kobold",
+			type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			models: [
+				sized(21, "Llama One", 5_000_000_000),
+				sized(22, "Llama Two", 7_000_000_000)
+			]
+		}
+		const html = renderList([kobold])
+		expect(html).toContain("12 GB")
+	})
+
+	function bigService(count: number) {
+		return {
+			...openRouter,
+			models: Array.from({ length: count }, (_, i) =>
+				model(100 + i, `Bulk ${String(i).padStart(2, "0")}`, [
+					"text->text"
+				])
+			)
+		}
+	}
+
+	test("a long service folds before the loadouts answer", () => {
+		const html = renderList([bigService(13)])
+		expect(html).toContain("13 models")
+		expect(html).toContain("Show")
+		expect(html).not.toContain("Bulk 00")
+		expect(html).not.toContain("in a loadout")
+	})
+
+	test("a model in a loadout stays out of the fold, and the line counts it", () => {
+		const html = renderList([bigService(13)], {
+			inLoadout: new Set(["1:105"])
+		})
+		expect(html).toContain("Bulk 05")
+		expect(html).not.toContain("Bulk 00")
+		expect(html).toContain("13 models · 1 in a loadout")
+	})
+
+	test("twelve models do not fold", () => {
+		const html = renderList([bigService(12)])
+		expect(html).not.toContain("Show")
+		expect(html).toContain("Bulk 00")
+		expect(html).toContain("Bulk 11")
+	})
+
+	test("an Ollama row ends its meta line with lives in Ollama", () => {
+		const html = renderList([
+			{
+				id: 3,
+				name: "Home Ollama",
+				type: CONNECTION_TYPE.OLLAMA,
+				models: [model(31, "Qwen Home", ["text->text"])]
+			}
+		])
+		expect(html).toContain("lives in Ollama")
+	})
+
+	test("nothing arriving: no Downloads button", () => {
+		expect(renderList([openRouter])).not.toContain('title="Downloads"')
+	})
 })

@@ -1,4 +1,4 @@
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { isReplyTimeout } from "./awaitReply"
 
 /**
@@ -15,7 +15,7 @@ export function toastUnsaved(
 	title: string,
 	kept = "Your changes are still here."
 ): void {
-	toaster.error({
+	notify.error({
 		title,
 		description: isReplyTimeout(err)
 			? `The server did not answer in time. ${kept}`

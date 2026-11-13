@@ -26,6 +26,7 @@ import * as schema from "$lib/server/db/schema"
 import { HISTORY_TYPE_ID, LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { StoryCalendar } from "$lib/shared/lorebooks/storyDate"
+import { BOOK_LOCK_REFUSAL } from "$lib/shared/lorebooks/sessionNotes"
 import { defineAttributeSlot, genre } from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import { genreKeeping } from "$lib/server/utils/testGenre"
@@ -340,7 +341,7 @@ describe("(a) a story time reaches a book only through a door that checks it", (
 				.where(eq(schema.sessions.id, sessionId))
 		)[0]!.lorebookId
 
-	test("a session whose story-time stats the new book's calendar cannot place is refused the switch, and stays", async () => {
+	test("a session cannot switch to a book whose calendar cannot place its dates: the lock refuses the switch, and it stays", async () => {
 		const { user, free, cal, session } = await readingFreeForm()
 		const { sessionsUpdateHandler } = await import("./sessions")
 		await expect(
@@ -349,27 +350,7 @@ describe("(a) a story time reaches a book only through a door that checks it", (
 				{ session: { id: session.id, lorebookId: cal.id } } as any,
 				noop
 			)
-		).rejects.toThrow(
-			/calendar can't place a date this session holds: The stat .* in the session “Wanderer” \(There is no month 5/
-		)
-		expect(await lorebookOf(session.id)).toBe(free.id)
-		expect(await stranded(user.id, cal.id, THAW)).toEqual([])
-	})
-
-	test("attaching the book from the lorebook side is refused the same way, in words", async () => {
-		const { user, free, cal, session } = await readingFreeForm()
-		const { sessionsSetLorebookHandler } = await import("./summarize")
-		const said: { event: string; data: any }[] = []
-		await expect(
-			sessionsSetLorebookHandler.handler(
-				socketOf(user.id),
-				{ sessionId: session.id, lorebookId: cal.id },
-				(event: string, data: any) => void said.push({ event, data })
-			)
-		).rejects.toThrow(/calendar can't place a date this session holds/)
-		expect(said.find((s) => s.event === "sessions:setLorebook:error")?.data.error).toMatch(
-			/There is no month 5/
-		)
+		).rejects.toThrow(BOOK_LOCK_REFUSAL)
 		expect(await lorebookOf(session.id)).toBe(free.id)
 		expect(await stranded(user.id, cal.id, THAW)).toEqual([])
 	})

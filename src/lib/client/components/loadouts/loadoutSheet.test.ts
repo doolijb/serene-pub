@@ -484,7 +484,8 @@ describe("needs and best with", () => {
 		const options = {
 			"text->text": [
 				{ id: 4, name: "Default", shape: "text", seedKey: "sampling-default" },
-				{ id: 9, name: "Extraction", shape: "text", seedKey: "sampling-extraction" }
+				{ id: 9, name: "Extraction", shape: "text", seedKey: "sampling-extraction" },
+				{ id: 13, name: "Reply", shape: "text", seedKey: "sampling-reply" }
 			],
 			"text->image": [
 				{ id: 12, name: "SD 1.5", shape: "image", seedKey: "sampling-image-default" }
@@ -556,7 +557,9 @@ describe("the swap rule", () => {
 				shape: S.textGen,
 				seedKey: "sampling-default"
 			},
-			{ id: 6, name: "Mine", shape: S.textGen, seedKey: null }
+			{ id: 6, name: "Mine", shape: S.textGen, seedKey: null },
+			// ★47 (owner 2026-11-04): the Reply loadout's seeded default is the reasoning-off "Reply" config.
+			{ id: 7, name: "Reply", shape: S.textGen, seedKey: "sampling-reply" }
 		]
 	}
 
@@ -575,14 +578,15 @@ describe("the swap rule", () => {
 			options,
 			[{ id: 9, name: "SDXL", shape: S.imageGen }]
 		)
-		expect(res.samplingConfigId).toBe(5)
+		expect(res.samplingConfigId).toBe(7)
 		expect(res.notice).toBe(
-			"SDXL does not fit this model, so sampling is now Default."
+			"SDXL does not fit this model, so sampling is now Reply."
 		)
 	})
 
 	test("the seeded default is core's default loadout's preset", () => {
-		expect(seededSamplingFor("text->text", options)?.id).toBe(5)
+		// ★47 (owner 2026-11-04): the Reply loadout now seeds `sampling-reply`.
+		expect(seededSamplingFor("text->text", options)?.id).toBe(7)
 		expect(seededSamplingFor("text->embedding", options)).toBeNull()
 	})
 })

@@ -37,6 +37,16 @@ export class LayoutCopyAsks {
 		return true
 	}
 
+	/**
+	 * The page left the session: every ask is settled as not landed, with
+	 * no save sent (the layout it dropped is another session's now). An
+	 * answer that still arrives finds nothing to settle. Without this a
+	 * pending ask outlives the session and keeps every later widget write held.
+	 */
+	abandon(): void {
+		for (const asked of this.#asks.splice(0)) asked.settle(false)
+	}
+
 	/** Asks with no answer yet. */
 	get pending(): number {
 		return this.#asks.length

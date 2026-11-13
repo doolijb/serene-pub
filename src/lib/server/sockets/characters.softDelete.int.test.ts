@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -207,4 +208,103 @@ describe("characters:delete — soft delete (PGlite integration)", () => {
 		})
 		expect(row?.isDeleted).toBe(false)
 	})
+})
+
+describe("characters:delete — followers are resolved first (★27-6)", () => {
+	test("members following the card keep its words; the seat plays on; another's card resolves nothing", async () => {
+		const { charactersDelete } = await import("./characters")
+		const { insertCard, insertCastMember, insertCharacterVersions } =
+			await import("$lib/server/characters/versions")
+		const { membersAsRead } = await import("$lib/server/cast/memberAsRead")
+		const { seatedCastOf } = await import("$lib/server/cast/seatedCast")
+		const user = await makeUser("char-delete-followers-user")
+		const stranger = await makeUser("char-delete-followers-stranger")
+		const { card, version: cardVersion } = await insertCard(testDb as any, {
+			userId: user.id,
+			name: "Ondine",
+			description: "Ondine mends nets."
+		})
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: user.id, name: "Ondine's book" })
+			.returning()
+		const { member, base } = await insertCastMember(testDb as any, {
+			lorebookId: book.id,
+			characterId: card.id,
+			binding: "{{char:ondine}}",
+			name: ""
+		})
+		const [dated] = await insertCharacterVersions(testDb as any, [
+			{
+				castMemberId: member.id,
+				lorebookId: book.id,
+				parentVersionId: cardVersion.id,
+				follows: ["name", "description"],
+				nodeState: "active",
+				nodeVisibility: "normal",
+				year: 5,
+				writtenBy: "user:0"
+			}
+		])
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: user.id, isGroup: false, lorebookId: book.id })
+			.returning()
+		await testDb.insert(schema.sessionCharacters).values({
+			sessionId: session.id,
+			characterId: card.id,
+			castMemberId: member.id,
+			position: 0
+		})
+		const before = (await membersAsRead(testDb as any, [member.id])).get(
+			member.id
+		)!
+		expect(before.name).toBe("Ondine")
+		expect(before.description).toBe("Ondine mends nets.")
+		const versionsOf = async () =>
+			testDb
+				.select()
+				.from(schema.characterVersions)
+				.where(
+					inArray(schema.characterVersions.id, [base!.id, dated.id])
+				)
+
+		// Someone else's card: a no-op, nothing resolved.
+		await charactersDelete.handler(
+			fakeSocket(stranger.id),
+			{ id: card.id },
+			noopEmit
+		)
+		expect((await versionsOf()).every((v) => v.follows.length > 0)).toBe(
+			true
+		)
+		const [kept] = await testDb
+			.select()
+			.from(schema.characters)
+			.where(eq(schema.characters.id, card.id))
+		expect(kept.isDeleted).toBe(false)
+
+		await charactersDelete.handler(
+			fakeSocket(user.id),
+			{ id: card.id },
+			noopEmit
+		)
+		for (const v of await versionsOf()) {
+			expect(v.follows).toEqual([])
+			expect(v.name).toBe("Ondine")
+			expect(v.description).toBe("Ondine mends nets.")
+			// ★3 (2026-11-08): a card delete makes followers card-less, so the versions are detached.
+			expect(v.parentVersionId).toBeNull()
+		}
+		const after = (await membersAsRead(testDb as any, [member.id])).get(
+			member.id
+		)!
+		expect(after.name).toBe(before.name)
+		expect(after.description).toBe(before.description)
+		const seats = await seatedCastOf(testDb as any, session.id)
+		expect(seats).toHaveLength(1)
+		expect(seats[0].castMemberId).toBe(member.id)
+		expect(seats[0].asRead?.name).toBe("Ondine")
+		expect(seats[0].asRead?.description).toBe("Ondine mends nets.")
+	}, 60_000)
 })

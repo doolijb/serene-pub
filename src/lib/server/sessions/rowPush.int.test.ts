@@ -99,7 +99,11 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 		const owner = await makeUser("rowpush-parity")
 		const [character] = await testDb
 			.insert(schema.characters)
-			.values({ userId: owner.id, name: "Brother Alder", description: "" })
+			.values({
+				userId: owner.id,
+				name: "Brother Alder",
+				description: ""
+			})
 			.returning()
 		const session = await makeSession(owner.id, "The Chapel")
 
@@ -136,16 +140,14 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 		const { sessionsListHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
-		const listed = (
-			await sessionsListHandler.handler(
-				{
-					user: { id: owner.id },
-					io: { to: () => ({ emit: () => {} }) }
-				} as any,
-				{},
-				() => {}
-			)
-		)!.sessionList.find((s) => s.id === session.id)!
+		const listed = (await sessionsListHandler.handler(
+			{
+				user: { id: owner.id },
+				io: { to: () => ({ emit: () => {} }) }
+			} as any,
+			{},
+			() => {}
+		))!.sessionList.find((s) => s.id === session.id)!
 		const pushed = await sessionRowFrame(testDb as any, session.id)
 
 		expect(pushed).not.toBeNull()
@@ -159,7 +161,9 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 		expect(pushed!.messageCount).toBe(4)
 		// The list sends a Date, which the socket serialises to ISO; the push
 		// sends that ISO string itself (a UTC instant since 0102).
-		expect(pushed!.updatedAt).toBe(new Date(listed.updatedAt!).toISOString())
+		expect(pushed!.updatedAt).toBe(
+			new Date(listed.updatedAt!).toISOString()
+		)
 	}, 60_000)
 
 	test("a session with nothing visible pushes a null quote", async () => {
@@ -181,8 +185,9 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 				content: "A line somebody thought better of."
 			})
 			.returning()
-		expect((await sessionRowFrame(testDb as any, session.id))!.lastMessage)
-			.not.toBeNull()
+		expect(
+			(await sessionRowFrame(testDb as any, session.id))!.lastMessage
+		).not.toBeNull()
 
 		await testDb
 			.update(schema.sessionMessages)
@@ -198,19 +203,37 @@ describe("sessions:rowChanged (PGlite integration)", () => {
 		const owner = await makeUser("rowpush-lanes")
 		const session = await makeSession(owner.id, "The Crawl")
 		await testDb.insert(schema.sessionMessages).values([
-			{ sessionId: session.id, role: "assistant", content: "The story so far.", channel: "main" },
-			{ sessionId: session.id, role: "user", content: "My secret plan.", channel: "parley:2" },
-			{ sessionId: session.id, role: "assistant", content: "A journal line.", channel: "travelogue" }
+			{
+				sessionId: session.id,
+				role: "assistant",
+				content: "The story so far.",
+				channel: "main"
+			},
+			{
+				sessionId: session.id,
+				role: "user",
+				content: "My secret plan.",
+				channel: "parley:2"
+			},
+			{
+				sessionId: session.id,
+				role: "assistant",
+				content: "A journal line.",
+				channel: "travelogue"
+			}
 		])
 		const { sessionRowFrame } = await import("./rowPush")
-		const { sessionsListHandler } = await import("$lib/server/sockets/sessions")
-		const listed = (
-			await sessionsListHandler.handler(
-				{ user: { id: owner.id }, io: { to: () => ({ emit: () => {} }) } } as any,
-				{},
-				() => {}
-			)
-		)!.sessionList.find((s) => s.id === session.id)!
+		const { sessionsListHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		const listed = (await sessionsListHandler.handler(
+			{
+				user: { id: owner.id },
+				io: { to: () => ({ emit: () => {} }) }
+			} as any,
+			{},
+			() => {}
+		))!.sessionList.find((s) => s.id === session.id)!
 		const pushed = await sessionRowFrame(testDb as any, session.id)
 		expect(pushed!.lastMessage!.excerpt).toBe("The story so far.")
 		expect(listed.lastMessage!.excerpt).toBe("The story so far.")

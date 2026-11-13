@@ -74,6 +74,12 @@ export interface InvokeOptions {
 	 */
 	userStorageDir?: string
 	/**
+	 * 🚧 Why `userStorageDir` is absent when the plugin holds the grant: the
+	 * sentence `ctx.storage.user` rejects with (no frame of the plugin is open,
+	 * `appletCause.ts`). Absent, the sandbox's own "no person is acting" stands.
+	 */
+	userStorageDenied?: string
+	/**
 	 * 🚧 (M2b) What `ctx.annex('user')` starts from: the acting person's
 	 * documents for this plugin (loaded by the manager before the call), or the
 	 * sentence its methods reject with. Host-derived like `userStorageDir` —

@@ -39,12 +39,12 @@ Themes are grouped as **Built-in**, **My themes** (ones you made, see [Creating 
 
 Each setting is a card: its name, one sentence saying what it does, and the control (beside the words on a wide screen, under them on a narrow one). From the top:
 
+- **Show advanced controls**: more choices on sessions, lorebooks and characters; off keeps the everyday ones. See [below](#show-advanced-controls).
 - **Language**: the language the app is shown in, or **Pub default** to follow whatever an administrator has set for everyone. See [Languages](./languages.md).
 - **Time zone**: the zone real-world dates and times are shown in (when a session was last active, when an account was made). It starts as your browser's zone the first time you open the app; pick another and it follows you to every device. Times are stored the same way whatever you pick, and in-story time (a session's or lorebook's own clock) is never affected.
 - **Lorebook writes from sessions**: how your sessions may change the lorebooks you own (the stats they record, a summary, a compiled history, a graph). **Full**, **Review changes** or **Off**, or follow the pub's default. A lorebook can be stricter in its own Book settings, never looser. See [Lorebooks](./lorebooks.md#what-a-session-may-write).
-- **Library write mode**: what happens when Serene or a session adds to your library (a character or a lorebook it drafted). **Full** adds it at once, **Review (default)** keeps it in the session until you accept it, **Off** adds nothing. Back takes back anything it added. See [Sessions](./sessions.md#back-and-forward).
+- **Library write mode**: what you allow by default when Serene or a session adds to your library (a character or a lorebook it drafted); whether a session adds anything depends on its genre and preset. **Full (default)** adds it at once, **Review** keeps it in the session until you accept it, **Off** adds nothing. Back takes back anything it added. See [Sessions](./sessions.md#back-and-forward).
 - **Background routines**: limits on your sessions' [routines](./sessions.md#routines) that run on the real clock: **Stop after nobody has played for (minutes)** and **Most runs in a row**. Leave a box empty to follow the pub's limit, shown beside it; you can only set a lower one. See [Pub settings › Background routines](./system-settings.md#background-routines).
-- **Show all character fields**: the character form shows every field, including the less common ones, instead of just the usual few. See [Characters](./characters.md).
 - **Easy character creation**: on (the default), **New** in the Characters view opens a short guided creator for a character or a persona; off, it goes straight to the full form.
 - **Document View**: **Switch to Document View** opens Serene Pub's simplified, high-contrast, keyboard- and screen-reader-friendly version. **Ctrl+Shift+Y** does the same from anywhere. See [Document View](./document-view.md).
 - **Extension settings**: only when a plugin offers you choices; see [below](#extension-settings).
@@ -52,6 +52,17 @@ Each setting is a card: its name, one sentence saying what it does, and the cont
 - **User profile**: your **avatar**, the round picture shown for your account (click it or drop an image on it; the crop editor's **Save** uploads it), and your **Display name**, the name the app and the characters call you. Up to 50 characters; press **Update** to save it. Empty it and press **Update** to go by your username again. With user accounts on, the card also has **Change passphrase** and **Logout**, and a **Two-factor authentication** card appears above it. See [Users and accounts](./users-and-accounts.md#your-own-account).
 
 Switches save as soon as you flip them.
+
+### Show advanced controls
+
+**Show advanced controls** is one switch, first on the **User** tab, and it is off by default. It decides how many choices you see on sessions, lorebooks and characters: off keeps the everyday ones, on adds the rest. Wherever a form hides something, a muted line at its foot reads *Some controls are hidden.* followed by **Show advanced controls**; pressing it turns the switch on in place.
+
+Hidden never means changed. A hidden control keeps its stored value, and the session or lorebook keeps using it. The switch is a preference, not a permission: it never shows you what your role hides, and **Admin** and the **Sampling**, **Models**, **Loadouts** and **Connections** views are the same either way. People who had the old *Show all character fields* switch on start with advanced controls on. **Easy character creation** is separate and unchanged.
+
+- **Starting and editing a session**: the rules choices on the start form, and parts of a session's **Settings** tab. See [Start a session](./sessions.md#start-a-session) and [Settings](./sessions.md#settings).
+- **The session view**: **Branch from here**, **Customize layout** in the full-screen corner control, and the **Author's note** widget's number settings. See [Branch from here](./sessions.md#branch-from-here), [Session layout](./session-layout.md#open-the-editor) and [Author's note](./sessions.md#authors-note).
+- **Characters**: the character form's less common fields. See [Characters](./characters.md).
+- **Lorebooks**: the entry editor's regex, case and priority fold, **Rules** and **Calendar** in Book settings, the **Graph** and **Lives** views, and the graph buttons. See [Lorebooks](./lorebooks.md).
 
 ### Extension settings
 
@@ -74,7 +85,7 @@ The **Background** card of the **Themes** tab puts a picture behind the app.
 - **Defaults** are pictures that come with Serene Pub.
 - **My uploads**: press **Upload** to add an image. Each one has a small delete button in its corner, which asks before removing it.
 
-Once a picture is chosen, the **Opacity** slider (10 to 100%) sets how strongly it shows through. In a session, the messages and the composer sit on a translucent layer over the picture, so the story stays readable. See [Session layout](./session-layout.md#what-the-messages-widget-offers).
+Once a picture is chosen, the **Opacity** slider (10 to 100%) sets how strongly it shows through. In a session, every panel sits on the layout's **Backing** (a card by default), so the story stays readable over the picture; lower the layout's own **Opacity** to let more of it through. See [Layout settings](./session-layout.md#layout-settings).
 
 ## Creating a custom theme
 

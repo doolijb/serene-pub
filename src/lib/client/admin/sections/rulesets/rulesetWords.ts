@@ -83,7 +83,8 @@ export const SCOPE_OPTIONS = [
 export const scopeWords = (scope: string): string => (scope === "world" ? "Across sessions" : "For the session")
 
 export const CHANGER_OPTIONS = [
-	{ value: "rules", label: "The rules" },
+	// 🚧 hint (lane ed, plan §25): what "the rules" leaves out, so a person reads why a stat is not editable by hand.
+	{ value: "rules", label: "The rules", hint: "Not by hand — unless the session lets people edit everything by hand" },
 	{ value: "gm", label: "The game master" },
 	{ value: "holder", label: "The holder" },
 	{ value: "everyone", label: "Anyone" }

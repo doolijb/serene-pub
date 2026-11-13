@@ -276,7 +276,7 @@ describe("the empty states", () => {
 		serverSays("state:get", stateGet(over))
 		const key = `${slug} ${JSON.stringify(over)}`
 		const native = NATIVE_DREW[key] as ReturnType<typeof drawn>
-		if (!RECORD) expect(native.empty).toBeTruthy()
+		if (!RECORD) expect(native.empty).toBe("")
 		const actual = drawn((await mountRemote(slug)).root, slug)
 		expect(actual).toEqual(record(key, native, actual))
 	})
@@ -285,17 +285,18 @@ describe("the empty states", () => {
 		const answer = stateGet()
 		serverSays("state:get", { ...answer, owners: answer.owners.filter((o) => o.key !== "world") })
 		const native = NATIVE_DREW["world-state no world owner"] as ReturnType<typeof drawn>
-		if (!RECORD) expect(native.empty).toMatch(/declares no stats to show here/)
+		if (!RECORD) expect(native.empty).toBe("")
 		const actual = drawn((await mountRemote("world-state")).root, "world-state")
 		expect(actual).toEqual(record("world-state no world owner", native, actual))
 	})
 
-	test("DIFFERENCE: before the first read the remote says it is loading — the native said nothing was declared", { timeout: 60_000 }, async () => {
+	test("R10: before the first read the remote draws no loading line and no 'declares nothing' line", { timeout: 60_000 }, async () => {
 		openSessionState(null)
 		openSessionState(SESSION)
 		const remote = await mountRemote("stats")
-		expect(text(remote.query("[role='status']"))).toMatch(/Loading the cast's stats/)
-		expect(text(remote.root)).not.toMatch(/Nothing in this session declares stats/)
+		expect(remote.query("[role='status']") === null).toBe(true)
+		expect(text(remote.root) ?? "").not.toMatch(/Loading the cast's stats/)
+		expect(text(remote.root) ?? "").not.toMatch(/Nothing in this session declares stats/)
 	})
 })
 

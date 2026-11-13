@@ -15,11 +15,14 @@ import { db } from "$lib/server/db"
 import type { Handler } from "$lib/shared/events"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { sessionStatTrail } from "$lib/server/state/statTrail"
+import { storedSeatOwner } from "$lib/server/state/seatRefs"
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 /** A refusal said to the asker in words (not a fault of the server's). */
 export class StatTrailRefusal extends Error {}
 
-const OWNER_KINDS = new Set(["session", "session_cast", "player_seat", "session_location"])
+// 🚧 `seated_member` (plan §27 S2) is read as its seat's stored owner once the asker is known to be in the session.
+const OWNER_KINDS = new Set(["session", "session_cast", "player_seat", "session_location", "seated_member"])
 
 const tokenOf = (params: { request?: unknown }) =>
 	typeof params?.request === "string" ? { request: params.request } : {}
@@ -43,11 +46,18 @@ export async function readStatTrail(
 	const access = await checkSessionAccess(params.sessionId, userId)
 	if (!access.hasAccess)
 		throw new StatTrailRefusal("This session is not one you are in.")
+	// 🚧 ⏳ Flip on (`memberForm.ts`): the door reads the other way too — a `session_cast` owner comes back as its seat's member form (a member-less seat, answered null, keeps its card form), and a stored `seated_member` is kept: a seat's trail is by its member.
+	const door = (await storedSeatOwner(db, params.sessionId, owner as { kind: string; id: number })) as {
+		kind: string
+		id: number
+	} | null
+	const stored = door ?? (memberFormOn() && owner.kind === "session_cast" ? (owner as { kind: string; id: number }) : null)
+	if (!stored || (stored.kind === "seated_member" && !memberFormOn())) throw new StatTrailRefusal("Name the stat's owner in this session.")
 	const { changes } = await sessionStatTrail(db, {
 		sessionId: params.sessionId,
 		owner: {
-			kind: owner.kind as "session" | "session_cast" | "player_seat" | "session_location",
-			id: owner.id
+			kind: stored.kind as "session" | "session_cast" | "player_seat" | "session_location" | "seated_member",
+			id: stored.id
 		},
 		slotId,
 		limit: typeof params.limit === "number" ? params.limit : undefined

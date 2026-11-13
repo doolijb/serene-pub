@@ -53,8 +53,10 @@ import {
 	type AttributeSlotDecl,
 	type ParticipantRef
 } from "@serene-pub/sdk"
-import { castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { castLinkKey, castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import type { StateOwner } from "$lib/server/state/owners"
+import type { SessionLinks } from "$lib/server/state/resolve"
 
 /** What a state has to carry for the filter to find the holder-only values. */
 interface EarshotStateLike {
@@ -299,14 +301,34 @@ export async function hearingOf(
 	db: Db,
 	sessionId: number,
 	userId: number,
-	cast: ReadonlyArray<{ characterId: number }>,
+	cast: ReadonlyArray<{
+		characterId: number
+		/** 🚧 ⏳ S4 (flip on): the seat's member and a carded player seat's id — see `CastMemberLink`. */
+		seatMemberId?: number | null
+		playerSeatId?: number | null
+	}>,
 	/**
 	 * 🚧 The session's live card-less player seats (`sessionLinks(...).playerSeats`): each
 	 * is heard as `player_seat:<playerSeatId>` by its `playerSeatHolderAudience`. Absent = none.
 	 */
-	playerSeats: ReadonlyArray<{ playerSeatId: number }> = []
+	playerSeats: ReadonlyArray<{ playerSeatId: number }> = [],
+	/**
+	 * 🚧 ⏳ S4 (flip on): the session's card-less character seats (`sessionLinks(...).seatedMembers`),
+	 * each asked for as `seated-member:<seatMemberId>` and heard under `seated_member:<seatMemberId>`. Absent = none.
+	 */
+	seatedMembers: ReadonlyArray<{ seatMemberId: number }> = []
 ): Promise<Hearing> {
 	const { resolvePortrayals } = await import("$lib/server/pipelines/runtime/portrayals")
+	if (memberFormOn())
+		return hearingInMemberForm(
+			db,
+			sessionId,
+			userId,
+			cast,
+			playerSeats,
+			seatedMembers,
+			resolvePortrayals
+		)
 	const seatAudiences = playerSeats.map((s) => ({
 		key: castMemberKey(s),
 		refs: playerSeatHolderAudience(s.playerSeatId)
@@ -336,12 +358,89 @@ export async function hearingOf(
 	}
 }
 
+/**
+ * 🚧 ⏳ S4, flip on: `hearingOf` keying each heard cast link by both its seat key (`castLinkKey`) and its card id — so a `seated_member` / `player_seat` owner is heard by its seat key and a `card` / `cast_member` owner by the card id — and asking for each link by its member-form ref (⏳ `character:<id>` for a member-less seat).
+ */
+async function hearingInMemberForm(
+	db: Db,
+	sessionId: number,
+	userId: number,
+	cast: Parameters<typeof hearingOf>[3],
+	playerSeats: ReadonlyArray<{ playerSeatId: number }>,
+	seatedMembers: ReadonlyArray<{ seatMemberId: number }>,
+	resolvePortrayals: typeof import("$lib/server/pipelines/runtime/portrayals").resolvePortrayals
+): Promise<Hearing> {
+	const links = cast.map((c) => ({
+		keys: [castLinkKey(c), String(c.characterId)],
+		refs: [
+			"owner",
+			typeof c.playerSeatId === "number"
+				? `player-seat:${c.playerSeatId}`
+				: typeof c.seatMemberId === "number"
+					? `seated-member:${c.seatMemberId}`
+					: `character:${c.characterId}`
+		] as ParticipantRef[]
+	}))
+	const seatAudiences = playerSeats.map((s) => ({
+		key: castMemberKey(s),
+		refs: playerSeatHolderAudience(s.playerSeatId)
+	}))
+	// A card-less character seat has no card: its member's key and its own seat ref, nothing else.
+	const cardlessLinks = seatedMembers.map((s) => ({
+		keys: [`seated_member:${s.seatMemberId}`],
+		refs: ["owner", `seated-member:${s.seatMemberId}`] as ParticipantRef[]
+	}))
+	const refs = new Set<ParticipantRef>([
+		"owner",
+		...links.flatMap((l) => l.refs),
+		...cardlessLinks.flatMap((l) => l.refs),
+		...seatAudiences.flatMap((s) => s.refs)
+	])
+	const portrayals = await resolvePortrayals(db, {
+		sessionId,
+		runOwnerUserId: userId,
+		refs: [...refs]
+	})
+	const viewer = { userId }
+	if (audienceHolds(["owner"], portrayals, viewer)) return EVERYTHING
+	return {
+		all: false,
+		characterIds: new Set([
+			...[...links, ...cardlessLinks]
+				.filter((l) => audienceHolds(l.refs, portrayals, viewer))
+				.flatMap((l) => l.keys),
+			...seatAudiences.filter((s) => audienceHolds(s.refs, portrayals, viewer)).map((s) => s.key)
+		])
+	}
+}
+
+/**
+ * 🚧 `hearing` plus the holder-only values of the AI character seats the given members hold: a seater showing their own AI seat's hidden stats on request. The caller's hearing for reads, hand edits (judged by `sheetLatitudeAllows`) and proposals — ★s4-fb-3 (owner, 2026-11-10).
+ */
+export function hearingWithHiddenStats(
+	hearing: Hearing,
+	links: Pick<SessionLinks, "cast" | "seatedMembers">,
+	memberIds: ReadonlySet<number>
+): Hearing {
+	if (hearing.all || memberIds.size === 0) return hearing
+	const keys = new Set(hearing.characterIds)
+	for (const c of links.cast) {
+		if (typeof c.playerSeatId === "number") continue
+		if (typeof c.seatMemberId !== "number" || !memberIds.has(c.seatMemberId)) continue
+		keys.add(castLinkKey(c))
+		keys.add(String(c.characterId))
+	}
+	for (const s of links.seatedMembers ?? [])
+		if (memberIds.has(s.seatMemberId)) keys.add(`seated_member:${s.seatMemberId}`)
+	return { all: false, characterIds: keys }
+}
+
 /** The state as `hearing` reads it. Unchanged (the same object) for someone who hears everything. */
 export const stateAsHeard = <S>(state: S, hearing: Hearing): S =>
 	hearing.all ? state : heardOnly(state, (id) => hears(hearing, id))
 
 /** The owner kinds a cast member's values are filed under, at each layer. */
-const CAST_OWNER_KINDS: ReadonlySet<string> = new Set(["session_cast", "card", "cast_member", "player_seat"])
+const CAST_OWNER_KINDS: ReadonlySet<string> = new Set(["session_cast", "seated_member", "card", "cast_member", "player_seat"])
 
 /**
  * Whether one stored value — a session-layer row, a pending change's payload
@@ -372,6 +471,8 @@ export function valueHeard(
 	if (!holderOnly) return true
 	// 🚧 A seat is heard by its own key (`hearingOf`'s `player_seat:<id>`).
 	if (kind === "player_seat") return hears(hearing, castMemberKey({ playerSeatId: id }))
+	// 🚧 ⏳ S4 (flip on): a character seat in member form is heard by its seat key.
+	if (kind === "seated_member") return hears(hearing, `seated_member:${id}`)
 	const characterId =
 		kind === "session_cast" || kind === "card"
 			? id

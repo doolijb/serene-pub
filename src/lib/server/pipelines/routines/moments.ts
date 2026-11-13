@@ -7,7 +7,7 @@
  *
  * | moment | event | when | payload |
  * |---|---|---|---|
- * | a turn ended | `turn-ended` | a speaker's line landed on a lane (a member's line, a reply, the narrator's) and what it set off settled — after its own event work, the turn-order recompute included | `messageId`, `speaker`, `lane`, `turn`, `round` (story's lane), `turnsBy` |
+ * | a turn ended | `turn-ended` | a speaker's line landed on a lane (a member's line, a reply, the narrator's) and what it set off settled — after its own event work, the turn-order recompute included | `messageId`, `speaker`, `lane`, `turn`, `round` (story's lane), `turnsBy`, 🚧 `turnSeatChanges` (only when the genre declares `shape.turnSeatChanges: true`) |
  * | a round ended | `round-ended` | on the story's lane, the turn after which every active speaker has had a turn (`turnTally.ts`) | `messageId`, `lane`, `turn`, `round`, `speakers` |
  * | a scene opened / closed | `scene-opened` · `scene-closed` | `openScene` / `closeScene` (a person, a boundary trigger) | `sceneId`, `messageId` |
  * | the story clock moved | `story-clock-moved` | every move of the session's own clock (a time action, the reckoning, a reply tick, a person's step, an accepted proposal) | `clock { from, to }` |
@@ -23,6 +23,12 @@
  * lane (`main`); a line on another lane is still a turn of that lane, which
  * an `onEvent` registration can listen for by its `lane`.
  *
+ * **Seat changes** (🚧 owner 2026-11-09, "a read genres opt into"). A genre that
+ * declares `shape.turnSeatChanges: true` gets `turnSeatChanges` on each `turn-ended`: the
+ * seats added, removed or changed since the previous turn of that lane, read from
+ * the session's ledger (`seatChangesOfTurn`), `[]` when none. Absent or false, the
+ * payload is as before and no ledger query runs (P1).
+ *
  * **Rounds** (R52) are the story's lane's: see `turnTally.ts`.
  *
  * **Not on the ledger.** Like `turn-order-changed`, a moment moves no
@@ -30,11 +36,12 @@
  * `session-updated`, the scene row). Plugins hear it; registrations and
  * cadences answer it.
  */
-import { and, eq, inArray, sql } from "drizzle-orm"
-import { readTurnOrder, sessionEvents as sdkSessionEvents, type EventCause } from "@serene-pub/sdk"
+import { and, desc, eq, inArray, sql } from "drizzle-orm"
+import { readTurnOrder, sessionEvents as sdkSessionEvents, type EventCause, type TurnSeatChange } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { liveMessageWhere } from "$lib/server/messages/store"
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
+import { speakerRefOf } from "$lib/server/messages/sessionChanges"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import {
@@ -75,16 +82,46 @@ export function takesTurn(row: LineRow): boolean {
 
 /**
  * Whose line it is, as a participant reference; null for narration. A
- * member's line names the card they voiced, else their card-less seat
+ * member's line names its seat (`speakerRefOf`: the member form once the flip
+ * is on, the card voiced before it), else their card-less seat or an envoy
  * (`metadata.speaker`), else the member (`user:<id>`).
  */
 export function lineSpeaker(row: LineRow): string | null {
-	if (row.personaId != null) return `character:${row.personaId}`
-	if (row.characterId != null) return `character:${row.characterId}`
+	const seat = speakerRefOf(row)
+	if (seat !== null) return seat
 	const said = (row.metadata as { speaker?: unknown } | null)?.speaker
 	if (typeof said === "string" && said.includes(":")) return said
 	if (row.role === "user" && row.userId != null) return `user:${row.userId}`
 	return null
+}
+
+/**
+ * ⏳ A speaker as the tally keys it once the flip is on: a card-form speaker (a
+ * line from before the stamp) read as its seat's member form, the form the
+ * turn order's seats hold. Anything else, or off, unchanged.
+ */
+async function tallySpeakerOf(db: Db, sessionId: number, speaker: string | null): Promise<string | null> {
+	if (!speaker || !memberFormOn()) return speaker
+	const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+	return (await storedSeatRef(db, sessionId, speaker)) ?? speaker
+}
+
+/** The rule for which lines are turns of a lane (R51) — `turnNumber` counts them, `seatChangesOfTurn` finds the previous one. */
+function turnLineWhere(sessionId: number, lane: string) {
+	const m = schema.sessionMessages
+	return and(
+		eq(m.sessionId, sessionId),
+		sql`${m.role} <> 'system'`,
+		lane === STORY_LANE ? inArray(m.channel, STORY_LANES) : eq(m.channel, lane),
+		sql`coalesce(${m.metadata}::jsonb ->> 'isGreeting', '') <> 'true'`,
+		sql`coalesce(${m.metadata}::jsonb ->> 'goalReached', '') <> 'true'`,
+		sql`not exists (
+			select 1 from ${schema.pipelineRunArtifacts} a
+			join ${schema.pipelineRuns} r on r.id = a.run_id
+			where a.kind = 'message' and a.entity_id = ${m.id} and a.action = 'created'
+			and r.trigger_family = 'routine'
+		)`
+	)
 }
 
 /** The lane's turn count through `messageId` — the turn this line is in its lane. */
@@ -93,23 +130,77 @@ async function turnNumber(db: Db, sessionId: number, messageId: number, lane: st
 	const [row] = await db
 		.select({ n: sql<number>`count(*)` })
 		.from(m)
-		.where(
-			and(
-				eq(m.sessionId, sessionId),
-				sql`${m.id} <= ${messageId}`,
-				sql`${m.role} <> 'system'`,
-				lane === STORY_LANE ? inArray(m.channel, STORY_LANES) : eq(m.channel, lane),
-				sql`coalesce(${m.metadata}::jsonb ->> 'isGreeting', '') <> 'true'`,
-				sql`coalesce(${m.metadata}::jsonb ->> 'goalReached', '') <> 'true'`,
-				sql`not exists (
-					select 1 from ${schema.pipelineRunArtifacts} a
-					join ${schema.pipelineRuns} r on r.id = a.run_id
-					where a.kind = 'message' and a.entity_id = ${m.id} and a.action = 'created'
-					and r.trigger_family = 'routine'
-				)`
-			)
-		)
+		.where(and(sql`${m.id} <= ${messageId}`, turnLineWhere(sessionId, lane)))
 	return Number(row?.n ?? 0)
+}
+
+/** 🚧 Does this session's genre declare `shape.turnSeatChanges: true` (owner 2026-11-09)? Absent is off (P1). */
+export async function sessionReadsSeatChanges(db: Db, sessionId: number): Promise<boolean> {
+	const { sessionGenreOf } = await import("$lib/server/sessions/annexFields")
+	const { getSessionGenre } = await import("$lib/server/pipelines/entities/sessionGenres")
+	const shape = (await getSessionGenre(db, await sessionGenreOf(db, sessionId)))?.shape
+	return (shape as { turnSeatChanges?: unknown } | null | undefined)?.turnSeatChanges === true
+}
+
+
+/**
+ * 🚧 The seats that changed in the turn `messageId` ended on `lane` (owner
+ * 2026-11-09). Built from the session's ledger, never by re-diffing seats: the
+ * window is the ledger ids after the previous turn-taking line of the lane
+ * landed, through this line's latest landing; the seat announcements in it
+ * (`member-added`, `member-removed`, `cast-changed`) are netted per seat. An
+ * add and a remove inside the window cancel; a seat switched on or off or
+ * re-portrayed (not a reorder) with no net add or remove is `changed`.
+ * `[]` when the line has no landing on the ledger.
+ */
+export async function seatChangesOfTurn(
+	db: Db,
+	at: { sessionId: number; messageId: number; lane: string }
+): Promise<TurnSeatChange[]> {
+	const { latestLandingId, latestChangeIdAtOrBefore, seatEventRowsBetween } = await import(
+		"$lib/server/messages/sessionChanges"
+	)
+	const through = await latestLandingId(db, at.sessionId, at.messageId)
+	if (through == null) return []
+	const m = schema.sessionMessages
+	const [prev] = await db
+		.select({ id: m.id, createdAt: m.createdAt })
+		.from(m)
+		.where(and(sql`${m.id} < ${at.messageId}`, turnLineWhere(at.sessionId, at.lane)))
+		.orderBy(desc(m.id))
+		.limit(1)
+	let after = 0
+	if (prev) {
+		after =
+			(await latestLandingId(db, at.sessionId, prev.id)) ??
+			(await latestChangeIdAtOrBefore(db, at.sessionId, prev.createdAt)) ??
+			0
+	}
+	const rows = await seatEventRowsBetween(db, at.sessionId, after, through)
+	if (rows.length === 0) return []
+	const { seatOf } = await import("$lib/server/sessions/seats")
+	const { hostSeatRefOf } = await import("$lib/server/pipelines/prompt/seatCards")
+	const seats = new Map<
+		string,
+		{ seat: { kind: "character" | "player"; castMemberId: number | null }; sum: number; recast: boolean }
+	>()
+	for (const r of rows) {
+		const seat = await seatOf(db, at.sessionId, r.ref)
+		if (!seat) continue
+		const ref = hostSeatRefOf(seat)
+		if (ref == null) continue
+		const entry = seats.get(ref) ?? { seat, sum: 0, recast: false }
+		if (r.event === sdkSessionEvents.memberAdded) entry.sum += 1
+		else if (r.event === sdkSessionEvents.memberRemoved) entry.sum -= 1
+		else if (r.change !== "position") entry.recast = true
+		seats.set(ref, entry)
+	}
+	const out: TurnSeatChange[] = []
+	for (const [ref, e] of seats) {
+		const change = e.sum > 0 ? "added" : e.sum < 0 ? "removed" : e.recast ? "changed" : null
+		if (change) out.push({ ref, seatKind: e.seat.kind, castMemberId: e.seat.castMemberId, change })
+	}
+	return out
 }
 
 /**
@@ -118,17 +209,21 @@ async function turnNumber(db: Db, sessionId: number, messageId: number, lane: st
  * pipeline's own voice). Read after the line's own event work, so the order
  * is the one its recompute wrote.
  */
-async function seatedOf(db: Db, sessionId: number): Promise<{ seated: string[]; core: Record<string, unknown> }> {
+async function seatedOf(db: Db, sessionId: number): Promise<{ seated: string[]; core: { turnOrder: unknown; turnTally: unknown } }> {
 	const [s] = await db
-		.select({ annex: schema.sessions.annex })
+		.select({ turnOrder: schema.sessions.turnOrder, turnTally: schema.sessions.turnTally })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	const core = coreAnnexIn(s?.annex ?? null)
+	const core = s ?? { turnOrder: null, turnTally: null }
 	const order = readTurnOrder(core)
 	const seated = new Set<string>()
-	for (const c of order.candidates) seated.add(c.ref)
-	for (const e of order.order) seated.add(speakerKey(e.ref))
+	// ⏳ Flip on: the seats are read in the form the tally keys a speaker by
+	// (a card-form candidate or entry as its seat's member form), whoever
+	// computed the order.
+	const asTallied = async (ref: string) => (await tallySpeakerOf(db, sessionId, ref)) ?? ref
+	for (const c of order.candidates) seated.add(await asTallied(c.ref))
+	for (const e of order.order) seated.add(await asTallied(speakerKey(e.ref)))
 	return { seated: [...seated], core }
 }
 
@@ -174,6 +269,9 @@ export async function replayStoryLane(
 		)
 		.orderBy(m.id)
 	const { seated } = await seatedOf(db, sessionId)
+	// ⏳ Flip on: a line from before the stamp is read as its seat's member form.
+	const { loadSeatMap, memberFormOf } = await import("$lib/server/state/seatRefs")
+	const seatMap = memberFormOn() ? await loadSeatMap(db, sessionId) : null
 	let tally: LaneTallyOf | undefined
 	let turn = 0
 	const taking = rows.filter((row) => takesTurn(row as LineRow))
@@ -202,7 +300,9 @@ export async function replayStoryLane(
 	let current: number | null = null
 	for (const row of taking) {
 		turn++
-		const speaker = speakerKey(lineSpeaker(row as LineRow))
+		const speaker = speakerKey(
+			seatMap ? (memberFormOf(seatMap, lineSpeaker(row as LineRow) ?? "") ?? lineSpeaker(row as LineRow)) : lineSpeaker(row as LineRow)
+		)
 		const person = row.role === "user"
 		const step = tallyTurn(tally, { messageId: row.id, turn, speaker, person }, seated)
 		tally = step.next
@@ -221,7 +321,7 @@ export async function replayStoryLane(
 		}
 		current = turnOf
 		turnOfLine.set(row.id, turnOf)
-		lines.push({ id: row.id, round: step.round ?? 1, person, speaker, turnOf })
+		lines.push({ id: row.id, round: step.round ?? 1, person, speaker, userId: row.userId ?? null, turnOf })
 	}
 	return { tally, lines }
 }
@@ -232,6 +332,8 @@ export interface ReplayedLine {
 	round: number
 	person: boolean
 	speaker: string
+	/** The account that wrote the row (session_messages.user_id); null when none. */
+	userId: number | null
 	/** The id of the line that opens this line's turn (R-c). */
 	turnOf: number
 }
@@ -296,7 +398,7 @@ export async function noteLineLanded(
 		if (!row || row.sessionId !== at.sessionId || !takesTurn(row as LineRow)) return
 		const lane = laneOf(row.channel)
 		const turn = await turnNumber(db, at.sessionId, at.messageId, lane)
-		const speaker = lineSpeaker(row as LineRow)
+		const speaker = await tallySpeakerOf(db, at.sessionId, lineSpeaker(row as LineRow))
 		const { seated, core } = await seatedOf(db, at.sessionId)
 		const prev = readTurnTally(core).lanes[lane]
 		const step = tallyTurn(
@@ -305,13 +407,24 @@ export async function noteLineLanded(
 			lane === STORY_LANE ? seated : null
 		)
 		if (step.counted) await writeLaneTally(db, at.sessionId, lane, step.next)
+		// 🚧 Off in core until the genre opts in (`shape.turnSeatChanges`): then the
+		// list rides the payload, `[]` when nothing changed. A failed read never
+		// holds back the turn: the payload then goes without it.
+		let turnSeatChanges: TurnSeatChange[] | null = null
+		try {
+			if (await sessionReadsSeatChanges(db, at.sessionId))
+				turnSeatChanges = await seatChangesOfTurn(db, { sessionId: at.sessionId, messageId: at.messageId, lane })
+		} catch (err) {
+			console.warn(`[routines] the seat changes of message ${at.messageId}'s turn were not read:`, err)
+		}
 		await emitMoment(db, at, sdkSessionEvents.turnEnded, {
 			messageId: at.messageId,
 			speaker,
 			lane,
 			turn,
 			...(step.round != null ? { round: step.round } : {}),
-			turnsBy: step.turnsBy
+			turnsBy: step.turnsBy,
+			...(turnSeatChanges ? { turnSeatChanges } : {})
 		})
 		if (step.roundEnded)
 			await emitMoment(db, at, sdkSessionEvents.roundEnded, {

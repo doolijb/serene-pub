@@ -17,6 +17,7 @@
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
 
 	interface FieldDecl {
@@ -51,6 +52,8 @@
 		maxBytes?: number
 		/** Shown while nothing is stored: the value a run reads (B16x). */
 		default?: unknown
+		/** 🚧 A string's blank, named: the first choice stores blank, the second shows a box (2026-11-04). */
+		unset?: { label: string | ({ en: string } & Record<string, string>); other: string | ({ en: string } & Record<string, string>) }
 		/**
 		 * For `object`: its members, drawn as one fieldset under the field's
 		 * label. A member's `group` is a fold inside it (closed until opened),
@@ -110,6 +113,12 @@
 	 */
 	const shown = (key: string): unknown =>
 		values[key] !== undefined ? values[key] : schema[key]?.default
+
+	/** A string field that names its blank; `unset` on any other type is ignored. */
+	const namesUnset = (decl: FieldDecl) => decl.type === "string" && !!decl.unset
+
+	/** Controls whose second choice was picked while nothing is stored yet, by control id. */
+	const pickedOther = new SvelteSet<string>()
 
 	/** One level of `showIf`, no rules engine — the SDK's own rule. */
 	const visible = (decl: FieldDecl): boolean =>
@@ -259,6 +268,47 @@
 	</div>
 {/snippet}
 
+<!-- A string field with a named blank: two choices (the first stores blank),
+     and a box only while the second is chosen. The box carries no placeholder:
+     a placeholder is "what to type" (STYLE-GUIDE §10) and the field's
+     description, drawn under it, is its purpose — one text, once. -->
+{#snippet unsetChoice(
+	id: string,
+	key: string,
+	decl: FieldDecl,
+	value: unknown,
+	set: (v: unknown) => void
+)}
+	{@const mode =
+		String(value ?? "") !== "" || pickedOther.has(id) ? "other" : "unset"}
+	<Select
+		label={text(decl.label, key)}
+		labelHidden
+		class="w-full"
+		value={mode}
+		options={[
+			{ value: "unset", label: text(decl.unset?.label, "") },
+			{ value: "other", label: text(decl.unset?.other, "") }
+		]}
+		onValueChange={(v) => {
+			if (v === "unset") {
+				pickedOther.delete(id)
+				set("")
+			} else pickedOther.add(id)
+		}}
+	/>
+	{#if mode === "other"}
+		<input
+			{id}
+			type="text"
+			class="input w-full"
+			aria-label={text(decl.unset?.other, "")}
+			value={String(value ?? "")}
+			onchange={(e) => set(e.currentTarget.value.trim())}
+		/>
+	{/if}
+{/snippet}
+
 <!-- One control, for a top-level field or an object's member: `id` labels it,
      `value` is what it shows, `set` commits (`live` writes as it is typed). -->
 {#snippet control(
@@ -270,7 +320,7 @@
 	live: (v: unknown) => void
 )}
 	<div class="flex flex-col gap-1">
-		{#if decl.type === "enum"}
+		{#if decl.type === "enum" || namesUnset(decl)}
 			<span class="text-sm font-medium" aria-hidden="true">
 				{text(decl.label, key)}
 			</span>
@@ -321,6 +371,8 @@
 				value={value == null ? "" : String(value)}
 				onchange={(e) => set(e.currentTarget.value)}
 			/>
+		{:else if namesUnset(decl)}
+			{@render unsetChoice(id, key, decl, value, set)}
 		{:else}
 			<input
 				{id}
@@ -391,7 +443,7 @@
 				</fieldset>
 			{:else if visible(decl)}
 				<div class="flex flex-col gap-1">
-					{#if decl.type === "enum" || isTicks(decl)}
+					{#if decl.type === "enum" || isTicks(decl) || namesUnset(decl)}
 						<!-- Select carries its own (visually hidden) label;
 						     this is the same visible text, kept for the
 						     column's rhythm. A ticked list's group says it. -->
@@ -513,6 +565,14 @@
 							placeholder="••••••••"
 							onchange={(e) => commit(key, e.currentTarget.value)}
 						/>
+					{:else if namesUnset(decl)}
+						{@render unsetChoice(
+							`sf-${key}`,
+							key,
+							decl,
+							shown(key),
+							(v) => commit(key, v)
+						)}
 					{:else}
 						<input
 							id="sf-{key}"

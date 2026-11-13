@@ -20,6 +20,7 @@ import { and, eq, isNotNull, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { db as appDb } from "$lib/server/db"
 import { isSharedWith } from "$lib/server/utils/shares"
+import { providedBooksReadableBy } from "$lib/server/plugins/providedMarks"
 
 /** The refusal every lorebook verb gives a book that is missing or not the asker's. */
 export const LOREBOOK_NOT_FOUND = "Lorebook not found."
@@ -84,7 +85,7 @@ export async function assertOwnedBook(
  *
  * Reads only. Every WRITE keeps `assertOwnedBook`, whatever this says.
  * `isAdmin` is the caller's when it has a socket in hand; absent, the
- * account row is read.
+ * account row is read. `shared` also = a live provided book (★M3-1).
  */
 export type LorebookAccess = "owner" | "shared" | "admin"
 
@@ -118,7 +119,10 @@ export async function lorebookAccessFor(
 			.limit(1)
 		isAdmin = !!user?.isAdmin
 	}
-	return isAdmin ? "admin" : null
+	if (isAdmin) return "admin"
+	if ((await providedBooksReadableBy(db, userId, [lorebookId as number])).has(lorebookId as number))
+		return "shared"
+	return null
 }
 
 /** Whether `userId` may read book `lorebookId`: owner · shared · admin. */

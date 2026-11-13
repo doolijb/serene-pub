@@ -80,7 +80,7 @@ export async function checkWorkflow(
 /** A connection with its key decrypted, for a read the adapter makes. */
 function readable(connection: SelectConnection): SelectConnection {
 	const key = (connection.extraJson as any)?.apiKey
-	return typeof key === "string" && key
+	return key
 		? {
 				...connection,
 				extraJson: { ...connection.extraJson, apiKey: decryptApiKeyField(key) ?? "" }

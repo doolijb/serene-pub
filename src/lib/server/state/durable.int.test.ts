@@ -14,6 +14,10 @@
  *  4. A derived slot is never recorded, and an absent value writes no row —
  *     "we did not record a mood" and "her mood was nothing" are different
  *     claims, and only the missing row can say the first.
+ *
+ * (sense-b4) Pins the rule that stat values and the timeline are NOT moved by
+ * the own-book route: the recording lands on the world, under Full, even for a
+ * session whose scenes end by themselves (twin in "recording to the timeline").
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -30,11 +34,18 @@ import {
 import { genreKeeping } from "$lib/server/utils/testGenre"
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { memberFormSwitch } from "$lib/server/state/memberForm"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 let testDb: TestDb
 let dataDir: string
+
+const scenesEnd = vi.hoisted(() => new Set<number>())
+vi.mock("$lib/server/lorebooks/ownBook", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/lorebooks/ownBook")>()),
+	scenesEndByThemselves: async (_db: unknown, sessionId: number) => scenesEnd.has(sessionId)
+}))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -248,6 +259,22 @@ describe("recording to the timeline", () => {
 		expect(cast.find((r) => r.slotId === HP)!.value).toEqual({ v: 14 })
 	})
 
+	test("unchanged for a session whose scenes end by themselves: the timeline capture still lands on the world", async () => {
+		declareSlots()
+		const w = await world()
+		scenesEnd.add(w.session.id)
+		await setSessionValue(w, { kind: "session_cast", id: w.verity.id }, HP, 14)
+		const { recordToTimeline } = await import("$lib/server/state/durable")
+		const report = await recordToTimeline(testDb as unknown as Db, w.session.id, {
+			reason: "mark",
+			historyEntryId: w.entry!.id
+		})
+		expect(report.recorded).toBe(true)
+		const cast = await durableRows("cast_member", w.binding!.id)
+		expect(cast.find((r) => r.slotId === HP)!.value).toEqual({ v: 14 })
+		expect(cast.find((r) => r.slotId === HP)!.historyEntryId).toBe(w.entry!.id)
+	})
+
 	test("a value is recorded WITH the configuration it was written under", async () => {
 		declareSlots()
 		const w = await world()
@@ -382,6 +409,42 @@ describe("the delete safeguard", () => {
 	})
 })
 
+describe("the delete safeguard on a book someone else owns", () => {
+	test("records nothing on it, and the session is still deleted", async () => {
+		declareSlots()
+		const w = await world()
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const other = await createTestUser(testDb, `durable-other-${++n}`)
+		await testDb
+			.update(schema.lorebooks)
+			.set({ userId: other.id })
+			.where(eq(schema.lorebooks.id, w.lorebook!.id))
+		await setSessionValue(w, { kind: "session_cast", id: w.verity.id }, HP, 4)
+		await setSessionValue(w, { kind: "session", id: w.session.id }, WEATHER, "storm")
+
+		const { recordToTimeline } = await import("$lib/server/state/durable")
+		const report = await recordToTimeline(testDb as unknown as Db, w.session.id, {
+			reason: "delete"
+		})
+		expect(report).toMatchObject({ recorded: false, values: 0, configs: 0 })
+
+		const { sessionsDeleteHandler } = await import("$lib/server/sockets/sessions")
+		await sessionsDeleteHandler.handler(
+			{
+				user: { id: w.user.id },
+				io: { to: () => ({ emit: () => {} }) }
+			} as any,
+			{ id: w.session.id } as any,
+			() => {}
+		)
+		expect(
+			await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
+		).toHaveLength(0)
+		expect(await durableRows("cast_member", w.binding!.id)).toHaveLength(0)
+		expect(await durableRows("lorebook", w.lorebook!.id)).toHaveLength(0)
+	})
+})
+
 describe("scene capture", () => {
 	test("capturing a moment records the state at it", async () => {
 		declareSlots()
@@ -470,5 +533,180 @@ describe("recording on a branch", () => {
 			.from(schema.attributeConfigs)
 			.where(eq(schema.attributeConfigs.sourceSessionId, w.session.id))
 		expect(configsAfter).toEqual([])
+	})
+})
+
+describe("a card held by a character seat and a player seat (★K-2, switch on)", () => {
+	/** One card, one durable member, two seats: each seat's own value stands under its own owner. */
+	async function twoSeats(playerFirst: boolean) {
+		declareSlots()
+		const w = await world()
+		const seatMember = w.binding!.id
+		const seatRow = async (player: boolean) =>
+			player
+				? (
+						await testDb
+							.insert(schema.sessionPersonas)
+							.values({
+								sessionId: w.session.id,
+								userId: w.user.id,
+								personaId: w.verity.id,
+								castMemberId: seatMember,
+								position: playerFirst ? 0 : 5
+							})
+							.returning()
+					)[0]!
+				: null
+		await testDb
+			.update(schema.sessionCharacters)
+			.set({ castMemberId: seatMember, position: playerFirst ? 5 : 0 })
+			.where(eq(schema.sessionCharacters.sessionId, w.session.id))
+		const playerSeat = (await seatRow(true))!
+		await setSessionValue(w, { kind: "seated_member", id: seatMember } as never, HP, 14)
+		await setSessionValue(w, { kind: "player_seat", id: playerSeat.id } as never, HP, 3)
+		return { w, seatMember, playerSeat }
+	}
+
+	for (const playerFirst of [false, true])
+		test(`the member's durable record takes the character seat's values, whichever seat comes first (player seat first: ${playerFirst})`, async () => {
+			const was = memberFormSwitch.on
+			memberFormSwitch.on = true
+			try {
+				const { w } = await twoSeats(playerFirst)
+				const { recordToTimeline } = await import("$lib/server/state/durable")
+				const report = await recordToTimeline(testDb as unknown as Db, w.session.id, {
+					reason: "mark",
+					historyEntryId: w.entry!.id
+				})
+				expect(report.recorded).toBe(true)
+				const hp = (await durableRows("cast_member", w.binding!.id)).filter((r) => r.slotId === HP)
+				expect(hp.map((r) => r.value)).toEqual([{ v: 14 }])
+				// The player seat's value stays with the session.
+				const kept = await testDb
+					.select()
+					.from(schema.attributeValues)
+					.where(and(eq(schema.attributeValues.sessionId, w.session.id), eq(schema.attributeValues.ownerKind, "player_seat")))
+				expect(kept.map((r) => r.value)).toEqual([{ v: 3 }])
+			} finally {
+				memberFormSwitch.on = was
+			}
+		})
+})
+
+describe("durable filing is by member (S4 follow-a)", () => {
+	/** A second session of the same user on the world's book, with one message. */
+	async function secondSession(w: Awaited<ReturnType<typeof world>>) {
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: w.user.id,
+				isGroup: false,
+				name: `Second ${++n}`,
+				genreId: GENRE,
+				lorebookId: w.lorebook!.id
+			})
+			.returning()
+		const [msg] = await testDb
+			.insert(schema.sessionMessages)
+			.values({ sessionId: session!.id, role: "user", userId: w.user.id, content: "…" })
+			.returning()
+		await testDb.insert(schema.messages).values({
+			id: msg!.id,
+			sessionId: session!.id,
+			role: "user",
+			userId: w.user.id
+		})
+		return { session: session!, message: msg! }
+	}
+	const record = async (sessionId: number, w: Awaited<ReturnType<typeof world>>) => {
+		const { recordToTimeline } = await import("$lib/server/state/durable")
+		return await recordToTimeline(testDb as unknown as Db, sessionId, {
+			reason: "mark",
+			historyEntryId: w.entry!.id
+		})
+	}
+	const putSession = (sessionId: number, messageId: number, owner: { kind: string; id: number }, v: number) =>
+		testDb.insert(schema.attributeValues).values({
+			ownerKind: owner.kind,
+			ownerId: owner.id,
+			slotId: HP,
+			value: { v },
+			sessionId,
+			validFromMessageId: messageId,
+			updatedBy: "user"
+		} as never)
+
+	test("a member played by the AI in one session and by a person in another is filed by member in both", async () => {
+		declareSlots()
+		const w = await world()
+		const member = w.binding!.id
+		await testDb
+			.update(schema.sessionCharacters)
+			.set({ castMemberId: member })
+			.where(eq(schema.sessionCharacters.sessionId, w.session.id))
+		const b = await secondSession(w)
+		const [seat] = await testDb
+			.insert(schema.sessionPersonas)
+			.values({ sessionId: b.session.id, userId: w.user.id, personaId: w.verity.id, castMemberId: member })
+			.returning()
+		await putSession(w.session.id, w.message.id, { kind: "seated_member", id: member }, 14)
+		await putSession(b.session.id, b.message.id, { kind: "player_seat", id: seat!.id }, 3)
+		await record(w.session.id, w)
+		await record(b.session.id, w)
+		const rows = (await durableRows("cast_member", member)).filter((r) => r.slotId === HP)
+		expect(rows.map((r) => [r.sourceSessionId, (r.value as { v: number }).v]).sort()).toEqual(
+			[
+				[w.session.id, 14],
+				[b.session.id, 3]
+			].sort()
+		)
+	})
+
+	/** A card-less member of the world's book, seated card-less as a player seat. */
+	async function cardlessMember(w: Awaited<ReturnType<typeof world>>, sessionId: number) {
+		const { insertCastMember } = await import("$lib/server/characters/versions")
+		const { member } = await insertCastMember(testDb as unknown as Db, {
+			lorebookId: w.lorebook!.id,
+			binding: `{{char:wren-${++n}}}`,
+			characterId: null,
+			name: "Wren"
+		})
+		const [seat] = await testDb
+			.insert(schema.sessionPersonas)
+			.values({
+				sessionId,
+				userId: w.user.id,
+				personaId: null,
+				seatName: "Wren",
+				castMemberId: member.id
+			})
+			.returning()
+		return { member, seat: seat! }
+	}
+
+	test("a card-less player seat's durable write lands on its member", async () => {
+		declareSlots()
+		const w = await world()
+		const { member, seat } = await cardlessMember(w, w.session.id)
+		await putSession(w.session.id, w.message.id, { kind: "player_seat", id: seat.id }, 7)
+		await record(w.session.id, w)
+		const rows = (await durableRows("cast_member", member.id)).filter((r) => r.slotId === HP)
+		expect(rows.map((r) => r.value)).toEqual([{ v: 7 }])
+	})
+
+	test("with the same member in a character seat of the session, it is filed once, by the character seat", async () => {
+		declareSlots()
+		const w = await world()
+		const { member, seat } = await cardlessMember(w, w.session.id)
+		await testDb.insert(schema.sessionCharacters).values({
+			sessionId: w.session.id,
+			characterId: null,
+			castMemberId: member.id
+		} as never)
+		await putSession(w.session.id, w.message.id, { kind: "seated_member", id: member.id }, 14)
+		await putSession(w.session.id, w.message.id, { kind: "player_seat", id: seat.id }, 3)
+		await record(w.session.id, w)
+		const rows = (await durableRows("cast_member", member.id)).filter((r) => r.slotId === HP)
+		expect(rows.map((r) => r.value)).toEqual([{ v: 14 }])
 	})
 })

@@ -25,7 +25,7 @@ Open **Characters** on the rail and press **New**. The menu has three ways to ad
 The same menu has **Write a persona** (a character you play) and **New folder**.
 
 :::tip You should see
-The new character in your list, with its picture, name and one line about it: its **Summary**, or else the first sentence of its creator notes or description.
+The new character in your list, with its picture, name and one line about it: its **Summary**, or else the first sentence of its creator notes or description, then where it is used (_Not in a lorebook yet_).
 :::
 
 ### Write one yourself
@@ -40,24 +40,59 @@ Prefer every field at once? Turn off **Easy character creation** in **Settings �
 
 :::warning If this didn't work
 - **Next stays grey**: the name or the description is empty.
-- **The new character isn't in the list**: check the filter above the list isn't set to a tag or **Favorites**. The chip under the search box clears it.
+- **The new character isn't in the list**: check that no filter is on. Each filter in force shows as a chip under the search box, and its **×** clears it.
 :::
 
 ## Everyday use
 
 ### Find a character
 
-The box at the top of the list filters as you type, matching name, description and tags. The sliders button beside it narrows the list to **All**, **Favorites**, **Personas**, or one of your tags; a chip under the box shows the filter, with an **×** to clear it. The two icons at the end switch between a list and portrait cards: docked beside the page the list is the default, and at Half or in Focus the cards are. Once you pick one, this browser remembers it at every width.
+The **Characters** list has one row for each character. A row is one of:
 
-Favorites sort to the top. Characters in a [folder](#favorites-folders-and-tags) are listed under its header, which collapses on click.
+- one of your character cards, with every cast member that uses it linked to it;
+- a card someone shared with you;
+- someone else's card that a lorebook you can read uses;
+- a **cast member with no character card**.
 
-The line under each name is the character's **Summary** when it has one. Otherwise it's the first sentence of the creator notes or the description, skipping sheet lines such as "Name: …" and "Gender: …" at the top.
+A card's row wears one badge, **Card**. The card's tags sit behind a **+N** after it; hover it to see them. A cast member with no card has no badge, and its picture falls back to its initial.
+
+The line under each name is the summary (for a shared card, _From ‹owner›_), then where the character is used:
+
+- _Not in a lorebook yet_
+- _In ‹lorebook›_
+- _In ‹session›'s notes_
+- _In 2 lorebooks_
+
+The summary is the character's **Summary** when it has one. Otherwise it's the first sentence of the creator notes or the description, skipping sheet lines such as "Name: …" and "Gender: …" at the top.
+
+The list is in groups, in this order:
+
+1. Your characters, with no header.
+2. Your [folders](#favorites-folders-and-tags), each under its header, which collapses on click.
+3. **Only in lorebooks**: cast members with no card, and other people's cards you see because a lorebook you can read uses them.
+4. **Shared with you**, last.
+
+The box at the top of the list filters as you type, matching names and tags (not descriptions). The list puts your favorites first, then goes in name order, and loads a page at a time: scroll to the end, or press **Load more**. A character with a nickname is listed by it. The two icons at the end switch between a list and portrait cards: docked beside the page the list is the default, and at Half or in Focus the cards are. Once you pick one, this browser remembers it at every width.
+
+The sliders button beside the box opens the filters. Pick one in each group you want:
+
+- **All**, **Favorites**, **Personas**, or one of your tags, at the top. Favorites and Personas are your own cards.
+- **Card**: **All**, **Has a card**, **No card**.
+- **Words**: **All**, **Follows its card**, **Has its own words**.
+- **Lorebook**: one of your lorebooks (yours, shared with you, or provided).
+- **Story**: one of your sessions. It shows while **In my stories** is on.
+
+The **In my stories** switch, _Also list characters kept only in your sessions' notes_, widens the list. A cast member kept only in a session's notes stays hidden until it is on. Each filter in force shows as a chip under the search box with an **×** to clear it.
 
 With the **Personas** filter on and no personas yet, the list offers **Write a persona**.
 
-Click a character to open it. Its page shows the picture, name and tags over three tabs: **Details**, **Gallery** and **Sprites**. **Edit** under the name edits it; the **⋮** menu at the top has **View sessions** and **Export character**.
+Click one of your cards, or a card shared with you, to open it. Its page shows the picture, name and tags over three tabs: **Details**, **Gallery** and **Sprites**. **Edit** under the name edits it; the **⋮** menu at the top has **View sessions** and **Export character**. Click a cast member's row, or someone else's card that only reaches you through a lorebook, and that cast member opens in **Lorebooks**.
 
-Each character's **⋮** menu has **View**, **Edit**, **Use as persona** (or **Not a persona**), **Set as default persona**, **Move to folder…**, **Export** and **Delete**.
+The **⋯** menu on a row depends on the row:
+
+- Your card: **View**, **Edit**, **Use as persona** (or **Not a persona**), **Set as default persona**, **Move to folder…**, **Export** and **Delete**.
+- A shared card: **View**, **Copy to my characters** and **Export**.
+- A cast member, or someone else's card from a lorebook: **View** and **Copy to my characters**. The copy is a new character card of your own, of what the member shows now, with no link back.
 
 ### Edit a character
 
@@ -66,7 +101,7 @@ Press **Edit** under the name on a character's page, or **Edit** in its **⋮** 
 | Tab | Fields |
 | --- | --- |
 | **Profile** | **Summary**, **Description**, **Aliases**, **Tags**, **Favorite**, **Persona**, **Default persona** |
-| **Voice** | **Personality**, **First message** |
+| **Voice** | **Personality**, **First greeting** |
 | **Notes** | **Creator notes** |
 | **Likeness** | How pictures of the character are drawn. See [Likeness](#likeness). |
 | **Stats** | The stats the character brings to every session. See [Stats on a card](#stats-on-a-card). |
@@ -79,25 +114,35 @@ Only **Name** and **Description** are required. A field with a small eye icon is
 
 Hover a field's name, or the box itself, for what it's for. **Summary** counts its characters once you are near the 200.
 
-**Show all fields**, at the bottom of the form, adds everything else a card can carry. It's remembered for next time.
+With [advanced controls](./themes-and-settings.md#show-advanced-controls) on, the form adds everything else a card can carry; with them off it shows the common fields only, and a line at the foot, *Some controls are hidden.*, turns them on. What is hidden keeps its saved value.
 
-- On **Profile**: **Version**, **Creator** and **Category**.
-- On **Voice**: **Scenario** (left out of group sessions), **Alternate greetings**, **Group-only greetings**, **Example dialogues** (sample exchanges that teach the AI the character's voice; with several, each session uses one of them for the whole session), and **Post-history instructions** (placed after the conversation, just before the reply; good for style reminders).
-- On **Notes**: creator notes in other languages.
+- On **Profile**: **Version label**, **Creator** and **Category**.
+- On **Voice**: **Scenario** (left out of group sessions), all of the card's **Greetings** in one list, **Example dialogues** (sample exchanges that teach the AI the character's voice; with several, each session uses one of them for the whole session), and **Post-history instructions** (placed after the conversation, just before the reply; good for style reminders).
+- On **Notes**: the **Language** of the creator notes, and **Other languages**: the notes in other languages, one per language code (**Add a language**).
+
+**Greetings** is one list. A new session opens with the first greeting and offers the others as swipes. Mark a greeting **Group sessions only** and group sessions use it; when no greeting is marked, a group session uses the others. Empty greetings are kept, as empty swipes. With advanced controls off, only the first greeting shows. After a save, the marked greetings are listed after the others.
 
 Press **Save** (or **Ctrl S**) to keep your changes. While there are unsaved changes the header says **Unsaved changes**, and leaving asks **Discard unsaved changes?** first.
 
-A card is a starter: it gives enough to begin a story. Once the card is in a lorebook, it represents a **cast member** there, and what a story changes about the character is kept on that member (see [What the member tells in their own words](./lorebook-cast.md#what-the-member-tells-in-their-own-words)). When a card represents any cast members, a line under the name says in which lorebooks (_In 1 lorebook: Atlas of Everything_); each lorebook's name opens that member. If one retells parts of the card, such as its description or face, the line names those parts after the lorebook (_(retells description, face)_); hover the line for how many members the card represents. Editing the card changes every member that still reads that part from the card; a member's retold parts stay as they are.
+### Card versions
+
+A card can keep more than one version of itself, so a cast member can stay on the words they were made from while the card moves on.
+
+- **Save as new version**, beside **Save**, saves your changes as the card's next version. It asks for the **Version label**, filled in with the next number after the newest version's (_1.0_ becomes _1.1_, _v2_ becomes _v3_). The newest version is the card's **current** one: new cast members start from it.
+- When cast members stay on an older version, the form stays open after the save and says who (_3 cast members stay on v1.0: Bianca, Theo, Ada._). Each name opens that cast member.
+- With more than one version, a picker under the name shows them (_v1.0 · v1.1 · current_). Pick one to edit it. **Save** writes the version you picked, in place, and every cast member still on that version reads the change (_Saving changes v1.0 in place; v1.1 is the current version._). Changing **Version label** and saving renames that version.
+
+A card is a starter: it gives enough to begin a story. Once the card is in a lorebook, it represents a **cast member** there, and what a story changes about the character is kept on that member (see [What the member tells in their own words](./lorebook-cast.md#what-the-member-tells-in-their-own-words)). When a card represents any cast members, a line under the name says in which lorebooks (_In 1 lorebook: Atlas of Everything_); each lorebook's name opens that member. If one retells parts of the card, such as its description or face, the line names those parts after the lorebook (_(retells description, face)_); hover the line for how many members the card represents. A member on an older version of the card gets a line under it (_On card v1.0; the card is on v1.1._) with **Update ‹name› to card v1.1**, which moves that member onto the current version; there is no button for all of them at once. Editing the card changes every member on the version you edit that still reads that part from the card; a member's retold parts stay as they are. The same line shows on the character's profile, under the name. In the edit form, a sentence under it says which cast members editing changes and which of their parts are their own (_Editing this changes Bianca in Porto Alto and The Shared House (their description, scenario, greetings, example dialogues and face; their personality is their own there)._); as in the line above, each lorebook's name in it opens that member. It is left out when every part is the member's own everywhere.
 
 ### Favorites, folders and tags
 
-- **Favorite** (on the form) pins a character to the top of its folder, with a small star.
+- **Favorite** (on the form) marks a character with a small star. Favorites sort to the top of the list, and the **Favorites** filter shows only them.
 - **Folders** group the list for you alone: "Campaign 2", "Retired", "NPCs". Create one with **New › New folder**, and file a character with **Move to folder…** in its **⋮** menu. A character is in one folder or none, and folders can't hold folders. A folder's own **⋮** menu renames or deletes it; deleting a folder keeps its characters.
 - **Tags** are labels a character can carry several of, shared with lorebooks and sessions. Type in the **Tags** field to pick one, or press Enter to create it. See [Tags](./tags.md).
 
 ### Delete a character
 
-**Delete** in the **⋮** menu asks first, naming the character. It leaves your list for good, along with the gallery and sprites on its card. Sessions that already have it keep it in their cast, with every message, its name and its picture.
+**Delete** in the **⋮** menu asks first, naming the character. It leaves your list for good, along with the gallery and sprites on its card. Sessions that already have it keep it in their cast, with every message, its name and its picture: it plays on there as a cast member who keeps the card's words (see [Lorebook cast](./lorebook-cast.md)).
 
 ## Avatar and gallery
 
@@ -115,7 +160,7 @@ The **gallery** holds more pictures. Open the character and switch to its **Gall
 4. The dialog says how many pictures that is and how many requests it takes (*2 pictures · 1 call*). A model that can return several pictures at once draws them in one request; others take one request each. An admin also sees which model draws them and, when it's known, the price.
 5. Press **Generate**. Before anything is drawn, a review card shows the prompt: change it if you like, then **Approve**. **Reject** stops without drawing.
 
-The pictures are drawn from the character's [likeness](#likeness): the likeness image is shown to the model, and the likeness prompt is the prompt. A model that can't take a reference image draws from the likeness prompt alone, and the dialog says so before you start. A character with no likeness gets a general portrait, which rarely looks like them; fill in the **Likeness** tab first.
+The pictures are drawn from the character's [likeness](#likeness): the likeness image is shown to the model, and the likeness prompt is the prompt. A model that can't take a reference image draws from the likeness prompt alone, and the dialog says so before you start. A character with no likeness at all — no image and no prompt — can't have a portrait yet: the dialog says *Add a likeness first* and **Generate** stays off until the **Likeness** tab has one.
 
 The new pictures are added to the gallery, marked **New**. Nothing else changes until you choose: open a picture's **⋮** menu and pick **Set as avatar** or **Use as likeness image**, or **Delete** the ones you don't want. **Stop** on the progress line ends a run that is still drawing.
 
@@ -184,7 +229,7 @@ Sets are chosen by name, so renaming one sends anything that chose the old name 
 A character's likeness tells an image model how to draw them, so every picture of them looks like the same person. Open the character, press **Edit** and switch to the **Likeness** tab. Personas have one too.
 
 - **Likeness image** is the picture the image model is shown. It starts as the **Avatar** and follows it when the avatar changes. **Gallery** or **Sprite** picks one of the character's own images instead; save the character first to see them.
-- **Likeness prompt** is a short line of what can be seen, separated by commas: *adult woman, red braid, green cloak, freckles*. Keep it to looks, not personality. This line does most of the work, so a good one matters more than a good image. **Describe from image** writes it for you from the likeness image; the button appears once a model that reads pictures is set up, and nothing is kept until you **Save**.
+- **Likeness prompt** is a short line of what can be seen, separated by commas: *adult woman, red braid, green cloak, freckles*. Keep it to looks, not personality. This line does most of the work, so a good one matters more than a good image. **Describe from image** writes it for you from the likeness image; the button appears once a model that reads pictures is set up — the **Vision** loadout, which runs on the Reply loadout's model when that model sees pictures — and nothing is kept until you **Save**.
 - **Avoid** lists what should never show up in a picture of them: *glasses, beard*. It's optional.
 
 The likeness is saved with the character's **Save**. It isn't the description: the AI that writes replies never sees it unless a prompt asks for it.
@@ -230,7 +275,7 @@ Coming from SillyTavern with a whole folder of characters? See [Importing from S
 A card exported from Serene Pub remembers which character it came from:
 
 - If nothing has changed, you see **Character already imported** and the existing character is used.
-- If it has changed, you choose **Overwrite existing**, **Import as new**, or **Cancel**. The file waits up to 15 minutes for your answer; after that, choose it again.
+- If it has changed, you choose **Add as a new version** (the file becomes the card's next version, under the **Version label** you give it), **Save as a new card**, or **Cancel**. Nothing you have is overwritten. The file waits up to 15 minutes for your answer; after that, choose it again.
 
 ### Cards that carry a lorebook
 
@@ -276,12 +321,29 @@ What they get is read-only: the character appears in their Characters view under
 
 Guests in your sessions see the cast's characters without any sharing; sharing is for a character outside a session.
 
+## Copy a cast member to your characters
+
+A cast member can become a character card of your own. Open the member's page in a lorebook's cast, or a seated member's sheet in a session, and choose **Copy to my characters**. The copy opens in Characters.
+
+Anyone who can read the member's lorebook can copy the member, and so can anyone in a session that seats them.
+
+The copy holds:
+
+- **Their words as the lorebook reads them now**: the description, personality, scenario, greetings and example dialogues they tell in their own words, and the card's for the parts they don't.
+- **Their face and likeness picture**, as files of your own.
+- **Their sprite sets**: the member's own, or else their card's.
+- **Their gallery**: the member's own, or else their card's, when you can read that card.
+- **Their stats**, with their current values as the card's starting values.
+- **The card's tags**, when you can read that card.
+
+The copy is not linked back. Changing it does not change the member, and changing the member does not change it.
+
 ## Characters in sessions
 
 The same character can be in any number of [sessions](./sessions.md), alone with you or in a [group](./group-sessions.md).
 
 - **How much of each character the AI reads** on other characters' turns is one setting for the whole session: [Character detail](./group-sessions.md#character-detail). A character always gets its own card in full on its own turn.
-- **Benching** a character keeps it in the session but out of the turn order: see [Bench a character](./group-sessions.md#bench-a-character).
+- **Benching** a seat keeps it in the session but out of the turn order: see [Bench a seat](./group-sessions.md#bench-a-seat).
 - **Lorebooks**: when a character joins a session that reads a lorebook, it joins the book's cast. See [Cast and relationships](./lorebook-cast.md).
 
 ## For power users

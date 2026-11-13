@@ -7,7 +7,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		absorbCastMember,
 		notAbsorbedTitle,
@@ -84,8 +84,8 @@
 		if (undoing.delete(msg.mergeLogId)) {
 			const toast = undoMergeToast(msg)
 			const shown = { title: toast.title, description: toast.description }
-			if (toast.kind === "warning") toaster.warning(shown)
-			else toaster.success(shown)
+			if (toast.kind === "warning") notify.warning(shown)
+			else notify.success(shown)
 		}
 		fetchAll()
 	}
@@ -114,18 +114,21 @@
 		absorbCastMember(socket, {
 			nodeId: candidate.bindingIdA,
 			parentNodeId: candidate.bindingIdB
-		}).then((res) => {
-			toaster.success({
-				title: "Absorbed",
-				description: `Merged into "${res.survivorNode.name}". Undo from Recent merges if this was a mistake.`
-			})
-		}, (err: unknown) => {
-			toaster.error({
-				title: notAbsorbedTitle(candidate.nameA),
-				description: err instanceof Error ? err.message : undefined
-			})
-			if (!gone) fetchAll()
-		})
+		}).then(
+			(res) => {
+				notify.success({
+					title: "Absorbed",
+					description: `Merged into "${res.survivorNode.name}". Undo from Recent merges if this was a mistake.`
+				})
+			},
+			(err: unknown) => {
+				notify.error({
+					title: notAbsorbedTitle(candidate.nameA),
+					description: err instanceof Error ? err.message : undefined
+				})
+				if (!gone) fetchAll()
+			}
+		)
 		// Optimistic: the server re-emits its own candidate list after the
 		// merge and corrects this if anything is off.
 		candidates = candidates.filter((c) => c !== candidate)

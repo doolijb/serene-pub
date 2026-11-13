@@ -25,33 +25,52 @@ vi.mock("$lib/server/db", async () => {
 })
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-vitest-upgrade-offer-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-vitest-upgrade-offer-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
-	await testDb.insert(schema.systemSettings).values({ id: 1 }).onConflictDoNothing()
+	await testDb
+		.insert(schema.systemSettings)
+		.values({ id: 1 })
+		.onConflictDoNothing()
 }, 60_000)
 
 afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-
 let n = 0
 
-async function world(over: { pinned?: string | null; published?: string | null; upgrades?: unknown[] } = {}) {
+async function world(
+	over: {
+		pinned?: string | null
+		published?: string | null
+		upgrades?: unknown[]
+	} = {}
+) {
 	const k = ++n
 	const rulesetId = `acme.lab:ruleset/offer-${k}@1`
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `offer-owner-${k}`)
 	const published = over.published === undefined ? "2.0.0" : over.published
-	const upgrades = over.upgrades ?? [{ from: "1.0.0", to: "2.0.0", note: "Nerve is now called Resolve.", slots: {} }]
+	const upgrades = over.upgrades ?? [
+		{
+			from: "1.0.0",
+			to: "2.0.0",
+			note: "Nerve is now called Resolve.",
+			slots: {}
+		}
+	]
 	await testDb.insert(schema.rulesets).values({
 		rulesetId,
 		ownerSlug: "acme.lab",
 		label: `Offer ${k}`,
 		draft: {},
-		published: published ? { id: rulesetId, version: published, upgrades } : null,
+		published: published
+			? { id: rulesetId, version: published, upgrades }
+			: null,
 		publishedVersion: published
 	})
 	const [session] = await testDb
@@ -68,19 +87,35 @@ async function world(over: { pinned?: string | null; published?: string | null; 
 }
 
 const offer = async (sessionId: number) => {
-	const { rulesetUpgradeOffer } = await import("$lib/server/sessions/convertRuleset")
+	const { rulesetUpgradeOffer } = await import(
+		"$lib/server/sessions/convertRuleset"
+	)
 	return rulesetUpgradeOffer(testDb as unknown as Db, sessionId)
 }
 
 describe("rulesetUpgradeOffer", () => {
-	test("pinned 1.0.0, published 2.0.0 with a noted chain: the offer carries the note", { timeout: 60_000 }, async () => {
-		const s = await world()
-		expect(await offer(s.id)).toEqual({ from: "1.0.0", to: "2.0.0", notes: ["Nerve is now called Resolve."] })
-	})
+	test(
+		"pinned 1.0.0, published 2.0.0 with a noted chain: the offer carries the note",
+		{ timeout: 60_000 },
+		async () => {
+			const s = await world()
+			expect(await offer(s.id)).toEqual({
+				from: "1.0.0",
+				to: "2.0.0",
+				notes: ["Nerve is now called Resolve."]
+			})
+		}
+	)
 
 	test("a step with no note adds none", { timeout: 60_000 }, async () => {
-		const s = await world({ upgrades: [{ from: "1.0.0", to: "2.0.0", slots: {} }] })
-		expect(await offer(s.id)).toEqual({ from: "1.0.0", to: "2.0.0", notes: [] })
+		const s = await world({
+			upgrades: [{ from: "1.0.0", to: "2.0.0", slots: {} }]
+		})
+		expect(await offer(s.id)).toEqual({
+			from: "1.0.0",
+			to: "2.0.0",
+			notes: []
+		})
 	})
 
 	test("the same version: null", { timeout: 60_000 }, async () => {
@@ -93,8 +128,14 @@ describe("rulesetUpgradeOffer", () => {
 		expect(await offer(s.id)).toBeNull()
 	})
 
-	test("not pinned, or nothing published: null", { timeout: 60_000 }, async () => {
-		expect(await offer((await world({ pinned: null })).id)).toBeNull()
-		expect(await offer((await world({ published: null })).id)).toBeNull()
-	})
+	test(
+		"not pinned, or nothing published: null",
+		{ timeout: 60_000 },
+		async () => {
+			expect(await offer((await world({ pinned: null })).id)).toBeNull()
+			expect(
+				await offer((await world({ published: null })).id)
+			).toBeNull()
+		}
+	)
 })

@@ -23,6 +23,7 @@ import {
 	i18nText,
 	rulesetEntryable,
 	rulesetEntryTypeId,
+	rulesets,
 	type FieldDecl,
 	type RulesetDecl
 } from "@serene-pub/sdk"
@@ -83,12 +84,55 @@ export async function bookRulesLists(db: Db, lorebookId: number): Promise<BookRu
 export async function bookRulesListsRead(
 	db: Db,
 	lorebookId: number
-): Promise<{ rulesName: string | null; types: BookRulesList[] }> {
+): Promise<{ rulesName: string | null; types: BookRulesList[]; otherRules: OtherRulesLists[] }> {
 	const rules = await bookRulesOf(db, lorebookId)
 	return {
 		rulesName: rules ? (i18nText(rules.name) ?? rules.id) : null,
-		types: rulesListsOf(rules)
+		types: rulesListsOf(rules),
+		otherRules: await otherRulesListsOf(db, lorebookId, rules)
 	}
+}
+
+/** 🚧 ★50 The lists of OTHER rules than the book's that it holds entries of, under those rules' name. */
+export interface OtherRulesLists {
+	rulesName: string
+	types: BookRulesList[]
+}
+
+/**
+ * 🚧 ★50 (owner ruling 2026-11-04): a book may hold entries of rules it is not
+ * told by — a provided book's package-ruleset entries, a converted book's —
+ * and they were counted in Everything but listed in no view. Every installed
+ * rules other than the book's own whose lists the book holds an entry of is
+ * sent, with only the lists the book holds an entry of; the workspace draws them
+ * under those rules' name, never as a list the book may add to (`rulesListRefusal` still refuses).
+ */
+export async function otherRulesListsOf(
+	db: Db,
+	lorebookId: number,
+	own: RulesetDecl | undefined
+): Promise<OtherRulesLists[]> {
+	const held = new Set<string>(
+		(
+			await db
+				.selectDistinct({ typeId: schema.lorebookEntries.typeId })
+				.from(schema.lorebookEntries)
+				.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
+		)
+			.map((r) => r.typeId)
+			.filter((t) => isDerivedEntryTypeId(t))
+	)
+	if (!held.size) return []
+	const out: OtherRulesLists[] = []
+	for (const rules of rulesets()) {
+		if (own && rules.id === own.id) continue
+		// Only the lists the book holds something of: a foreign list with
+		// nothing in it is not drawn (★50: "lists with something in them").
+		const types = rulesListsOf(rules).filter((t) => held.has(t.typeId))
+		if (!types.length) continue
+		out.push({ rulesName: i18nText(rules.name) ?? rules.id, types })
+	}
+	return out.sort((a, b) => a.rulesName.localeCompare(b.rulesName))
 }
 
 /**

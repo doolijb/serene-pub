@@ -25,6 +25,7 @@
  */
 
 import { asc, count, eq, isNull } from "drizzle-orm"
+import { rulesetFitReader } from "$lib/server/rulesets/genreFit"
 import {
 	_withdrawRuleset,
 	attributeSlots,
@@ -114,6 +115,12 @@ export interface RulesetListRow {
 	playedBy: { sessions: number; lorebooks: number }
 	/** The plugin's display name for a plugin ruleset; null otherwise. */
 	pluginName: string | null
+	/**
+	 * 🚧 (s22-V, ★§22-3) How each enabled genre that declares `uses` (or
+	 * `rulesets: { only }`) rates this ruleset (`rulesetFitReader`). Absent
+	 * when no genre speaks, or the ruleset is not registered (a draft).
+	 */
+	rulesetFitByGenre?: import("$lib/server/rulesets/genreFit").RulesetGenreFit[]
 }
 
 export interface RulesetDetail extends RulesetListRow {
@@ -534,9 +541,11 @@ async function listRow(
 	db: Db,
 	decl: RulesetDecl | undefined,
 	row: Row | undefined,
-	plugins?: Map<string, string>
+	plugins?: Map<string, string>,
+	rulesetFitOf?: (rulesetId: string) => import("$lib/server/rulesets/genreFit").RulesetGenreFit[] | undefined
 ): Promise<RulesetListRow> {
 	const id = (row?.rulesetId ?? decl?.id)!
+	const fit = decl ? rulesetFitOf?.(id) : undefined
 	const doc = (row?.published ?? row?.draft) as RulesetDocument | undefined
 	const shown = decl ?? (doc as unknown as RulesetDecl | undefined)
 	const origin: RulesetOrigin = row ? "pub" : id.startsWith("core:") ? "core" : "plugin"
@@ -555,7 +564,8 @@ async function listRow(
 		rollsDice: rollsDice(shown),
 		// 🚧 Any deciding function, in either shape (the SDK's reading, 2026-10-23).
 		decides: !!shown && rulesetDecides(shown),
-		playedBy: await playedBy(db, id)
+		playedBy: await playedBy(db, id),
+		...(fit ? { rulesetFitByGenre: fit } : {})
 	}
 }
 
@@ -563,11 +573,12 @@ async function listRow(
 export async function listRulesets(db: Db): Promise<RulesetListRow[]> {
 	const rows = await rowsByRulesetId(db)
 	const plugins = await pluginNames(db)
+	const rulesetFitOf = await rulesetFitReader(db)
 	const out: RulesetListRow[] = []
 	const seen = new Set<string>()
 	for (const decl of rulesets()) {
 		seen.add(decl.id)
-		out.push(await listRow(db, decl, rows.get(decl.id), plugins))
+		out.push(await listRow(db, decl, rows.get(decl.id), plugins, rulesetFitOf))
 	}
 	for (const [id, row] of rows) if (!seen.has(id)) out.push(await listRow(db, undefined, row, plugins))
 	return out.sort((a, b) => (a.origin === b.origin ? a.name.localeCompare(b.name) : a.origin === "core" ? -1 : b.origin === "core" ? 1 : a.origin.localeCompare(b.origin)))
@@ -578,7 +589,8 @@ export async function rulesetDetail(db: Db, rulesetId: string): Promise<RulesetD
 	const row = rows.get(rulesetId)
 	const decl = getRuleset(rulesetId)
 	if (!row && !decl) return null
-	const base = await listRow(db, decl, row)
+	const rulesetFitOf = await rulesetFitReader(db)
+	const base = await listRow(db, decl, row, undefined, rulesetFitOf)
 	const draft = (row?.draft ?? null) as RulesetDocument | null
 	const published = (row?.published ?? null) as RulesetDocument | null
 	const shownDoc = draft ?? (decl ? rulesetDocumentOf(decl) : null)

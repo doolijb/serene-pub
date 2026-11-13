@@ -20,12 +20,14 @@
  * implementations of "and then record it" is how the delete safeguard ends up
  * recording a different set of slots from the capture beside it.
  *
- * ## No lorebook: the session's own notes (🚧 PLAN-rulesets §26)
+ * ## A session with no attached book: its own book (🚧 PLAN-rulesets §26)
  *
- * Until 2026-10-16 a session with no world recorded nothing. It now has one
- * of its own — its notes (`$lib/server/lorebooks/ownBook.ts`), a hidden
- * lorebook it alone owns — and the world's values land there. The delete
- * safeguard is the exception: the notes go with the session it records.
+ * Every session has a book: the attached one, or its own book
+ * (`$lib/server/lorebooks/ownBook.ts`), a hidden lorebook it alone owns,
+ * shown on screen as **Session notes**. A session with no attached book
+ * records the world's values on its own book. The delete safeguard is the
+ * exception and records nothing there: the own book goes with the session
+ * it records.
  *
  * ## Where, and whether (plan A22, ruled 2026-09-30; routed 2026-10-16)
  *
@@ -34,12 +36,14 @@
  * on the session's line, dated at the moment the recording names (a
  * capture's scene names its history entry) or else at the latest history
  * entry on that line at or before the session's story now
- * (`writeDatingAt`). Otherwise — no book, Review changes, Off, or someone
- * else's book — the world's values land in the session's notes, on their
- * main line and undated (`loreWriteTargetFor`); Review changes files no
- * proposals from here, the notes being the overlay a review resolves.
+ * (`writeDatingAt`). Otherwise — no attached book, Review changes, Off,
+ * or someone else's book — the world's values land in the session's own
+ * book, on its main line and undated (`loreWriteTargetFor`); Review changes
+ * files no proposals from here, the own book being the overlay a review
+ * resolves.
  * The delete safeguard keeps the A22 table: Full and Review changes write
- * the book (a proposal would go with its session), Off records nothing.
+ * the book (a proposal would go with its session), Off records nothing, and
+ * a book someone else owns records nothing on delete.
  *
  * Full writes each value through the book's own door (`validateValue`), as
  * Review's proposals are judged: a value may resolve from the card's layer,
@@ -47,7 +51,9 @@
  * place is refused (`refused`) and not recorded (plan A18(a)).
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
+import { castOwnerOf, type StateOwner } from "$lib/server/state/owners"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import * as schema from "$lib/server/db/schema"
 import { slotValueForStorage } from "@serene-pub/sdk"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
@@ -66,6 +72,7 @@ import {
 	validateValue
 } from "$lib/server/state/write"
 import { lockBookCalendar } from "$lib/server/state/storyTime"
+import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
 import { MAIN_HEAD, placesOnReading } from "$lib/server/state/entriesOnReading"
 
 /** Why a row is being recorded — the ledger reads it, and it is not a status. */
@@ -163,17 +170,32 @@ export async function recordToTimeline(
 	 *
 	 * The delete safeguard never routes to the notes — they go with the
 	 * session it records — and keeps the A22 table: Full and Review changes
-	 * write the book, Off and no book record nothing.
+	 * write the book, Off and no book record nothing; a book someone else
+	 * owns records nothing on delete either.
 	 */
 	let lorebookId: number
 	let route: "book" | "own-book"
 	if (opts.reason === "delete") {
 		if (!links.lorebookId || mode === "off") return report
+		// A book someone else owns records nothing: the same ownership
+		// test `loreWriteRoute` applies (`own-book`), and the notes go
+		// with the session, so there is nowhere else for it to land.
+		const [owners] = await db
+			.select({
+				sessionOwnerId: schema.sessions.userId,
+				bookOwnerId: schema.lorebooks.userId
+			})
+			.from(schema.sessions)
+			.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, links.lorebookId))
+			.where(eq(schema.sessions.id, sessionId))
+		if (!owners || owners.bookOwnerId !== owners.sessionOwnerId) return report
 		lorebookId = links.lorebookId
 		route = "book"
 	} else {
 		const { loreWriteTargetFor } = await import("$lib/server/lorebooks/ownBook")
-		const target = await loreWriteTargetFor(db, sessionId)
+		// Routed only: the line forks inside the first `record` transaction
+		// that has something to write, after its checks.
+		const target = await loreWriteTargetFor(db, sessionId, { fork: false })
 		lorebookId = target.lorebookId
 		route = target.route
 	}
@@ -195,13 +217,30 @@ export async function recordToTimeline(
 	// on main and on every branch — so a branch session's facts would leak
 	// onto every line. The FK on `branch_id` cascades it away with the
 	// branch, as the line's amendments and entries go.
-	// The notes are never branched as a book, and the book's history is not
-	// theirs to file under: main, undated (unless the caller named one).
+	// The notes are branched as a book only when the session reads them alone
+	// on a line (no attached book; a fold can leave it on one): then the row
+	// lands on that line, dated by the line's history. Beside an attached book,
+	// or on the notes' main, they are main and undated unless the caller named
+	// a history entry.
+	const sessionReading =
+		route === "own-book" && links.lorebookId == null
+			? (links.reading ?? (await sessionReadingOf(db, sessionId)))
+			: null
+	const onOwnLine =
+		sessionReading != null &&
+		sessionReading.onOwnBook === true &&
+		sessionReading.branchId != null &&
+		sessionReading.lorebookId === lorebookId
 	const reading =
-		route === "own-book" ? null : (links.reading ?? (await sessionReadingOf(db, sessionId)))
+		route === "own-book"
+			? onOwnLine
+				? sessionReading
+				: null
+			: (links.reading ?? (await sessionReadingOf(db, sessionId)))
 	if (opts.historyEntryId === undefined && reading)
 		report.historyEntryId = (await writeDatingAt(db, reading))?.historyEntryId ?? null
-	if (route === "own-book" && opts.historyEntryId === undefined) report.historyEntryId = null
+	if (route === "own-book" && !onOwnLine && opts.historyEntryId === undefined)
+		report.historyEntryId = null
 	const common = {
 		branchId: reading?.branchId ?? null,
 		historyEntryId: report.historyEntryId,
@@ -219,7 +258,7 @@ export async function recordToTimeline(
 
 	/** One owner's whole state, read from the session and filed against the world. */
 	const record = async (
-		read: { kind: "session" | "session_cast" | "session_location"; id: number },
+		read: StateOwner,
 		write: { kind: "lorebook" | "cast_member" | "location"; id: number },
 		facet: "world" | "cast" | "location",
 		/** Whose values these are, to lead a refusal's sentence. */
@@ -261,19 +300,29 @@ export async function recordToTimeline(
 						value: slotValueForStorage(value),
 						config
 					})
+					// The attached book's rows land on the session's line, forked
+					// here on its first write (after the checks, on `tx`); the
+					// notes' rows are main.
+					const filed =
+						route === "book" && into.lorebookId === lorebookId
+							? {
+									...into.common,
+									branchId: await ensureSessionLine(tx, sessionId)
+								}
+							: into.common
 					await tx.insert(schema.attributeValues).values({
 						ownerKind: write.kind,
 						ownerId: write.id,
 						slotId: decl.id,
 						value: { v: value },
-						...into.common
+						...filed
 					})
 					await tx.insert(schema.attributeConfigs).values({
 						ownerKind: write.kind,
 						ownerId: write.id,
 						slotId: decl.id,
 						config,
-						...into.common
+						...filed
 					})
 				})
 			} catch (e) {
@@ -288,6 +337,36 @@ export async function recordToTimeline(
 			wrote = true
 		}
 		if (wrote) report.owners.push(`${write.kind}:${write.id}`)
+	}
+
+	/**
+	 * 🚧 ⏳ ★K-2, flip on: a card held by a character seat AND a player seat is
+	 * two links onto one durable member, and only the character seat's files
+	 * (the first in `seatOf`'s order); the player seat's values stay with the
+	 * session. `sameMember` says whether another link files the same durable
+	 * member. Off: one link per card, nothing is skipped.
+	 */
+	const heldByCharacterSeat = (
+		link: (typeof links.cast)[number],
+		sameMember: (other: (typeof links.cast)[number]) => boolean
+	): boolean =>
+		memberFormOn() && link.playerSeatId != null && links.cast.some((c) => c.playerSeatId == null && sameMember(c))
+
+	/**
+	 * 🚧 ⏳ S4 (flip on): which of the card-less player seats' members live in `bookId` (one query on the book's members), by member id.
+	 */
+	const playerSeatMembersIn = async (bookId: number): Promise<Set<number>> => {
+		const ids = [
+			...new Set(
+				(links.playerSeats ?? []).map((p) => p.seatMemberId).filter((id): id is number => id != null)
+			)
+		]
+		if (!ids.length) return new Set()
+		const found = await db
+			.select({ id: schema.lorebookBindings.id })
+			.from(schema.lorebookBindings)
+			.where(and(inArray(schema.lorebookBindings.id, ids), eq(schema.lorebookBindings.lorebookId, bookId)))
+		return new Set(found.map((f) => f.id))
 	}
 
 	/**
@@ -309,15 +388,49 @@ export async function recordToTimeline(
 		for (const member of links.cast) {
 			const bound = memberOf.get(member.characterId)
 			if (bound == null || (!allCast && member.castMemberId)) continue
+			if (heldByCharacterSeat(member, (c) => memberOf.get(c.characterId) === bound)) continue
 			await record(
-				{ kind: "session_cast", id: member.characterId },
+				castOwnerOf(member),
 				{ kind: "cast_member", id: bound },
 				"cast",
 				member.name,
 				into
 			)
 		}
-		for (const place of await placesOnReading(db, ownBook.id, MAIN_HEAD, "session"))
+		// 🚧 ⏳ S4 (flip on): a card-less character seat files its member the same way; a carded link that already files the same member keeps it (K-2: filed once).
+		for (const seat of links.seatedMembers ?? []) {
+			const bound = seat.ownBookMemberId
+			if (bound == null || (!allCast && seat.castMemberId)) continue
+			if (links.cast.some((c) => c.playerSeatId == null && memberOf.get(c.characterId) === bound)) continue
+			await record(
+				{ kind: "seated_member", id: seat.seatMemberId },
+				{ kind: "cast_member", id: bound },
+				"cast",
+				seat.name,
+				into
+			)
+		}
+		// 🚧 ⏳ S4 (flip on): each card-less player seat whose member lives in the notes files onto that member, as the seated members do (K-2: skipped when a character seat of this session already files it).
+		const ownSeatMembers = await playerSeatMembersIn(ownBook.id)
+		for (const seat of links.playerSeats ?? []) {
+			const bound = seat.seatMemberId
+			if (bound == null || !ownSeatMembers.has(bound)) continue
+			if (links.cast.some((c) => c.playerSeatId == null && memberOf.get(c.characterId) === bound)) continue
+			if ((links.seatedMembers ?? []).some((m) => m.ownBookMemberId === bound)) continue
+			await record(
+				{ kind: "player_seat", id: seat.playerSeatId },
+				{ kind: "cast_member", id: bound },
+				"cast",
+				seat.name,
+				into
+			)
+		}
+		for (const place of await placesOnReading(
+			db,
+			ownBook.id,
+			links.lorebookId ? MAIN_HEAD : (links.reading ?? MAIN_HEAD),
+			"session"
+		))
 			await record(
 				{ kind: "session_location", id: place.entryId },
 				{ kind: "location", id: place.entryId },
@@ -344,11 +457,37 @@ export async function recordToTimeline(
 		// and inventing a binding here would be inventing a cast member the
 		// author never put in their world.
 		if (!member.castMemberId) continue
+		if (heldByCharacterSeat(member, (c) => c.castMemberId === member.castMemberId)) continue
 		await record(
-			{ kind: "session_cast", id: member.characterId },
+			castOwnerOf(member),
 			{ kind: "cast_member", id: member.castMemberId },
 			"cast",
 			member.name
+		)
+	}
+	// 🚧 ⏳ S4 (flip on): each card-less character seat whose member lives in this world files onto that member (K-2: not twice when a carded character seat already files it).
+	for (const seat of links.seatedMembers ?? []) {
+		if (!seat.castMemberId) continue
+		if (links.cast.some((c) => c.playerSeatId == null && c.castMemberId === seat.castMemberId)) continue
+		await record(
+			{ kind: "seated_member", id: seat.seatMemberId },
+			{ kind: "cast_member", id: seat.castMemberId },
+			"cast",
+			seat.name
+		)
+	}
+	// 🚧 ⏳ S4 (flip on): each card-less player seat whose member lives in this world files onto that member (K-2: not twice when a character seat of this session already files it).
+	const bookSeatMembers = await playerSeatMembersIn(lorebookId)
+	for (const seat of links.playerSeats ?? []) {
+		const bound = seat.seatMemberId
+		if (bound == null || !bookSeatMembers.has(bound)) continue
+		if (links.cast.some((c) => c.playerSeatId == null && c.castMemberId === bound)) continue
+		if ((links.seatedMembers ?? []).some((m) => m.castMemberId === bound)) continue
+		await record(
+			{ kind: "player_seat", id: seat.playerSeatId },
+			{ kind: "cast_member", id: bound },
+			"cast",
+			seat.name
 		)
 	}
 	// 🚧 Each place (phase 4), filed against its location entry — the
@@ -410,7 +549,7 @@ export async function newestHistoryEntryOf(
 		})
 		.from(schema.scenes)
 		.where(eq(schema.scenes.sessionId, sessionId))
-	let best: { id: number; historyEntryId: number } | undefined
+	let best: { id: number; historyEntryId: number | null } | undefined
 	for (const row of rows) if (!best || row.id > best.id) best = row
 	return {
 		historyEntryId: best?.historyEntryId ?? null,

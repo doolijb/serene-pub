@@ -8,7 +8,11 @@ import { flushSync } from "svelte"
 
 const errors: unknown[] = []
 vi.mock("$lib/client/utils/toaster", () => ({
-	toaster: { error: (t: unknown) => errors.push(t), success: vi.fn(), info: vi.fn() }
+	toaster: {
+		error: (t: unknown) => errors.push(t),
+		success: vi.fn(),
+		info: vi.fn()
+	}
 }))
 
 import { createRerunRefusals, rowAsks } from "./rerunRefusals.svelte"
@@ -33,7 +37,8 @@ function harness() {
 	return { refusals: () => refusals, deliver, stop }
 }
 
-const QUESTION = "This message is a question, not a reply — there is nothing to generate again. Answer it to go on."
+const QUESTION =
+	"This message is a question, not a reply — there is nothing to generate again. Answer it to go on."
 
 describe("rerun refusals", () => {
 	it("a refused swipe toasts its sentence once and the row stops being rerunnable", () => {
@@ -41,7 +46,9 @@ describe("rerun refusals", () => {
 		const h = harness()
 		h.refusals().asked("sessionMessages:swipeRight", 41)
 		h.deliver("sessionMessages:swipeRight", { error: QUESTION })
-		expect(errors).toEqual([{ title: QUESTION }])
+		expect(errors).toEqual([
+			{ id: "notify:sessions:rerunRefusal", title: QUESTION }
+		])
 		expect(h.refusals().isRefused(41)).toBe(true)
 		expect(h.refusals().key).toBe("41")
 		h.stop()
@@ -68,8 +75,22 @@ describe("rerun refusals", () => {
 
 describe("rowAsks", () => {
 	it("finds a form block, nested or not", () => {
-		expect(rowAsks({ parts: [{ data: { blocks: [{ kind: "text" }] } }] })).toBe(false)
-		expect(rowAsks({ parts: [{ data: { blocks: [{ kind: "group", blocks: [{ kind: "form" }] }] } }] })).toBe(true)
+		expect(
+			rowAsks({ parts: [{ data: { blocks: [{ kind: "text" }] } }] })
+		).toBe(false)
+		expect(
+			rowAsks({
+				parts: [
+					{
+						data: {
+							blocks: [
+								{ kind: "group", blocks: [{ kind: "form" }] }
+							]
+						}
+					}
+				]
+			})
+		).toBe(true)
 		expect(rowAsks({})).toBe(false)
 	})
 })

@@ -42,3 +42,15 @@ describe("cast tag label and kind", () => {
 		expect(castTagKind(rows, "{{char:2}}")).toBe("persona")
 	})
 })
+
+describe("a member's own names in the label (§0-D)", () => {
+	test("none: the card's, exactly as before", () => {
+		expect(castTagLabel(rows, "{{char:1}}")).toBe("Ari")
+	})
+	test("an own name with no own nickname (\"\") shows; an own nickname wins", () => {
+		const own = [{ ...rows[0], ownName: "Aria Nox", ownNickname: "" }]
+		expect(castTagLabel(own, "{{char:1}}")).toBe("Aria Nox")
+		const nick = [{ ...rows[0], ownNickname: "Ria" }]
+		expect(castTagLabel(nick, "{{char:1}}")).toBe("Ria")
+	})
+})

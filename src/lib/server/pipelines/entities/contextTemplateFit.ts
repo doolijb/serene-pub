@@ -21,6 +21,8 @@
  */
 
 import {
+	laidOutScope,
+	rendersAt,
 	templateFit,
 	templateFitSentence,
 	type SpecDocument,
@@ -44,14 +46,106 @@ const HOST_REFUSES: readonly TemplateFindingKind[] = [
 	"syntax",
 	"unknown-name",
 	"unknown-path",
-	"unknown-helper"
+	"unknown-helper",
+	// 🚧 A `layout <key> "<reference>"` call that names no variable of this step
+	// with layouts, or no layout it offers (law T1 covers references). Only a
+	// check that knows which keys are laid out can say so — see
+	// `contextTemplateChecking`; the plain scope below cannot.
+	"layout-argument",
+	"unknown-layout"
 ]
 
-/** Core's checker, with core's vocabulary. */
+/**
+ * Core's checker, with core's vocabulary, over a scope that does not know
+ * which keys are laid out.
+ *
+ * ⚠ Names and paths only: the refusal of a `layout` call needs the step's laid-out
+ * scope (`contextTemplateChecking`), which a caller holding just a document
+ * (`templateLawFindings` at publish) does not have — adding the two layout
+ * kinds here would refuse every valid `layout` call in a spec's own templates.
+ */
 export const CONTEXT_TEMPLATE_CHECKING: TemplateChecking = {
 	check: checkTemplateSourceReport,
 	options: CONTEXT_TEMPLATE_CHECK,
-	refuse: HOST_REFUSES
+	refuse: HOST_REFUSES.filter(
+		(k) => k !== "layout-argument" && k !== "unknown-layout"
+	)
+}
+
+/**
+ * The layouts every variable offers, across the whole pub: each variable's
+ * rows that carry a reference and are not withdrawn — what an explicit
+ * `layout` reference is checked against (and where the SDK finds its
+ * near-miss). Independent of the step.
+ */
+export async function variableLayoutOffersOf(
+	db: Db,
+	variableIds: readonly string[]
+): Promise<Record<string, Array<{ reference: string; label: string }>>> {
+	const { listVariableTemplates, layoutByReference } = await import(
+		"$lib/server/pipelines/entities/variableTemplates"
+	)
+	const out: Record<string, Array<{ reference: string; label: string }>> = {}
+	for (const variableId of new Set(variableIds)) {
+		const offered: Array<{ reference: string; label: string }> = []
+		for (const row of await listVariableTemplates(db, variableId))
+			if (
+				row.reference &&
+				(await layoutByReference(db, variableId, row.reference)) === row.id
+			)
+				offered.push({ reference: row.reference, label: row.name })
+		out[variableId] = offered
+	}
+	return out
+}
+
+/**
+ * Core's checking **for one step**: the same checker, but over the step's
+ * laid-out scope (`laidOutScope` with what its `variables` slot renders) and
+ * with the layouts every variable offers, so a `layout <key> "<reference>"`
+ * call is read for what it is and an unknown reference is refused with its
+ * near-miss.
+ */
+export async function contextTemplateChecking(
+	db: Db,
+	doc: SpecDocument,
+	nodeKey: string,
+	describe: ReturnType<typeof rowSource>
+): Promise<TemplateChecking> {
+	// Every key a `variables` slot renders anywhere in the document, not only
+	// this node's: the context builder lays out `characters`, `scenario` and
+	// the rest, and the template at Assemble reads them across a port. All the
+	// document's variables-slot nodes rather than exactly the ones upstream —
+	// a key two nodes lay out by different variables is the node's own, the
+	// others written first so it wins. Offers stay per variable, pub-wide.
+	const renders: Record<string, string> = {}
+	const rendersOfNode = (key: string): Record<string, string> => {
+		const node = doc.nodes.find((n) => n.key === key)
+		const described = node ? describe(node) : undefined
+		const out: Record<string, string> = {}
+		for (const slot of Object.values(described?.slots ?? {}))
+			if (slot.kind === "variables")
+				Object.assign(out, rendersAt(doc, key, slot, describe))
+		return out
+	}
+	for (const n of doc.nodes)
+		if (n.key !== nodeKey) Object.assign(renders, rendersOfNode(n.key))
+	Object.assign(renders, rendersOfNode(nodeKey))
+	const variableLayoutOffers = await variableLayoutOffersOf(
+		db,
+		Object.values(renders)
+	)
+	return {
+		...CONTEXT_TEMPLATE_CHECKING,
+		check: (engine, source, scope, options) =>
+			checkTemplateSourceReport(
+				engine,
+				source,
+				laidOutScope(scope, renders),
+				{ ...options, variableLayoutOffers }
+			),
+		refuse: HOST_REFUSES
+	}
 }
 
 /** Where a template is rendered: one template slot of one published version. */
@@ -87,6 +181,7 @@ export async function contextTemplateFitAt(
 			await import("$lib/server/pipelines/boot/store")
 		).loadDocument(db, at.specVersionId))
 	try {
+		const describe = rowSource(read.byPin ?? (await registryByPin(db)))
 		return templateFit(
 			doc,
 			at.nodeKey,
@@ -94,11 +189,8 @@ export async function contextTemplateFitAt(
 				engine: template.engine ?? CORE_TEMPLATE_ENGINE,
 				source: template.source
 			},
-			CONTEXT_TEMPLATE_CHECKING,
-			{
-				slot: at.slot,
-				describe: rowSource(read.byPin ?? (await registryByPin(db)))
-			}
+			await contextTemplateChecking(db, doc, at.nodeKey, describe),
+			{ slot: at.slot, describe }
 		)
 	} catch (e) {
 		console.warn(

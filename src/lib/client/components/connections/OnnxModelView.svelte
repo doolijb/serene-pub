@@ -35,7 +35,7 @@
 	 * the reason under it — the files are real, and the star is refused with
 	 * that sentence too.
 	 */
-	import { getContext } from "svelte"
+	import { getContext, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
@@ -184,8 +184,11 @@
 	 */
 	const precisions = $derived(quantsFromOnnx(local?.catalog))
 	let choosing = $state(false)
-	function download() {
+	/** The button that opened the picker; Cancel returns focus to it. */
+	let opener: HTMLElement | null = null
+	function download(from: HTMLElement) {
 		if (quantChoice(precisions) === "picker") {
+			opener = from
 			choosing = true
 			return
 		}
@@ -371,11 +374,13 @@
 				<span class="text-sm font-semibold">{headline.text}</span>
 				{#if isActive && section}
 					<span
-						class="preset-tonal-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-meta font-medium"
+						class="preset-tonal-primary text-meta inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium"
 						title={`In the ${isEmbeddings ? "Embeddings" : "Entities"} loadout`}
 					>
 						<Icons.Star size={9} aria-hidden="true" />
-						{isEmbeddings ? "Embeddings loadout" : "Entities loadout"}
+						{isEmbeddings
+							? "Embeddings loadout"
+							: "Entities loadout"}
 					</span>
 				{/if}
 			</div>
@@ -453,7 +458,7 @@
 							type="button"
 							class="{action} preset-filled-primary-500"
 							disabled={busy}
-							onclick={download}
+							onclick={(e) => download(e.currentTarget)}
 						>
 							<Icons.RefreshCw size={14} aria-hidden="true" />
 							Retry
@@ -467,7 +472,7 @@
 							type="button"
 							class="{action} preset-filled-primary-500"
 							disabled={busy}
-							onclick={download}
+							onclick={(e) => download(e.currentTarget)}
 						>
 							<Icons.Download size={14} aria-hidden="true" />
 							Download
@@ -590,7 +595,7 @@
 							type="button"
 							class="{action} preset-filled-primary-500"
 							disabled={busy}
-							onclick={download}
+							onclick={(e) => download(e.currentTarget)}
 						>
 							<Icons.RefreshCw size={14} aria-hidden="true" />
 							Retry
@@ -604,13 +609,29 @@
 							type="button"
 							class="{action} preset-filled-primary-500"
 							disabled={busy}
-							onclick={download}
+							onclick={(e) => download(e.currentTarget)}
 						>
 							<Icons.Download size={14} aria-hidden="true" />
 							Download
 						</button>
 					{/if}
 				{/if}
+			{/if}
+			{#if choosing}
+				<QuantPicker
+					repo={model.name}
+					quants={precisions}
+					tier="unsure"
+					noun="precision"
+					onCancel={() => {
+						choosing = false
+						void tick().then(() => opener?.focus())
+					}}
+					onDownload={(quant) => {
+						choosing = false
+						sendDownload(quant.dtype)
+					}}
+				/>
 			{/if}
 		</div>
 
@@ -750,18 +771,3 @@
 		<span class="min-w-0">{unavailable}</span>
 	</p>
 {/snippet}
-
-{#if choosing}
-	<QuantPicker
-		open={true}
-		repo={model.name}
-		quants={precisions}
-		tier="unsure"
-		noun="precision"
-		onCancel={() => (choosing = false)}
-		onDownload={(quant) => {
-			choosing = false
-			sendDownload(quant.dtype)
-		}}
-	/>
-{/if}

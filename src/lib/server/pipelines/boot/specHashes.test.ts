@@ -85,7 +85,9 @@ const PUBLISHED: Record<string, string> = {
 	// `tasks` step and `unprompted` (`core:task/turn-unprompted@1`) before the
 	// write, the narrator's line Narrate. Edited in place under the freeze. (was "404361a5ed026")
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was 'a4799f0c90c18')
-	"core:spec/story-turn-order@1.0.0": "c9fcf581d1791",
+	// Moved 2026-11-08 (image-gen playtest Q2, owner ruling): `emptyCast` — after the write, a `seats` junction on the pool's candidates closes the main composer with "No one is here to reply yet…" when nobody can take a turn and lifts its own closure once somebody can. Story only; the other genres' turn orders are unchanged. (was 'c9fcf581d1791')
+	// Moved again 2026-11-08 (same build): the gate's empty `otherwise` branches removed — a branch with no node is not stored and the published document drifted. (was '506243c58ce77')
+	"core:spec/story-turn-order@1.0.0": "1bd787847c4d77",
 	// Moved 2026-10-05 (role, PLAN-catalogue-and-pipeline-names N3): role `maintenance`, a background lane. (was "1e155929f443a5")
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '127cf804a74c6d')
 	"core:spec/guide-turn-order@1.0.0": "6e430e962cd0b",
@@ -202,7 +204,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (RF fix 3): the `reply` junction holds only what differs — the prose call; the changes call, its `owners`, `shape`, `asked` and, last, `message` — and ONE tail after it (`save` reading the junction's `text`, the commit's Apply, `spritePick`, `spriteShow`) runs once at the top-level keys; the never-reachable Review arm is gone. Edited in place. (was "b30e48c4270fb")
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was 'e396fa6e5ffb8')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1ba28f5858a4c3')
-	"core:spec/story-respond@1.21.0": "e396fa6e5ffb8",
+	// Moved 2026-11-11 (sense-clk2, owner ruling "Remove it"): the per-reply tick is gone — no `tick` node, no `clock` junction, no `clock.moves.advance`; Story's clock is moved by the round tick (one default owner). Edited in place. (was "e396fa6e5ffb8")
+	"core:spec/story-respond@1.21.0": "757e3c34b4284",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -261,7 +264,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '3fd5d0832ce80')
 	"core:spec/assistant-answer-form@1.0.0": "1a5af4b489d165",
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '63c78ba748cb9')
-	"core:spec/assistant-create@1.0.0": "1180def0f20ddf",
+	"core:spec/assistant-create@1.0.0":
+		"14096089e55f27" /* (was "1180def0f20ddf") — M2e 2026-11-04: group/reach added to the create specs' field declarations (★E-2); no prompt or default changed */,
 	// Moved 2026-10-19 (PLAN-genre-restructure lane 2): `tasks` at the head,
 	// the `retrieval` junction, and *Remember things* (★K) after the answer.
 	// Edited in place under the freeze. (was "16a65b471d2187")
@@ -278,7 +282,11 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-21 (lane F1): Story's declaration lost `applyActionChanges` (R55). (was "ae777ed4f3b4e")
 	// Moved 2026-10-23 (core genres on the seams, merge GM): Story's `about` and its difficulty words corrected, in the genre shape it carries (lane G0, S7). Edited in place. (was "1b30b1e4ad7357")
 	// Moved 2026-10-28 (speech build, lane D + follow-up; pinned by lane V): the genre declaration carries the four speech fields `speechReadAloud`, `speechTemplate` (no default), `speechNarratorVoice`, `sessionLanguage`. Proven speech-only: the document with those four fields removed hashes back to the old pin. (was '37a22c038f516')
-	"core:spec/story-create@2.2.0": "fd12c6ff3be21",
+	"core:spec/story-create@2.2.0":
+	// Moved 2026-11-04 (playtest build 3, ★T-2): the narrator field's label *Narrator's turn*. (was "184ecbc0022b8e")
+		// Moved 2026-11-08 (image-gen playtest Q2, owner ruling): a `seats` junction after `seed` closes the main composer at create when no character or persona seat exists; the turn order lifts it on the first seat. (was 'e5c4687fcf3f9')
+		// Moved again 2026-11-08 (same build): the create gate's empty `otherwise` branches removed — not stored on publish. (was '1c1d6ac033a3c4')
+		"2ccd9cc23d00f" /* (was "1ad4d7a73cdeca") — lead, sense-scn 2026-11-12: the genre declares `scenes.mode: automatic`. Earlier: (was "114c6a3e91a4d9") — lead, sense-clk2 2026-11-11: the create spec's `meta.genre` carries the genre's `fields`, which gain `roundWorth`. Earlier: (was "1251225374524a") — lead, ed B1 2026-11-05: the create spec's `meta.genre` carries the genre's pinned `settings` (Story pins ownerSheetLatitude all-any). Earlier: (was "3523048ab5223", already stale: the code hashed "12c47aecb2baa0" before this rename) — m2e-F-D 2026-11-04: field-group headings Reply → Writing, the Lair's Story → Lair (★M2e-D-2); only the group strings */,
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -318,7 +326,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (core genres on the seams, merge GM): the Guide's `tools` field dropped and its `about` written (lane G0, S8). Edited in place. (was "16e203934af640")
 	// Moved 2026-10-28 (speech build, lane D + follow-up; pinned by lane V): the genre declaration carries the four speech fields `speechReadAloud`, `speechTemplate` (no default), `speechNarratorVoice`, `sessionLanguage`. Proven speech-only: the document with those four fields — Guide's whole `fields` map — removed hashes back to the old pin. (was 'c06cc623f9142')
 	// Moved 2026-10-31 (M2c path B; re-pinned by E): the Guide genre declares `writes.library { characters, lorebooks }`. Edited in place. (was "135f054ab8ea7f")
-	"core:spec/guide-create@1.1.0": "950a043b9ff9",
+	"core:spec/guide-create@1.1.0":
+		"6ee7b4f737222" /* (was "950a043b9ff9") — M2e 2026-11-04: group/reach added to the create specs' field declarations (★E-2); no prompt or default changed */,
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
@@ -1259,11 +1268,13 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "119ee8ce3f667f")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the scene's story rows, `entryType` history declared. (was "1ad856ab45f64f")
 	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "16ed70b70a8b40")
-	"core:spec/story-summarize-scene@1.0.0": "a6aee5af27e2f",
+	// Moved 2026-11-10 (hist-D2 re-pin after the SDK build): the shared scene template lists the scene's notes (`scene.notes`, hist-C ★S4). Edited in place. (was "a6aee5af27e2f")
+	"core:spec/story-summarize-scene@1.0.0": "1296609fd2b958",
 	// Moved 2026-10-21 (lane F1): declares its `summarize-scene` action (an audience naming nobody — the host fires it), inlet `{ suits: [] }` (R50). (was "9c19042ad22a0")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the scene's story rows, `entryType` history declared. (was "1f9d6798655f8b")
 	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "1f16042b617a7")
-	"core:spec/guide-summarize-scene@1.0.0": "1f1ee56640bf36",
+	// Moved 2026-11-10 (hist-D2 re-pin after the SDK build): the shared scene template lists the scene's notes (`scene.notes`, hist-C ★S4). Edited in place. (was "1f1ee56640bf36")
+	"core:spec/guide-summarize-scene@1.0.0": "121de59f6e5944",
 	// The Lair's reads the Sanctum as asides, through its own template.
 	// Moved 2026-10-13 (live scenes §15 G1, ★9): it carries the Lair's own
 	// boundary trigger, `contributes.boundaryTriggers` (a new floor on main).
@@ -1273,6 +1284,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): `save` is `rememberNote`: `sources` wired from the scene's story rows, `entryType` history declared. (was "249eb28ab0204")
 	// Moved 2026-10-25 (pr-6 B4): every summarize-scene spec contributes the close-out action; summaries register it with minAge 0. (was "eadef3540cfdf")
 	"core:spec/lair-summarize-scene@1.0.0": "8217737712bc2",
+	// 🚧 NEW 2026-11-10 (hist-D1, ★H4): the Dungeon Crawler's scene summary (`writes.scenes: true`), Lair's scene mode; its prompt asks for deaths, departures and arrivals.
+	"core:spec/dungeon-crawler-summarize-scene@1.0.0": "18b436448d91fd",
 	// Moved 2026-09-30 (config grouping, catalog lane): `expose.label` (and, on
 	// a model call of a multi-call spec, `expose.purpose`) names the step in
 	// settings. Display text only; the run is unchanged. Proven: a copy of
@@ -1359,14 +1372,16 @@ const PUBLISHED: Record<string, string> = {
 	// Image generation I8 (2026-10-12): Portrait — a card action from the
 	// Gallery tab. New spec.
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '438207384f24e')
-	"core:spec/character-portrait@1.0.0": "78a91b905834b", // 2026-10-12 sweep: both presets name core:loadout/portrait@1
+	// Moved 2026-11-08 (image-gen playtest, owner go): the draw step's `seed` is `as-set`, not `per-run` — proofs share a prompt, so one seed drew `count` identical pictures. (was '78a91b905834b')
+	"core:spec/character-portrait@1.0.0": "15da4df836d06", // 2026-10-12 sweep: both presets name core:loadout/portrait@1
 	"core:spec/describe-likeness@1.0.0": "bb28ace5bf811", // D1 2026-10-12: Describe from image — a card action, no loadout
 	// Image generation I9 (lane C3, 2026-10-12): the Scene action — a quiet
 	// scene prompt off the last lines, the picture with the likeness images
 	// as references, posted and/or set as the backdrop. A new slug.
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '78e8e1adf0d59')
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was 'dd093ed71a4be')
-	"core:spec/story-illustrate-scene@1.0.0": "1c5a6e00dbb9e4", // 2026-10-12 sweep: purposes on the two calls
+	// Moved 2026-11-08 (image-gen playtest Q5, owner ruling): a second quiet call `caption` (its own `assemble` on the "Scene caption" row, on the Scene prompt loadout) writes the one sentence the picture is posted with; `post` reads `caption.text` instead of the picture's tag line. (was '1c5a6e00dbb9e4')
+	"core:spec/story-illustrate-scene@1.0.0": "12caf095ad6ead", // 2026-10-12 sweep: purposes on the two calls
 	// §16 follow-up D3 (2026-10-12): the same Scene graph with Adventure's
 	// inlet (`shared/illustrateScene.ts`; an inlet is one genre's). A new slug.
 	// Chat's hash above did not move when its graph was lifted into the shared
@@ -1487,7 +1502,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (RF fix 2): the genre shape it carries says `lorebook: 'optional'` — 'required' is retired; a Lair session may start without a book (its own book is the dungeon). Edited in place. (was "1cb73ccca537ee")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the genre it carries declares the Sanctum `lore: 'aside'` (pass 9 S1); the document is otherwise byte-identical. (was "1a7932ed813f14")
 	// Moved 2026-10-28 (speech build, lane D + follow-up; pinned by lane V): the genre declaration carries the four speech fields `speechReadAloud`, `speechTemplate` (no default), `speechNarratorVoice`, `sessionLanguage`. Proven speech-only: the document with those four fields removed hashes back to the old pin. (was 'd927ed6661005')
-	"core:spec/lair-create@1.0.0": "3b5ac8f6f9ab1",
+	"core:spec/lair-create@1.0.0":
+		"13ccac77f5b4ce" /* (was "af2c76053c8c5") — lead, sense-scn 2026-11-12: the genre declares `scenes.mode: automatic`. Earlier: (was "9a6cb730d1ad5") — lead, sense-clk2 2026-11-11: `meta.genre.fields` gains `roundWorth` (group Lair). Earlier: (was "a5f9511302c15") — lead, ed B1 2026-11-05: `meta.genre.settings` (the Lair pins ownerSheetLatitude all-any). Earlier: (was "94639a590b82b") — m2e-F-D 2026-11-04: field-group headings Reply → Writing, the Lair's Story → Lair (★M2e-D-2); only the group strings */,
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -1652,7 +1668,10 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (RF fix 5): the Honour mode field the create inlet's
 	// genre carries reads "…and the host delete the latest turn where
 	// deleting is on. Off: neither." (deletion needs a pipeline). (was "1249c16d98f1e")
-	"core:spec/dungeon-crawler-create@1.0.0": "4d5dc06bd6b9e",
+	// Moved 2026-11-10 (hist-D1, ★C1): create sets the session story clock to 08:00 (`advance-story-clock@1` `to: {hour: 8, day: 'today'}`, cause `action`, skip on refusal) instead of writing `crawl-time`. Edited in place. (was "18eac45db7d0a1")
+	// Moved 2026-11-11 (bench-L3, benched seats ★4): the genre the create inlet carries declares `writes.seats: true`; nothing else moved. Edited in place. (was "1f9a5c1fa4770c")
+	"core:spec/dungeon-crawler-create@1.0.0":
+		"26a9094a144b7" /* (was "9e4ed3ed98acc") — lead, sense-scn 2026-11-12: the genre declares `scenes.mode: automatic`. Earlier: (was "1f9a5c1fa4770c" before bench-L3) — (was "18eac45db7d0a1" before hist-D1) — (was "9f18693b91c78") — lead, ★ed-2 2026-11-05: the Crawler pins the owner `all-any`. Earlier: (was "97d4fff3d70ce") — lead, ed B1 2026-11-05: `meta.genre.settings` (the Crawler pins ownerSheetLatitude as-ruled). Earlier: (was "58a64edcadb97") — lane ed 2026-11-05 (plan §25): the genre the create inlet carries declares `playerSheetLatitude` / `playerItemMoves` / `keepEveryTurn` instead of `honorMode`, and pins `ownerSheetLatitude`; no prompt changed. (before that, was "4d5dc06bd6b9e": M2e 2026-11-04, group/reach added to the create specs' field declarations (★E-2)) */,
 	// Moved 2026-10-18: lanes by person (channel-lane), one exit model, asks, journal kinds, solo standing order, A11 placeholder-first (was "10e007b633e3a9").
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '169cfff3d40856')
 	"core:spec/dungeon-crawler-welcome@1.0.0": "19ed24cbe42e4",
@@ -1683,13 +1702,14 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (core genres on the seams, merge GM): kits as the session's rules' class rows, read at run time (lane G3, S4). Edited in place. (was "62087cf4de501")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "1ff08425d1064c")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the world writes are `fileLore`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "563a02b06d940")
-	"core:spec/dungeon-crawler-interview@1.0.0": "fe64892e7ed",
+	// Moved 2026-11-10 (hist-D1, ★H4): the fallen are read from `progress.fallen` and the people listing leaves the fallen's anchored lore out (`peopleOf`); no cairn arm, no history `fallen` query. Edited in place. (was "fe64892e7ed")
+	"core:spec/dungeon-crawler-interview@1.0.0": "d85db468665ff",
 	// NEW 2026-10-15 (the multiplayer lane): Reveal the planning notes (D8). 🚧
 	// Moved 2026-10-15 (walkthrough fixes): a quick action — a button among
 	// the composer's actions. (was "ded39ad9f077b")
 	// Moved 2026-10-18 (lane C, P4-10): the reveal asks first (`confirm`) (was "172e46833e9041").
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '14e4e70ccbba9f')
-	"core:spec/dungeon-crawler-reveal@1.0.0": "25c62df03bdec",
+	"core:spec/dungeon-crawler-reveal@1.0.0": "2201000dc17a1" /* (was "25c62df03bdec") — lead, sense-st2b 2026-11-11: the reveal's copy says Back past it hides the notes again (owner ruling). */,
 	// Moved 2026-10-15 (the story-turn lane, unreleased): the story branch is
 	// the hidden Planner's JSON, the dice, the books and the Narrator — no
 	// longer the ⏳ Narrator-only placeholder; the story read is 30 rows.
@@ -1731,7 +1751,10 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (core genres on the seams, merge GM): the Planner's grammar laid over the session's rules (`core:script/dungeon-crawler-shape`, lane G3, S1, S4), and its two resolve steps headed by their branch (_(dice)_ · _(words)_, GM). Edited in place. (was "7514f5a052a56")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "bb0ea113263db")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the world writes are `fileLore`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "9ec5ea8729236")
-	"core:spec/dungeon-crawler-respond@1.0.0": "1a18135c4edb35",
+	// Moved 2026-11-10 (hist-D1, ★H4 + ★C1): a death writes `update-cast-member@1 {nodeState: "deceased"}` and a `progress.fallen` item instead of a history cairn; the turn moves the session story clock (`advance-story-clock@1`, cause `action`) instead of `crawl-time`; the Narrator names a death in its own sentence. Edited in place. (was "1a18135c4edb35")
+	// Moved 2026-11-11 (bench-L3, benched seats ★4): the genre carries `writes.seats: true`, and the story turn gains the `companions` junction (`fates` → each `companion` → `set-seat-bench@1` `bench`, then `update-cast-member@1` `state`) for a companion's death or story revival; the Planner's turn grammar gains `fallenCompanions` / `revivedCompanions`. Edited in place. (was "1dbe9e4d1a637a")
+	// Moved 2026-11-11 (bench verification): the companion junction's two steps are headed "The companion's cast member" / "The companion's new state", so no two steps of the spec read alike (groups.int). Labels only. Edited in place. (was "14977e35fe6578")
+	"core:spec/dungeon-crawler-respond@1.0.0": "c4c7152584fda",
 	// NEW 2026-10-15 (the story-turn lane): Rest (no model call) and what
 	// follows the goal (its form; one call for a new goal). 🚧
 	// Moved 2026-10-16 (🚧 table channel, PLAN-rulesets §30): the rest's
@@ -1745,7 +1768,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-20 (PLAN-layering lane 3): no inlet lock — `{ suits }` — and the author default preset is the declared defaults (`.defaults()`, non-default author presets gone); the replies' background tasks became routines (story-respond: `reading` duty; assistant-respond: optional lore lane, memory out). (was '11ad47b290ec51')
 	// Moved 2026-10-23 (core genres on the seams, merge GM): Rest's length the session's rules' and one body with *After a rest* (lane G3, S3, S4). Edited in place. (was "f58384e131f26")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "1dfa16c74e4181")
-	"core:spec/dungeon-crawler-rest@1.0.0": "53224cac7f345",
+	// Moved 2026-11-10 (hist-D1, ★C1): the rest reads the story now and moves the session story clock (`rested.clock`) instead of `crawl-time`. Edited in place. (was "53224cac7f345")
+	"core:spec/dungeon-crawler-rest@1.0.0": "16a362ebd60b85",
 	// Moved 2026-10-15 (one heading per step): "Draw up the new goal" (the
 	// script) and "Keep the new goal in the world" (the write), no longer both
 	// "File the new goal". Proven: with the labels reverted the document hashes
@@ -1866,7 +1890,8 @@ const PUBLISHED: Record<string, string> = {
 	// reckoning under the Lair's prompt), the scratchpad, file the current room.
 	// Moved 2026-10-23 (core genres on the seams, merge GM): _Keep the books_ (G0), the one change grammar of the shared reckoning (G1, S1), and the keeper's lift `tableRules` retired (GM). Edited in place. (was "123fac28db816a")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "13f43d1c42809")
-	"core:spec/lair-keeper@1.0.0": "1e7e03116e5d3d",
+	// Moved 2026-11-11 (sense-clk2, owner ruling "one default owner that moves the clock"): the keeper owns the Lair's clock — its `time` junction gained a `round` branch (`reckon.on.time.round.*`: worth → step → clock → present → clocked → advance, cause `tick`). Edited in place. (was "1e7e03116e5d3d")
+	"core:spec/lair-keeper@1.0.0": "1e7e03116e5d3d" /* (was "11b9d67c75dee2") — lead, sense-st2b 2026-11-11: the keeper loses its round-worth branch (owner ruling: the round tick owns the Lair's clock); back to the hash before sense-clk2. */,
 	"core:spec/lair-scratchpad@1.0.0": "8ffdc89f6eb8",
 	// L4 (2026-10-21): its two saves headed apart — two steps of one group never share a heading. (L3's was "507d5063e77de")
 	"core:spec/lair-file-current-room@1.0.0": "567f7947865d0",
@@ -1880,20 +1905,24 @@ const PUBLISHED: Record<string, string> = {
 	// Scene action's graph on a routine inlet) — and Chat's *Remember things*.
 	// Moved 2026-10-23 (core genres on the seams, merge GM): _Note what changed_ titles its duties card (G0, S7); the one change grammar — the crib writes the schema the call asks in, commit arms `ruled` · `ruledHeld` · `words` (G1, S1). Edited in place. (was "1ea1946ced835")
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "155e7dcd4aa7d")
-	"core:spec/story-reckoning@1.0.0": "10867c2eda2502",
+	// Moved 2026-11-11 (sense-clk2): *Note what changed* ships its `duties.time` (*Move the clock*) off — the round tick is Story's one default clock owner. Edited in place. (was "10867c2eda2502")
+	"core:spec/story-reckoning@1.0.0": "d003834805a9",
 	// Moved 2026-10-23 (core genres on the seams, merge GM): _Look back over the story_ titles its duties card (lane G0, S7); its model call labelled _File what is worth keeping_, never the routine's name its duties card carries (GM). Edited in place. (was "17981ba0e2bec5")
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the lore writes are `fileLore` / `rememberNote`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "1baa5f325cd667")
 	// Moved 2026-10-25 (sprint 2 lane I2, pass 7 / R-i): the crib and the sort read the duties step's `sceneCheck` (and the crib the history), and a `sceneCue` junction offers `propose-scene-cue@1` — Full as the scene mode decides, Review with `ask`. Edited in place. (was "131df6899cf85d")
-	"core:spec/story-sweep@1.0.0": "2f4aae4332c2b",
+	// Moved 2026-11-04 (playtest2-S, §0-B): *Summarize the story* retired — `summary` out of the sweep schema, crib and sorter; the `summarized` junction gone, lore chains from `sorted`. Edited in place. (was "2f4aae4332c2b")
+	"core:spec/story-sweep@1.0.0": "1bb283916d78e1",
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1989d733a38b8')
-	"core:spec/story-illustrate-new-scene@1.0.0": "9b8440cff74d8",
+	// Moved 2026-11-08 (image-gen playtest Q5, owner ruling): a second quiet call `caption` (its own `assemble` on the "Scene caption" row, on the Scene prompt loadout) writes the one sentence the picture is posted with; `post` reads `caption.text` instead of the picture's tag line. (was '9b8440cff74d8')
+	"core:spec/story-illustrate-new-scene@1.0.0": "15d6c6538e3d31",
 	"core:spec/assistant-memory@1.0.0": "1811e7b16e1c3",
 	// NEW 2026-10-23 (rulesets as functions D6): a ruleset's action — the one generic pipeline every invokable function runs, Full or Review by its registration's mode.
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "47e5217d6d257")
 	"core:spec/rules-action@1.0.0": "988b95d02e6db",
 	// NEW 2026-10-23 (PLAN-genres-seams S3, lane G3): the crawl's own effects after the rules' Rest, on `rest-taken`.
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read; its resolve steps take the routine's cause as their `event` (the functions' `ctx.event`). Edited in place. (was "1c6b2a2d957d5")
-	"core:spec/dungeon-crawler-after-rest@1.0.0": "12de3951048577",
+	// Moved 2026-11-10 (hist-D1, ★C1): the rest's clock move shares the story-clock path (`rest.ts`, the label "Heal the party"). Edited in place. (was "12de3951048577")
+	"core:spec/dungeon-crawler-after-rest@1.0.0": "1cf24c734d009f",
 	// NEW 2026-10-23 (genres GM, G1 ★5): Story's clock moved by the rest the rules raised, on `rest-taken`.
 	"core:spec/story-after-rest@1.0.0": "ef952f79caa2",
 	// 🚧 NEW 2026-10-28 (speech build, lane D + follow-up ★1; pinned by lane V): the
@@ -1902,6 +1931,11 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/speak-message@1.0.0": "1702bfb01171db",
 	// NEW 2026-10-28 (E M0, lane T5, SHAPES L3): the day's weather, a routine no genre mounts yet. 🚧
 	"core:spec/weather@1.0.0": "1123a7599ac1bc",
+	// NEW 2026-11-11 (sense-clk, PLAN-sensible-engine §2.11): each round moves the story clock — an event pipeline on round-ended, registered by Story and the Lair; no model. 🚧
+	// Moved 2026-11-11 (sense-clk2, owner ruling "Remove it" / "Story should be round"): reads the round worth (`core:query/round-worth@1`) and feeds its step to the clock; its exposed *By* setting is gone, and only Story registers it. Edited in place. (was "8090bdc19f449")
+	// Moved 2026-11-11, sense-clk3 + sense-clk4: Words only registers the round tick and the tick steps aside while the Lair keeper runs (steps `modes` and `keeper`, branches review, full, tick); compile lists a clause's member-less branches last, by name (tick, full, review). Edited in place. (was "123220d7c924ea")
+	"core:spec/scene-boundaries@1.0.0": "bb370142425c8" /* new — lead, sense-scn 2026-11-12: the scenes routine */,
+	"core:spec/round-tick@1.0.0": "123220d7c924ea" /* (was "17442b115a76f") — lead, sense-st2b 2026-11-11: the keeper gate is gone; back to the hash before sense-clk3. */
 }
 
 describe("published spec hashes", () => {

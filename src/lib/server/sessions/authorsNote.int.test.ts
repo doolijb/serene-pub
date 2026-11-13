@@ -26,12 +26,23 @@ let owner: number
 let guest: number
 let stranger: number
 
-async function session(genreId: string, genreFields: Record<string, unknown> = {}) {
+async function session(
+	genreId: string,
+	genreFields: Record<string, unknown> = {}
+) {
 	const [row] = await db
 		.insert(schema.sessions)
-		.values({ userId: owner, isGroup: false, genreId, presetId: null, genreFields } as any)
+		.values({
+			userId: owner,
+			isGroup: false,
+			genreId,
+			presetId: null,
+			genreFields
+		} as any)
 		.returning()
-	await db.insert(schema.sessionGuests).values({ sessionId: row!.id, userId: guest } as any)
+	await db
+		.insert(schema.sessionGuests)
+		.values({ sessionId: row!.id, userId: guest } as any)
 	return row!
 }
 
@@ -82,22 +93,39 @@ describe("the author's note (AN1)", () => {
 	it("the Lair does not offer it, and refuses a write", async () => {
 		// Adventure was the genre without one until it retired (2026-10-19).
 		const s = await session(LAIR_GENRE_ID)
-		expect((await readSessionAuthorsNote(db, s.id, owner)).offered).toBe(false)
+		expect((await readSessionAuthorsNote(db, s.id, owner)).offered).toBe(
+			false
+		)
 		await expect(
-			writeSessionAuthorsNote(db, s.id, owner, { text: "x", depth: 1, interval: 1, role: "system" })
+			writeSessionAuthorsNote(db, s.id, owner, {
+				text: "x",
+				depth: 1,
+				interval: 1,
+				role: "system"
+			})
 		).rejects.toThrow(/no author's note/)
 	}, 60_000)
 
 	it("the owner writes the note alone; a guest reads it and may not write", async () => {
 		const s = await session(STORY_GENRE_ID, { autoAdvance: "off" })
-		const { answer, changed } = await writeSessionAuthorsNote(db, s.id, owner, {
+		const { answer, changed } = await writeSessionAuthorsNote(
+			db,
+			s.id,
+			owner,
+			{
+				text: "It is raining.",
+				depth: "2",
+				interval: 3,
+				role: "user"
+			}
+		)
+		expect(changed).toBe(true)
+		expect(answer.note).toEqual({
 			text: "It is raining.",
-			depth: "2",
+			depth: 2,
 			interval: 3,
 			role: "user"
 		})
-		expect(changed).toBe(true)
-		expect(answer.note).toEqual({ text: "It is raining.", depth: 2, interval: 3, role: "user" })
 		const fields = await genreFieldsFor(db, s.id)
 		expect(fields.autoAdvance).toBe("off")
 		expect(fields.authorsNote).toEqual(answer.note)
@@ -108,27 +136,72 @@ describe("the author's note (AN1)", () => {
 		await expect(
 			writeSessionAuthorsNote(db, s.id, guest, answer.note)
 		).rejects.toBeInstanceOf(AuthorsNoteRefusal)
-		await expect(readSessionAuthorsNote(db, s.id, stranger)).rejects.toThrow(/not found/)
+		await expect(
+			readSessionAuthorsNote(db, s.id, stranger)
+		).rejects.toThrow(/not found/)
 
 		// Saving what is already there is not a change.
-		expect((await writeSessionAuthorsNote(db, s.id, owner, answer.note)).changed).toBe(false)
+		expect(
+			(await writeSessionAuthorsNote(db, s.id, owner, answer.note))
+				.changed
+		).toBe(false)
 	}, 60_000)
 
 	it("reports the newest receipt's decision, passing over runs that made none", async () => {
 		const s = await session(STORY_GENRE_ID, {
-			authorsNote: { text: "Rain.", depth: 4, interval: 2, role: "system" }
+			authorsNote: {
+				text: "Rain.",
+				depth: 4,
+				interval: 2,
+				role: "system"
+			}
 		})
 		await receipt(s.id, `an-${s.id}-1`, [
-			{ nodeKey: "prompt", output: { authorsNote: { included: true, reason: "included", depth: 4, interval: 2, replyCount: 0, targetIndex: 3, role: "system" } } }
+			{
+				nodeKey: "prompt",
+				output: {
+					authorsNote: {
+						included: true,
+						reason: "included",
+						depth: 4,
+						interval: 2,
+						replyCount: 0,
+						targetIndex: 3,
+						role: "system"
+					}
+				}
+			}
 		])
 		await receipt(s.id, `an-${s.id}-2`, [
-			{ nodeKey: "prompt", output: { authorsNote: { included: false, reason: "interval", depth: 4, interval: 2, replyCount: 1, targetIndex: 5, role: "system" } } }
+			{
+				nodeKey: "prompt",
+				output: {
+					authorsNote: {
+						included: false,
+						reason: "interval",
+						depth: 4,
+						interval: 2,
+						replyCount: 1,
+						targetIndex: 5,
+						role: "system"
+					}
+				}
+			}
 		])
 		// A turn-order run after it, and the builder's unplaced copy: no decision.
 		await receipt(s.id, `an-${s.id}-3`, [
-			{ nodeKey: "context", output: { templateContext: { authorsNote: { gatedBy: "assemble", targetIndex: 0 } } } }
+			{
+				nodeKey: "context",
+				output: {
+					templateContext: {
+						authorsNote: { gatedBy: "assemble", targetIndex: 0 }
+					}
+				}
+			}
 		])
-		expect((await readSessionAuthorsNote(db, s.id, guest)).lastReply).toEqual({
+		expect(
+			(await readSessionAuthorsNote(db, s.id, guest)).lastReply
+		).toEqual({
 			included: false,
 			reason: "interval",
 			depth: 4,

@@ -1,0 +1,15 @@
+# BRIEF s27-S2-pT2 — four fixes after the scope review of s27-S2-promptText (seat-cast programme, stage S2)
+
+You are a `lane-supervisor` (fresh, Opus). Read `plans/briefs/BRIEF-s27-S2-common.md` (the contract), `plans/briefs/BRIEF-s27-S2-promptText.md`, and `plans/REPORT-s27-S2-promptText-2026-11-05.md` **including the lead's scope-review section at its end**. Lane id **s27-S2-pT2**. One worker (Sonnet), two at most. App `/home/jody/github/serene-pub`. Concurrent lane: **s27-S2-state** (`state/**`, `rulesets/**`, `sockets/state.ts`, …) and, soon, wave 2 (**s27-S2-turns**, **s27-S2-client**, **s27-S2-access**) — they build on `pipelines/prompt/seatCards.ts`; keep its exported signatures.
+
+## Items
+1. **One find-only rule (P2/R1).** Export from `src/lib/server/sessions/seats.ts` one find-only batch (e.g. members for many cards in one session's attached then own book, the order `resolveSeatMember` uses with `mint: false`; a per-card cache) and make both `resolveSeatMember` (find half) and `seatCardsAsRead` / `cardsAsSeatsRead` for unfilled seats use it. No behaviour change. `cardFormRefInCast` stays (a binding has no db); its §25 row says it mirrors `seatOf`'s order and must change with it; add a pure test that pins the same order on a fixture.
+2. **Revert the unreachable `seated-member:` hunks** in `pipelines/runtime/host.ts` (~2578–2582 `personLineOf`, ~7565–7573, ~7629–7630): they only ever see `namedRef`, gated by `isParticipantRef` (~7193), which the SDK grammar keeps from `seated-member:`. Keep the turn-order write's acceptance (tested). Correct the lane report's ref-in list (append a corrected list to the report's end; don't rewrite history above it).
+3. **Side-character picker** (`pipelines/entities/sideCharacter.ts` ~325–331): read through the member only for cards a seat holds (the "removed member offered again" case); unseated library cards keep their card names, as before S2. Test both.
+4. **Stale stored member after a book swap:** `seatCardsAsRead` trusts a seat's stored `cast_member_id` only when that member's lorebook is the session's attached book or its own book; otherwise it uses the find-only rule (item 1). Test: a seat whose stored member lives in a book the session no longer reads reads the current book's member (or the card).
+5. NOMENCLATURE §25: the new find-only name (R3, qualified) and the `cardFormRefInCast` note.
+
+## Files owned
+`src/lib/server/sessions/seats.ts` (the find-only export and `resolveSeatMember`'s find half only), `src/lib/server/pipelines/prompt/seatCards.ts`, `src/lib/server/pipelines/runtime/host.ts` (the three hunks only), `src/lib/server/pipelines/entities/sideCharacter.ts`, their tests, `plans/REPORT-s27-S2-promptText-2026-11-05.md` (append only), `NOMENCLATURE.md` (§25).
+## Tests
+`seatCards*`, `host.seatMembers.int`, `greetings.seatMembers.int`, `stops.seatMembers.int`, `chains.sideCharacterExtras.int`, `sessions.sideCharacter.int`, `seats.int`, `seatSites.int`, `seatMembers.int`, `sessions.seatCast.int`, `retold.int` (its one known failure is the banner `toEqual`, owned by s27-S2-client) — green.

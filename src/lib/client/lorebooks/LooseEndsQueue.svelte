@@ -128,6 +128,34 @@
 											{row.name || "Untitled"}
 										</span>
 									</button>
+									{#each row.alsoEntryIds ?? [] as otherId, n (otherId)}
+										{@const also =
+											row.alsoEntryIds?.length ?? 0}
+										{@const label =
+											also > 1
+												? `Other entry ${n + 2}`
+												: "Other entry"}
+										<!-- 🚧 provisional copy (★ owner) -->
+										<button
+											type="button"
+											class="text-primary-ink shrink-0 px-2 text-xs hover:underline"
+											aria-label="Open the other history entry for {row.name}{also >
+											1
+												? ` (${n + 2})`
+												: ''}"
+											data-loose-end-also={otherId}
+											onclick={() =>
+												onOpen({
+													...row,
+													target: {
+														kind: "entry",
+														entryId: otherId
+													}
+												})}
+										>
+											{label}
+										</button>
+									{/each}
 								</li>
 							{/each}
 						</ul>

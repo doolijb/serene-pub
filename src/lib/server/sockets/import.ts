@@ -12,6 +12,14 @@ import {
 } from "$lib/server/utils/lorebookImportMapper"
 import { insertLegacyMany } from "$lib/server/messages/store"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
+import {
+	seatCast,
+	seatOf,
+	seatPlayer,
+	settleSeats,
+	syncMintedSeatMembers,
+	type MintedSeatMember
+} from "$lib/server/sessions/seats"
 import type { Handler } from "$lib/shared/events"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
@@ -36,7 +44,11 @@ import {
 	resolveSillyTavernDataRoot,
 	SILLYTAVERN_DIRS
 } from "$lib/shared/utils/sillyTavernPaths"
-import { characterFieldsFromParsedData } from "./characters"
+import {
+	characterFieldsFromParsedData,
+	insertCardFromColumns
+} from "./characters"
+import { updateCardVersion } from "$lib/server/characters/versions"
 import {
 	likenessFromCardExtensions,
 	withLikeness
@@ -974,20 +986,21 @@ export const importExecuteSillyTavern: Handler<
 					// duplicate, so a future field added to that allowlist
 					// (eg. explicitly stripping a sensitive column) can't
 					// silently drift out of sync with this bulk-import path.
-					const [newChar] = await db
-						.insert(schema.characters)
-						.values({
-							...characterFieldsFromParsedData(d),
-							userId,
-							isFavorite: false,
-							// 🚧 SillyTavern's `sd_character_prompt`, when
-							// the card has one, read into our likeness (R5).
-							extensions: withLikeness(
-								d.extensions ?? {},
-								likenessFromCardExtensions(d.extensions)
-							)
-						})
-						.returning()
+					// The card and its v1 together.
+					const { card: newChar, version: newCharVersion } =
+						await db.transaction((tx) =>
+							insertCardFromColumns(tx as unknown as Db, {
+								...characterFieldsFromParsedData(d),
+								userId,
+								isFavorite: false,
+								// 🚧 SillyTavern's `sd_character_prompt`, when
+								// the card has one, read into our likeness (R5).
+								extensions: withLikeness(
+									d.extensions ?? {},
+									likenessFromCardExtensions(d.extensions)
+								)
+							})
+						)
 
 					characterNameToId.set(d.name, newChar.id)
 					// Also key by filename basename — SillyTavern names chat folders after the
@@ -1016,10 +1029,9 @@ export const importExecuteSillyTavern: Handler<
 								bytes: buffer,
 								filename: charItem.filename
 							})
-							await db
-								.update(schema.characters)
-								.set({ avatarMediaId: created.file.id })
-								.where(eq(schema.characters.id, newChar.id))
+							await updateCardVersion(db, newCharVersion.id, {
+								faceMediaId: created.file.id
+							})
 						} catch (e) {
 							console.warn(
 								`Could not copy avatar for ${d.name}:`,
@@ -1123,16 +1135,16 @@ export const importExecuteSillyTavern: Handler<
 
 					// `personaFieldsFromParsedData` carries `isPersona: true` —
 					// an ST persona import is the user saying they play it.
-					const [newPersona] = await db
-						.insert(schema.characters)
-						.values({
-							...personaFieldsFromParsedData({
-								name: personaItem.name,
-								description
-							}),
-							userId
-						})
-						.returning()
+					const { card: newPersona, version: newPersonaVersion } =
+						await db.transaction((tx) =>
+							insertCardFromColumns(tx as unknown as Db, {
+								...personaFieldsFromParsedData({
+									name: personaItem.name,
+									description
+								}),
+								userId
+							})
+						)
 
 					personaNameToId.set(personaItem.name, newPersona.id)
 					stats.personas++
@@ -1157,10 +1169,9 @@ export const importExecuteSillyTavern: Handler<
 							bytes: buffer,
 							filename: avatarFilename
 						})
-						await db
-							.update(schema.characters)
-							.set({ avatarMediaId: created.file.id })
-							.where(eq(schema.characters.id, newPersona.id))
+						await updateCardVersion(db, newPersonaVersion.id, {
+							faceMediaId: created.file.id
+						})
 					} catch {
 						/* no avatar file — that's fine */
 					}
@@ -1314,6 +1325,7 @@ export const importExecuteSillyTavern: Handler<
 
 					// The session, its members and its history land whole or
 					// not at all — one transaction, the history in batches.
+					const seatedMinted: MintedSeatMember[] = []
 					const newSession = await db.transaction(async (tx) => {
 						const [row] = await tx
 							.insert(schema.sessions)
@@ -1340,19 +1352,30 @@ export const importExecuteSillyTavern: Handler<
 								rulesetVersion: row.rulesetVersion ?? null
 							})
 						}
+						// Seats go through the one seat writer (S1, dual write);
+						// the bulk path seats everything, then settles once.
 						if (characterId) {
-							await tx.insert(schema.sessionCharacters).values({
+							const seat = await seatCast(tx as unknown as Db, {
 								sessionId: row.id,
-								characterId,
-								position: 0
+								cardId: characterId,
+								position: 0,
+								secondCard: "allow",
+								seatedBy: userId
 							})
+							if (seat.ok) seatedMinted.push(...seat.mintedMembers)
 						}
 						if (resolvedPersonaId) {
-							await tx.insert(schema.sessionPersonas).values({
+							const seat = await seatPlayer(tx as unknown as Db, {
 								sessionId: row.id,
-								personaId: resolvedPersonaId
+								personaId: resolvedPersonaId,
+								onExisting: "insert"
 							})
+							seatedMinted.push(...seat.mintedMembers)
 						}
+						seatedMinted.push(
+							...(await settleSeats(tx as unknown as Db, row.id))
+								.mintedMembers
+						)
 						await insertImportedHistory(
 							tx,
 							row.id,
@@ -1362,6 +1385,8 @@ export const importExecuteSillyTavern: Handler<
 						)
 						return row
 					})
+					// Committed: the members just made are named from their cards.
+					await syncMintedSeatMembers(db, seatedMinted)
 					stats.sessions++
 					if (sessionNote?.importNote)
 						warnings.push(`${label} was imported, but ${sessionNote.importNote}.`)
@@ -1451,6 +1476,7 @@ export const importExecuteSillyTavern: Handler<
 					)
 
 					// Whole or not at all, as a solo session.
+					const seatedMinted: MintedSeatMember[] = []
 					const newSession = await db.transaction(async (tx) => {
 						const [row] = await tx
 							.insert(schema.sessions)
@@ -1487,14 +1513,30 @@ export const importExecuteSillyTavern: Handler<
 								(m): m is typeof m & { characterId: number } =>
 									!!m.characterId
 							)
-						if (members.length)
-							await tx.insert(schema.sessionCharacters).values(members)
-						if (resolvedGroupPersonaId) {
-							await tx.insert(schema.sessionPersonas).values({
-								sessionId: row.id,
-								personaId: resolvedGroupPersonaId
+						// One seat per member, in order (S1, dual write); the
+						// bulk path seats everything, then settles once.
+						for (const m of members) {
+							const seat = await seatCast(tx as unknown as Db, {
+								sessionId: m.sessionId,
+								cardId: m.characterId,
+								position: m.position,
+								secondCard: "allow",
+								seatedBy: userId
 							})
+							if (seat.ok) seatedMinted.push(...seat.mintedMembers)
 						}
+						if (resolvedGroupPersonaId) {
+							const seat = await seatPlayer(tx as unknown as Db, {
+								sessionId: row.id,
+								personaId: resolvedGroupPersonaId,
+								onExisting: "insert"
+							})
+							seatedMinted.push(...seat.mintedMembers)
+						}
+						seatedMinted.push(
+							...(await settleSeats(tx as unknown as Db, row.id))
+								.mintedMembers
+						)
 						if (groupParsed)
 							await insertImportedHistory(
 								tx,
@@ -1507,6 +1549,8 @@ export const importExecuteSillyTavern: Handler<
 							)
 						return row
 					})
+					// Committed: the members just made are named from their cards.
+					await syncMintedSeatMembers(db, seatedMinted)
 					stats.sessions++
 
 					// The group's activation strategy, as a rebind of the
@@ -1612,6 +1656,21 @@ async function insertImportedHistory(
 	messages: ImportedChatMessage[],
 	characterOf: (msg: ImportedChatMessage) => number | null
 ): Promise<void> {
+	// 🚧 A character's line names the member of the seat its card holds — the
+	// seats are settled before this runs, so they have theirs. Read once per
+	// distinct card, on the transaction's handle. A user line names none: no
+	// person's seat is known here.
+	const memberOfCard = new Map<number, number | null>()
+	for (const msg of messages) {
+		if (msg.is_system || msg.is_user) continue
+		const cardId = characterOf(msg)
+		if (cardId == null || memberOfCard.has(cardId)) continue
+		memberOfCard.set(
+			cardId,
+			(await seatOf(tx, sessionId, `character:${cardId}`))?.castMemberId ??
+				null
+		)
+	}
 	const rows = messages
 		.filter((msg) => !msg.is_system)
 		.map((msg) => {
@@ -1622,14 +1681,24 @@ async function insertImportedHistory(
 					history: msg.swipes
 				}
 			}
+			const characterId = msg.is_user ? null : characterOf(msg)
 			return {
 				sessionId,
 				userId,
-				characterId: msg.is_user ? null : characterOf(msg),
+				characterId,
+				castMemberId:
+					characterId == null ? null : (memberOfCard.get(characterId) ?? null),
 				role: msg.is_user ? "user" : "character",
 				content: msg.mes,
 				metadata,
-				createdAt: normalizeTimestamp(msg.send_date)
+				createdAt: normalizeTimestamp(msg.send_date),
+				// Said, not stamped: an imported line was written before this
+				// session's story now, so it never takes the import moment's.
+				storyClockYear: null,
+				storyClockMonth: null,
+				storyClockDay: null,
+				storyClockHour: null,
+				storyClockMinute: null
 			}
 		})
 	for (let i = 0; i < rows.length; i += HISTORY_INSERT_BATCH)

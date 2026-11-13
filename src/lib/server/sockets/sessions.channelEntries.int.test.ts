@@ -165,19 +165,15 @@ async function session(
 			userId: owner.id,
 			isGroup: false,
 			genreId,
-			annex: {
-				core: {
-					turnOrder: {
-						v: 1,
-						order,
-						candidates: [],
-						basedOnAt: Date.now(),
-						computedAt: Date.now(),
-						runId: null,
-						event: null,
-						strategy: "core:task/turn-narrator@1"
-					}
-				}
+			turnOrder: {
+				v: 1,
+				order,
+				candidates: [],
+				basedOnAt: Date.now(),
+				computedAt: Date.now(),
+				runId: null,
+				event: null,
+				strategy: "core:task/turn-narrator@1"
 			}
 		} as any)
 		.returning()

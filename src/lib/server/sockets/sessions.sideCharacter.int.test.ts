@@ -33,6 +33,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -282,7 +283,7 @@ describe("a side-character turn is a participant, not a cast member", () => {
 		// the suggestion fires on everybody.
 		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("known")
-		await testDb.insert(schema.lorebookBindings).values({
+		await insertCastMember(testDb, {
 			lorebookId: f.lorebook.id,
 			binding: "{{char:99}}",
 			name: "The innkeeper",
@@ -553,5 +554,81 @@ describe("the dropdown offers the people it should", () => {
 		)
 		expect(res.error).toBe("Session not found.")
 		expect(res.characters).toEqual([])
+	}, 60_000)
+})
+
+describe("a removed member offered again (§0-D)", () => {
+	test("shows the name the book gives them", async () => {
+		const { sessionsSideCharacterOptionsHandler } = await import(
+			"./sessions"
+		)
+		const f = await makeSession("options-own-name")
+		await insertCastMember(testDb, {
+			lorebookId: f.session.lorebookId!,
+			binding: "{{char:own-name}}",
+			characterId: f.alice.id,
+			ownName: "Maren"
+		} as any)
+		await testDb
+			.update(schema.sessionCharacters)
+			.set({ removedAt: new Date() })
+			.where(eq(schema.sessionCharacters.characterId, f.alice.id))
+		const res = await sessionsSideCharacterOptionsHandler.handler(
+			fakeSocket(f.user.id),
+			{ sessionId: f.session.id },
+			noopEmit
+		)
+		expect(res.characters.find((c) => c.id === f.alice.id)?.name).toBe(
+			"Maren"
+		)
+		expect(res.characters.find((c) => c.id === f.vell.id)?.name).toBe(
+			`Vell options-own-name`
+		)
+	}, 60_000)
+
+	test("a departed seat is offered again under its member's name, not the card's", async () => {
+		const { sessionsSideCharacterOptionsHandler } = await import(
+			"./sessions"
+		)
+		const f = await makeSession("options-departed-member")
+		await insertCastMember(testDb, {
+			lorebookId: f.session.lorebookId!,
+			binding: "{{char:departed-member}}",
+			characterId: f.bram.id,
+			ownName: "Odalys"
+		} as any)
+		await testDb
+			.update(schema.sessionCharacters)
+			.set({ removedAt: new Date() })
+			.where(eq(schema.sessionCharacters.characterId, f.bram.id))
+		const res = await sessionsSideCharacterOptionsHandler.handler(
+			fakeSocket(f.user.id),
+			{ sessionId: f.session.id },
+			noopEmit
+		)
+		const offered = res.characters.find((c) => c.id === f.bram.id)
+		expect(offered?.name).toBe("Odalys")
+		expect(offered?.name).not.toBe(f.bram.name)
+	}, 60_000)
+
+	test("a library card no seat holds is offered under the card's name, even when the book has a member for it", async () => {
+		const { sessionsSideCharacterOptionsHandler } = await import(
+			"./sessions"
+		)
+		const f = await makeSession("options-unseated-card")
+		await insertCastMember(testDb, {
+			lorebookId: f.session.lorebookId!,
+			binding: "{{char:unseated-card}}",
+			characterId: f.vell.id,
+			ownName: "Tamsin"
+		} as any)
+		const res = await sessionsSideCharacterOptionsHandler.handler(
+			fakeSocket(f.user.id),
+			{ sessionId: f.session.id },
+			noopEmit
+		)
+		expect(res.characters.find((c) => c.id === f.vell.id)?.name).toBe(
+			f.vell.name
+		)
 	}, 60_000)
 })

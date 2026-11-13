@@ -85,4 +85,21 @@ describe("downloadParams", () => {
 			kind: "text"
 		})
 	})
+
+	test("a recommended vision model's projector rides along on a text download, never on an image one", () => {
+		const projector = {
+			filename: "mmproj-F16.gguf",
+			downloadUrl: "https://example.invalid/mmproj-F16.gguf"
+		}
+		const seeing = { ...TEXT_MODEL, visionProjector: projector }
+		expect(
+			downloadParams(seeing, TEXT_MODEL.pullOptions[1], "text").visionProjector
+		).toEqual(projector)
+		expect(
+			downloadParams(seeing, TEXT_MODEL.pullOptions[1], "image").visionProjector
+		).toBeUndefined()
+		expect(
+			downloadParams(TEXT_MODEL, TEXT_MODEL.pullOptions[1], "text").visionProjector
+		).toBeUndefined()
+	})
 })

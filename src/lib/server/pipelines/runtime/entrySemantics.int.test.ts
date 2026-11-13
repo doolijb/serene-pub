@@ -82,6 +82,12 @@ beforeAll(async () => {
 		.returning()
 	ash = cast[0]!.id
 	bran = cast[1]!.id
+	// Both are seated: since ★4 (2026-11-08) an unseated member is background,
+	// and the narrator reads a background member's lore.
+	await db.insert(schema.sessionCharacters).values([
+		{ sessionId, characterId: ash, isActive: true },
+		{ sessionId, characterId: bran, isActive: true }
+	] as any)
 
 	const [ashBinding] = await db
 		.insert(schema.lorebookBindings)

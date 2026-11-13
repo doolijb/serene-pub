@@ -26,7 +26,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	interface Props {
 		/** The session the open receipt belongs to. Nothing is asked without one. */
@@ -54,7 +54,10 @@
 	const onUsage = (res: Usage) => {
 		loading = false
 		if (res.error) {
-			toaster.error({ title: res.error })
+			notify.error({
+				source: "socket:pipelines:sessionEntryUsage",
+				title: res.error
+			})
 			return
 		}
 		// The receipt above can move to a run in another session while this is
@@ -68,7 +71,11 @@
 	/** The read failed: stop waiting, and show the sentence the server wrote. */
 	const showRefusal = (res: { error?: string }) => {
 		loading = false
-		if (res?.error) toaster.error({ title: res.error })
+		if (res?.error)
+			notify.error({
+				source: "socket:pipelines:sessionEntryUsage:error",
+				title: res.error
+			})
 	}
 
 	/**
@@ -222,9 +229,7 @@
 									<span class="text-sm font-medium">
 										{row.title}
 									</span>
-									<span
-										class="text-surface-600-400 text-xs"
-									>
+									<span class="text-surface-600-400 text-xs">
 										{row.sourceLabel}
 									</span>
 									<span class="flex-1"></span>

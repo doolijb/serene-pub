@@ -39,7 +39,7 @@ describe("fireTurn", () => {
 
 	test("a pick names the character's ref, recorded as a pick", () => {
 		const { sent, socket } = recorder()
-		fireTurn(socket, 7, { characterId: 12 })
+		fireTurn(socket, 7, { ref: "character:12" })
 		expect(sent).toEqual([
 			{
 				event: "sessions:fireTurn",
@@ -66,7 +66,7 @@ describe("fireTurn", () => {
 		const { sent, socket } = recorder()
 		fireTurn(socket, 7, { narrator: true }, "sanctum")
 		fireTurn(socket, 7, { narrator: true }, "main")
-		fireTurn(socket, 7, { characterId: 12 }, "sanctum")
+		fireTurn(socket, 7, { ref: "character:12" }, "sanctum")
 		expect(sent.map((s) => s.params)).toEqual([
 			{ sessionId: 7, entry: { ref: null, via: "pick" }, channel: "sanctum" },
 			{ sessionId: 7, entry: { ref: null, via: "pick" } },
@@ -74,10 +74,20 @@ describe("fireTurn", () => {
 		])
 	})
 
+	test("a pick on member-keyed data names the seat's own ref, as given", () => {
+		const { sent, socket } = recorder()
+		fireTurn(socket, 7, { ref: "seated-member:31" })
+		fireTurn(socket, 7, { ref: "player-seat:4" })
+		expect(sent.map((s) => s.params)).toEqual([
+			{ sessionId: 7, entry: { ref: "seated-member:31", via: "pick" } },
+			{ sessionId: 7, entry: { ref: "player-seat:4", via: "pick" } }
+		])
+	})
+
 	test("never the retired alias", () => {
 		const { sent, socket } = recorder()
 		fireTurn(socket, 1)
-		fireTurn(socket, 1, { characterId: 2 })
+		fireTurn(socket, 1, { ref: "character:2" })
 		expect(sent.map((s) => s.event)).not.toContain(
 			"sessions:triggerGenerateMessage"
 		)

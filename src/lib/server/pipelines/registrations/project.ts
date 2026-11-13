@@ -132,7 +132,9 @@ export async function projectRegistrations(db: Db): Promise<RegistrationProjecti
 				defaults: seed.defaults ?? null,
 				settings: seed.settings ?? null,
 				callsPerTurn: seed.callsPerTurn ?? null,
-				castFloor: seed.castFloor ?? null
+				castFloor: seed.castFloor ?? null,
+				// 🚧 The preset's variable layouts; core's seeds state none today.
+				variableLayouts: (seed as { variableLayouts?: Record<string, string> }).variableLayouts ?? {}
 			}
 			const differs = (Object.keys(shipped) as Array<keyof typeof shipped>).some(
 				(k) => JSON.stringify((row as Record<string, unknown>)[k] ?? null) !== JSON.stringify(shipped[k] ?? null)

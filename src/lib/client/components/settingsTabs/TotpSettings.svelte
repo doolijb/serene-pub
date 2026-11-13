@@ -9,7 +9,7 @@
 	 */
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 
@@ -46,11 +46,14 @@
 		recoveryCodes = null
 		disableCode = ""
 		busy = false
-		toaster.success({ title: "Two-factor authentication disabled" })
+		notify.success({
+			source: "socket:totp:disable",
+			title: "Two-factor authentication disabled"
+		})
 	}
 	function handleError(res: Sockets.ErrorResponse) {
 		busy = false
-		toaster.error({ title: res.error })
+		notify.error({ source: "totp:refusal", title: res.error })
 	}
 
 	const ERRORS = [
@@ -92,7 +95,7 @@
 	async function copyCodes() {
 		if (!recoveryCodes) return
 		await navigator.clipboard.writeText(recoveryCodes.join("\n"))
-		toaster.success({ title: "Recovery codes copied" })
+		notify.success({ title: "Recovery codes copied" })
 	}
 
 	function downloadCodes() {

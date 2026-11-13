@@ -32,10 +32,15 @@ import {
 import * as schema from "$lib/server/db/schema"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { slotConnectionId, slotModelId } from "$lib/shared/connections/slotRef"
-import { getMediaByUuid } from "$lib/server/media"
+import { addToMemberGallery, fileForOwner, getMediaByUuid } from "$lib/server/media"
+import { canEditCastMember } from "$lib/server/cast/memberAccess"
 import { mayFillSprites } from "$lib/server/sprites/attach"
+import type { SpriteOwner } from "$lib/server/sprites"
 import { money, perImagePrice, pictureCount } from "$lib/server/sprites/fillAction"
-import { cardActionInput } from "$lib/server/pipelines/runtime/cardAction"
+import {
+	cardActionInput,
+	cardActionOwnerOf
+} from "$lib/server/pipelines/runtime/cardAction"
 
 /** The form's bounds (§6.2): one to four pictures, two by default. */
 export const PORTRAIT_COUNT = Object.freeze({ min: 1, max: 4, default: 2 })
@@ -116,12 +121,25 @@ export interface OfferMediaResult {
  * the card's gallery pictures, after the ones already there. A picture must
  * be the person's own file or already the card's; one that is the card's
  * stays where it is. Refused unless the person owns the card or is an admin.
+ *
+ * 🚧 For a cast member (`castMemberId`): refused unless the person may edit
+ * its lorebook; the pictures are its book owner's files (a copy when the run
+ * person is not the owner) linked into the member's gallery.
  */
 export async function offerMediaToGallery(
 	db: Db,
-	input: { characterId: number; media: unknown; userId: number }
+	input: {
+		characterId?: number
+		castMemberId?: number
+		media: unknown
+		userId: number
+	}
 ): Promise<OfferMediaResult> {
-	if (!(await mayFillSprites(db, input.userId, input.characterId)))
+	if ((input.characterId == null) === (input.castMemberId == null))
+		throw new OfferMediaRefusal("name a character or a cast member, not both.")
+	if (input.castMemberId != null) return offerMediaToMemberGallery(db, input)
+	const characterId = input.characterId!
+	if (!(await mayFillSprites(db, input.userId, characterId)))
 		throw new OfferMediaRefusal(
 			"only the card's owner or an admin can add pictures to its gallery."
 		)
@@ -133,7 +151,7 @@ export async function offerMediaToGallery(
 	const [{ last } = { last: null }] = await db
 		.select({ last: max(schema.files.position) })
 		.from(schema.files)
-		.where(eq(schema.files.characterId, input.characterId))
+		.where(eq(schema.files.characterId, characterId))
 	let position = typeof last === "number" ? last + 1 : 0
 
 	const offered: OfferMediaResult["offered"] = []
@@ -148,7 +166,7 @@ export async function offerMediaToGallery(
 			ref.key === undefined || ref.key === null || ref.key === ""
 				? null
 				: String(ref.key)
-		if (file.characterId === input.characterId) {
+		if (file.characterId === characterId) {
 			offered.push({ mediaId: file.id, key })
 			continue
 		}
@@ -160,17 +178,94 @@ export async function offerMediaToGallery(
 		// its gallery. Only a file nobody else claims is stamped.
 		await db
 			.update(schema.files)
-			.set({ characterId: input.characterId, position: position++ })
+			.set({ characterId: characterId, position: position++ })
 			.where(and(eq(schema.files.id, file.id), isNull(schema.files.characterId)))
 		offered.push({ mediaId: file.id, key })
 	}
 	return { offered }
 }
 
+/** The member half of `offerMediaToGallery`. */
+async function offerMediaToMemberGallery(
+	db: Db,
+	input: { castMemberId?: number; media: unknown; userId: number }
+): Promise<OfferMediaResult> {
+	const member = await canEditCastMember(db, input.castMemberId!, input.userId)
+	if (!member)
+		throw new OfferMediaRefusal(
+			"only someone who can edit this cast member's lorebook can add pictures to its gallery."
+		)
+	const items = Array.isArray(input.media)
+		? input.media
+		: input.media
+			? [input.media]
+			: []
+	const inGallery = new Set(
+		(
+			await db
+				.select({ fileId: schema.castMemberFiles.fileId })
+				.from(schema.castMemberFiles)
+				.where(eq(schema.castMemberFiles.castMemberId, member.id))
+		).map((r) => r.fileId)
+	)
+	const offered: OfferMediaResult["offered"] = []
+	const toLink: number[] = []
+	for (const item of items) {
+		if (!item || typeof item !== "object") continue
+		const ref = item as { uuid?: unknown; key?: unknown; kind?: unknown }
+		if (ref.kind !== undefined && ref.kind !== "image") continue
+		if (typeof ref.uuid !== "string") continue
+		const file = await getMediaByUuid(db, ref.uuid)
+		if (!file || file.kind !== "image") continue
+		const key =
+			ref.key === undefined || ref.key === null || ref.key === ""
+				? null
+				: String(ref.key)
+		// Already in the member's gallery: offered as is.
+		if (inGallery.has(file.id)) {
+			offered.push({ mediaId: file.id, key })
+			continue
+		}
+		const isMembers =
+			file.userId === member.bookOwnerId && file.lorebookId === member.lorebookId
+		if (file.userId !== input.userId && !isMembers)
+			throw new OfferMediaRefusal(
+				"a picture handed to it is neither yours nor this cast member's."
+			)
+		let fileId = file.id
+		if (file.userId !== member.bookOwnerId)
+			// A session's notes editor ran it: the member's picture is the owner's copy.
+			fileId = await fileForOwner(db, file.id, {
+				userId: member.bookOwnerId,
+				lorebookId: member.lorebookId
+			})
+		else if (file.characterId == null && file.lorebookId == null)
+			// The owner's own file nobody else claims: the book is its provenance.
+			await db
+				.update(schema.files)
+				.set({ lorebookId: member.lorebookId })
+				.where(
+					and(
+						eq(schema.files.id, file.id),
+						isNull(schema.files.characterId),
+						isNull(schema.files.lorebookId)
+					)
+				)
+		toLink.push(fileId)
+		inGallery.add(fileId)
+		offered.push({ mediaId: fileId, key })
+	}
+	if (toLink.length) await addToMemberGallery(db, member.id, toLink)
+	return { offered }
+}
+
 // ── The dialog's preview ────────────────────────────────────────────────
 
 export interface PortraitPreview {
-	characterId: number
+	/** The card's id; absent for a cast member. */
+	characterId?: number
+	/** 🚧 The cast member's id; absent for a card. */
+	castMemberId?: number
 	count: number
 	style: PortraitStyle
 	pictures: number
@@ -219,11 +314,29 @@ async function resolvedDraw(db: Db, style: PortraitStyle) {
 	}
 }
 
+/**
+ * The refusal a portrait meets with nothing to draw from (owner ruling
+ * 2026-11-08): no likeness image and no likeness line. Until then it was a
+ * notice and the portrait was drawn from the fixed tail alone — a generic
+ * face that carried nothing of the card. Null when there is a likeness.
+ */
+export function likenessRefusal(
+	owner: SpriteOwner,
+	input: { likenessImage?: unknown; likeness?: unknown }
+): string | null {
+	const hasImage = Array.isArray(input.likenessImage) && input.likenessImage.length > 0
+	if (hasImage || String(input.likeness ?? "").trim()) return null
+	return "castMemberId" in owner
+		? "Add a likeness first: this cast member has no likeness image or likeness line, so there is nothing to draw them from."
+		: "Add a likeness first — a picture or a line of looks on the character's Likeness tab — so the portrait is drawn as them."
+}
+
 /** The dialog's preview for *Generate portrait*. */
 export async function previewPortrait(
 	db: Db,
 	req: {
-		characterId: number
+		characterId?: number
+		castMemberId?: number
 		count?: unknown
 		style?: unknown
 		userId: number
@@ -232,11 +345,12 @@ export async function previewPortrait(
 ): Promise<PortraitPreview> {
 	const count = clampCount(req.count ?? PORTRAIT_COUNT.default, PORTRAIT_COUNT.max)
 	const style = portraitStyleOf(req.style)
-	const input = await cardActionInput(db, req.characterId, { count, style })
+	const owner = cardActionOwnerOf(req)
+	const input = await cardActionInput(db, owner, { count, style })
 	const draw = await resolvedDraw(db, style)
 	const series = buildProofs(count)
 	const base = {
-		characterId: req.characterId,
+		...owner,
 		count,
 		style,
 		pictures: count,
@@ -244,11 +358,9 @@ export async function previewPortrait(
 	}
 
 	const notices: string[] = []
-	const hasImage = (input.likenessImage as unknown[]).length > 0
-	if (!hasImage && !String(input.likeness ?? "").trim())
-		notices.push(
-			"This character has no likeness yet, so the portrait is drawn from a general prompt alone. Add a picture or a description on the Likeness tab for one that looks like them."
-		)
+	const noLikeness = likenessRefusal(owner, input)
+	if (noLikeness)
+		return { ...base, calls: null, line: pictureCount(count), notices, refusal: noLikeness }
 
 	const { previewImageRun } = await import(
 		"$lib/server/pipelines/runtime/dispatchImage"
@@ -312,12 +424,17 @@ export async function previewPortrait(
 // ── The run ─────────────────────────────────────────────────────────────
 
 export interface PortraitProgress {
-	characterId: number
+	/** The card's id; absent for a cast member. */
+	characterId?: number
+	/** 🚧 The cast member's id; absent for a card. */
+	castMemberId?: number
 	runId: string
 	/** Where the run is. `done` and `failed` are final. */
 	phase: "drawing" | "offering" | "done" | "failed"
 	count: number
 	status?: unknown
+	/** The backend's own line (*In the Horde's queue…*), when no `status` is. */
+	message?: string
 	percent?: number
 	/** The pictures placed in the gallery, with the series key each was drawn for. */
 	offered?: Array<{ mediaId: number; key: string | null }>
@@ -335,7 +452,8 @@ export interface PortraitProgress {
 export async function runPortrait(
 	db: Db,
 	req: {
-		characterId: number
+		characterId?: number
+		castMemberId?: number
 		count?: unknown
 		style?: unknown
 		userId: number
@@ -347,18 +465,26 @@ export async function runPortrait(
 ): Promise<void> {
 	const count = clampCount(req.count ?? PORTRAIT_COUNT.default, PORTRAIT_COUNT.max)
 	const style = portraitStyleOf(req.style)
-	const head = { characterId: req.characterId, runId: req.runId, count }
+	const head = { ...cardActionOwnerOf(req), runId: req.runId, count }
 	const { runCardAction } = await import("$lib/server/pipelines/runtime/cardAction")
 	const { haltExplanation } = await import(
 		"$lib/server/pipelines/runtime/haltExplanation"
 	)
 	let phase: PortraitProgress["phase"] = "drawing"
+	// The same door the preview closes: a run started past a stale preview
+	// (or without one) is refused here, before anything is drawn.
+	const owner = cardActionOwnerOf(req)
+	const noLikeness = likenessRefusal(owner, await cardActionInput(db, owner, { count, style }))
+	if (noLikeness) {
+		req.report({ ...head, phase: "failed", error: noLikeness })
+		return
+	}
 	req.report({ ...head, phase })
 	try {
 		const receipt = await runCardAction({
 			db,
 			specId: CHARACTER_PORTRAIT_SPEC_ID,
-			characterId: req.characterId,
+			...cardActionOwnerOf(req),
 			userId: req.userId,
 			fields: { count, style },
 			overrides: await styleOverrides(db, style),
@@ -370,7 +496,12 @@ export async function runPortrait(
 					...head,
 					phase,
 					...(e.percent != null ? { percent: e.percent } : {}),
-					...(e.status ? { status: e.status } : {})
+					...(e.status ? { status: e.status } : {}),
+					// The adapter's sentence — a queue position, a wait, "this
+					// server does not say how far along it is" — is plain
+					// text beside the structured status, and is what a person
+					// waiting on the Horde needs to see.
+					...(e.message ? { message: e.message } : {})
 				}),
 			onStatus: (_node, text) => req.report({ ...head, phase, status: text }),
 			onNode: (e) => {

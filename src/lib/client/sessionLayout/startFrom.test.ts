@@ -230,7 +230,11 @@ describe("what each confirmation says it replaces", () => {
 		expect(reset.lines).toContain(
 			"This replaces this session's layout with a fresh copy of the genre default layout."
 		)
-		expect(reset.lines).toContain(LB)
+		// Owner 2026-11-04, item 15: Reset clears; a card and Start again keep the merge.
+		expect(reset.lines).toContain(
+			"Your settings and style for the widgets it places are cleared, so they look as the genre ships them. Widgets it doesn't place keep yours."
+		)
+		expect(reset.lines).not.toContain(LB)
 		expect(reset.confirmLabel).toBe("Reset layout")
 
 		const again = copyConfirm({ kind: "again", preset: MINE })
@@ -239,6 +243,7 @@ describe("what each confirmation says it replaces", () => {
 			"This replaces this session's layout with a fresh copy of “Lighthouse table”."
 		)
 		expect(again.confirmLabel).toBe("Start again")
+		expect(again.lines).toContain(LB)
 	})
 
 	test("Start from scratch: the minimal setup, every widget back at its defaults (LC)", () => {

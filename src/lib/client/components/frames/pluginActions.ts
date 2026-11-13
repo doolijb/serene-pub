@@ -10,7 +10,12 @@ import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 export async function invokePluginAction(
 	pluginId: string,
 	action: string,
-	input?: Record<string, unknown>
+	input?: Record<string, unknown>,
+	/**
+	 * 🚧 M2e: sent only by the plugin's own applet mount (the launcher, or its session view). It names the mount
+	 * for the server to check against its own data (`frameCauseOfInvoke`); the server never takes it as the cause.
+	 */
+	fromApplet?: { pluginId: string; sessionId?: number }
 ): Promise<unknown> {
 	// The uuid package, not the Web Crypto UUID: that is undefined on a plain-http LAN address.
 	const requestId = uuid()
@@ -18,7 +23,13 @@ export async function invokePluginAction(
 		socket: useTypedSocket(),
 		event: "pluginActions:invoke",
 		errorEvent: "pluginActions:invoke:error",
-		params: { pluginId, action, ...(input ? { input } : {}), requestId },
+		params: {
+			pluginId,
+			action,
+			...(input ? { input } : {}),
+			...(fromApplet ? { fromApplet } : {}),
+			requestId
+		},
 		match: (r) => r?.requestId === requestId,
 		matchError: (e) => (e as { requestId?: string } | null)?.requestId === requestId,
 		timeoutMs: 130_000

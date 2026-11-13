@@ -21,6 +21,7 @@
 
 import { inArray, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 /** The genre field a session turns the outcomes' numbers out of its prompts with — _Show outcomes_ (⏳ id `showDice`, kept). */
 export const SHOW_DICE_FIELD = "showDice"
@@ -62,25 +63,61 @@ function diceBlocksOf(blocks: unknown): DiceLike[] {
  * the session's seats (a character or a persona by name, a card-less seat
  * by its seat name). Null when the tree holds no outcome block.
  */
-export async function outcomeWordsOf(db: Db, blocks: unknown): Promise<string | null> {
+export async function outcomeWordsOf(
+	db: Db,
+	blocks: unknown,
+	/**
+	 * 🚧 The session the outcome was reported in. Given, a character is named
+	 * as that session's seat reads them (a seated member by its own name), and
+	 * a `seated-member:<id>` reference is understood; absent, a character is
+	 * named by its card, as before.
+	 */
+	sessionId?: number
+): Promise<string | null> {
 	const dice = diceBlocksOf(blocks)
 	if (!dice.length) return null
 	const refs = dice.map((d) => (typeof d.by === "string" ? d.by : ""))
-	const characterIds = refs
+	// The name key of each reference — `character:<cardId>` for a seat with a
+	// card, `player-seat:<id>` for a card-less one (a `seated-member:` one
+	// translated; an unresolved one names nobody). ⏳ With the flip on
+	// (`state/memberForm.ts`) the references arrive in member form
+	// (`seated-member:` / `player-seat:`), so each is read through its seat;
+	// off, through `storedSeatRef`.
+	const forms: string[] = []
+	if (sessionId != null && memberFormOn()) {
+		const { seatOf, parseSeatRef } = await import("$lib/server/sessions/seats")
+		for (const r of refs) {
+			const seat = await seatOf(db, sessionId, r)
+			forms.push(
+				seat
+					? seat.cardId != null
+						? `character:${seat.cardId}`
+						: `player-seat:${seat.seatId}`
+					: parseSeatRef(r)?.form === "seated-member"
+						? ""
+						: r
+			)
+		}
+	} else if (sessionId != null) {
+		const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+		for (const r of refs) forms.push((await storedSeatRef(db, sessionId, r)) ?? "")
+	} else forms.push(...refs)
+	const characterIds = forms
 		.map((r) => /^character:(\d+)$/.exec(r)?.[1])
 		.filter((x): x is string => !!x)
 		.map(Number)
-	const seatIds = refs
+	const seatIds = forms
 		.map((r) => /^player-seat:(\d+)$/.exec(r)?.[1])
 		.filter((x): x is string => !!x)
 		.map(Number)
 	const names = new Map<string, string>()
-	if (characterIds.length)
-		for (const c of await db
-			.select({ id: schema.characters.id, name: schema.characters.name })
-			.from(schema.characters)
-			.where(inArray(schema.characters.id, characterIds)))
-			if (c.name) names.set(`character:${c.id}`, c.name)
+	if (characterIds.length) {
+		const { cardsNowAsSeatsRead } = await import(
+			"$lib/server/pipelines/prompt/seatCards"
+		)
+		const cards = [...(await cardsNowAsSeatsRead(db, sessionId, characterIds)).values()]
+		for (const c of cards) if (c.name) names.set(`character:${c.id}`, c.name)
+	}
 	for (const id of seatIds) {
 		const [seat] = await db
 			.select({ seatName: schema.sessionPersonas.seatName })
@@ -90,7 +127,7 @@ export async function outcomeWordsOf(db: Db, blocks: unknown): Promise<string | 
 		if (seat?.seatName) names.set(`player-seat:${id}`, seat.seatName)
 	}
 	const lines = dice.map((d, i) => {
-		const who = names.get(refs[i]!)
+		const who = names.get(forms[i]!)
 		const what = typeof d.stat === "string" && d.stat.trim() ? d.stat.trim() : "The roll"
 		const how = typeof d.outcome === "string" && d.outcome.trim() ? d.outcome.trim() : "it is done"
 		const by = typeof d.method === "string" ? METHOD_WORDS[d.method] : undefined

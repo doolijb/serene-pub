@@ -22,6 +22,14 @@ import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 /** What a new managed endpoint is called, before any clash. */
 export const MANAGED_ENDPOINT_NAME = "KoboldCPP"
 
+/**
+ * The one spelling of the Managed address: the process listens on the port, so
+ * the address Serene Pub reaches it at is made from it, never typed.
+ */
+export function managedBaseUrl(port: number | null | undefined): string {
+	return `http://localhost:${port ?? 5001}`
+}
+
 /** The managed endpoint, or undefined when this install has none yet. */
 export async function managedKoboldCppEndpoint(
 	db: Db

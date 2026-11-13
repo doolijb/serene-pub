@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
 import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
@@ -147,6 +147,15 @@ describe("avatar upload via media (28)", () => {
 		const after = await testDb.query.characters.findFirst({
 			where: (c, { eq }) => eq(c.id, character.id)
 		})
+		// The face is the current card version's; the card's copy agrees.
+		const [current] = await testDb
+			.select({ face: schema.characterVersions.faceMediaId })
+			.from(schema.characterVersions)
+			.where(eq(schema.characterVersions.cardId, character.id))
+			.orderBy(desc(schema.characterVersions.number))
+			.limit(1)
+		expect(current?.face).toBe(row.file.id)
+		expect(after?.avatarMediaId).toBe(row.file.id)
 		// The pointer names the FILE, never a stored representation — which is
 		// what lets the original be culled later without stranding it.
 		expect(after?.avatarMediaId).toBe(row.file.id)

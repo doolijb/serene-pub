@@ -4,8 +4,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { v4 as uuid } from "uuid"
-	import { toaster } from "$lib/client/utils/toaster"
-	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
+	import { notify } from "$lib/client/utils/notify"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import NewLorebookDialog from "$lib/client/components/lorebookForms/NewLorebookDialog.svelte"
 	import ImportConflictModal from "$lib/client/components/modals/ImportConflictModal.svelte"
@@ -54,8 +53,6 @@
 		 * figures.
 		 */
 		deletingBook?: DeletingBook | null
-		/** Hidden rather than disabled when the checkbox would do nothing. */
-		canOfferAttachToSession: boolean
 		/** So a book that is open can be left when it stops existing. */
 		onDeleted?: (id: number) => void
 		/** So the copy is what the workspace is looking at afterwards. */
@@ -76,7 +73,6 @@
 		deletingId = $bindable(null),
 		duplicating = $bindable(null),
 		deletingBook = null,
-		canOfferAttachToSession,
 		onDeleted,
 		onDuplicated,
 		onCreated,
@@ -98,12 +94,6 @@
 		| Sockets.Lorebooks.Import.Response["conflict"]
 		| undefined = $state(undefined)
 	let showImportConflictModal: boolean = $state(false)
-
-	/**
-	 * Whether the create in flight should attach the new book to the open
-	 * session (the user ticked "attach to this session").
-	 */
-	let pendingAttach: boolean = $state(false)
 
 	/**
 	 * The `requestId` of the create this tab sent, until it is answered. The
@@ -133,12 +123,13 @@
 					]
 				}
 			: deleteBookCopy(deletingBook, {
-			placeTypeId: LOCATION_TYPE_ID,
-			openSessionName:
-				deletingId !== null && openSessionCtx?.lorebookId === deletingId
-					? openSessionCtx.sessionName
-					: null
-			})
+					placeTypeId: LOCATION_TYPE_ID,
+					openSessionName:
+						deletingId !== null &&
+						openSessionCtx?.lorebookId === deletingId
+							? openSessionCtx.sessionName
+							: null
+				})
 	)
 
 	/** What the copy will be called, as the reader may still edit it. */
@@ -151,7 +142,7 @@
 	$effect(() => {
 		if (exportingId === null) return
 		exportingId = null
-		toaster.info({ title: LOREBOOK_EXPORT_PAUSED })
+		notify.info({ title: LOREBOOK_EXPORT_PAUSED })
 	})
 
 	// The suggestion follows the book being copied and nothing else: a
@@ -166,16 +157,12 @@
 
 	function handleCreateConfirm(details: {
 		name: string
-		attachToSession: boolean
 		primaryRuleset?: string
 		starterKit?: Sockets.StarterKits.Ref
 	}) {
 		if (!details.name.trim() && !details.starterKit) return
 		creating = false
 		const trimmed = details.name.trim()
-		// Only claim the create when the switch was both shown and on;
-		// `attachToSession` is meaningless if the modal rendered no switch.
-		pendingAttach = details.attachToSession && canOfferAttachToSession
 		pendingCreateRequestId = uuid()
 		const req: Sockets.Lorebooks.Create.Params = {
 			name: trimmed,
@@ -198,7 +185,6 @@
 	export function makeBookFromKit(kitBookId: number, kitName: string) {
 		handleCreateConfirm({
 			name: kitName,
-			attachToSession: false,
 			starterKit: { lorebookId: kitBookId }
 		})
 	}
@@ -216,10 +202,12 @@
 		socket.emit("starterKits:saveFromBook", { lorebookId })
 	}
 
-	function handleSaveFromBook(msg: Sockets.StarterKits.SaveFromBook.Response) {
+	function handleSaveFromBook(
+		msg: Sockets.StarterKits.SaveFromBook.Response
+	) {
 		if (pendingSaveAsKit === null || !msg?.kit) return
 		pendingSaveAsKit = null
-		toaster.success({
+		notify.success({
 			title: "Saved as a starter lorebook",
 			description: `"${msg.kit.name}" is under Your starter lorebooks here and in Admin › Starter lorebooks. Everyone on the pub can start a lorebook or a session from it.`
 		})
@@ -228,6 +216,32 @@
 	/** The refusal is toasted by Layout's catch-all; stop waiting on it. */
 	function handleSaveFromBookError() {
 		pendingSaveAsKit = null
+	}
+
+	/** The primer row this tab asked to clone, until answered. */
+	let pendingClone: number | null = $state(null)
+
+	/**
+	 * 🚧 (m2e-F-C) **Clone** a read-only primer row into a starter lorebook of
+	 * the person's own; the copy opens when it lands (that is the feedback).
+	 */
+	export function cloneStarter(lorebookId: number) {
+		if (pendingClone !== null) return
+		pendingClone = lorebookId
+		socket.emit("starterKits:clone", { id: `book:${lorebookId}` })
+	}
+
+	function handleCloneStarter(msg: Sockets.StarterKits.Clone.Response) {
+		if (pendingClone === null || !msg?.kit) return
+		pendingClone = null
+		const n = Number(msg.kit.id.slice("book:".length))
+		if (msg.kit.id.startsWith("book:") && Number.isSafeInteger(n) && n > 0)
+			onDuplicated?.(n)
+	}
+
+	/** The refusal is toasted by Layout's catch-all; stop waiting on it. */
+	function handleCloneStarterError() {
+		pendingClone = null
 	}
 
 	/**
@@ -245,7 +259,7 @@
 		const file = details.files[0]
 
 		if (file.type !== "application/json") {
-			toaster.error({
+			notify.error({
 				title: "Invalid file type. Please upload a JSON file."
 			})
 			return
@@ -253,7 +267,7 @@
 		// The server's own ceiling, said before a byte is read or sent.
 		const tooLarge = lorebookFileTooLarge(file.size)
 		if (tooLarge) {
-			toaster.error({ title: tooLarge })
+			notify.error({ title: tooLarge })
 			return
 		}
 
@@ -264,7 +278,7 @@
 			try {
 				name = nameInFile(JSON.parse(text))
 			} catch {
-				toaster.error({
+				notify.error({
 					title: "This lorebook file isn't valid JSON, so Serene Pub can't read it."
 				})
 				return
@@ -336,10 +350,11 @@
 	}
 
 	function handleStarterKitDelete(msg: Sockets.StarterKits.Delete.Response) {
-		if (pendingDeleteId === null || msg?.lorebookId !== pendingDeleteId) return
+		if (pendingDeleteId === null || msg?.lorebookId !== pendingDeleteId)
+			return
 		const id = pendingDeleteId
 		pendingDeleteId = null
-		toaster.success({ title: "Starter lorebook deleted" })
+		notify.success({ title: "Starter lorebook deleted" })
 		onDeleted?.(id)
 	}
 
@@ -367,7 +382,7 @@
 		if (!msg.lorebook || !duplicatePending) return
 		duplicating = null
 		duplicatePending = false
-		toaster.success({
+		notify.success({
 			title: "Lorebook duplicated",
 			description: `"${msg.lorebook.name}" is ready.`
 		})
@@ -395,20 +410,11 @@
 		)
 			return
 		pendingCreateRequestId = null
-		const attach = pendingAttach
-		pendingAttach = false
-		toaster.success({
+		notify.success({
 			title: "Lorebook created",
 			description: `"${msg.lorebook.name}" created successfully.`
 		})
 		// Server automatically emits updated list
-		if (attach && openSessionCtx.sessionId !== null) {
-			attachLorebookToSession(
-				socket,
-				openSessionCtx.sessionId,
-				msg.lorebook.id
-			)
-		}
 		onCreated?.(msg.lorebook.id)
 	}
 
@@ -421,7 +427,7 @@
 			return
 		}
 		if (msg.status === "unchanged") {
-			toaster.success({
+			notify.success({
 				title: "Already imported",
 				description: `"${msg.lorebook?.name}" is unchanged. Opening the lorebook you already have.`
 			})
@@ -429,7 +435,10 @@
 			return
 		}
 		const toast = lorebookImportedToast(msg.warnings)
-		toaster[toast.kind]({ title: toast.title, description: toast.description })
+		notify[toast.kind]({
+			title: toast.title,
+			description: toast.description
+		})
 		if (msg.lorebook) onImported?.(msg.lorebook.id)
 	}
 
@@ -440,7 +449,10 @@
 	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
 		if (!importPending) return
 		importPending = false
-		toaster.error({ title: msg.error || "Failed to import lorebook" })
+		notify.error({
+			title: msg.error || "Failed to import lorebook",
+			source: "socket:lorebooks:import:error"
+		})
 	}
 
 	function handleLorebooksImportResolve(
@@ -449,15 +461,19 @@
 		if (!importPending) return
 		importPending = false
 		const toast = lorebookImportedToast(msg.warnings)
-		toaster[toast.kind]({ title: toast.title, description: toast.description })
+		notify[toast.kind]({
+			title: toast.title,
+			description: toast.description
+		})
 		if (msg.lorebook) onImported?.(msg.lorebook.id)
 	}
 
 	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
 		if (!importPending) return
 		importPending = false
-		toaster.error({
-			title: msg.error || "Failed to resolve lorebook import"
+		notify.error({
+			title: msg.error || "Failed to resolve lorebook import",
+			source: "socket:lorebooks:importResolve:error"
 		})
 	}
 
@@ -467,7 +483,7 @@
 		if (msg.id !== undefined && msg.id !== pendingDeleteId) return
 		const id = pendingDeleteId
 		pendingDeleteId = null
-		toaster.success({ title: "Lorebook deleted" })
+		notify.success({ title: "Lorebook deleted" })
 		onDeleted?.(id)
 	}
 
@@ -500,7 +516,10 @@
 	)
 	useInterest<"lorebooks:delete">("lorebooks:delete", handleLorebooksDelete)
 	// 🚧 Starter lorebooks (a GATED family: these keys are what lets them through).
-	useInterest<"starterKits:delete">("starterKits:delete", handleStarterKitDelete)
+	useInterest<"starterKits:delete">(
+		"starterKits:delete",
+		handleStarterKitDelete
+	)
 	useInterest<"starterKits:delete:error">(
 		"starterKits:delete:error",
 		handleLorebooksDeleteError
@@ -512,6 +531,11 @@
 	useInterest<"starterKits:saveFromBook:error">(
 		"starterKits:saveFromBook:error",
 		handleSaveFromBookError
+	)
+	useInterest<"starterKits:clone">("starterKits:clone", handleCloneStarter)
+	useInterest<"starterKits:clone:error">(
+		"starterKits:clone:error",
+		handleCloneStarterError
 	)
 	useInterest<"lorebooks:delete:error">(
 		"lorebooks:delete:error",
@@ -536,8 +560,6 @@
 		creating = false
 		importing = true
 	}}
-	{canOfferAttachToSession}
-	sessionName={openSessionCtx.sessionName}
 />
 
 {#if importConflict}
@@ -647,10 +669,9 @@
 							Duplicate lorebook
 						</h2>
 						<p class="text-surface-700-300 mb-4 text-sm">
-							An exact copy: every entry on every branch, the
-							cast and their dated changes, the links, the
-							scenes, the tags and the story's calendar. Nothing
-							is read into a session until you say so.
+							An exact copy: every entry on every branch, the cast
+							and their dated changes, the links, the scenes, the
+							tags and the story's calendar.
 						</p>
 						<label class="mb-2 block" for="duplicate-name">
 							Name

@@ -20,6 +20,7 @@
  */
 import * as schema from "$lib/server/db/schema"
 import { DERELICT_REPLY_SENTENCE } from "$lib/server/sessions/derelictReplies"
+import { benchRemovedSeatsWithLines } from "$lib/server/db/dataUpgrades/0152_overjoyed_magik"
 import * as attic from "../tables"
 import { vectorColumns } from "../embeddings"
 import {
@@ -238,4 +239,11 @@ export async function restoreMessages(ctx: RestoreContext): Promise<void> {
 			250
 		)
 	}
+
+	// A seat removed in 0.5.3 that has lines arrives benched, as data upgrade
+	// 0152 does for 0.6's own: the lines now exist to decide it.
+	const chatIds = (await tx.select({ id: attic.chats.id }).from(attic.chats)).map(
+		(c) => c.id
+	)
+	await benchRemovedSeatsWithLines(tx, chatIds)
 }

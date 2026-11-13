@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { describe, expect, test } from "vitest"
 import {
 	MESSAGE_STYLE_PRESETS,
+	SCENE_PORTRAITS_STYLE_PRESETS,
 	OFF_FOLIO,
 	folioGuarded,
 	legacyLayoutAttr,
@@ -12,6 +13,8 @@ import {
 import { systemStyleSlug, type WidgetDecl } from "./types"
 import type { ResolvableStyle } from "./resolve"
 import { resolveStyle } from "./resolve"
+import { getGenre } from "@serene-pub/sdk"
+import "@serene-pub/core-catalog"
 
 const row = (id: number, widgetSlug: string, slug: string): ResolvableStyle => ({
 	id,
@@ -40,6 +43,12 @@ describe("withCorePresets", () => {
 			id: "scene-portraits",
 			title: "Scene Portraits",
 			component: "scene-portraits",
+			presets: [{ slug: "default", title: "Default", css: "" }]
+		},
+		{
+			id: "stats",
+			title: "Stats",
+			component: "stats",
 			presets: [{ slug: "default", title: "Default", css: "" }]
 		}
 	]
@@ -82,8 +91,46 @@ describe("withCorePresets", () => {
 	test("leaves a widget the app ships no packs for untouched", () => {
 		const out = withCorePresets(decls)
 		expect(
-			out.find((d) => d.id === "scene-portraits")?.presets?.map((p) => p.slug)
+			out.find((d) => d.id === "stats")?.presets?.map((p) => p.slug)
 		).toEqual(["default"])
+	})
+
+	test("Scene Portraits keeps its one default, as it seeds today, and adds Open stage", () => {
+		const presets = withCorePresets(decls).find(
+			(d) => d.id === "scene-portraits"
+		)!.presets!
+		expect(presets.filter((p) => p.slug === "default")).toHaveLength(1)
+		expect(presets[0]).toEqual({ slug: "default", title: "Default", css: "" })
+		const open = presets.find((p) => p.slug === "open-stage")
+		expect(open?.title).toBe("Open stage")
+		expect(open?.vars).toEqual({
+			"--sp-widget-background": "transparent",
+			"--sp-widget-border": "none"
+		})
+	})
+
+	test("the Visual novel layout pins the slug Open stage seeds under", () => {
+		const pin = getGenre("core:genre/story")?.layouts?.find(
+			(l) => l.slug === "visual-novel"
+		)?.preset.widgetStyles?.["scene-portraits"]?.slug
+		expect(pin).toBe(systemStyleSlug("scene-portraits", "open-stage"))
+	})
+
+	test("Open stage names only widget parts and no colour literal", () => {
+		const css = SCENE_PORTRAITS_STYLE_PRESETS.find(
+			(p) => p.slug === "open-stage"
+		)!.css
+		const body = css.replace(/\/\*[\s\S]*?\*\//g, "")
+		const selectors = body
+			.split("}")
+			.map((b) => b.split("{")[0].trim())
+			.filter(Boolean)
+		expect(selectors.length).toBeGreaterThan(0)
+		for (const sel of selectors) {
+			expect(sel).not.toMatch(/(^|[\s>,])[.#]/)
+			expect(sel).toContain("data-widget-part~=")
+		}
+		expect(body).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i)
 	})
 
 	test("does not mutate the decls it is given", () => {

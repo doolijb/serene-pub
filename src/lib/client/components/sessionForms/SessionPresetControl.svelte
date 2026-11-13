@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	type PresetRow = Sockets.SessionAdmin.PresetRow
 
@@ -23,9 +23,21 @@
 		/** After a switch: the form drops its own copies of the pinned choices. */
 		onapplied: (presetId: number) => void
 	}
-	let { sessionId, genreId, presetId, fields, presets, disabled = false, onapplied }: Props = $props()
+	let {
+		sessionId,
+		genreId,
+		presetId,
+		fields,
+		presets,
+		disabled = false,
+		onapplied
+	}: Props = $props()
 
-	const options = $derived(presets.filter((p) => p.genreId === genreId && p.enabled && !(p as any).withdrawnAt))
+	const options = $derived(
+		presets.filter(
+			(p) => p.genreId === genreId && p.enabled && !(p as any).withdrawnAt
+		)
+	)
 	const current = $derived(options.find((p) => p.id === presetId) ?? null)
 
 	/** Does anything the preset pins differ from what the session holds? */
@@ -44,53 +56,85 @@
 	function apply(id: number) {
 		if (disabled || busy) return
 		busy = true
-		const release = requestWithInterest("sessions:setSessionPreset", { sessionId, presetId: id }, (res) => {
-			release()
-			busy = false
-			if (res.error) {
-				toaster.error({ title: "Preset", description: res.error })
-				return
+		const release = requestWithInterest(
+			"sessions:setSessionPreset",
+			{ sessionId, presetId: id },
+			(res) => {
+				release()
+				busy = false
+				if (res.error) {
+					notify.error({
+						source: "socket:sessions:setSessionPreset",
+						title: "Preset",
+						description: res.error
+					})
+					return
+				}
+				onapplied(id)
 			}
-			onapplied(id)
-		})
+		)
 	}
 
 	/** What a turn costs, derived from what the preset registers (lane 5b), ⏳ else its stored number. */
 	const cost = (p: PresetRow) => {
 		const n = p.derived?.callsPerTurn ?? p.callsPerTurn
-		return typeof n === "number" ? (n === 1 ? "1 call per turn" : `${n} calls per turn`) : ""
+		return typeof n === "number"
+			? n === 1
+				? "1 call per turn"
+				: `${n} calls per turn`
+			: ""
 	}
 </script>
 
 {#if options.length > 1}
 	<div class="mb-4 flex flex-col gap-2" data-testid="session-preset-control">
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
-			<span class="text-sm font-medium" id="session-preset-heading">Preset · Applies at once</span>
+			<span class="text-sm font-medium" id="session-preset-heading">
+				Preset · Applies at once
+			</span>
 			{#if custom}
-				<span class="text-surface-600-400 text-xs" data-testid="session-preset-custom">
+				<span
+					class="text-surface-600-400 text-xs"
+					data-testid="session-preset-custom"
+				>
 					Custom
 					{#if current}
 						·
-						<button type="button" class="anchor" onclick={() => apply(current.id)} {disabled}>Back to {current.name}</button>
+						<button
+							type="button"
+							class="anchor"
+							onclick={() => apply(current.id)}
+							{disabled}
+						>
+							Back to {current.name}
+						</button>
 					{/if}
 				</span>
 			{/if}
 		</div>
-		<div class="flex flex-wrap gap-2" role="radiogroup" aria-labelledby="session-preset-heading">
+		<div
+			class="flex flex-wrap gap-2"
+			role="radiogroup"
+			aria-labelledby="session-preset-heading"
+		>
 			{#each options as p (p.id)}
 				{@const selected = p.id === presetId && !custom}
 				<button
 					type="button"
 					role="radio"
 					aria-checked={selected}
-					class="btn btn-sm min-h-11 flex-col items-start {selected ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					class="btn btn-sm min-h-11 flex-col items-start {selected
+						? 'preset-filled-primary-500'
+						: 'preset-tonal-surface'}"
 					title={p.description ?? ""}
 					onclick={() => apply(p.id)}
 					disabled={disabled || busy}
 					data-session-preset={p.id}
 				>
 					<span>{p.name}</span>
-					{#if cost(p)}<span class="text-meta opacity-80">{cost(p)}</span>{/if}
+					{#if cost(p)}<span class="text-meta opacity-80">
+							{cost(p)}
+						</span>{/if}
 				</button>
 			{/each}
 		</div>

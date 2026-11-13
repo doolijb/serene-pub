@@ -1,16 +1,16 @@
 /**
  * **Retold fields** at the read seams (PLAN-cast-retold-fields-2026-10-13).
  *
- * A session seats a CARD; when the session's lorebook has that card as a cast
- * member, and the member retells some of the card's fields
- * (`lorebook_bindings.retold`), the member's own text is read in their place.
- * With `retold = {}` — every member until someone toggles a field — nothing
- * here changes a byte of what a session reads.
+ * What is left here: `splitExampleDialogues`, `faceMediaProblem`,
+ * `retoldUpdateProblem`, and the member form's column shape of a version
+ * (`memberColumnsOfVersion`, `castChangesOfMemberEdit`). A seat reads its
+ * member from the member's character version (`cast/memberAsRead.ts`); the
+ * frozen member columns are read nowhere.
  *
  * ⚠ Must not statically import `$lib/server/db`; every function takes its
  * handle (the `castMemberCards` rule).
  */
-import { asc, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { MediaVisibility } from "$lib/shared/constants/MediaVisibility"
 import {
@@ -18,79 +18,21 @@ import {
 	RETOLD_TEXT_FIELDS,
 	type RetoldFlags
 } from "$lib/shared/lorebooks/retold"
-import type { Amendment } from "$lib/shared/lorebooks/amendments"
-import type { EntryReading } from "$lib/server/state/entriesOnReading"
+import {
+	memberProfileOf,
+	type CastVersionChanges
+} from "$lib/server/characters/versions"
+import {
+	legacyGreetingsOf,
+	profileOf,
+	type CharacterCreatorNotes,
+	type CharacterProfileField,
+	type CharacterProfileV1
+} from "$lib/shared/characters/profile"
+import type { CharacterLikenessInput } from "$lib/shared/characters/likeness"
+import type { CharacterTimbreInput } from "$lib/shared/characters/timbre"
+import type { NodeState, NodeVisibility } from "$lib/server/db/schema"
 
-/** A cast member's retold columns, as one reading has them. */
-export interface RetoldMember {
-	id: number
-	characterId: number | null
-	description: string | null
-	personality: string | null
-	scenario: string | null
-	firstMessage: string | null
-	alternateGreetings: string[]
-	exampleDialogues: string | null
-	faceMediaId: number | null
-	retold: RetoldFlags
-}
-
-/** The `lorebook_bindings` columns a `RetoldMember` is read from. */
-export const RETOLD_MEMBER_COLUMNS = {
-	id: schema.lorebookBindings.id,
-	characterId: schema.lorebookBindings.characterId,
-	description: schema.lorebookBindings.description,
-	personality: schema.lorebookBindings.personality,
-	scenario: schema.lorebookBindings.scenario,
-	firstMessage: schema.lorebookBindings.firstMessage,
-	alternateGreetings: schema.lorebookBindings.alternateGreetings,
-	exampleDialogues: schema.lorebookBindings.exampleDialogues,
-	faceMediaId: schema.lorebookBindings.faceMediaId,
-	retold: schema.lorebookBindings.retold
-} as const
-
-/** Whether a member retells anything at all. */
-export function retellsAnything(member: Pick<RetoldMember, "retold">): boolean {
-	const r = member.retold
-	return !!r && typeof r === "object" && Object.values(r).some((v) => v === true)
-}
-
-/** A resolved row, normalised — an overlay may have set any of these to anything. */
-function asRetoldMember(row: Record<string, unknown>): RetoldMember {
-	const text = (v: unknown) => (typeof v === "string" ? v : null)
-	const retold =
-		row.retold && typeof row.retold === "object" && !Array.isArray(row.retold)
-			? (row.retold as RetoldFlags)
-			: {}
-	return {
-		id: row.id as number,
-		characterId: (row.characterId as number | null) ?? null,
-		description: text(row.description),
-		personality: text(row.personality),
-		scenario: text(row.scenario),
-		firstMessage: text(row.firstMessage),
-		alternateGreetings: Array.isArray(row.alternateGreetings)
-			? row.alternateGreetings.filter((g): g is string => typeof g === "string")
-			: [],
-		exampleDialogues: text(row.exampleDialogues),
-		faceMediaId:
-			typeof row.faceMediaId === "number" ? row.faceMediaId : null,
-		retold
-	}
-}
-
-/**
- * The card as the member tells it: each retold prose field replaced by the
- * member's text (`""` when the member's column is empty — retold means the
- * member's text is read, even when it says nothing), greetings as a list.
- * Retelling the description or the personality drops the card's strokes,
- * which would otherwise beat the prose. Returns the SAME object when the
- * member retells no field of the card's text, so an untouched card stays
- * identical.
- *
- * `face` is not applied here — the card's avatar is the card's; the member's
- * face travels as `castFaces` on `sessions:get`.
- */
 /** A member's example-dialogue text as the card shape: one entry per `<START>`. */
 export function splitExampleDialogues(text: unknown): string[] {
 	if (typeof text !== "string") return []
@@ -98,125 +40,6 @@ export function splitExampleDialogues(text: unknown): string[] {
 		.split("<START>")
 		.map((d) => d.trim())
 		.filter((d) => d !== "")
-}
-
-export function applyRetold<T extends object>(
-	card: T,
-	member: Pick<RetoldMember, "retold"> &
-		Partial<Omit<RetoldMember, "retold">>
-): T {
-	const r = member.retold ?? {}
-	const fields: Record<string, unknown> = {}
-	for (const field of RETOLD_TEXT_FIELDS)
-		if (r[field] === true) fields[field] = member[field] ?? ""
-	// The member's example dialogues are ONE text (the column is text, the
-	// form writes each dialogue opened with `<START>`); the card's are an
-	// array and the prompt reader (`characterExampleDialogue`) only reads an
-	// array. Split the same way the card editor migrates an old string card.
-	if (r.exampleDialogues === true)
-		fields.exampleDialogues = splitExampleDialogues(member.exampleDialogues)
-	if (r.alternateGreetings === true)
-		fields.alternateGreetings = Array.isArray(member.alternateGreetings)
-			? [...member.alternateGreetings]
-			: []
-	if (!Object.keys(fields).length) return card
-	if (r.description === true || r.personality === true) fields.strokes = null
-	// A member who retells their greetings replaces ALL of the card's,
-	// group-only ones too: `buildCharacterFirstSessionMessage` reads a card's
-	// `groupOnlyGreetings` first in a group session, so leaving them would
-	// make the member's greetings silently lose there (review 2026-10-13).
-	if (r.firstMessage === true || r.alternateGreetings === true)
-		fields.groupOnlyGreetings = []
-	return { ...card, ...fields } as T
-}
-
-/**
- * Each card → the member it is, as the reading has the member, kept to the
- * members that retell anything. Pure: the caller has the members, their
- * overlays and the book's card map already (the `session_cast` read does).
- */
-export function retoldByCard(
-	members: readonly Record<string, unknown>[],
-	overlays: ReadonlyMap<number, readonly Amendment[]>,
-	reading: EntryReading,
-	memberOf: ReadonlyMap<number, number>,
-	castMemberAt: <M extends { id: number; characterId?: number | null }>(
-		member: M,
-		overlays: ReadonlyMap<number, readonly Amendment[]>,
-		reading: EntryReading,
-		opts?: { keepCard?: boolean }
-	) => M
-): Map<number, RetoldMember> {
-	const byMember = new Map<number, RetoldMember>()
-	for (const row of members) {
-		const resolved = asRetoldMember(
-			castMemberAt(
-				row as { id: number; characterId?: number | null },
-				overlays,
-				reading,
-				{ keepCard: true }
-			) as Record<string, unknown>
-		)
-		if (retellsAnything(resolved)) byMember.set(resolved.id, resolved)
-	}
-	const out = new Map<number, RetoldMember>()
-	for (const [card, memberId] of memberOf) {
-		const member = byMember.get(memberId)
-		if (member) out.set(card, member)
-	}
-	return out
-}
-
-/**
- * The retelling members of a session's lorebook, by card, as the session's
- * reading has them — optionally kept to `cardIds`. Empty when the session has
- * no lorebook or nobody in it retells anything. One read of the book's
- * members; the overlays and card map are read only when someone retells.
- */
-export async function retoldMembersForSession(
-	db: Db,
-	session: number | { id: number; lorebookId: number | null },
-	cardIds?: readonly number[]
-): Promise<Map<number, RetoldMember>> {
-	const s =
-		typeof session === "number"
-			? (
-					await db
-						.select({
-							id: schema.sessions.id,
-							lorebookId: schema.sessions.lorebookId
-						})
-						.from(schema.sessions)
-						.where(eq(schema.sessions.id, session))
-						.limit(1)
-				)[0]
-			: session
-	if (!s?.lorebookId) return new Map()
-	if (cardIds && !cardIds.length) return new Map()
-	const lorebookId = s.lorebookId
-	const members = await db
-		.select(RETOLD_MEMBER_COLUMNS)
-		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
-		.orderBy(asc(schema.lorebookBindings.id))
-	const { sessionReadingOf } = await import("$lib/server/state/reading")
-	const { MAIN_HEAD, castOverlaysFor, castMemberAt } = await import(
-		"$lib/server/state/entriesOnReading"
-	)
-	const reading = (await sessionReadingOf(db, s.id)) ?? MAIN_HEAD
-	const overlays = await castOverlaysFor(db, lorebookId, reading)
-	// Nobody retells and no overlay could make them: nothing to resolve.
-	if (!members.some(retellsAnything) && !overlays.size) return new Map()
-	const { castMemberCards } = await import("$lib/server/utils/castMemberCards")
-	const { memberOf } = await castMemberCards(db, lorebookId)
-	const all = retoldByCard(members, overlays, reading, memberOf, castMemberAt)
-	if (!cardIds) return all
-	const out = new Map<number, RetoldMember>()
-	for (const id of cardIds) {
-		const m = all.get(id)
-		if (m) out.set(id, m)
-	}
-	return out
 }
 
 /**
@@ -314,6 +137,14 @@ export async function retoldUpdateProblem(
 		)
 	)
 		return "A cast member's other greetings are a list of greetings."
+	if (
+		update.groupOnlyGreetings !== undefined &&
+		!(
+			Array.isArray(update.groupOnlyGreetings) &&
+			update.groupOnlyGreetings.every((g) => typeof g === "string")
+		)
+	)
+		return "A cast member's group-only greetings are a list of greetings."
 	if (update.retold !== undefined) {
 		const parsed = parseRetoldFlags(update.retold)
 		if (!parsed.ok) return parsed.error
@@ -333,4 +164,190 @@ export async function retoldUpdateProblem(
 		if (problem) return problem
 	}
 	return null
+}
+
+// ── A cast version, in the member form's column names ─────────────────────
+
+/**
+ * ⏳ A cast version in the member row's column names, until the client reads
+ * versions (wave 3): what `memberColumnsOfVersion` answers and the member form
+ * sends back.
+ */
+export interface MemberColumnsOfVersion {
+	/** A card-less member's name; null for a carded one (its name is `ownName` or the card's). */
+	name: string | null
+	aliases: string[]
+	summary: string | null
+	description: string | null
+	personality: string | null
+	scenario: string | null
+	firstMessage: string | null
+	alternateGreetings: string[]
+	/** The version's own greetings marked for group sessions only. */
+	groupOnlyGreetings: string[]
+	exampleDialogues: string | null
+	faceMediaId: number | null
+	retold: RetoldFlags
+	ownName: string | null
+	ownNickname: string | null
+	timbre: CharacterTimbreInput | null
+	spriteSet: string | null
+	/** The version's own post-history instructions, kept while the field follows the card. */
+	postHistoryInstructions: string | null
+	/** The version's own creator notes, kept while the field follows the card. */
+	creatorNotes: CharacterCreatorNotes | null
+	/** The version's own likeness, kept while the field follows the card. */
+	likeness: CharacterLikenessInput | null
+	nodeState: NodeState
+	nodeVisibility: NodeVisibility
+}
+
+/** Each retold flag's profile field: a field is retold when its profile field is not followed. */
+const RETOLD_PROFILE_FIELD: Record<
+	keyof Required<RetoldFlags>,
+	CharacterProfileField
+> = {
+	description: "description",
+	personality: "personality",
+	scenario: "scenario",
+	firstMessage: "greetings",
+	alternateGreetings: "greetings",
+	exampleDialogues: "exampleDialogues",
+	face: "faceMediaId",
+	postHistoryInstructions: "postHistoryInstructions",
+	creatorNotes: "creatorNotes",
+	likeness: "likeness"
+}
+
+/** A member's example dialogues as ONE text: each dialogue opened with `<START>` (the form's join). */
+function joinExampleDialogues(dialogues: readonly string[]): string | null {
+	const texts = dialogues.map((d) => d.trim()).filter(Boolean)
+	return texts.length ? texts.map((d) => `<START>\n${d}`).join("\n\n") : null
+}
+
+/**
+ * 🚧 ⏳ A cast version in the member row's column names (the one mapping from
+ * a version to the member form). A text field is the version's own column
+ * even while the field is followed (toggling off hides, never discards); a
+ * field is **retold** exactly when its profile field is not in `follows`.
+ * A card-less version (`carded: false`) has no retold flags and no own names:
+ * its columns are simply its own, `name` included.
+ */
+export function memberColumnsOfVersion(
+	version: Partial<Record<CharacterProfileField, unknown>> & {
+		follows: readonly string[]
+		nodeState: NodeState | null
+		nodeVisibility: NodeVisibility | null
+	},
+	opts: { carded: boolean }
+): MemberColumnsOfVersion {
+	const profile = profileOf(version)
+	const follows = new Set<string>(version.follows)
+	const greetings = legacyGreetingsOf(profile.greetings)
+	const retold: RetoldFlags = {}
+	if (opts.carded)
+		for (const [flag, field] of Object.entries(RETOLD_PROFILE_FIELD))
+			if (!follows.has(field)) retold[flag as keyof RetoldFlags] = true
+	return {
+		name: opts.carded ? null : profile.name,
+		aliases: profile.aliases,
+		summary: profile.summary,
+		description: profile.description,
+		personality: profile.personality,
+		scenario: profile.scenario,
+		firstMessage: greetings.firstMessage,
+		alternateGreetings: greetings.alternateGreetings,
+		groupOnlyGreetings: greetings.groupOnlyGreetings,
+		exampleDialogues: joinExampleDialogues(profile.exampleDialogues),
+		faceMediaId: profile.faceMediaId,
+		retold,
+		ownName: opts.carded && !follows.has("name") ? profile.name : null,
+		// An own empty nickname is "no nickname in this book" (★L-3b).
+		ownNickname:
+			opts.carded && !follows.has("nickname")
+				? (profile.nickname ?? "")
+				: null,
+		timbre: profile.timbre,
+		spriteSet: profile.spriteSet,
+		postHistoryInstructions: profile.postHistoryInstructions,
+		creatorNotes: profile.creatorNotes,
+		likeness: profile.likeness,
+		nodeState: version.nodeState ?? "active",
+		nodeVisibility: version.nodeVisibility ?? "normal"
+	}
+}
+
+/** Two values as equal JSON, object keys in any order. */
+function sameValue(a: unknown, b: unknown): boolean {
+	const stable = (v: unknown) =>
+		JSON.stringify(v ?? null, (_k, x) =>
+			x && typeof x === "object" && !Array.isArray(x)
+				? Object.fromEntries(
+						Object.keys(x)
+							.sort()
+							.map((k) => [k, (x as Record<string, unknown>)[k]])
+					)
+				: x
+		)
+	return stable(a) === stable(b)
+}
+
+/**
+ * 🚧 The cast-version changes a member-form edit means, or null when nothing
+ * changed. `after` is converted by `memberProfileOf` — the conversion the base
+ * insert and the boot lift use — and only the profile fields the edit
+ * **touched** (one of their member-column inputs differs) are emitted: a
+ * touched field the conversion follows is `{ follow: true }`, any other its
+ * own value. `card` is the parent card version's profile (null = card-less).
+ */
+export function castChangesOfMemberEdit(
+	before: MemberColumnsOfVersion & { characterId: number | null },
+	after: MemberColumnsOfVersion & { characterId: number | null },
+	card: CharacterProfileV1 | null
+): CastVersionChanges | null {
+	const { own, follows } = memberProfileOf(
+		{ ...after, name: after.name ?? "" },
+		card
+	)
+	const flag = (m: MemberColumnsOfVersion, f: keyof RetoldFlags) =>
+		m.retold?.[f] === true
+	const differs = (...keys: (keyof MemberColumnsOfVersion)[]) =>
+		keys.some((k) => !sameValue(before[k], after[k]))
+	const flagsDiffer = (...flags: (keyof RetoldFlags)[]) =>
+		flags.some((f) => flag(before, f) !== flag(after, f))
+
+	const touched = new Set<CharacterProfileField>()
+	if (after.characterId != null ? differs("ownName") : differs("name"))
+		touched.add("name")
+	if (differs("ownNickname")) touched.add("nickname")
+	if (differs("aliases")) touched.add("aliases")
+	if (differs("summary")) touched.add("summary")
+	for (const field of ["description", "personality", "scenario"] as const)
+		if (differs(field) || flagsDiffer(field)) touched.add(field)
+	if (
+		differs("firstMessage", "alternateGreetings", "groupOnlyGreetings") ||
+		flagsDiffer("firstMessage", "alternateGreetings")
+	)
+		touched.add("greetings")
+	if (differs("exampleDialogues") || flagsDiffer("exampleDialogues"))
+		touched.add("exampleDialogues")
+	if (differs("faceMediaId") || flagsDiffer("face"))
+		touched.add("faceMediaId")
+	if (differs("timbre")) touched.add("timbre")
+	if (differs("spriteSet")) touched.add("spriteSet")
+	for (const field of [
+		"postHistoryInstructions",
+		"creatorNotes",
+		"likeness"
+	] as const)
+		if (differs(field) || flagsDiffer(field)) touched.add(field)
+
+	const changes: Record<string, unknown> = {}
+	for (const field of touched)
+		changes[field] = follows.includes(field) ? { follow: true } : own[field]
+	if (before.nodeState !== after.nodeState)
+		changes.nodeState = after.nodeState
+	if (before.nodeVisibility !== after.nodeVisibility)
+		changes.nodeVisibility = after.nodeVisibility
+	return Object.keys(changes).length ? (changes as CastVersionChanges) : null
 }

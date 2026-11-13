@@ -22,7 +22,7 @@
  */
 import { getContext, setContext } from "svelte"
 import { useInterest } from "$lib/client/sockets/interest.svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { cardImportedToast } from "$lib/client/utils/cardImportedToast"
 
 type Imported = Sockets.Characters.ImportCard.Response
@@ -68,7 +68,7 @@ export function createCharacterImports(): CharacterImportsCtx {
 	useInterest<"characters:importCard">("characters:importCard", (msg) => {
 		const toast = cardImportedToast(msg)
 		if (toast)
-			toaster[toast.kind]({
+			notify[toast.kind]({
 				title: toast.title,
 				description: toast.description
 			})
@@ -77,15 +77,16 @@ export function createCharacterImports(): CharacterImportsCtx {
 	useInterest<"characters:importCard:error">(
 		"characters:importCard:error",
 		(msg) => {
-			toaster.error({
+			notify.error({
 				title: "Import failed",
-				description: msg.error ?? "Could not import character card"
+				description: msg.error ?? "Could not import character card",
+				source: "socket:characters:importCard:error"
 			})
 			for (const listener of failed) listener(msg)
 		}
 	)
-	// The Characters view's conflict dialog resolves through here: keeping
-	// both, or overwriting, is a card that has now imported.
+	// The Characters view's conflict dialog resolves through here: adding a
+	// card version, or saving as a new card, is a card that has now imported.
 	useInterest<"characters:importResolve">(
 		"characters:importResolve",
 		(msg) => {
@@ -95,7 +96,7 @@ export function createCharacterImports(): CharacterImportsCtx {
 				summary: msg.summary
 			})
 			if (toast)
-				toaster[toast.kind]({
+				notify[toast.kind]({
 					title: toast.title,
 					description: toast.description
 				})
@@ -105,8 +106,9 @@ export function createCharacterImports(): CharacterImportsCtx {
 	useInterest<"characters:importResolve:error">(
 		"characters:importResolve:error",
 		(msg) => {
-			toaster.error({
-				title: msg.error || "Failed to resolve character import"
+			notify.error({
+				title: msg.error || "Failed to resolve character import",
+				source: "socket:characters:importResolve:error"
 			})
 			for (const listener of resolveFailed) listener(msg)
 		}
@@ -121,8 +123,9 @@ export function createCharacterImports(): CharacterImportsCtx {
 	useInterest<"characters:importFromLibrary:error">(
 		"characters:importFromLibrary:error",
 		(msg) => {
-			toaster.error({
-				title: msg.error || "Failed to import the character"
+			notify.error({
+				title: msg.error || "Failed to import the character",
+				source: "socket:characters:importFromLibrary:error"
 			})
 			for (const listener of libraryFailed) listener(msg)
 		}

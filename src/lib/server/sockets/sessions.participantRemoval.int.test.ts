@@ -134,7 +134,7 @@ describe("sessions:update — participant removal ownership + soft delete (PGlit
 		expect(row!.isActive).toBe(true)
 	})
 
-	test("a guest removing their own character succeeds — soft-deleted with a removedName snapshot", async () => {
+	test("a guest removing their own character succeeds — benched, not removed", async () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const owner = await makeUser("removal-owner-2")
 		const guest = await makeUser("removal-guest-2")
@@ -159,12 +159,12 @@ describe("sessions:update — participant removal ownership + soft delete (PGlit
 			)
 		})
 		expect(row).toBeDefined()
-		expect(row!.removedAt).not.toBeNull()
-		expect(row!.removedName).toBe("Guest's Character")
+		// Removing a live seat benches it (owner 2026-11-10): still on the roster.
+		expect(row!.removedAt).toBeNull()
 		expect(row!.isActive).toBe(false)
 	})
 
-	test("the session owner removing anyone's participant succeeds", async () => {
+	test("the session owner removing anyone's participant succeeds (benches it)", async () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const owner = await makeUser("removal-owner-3")
 		const guest = await makeUser("removal-guest-3")
@@ -188,7 +188,8 @@ describe("sessions:update — participant removal ownership + soft delete (PGlit
 				eq(schema.sessionCharacters.characterId, guestChar.id)
 			)
 		})
-		expect(row!.removedAt).not.toBeNull()
+		expect(row!.removedAt).toBeNull()
+		expect(row!.isActive).toBe(false)
 	})
 
 	test("re-adding a previously-removed participant clears removedAt instead of violating the unique index", async () => {
@@ -198,12 +199,14 @@ describe("sessions:update — participant removal ownership + soft delete (PGlit
 		const char = await makeCharacter(owner.id, "Comeback Character")
 		await addCharacterToSession(session.id, char.id)
 
-		// Remove it first.
-		await sessionsUpdateHandler.handler(
-			fakeSocket(owner.id),
-			{ session: { id: session.id }, characterIds: [] } as any,
-			noopEmit
-		)
+		// Remove it first: the first removal benches the seat, the second (a
+		// benched seat with no lines) removes it.
+		for (let pass = 0; pass < 2; pass++)
+			await sessionsUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{ session: { id: session.id }, characterIds: [] } as any,
+				noopEmit
+			)
 		const removed = await testDb.query.sessionCharacters.findFirst({
 			where: and(
 				eq(schema.sessionCharacters.sessionId, session.id),
@@ -251,13 +254,15 @@ describe("sessions:reassignRemovedParticipant (PGlite integration)", () => {
 		await addGuest(session.id, originalOwner.id)
 		const oldChar = await makeCharacter(originalOwner.id, "Old Character")
 		await addCharacterToSession(session.id, oldChar.id)
-		// Owner removes the guest-owned character (soft delete).
+		// Owner removes the guest-owned character (soft delete): the first
+		// removal benches the seat, the second removes it (no lines yet).
 		const { sessionsUpdateHandler } = await import("./sessions")
-		await sessionsUpdateHandler.handler(
-			fakeSocket(owner.id),
-			{ session: { id: session.id }, characterIds: [] } as any,
-			noopEmit
-		)
+		for (let pass = 0; pass < 2; pass++)
+			await sessionsUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{ session: { id: session.id }, characterIds: [] } as any,
+				noopEmit
+			)
 		const [message] = await testDb
 			.insert(schema.sessionMessages)
 			.values({
@@ -435,12 +440,13 @@ describe("the turn pool — removed participant choke-point filter (PGlite integ
 		const char = await makeCharacter(owner.id, "Solo Character")
 		await addCharacterToSession(session.id, char.id)
 
-		// Remove the only character.
-		await sessionsUpdateHandler.handler(
-			fakeSocket(owner.id),
-			{ session: { id: session.id }, characterIds: [] } as any,
-			noopEmit
-		)
+		// Remove the only character (benched first, then removed).
+		for (let pass = 0; pass < 2; pass++)
+			await sessionsUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{ session: { id: session.id }, characterIds: [] } as any,
+				noopEmit
+			)
 
 		expect(await pool(session.id)).not.toContain(`character:${char.id}`)
 		// And not even with `characters: 'all'`, which admits one switched
@@ -472,14 +478,16 @@ describe("the turn pool — removed participant choke-point filter (PGlite integ
 		await addCharacterToSession(session.id, removedChar.id, 0)
 		await addCharacterToSession(session.id, activeChar.id, 1)
 
-		await sessionsUpdateHandler.handler(
-			fakeSocket(owner.id),
-			{
-				session: { id: session.id },
-				characterIds: [activeChar.id] // drops removedChar
-			} as any,
-			noopEmit
-		)
+		// Dropped twice: the first benches the seat, the second removes it.
+		for (let pass = 0; pass < 2; pass++)
+			await sessionsUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{
+					session: { id: session.id },
+					characterIds: [activeChar.id] // drops removedChar
+				} as any,
+				noopEmit
+			)
 
 		const refs = await pool(session.id)
 		expect(refs).toContain(`character:${activeChar.id}`)
@@ -530,6 +538,15 @@ describe("sessions:branch — owner-only gate + removed participants excluded fr
 			} as any,
 			noopEmit
 		)
+		// The first remove benches; a second, with no lines to keep, removes.
+		await sessionsUpdateHandler.handler(
+			fakeSocket(owner.id),
+			{
+				session: { id: session.id },
+				characterIds: [activeChar.id]
+			} as any,
+			noopEmit
+		)
 		const [message] = await testDb
 			.insert(schema.sessionMessages)
 			.values({ sessionId: session.id, role: "user", content: "Hi" })
@@ -562,11 +579,13 @@ describe("toggle/visibility handlers — removed row excluded (PGlite integratio
 		const session = await makeSession(owner.id)
 		const char = await makeCharacter(owner.id, "Toggled Away")
 		await addCharacterToSession(session.id, char.id)
-		await sessionsUpdateHandler.handler(
-			fakeSocket(owner.id),
-			{ session: { id: session.id }, characterIds: [] } as any,
-			noopEmit
-		)
+		// Benched first, then removed.
+		for (let pass = 0; pass < 2; pass++)
+			await sessionsUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{ session: { id: session.id }, characterIds: [] } as any,
+				noopEmit
+			)
 
 		const res = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(owner.id),

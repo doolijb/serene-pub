@@ -1,16 +1,19 @@
 <script lang="ts">
 	/**
-	 * The changelist half of the template admin (Django admin, note 37):
-	 * context templates and variable templates share everything but their
-	 * pool vocabulary. Rows come from the pipeline library view; filters by
+	 * The changelist half of the context-template admin (Django admin, note 37).
+	 * Variable layouts have their own pages (`admin/sections/variable-layouts/`).
+	 * Rows come from the pipeline library view; filters by
 	 * pool, language, origin and use; "Delete selected" keeps built-in and
 	 * in-use rows (the server refuses those). A row opens `TemplateChangeForm`
 	 * at `<basePath>/<id>`; "Add template" at `<basePath>/new`.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangelist from "./AdminChangelist.svelte"
 	import {
 		deletionFor,
@@ -22,7 +25,7 @@
 	type Template = Sockets.Pipelines.Library.LibraryTemplate
 
 	interface Props {
-		kind: "context" | "variable"
+		kind: "context"
 		title: string
 		description: string
 		/** Route base, e.g. `/admin/context-templates`. */
@@ -46,31 +49,52 @@
 		})
 	)
 	let deleting = $state(0)
-	useInterest<"pipelines:libraryDeleteTemplate">("pipelines:libraryDeleteTemplate", (res) => {
-		if (res.library) view = res.library
-		if (deleting > 0 && --deleting === 0) toaster.success({ title: "Deleted" })
-	})
+	useInterest<"pipelines:libraryDeleteTemplate">(
+		"pipelines:libraryDeleteTemplate",
+		(res) => {
+			if (res.library) view = res.library
+			if (deleting > 0 && --deleting === 0)
+				notify.success({
+					source: "socket:pipelines:libraryDeleteTemplate",
+					title: "Deleted"
+				})
+		}
+	)
 	useInterest<"pipelines:libraryDeleteTemplate:error">(
 		"pipelines:libraryDeleteTemplate:error",
 		(res) => {
 			if (deleting > 0) deleting--
-			toaster.error({ title: res.error ?? "The template was not deleted." })
+			notify.error({
+				source: "socket:pipelines:libraryDeleteTemplate:error",
+				title: res.error ?? "The template was not deleted."
+			})
 		}
 	)
 
-	const rows = $derived(
-		(kind === "context" ? (view.contextTemplates ?? []) : (view.variableTemplates ?? [])) as Template[]
-	)
+	const rows = $derived((view.contextTemplates ?? []) as Template[])
 	/** `core:template/handlebars@1` → "Handlebars", as the pool labels say it. */
 	const language = (engine: string) => {
 		const n = engine.split("/")[1]?.split("@")[0]
 		return n ? n.charAt(0).toUpperCase() + n.slice(1) : engine
 	}
-	const poolLabels = $derived(new Map(rows.map((r) => [`${r.poolId}#${r.engine}`, r.poolLabel])))
+	const poolLabels = $derived(
+		new Map(rows.map((r) => [`${r.poolId}#${r.engine}`, r.poolLabel]))
+	)
 
 	const columns: AdminChangelistColumn<Template>[] = $derived([
-		{ key: "name", label: "Name", primary: true, text: (r) => r.name, sortValue: (r) => r.name },
-		{ key: "pool", label: kind === "context" ? "Step" : "Variable", text: (r) => r.poolLabel, sortValue: (r) => r.poolLabel },
+		{
+			key: "name",
+			label: "Name",
+			primary: true,
+			text: (r) => r.name,
+			sortValue: (r) => r.name
+		},
+		{
+			key: "pool",
+			label: "Step",
+			text: (r) => r.poolLabel,
+			sortValue: (r) => r.poolLabel
+		},
 		{
 			key: "usedBy",
 			label: "Used by",
@@ -93,11 +117,16 @@
 	const filters: AdminChangelistFilter<Template>[] = $derived([
 		{
 			key: "pool",
-			label: kind === "context" ? "Step" : "Variable",
+			label: "Step",
 			values: (r) => `${r.poolId}#${r.engine}`,
 			optionLabel: (v) => poolLabels.get(v) ?? v
 		},
-		{ key: "language", label: "Language", values: (r) => r.engine, optionLabel: language },
+		{
+			key: "language",
+			label: "Language",
+			values: (r) => r.engine,
+			optionLabel: language
+		},
 		{
 			key: "origin",
 			label: "Origin",
@@ -109,7 +138,8 @@
 			key: "use",
 			label: "Use",
 			values: (r) => (r.usedBy.length ? "used" : "unused"),
-			optionLabel: (v) => (v === "used" ? "Picked by a pipeline" : "Unused"),
+			optionLabel: (v) =>
+				v === "used" ? "Picked by a pipeline" : "Unused",
 			order: ["used", "unused"]
 		}
 	])
@@ -132,9 +162,12 @@
 								: null
 				}),
 			run: (selected) => {
-				const ids = selected.filter((r) => !r.isImmutable && !r.usedBy.length).map((r) => r.id)
+				const ids = selected
+					.filter((r) => !r.isImmutable && !r.usedBy.length)
+					.map((r) => r.id)
 				deleting += ids.length
-				for (const id of ids) socket.emit("pipelines:libraryDeleteTemplate", { kind, id })
+				for (const id of ids)
+					socket.emit("pipelines:libraryDeleteTemplate", { kind, id })
 			}
 		}
 	]
@@ -150,7 +183,8 @@
 	{bulkActions}
 	{loading}
 	{noun}
-	searchText={(r) => `${r.name} ${r.poolLabel} ${r.engine} ${r.usedBy.join(" ")}`}
+	searchText={(r) =>
+		`${r.name} ${r.poolLabel} ${r.engine} ${r.usedBy.join(" ")}`}
 	rowHref={(r) => `${basePath}/${r.id}`}
 	addHref="{basePath}/new"
 	defaultSort="pool"

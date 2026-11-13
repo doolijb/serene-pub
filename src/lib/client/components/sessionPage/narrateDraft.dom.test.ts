@@ -183,7 +183,7 @@ class Page {
 		const sections = componentParitySections() as Record<string, any>
 		this.view = await mountComponent({
 			root: CORE_CATALOG,
-			entry: "dist/components/messages.js",
+			entry: "dist/components/composer.js",
 			owner: "core",
 			coreConversation: true,
 			timeoutMs: 60_000,
@@ -243,7 +243,7 @@ describe("C2 · /narrate <text> from the composer", () => {
 		const page = readFileSync(PAGE_SOURCE, "utf8")
 		expect(page).toMatch(/useInterest<"sessions:fireNarratorResponse">\(\s*"sessions:fireNarratorResponse",\s*narrations\.answered\s*\)/)
 		expect(page).toMatch(/useInterest<"sessions:fireNarratorResponse:error">\(\s*"sessions:fireNarratorResponse:error",\s*narrations\.error\s*\)/)
-		expect(page).toMatch(/if \(direction\) narrations\.directed\(direction, !!supplied\?\.fromDraft\)/)
+		expect(page).toMatch(/if \(direction !== null\) narrations\.directed\(direction, !!supplied\?\.fromDraft\)/)
 		// What the page lends it: its session, its draft, the modal's unlanded press.
 		const wiring = page.match(/const narrations = createNarrations\(\{([\s\S]*?)\n\t\}\)/)?.[1] ?? ""
 		expect(wiring).toMatch(/sessionId: \(\) => sessionId,/)

@@ -1,7 +1,9 @@
 <script lang="ts">
 	/**
 	 * 🚧 The card form's **Speech** tab (speech build E1; design §6.1): who
-	 * speaks for the character when a line is read aloud.
+	 * speaks for the character when a line is read aloud. It also serves a cast
+	 * member's own voice in a lorebook (`castMember`), where it reads as an
+	 * override of the card's.
 	 *
 	 * - **Spoken aloud**: whether the character's lines are spoken at all.
 	 * - **Voice**: pick a voicebank voice as the base (administrators; everyone
@@ -37,8 +39,15 @@
 		timbre: TimbreDraft
 		/** Admins: open the Loadouts view's Voices panel. */
 		openVoices?: () => void
+		/** Set when this is a cast member's own voice, not the card's; `linked` is true when the member has a card. */
+		castMember?: { linked: boolean }
 	}
-	let { characterName, timbre = $bindable(), openVoices }: Props = $props()
+	let {
+		characterName,
+		timbre = $bindable(),
+		openVoices,
+		castMember
+	}: Props = $props()
 
 	const userCtx: { user?: { isAdmin?: boolean | null } | null } | undefined =
 		getContext("userCtx")
@@ -90,7 +99,11 @@
 	<div>
 		<h2 class="text-sm font-medium">Speech</h2>
 		<FieldHelp>
-			Who speaks for {who} when a line is read aloud.
+			{#if castMember?.linked}
+				{who}'s own voice in this book, used instead of the card's.
+			{:else}
+				Who speaks for {who} when a line is read aloud.
+			{/if}
 		</FieldHelp>
 	</div>
 
@@ -98,8 +111,8 @@
 		<div>
 			<p class="text-sm font-medium" id="timbre-spoken-label">Spoken aloud</p>
 			<FieldHelp>
-				Off, their lines stay text even when the session reads aloud. Travels
-				with the card.
+				Off, their lines stay text even when the session reads aloud.{#if !castMember}
+					Travels with the card.{/if}
 			</FieldHelp>
 		</div>
 		<Switch

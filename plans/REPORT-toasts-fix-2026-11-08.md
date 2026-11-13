@@ -1,0 +1,11 @@
+# REPORT toasts-fix (2026-11-08) — saved by the lead from the worker's hand-back
+
+Done. `npm run check` 0 errors / 8 pre-existing warnings; 89 test files next to the changed files pass (1051 tests); `prettier --check` clean on every edited file.
+
+1. **Punctuation restored to HEAD's rendering** (punctuation back against its tag; `<!-- prettier-ignore -->` on the containing element, on the wrapper where prettier ignores a comment before a bare text run): BookRulesCard:132 ("**X**?"), BookWritesCard:145 ("**label**,", "**mode**."), BranchChip:395,400, LibraryView:715, ImportComponentDialog:212 (on `<Dialog.Description>`), admin rulesets IdPage:817-827 (on `<FieldHelp>`), StartSessionForm two `<li>` loops ("Label: why"). Search over every changed `.svelte` file found no further cases: all other hits already had the line-break space at HEAD (MediaManagerTab 1106/1110/1223, KoboldCppSettingsTab 1152, GraphBuildModal 941, PipelineConfigOptions 1817/1819/2134, DataSettingsTab 186, network/Page 449/634, session-presets/IdPage 1819, PresencesPanel 436, EntryWorkspace 1993). Other lanes' files showed only code-expression hits.
+2. **★T2 silent:** UserSettingsTab *Language set to* / *Time zone set to*; bulk successes in session-genres, session-presets, prompts Page (each row's state column flips). MediaManagerTab and AccountsCard left.
+3. **★T4 keys** (`<area>:refusal`, W1's style): admin:updates, admin:network, admin:scripts, admin:session-presets, admin:components (Page + IdPage), admin:completion-templates, admin:pipelines (SlugPage `onDetailError`), `pipelines:library:refusal` (shares W1's key on the same page). Layout and TemplateChangeForm untouched.
+
+**Deviation (accepted by the lead):** `prettier --write` on 9 files whose only prettier diff was the worker's own added `source:` lines (diffed before writing; the files were already formatted by the toasts lane): updates/Page, network/Page, scripts/IdPage, session-presets/IdPage, components/Page, components/IdPage, completion-templates/IdPage, pipelines/SlugPage, routes/pipelines/library/+page.
+
+**Noticed, not done:** session-presets/IdPage and components/IdPage keep unkeyed `notify.success` press handlers (★T5: no source).

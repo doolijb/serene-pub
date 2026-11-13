@@ -82,6 +82,8 @@ export interface SectionDescriptor {
 	rowMenu?: Component<{ source: PoolSource; close: () => void }>
 	/** An action over the whole list, in the toolbar beside the sort. */
 	listActions?: Component<{ sources: PoolSource[] }>
+	/** What a door draws at the top of its list, above the rows and the empty state. */
+	listHead?: Component<{ sources: PoolSource[] }>
 	inspector: InspectorTab[]
 	emptyCopy: { title: string; body: string; action: string }
 	/** A door whose rows are made elsewhere offers no New. */

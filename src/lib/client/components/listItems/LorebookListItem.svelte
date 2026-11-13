@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
-	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
+	import RulesFitLine from "$lib/client/lorebooks/RulesFitLine.svelte"
+	import { isFreeformBook } from "$lib/client/lorebooks/rulesFitWords"
+	import {
+		isProvidedBook,
+		isReadOnlyBook,
+		isStarterKit,
+		providedRowLine
+	} from "$lib/client/lorebooks/starterKitCards"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import Avatar from "../Avatar.svelte"
@@ -14,10 +21,6 @@
 		LOCATION_TYPE_ID,
 		WORLD_LORE_TYPE_ID
 	} from "$lib/shared/entries/types"
-	import {
-		READ_INTO_SESSION,
-		STOP_READING
-	} from "$lib/client/lorebooks/scopes"
 
 	interface Props {
 		lorebook: any
@@ -32,19 +35,12 @@
 		 * `entryCounts`, archived rows excluded). Falls back to the row's own.
 		 */
 		entryCounts?: Record<string, number>
-		hasOpenSession?: boolean
-		openSessionHasLorebook?: boolean
-		isOpenSessionLorebook?: boolean
-		/**
-		 * Read this book into the open session. The caller confirms when the
-		 * session already reads another book, since this replaces it.
-		 */
-		onAttachToSession?: (id: number) => void
-		onDetachFromSession?: (id: number) => void
 		/** Opens the book at Book settings. Owners' rows only. */
 		onOpenSettings?: (id: number) => void
 		/** Asks for a copy; the prompt names it. A shared row's one verb. */
 		onDuplicate?: (id: number, name: string) => void
+		/** 🚧 (m2e-F-C) A primer row's one verb: clone it into a starter lorebook of the reader's own. */
+		onClone?: (lorebookId: number) => void
 		/** 🚧 pr-6 (R-f): set on a session-notes row — "Kept on top of ‹book›" in place of the description. */
 		sessionNotesOf?: { attached: { id: number; name: string } | null } | null
 		/** 🚧 pr-6 (R-p): the Share verbs, right after View. */
@@ -60,19 +56,19 @@
 		classes = "",
 		bindingsCount = 0,
 		entryCounts,
-		hasOpenSession = false,
-		openSessionHasLorebook = false,
-		isOpenSessionLorebook = false,
-		onAttachToSession,
-		onDetachFromSession,
 		onOpenSettings,
 		onDuplicate,
+		onClone,
 		sessionNotesOf = null,
 		shareItems
 	}: Props = $props()
 
 	/** 🚧 A starter lorebook's row: badged, and never read into a session. */
 	let isKit = $derived(isStarterKit(lorebook))
+	/** 🚧 (M2e) A provided book is disabled by an admin, never deleted: no Delete. */
+	/** 🚧 (m2e-F-C) The server's primer-row mark: read-only, clone only. */
+	let readOnlyRow = $derived(isReadOnlyBook(lorebook))
+	let canDelete = $derived(!!onDelete && !isProvidedBook(lorebook))
 
 	let counts = $derived<Record<string, number>>(
 		entryCounts ?? lorebook?.entryCounts ?? {}
@@ -140,7 +136,7 @@
 						<!-- Shared with the reader (PLAN-private-messages §6.7):
 						     whose it is, in place of the owner's blurb. -->
 						<div class="text-surface-600-400 truncate text-left text-xs">
-							{sharedFromLine(lorebook)}
+							{providedRowLine(lorebook) ?? sharedFromLine(lorebook)}
 						</div>
 					{:else if sessionNotesOf}
 						{#if sessionNotesOf.attached}
@@ -155,6 +151,12 @@
 							{lorebook.description}
 						</div>
 					{/if}
+					<!-- Owner 2026-11-05 (§24.8): the book's rules' fit per genre is always the
+					     row's third line, after the share line, session-notes line or description. -->
+					<RulesFitLine
+						fits={lorebook.rulesetFitByGenre}
+						freeform={isFreeformBook(lorebook.primaryRuleset)}
+					/>
 				</div>
 			</div>
 		</div>
@@ -177,10 +179,6 @@
 	{/snippet}
 	{#snippet controls()}
 		{#if showControls && (onclick || onDelete || onDuplicate)}
-			{@const sessionActions =
-				!isKit &&
-				hasOpenSession &&
-				(onAttachToSession || onDetachFromSession)}
 			<RowMenu
 				label="Lorebook"
 				width={260}
@@ -192,29 +190,22 @@
 						onSelect: handleClick
 					},
 					...(shareItems ?? []),
-					sessionActions &&
-						isOpenSessionLorebook && {
-							label: STOP_READING,
-							icon: Icons.BookX,
-							title: "Stop reading this book into the open session",
-							onSelect: () => onDetachFromSession?.(lorebook.id!)
-						},
-					sessionActions &&
-						!isOpenSessionLorebook && {
-							label: READ_INTO_SESSION,
-							icon: Icons.BookOpen,
-							title: openSessionHasLorebook
-								? "The open session reads another book; this asks before replacing it"
-								: "Read this book into the open session",
-							onSelect: () => onAttachToSession?.(lorebook.id!)
-						},
-					onOpenSettings && {
+					onOpenSettings &&
+						!readOnlyRow && {
 						label: "Book settings",
 						icon: Icons.SlidersHorizontal,
 						title: "Name, cover, rules, calendar and clock",
 						onSelect: () => onOpenSettings?.(lorebook.id!)
 					},
-					onDuplicate && {
+					readOnlyRow &&
+						onClone && {
+							label: "Clone",
+							icon: Icons.CopyPlus,
+							title: "Make a starter lorebook of your own from this one",
+							onSelect: () => onClone?.(lorebook.id!)
+						},
+					onDuplicate &&
+						!readOnlyRow && {
 						label: "Duplicate",
 						icon: Icons.Copy,
 						title: isKit
@@ -232,8 +223,8 @@
 						title: LOREBOOK_EXPORT_PAUSED,
 						onSelect: () => {}
 					},
-					onDelete && { separator: true },
-					onDelete && {
+					canDelete && { separator: true },
+					canDelete && {
 						label: "Delete",
 						icon: Icons.Trash2,
 						destructive: true,

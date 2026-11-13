@@ -18,6 +18,7 @@ import {
 	setWidgetSettingValues,
 	setWidgetSettingsWriter
 } from "$lib/client/stores/widgetSettings.svelte"
+import { setWidgetStylePinWriter } from "$lib/client/stores/widgetStyles.svelte"
 
 describe("the settings panel writes every control", () => {
 	let app: ReturnType<typeof mount> | null = null
@@ -69,6 +70,22 @@ describe("the settings panel writes every control", () => {
 		flushSync()
 	}
 
+	test("Reset carries its label, clears settings, and writes no style pin", async () => {
+		setWidgetSettingValues({ messages: { composer: "minimal" } })
+		await settle()
+		const reset = host.querySelector<HTMLButtonElement>('button[aria-label="Reset settings"]')
+		expect(reset).not.toBeNull()
+		expect(reset!.textContent?.trim()).toBe("Reset")
+		const pinWrites: unknown[] = []
+		setWidgetStylePinWriter((next) => void pinWrites.push(next))
+		reset!.click()
+		await settle()
+		setWidgetStylePinWriter(null)
+		expect(writes.length).toBeGreaterThan(0)
+		expect(writes.at(-1)!.messages ?? {}).toEqual({})
+		expect(pinWrites).toEqual([])
+	})
+
 	test("picking a choice writes it", async () => {
 		const trigger = host.querySelector<HTMLButtonElement>(
 			'button[aria-label="Show Composer options"]'
@@ -85,38 +102,33 @@ describe("the settings panel writes every control", () => {
 		expect(writes.at(-1)).toEqual({ messages: { composer: "minimal" } })
 	})
 
-	test("the Messages widget's Card is a backing mode, and picking one writes it", async () => {
-		// note 18: Auto / On / Off in place of the host card's checkbox.
-		expect(host.querySelector("#sf-hostCard")).toBeNull()
-		const trigger = host.querySelector<HTMLButtonElement>(
-			'button[aria-label="Show Card options"]'
-		)
-		expect(trigger).not.toBeNull()
-		trigger!.click()
-		await settle()
-		const option = [
-			...document.querySelectorAll<HTMLElement>('[role="option"]')
-		].find((o) => o.textContent?.trim() === "Off")
-		expect(option).toBeTruthy()
-		option!.click()
-		await settle()
-		expect(writes.at(-1)).toEqual({ messages: { backingMode: "off" } })
+	test("the panel draws no per-widget Card or backing control (the layout's look owns it)", () => {
+		expect(host.querySelector("#sf-hostCard") === null).toBe(true)
+		expect(host.querySelector("#sf-backingMode") === null).toBe(true)
+		expect(
+			host.querySelector('button[aria-label="Show Card options"]') === null
+		).toBe(true)
 	})
 
 	test("a checkbox still writes on its own change", async () => {
-		// Any other widget keeps the host card's checkbox.
 		if (app) unmount(app)
-		setWidgetSettingDecls({ notes: { id: "notes", title: "Notes" } })
+		setWidgetSettingDecls({
+			notes: {
+				id: "notes",
+				title: "Notes",
+				settings: { compact: { type: "boolean", label: "Compact" } }
+			}
+		})
 		app = mount(WidgetSettingsPanel, {
 			target: host,
 			props: { widgetId: "notes" }
 		})
 		flushSync()
-		const card = host.querySelector<HTMLInputElement>("#sf-hostCard")
-		expect(card).not.toBeNull()
-		card!.click()
+		const box = host.querySelector<HTMLInputElement>("#sf-compact")
+		expect(box === null).toBe(false)
+		box!.click()
 		await settle()
-		expect(writes.at(-1)).toEqual({ notes: { hostCard: true } })
+		expect(writes.at(-1)).toEqual({ notes: { compact: true } })
 	})
 })
 
@@ -208,6 +220,176 @@ describe("the settings panel's sections", () => {
 		open("notes")
 		expect(host.querySelector("[data-settings-group]")).toBeNull()
 		expect(host.querySelector("details")).toBeNull()
-		expect(host.querySelector("#sf-hostCard")).not.toBeNull()
+		expect(host.querySelector("#sf-hostCard") === null).toBe(true)
+	})
+})
+
+describe("the Messages widget's Channel and Channel lane name their default", () => {
+	let app: ReturnType<typeof mount> | null = null
+	let host: HTMLElement
+	let writes: Array<Record<string, Record<string, unknown>>> = []
+
+	function open(
+		stored: Record<string, Record<string, unknown>> = {},
+		widgetId = "messages"
+	) {
+		setWidgetSettingValues(stored)
+		host = document.createElement("div")
+		document.body.append(host)
+		app = mount(WidgetSettingsPanel, { target: host, props: { widgetId } })
+		flushSync()
+	}
+
+	beforeEach(() => {
+		writes = []
+		setWidgetSettingDecls({
+			messages: {
+				id: "messages",
+				title: "Messages",
+				settings: {
+					channel: {
+						type: "string",
+						label: "Channel",
+						description: "Help.",
+						group: "Channel",
+						unset: { label: "Default (main)", other: "Another channel" }
+					},
+					channelLane: {
+						type: "string",
+						default: "",
+						label: "Channel lane",
+						group: "Channel",
+						unset: { label: "Default (whole channel)", other: "Another lane" }
+					},
+					interleave: {
+						type: "string",
+						default: "",
+						label: "Show another channel inline",
+						group: "Channel",
+						unset: { label: "Default (none)", other: "A channel" }
+					}
+				}
+			},
+			album: {
+				id: "album",
+				title: "Album",
+				settings: {
+					channel: {
+						type: "string",
+						label: "Channel",
+						description: "Which channel.",
+						unset: { label: "Default (every channel)", other: "One channel" }
+					}
+				}
+			}
+		})
+		setWidgetSettingsWriter((next) => {
+			writes.push(next)
+			setWidgetSettingValues(next)
+		})
+	})
+
+	afterEach(() => {
+		if (app) unmount(app)
+		app = null
+		setWidgetSettingsWriter(null)
+		setWidgetSettingDecls({})
+		document.body.innerHTML = ""
+	})
+
+	async function settle() {
+		flushSync()
+		await tick()
+		await new Promise((r) => setTimeout(r, 0))
+		flushSync()
+	}
+
+	const input = (label: string) => host.querySelector(`input[aria-label="${label}"]`)
+
+	test("with nothing stored, Channel reads Default (main) and Channel lane Default (whole channel), with no box", () => {
+		open()
+		const texts = [...host.querySelectorAll<HTMLInputElement>('input[role="combobox"]')]
+			.map((i) => i.value)
+			.filter((v) => /^(Default|Another)/.test(v))
+		expect(texts).toEqual([
+			"Default (main)",
+			"Default (whole channel)",
+			"Default (none)"
+		])
+		expect(input("Another channel")).toBeNull()
+		expect(input("Another lane")).toBeNull()
+		expect(input("A channel")).toBeNull()
+		expect(host.querySelector("#sf-interleave")).toBeNull()
+		expect(host.querySelector("#sf-channel")).toBeNull()
+	})
+
+	test("a stored slug shows Another channel with the slug in the box", () => {
+		open({ messages: { channel: "sanctum" } })
+		const combos = [...host.querySelectorAll<HTMLInputElement>('input[role="combobox"]')].map(
+			(i) => i.value
+		)
+		expect(combos).toContain("Another channel")
+		expect((input("Another channel") as HTMLInputElement).value).toBe("sanctum")
+	})
+
+	test("picking the default stores blank, so nothing is stored", async () => {
+		open({ messages: { channel: "sanctum" } })
+		host.querySelector<HTMLButtonElement>('button[aria-label="Show Channel options"]')!.click()
+		await settle()
+		const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+			(o) => o.textContent?.trim() === "Default (main)"
+		)
+		expect(option).toBeTruthy()
+		option!.click()
+		await settle()
+		expect(writes.at(-1)).toEqual({})
+	})
+
+	test("committing a slug writes it", async () => {
+		open()
+		host.querySelector<HTMLButtonElement>('button[aria-label="Show Channel options"]')!.click()
+		await settle()
+		;[...document.querySelectorAll<HTMLElement>('[role="option"]')]
+			.find((o) => o.textContent?.trim() === "Another channel")!
+			.click()
+		await settle()
+		expect(writes).toHaveLength(0)
+		const box = input("Another channel") as HTMLInputElement
+		expect(box).not.toBeNull()
+		box.value = "sanctum"
+		box.dispatchEvent(new Event("change", { bubbles: true }))
+		await settle()
+		expect(writes.at(-1)).toEqual({ messages: { channel: "sanctum" } })
+	})
+
+	test("the box carries no placeholder; the description is drawn once, under the field", () => {
+		open({ messages: { channel: "sanctum" } })
+		expect((input("Another channel") as HTMLInputElement).placeholder).toBe("")
+	})
+
+	test("Show another channel inline reads Default (none) with no box, and a stored slug shows in the box", () => {
+		open()
+		expect(input("A channel")).toBeNull()
+		unmount(app!)
+		host.remove()
+		open({ messages: { interleave: "table" } })
+		const combos = [...host.querySelectorAll<HTMLInputElement>('input[role="combobox"]')].map(
+			(i) => i.value
+		)
+		expect(combos).toContain("A channel")
+		expect((input("A channel") as HTMLInputElement).value).toBe("table")
+	})
+
+	test("an Album's Channel draws its own named default, and picking it stores blank", async () => {
+		open({ album: { channel: "sanctum" } }, "album")
+		expect((input("One channel") as HTMLInputElement).value).toBe("sanctum")
+		host.querySelector<HTMLButtonElement>('button[aria-label="Show Channel options"]')!.click()
+		await settle()
+		;[...document.querySelectorAll<HTMLElement>('[role="option"]')]
+			.find((o) => o.textContent?.trim() === "Default (every channel)")!
+			.click()
+		await settle()
+		expect(writes.at(-1)).toEqual({})
+		expect(input("One channel")).toBeNull()
 	})
 })

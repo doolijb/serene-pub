@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -70,14 +71,14 @@ async function makeBinding(
 	lorebookId: number,
 	overrides: Partial<typeof schema.lorebookBindings.$inferInsert> = {}
 ) {
-	const [binding] = await testDb
-		.insert(schema.lorebookBindings)
-		.values({
+	const { member: binding } = await insertCastMember(
+		testDb as unknown as Db,
+		{
 			lorebookId,
 			binding: `{{char:seed-${++seedTag}}}`,
 			...overrides
-		})
-		.returning()
+		}
+	)
 	return binding
 }
 

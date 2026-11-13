@@ -27,6 +27,8 @@
 		getContext("sceneSummarizesCtx")
 
 	let scenes = $derived(pool.scenesOf(entry.id))
+	/** Scenes not yet compiled that a compile of this entry would take in. */
+	let unfiled = $derived(Number(entry?.unfiledSceneCount) || 0)
 	let readyToGraph = $derived(scenes.filter((s) => !s.graphed && s.summary))
 
 	function activityOf(sceneId: number) {
@@ -70,8 +72,13 @@
 	{/if}
 	{#if scenes.length === 0}
 		<p class="text-surface-700-300 py-4 text-center text-xs italic">
-			No scenes captured for this entry yet. Capture scenes from the
-			session page.
+			{#if unfiled > 0}
+				{unfiled}
+				{unfiled === 1 ? "scene" : "scenes"} not yet compiled for this day.
+			{:else}
+				No scenes captured for this entry yet. Capture scenes from the
+				session page.
+			{/if}
 		</p>
 	{:else}
 		{#each scenes as scene, sceneIdx (scene.id)}
@@ -180,6 +187,8 @@
 				<SceneCastChips {scene} />
 			</div>
 		{/each}
+	{/if}
+	{#if scenes.length > 0 || unfiled > 0}
 		<button
 			class="btn btn-sm preset-filled-primary-500 w-full"
 			type="button"

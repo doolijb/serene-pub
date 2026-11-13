@@ -1205,10 +1205,57 @@ describe("layoutsView (2026-10-13)", () => {
 			})
 		)
 		expect(lines).toEqual([
-			{ key: "worldLore", variableId: "core:var/world-lore@1", line: "Titled JSON block (Serene Pub's)", floor: false },
-			{ key: "characterLore", variableId: "acme:var/ranked-lore@1", line: "built-in default", floor: true },
-			{ key: "history", variableId: "core:var/history@1", line: "Dated prose (made here)", floor: false }
+			{ key: "worldLore", variableId: "core:var/world-lore@1", line: "Titled JSON block (Serene Pub's)", floor: false, why: null, missingReference: null },
+			{ key: "characterLore", variableId: "acme:var/ranked-lore@1", line: "built-in default", floor: true, why: null, missingReference: null },
+			{ key: "history", variableId: "core:var/history@1", line: "Dated prose (made here)", floor: false, why: null, missingReference: null }
 		])
+	})
+
+	it("says why each layout was used, in words", () => {
+		const reasons = ["template", "leftover", "preset", "pub", "authored", "default", "automatic", "no-layout", null, "unheard-of"]
+		const lines = layoutsView(
+			node({
+				context: {
+					layouts: reasons.map((reason) => ({ key: "history", variableId: "core:var/history@1", layout: "Dated prose", origin: null, reason }))
+				}
+			})
+		)
+		expect(lines.map((l) => l.why)).toEqual([
+			"named by the template",
+			"leftover pick",
+			"the preset's",
+			"the pub's",
+			"the pipeline's choice for this step",
+			"the variable's default",
+			"automatic",
+			"no layout for it",
+			null,
+			null
+		])
+		// The same key may repeat — one line per layout call.
+		expect(lines.map((l) => l.key)).toEqual(Array(10).fill("history"))
+	})
+
+	it("says a named reference that wasn't found, and what was used instead", () => {
+		const lines = layoutsView(
+			node({
+				context: {
+					layouts: [
+						{ key: "a", variableId: "v", layout: "Dated prose", origin: "own", reason: "pub", missingReference: "acme:layout/gone@1" },
+						{ key: "b", variableId: "v", layout: null, origin: null, reason: "default", missingReference: "acme:layout/gone@1" }
+					]
+				}
+			})
+		)
+		expect(lines[0]).toMatchObject({
+			line: "named acme:layout/gone@1, which wasn't found; used Dated prose",
+			missingReference: "acme:layout/gone@1",
+			why: "the pub's"
+		})
+		expect(lines[1]).toMatchObject({
+			line: "named acme:layout/gone@1, which wasn't found; used built-in default",
+			floor: true
+		})
 	})
 
 	it("is empty for a receipt that recorded none", () => {

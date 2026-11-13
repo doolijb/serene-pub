@@ -36,6 +36,7 @@ import {
 	cancellation,
 	setRunStopObserver,
 	runKindOf,
+	runSessionOf,
 	runKindOfFamily,
 	_reset,
 	type RunStop
@@ -398,5 +399,42 @@ describe("a run's kind (sprint 2)", () => {
 		expect(runKindOfFamily("action")).toBe("action")
 		expect(runKindOfFamily("routine")).toBe("routine")
 		expect(runKindOfFamily("anything")).toBe("maintenance")
+	})
+})
+
+describe("an action on its way, and who may stop it by id", () => {
+	const SESSION = 3
+
+	it("an action with no live row is stopped by cancel, by whoever started it", () => {
+		const ask = start({
+			runId: "ask",
+			userId: USER,
+			sessionId: SESSION,
+			kind: "action"
+		})
+		expect(cancel("ask", USER)).toEqual({ found: true, allowed: true })
+		expect(ask.controller.signal.aborted).toBe(true)
+		expect(cancellation(ask)?.by).toBe(`user:${USER}`)
+	})
+
+	it("only the starter stops it: the session's owner is refused at this layer", () => {
+		const ask = start({
+			runId: "ask",
+			userId: OTHER_USER,
+			sessionId: SESSION,
+			kind: "action"
+		})
+		expect(cancel("ask", USER)).toEqual({ found: true, allowed: false })
+		expect(ask.controller.signal.aborted).toBe(false)
+		expect(cancel("ask", OTHER_USER)).toEqual({ found: true, allowed: true })
+		expect(ask.controller.signal.aborted).toBe(true)
+	})
+
+	it("runSessionOf reads the session of a registered run, and nothing for an unknown id", () => {
+		start({ runId: "ask", userId: USER, sessionId: SESSION, kind: "action" })
+		start({ runId: "bare", userId: USER, kind: "action" })
+		expect(runSessionOf("ask")).toBe(SESSION)
+		expect(runSessionOf("bare")).toBeUndefined()
+		expect(runSessionOf("nope")).toBeUndefined()
 	})
 })

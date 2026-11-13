@@ -13,7 +13,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { mediaRevUrl } from "$lib/client/utils/media"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import type { ShownSprite, SpriteSetView } from "$lib/shared/sprites"
@@ -29,8 +29,14 @@
 		onClose: () => void
 	}
 
-	let { open, messageId, characterId, characterName, current, onClose }: Props =
-		$props()
+	let {
+		open,
+		messageId,
+		characterId,
+		characterName,
+		current,
+		onClose
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -54,7 +60,9 @@
 				src: mediaRevUrl(s.media.uuid, s.media.rev)
 			})
 		}
-		return [...byLabel.values()].sort((a, b) => a.label.localeCompare(b.label))
+		return [...byLabel.values()].sort((a, b) =>
+			a.label.localeCompare(b.label)
+		)
 	})
 
 	function handleList(msg: Sockets.Characters.ListSprites.Response) {
@@ -74,7 +82,11 @@
 		if (!sending) return
 		if (msg.sessionMessage && msg.sessionMessage.id !== messageId) return
 		sending = false
-		if (msg.error) toaster.error({ title: msg.error })
+		if (msg.error)
+			notify.error({
+				source: "socket:sessionMessages:setSprite",
+				title: msg.error
+			})
 		else onClose()
 	}
 
@@ -83,8 +95,14 @@
 		const id = characterId
 		loading = true
 		const releases = [
-			declareInterest<any>(interestKey("characters:listSprites", id), handleList),
-			declareInterest<any>("characters:listSprites:error", handleListError),
+			declareInterest<any>(
+				interestKey("characters:listSprites", id),
+				handleList
+			),
+			declareInterest<any>(
+				"characters:listSprites:error",
+				handleListError
+			),
 			declareInterest<any>("sessionMessages:setSprite", handleResult)
 		]
 		socket.emit("characters:listSprites", { characterId: id })
@@ -109,8 +127,12 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
 			<Dialog.Content
 				class="card bg-surface-100-900 w-[min(95vw,560px)] space-y-4 p-6 shadow-xl"
 			>
@@ -119,13 +141,16 @@
 					<h2 class="text-lg font-bold">Change sprite</h2>
 				</header>
 				<p class="text-surface-600-400 text-sm">
-					Choose the face {characterName ?? "the character"} shows on this line.
-					The automatic picker won't change it afterwards.
+					Choose the face {characterName ?? "the character"} shows on this
+					line. The automatic picker won't change it afterwards.
 				</p>
 
 				{#if loading}
 					<div class="flex justify-center py-6" role="status">
-						<Icons.Loader2 class="h-6 w-6 animate-spin" aria-hidden="true" />
+						<Icons.Loader2
+							class="h-6 w-6 animate-spin"
+							aria-hidden="true"
+						/>
 						<span class="sr-only">Loading sprites</span>
 					</div>
 				{:else if sets.length === 0}
@@ -136,7 +161,10 @@
 					{#if sets.length > 1}
 						<Select
 							label="Sprite set"
-							options={sets.map((s) => ({ value: String(s.id), label: s.name }))}
+							options={sets.map((s) => ({
+								value: String(s.id),
+								label: s.name
+							}))}
 							bind:value={setValue}
 						/>
 					{/if}
@@ -145,7 +173,8 @@
 					>
 						{#each tiles as tile (tile.label)}
 							{@const isCurrent =
-								current?.set === activeSet?.name && current?.label === tile.label}
+								current?.set === activeSet?.name &&
+								current?.label === tile.label}
 							<li>
 								<button
 									type="button"
@@ -163,7 +192,9 @@
 										class="aspect-square w-full rounded object-cover"
 										loading="lazy"
 									/>
-									<span class="w-full truncate">{tile.label}</span>
+									<span class="w-full truncate">
+										{tile.label}
+									</span>
 								</button>
 							</li>
 						{/each}
@@ -179,7 +210,11 @@
 					>
 						Show no sprite
 					</button>
-					<button type="button" class="btn preset-tonal-surface" onclick={onClose}>
+					<button
+						type="button"
+						class="btn preset-tonal-surface"
+						onclick={onClose}
+					>
 						Cancel
 					</button>
 				</footer>

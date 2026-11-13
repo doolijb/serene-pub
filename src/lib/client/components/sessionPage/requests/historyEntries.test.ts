@@ -286,35 +286,39 @@ describe("🚧 live scenes (§7, lane D): the open scene and the summaries", () 
 			summaryStatus: "none"
 		}
 	]
-	const openScenes = async (): Promise<Sockets.Scenes.OpenScenes.Response> => ({
-		sessionId: 7,
-		scenes: [
-			{
-				id: 21,
-				name: "Scene 2",
-				channel: "main",
-				openedAtMessageId: 60,
-				since: "Day 1",
-				lineCount: 4,
-				cast: [{ name: "Vell", evidence: "spoke 2 times" }]
+	const openScenes =
+		async (): Promise<Sockets.Scenes.OpenScenes.Response> => ({
+			sessionId: 7,
+			scenes: [
+				{
+					id: 21,
+					name: "Scene 2",
+					channel: "main",
+					openedAtMessageId: 60,
+					since: "Day 1",
+					lineCount: 4,
+					cast: [{ name: "Vell", evidence: "spoke 2 times" }]
+				}
+			],
+			settings: {
+				mode: "suggested",
+				triggers: {
+					dayCrossed: true,
+					timeAction: true,
+					placeChanged: true,
+					narration: false,
+					length: null,
+					pause: null
+				},
+				summary: "onClose"
 			}
-		],
-		settings: {
-			mode: "suggested",
-			triggers: {
-				dayCrossed: true,
-				timeAction: true,
-				placeChanged: true,
-				narration: false,
-				length: null,
-				pause: null
-			},
-			summary: "onClose"
-		}
-	})
+		})
 
 	test("the open scene's card off the fresh read; each row's summary state; how many await a summary", async () => {
-		const { d } = deps({ sceneList: () => LIVE, readOpenScenes: openScenes })
+		const { d } = deps({
+			sceneList: () => LIVE,
+			readOpenScenes: openScenes
+		})
 		const out = await answerHistoryEntries({}, d)
 		expect(out.openScene).toEqual({
 			id: 21,
@@ -326,7 +330,9 @@ describe("🚧 live scenes (§7, lane D): the open scene and the summaries", () 
 			cast: [{ name: "Vell", evidence: "spoke 2 times" }]
 		})
 		expect(out.summaryMode).toBe("onClose")
-		expect(out.scenes.map((s) => [s.id, s.lineCount, s.summaryStatus])).toEqual([
+		expect(
+			out.scenes.map((s) => [s.id, s.lineCount, s.summaryStatus])
+		).toEqual([
 			[22, 1, "done"],
 			[20, 2, "failed"],
 			[21, 4, "none"]
@@ -352,7 +358,10 @@ describe("🚧 live scenes (§7, lane D): the open scene and the summaries", () 
 		}
 		expect(summaryStatusOf(moved)).toBe("none")
 		expect(awaitsSummary(moved)).toBe(true)
-		const { d } = deps({ sceneList: () => [...LIVE, moved], readOpenScenes: openScenes })
+		const { d } = deps({
+			sceneList: () => [...LIVE, moved],
+			readOpenScenes: openScenes
+		})
 		const out = await answerHistoryEntries({}, d)
 		expect(out.scenes.find((s) => s.id === 23)!.summaryStatus).toBe("none")
 		// Scene 1 (failed) and this one; never the open scene, never the old capture.
@@ -362,25 +371,89 @@ describe("🚧 live scenes (§7, lane D): the open scene and the summaries", () 
 	test("summaryStatusOf: a selection capture's text predates the status and reads done; a live scene's status stands", () => {
 		const text = "A summary."
 		// Captured by selection (no opening line): text with `none` is `done`.
-		expect(summaryStatusOf({ summary: text, summaryStatus: "none", openedAtMessageId: null })).toBe("done")
-		expect(summaryStatusOf({ summary: text, summaryStatus: "none" })).toBe("done")
-		expect(summaryStatusOf({ summary: text, summaryStatus: null })).toBe("done")
-		expect(summaryStatusOf({ summary: "  ", summaryStatus: "none", openedAtMessageId: null })).toBe("none")
+		expect(
+			summaryStatusOf({
+				summary: text,
+				summaryStatus: "none",
+				openedAtMessageId: null
+			})
+		).toBe("done")
+		expect(summaryStatusOf({ summary: text, summaryStatus: "none" })).toBe(
+			"done"
+		)
+		expect(summaryStatusOf({ summary: text, summaryStatus: null })).toBe(
+			"done"
+		)
+		expect(
+			summaryStatusOf({
+				summary: "  ",
+				summaryStatus: "none",
+				openedAtMessageId: null
+			})
+		).toBe("none")
 		// Live: `none` is `none` whatever text it kept; the others read as they are.
-		expect(summaryStatusOf({ summary: text, summaryStatus: "none", openedAtMessageId: 5 })).toBe("none")
-		expect(summaryStatusOf({ summary: text, summaryStatus: "done", openedAtMessageId: 5 })).toBe("done")
-		expect(summaryStatusOf({ summary: text, summaryStatus: "running", openedAtMessageId: 5 })).toBe("running")
-		expect(summaryStatusOf({ summary: null, summaryStatus: "failed", openedAtMessageId: 5 })).toBe("failed")
+		expect(
+			summaryStatusOf({
+				summary: text,
+				summaryStatus: "none",
+				openedAtMessageId: 5
+			})
+		).toBe("none")
+		expect(
+			summaryStatusOf({
+				summary: text,
+				summaryStatus: "done",
+				openedAtMessageId: 5
+			})
+		).toBe("done")
+		expect(
+			summaryStatusOf({
+				summary: text,
+				summaryStatus: "running",
+				openedAtMessageId: 5
+			})
+		).toBe("running")
+		expect(
+			summaryStatusOf({
+				summary: null,
+				summaryStatus: "failed",
+				openedAtMessageId: 5
+			})
+		).toBe("failed")
 		// 🚧 §15 G8: a finished run waiting for the person reads `review`, its
 		// old text or none, and is not counted by *Summarize all*.
-		expect(summaryStatusOf({ summary: text, summaryStatus: "review", openedAtMessageId: null })).toBe("review")
-		expect(summaryStatusOf({ summary: null, summaryStatus: "review", openedAtMessageId: 5 })).toBe("review")
 		expect(
-			awaitsSummary({ id: 2, summary: null, summaryStatus: "review", openedAtMessageId: 5, closedAtMessageId: 7 })
+			summaryStatusOf({
+				summary: text,
+				summaryStatus: "review",
+				openedAtMessageId: null
+			})
+		).toBe("review")
+		expect(
+			summaryStatusOf({
+				summary: null,
+				summaryStatus: "review",
+				openedAtMessageId: 5
+			})
+		).toBe("review")
+		expect(
+			awaitsSummary({
+				id: 2,
+				summary: null,
+				summaryStatus: "review",
+				openedAtMessageId: 5,
+				closedAtMessageId: 7
+			})
 		).toBe(false)
 		// The open scene never awaits a summary, stale text or not.
 		expect(
-			awaitsSummary({ id: 1, summary: text, summaryStatus: "none", openedAtMessageId: 5, closedAtMessageId: null })
+			awaitsSummary({
+				id: 1,
+				summary: text,
+				summaryStatus: "none",
+				openedAtMessageId: 5,
+				closedAtMessageId: null
+			})
 		).toBe(false)
 	})
 
@@ -444,7 +517,11 @@ describe("🚧 pr-6s2: the own book and what a summary was written from", () => 
 				s.id === 11
 					? {
 							...s,
-							loreSources: { fromMessageId: 3, throughMessageId: 8, throughAt }
+							loreSources: {
+								fromMessageId: 3,
+								throughMessageId: 8,
+								throughAt
+							}
 						}
 					: s
 			)
@@ -461,10 +538,138 @@ describe("🚧 pr-6s2: the own book and what a summary was written from", () => 
 			{},
 			deps({ sceneList: () => withSources(null) }).d
 		)
-		expect(b.scenes.find((s) => s.id === 11)!.loreSources?.throughLabel).toBe("")
+		expect(
+			b.scenes.find((s) => s.id === 11)!.loreSources?.throughLabel
+		).toBe("")
 	})
 
 	test("throughLabelOf: null is empty", () => {
 		expect(throughLabelOf(null)).toBe("")
+	})
+})
+
+describe("🚧 ★S2-1b: Not yet compiled", () => {
+	const at = (
+		id: number,
+		year: number | null,
+		month: number | null = null,
+		day: number | null = null,
+		over: Partial<SceneRow> = {}
+	): SceneRow => ({
+		id,
+		sessionId: 7,
+		historyEntryId: null,
+		name: `Scene ${id}`,
+		selectedMessageIds: [id],
+		summary: "",
+		graphed: false,
+		branchId: null,
+		openedStoryClockYear: year,
+		openedStoryClockMonth: month,
+		openedStoryClockDay: day,
+		...over
+	})
+	const WAITING: SceneRow[] = [
+		at(35, null),
+		at(33, 3, 2, 1),
+		at(31, 2, 6, 1),
+		at(34, 3, 2, 1),
+		at(36, 3, 2, 1, { historyEntryId: 3 }),
+		at(37, 3, 2, 1, { branchId: 77 }),
+		at(38, 3, 2, 1, { sessionId: 8 })
+	]
+
+	test("listed by day, story order, Undated last, scenes in id order; filed, other-line and other-session scenes left out", async () => {
+		const { d } = deps({ sceneList: () => [...SCENES, ...WAITING] })
+		const out = await answerHistoryEntries({}, d)
+		expect(
+			out.unfiledDays!.map((x) => [x.date, x.scenes.map((s) => s.id)])
+		).toEqual([
+			[{ year: 2, month: 6, day: 1 }, [31]],
+			[{ year: 3, month: 2, day: 1 }, [33, 34]],
+			[null, [35]]
+		])
+		expect(out.unfiledDays![0].label).not.toBe("")
+		expect(out.unfiledDays![1].label).not.toBe("")
+		expect(out.unfiledDays![2].label).toBe("")
+	})
+
+	test("listed even when the line has no history entry yet", async () => {
+		const { d } = deps({
+			reading: { ...OWNER_READING, present: clock(0, 1, 1) },
+			sceneList: () => [at(31, 2, 6, 1)]
+		})
+		const out = await answerHistoryEntries({}, d)
+		expect(out.current).toBeNull()
+		expect(out.unfiledDays!.map((x) => x.scenes.map((s) => s.id))).toEqual([
+			[31]
+		])
+	})
+
+	test("nothing waiting: an empty list", async () => {
+		const { d } = deps()
+		expect((await answerHistoryEntries({}, d)).unfiledDays).toEqual([])
+	})
+
+	test("a guest, and no lorebook: no field", async () => {
+		const guest = deps({
+			reading: { ...OWNER_READING, isOwner: false },
+			sceneList: () => WAITING
+		})
+		expect("unfiledDays" in (await answerHistoryEntries({}, guest.d))).toBe(
+			false
+		)
+		const none = deps({
+			reading: { ...OWNER_READING, lorebookId: null },
+			sceneList: () => WAITING
+		})
+		expect("unfiledDays" in (await answerHistoryEntries({}, none.d))).toBe(
+			false
+		)
+	})
+
+	test("a row reads the same as in scenes: its status and its lines from the open-scene read", async () => {
+		const open = at(40, 3, 2, 1, {
+			openedAtMessageId: 60,
+			closedAtMessageId: null,
+			summaryStatus: "none",
+			selectedMessageIds: []
+		})
+		const { d } = deps({
+			sceneList: () => [open],
+			readOpenScenes: async () => ({
+				sessionId: 7,
+				scenes: [
+					{
+						id: 40,
+						name: "Scene 40",
+						channel: "main",
+						openedAtMessageId: 60,
+						since: "Day 1",
+						lineCount: 4,
+						cast: []
+					}
+				],
+				settings: {
+					mode: "suggested",
+					triggers: {
+						dayCrossed: true,
+						timeAction: true,
+						placeChanged: true,
+						narration: false,
+						length: null,
+						pause: null
+					},
+					summary: "onClose"
+				}
+			})
+		})
+		const out = await answerHistoryEntries({}, d)
+		const row = out.unfiledDays![0].scenes[0]
+		expect([row.id, row.lineCount, row.summaryStatus]).toEqual([
+			40,
+			4,
+			"none"
+		])
 	})
 })

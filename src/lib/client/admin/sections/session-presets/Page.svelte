@@ -11,7 +11,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
 		AdminBulkAction,
@@ -52,14 +52,22 @@
 			interest.requestWithInterest("sessionGenres:list", {}, (res) => {
 				genres = res.genres
 			}),
-			interest.declareInterest<"sessionPresets:delete">("sessionPresets:delete", () => {
-				if (deleting > 0 && --deleting === 0) toaster.success({ title: "Deleted" })
-			}),
+			interest.declareInterest<"sessionPresets:delete">(
+				"sessionPresets:delete",
+				() => {
+					if (deleting > 0 && --deleting === 0)
+						notify.success({ title: "Deleted" })
+				}
+			),
 			interest.declareInterest<"sessionPresets:delete:error">(
 				"sessionPresets:delete:error",
 				(res) => {
 					if (deleting > 0) deleting--
-					if (res.error) toaster.error({ title: res.error })
+					if (res.error)
+						notify.error({
+							title: res.error,
+							source: "socket:sessionPresets:delete:error"
+						})
 				}
 			)
 		]
@@ -68,10 +76,17 @@
 		}
 	})
 
-	const genreName = (slug: string) => genres.find((t) => t.slug === slug)?.name ?? slug
+	const genreName = (slug: string) =>
+		genres.find((t) => t.slug === slug)?.name ?? slug
 
 	const columns: AdminChangelistColumn<Row>[] = [
-		{ key: "name", label: "Name", primary: true, text: (r) => r.name, sortValue: (r) => r.name },
+		{
+			key: "name",
+			label: "Name",
+			primary: true,
+			text: (r) => r.name,
+			sortValue: (r) => r.name
+		},
 		{
 			key: "genre",
 			label: "Genre",
@@ -101,7 +116,12 @@
 	]
 
 	const filters: AdminChangelistFilter<Row>[] = $derived([
-		{ key: "genre", label: "Genre", values: (r) => r.genreId, optionLabel: genreName },
+		{
+			key: "genre",
+			label: "Genre",
+			values: (r) => r.genreId,
+			optionLabel: genreName
+		},
 		{
 			key: "status",
 			label: "Status",
@@ -120,15 +140,20 @@
 			key: "default",
 			label: "Default",
 			values: (r) => (r.isDefault ? "yes" : "no"),
-			optionLabel: (v) => (v === "yes" ? "Default for its genre" : "Not the default"),
+			optionLabel: (v) =>
+				v === "yes" ? "Default for its genre" : "Not the default",
 			order: ["yes", "no"]
 		}
 	])
 
 	const setEnabled = (selected: Row[], enabled: boolean) => {
-		const ids = selected.filter((r) => r.enabled !== enabled).map((r) => r.id)
-		for (const id of ids) socket.emit("sessionPresets:update", { id, enabled })
-		toaster.success({
+		const ids = selected
+			.filter((r) => r.enabled !== enabled)
+			.map((r) => r.id)
+		for (const id of ids)
+			socket.emit("sessionPresets:update", { id, enabled })
+		notify.success({
+			silent: true,
 			title: `${ids.length} ${ids.length === 1 ? "preset" : "presets"} ${enabled ? "made available" : "hidden"}`
 		})
 	}
@@ -155,12 +180,14 @@
 			run: (s) => {
 				const ids = s.filter((r) => !r.isImmutable).map((r) => r.id)
 				deleting += ids.length
-				for (const id of ids) socket.emit("sessionPresets:delete", { id })
+				for (const id of ids)
+					socket.emit("sessionPresets:delete", { id })
 			}
 		}
 	]
 	const DOT: Record<string, string> = {
 		stale: "bg-warning-500",
+		layouts: "bg-warning-500",
 		hidden: "bg-surface-400-600",
 		available: "bg-success-500"
 	}
@@ -178,7 +205,11 @@
 	noun={PRESET_NOUN}
 	searchText={(r) =>
 		`${r.name} ${genreName(r.genreId)} ${r.genreId} ${r.description ?? ""} ` +
-		(r.staleBindings ?? []).map((b) => `${b.event} ${b.bound}`).join(" ")}
+		(r.staleBindings ?? []).map((b) => `${b.event} ${b.bound}`).join(" ") +
+		" " +
+		(r.danglingVariableLayouts ?? [])
+			.map((d) => `${d.variableId} ${d.reference}`)
+			.join(" ")}
 	rowHref={(r) => `/admin/session-presets/${r.id}`}
 	addHref="/admin/session-presets/new"
 	defaultSort="status"
@@ -189,7 +220,10 @@
 		{#if col.key === "status"}
 			{@const s = presetStatus(row)}
 			<span class="inline-flex items-center gap-1.5">
-				<span class="size-2 shrink-0 rounded-full {DOT[s]}" aria-hidden="true"></span>
+				<span
+					class="size-2 shrink-0 rounded-full {DOT[s]}"
+					aria-hidden="true"
+				></span>
 				{presetStatusWord(s)}
 			</span>
 		{/if}

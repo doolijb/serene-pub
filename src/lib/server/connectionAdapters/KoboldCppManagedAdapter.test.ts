@@ -37,10 +37,10 @@ vi.mock("$lib/server/koboldcpp/subprocessManager", () => ({
 	suspendHealthCheck: vi.fn(),
 	resumeHealthCheck: vi.fn(),
 	pingActivity: vi.fn(),
-	isExternal: vi.fn(() => false),
 	isRunning: () => isRunningMock()
 }))
 const resetTtlMock = vi.fn()
+const clearTtlMock = vi.fn()
 const getLoadedSignatureMock = vi.fn(
 	() => ({ model: "some-model.gguf" }) as any
 )
@@ -52,6 +52,7 @@ vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 		batchSize: 512
 	},
 	resetTtl: (...args: any[]) => resetTtlMock(...args),
+	clearTtl: (...args: any[]) => clearTtlMock(...args),
 	getLoadedSignature: () => getLoadedSignatureMock()
 }))
 
@@ -218,7 +219,9 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 				"b.gguf",
 				"a.gguf",
 				"notes.txt",
-				"sd.safetensors"
+				"sd.safetensors",
+				// A vision projector is a part of a model, never a model row.
+				"mmproj-F16.gguf"
 			])
 			const result = await exportsDefault.listModels(makeConnection({}))
 			expect(readdirMock).toHaveBeenCalledWith("/models/llm")
@@ -458,6 +461,23 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 		await adapter.preflight()
 
 		expect(ensureModelLoaded).toHaveBeenCalledTimes(1)
+	})
+
+	test("a confirmed load holds the idle-unload timer until the generation re-arms it", async () => {
+		// The load arms the timer (modelManager); processing follows, and the
+		// timer must not fire under it — it is armed again only when the
+		// generation finishes (ruling 2026-11-08). Seen live: a render longer
+		// than the TTL had `unload_model` POSTed beneath it.
+		clearTtlMock.mockClear()
+		const adapter = makeAdapter()
+		vi.mocked(ensureModelLoaded).mockResolvedValue(true)
+
+		await adapter.preflight()
+
+		expect(clearTtlMock).toHaveBeenCalledTimes(1)
+		expect(clearTtlMock).toHaveBeenCalledWith(
+			MANAGED_SETTINGS.koboldCppManagerBaseUrl
+		)
 	})
 
 	test("retries after a transient failure and succeeds on the second attempt", async () => {

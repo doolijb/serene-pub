@@ -808,3 +808,31 @@ describe("resolution is correct where the packed value collided", () => {
 		expect(out.content).toBe("fork")
 	})
 })
+
+describe("held amendments", () => {
+	const held = (id: number, year: number | null, anchor: number | null, fields = {}) =>
+		({ id, branchId: null, year, fields, held: { anchor } }) as Amendment
+
+	test("a held amendment lands after every dated one and wins per field", () => {
+		const out = entryAsOf(entry, [
+			held(9, null, 4, { content: "Held." }),
+			am({ id: 2, year: 7, fields: { content: "Dated." } })
+		])
+		expect(out.content).toBe("Held.")
+	})
+
+	test("held amendments apply in anchor order, then id", () => {
+		const out = entryAsOf(entry, [
+			held(5, null, 8, { name: "later anchor" }),
+			held(6, null, 2, { name: "earlier anchor" })
+		])
+		expect(out.name).toBe("later anchor")
+	})
+
+	test("a dated held amendment waits for its date; amendmentsAfter never lists one", () => {
+		const rows = [held(3, 5, 1, { name: "Held." })]
+		expect(entryAsOf(entry, rows, { moment: { year: 4 } }).name).toBe("Verity")
+		expect(entryAsOf(entry, rows, { moment: { year: 5 } }).name).toBe("Held.")
+		expect(amendmentsAfter(rows, { moment: { year: 1 } })).toEqual([])
+	})
+})

@@ -28,6 +28,7 @@ import {
 	worldLoreValues
 } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -224,14 +225,14 @@ describe("cross-lorebook relocation via update — scoping (PGlite integration)"
 			owner.id,
 			"Foreign Binding Book"
 		)
-		const [binding] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({
+		const { member: binding } = await insertCastMember(
+			testDb as unknown as Db,
+			{
 				lorebookId: ownLorebook.id,
 				binding: "{{char:1}}",
 				name: "NPC"
-			})
-			.returning()
+			}
+		)
 
 		const res = await updateLorebookBindingHandler.handler(
 			fakeSocket(owner.id),

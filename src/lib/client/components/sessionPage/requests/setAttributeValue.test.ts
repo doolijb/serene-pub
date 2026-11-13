@@ -41,6 +41,23 @@ describe("answerSetAttributeValue", () => {
 		])
 	})
 
+	test("a seated_member owner matches the row carrying that castMemberId and writes with the row's own { kind, id } (S4-shaped colliding ids)", async () => {
+		const first = { key: "cast:7", kind: "session_cast" as const, id: 7, label: "Seven", castMemberId: 31, configs: { "core:slot/hp@1": {} } }
+		const second = { key: "cast:31", kind: "session_cast" as const, id: 31, label: "Thirty-one", castMemberId: 7, configs: { "core:slot/hp@1": {} } }
+		const { store, writes } = writer({
+			owners: new Map<string, Sockets.State.StateOwnerRow>([
+				[second.key, second],
+				[first.key, first]
+			])
+		})
+		await answerSetAttributeValue({ owner: { kind: "seated_member", id: 31 }, slotId: "core:slot/hp@1", value: 5 }, store, 7)
+		expect(writes).toEqual([[{ kind: "session_cast", id: 7 }, "core:slot/hp@1", 5, { ownError: true }]])
+		await expect(
+			answerSetAttributeValue({ owner: { kind: "seated_member", id: 99 }, slotId: "core:slot/hp@1", value: 5 }, store, 7)
+		).rejects.toThrow("that owner is not in this session")
+		expect(writes).toHaveLength(1)
+	})
+
 	test("a place is a session layer too (phase 4): its values are written like the world's", async () => {
 		const crypt = { key: "location:crypt", kind: "session_location" as const, id: 41, label: "Crypt", configs: { "core:slot/inventory@1": {} } }
 		const { store, writes } = writer({
@@ -146,5 +163,35 @@ describe("set-attribute-value behind the askers table", () => {
 		expect(writes).toEqual([])
 		await ask("set-attribute-value", params as never, { widgetId: "acme:x", owner: "acme", grants: ["session:state:write"] })
 		expect(writes).toHaveLength(1)
+	})
+
+	test("member form (the flip): a K-2 member's seated_member owner finds the character seat's row, a player_seat owner its own; ids collide on purpose", async () => {
+		const cfg = { "core:slot/hp@1": {} }
+		const char = { key: "bea", kind: "seated_member" as const, id: 7, label: "Bea", ref: "seated-member:7", castMemberId: 7, configs: cfg }
+		const seat = { key: "player_seat:7", kind: "player_seat" as const, id: 7, label: "Bea (player)", ref: "player-seat:7", castMemberId: 7, configs: cfg }
+		const other = { key: "cal", kind: "seated_member" as const, id: 31, label: "Cal", ref: "seated-member:31", castMemberId: 31, configs: cfg }
+		const { store, writes } = writer({
+			// the player seat first, so a castMemberId-only fallback would land on it
+			owners: new Map<string, Sockets.State.StateOwnerRow>([
+				[seat.key, seat],
+				[char.key, char],
+				[other.key, other]
+			])
+		})
+		await answerSetAttributeValue({ owner: { kind: "seated_member", id: 7 }, slotId: "core:slot/hp@1", value: 1 }, store, 7)
+		await answerSetAttributeValue({ owner: { kind: "player_seat", id: 7 }, slotId: "core:slot/hp@1", value: 2 }, store, 7)
+		expect(writes).toEqual([
+			[{ kind: "seated_member", id: 7 }, "core:slot/hp@1", 1, { ownError: true }],
+			[{ kind: "player_seat", id: 7 }, "core:slot/hp@1", 2, { ownError: true }]
+		])
+		// A seated_member owner never lands on a player seat alone.
+		const { store: lone } = writer({ owners: new Map<string, Sockets.State.StateOwnerRow>([[seat.key, seat]]) })
+		await expect(
+			answerSetAttributeValue({ owner: { kind: "seated_member", id: 7 }, slotId: "core:slot/hp@1", value: 1 }, lone, 7)
+		).rejects.toThrow("that owner is not in this session")
+		// ⏳ A session_cast owner matches no member-form row: refused locally after the flip.
+		await expect(
+			answerSetAttributeValue({ owner: { kind: "session_cast", id: 7 }, slotId: "core:slot/hp@1", value: 1 }, store, 7)
+		).rejects.toThrow("that owner is not in this session")
 	})
 })

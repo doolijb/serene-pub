@@ -25,7 +25,13 @@ import { describe, expect, test, vi } from "vitest"
 // stub is enough since nothing here calls db.
 vi.mock("$lib/server/db", () => ({ db: {} }))
 
-import { registerEmitter, unregisterEmitter, stop } from "./subprocessManager"
+import {
+	registerEmitter,
+	unregisterEmitter,
+	stop,
+	getStatus,
+	noteCoLoadReason
+} from "./subprocessManager"
 
 describe("subprocessManager status emitter fan-out", () => {
 	test("broadcasts to every distinct registered user", async () => {
@@ -83,5 +89,38 @@ describe("subprocessManager status emitter fan-out", () => {
 		emit.mockClear()
 		await stop()
 		expect(emit).not.toHaveBeenCalled()
+	})
+})
+
+describe("subprocessManager status carries the co-load reason", () => {
+	test("noteCoLoadReason is in getStatus and is pushed to a registered emitter", () => {
+		const emit = vi.fn()
+		registerEmitter(4001, emit)
+
+		noteCoLoadReason("Both fit: 6.0 GiB free, 4.0 GiB needed.")
+
+		expect(getStatus().coLoadReason).toBe(
+			"Both fit: 6.0 GiB free, 4.0 GiB needed."
+		)
+		expect(emit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				coLoadReason: "Both fit: 6.0 GiB free, 4.0 GiB needed."
+			})
+		)
+		unregisterEmitter(4001)
+	})
+
+	test("a supervisor push carries the field, and it is null once the process is gone", async () => {
+		noteCoLoadReason("kept")
+		const emit = vi.fn()
+		registerEmitter(4002, emit)
+
+		await stop()
+
+		expect(emit).toHaveBeenCalledWith(
+			expect.objectContaining({ status: "stopped", coLoadReason: null })
+		)
+		expect(getStatus().coLoadReason).toBeNull()
+		unregisterEmitter(4002)
 	})
 })

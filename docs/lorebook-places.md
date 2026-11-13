@@ -38,7 +38,7 @@ There are three ways to link places, and they all make the same link:
 
 - In a place's editor, **Link a place** picks another place, or **New place…** creates one by name and links it.
 - On the map, hold **Alt** (**⌥** on a Mac) and drag from one place to another.
-- On the map or in **Show as › Graph**, select a place and use **Link to…**.
+- On the map or in **Show as › Graph** (shown with [advanced controls](./themes-and-settings.md#show-advanced-controls) on), select a place and use **Link to…**.
 
 Links save on their own, as soon as you save the link; they're never part of the entry's **Save**. Select a link anywhere to edit it, or **Unlink** to remove it (it asks first).
 
@@ -67,7 +67,7 @@ Write each way with an arrow (→, ->, =>), or with a colon on a line without ar
 
 On a phone, the map fills the screen until you pick something.
 
-**Show as › Graph** is the same canvas for everything else: cast members, relationships and links between other lore. See [Cast and relationships](./lorebook-cast.md#the-graph).
+**Show as › Graph** (shown with advanced controls on) is the same canvas for everything else: cast members, relationships and links between other lore. See [Cast and relationships](./lorebook-cast.md#the-graph).
 
 ## What a place holds
 

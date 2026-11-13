@@ -197,7 +197,8 @@ describe("the context task", () => {
 		expect(r.value.templateContext.persona).toBe("Bob")
 	})
 
-	it("names the active character and still shows the inactive one's card", async () => {
+	// 🚧 A benched character's card leaves the block, except the speaker's (owner 2026-11-10, benched seats).
+	it("names the active character and leaves the benched one's card out", async () => {
 		const cast = (await readCast()).value.cast
 		const r = await buildFrom(cast)
 		// The cast arrives through its layout, so the JSON sits inside the
@@ -208,7 +209,7 @@ describe("the context task", () => {
 				.split("```json\n")[1]!
 				.split("\n```")[0]!
 		)
-		expect(cards.map((c: any) => c.name).sort()).toEqual(["Alice", "Cara"])
+		expect(cards.map((c: any) => c.name).sort()).toEqual(["Alice"])
 		expect(r.value.templateContext.characterNames).toBe("Alice")
 	})
 
@@ -231,7 +232,7 @@ describe("the context task", () => {
 		expect((await buildFrom({ ...cast, characterDetail: "full" })).value.templateContext).toEqual(
 			baseline.value.templateContext
 		)
-		expect(full.cards.map((c) => c.name).sort()).toEqual(["Alice", "Cara"])
+		expect(full.cards.map((c) => c.name).sort()).toEqual(["Alice"])
 
 		const only = await cardsAt("speaker-only")
 		expect(only.cards.map((c) => c.name)).toEqual(["Alice"])

@@ -21,7 +21,8 @@ import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
 import { mountComponent, type MountedComponent } from "@serene-pub/cli/testing"
 import { componentParitySections } from "@serene-pub/conformance"
-import { draftHolds, nextDraftWrite, routePress, type DraftWrite, type ListedCollects } from "./collects"
+import { draftHolds, narrateDirectly, nextDraftWrite, routePress, type DraftWrite, type ListedCollects } from "./collects"
+import { NARRATE_ACTION } from "$lib/shared/actions/identity"
 import { answerDraft } from "./requests/draft"
 
 const CORE_CATALOG = realpathSync(resolve(process.cwd(), "node_modules/@serene-pub/core-catalog"))
@@ -57,7 +58,7 @@ class Page {
 	newMessage = ""
 	draft: DraftWrite = { content: "", write: 0 }
 	view!: MountedComponent
-	constructor(private opts: { tier?: string; member?: string } = {}) {}
+	constructor(private opts: { tier?: string; member?: string; entry?: string } = {}) {}
 	writeDraft(content: string) {
 		this.newMessage = content
 		this.draft = nextDraftWrite(this.draft, content)
@@ -89,7 +90,7 @@ class Page {
 		const sections = componentParitySections() as Record<string, any>
 		this.view = await mountComponent({
 			root: CORE_CATALOG,
-			entry: "dist/components/messages.js",
+			entry: this.opts.entry ?? "dist/components/composer.js",
 			owner: "core",
 			coreConversation: true,
 			timeoutMs: 60_000,
@@ -152,14 +153,43 @@ describe("S2 · slash arguments in core's composer", () => {
 		}
 	}, 120_000)
 
-	test("a bare /nudge presses it with no text (the page opens the modal) and empties the field", async () => {
+	test("a bare /nudge carries an empty argument: Nudge needs text, so the page opens the modal; the field empties", async () => {
 		const page = await new Page().open()
 		try {
 			await page.type("/nudge")
 			await page.enter()
-			expect(page.view.invoked).toEqual([{ key: "core:spec/lair-nudge#nudge" }])
+			expect(page.view.invoked).toEqual([{ key: "core:spec/lair-nudge#nudge", text: "" }])
 			expect(page.lastRoute()).toEqual({ route: "modal", initialText: "" })
 			// The draft was only the name: it goes now.
+			expect(page.newMessage).toBe("")
+		} finally {
+			await page.view.unmount()
+		}
+	}, 120_000)
+
+	test("a bare /room fires at once with no text: its text is optional (2026-11-04)", async () => {
+		const page = await new Page().open()
+		try {
+			await page.type("/room")
+			await page.enter()
+			expect(page.view.invoked).toEqual([{ key: "core:spec/lair-room-answer#room", text: "" }])
+			expect(page.lastRoute()).toEqual({ route: "fire", collected: {} })
+			expect(page.newMessage).toBe("")
+		} finally {
+			await page.view.unmount()
+		}
+	}, 120_000)
+
+	test("a bare /narrator fires the narrator with no direction, never the modal (2026-11-04)", async () => {
+		const page = await new Page().open()
+		try {
+			await page.type("/narrator")
+			await page.enter()
+			const inv = page.view.invoked.at(-1)!
+			expect(inv).toEqual({ key: "core:spec/story-narrate#narrate", text: "" })
+			const route = page.lastRoute()
+			expect(route).toEqual({ route: "plain" })
+			expect(narrateDirectly(NARRATE_ACTION, route, { text: inv.text })).toBe("")
 			expect(page.newMessage).toBe("")
 		} finally {
 			await page.view.unmount()
@@ -251,8 +281,9 @@ describe("S2 · slash arguments in core's composer", () => {
 		}
 	}, 120_000)
 
+	// The log is drawn by Messages, not the Composer (R8).
 	test("a shared session's persona-less line shows its member after the name", async () => {
-		const page = await new Page({ member: "jody" }).open()
+		const page = await new Page({ member: "jody", entry: "dist/components/messages.js" }).open()
 		try {
 			const line = page.view.query('[data-message-id="1"]') ?? page.view.queryAll('[data-widget-part~="messages.message"]')[0]!
 			expect(line.querySelector('[data-widget-part~="messages.message-name"]')?.textContent?.trim()).toBe(

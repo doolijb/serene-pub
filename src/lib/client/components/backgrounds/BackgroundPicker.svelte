@@ -3,7 +3,7 @@
 	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
@@ -61,7 +61,7 @@
 		if (!file) return
 
 		if (!file.type.startsWith("image/")) {
-			toaster.error({ title: "Select an image file" })
+			notify.error({ title: "Select an image file" })
 			return
 		}
 
@@ -125,10 +125,16 @@
 	) {
 		isUploading = false
 		if (msg.success) {
-			toaster.success({ title: "Background uploaded" })
+			notify.success({
+				source: "socket:userSettings:uploadBackground",
+				title: "Background uploaded"
+			})
 			// list refresh is triggered server-side after upload
 		} else {
-			toaster.error({ title: "Upload failed" })
+			notify.error({
+				source: "socket:userSettings:uploadBackground",
+				title: "Upload failed"
+			})
 		}
 	}
 
@@ -136,7 +142,10 @@
 		_msg: SocketEventMap["userSettings:uploadBackground:error"]["response"]
 	) {
 		isUploading = false
-		toaster.error({ title: "Upload failed" })
+		notify.error({
+			source: "socket:userSettings:uploadBackground:error",
+			title: "Upload failed"
+		})
 	}
 
 	/**
@@ -232,11 +241,7 @@
 		<!-- Defaults -->
 		{#if visibleDefaults.length > 0}
 			<div>
-				<h4
-					class="text-surface-600-400 mb-2 text-xs"
-				>
-					Defaults
-				</h4>
+				<h4 class="text-surface-600-400 mb-2 text-xs">Defaults</h4>
 				<div
 					class="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2"
 				>
@@ -279,11 +284,7 @@
 		<!-- Uploads -->
 		<div>
 			<div class="mb-2 flex items-center justify-between">
-				<h4
-					class="text-surface-600-400 text-xs"
-				>
-					My uploads
-				</h4>
+				<h4 class="text-surface-600-400 text-xs">My uploads</h4>
 				<button
 					type="button"
 					class="btn btn-sm preset-tonal-surface"

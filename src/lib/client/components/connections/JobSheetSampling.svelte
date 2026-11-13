@@ -30,7 +30,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingShape"
 	import {
@@ -154,7 +154,10 @@
 		pendingId = null
 		const name =
 			samplingConfigsList.find((c) => c.id === message.id)?.name ?? null
-		toaster.success(samplingDefaultToast(name, capability))
+		notify.success({
+			...samplingDefaultToast(name, capability),
+			source: "socket:samplingConfigs:setDefaultFor"
+		})
 	}
 	/** Refused: the radio goes back; Layout's catch-all says why. */
 	function handleSamplingConfigsSetDefaultForError() {
@@ -242,7 +245,7 @@
 						type="button"
 						role="radio"
 						aria-checked={checked}
-						class="focus-visible:ring-primary-500 flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-base px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {checked
+						class="focus-visible:ring-primary-500 rounded-base flex min-h-11 w-full min-w-0 items-center gap-2.5 px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {checked
 							? 'sidebar-row-active'
 							: 'hover:bg-surface-200-800'}"
 						aria-label={samplingChoiceLabel(row, capability)}
@@ -262,7 +265,7 @@
 						</span>
 						<span class="min-w-0 flex-1">
 							<span class="flex min-w-0 items-center gap-1.5">
-								<span class="truncate text-lead font-medium">
+								<span class="text-lead truncate font-medium">
 									{row.name}
 								</span>
 								{#if row.isDefault}
@@ -346,4 +349,3 @@
 		{/if}
 	{/if}
 </section>
-

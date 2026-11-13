@@ -1,29 +1,57 @@
 <script lang="ts">
+	import { onDestroy } from "svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { Popover, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { normalizeSpriteName } from "$lib/shared/sprites"
+	import { ownNameValue } from "$lib/shared/lorebooks/memberIdentity"
 	import type { CastMember, CastRow } from "../castPool"
 	import {
 		draftFollowsRow,
 		memberDraftOf,
 		memberPatch,
+		notesText,
 		sameMemberDraft,
+		withNotesText,
 		type MemberDraft
 	} from "./memberDraft"
 	import {
+		GREETINGS_LABEL,
+		RETOLD_LABELS,
+		greetingListOf,
+		greetingsOf,
 		retoldRows,
 		setRetold,
 		takeFromCard,
-		type RetoldProseField
+		withGreetingList,
+		type RetoldProseField,
+		type RetoldRow,
+		type RetoldRowField
 	} from "./retoldRows"
 	import { memberFaceSrc } from "./memberFace"
 	import { mediaThumbUrl } from "$lib/client/utils/media"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import { laterVersionsLine } from "./castSave"
+	import CardUpdateOffer from "./CardUpdateOffer.svelte"
+	import UseFromCardSwitch from "./UseFromCardSwitch.svelte"
+	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
+	import { FORM_TABS } from "$lib/client/components/characterForms/formTabs"
+	import { FIELD_CLASS } from "$lib/client/components/characterForms/fieldClass"
+	import ProseField from "$lib/client/components/characterForms/ProseField.svelte"
+	import GreetingsList from "$lib/client/components/characterForms/GreetingsList.svelte"
+	import CreatorNotesFields from "$lib/client/components/characterForms/CreatorNotesFields.svelte"
+	import {
+		noteLanguageProblem,
+		type NoteLanguageRow
+	} from "$lib/client/components/characterForms/cardDraft"
+	import VoiceTab from "$lib/client/components/characterForms/VoiceTab.svelte"
+	import LikenessTab from "$lib/client/components/characterForms/LikenessTab.svelte"
+	import { likenessOfExtensions } from "$lib/shared/characters/likeness"
+	import type { CharacterGreeting } from "$lib/shared/characters/profile"
 	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import {
 		CAST_STATES,
@@ -31,16 +59,19 @@
 		stateBadge,
 		visibilityBadge
 	} from "./castVocabulary"
+	import { emptyOwnTimbre } from "./memberDraft"
 
 	/**
 	 * One cast member's page: who they are, and where they stand in the world.
 	 *
 	 * A background member's name and other names are edited here. A carded
-	 * member is NAMED by their card, but their other names are their own
-	 * (#114, cast-first): editable here like anyone's, with the card's names
-	 * merged in by the server and every name they were known by before the
-	 * card was linked kept — changing or unlinking the card never takes those
-	 * away.
+	 * member reads as their card's name and nickname until the book gives them
+	 * their own (`ownName` / `ownNickname`: shown in this book only, not dated).
+	 * *Use from card* on = the card's; off = the book's own, and an own empty
+	 * nickname means no nickname in this book. Their other names are their own too (#114,
+	 * cast-first): editable here like anyone's, with the card's names merged in
+	 * by the server and every name they were known by before the card was
+	 * linked kept — changing or unlinking the card never takes those away.
 	 *
 	 * ⚠ The form draws the member as they READ at the moment being read, so the
 	 * row moves under it. The draft remembers what it was built from
@@ -59,7 +90,8 @@
 		 */
 		onSave: (
 			patch: Record<string, unknown>,
-			pristine: Record<string, unknown>
+			pristine: Record<string, unknown>,
+			options: SaveOptions
 		) => Promise<boolean>
 		/**
 		 * File the change as a dated overlay instead. Absent at now, where
@@ -67,8 +99,15 @@
 		 */
 		onAmend?: (
 			patch: Record<string, unknown>,
-			pristine: Record<string, unknown>
+			pristine: Record<string, unknown>,
+			options: SaveOptions
 		) => Promise<boolean>
+		/**
+		 * How many later versions each save would leave with their own words:
+		 * `base` for **Save** (and "change them outright"), `amend` for
+		 * **Save as of**. Absent, there is nothing to offer.
+		 */
+		laterCounts?: { base: number; amend: number }
 		/** The moment being read, spelled for the button. */
 		momentLabel?: string | null
 		onDelete: () => void
@@ -78,9 +117,25 @@
 		 */
 		onLinkCharacter: (how: CardWrite) => void
 		onUnlink: (how: CardWrite) => void
+		/**
+		 * Open the linked card in Characters. Given only when the reader
+		 * owns the card and the book; absent, there is no button.
+		 */
+		onEditCard?: () => void
+		/**
+		 * The viewer can edit the book (the page's edit gate): the **Update**
+		 * offer to the card's current version is shown only then.
+		 */
+		canUpdateCard?: boolean
 	}
 
 	type CardWrite = "amend" | "base"
+
+	/** How one save is sent. */
+	interface SaveOptions {
+		/** ★CV-13: also write the same fields onto the later versions. */
+		changeLaterVersions: boolean
+	}
 
 	let {
 		member,
@@ -89,10 +144,13 @@
 		hasUnsavedChanges = $bindable(false),
 		onSave,
 		onAmend,
+		laterCounts,
 		momentLabel = null,
 		onDelete,
 		onLinkCharacter,
-		onUnlink
+		onUnlink,
+		onEditCard,
+		canUpdateCard = false
 	}: Props = $props()
 
 	/** Chips rather than a comma-delimited field: one name, one thing to remove. */
@@ -104,19 +162,138 @@
 	let draftFor = $state<number | null>(null)
 	/** A write of ours is on its way; the save controls stand down. */
 	let saving = $state(false)
+	/**
+	 * **Change later versions too** is pressed. Only changes how the next save
+	 * is sent, so it is not an unsaved change (§6.14); it resets after every
+	 * save and when the member changes.
+	 */
+	let changeLater = $state(false)
 
 	let card = $derived(row.character ?? null)
 
 	function seed() {
+		blankAdded = false
 		draft = memberDraftOf(row)
 		pristine = memberDraftOf(row)
+		seedNotes()
+	}
+
+	/**
+	 * The member's own creator notes as the shared fields edit them: text,
+	 * language and the other-language rows. `writeNotes` writes them back to
+	 * the draft; this reads them from it (on seed, and when the card's are
+	 * switched on or off).
+	 */
+	let noteText = $state("")
+	let noteLang = $state("")
+	let noteRows = $state<NoteLanguageRow[]>([])
+
+	function seedNotes() {
+		const notes = draft.creatorNotes
+		noteText = notes?.text ?? ""
+		noteLang = notes?.lang ?? ""
+		noteRows = Object.entries(notes?.variants ?? {}).map(
+			([lang, text]) => ({
+				lang,
+				text
+			})
+		)
+		delete validationErrors.creatorNotesLanguages
+	}
+
+	const noteCode = (value: string) => value.trim().toLowerCase()
+
+	/**
+	 * A notes edit into the draft. A text edit goes the way it always did
+	 * (language and variants kept as they came); a language edit rebuilds
+	 * both from the rows. An added empty row changes nothing in the draft, so
+	 * it is not an unsaved change (§6.14).
+	 */
+	function writeNotes() {
+		delete validationErrors.creatorNotesLanguages
+		if (noteText !== notesText(draft)) {
+			draft = withNotesText(draft, noteText)
+			return
+		}
+		const lang = noteCode(noteLang)
+		const variants: Record<string, string> = {}
+		for (const r of noteRows) {
+			const code = noteCode(r.lang)
+			if (code) variants[code] = r.text
+		}
+		const same =
+			(lang || undefined) === (draft.creatorNotes?.lang || undefined) &&
+			JSON.stringify(variants) ===
+				JSON.stringify(draft.creatorNotes?.variants ?? {})
+		if (same) return
+		draft.creatorNotes = {
+			text: noteText,
+			...(lang ? { lang } : {}),
+			variants
+		}
+	}
+
+	/** Group → fields that can fail, as on the card. */
+	let validationErrors = $state<Record<string, string>>({})
+	let activeFormTab: MemberTab = $state("profile")
+
+	/**
+	 * Which group each validated field sits in, so a group can mark itself when
+	 * something inside it fails while another group is on show. Name is in the
+	 * hero above the tabs and shows its own state there.
+	 */
+	const TAB_FIELDS: Record<MemberTab, string[]> = {
+		profile: [],
+		voice: [],
+		notes: ["creatorNotesLanguages"],
+		likeness: [],
+		speech: []
+	}
+
+	/** The strip's tabs: the card's, without Stats (a member has no stats fields). */
+	let formTabs = $derived(
+		FORM_TABS.filter((tab) => tab.value !== "stats").map((tab) => ({
+			...tab,
+			hasError: TAB_FIELDS[tab.value as MemberTab].some(
+				(field) => !!validationErrors[field]
+			)
+		}))
+	)
+
+	/** The member's own creator notes are on show (card-less, or the card's switched off). */
+	function ownNotesShown() {
+		return !member.linked || draft.retold.creatorNotes === true
+	}
+
+	/** A sentence when the own notes name a language twice; sets it and stops the save. */
+	function notesBlockSave(): boolean {
+		if (!ownNotesShown()) return false
+		const problem = noteLanguageProblem({
+			creatorNotes: noteText,
+			creatorNotesLang: noteLang,
+			creatorNotesVariants: noteRows
+		})
+		if (!problem) return false
+		validationErrors.creatorNotesLanguages = problem
+		return true
 	}
 
 	$effect(() => {
 		if (draftFor === member.id) return
 		draftFor = member.id
 		aliasDraft = ""
+		changeLater = false
 		seed()
+	})
+
+	/**
+	 * A card-less member has no card's voice to read through, so their form is
+	 * always the voice fields. An empty voice writes null, so this is clean.
+	 */
+	$effect(() => {
+		if (draftFor !== member.id || member.linked || draft.timbre) return
+		draft.timbre = emptyOwnTimbre()
+		pristine.timbre = emptyOwnTimbre()
 	})
 
 	let dirty = $derived(
@@ -146,6 +323,13 @@
 		hasUnsavedChanges = dirty
 	})
 
+	// A form that goes away takes its draft with it: never leave the bound
+	// flag claiming changes nothing holds any more, or every later move in
+	// the lorebook asks about them.
+	onDestroy(() => {
+		hasUnsavedChanges = false
+	})
+
 	/**
 	 * Send the form one way or the other, and once it has landed make what
 	 * was sent the new "as built" — so typing done while waiting stays dirty,
@@ -155,35 +339,68 @@
 	async function submit(
 		write: (
 			patch: Record<string, unknown>,
-			pristine: Record<string, unknown>
+			pristine: Record<string, unknown>,
+			options: SaveOptions
 		) => Promise<boolean>
 	) {
 		if (saving) return
 		const forId = member.id
 		const linked = member.linked
 		const sent = $state.snapshot(draft) as MemberDraft
+		const options = { changeLaterVersions: changeLater }
 		saving = true
 		let ok = false
 		try {
 			ok = await write(
 				memberPatch(sent, linked),
-				memberPatch($state.snapshot(pristine) as MemberDraft, linked)
+				memberPatch($state.snapshot(pristine) as MemberDraft, linked),
+				options
 			)
 		} finally {
 			saving = false
+			if (draftFor === forId) changeLater = false
 		}
 		if (ok && draftFor === forId) pristine = sent
 	}
 
 	function save() {
+		if (notesBlockSave()) return
 		void submit(onSave)
 	}
 
+	/** Own names are not dated: an amendment never carries them. */
+	function undated(patch: Record<string, unknown>) {
+		const { ownName: _n, ownNickname: _k, ...rest } = patch
+		return rest
+	}
+
+	/** An own name or nickname typed and not yet saved. */
+	let ownNamesDirty = $derived(
+		ownNameValue(draft.ownName) !== ownNameValue(pristine.ownName) ||
+			ownNameValue(draft.ownNickname) !==
+				ownNameValue(pristine.ownNickname)
+	)
+
 	function amend() {
-		if (onAmend) void submit(onAmend)
+		if (notesBlockSave()) return
+		if (onAmend)
+			void submit((patch, was, options) =>
+				onAmend(undated(patch), undated(was), options)
+			)
 	}
 
 	let saveMenuOpen = $state(false)
+
+	/**
+	 * The later versions the PRIMARY button leaves with their own words:
+	 * Save as of while a moment is read, else Save. The menu's "change them
+	 * outright" is a base save; it says its own count when that differs.
+	 */
+	let datedPrimary = $derived(!!onAmend && !!momentLabel)
+	let primaryLater = $derived(
+		(datedPrimary ? laterCounts?.amend : laterCounts?.base) ?? 0
+	)
+	let outrightLater = $derived(laterCounts?.base ?? 0)
 
 	/** Read at a moment, a card change is dated from it (#115). */
 	let cardDated = $derived(!!onAmend && !!momentLabel)
@@ -225,11 +442,11 @@
 	 * why the stored name is offered as its own option when it is missing.
 	 */
 	const socket = useTypedSocket()
-	let spriteSets = $state<{ name: string; isDefault: boolean }[]>([])
+	let cardSets = $state<{ name: string; isDefault: boolean }[]>([])
 	/**
 	 * The card whose list has actually ARRIVED.
 	 *
-	 * ⚠ An empty `spriteSets` is two different facts — "the reply is still in
+	 * ⚠ An empty `cardSets` is two different facts — "the reply is still in
 	 * flight" and "this card has no sets at all" — and the difference decides
 	 * whether a stored name is missing or merely unconfirmed. Without this the
 	 * zero-set card never offers the stored name below, which is the one way
@@ -241,7 +458,7 @@
 	 * ⚠ A PRIMITIVE, deliberately — the effect below must depend on the card's
 	 * id and nothing else. `row` is rebuilt by `resolvedCast` on every
 	 * recompute, so an effect that reads `row.characterId` directly re-runs
-	 * whenever any unrelated cast state moves, clearing `spriteSets` a moment
+	 * whenever any unrelated cast state moves, clearing `cardSets` a moment
 	 * after the reply filled it and firing another request. A `$derived`
 	 * holding a number only notifies when the number changes.
 	 */
@@ -249,14 +466,14 @@
 
 	$effect(() => {
 		const cardId = cardIdForSprites
-		spriteSets = []
+		cardSets = []
 		loadedFor = null
 		if (cardId == null) return
 		const release = declareInterest<"characters:listSprites">(
 			interestKey("characters:listSprites", cardId),
 			(msg) => {
 				if (msg.characterId !== cardId) return
-				spriteSets = msg.sets.map((s) => ({
+				cardSets = msg.sets.map((s) => ({
 					name: s.name,
 					isDefault: s.isDefault
 				}))
@@ -266,6 +483,71 @@
 		socket.emit("characters:listSprites", { characterId: cardId })
 		return release
 	})
+
+	/**
+	 * The member's OWN sprite sets, which are its art when any holds an image
+	 * (NOMENCLATURE §18); a card's are read only otherwise. A member-form
+	 * reply carries `castMemberId` and no `characterId`, so it is scoped
+	 * `member:<id>` (the shared `SCOPED_EVENTS`). Every sprite write
+	 * answers with the whole list, so the sibling Sprites tab's edits reach
+	 * this picker through the same events.
+	 */
+	let ownSets = $state<
+		{ name: string; isDefault: boolean; drawn: boolean }[]
+	>([])
+	let ownLoadedFor = $state<number | null>(null)
+	/** A primitive for the same reason as `cardIdForSprites`. */
+	let memberIdForSprites = $derived(member.id)
+	const OWN_LIST_EVENTS = [
+		"characters:listSprites",
+		"characters:createSpriteSet",
+		"characters:updateSpriteSet",
+		"characters:deleteSpriteSet",
+		"characters:uploadSprite",
+		"characters:addStandardSprites",
+		"characters:updateSprite",
+		"characters:deleteSprite",
+		"characters:reorderSprites"
+	] as const
+
+	$effect(() => {
+		const memberId = memberIdForSprites
+		ownSets = []
+		ownLoadedFor = null
+		const onList = (msg: {
+			castMemberId?: number
+			sets?: {
+				name: string
+				isDefault: boolean
+				sprites: { media?: unknown }[]
+			}[]
+		}) => {
+			if (msg.castMemberId !== memberId || !msg.sets) return
+			ownSets = msg.sets.map((s) => ({
+				name: s.name,
+				isDefault: s.isDefault,
+				drawn: s.sprites.some((sp) => sp.media)
+			}))
+			ownLoadedFor = memberId
+		}
+		const releases = OWN_LIST_EVENTS.map((event) =>
+			declareInterest<any>(
+				interestKey(event, `member:${memberId}`),
+				onList
+			)
+		)
+		socket.emit("characters:listSprites", { castMemberId: memberId })
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/** Whether the member's own sets are the art (any holds an image). */
+	let ownDrawn = $derived(ownSets.some((s) => s.drawn))
+	/** The picker reads the member's own sets: they hold an image, or there is no card. */
+	let ownSetsShown = $derived(ownDrawn || cardIdForSprites == null)
+	/** The sets the picker offers: the member's own, else its card's. */
+	let spriteSets = $derived(ownSetsShown ? ownSets : cardSets)
 
 	/**
 	 * The chosen set, when no set of the resolved card carries that name.
@@ -294,7 +576,9 @@
 	 * card swap flashes "not on this card" for the length of a round trip.
 	 */
 	let missingConfirmed = $derived(
-		missingSet != null && loadedFor === cardIdForSprites
+		missingSet != null &&
+			ownLoadedFor === memberIdForSprites &&
+			(cardIdForSprites == null || loadedFor === cardIdForSprites)
 	)
 
 	/**
@@ -314,20 +598,107 @@
 	// the draft, so a retold change saves — or files as a dated change — with
 	// the rest of the form.
 
-	const switchClass =
-		"preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+	let retold = $derived(member.linked && card ? retoldRows(draft, card) : [])
 
-	let retold = $derived(
-		member.linked && card ? retoldRows(draft, card) : []
+	/** A card-less member's five fields are plain: no card to read or retell. */
+	let ownWords = $derived(!member.linked)
+
+	// ── Post-history instructions, creator notes, likeness ─────────────────
+	//
+	// The card is a seed, not the sole carrier: a carded member reads the
+	// card's until the book gives them their own (*Use from card* off); a
+	// card-less member has only their own. Their own is kept while the card's
+	// is read — hidden, never discarded.
+
+	/** The card's values for the three, as the wire sends the card's whole row. */
+	let cardExtras = $derived(
+		card as
+			| (NonNullable<typeof card> & {
+					postHistoryInstructions?: string | null
+					creatorNotes?: string | null
+					extensions?: unknown
+			  })
+			| null
 	)
 
-	type ProseTextField = Exclude<RetoldProseField, "alternateGreetings">
+	type OwnedField = "postHistoryInstructions" | "creatorNotes" | "likeness"
+	type MemberTab = "profile" | "voice" | "notes" | "likeness" | "speech"
+
+	const ownedId = (field: OwnedField) => `castOwned-${field}-${member.id}`
+
+	/** The card's value reads through (a carded member, *Use from card* on). */
+	const usesCard = (field: OwnedField) =>
+		member.linked && draft.retold[field] !== true
+
+	function emptyLikeness() {
+		return { prompt: "", negative: "" }
+	}
+
+	/** The card's current value for a field, as the draft holds it. */
+	function cardOwned(field: OwnedField): MemberDraft[OwnedField] {
+		if (field === "postHistoryInstructions")
+			return cardExtras?.postHistoryInstructions ?? ""
+		if (field === "creatorNotes") return { text: cardExtras?.creatorNotes ?? "", variants: {} }
+		const l = likenessOfExtensions(cardExtras?.extensions)
+		return {
+			...(l.imageMediaId !== undefined ? { imageMediaId: l.imageMediaId } : {}),
+			prompt: l.prompt ?? "",
+			negative: l.negative ?? ""
+		}
+	}
+
+	function ownedEmpty(field: OwnedField, d: MemberDraft): boolean {
+		if (field === "postHistoryInstructions")
+			return !d.postHistoryInstructions.trim()
+		if (field === "creatorNotes")
+			return (
+				!notesText(d).trim() &&
+				!Object.keys(d.creatorNotes?.variants ?? {}).length
+			)
+		return (
+			d.likeness.imageMediaId === undefined &&
+			!d.likeness.prompt.trim() &&
+			!d.likeness.negative.trim()
+		)
+	}
+
+	function setOwned<F extends OwnedField>(field: F, value: MemberDraft[F]) {
+		draft[field] = value
+	}
+
+	/**
+	 * Switch one of the three between the card's and the member's own. Off
+	 * starts from the member's kept value, or the card's current one when they
+	 * have none; on keeps the member's value, except an untouched copy of the
+	 * card's, which gives back what was saved (so on-and-off leaves the form clean).
+	 */
+	function useFromCard(field: OwnedField, fromCard: boolean) {
+		draft.retold = { ...draft.retold, [field]: !fromCard }
+		if (!fromCard) {
+			if (ownedEmpty(field, draft)) setOwned(field, cardOwned(field))
+			return
+		}
+		if (
+			ownedEmpty(field, pristine) &&
+			JSON.stringify(draft[field]) === JSON.stringify(cardOwned(field))
+		)
+			setOwned(field, $state.snapshot(pristine[field]))
+	}
+
+	type ProseTextField = Exclude<
+		RetoldProseField,
+		"firstMessage" | "alternateGreetings"
+	>
+
+	/** One retold row by field (absent for a background member). */
+	const rowOf = (field: RetoldRowField) =>
+		retold.find((r) => r.field === field)
 
 	function snapshot(): MemberDraft {
 		return $state.snapshot(draft) as MemberDraft
 	}
 
-	function toggleRetold(field: RetoldProseField, on: boolean) {
+	function toggleRetold(field: RetoldRowField, on: boolean) {
 		draft = setRetold(
 			snapshot(),
 			field,
@@ -337,7 +708,7 @@
 		)
 	}
 
-	function takeCardValue(field: RetoldProseField) {
+	function takeCardValue(field: RetoldRowField) {
 		draft = takeFromCard(snapshot(), field, card)
 	}
 
@@ -345,10 +716,56 @@
 		draft[field] = value
 	}
 
+	/**
+	 * One greeting list: the first is the opener, the rest the alternates.
+	 * `blankAdded` is an added greeting nobody has typed in yet, which the
+	 * draft cannot hold while the list is empty (an empty list and a list of
+	 * one empty greeting write the same thing).
+	 */
+	let blankAdded = $state(false)
+	let greetingList = $derived.by(() => {
+		const list = greetingListOf(draft)
+		return list.every((g) => g.groupOnly) && blankAdded
+			? [{ text: "" }, ...list]
+			: list
+	})
+
+	function setGreetingList(list: CharacterGreeting[]) {
+		blankAdded = false
+		const next = withGreetingList(snapshot(), list)
+		draft.firstMessage = next.firstMessage
+		draft.alternateGreetings = next.alternateGreetings
+		draft.groupOnlyGreetings = next.groupOnlyGreetings
+	}
+
 	function setGreeting(index: number, value: string) {
-		draft.alternateGreetings = draft.alternateGreetings.map((g, i) =>
-			i === index ? value : g
+		setGreetingList(
+			greetingList.map((g, i) =>
+				i === index ? { ...g, text: value } : g
+			)
 		)
+	}
+
+	/** Absent, not false, when unmarked: marking and unmarking stays clean. */
+	function markGreeting(index: number, groupOnly: boolean) {
+		setGreetingList(
+			greetingList.map((g, i) =>
+				i === index
+					? groupOnly
+						? { text: g.text, groupOnly: true }
+						: { text: g.text }
+					: g
+			)
+		)
+	}
+
+	function addGreeting() {
+		if (greetingsOf(draft).length === 0) blankAdded = true
+		else setGreetingList([...greetingList, { text: "" }])
+	}
+
+	function removeGreeting(index: number) {
+		setGreetingList(greetingList.filter((_, i) => i !== index))
 	}
 
 	// ── The member's face ──────────────────────────────────────────────────
@@ -506,8 +923,7 @@
 				</span>
 				{#if member.state !== "active"}
 					<span
-						class="badge {stateBadge(member.state)
-							.color} text-meta"
+						class="badge {stateBadge(member.state).color} text-meta"
 					>
 						{member.state}
 					</span>
@@ -522,159 +938,6 @@
 					</span>
 				{/if}
 			</div>
-			{#if member.linked && card}
-				<!-- The member's face: a picture from the card's gallery or one
-				     uploaded to this lorebook. A popover, not a dialog: it picks
-				     into the draft, and Save writes it like everything else. -->
-				<Popover
-					open={facePickerOpen}
-					onOpenChange={(e) => {
-						facePickerOpen = e.open
-						if (e.open) faceError = null
-					}}
-					positioning={{ placement: "bottom-start" }}
-				>
-					<Popover.Trigger
-						class="btn btn-sm preset-tonal-surface mt-2"
-						title="Draw this member with a picture of their own"
-						data-cast-change-face
-					>
-						<Icons.ImageUp size={14} aria-hidden="true" />
-						Change face
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-surface-50-950 border-surface-200-800 flex w-[min(90vw,360px)] flex-col gap-3 border p-4 shadow-xl"
-							>
-								<div class="flex flex-col gap-1">
-									<p class="text-sm font-semibold">
-										Card gallery
-									</p>
-									{#if galleryFor !== cardIdForSprites}
-										<p class="text-surface-600-400 text-xs">
-											Loading the card's gallery…
-										</p>
-									{:else if gallery.length === 0}
-										<p class="text-surface-600-400 text-xs">
-											The card's gallery is empty.
-										</p>
-									{:else}
-										<div
-											class="grid max-h-56 grid-cols-4 gap-2 overflow-y-auto"
-										>
-											{#each gallery as mediaId (mediaId)}
-												{@const current =
-													draft.retold.face === true &&
-													draft.faceMediaId === mediaId}
-												<button
-													type="button"
-													class="aspect-square overflow-hidden rounded-md ring-2 {current
-														? 'ring-primary-500'
-														: 'ring-transparent hover:ring-surface-400-600'}"
-													aria-pressed={current}
-													title="Use this picture as their face"
-													aria-label="Use gallery picture {mediaId} as their face"
-													onclick={() => pickFace(mediaId)}
-												>
-													<img
-														src={mediaThumbUrl(mediaId)}
-														alt=""
-														class="h-full w-full object-cover"
-														loading="lazy"
-													/>
-												</button>
-											{/each}
-										</div>
-									{/if}
-								</div>
-								<hr class="border-surface-200-800" />
-								<div class="flex flex-col gap-1">
-									<p class="text-sm font-semibold">
-										This book's pictures
-									</p>
-									{#if bookPicturesFor !== lorebookId}
-										<p class="text-surface-600-400 text-xs">
-											Loading this book's pictures…
-										</p>
-									{:else if !bookPictures?.length}
-										<p class="text-surface-600-400 text-xs">
-											None yet. Upload one below.
-										</p>
-									{:else}
-										<div
-											class="grid max-h-56 grid-cols-4 gap-2 overflow-y-auto"
-											data-cast-book-pictures
-										>
-											{#each bookPictures as mediaId (mediaId)}
-												{@const current =
-													draft.retold.face === true &&
-													draft.faceMediaId === mediaId}
-												<button
-													type="button"
-													class="aspect-square overflow-hidden rounded-md ring-2 {current
-														? 'ring-primary-500'
-														: 'ring-transparent hover:ring-surface-400-600'}"
-													aria-pressed={current}
-													title="Use this picture as their face"
-													aria-label="Use book picture {mediaId} as their face"
-													onclick={() => pickFace(mediaId)}
-												>
-													<img
-														src={mediaThumbUrl(mediaId)}
-														alt=""
-														class="h-full w-full object-cover"
-														loading="lazy"
-													/>
-												</button>
-											{/each}
-										</div>
-									{/if}
-									<label
-										class="btn btn-sm preset-tonal-surface mt-1 w-full justify-start {faceUploading
-											? 'pointer-events-none opacity-60'
-											: ''}"
-									>
-										<Icons.Upload size={14} aria-hidden="true" />
-										{faceUploading
-											? "Uploading…"
-											: "Upload a picture"}
-										<input
-											class="sr-only"
-											type="file"
-											accept="image/*"
-											disabled={faceUploading}
-											onchange={uploadFace}
-										/>
-									</label>
-									<p class="text-surface-700-300 text-xs">
-										Kept with this lorebook, not added to
-										the card, and picked as their face. Save
-										to keep it, or Save as of a date to date
-										it.
-									</p>
-									{#if faceError}
-										<p class="text-error-600-400 text-xs" role="alert">
-											{faceError}
-										</p>
-									{/if}
-								</div>
-								<hr class="border-surface-200-800" />
-								<button
-									class="btn btn-sm preset-tonal-surface w-full justify-start"
-									type="button"
-									disabled={draft.retold.face !== true}
-									onclick={useCardPicture}
-									title="Draw them with the card's own picture again; their face is kept"
-								>
-									<Icons.Undo2 size={14} aria-hidden="true" />
-									Use the card's picture
-								</button>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
-			{/if}
 		</div>
 		<button
 			class="btn btn-sm preset-tonal-error shrink-0 p-1.5"
@@ -699,373 +962,943 @@
 				bind:value={draft.name}
 			/>
 		</div>
-	{/if}
-	<div class="flex flex-col gap-1">
-		<p class="text-sm font-semibold">Also known as</p>
-		<div class="flex flex-wrap items-center gap-1">
-			{#each draft.aliases as alias (alias)}
-				<span class="chip preset-tonal-surface gap-1">
-					{alias}
-					<button
-						type="button"
-						class="opacity-70 hover:opacity-100"
-						title="Remove {alias}"
-						aria-label="Remove {alias}"
-						onclick={() =>
-							(draft.aliases = draft.aliases.filter(
-								(a) => a !== alias
-							))}
+	{:else}
+		<div class="flex flex-col gap-2" data-testid="cast-own-identity">
+			<div class="flex flex-col gap-1">
+				<label
+					class="text-sm font-semibold"
+					for="castOwnName-{member.id}"
+				>
+					Name
+				</label>
+				<UseFromCardSwitch
+					name="castOwnName-{member.id}-fromCard"
+					label="Name"
+					checked={draft.ownName === null}
+					onCheckedChange={(on) =>
+						(draft.ownName = on ? null : (card?.name ?? ""))}
+				/>
+				{#if draft.ownName === null}
+					<input
+						id="castOwnName-{member.id}"
+						class="input text-sm opacity-60"
+						type="text"
+						disabled
+						value={card?.name ?? ""}
+					/>
+				{:else}
+					<input
+						id="castOwnName-{member.id}"
+						class="input text-sm"
+						type="text"
+						bind:value={draft.ownName}
+					/>
+				{/if}
+			</div>
+			<div class="flex flex-col gap-1">
+				<label
+					class="text-sm font-semibold"
+					for="castOwnNickname-{member.id}"
+				>
+					Nickname
+				</label>
+				<UseFromCardSwitch
+					name="castOwnNickname-{member.id}-fromCard"
+					label="Nickname"
+					checked={draft.ownNickname === null}
+					onCheckedChange={(on) =>
+						(draft.ownNickname = on
+							? null
+							: (card?.nickname ?? ""))}
+				/>
+				{#if draft.ownNickname === null}
+					<input
+						id="castOwnNickname-{member.id}"
+						class="input text-sm opacity-60"
+						type="text"
+						disabled
+						placeholder={card?.nickname ? "" : "The card has none."}
+						value={card?.nickname ?? ""}
+					/>
+				{:else}
+					<input
+						id="castOwnNickname-{member.id}"
+						class="input text-sm"
+						type="text"
+						placeholder="No nickname in this book"
+						bind:value={draft.ownNickname}
+					/>
+				{/if}
+			</div>
+			{#if card}
+				<div class="flex flex-col items-start gap-1">
+					<p class="text-sm font-semibold">Face</p>
+					<!-- The member's face: a picture from the card's gallery or one
+						     uploaded to this lorebook. A popover, not a dialog: it picks
+						     into the draft, and Save writes it like everything else. -->
+					<Popover
+						open={facePickerOpen}
+						onOpenChange={(e) => {
+							facePickerOpen = e.open
+							if (e.open) faceError = null
+						}}
+						positioning={{ placement: "bottom-start" }}
 					>
-						<Icons.X size={11} aria-hidden="true" />
-					</button>
-				</span>
-			{/each}
-			<label class="sr-only" for="castAlias-{member.id}">
-				Add another name
-			</label>
-			<input
-				id="castAlias-{member.id}"
-				class="input input-sm w-28 text-xs"
-				type="text"
-				placeholder="Add…"
-				bind:value={aliasDraft}
-				onblur={addAlias}
-				onkeydown={(e) => {
-					if (e.key === "Enter") {
-						e.preventDefault()
-						addAlias()
-					}
-					if (e.key === "Escape") aliasDraft = ""
-				}}
-			/>
+						<Popover.Trigger
+							class="btn btn-sm preset-tonal-surface"
+							title="Draw this member with a picture of their own"
+							data-cast-change-face
+						>
+							<Icons.ImageUp size={14} aria-hidden="true" />
+							Change face
+						</Popover.Trigger>
+						<Portal>
+							<Popover.Positioner class="z-[1000]!">
+								<Popover.Content
+									class="card bg-surface-50-950 border-surface-200-800 flex w-[min(90vw,360px)] flex-col gap-3 border p-4 shadow-xl"
+								>
+									<div class="flex flex-col gap-1">
+										<p class="text-sm font-semibold">
+											Card gallery
+										</p>
+										{#if galleryFor !== cardIdForSprites}
+											<p
+												class="text-surface-600-400 text-xs"
+											>
+												Loading the card's gallery…
+											</p>
+										{:else if gallery.length === 0}
+											<p
+												class="text-surface-600-400 text-xs"
+											>
+												The card's gallery is empty.
+											</p>
+										{:else}
+											<div
+												class="grid max-h-56 grid-cols-4 gap-2 overflow-y-auto"
+											>
+												{#each gallery as mediaId (mediaId)}
+													{@const current =
+														draft.retold.face ===
+															true &&
+														draft.faceMediaId ===
+															mediaId}
+													<button
+														type="button"
+														class="aspect-square overflow-hidden rounded-md ring-2 {current
+															? 'ring-primary-500'
+															: 'hover:ring-surface-400-600 ring-transparent'}"
+														aria-pressed={current}
+														title="Use this picture as their face"
+														aria-label="Use gallery picture {mediaId} as their face"
+														onclick={() =>
+															pickFace(mediaId)}
+													>
+														<img
+															src={mediaThumbUrl(
+																mediaId
+															)}
+															alt=""
+															class="h-full w-full object-cover"
+															loading="lazy"
+														/>
+													</button>
+												{/each}
+											</div>
+										{/if}
+									</div>
+									<hr class="border-surface-200-800" />
+									<div class="flex flex-col gap-1">
+										<p class="text-sm font-semibold">
+											This book's pictures
+										</p>
+										{#if bookPicturesFor !== lorebookId}
+											<p
+												class="text-surface-600-400 text-xs"
+											>
+												Loading this book's pictures…
+											</p>
+										{:else if !bookPictures?.length}
+											<p
+												class="text-surface-600-400 text-xs"
+											>
+												None yet. Upload one below.
+											</p>
+										{:else}
+											<div
+												class="grid max-h-56 grid-cols-4 gap-2 overflow-y-auto"
+												data-cast-book-pictures
+											>
+												{#each bookPictures as mediaId (mediaId)}
+													{@const current =
+														draft.retold.face ===
+															true &&
+														draft.faceMediaId ===
+															mediaId}
+													<button
+														type="button"
+														class="aspect-square overflow-hidden rounded-md ring-2 {current
+															? 'ring-primary-500'
+															: 'hover:ring-surface-400-600 ring-transparent'}"
+														aria-pressed={current}
+														title="Use this picture as their face"
+														aria-label="Use book picture {mediaId} as their face"
+														onclick={() =>
+															pickFace(mediaId)}
+													>
+														<img
+															src={mediaThumbUrl(
+																mediaId
+															)}
+															alt=""
+															class="h-full w-full object-cover"
+															loading="lazy"
+														/>
+													</button>
+												{/each}
+											</div>
+										{/if}
+										<label
+											class="btn btn-sm preset-tonal-surface mt-1 w-full justify-start {faceUploading
+												? 'pointer-events-none opacity-60'
+												: ''}"
+										>
+											<Icons.Upload
+												size={14}
+												aria-hidden="true"
+											/>
+											{faceUploading
+												? "Uploading…"
+												: "Upload a picture"}
+											<input
+												class="sr-only"
+												type="file"
+												accept="image/*"
+												disabled={faceUploading}
+												onchange={uploadFace}
+											/>
+										</label>
+										<p class="text-surface-700-300 text-xs">
+											Kept with this lorebook, not added
+											to the card, and picked as their
+											face. Save to keep it, or Save as of
+											a date to date it.
+										</p>
+										{#if faceError}
+											<p
+												class="text-error-600-400 text-xs"
+												role="alert"
+											>
+												{faceError}
+											</p>
+										{/if}
+									</div>
+									<hr class="border-surface-200-800" />
+									<button
+										class="btn btn-sm preset-tonal-surface w-full justify-start"
+										type="button"
+										disabled={draft.retold.face !== true}
+										onclick={useCardPicture}
+										title="Draw them with the card's own picture again; their face is kept"
+									>
+										<Icons.Undo2
+											size={14}
+											aria-hidden="true"
+										/>
+										Use the card's picture
+									</button>
+								</Popover.Content>
+							</Popover.Positioner>
+						</Portal>
+					</Popover>
+				</div>
+			{/if}
+			<p class="text-surface-600-400 text-xs">
+				Shown in this book only; the card keeps its own.
+			</p>
 		</div>
-		<p class="text-surface-700-300 text-xs">
-			Other names this member is known by, so scene summarization
-			recognises them under a nickname or a title instead of adding a
-			second row for the same person.{member.linked
-				? " They are the member's own: the card's names are added to them, and changing or unlinking the card keeps them."
-				: ""}
-		</p>
-		{#if absorbedNames.length > 0}
+	{/if}
+
+	{#snippet fromCardIntro()}
+		<!-- From the card (retold fields): the card is a starter; each field
+		     may be told in this member's own words for this story. Use from
+		     card off, the member's own text is read; on, the card's reads
+		     through, shown dimmed, and the member's own is kept, set aside. -->
+		<div class="panel-inset flex flex-col gap-1" data-cast-retold>
+			<p class="text-sm font-semibold">From the card</p>
+			<p class="text-surface-700-300 text-xs leading-relaxed">
+				The card is a starter. Switch <strong>Use from card</strong>
+				off on a field to tell it in this member's own words for this story;
+				the card itself is not changed. Switching it back on keeps what you
+				wrote here, set aside, until you switch it off again.
+			</p>
+		</div>
+	{/snippet}
+
+	{#snippet retoldControls(r: RetoldRow)}
+		{@const fieldId = `castRetold-${r.field}-${member.id}`}
+		<div class="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+			<UseFromCardSwitch
+				name="{fieldId}-retold"
+				label={r.label}
+				checked={!r.retold}
+				onCheckedChange={(on) => toggleRetold(r.field, !on)}
+			/>
+			{#if r.retold}
+				<button
+					class="btn btn-sm preset-tonal-surface"
+					type="button"
+					disabled={!r.cardHasText}
+					title="Copy the card's current {r.label.toLowerCase()} into this member's"
+					onclick={() => takeCardValue(r.field)}
+				>
+					<Icons.Copy size={14} aria-hidden="true" />
+					Take from card
+				</button>
+			{/if}
+		</div>
+	{/snippet}
+
+	{#snippet keptLine(r: RetoldRow)}
+		{#if r.kept}
 			<p class="text-surface-700-300 text-xs">
-				Also answers to {absorbedNames.join(", ")}: names kept from
-				before a card was linked, or from members merged into this one.
+				Their own {r.label.toLowerCase()} is kept, set aside. Switch off
+				Use from card to read it again.
 			</p>
 		{/if}
-	</div>
+	{/snippet}
 
-	<div class="flex flex-col gap-1">
-		<label class="text-sm font-semibold" for="castSummary-{member.id}">
-			Summary
-		</label>
-		<textarea
-			id="castSummary-{member.id}"
-			class="textarea min-h-16 text-sm"
-			maxlength="200"
-			placeholder="A short line on who this is right now…"
-			bind:value={draft.summary}
-		></textarea>
-		<p class="text-surface-700-300 text-xs">
-			Reaches the model only while Visibility is legendary, where it is
-			attached to the historical-figures layer of the relationship
-			context. At normal visibility it is a note to yourself.
-		</p>
-		<p class="text-surface-600-400 text-right text-xs">
-			{draft.summary.length} / 200
-		</p>
-	</div>
+	{#snippet textRow(
+		field: ProseTextField,
+		hint: string,
+		placeholder: string,
+		mono: boolean = false
+	)}
+		{@const r = rowOf(field)}
+		{#if r}
+			<div class="flex flex-col" data-retold-field={field}>
+				<ProseField
+					id="castRetold-{field}-{member.id}"
+					label={r.label}
+					{hint}
+					rows={8}
+					class={mono ? "font-mono" : ""}
+					value={r.retold ? draft[field] : (r.cardValue as string)}
+					disabled={!r.retold}
+					placeholder={r.retold ? placeholder : "The card has none."}
+					oninput={(v) => setText(field, v)}
+				>
+					{#snippet follow()}
+						{@render retoldControls(r)}
+					{/snippet}
+				</ProseField>
+				{@render keptLine(r)}
+			</div>
+		{/if}
+		{#if ownWords}
+			<div class="flex flex-col" data-own-field={field}>
+				<ProseField
+					id="castOwn-{field}-{member.id}"
+					label={RETOLD_LABELS[field]}
+					{hint}
+					rows={8}
+					class={mono ? "font-mono" : ""}
+					value={draft[field]}
+					{placeholder}
+					oninput={(v) => setText(field, v)}
+				/>
+			</div>
+		{/if}
+	{/snippet}
 
-	{#if retold.length > 0}
-		<!-- From the card (retold fields): the card is a starter; each field
-		     may be told in this member's own words for this story. Off, the
-		     card's text reads through, shown dimmed; the member's own text is
-		     kept, hidden. -->
-		<div class="panel-inset flex flex-col gap-3" data-cast-retold>
-			<div class="flex flex-col gap-1">
-				<p class="text-sm font-semibold">From the card</p>
-				<p class="text-surface-700-300 text-xs leading-relaxed">
-					The card is a starter. Switch a field to <strong
-						>Retold here</strong
-					> to tell it in this member's own words for this story; the card
-					itself is not changed. Switching back to the card keeps what you
-					wrote here, hidden, until you switch it on again.
+	{#snippet greetingsRow()}
+		{@const r = rowOf("greetings")}
+		{#if r}
+			{@const fieldId = `castRetold-greetings-${member.id}`}
+			<div class="flex flex-col" data-retold-field="greetings">
+				<label
+					class="text-surface-600-400 mb-1.5 text-xs"
+					for={fieldId}
+				>
+					{r.label}
+				</label>
+				{@render retoldControls(r)}
+				{#if r.retold}
+					<GreetingsList
+						id={fieldId}
+						greetings={greetingList}
+						onText={setGreeting}
+						onGroupOnly={markGreeting}
+						onRemove={removeGreeting}
+						onAdd={addGreeting}
+					/>
+				{:else if r.cardHasText}
+					<ul
+						class="flex flex-col gap-2 opacity-60"
+						id={fieldId}
+						aria-label="The card's greetings"
+					>
+						{#each r.cardValue as string[] as greeting, i (i)}
+							<li
+								class="textarea min-h-12 text-sm whitespace-pre-wrap"
+							>
+								{greeting}
+							</li>
+						{/each}
+					</ul>
+				{:else}
+					<p class="text-surface-600-400 text-xs" id={fieldId}>
+						The card has none.
+					</p>
+				{/if}
+				{@render keptLine(r)}
+			</div>
+		{/if}
+		{#if ownWords}
+			{@const ownId = `castOwn-greetings-${member.id}`}
+			<div class="flex flex-col" data-own-field="greetings">
+				<label class="text-surface-600-400 mb-1.5 text-xs" for={ownId}>
+					{GREETINGS_LABEL}
+				</label>
+				<GreetingsList
+					id={ownId}
+					greetings={greetingList}
+					onText={setGreeting}
+					onGroupOnly={markGreeting}
+					onRemove={removeGreeting}
+					onAdd={addGreeting}
+				/>
+			</div>
+		{/if}
+	{/snippet}
+
+	{#snippet postHistorySwitch()}
+		{#if member.linked}
+			<div class="mb-1.5">
+				<UseFromCardSwitch
+					name="{ownedId('postHistoryInstructions')}-fromCard"
+					label="Post-history instructions"
+					checked={usesCard("postHistoryInstructions")}
+					onCheckedChange={(on) =>
+						useFromCard("postHistoryInstructions", on)}
+				/>
+			</div>
+		{/if}
+	{/snippet}
+
+	{#snippet creatorNotesSwitch()}
+		{#if member.linked}
+			<div class="mb-1.5">
+				<UseFromCardSwitch
+					name="{ownedId('creatorNotes')}-fromCard"
+					label="Creator notes"
+					checked={usesCard("creatorNotes")}
+					onCheckedChange={(on) => {
+						useFromCard("creatorNotes", on)
+						seedNotes()
+					}}
+				/>
+			</div>
+		{/if}
+	{/snippet}
+
+	<PanelTabStrip
+		bind:value={activeFormTab}
+		tabs={formTabs}
+		ariaLabel="Character fields"
+		panelIdPrefix="cast-member-form"
+	/>
+
+	<div
+		id="cast-member-form-profile"
+		role="tabpanel"
+		aria-labelledby="cast-member-form-profile-tab"
+		hidden={activeFormTab !== "profile"}
+		class="space-y-3"
+	>
+		{#if retold.length > 0}
+			{@render fromCardIntro()}
+		{/if}
+		<section class="panel-inset flex flex-col gap-3">
+			<h5 class="text-sm font-medium">About</h5>
+			<div class="flex flex-col">
+				<label
+					class="text-surface-600-400 mb-1.5 text-xs"
+					for="castSummary-{member.id}"
+				>
+					Summary
+				</label>
+				<textarea
+					id="castSummary-{member.id}"
+					class="{FIELD_CLASS} min-h-16"
+					maxlength="200"
+					placeholder="A short line on who this is right now…"
+					bind:value={draft.summary}
+				></textarea>
+				<p class="text-surface-700-300 mt-1 text-xs">
+					Reaches the model only while Visibility is legendary, where
+					it is attached to the historical-figures layer of the
+					relationship context. At normal visibility it is a note to
+					yourself.
+				</p>
+				<p class="text-surface-600-400 text-right text-xs">
+					{draft.summary.length} / 200
 				</p>
 			</div>
-			{#each retold as r (r.field)}
-				{@const fieldId = `castRetold-${r.field}-${member.id}`}
-				<div class="flex flex-col gap-1" data-retold-field={r.field}>
-					<!-- The label on its own line: the panel is narrow (240–320px),
-					     and label + switch + button on one row left the label
-					     clipped under the switch (walk 2026-10-13). -->
-					<label class="text-sm font-semibold" for={fieldId}>
-						{r.label}
+			{@render textRow(
+				"description",
+				"This field will be visible in prompts",
+				"Description..."
+			)}
+			<div class="flex flex-col gap-1">
+				<p class="text-surface-600-400 mb-1.5 text-xs">Also known as</p>
+				<div class="flex flex-wrap items-center gap-1">
+					{#each draft.aliases as alias (alias)}
+						<span class="chip preset-tonal-surface gap-1">
+							{alias}
+							<button
+								type="button"
+								class="opacity-70 hover:opacity-100"
+								title="Remove {alias}"
+								aria-label="Remove {alias}"
+								onclick={() =>
+									(draft.aliases = draft.aliases.filter(
+										(a) => a !== alias
+									))}
+							>
+								<Icons.X size={11} aria-hidden="true" />
+							</button>
+						</span>
+					{/each}
+					<label class="sr-only" for="castAlias-{member.id}">
+						Add another name
 					</label>
-					<div class="flex flex-wrap items-center justify-between gap-2">
-						<Switch
-							name="{fieldId}-retold"
-							checked={r.retold}
-							onCheckedChange={(e) => toggleRetold(r.field, e.checked)}
-							class="flex items-center gap-2 text-xs"
-						>
-							<Switch.Control class={switchClass}>
-								<Switch.Thumb />
-							</Switch.Control>
-							<Switch.Label class="w-24">
-								<span class="sr-only">{r.label}:</span>
-								{r.retold ? "Retold here" : "From the card"}
-							</Switch.Label>
-							<Switch.HiddenInput />
-						</Switch>
+					<input
+						id="castAlias-{member.id}"
+						class="{FIELD_CLASS} input-sm w-28 text-xs"
+						type="text"
+						placeholder="Add…"
+						bind:value={aliasDraft}
+						onblur={addAlias}
+						onkeydown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault()
+								addAlias()
+							}
+							if (e.key === "Escape") aliasDraft = ""
+						}}
+					/>
+				</div>
+				<p class="text-surface-700-300 text-xs">
+					Other names this member is known by, so scene summarization
+					recognises them under a nickname or a title instead of
+					adding a second row for the same person.{member.linked
+						? " They are the member's own: the card's names are added to them, and changing or unlinking the card keeps them."
+						: ""}
+				</p>
+				{#if absorbedNames.length > 0}
+					<p class="text-surface-700-300 text-xs">
+						Also answers to {absorbedNames.join(", ")}: names kept
+						from before a card was linked, or from members merged
+						into this one.
+					</p>
+				{/if}
+			</div>
+		</section>
+
+		<section class="panel-inset flex flex-col gap-3">
+			<h5 class="text-sm font-medium">Status in world</h5>
+			<div class="grid grid-cols-2 gap-3">
+				<div class="flex flex-col gap-1">
+					<Select
+						label="State"
+						class="text-surface-600-400 [&_input]:text-surface-950-50 min-w-0 text-xs [&_input]:text-sm"
+						options={CAST_STATES.map((s) => ({
+							value: s,
+							label: s
+						}))}
+						value={draft.nodeState}
+						onValueChange={(v) => {
+							if (v) draft.nodeState = v
+						}}
+					/>
+				</div>
+				<div class="flex flex-col gap-1">
+					<Select
+						label="Visibility"
+						class="text-surface-600-400 [&_input]:text-surface-950-50 min-w-0 text-xs [&_input]:text-sm"
+						options={CAST_VISIBILITIES.map((v) => ({
+							value: v,
+							label: v
+						}))}
+						value={draft.nodeVisibility}
+						onValueChange={(v) => {
+							if (v) draft.nodeVisibility = v
+						}}
+					/>
+				</div>
+			</div>
+			<p class="text-surface-700-300 text-xs">
+				State is your own tracking of who is still around. Normal
+				visibility surfaces by relevance, legendary always appears as a
+				historical figure, and hidden is kept out of other members'
+				relationship context.
+			</p>
+		</section>
+
+		<!-- ⚠ Which card represents them is amendable like any other field
+		     (#115): read at a moment, Change and Unlink are DATED from it, and the
+		     outright rewrite is in the menu, never the primary (STYLE-GUIDE §6.1). -->
+		<div class="panel-inset flex flex-col gap-2" data-cast-card>
+			<div class="flex flex-wrap items-center gap-2">
+				{#if member.linked}
+					<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+						<p class="text-sm font-semibold">Character card</p>
+						<p class="text-surface-600-400 truncate text-xs">
+							{member.name}, {member.kind === "persona"
+								? "your persona"
+								: "character"}
+						</p>
+					</div>
+					{#if onEditCard}
 						<button
 							class="btn btn-sm preset-tonal-surface"
 							type="button"
-							disabled={!r.retold || !r.cardHasText}
-							title="Copy the card's current {r.label.toLowerCase()} into this member's"
-							onclick={() => takeCardValue(r.field)}
+							title="Open this card in Characters"
+							onclick={onEditCard}
+							data-cast-edit-card
 						>
-							<Icons.Copy size={14} aria-hidden="true" />
-							Take from card
+							<Icons.Pencil size={14} aria-hidden="true" /> Edit the
+							card
 						</button>
-					</div>
-					{#if r.field === "alternateGreetings"}
-						{#if r.retold}
-							<div class="flex flex-col gap-2" id={fieldId}>
-								{#each draft.alternateGreetings as greeting, i (i)}
-									<div class="flex items-start gap-2">
-										<textarea
-											class="textarea min-h-12 flex-1 text-sm"
-											aria-label="Alternate greeting {i + 1}"
-											value={greeting}
-											oninput={(e) =>
-												setGreeting(i, e.currentTarget.value)}
-										></textarea>
-										<button
-											class="btn btn-sm preset-tonal-surface shrink-0 p-1.5"
-											type="button"
-											title="Remove greeting {i + 1}"
-											aria-label="Remove greeting {i + 1}"
-											onclick={() =>
-												(draft.alternateGreetings =
-													draft.alternateGreetings.filter(
-														(_, j) => j !== i
-													))}
-										>
-											<Icons.X size={14} aria-hidden="true" />
-										</button>
-									</div>
-								{/each}
-								<button
-									class="btn btn-sm preset-tonal-surface self-start"
-									type="button"
-									onclick={() =>
-										(draft.alternateGreetings = [
-											...draft.alternateGreetings,
-											""
-										])}
-								>
-									<Icons.Plus size={14} aria-hidden="true" /> Add
-									greeting
-								</button>
-							</div>
-						{:else if r.cardHasText}
-							<ul
-								class="flex flex-col gap-2 opacity-60"
-								id={fieldId}
-								aria-label="The card's alternate greetings"
-							>
-								{#each r.cardValue as string[] as greeting, i (i)}
-									<li
-										class="textarea min-h-12 whitespace-pre-wrap text-sm"
-									>
-										{greeting}
-									</li>
-								{/each}
-							</ul>
-						{:else}
-							<p class="text-surface-600-400 text-xs" id={fieldId}>
-								The card has none.
-							</p>
-						{/if}
-					{:else}
-						{@const field = r.field as ProseTextField}
-						<textarea
-							id={fieldId}
-							class="textarea text-sm {field === 'exampleDialogues'
-								? 'min-h-32 font-mono'
-								: 'min-h-20'} {r.retold ? '' : 'opacity-60'}"
-							disabled={!r.retold}
-							placeholder={r.retold ? "" : "The card has none."}
-							value={r.retold ? draft[field] : (r.cardValue as string)}
-							oninput={(e) => setText(field, e.currentTarget.value)}
-						></textarea>
 					{/if}
-					{#if r.kept}
-						<p class="text-surface-700-300 text-xs">
-							Their own {r.label.toLowerCase()} is kept, hidden. Switch
-							to Retold here to read it again.
-						</p>
-					{/if}
-				</div>
-			{/each}
-		</div>
-	{/if}
-
-	<div class="panel-inset flex flex-col gap-3">
-		<p class="text-sm font-semibold">Status in world</p>
-		<div class="grid grid-cols-2 gap-3">
-			<div class="flex flex-col gap-1">
-				<Select
-					label="State"
-					class="text-surface-600-400 [&_input]:text-surface-950-50 min-w-0 text-xs [&_input]:text-sm"
-					options={CAST_STATES.map((s) => ({ value: s, label: s }))}
-					value={draft.nodeState}
-					onValueChange={(v) => {
-						if (v) draft.nodeState = v
-					}}
-				/>
-			</div>
-			<div class="flex flex-col gap-1">
-				<Select
-					label="Visibility"
-					class="text-surface-600-400 [&_input]:text-surface-950-50 min-w-0 text-xs [&_input]:text-sm"
-					options={CAST_VISIBILITIES.map((v) => ({
-						value: v,
-						label: v
-					}))}
-					value={draft.nodeVisibility}
-					onValueChange={(v) => {
-						if (v) draft.nodeVisibility = v
-					}}
-				/>
-			</div>
-		</div>
-		<p class="text-surface-700-300 text-xs">
-			State is your own tracking of who is still around. Normal visibility
-			surfaces by relevance, legendary always appears as a historical
-			figure, and hidden is kept out of other members' relationship
-			context.
-		</p>
-	</div>
-
-	{#if member.linked && (spriteSets.length > 0 || draft.spriteSet)}
-		<div class="panel-inset flex flex-col gap-1">
-			<!-- ⚠ The missing set stays a row so choosing it again is possible
-			     and saving does not silently drop it. The card they resolve to
-			     here has no set by this name; another card may. -->
-			<Select
-				label="Sprite set"
-				class="text-sm"
-				options={[
-					{ value: "", label: "The card's default set" },
-					...spriteSets.map((set) => ({
-						value: set.name,
-						label: `${set.name}${set.isDefault ? " (default)" : ""}`
-					})),
-					...(missingSet
-						? [
-								{
-									value: missingSet,
-									label: `${missingSet} — not on this card`
-								}
-							]
-						: [])
-				]}
-				bind:value={draft.spriteSet}
-			/>
-			{#if missingConfirmed}
-				<p class="text-warning-700-300 text-xs leading-relaxed">
-					The card they are drawn with here has no set called
-					<strong>{missingSet}</strong>
-					, so they fall back to its default. The name is kept: a card
-					swap does not throw away what you wrote, and another card may
-					have it.
-				</p>
-			{:else}
-				<p class="text-surface-700-300 text-xs leading-relaxed">
-					Which of the card's sets this member is drawn with. Sets
-					belong to the card; which one they use is theirs, and can be
-					dated like anything else on this page.
-				</p>
-			{/if}
-		</div>
-	{/if}
-
-	<!-- ⚠ Which card represents them is amendable like any other field
-	     (#115): read at a moment, Change and Unlink are DATED from it, and the
-	     outright rewrite is in the menu, never the primary (STYLE-GUIDE §6.1). -->
-	<div class="panel-inset flex flex-col gap-2" data-cast-card>
-		<div class="flex flex-wrap items-center gap-2">
-			{#if member.linked}
-				<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-					<p class="text-sm font-semibold">Character card</p>
-					<p class="text-surface-600-400 truncate text-xs">
-						{member.name}, {member.kind === "persona"
-							? "your persona"
-							: "character"}
+					<button
+						class="btn btn-sm preset-tonal-surface"
+						type="button"
+						disabled={saving}
+						title={cardDated
+							? `Draw this member with a different card from ${momentLabel}`
+							: "Point this member at a different card"}
+						onclick={() =>
+							onLinkCharacter(cardDated ? "amend" : "base")}
+					>
+						<Icons.Repeat size={14} aria-hidden="true" /> Change
+					</button>
+					<button
+						class="btn btn-sm preset-tonal-warning"
+						type="button"
+						disabled={saving}
+						onclick={() => onUnlink(cardDated ? "amend" : "base")}
+						title={cardDated
+							? `Detach the card from ${momentLabel}; before then they keep it`
+							: "Detach the card and keep this member as a background character"}
+					>
+						<Icons.Unlink size={14} aria-hidden="true" /> Unlink card
+					</button>
+				{:else}
+					<!-- One picker: a persona IS a character, so "link a persona" and
+						"link a character" were always the same act. -->
+					<p class="min-w-0 flex-1 text-sm font-semibold">
+						Character card
 					</p>
-				</div>
-				<button
-					class="btn btn-sm preset-tonal-surface"
-					type="button"
-					disabled={saving}
-					title={cardDated
-						? `Draw this member with a different card from ${momentLabel}`
-						: "Point this member at a different card"}
-					onclick={() =>
-						onLinkCharacter(cardDated ? "amend" : "base")}
-				>
-					<Icons.Repeat size={14} aria-hidden="true" /> Change
-				</button>
-				<button
-					class="btn btn-sm preset-tonal-warning"
-					type="button"
-					disabled={saving}
-					onclick={() => onUnlink(cardDated ? "amend" : "base")}
-					title={cardDated
-						? `Detach the card from ${momentLabel}; before then they keep it`
-						: "Detach the card and keep this member as a background character"}
-				>
-					<Icons.Unlink size={14} aria-hidden="true" /> Unlink card
-				</button>
-			{:else}
-				<!-- One picker: a persona IS a character, so "link a persona" and
-					"link a character" were always the same act. -->
-				<p class="min-w-0 flex-1 text-sm font-semibold">
-					Character card
-				</p>
-				<button
-					class="btn btn-sm preset-tonal-surface"
-					type="button"
-					disabled={saving}
-					title={cardDated
-						? `Draw this member with a card from ${momentLabel}`
-						: "Draw this member with a character card"}
-					onclick={() =>
-						onLinkCharacter(cardDated ? "amend" : "base")}
-				>
-					<Icons.Link size={14} aria-hidden="true" /> Link character
-				</button>
+					<button
+						class="btn btn-sm preset-tonal-surface"
+						type="button"
+						disabled={saving}
+						title={cardDated
+							? `Draw this member with a card from ${momentLabel}`
+							: "Draw this member with a character card"}
+						onclick={() =>
+							onLinkCharacter(cardDated ? "amend" : "base")}
+					>
+						<Icons.Link size={14} aria-hidden="true" /> Link character
+					</button>
+				{/if}
+				{#if cardDated}
+					<RowMenu
+						label="Card"
+						triggerLabel="Other ways to change the card"
+						triggerTitle="Other ways to change the card"
+						width={300}
+						items={cardMenuItems}
+					/>
+				{/if}
+			</div>
+			{#if canUpdateCard && member.linked && row.behindCard && row.cardVersion && row.cardCurrentVersion}
+				<CardUpdateOffer
+					castId={member.id}
+					{lorebookId}
+					memberName={member.name}
+					cardVersion={row.cardVersion}
+					cardCurrentVersion={row.cardCurrentVersion}
+				/>
 			{/if}
 			{#if cardDated}
-				<RowMenu
-					label="Card"
-					triggerLabel="Other ways to change the card"
-					triggerTitle="Other ways to change the card"
-					width={300}
-					items={cardMenuItems}
-				/>
+				<p class="text-surface-700-300 text-xs" data-cast-card-dated>
+					{member.linked ? "Change and Unlink" : "Linking"} here
+					{member.linked ? "are" : "is"} dated {momentLabel}: before
+					then they read as they do now. The menu changes the card
+					everywhere.
+				</p>
 			{/if}
 		</div>
-		{#if cardDated}
-			<p class="text-surface-700-300 text-xs" data-cast-card-dated>
-				{member.linked ? "Change and Unlink" : "Linking"} here
-				{member.linked ? "are" : "is"} dated {momentLabel}: before then
-				they read as they do now. The menu changes the card everywhere.
-			</p>
+	</div>
+
+	<div
+		id="cast-member-form-voice"
+		role="tabpanel"
+		aria-labelledby="cast-member-form-voice-tab"
+		hidden={activeFormTab !== "voice"}
+		class="space-y-3"
+	>
+		{#if retold.length > 0 || ownWords}
+			{#if retold.length > 0}
+				{@render fromCardIntro()}
+			{/if}
+			<section class="panel-inset flex flex-col gap-3">
+				<h5 class="text-sm font-medium">Voice</h5>
+				{@render textRow(
+					"personality",
+					"This field will be visible in prompts",
+					"Personality..."
+				)}
+				{@render textRow(
+					"scenario",
+					"This field will be visible in prompts (excluded from group sessions)",
+					"Scenario..."
+				)}
+			</section>
+			<section class="panel-inset flex flex-col gap-3">
+				<h5 class="text-sm font-medium">Greetings</h5>
+				{@render greetingsRow()}
+			</section>
+			<section class="panel-inset flex flex-col gap-3">
+				<h5 class="text-sm font-medium">Examples</h5>
+				{@render textRow(
+					"exampleDialogues",
+					"This field will be visible in prompts",
+					"Example dialogue...",
+					true
+				)}
+			</section>
+		{/if}
+		<section class="panel-inset flex flex-col gap-3" data-cast-post-history>
+			<h5 class="text-sm font-medium">Instructions</h5>
+			<div class="flex flex-col">
+				{#if usesCard("postHistoryInstructions")}
+					<ProseField
+						id={ownedId("postHistoryInstructions")}
+						label="Post-history instructions"
+						hint="This field will be visible in prompts"
+						rows={4}
+						disabled
+						placeholder="The card has none."
+						value={cardExtras?.postHistoryInstructions ?? ""}
+						follow={postHistorySwitch}
+					/>
+				{:else}
+					<ProseField
+						id={ownedId("postHistoryInstructions")}
+						label="Post-history instructions"
+						hint="This field will be visible in prompts"
+						rows={4}
+						bind:value={draft.postHistoryInstructions}
+						placeholder="Stay in character and keep replies short…"
+						title="Placed after the conversation, just before the reply; good for style reminders."
+						follow={postHistorySwitch}
+					/>
+				{/if}
+			</div>
+		</section>
+	</div>
+
+	<div
+		id="cast-member-form-notes"
+		role="tabpanel"
+		aria-labelledby="cast-member-form-notes-tab"
+		hidden={activeFormTab !== "notes"}
+		class="space-y-3"
+	>
+		<section
+			class="panel-inset flex flex-col gap-3"
+			data-cast-creator-notes
+		>
+			<h5 class="text-sm font-medium">Creator notes</h5>
+			{#if usesCard("creatorNotes")}
+				<CreatorNotesFields
+					textId={ownedId("creatorNotes")}
+					langId="castOwnedLang-creatorNotes-{member.id}"
+					text={cardExtras?.creatorNotes ?? ""}
+					placeholder="The card has none."
+					disabled
+					languages={false}
+					follow={creatorNotesSwitch}
+				/>
+			{:else}
+				<CreatorNotesFields
+					textId={ownedId("creatorNotes")}
+					langId="castOwnedLang-creatorNotes-{member.id}"
+					bind:text={noteText}
+					bind:lang={noteLang}
+					bind:variants={noteRows}
+					languages
+					error={validationErrors.creatorNotesLanguages}
+					onchange={writeNotes}
+					follow={creatorNotesSwitch}
+				/>
+			{/if}
+		</section>
+	</div>
+
+	<div
+		id="cast-member-form-likeness"
+		role="tabpanel"
+		aria-labelledby="cast-member-form-likeness-tab"
+		hidden={activeFormTab !== "likeness"}
+		class="space-y-3"
+	>
+		<section class="panel-inset flex flex-col gap-3" data-cast-likeness>
+			<h5 class="text-sm font-medium">Likeness</h5>
+			{#if member.linked}
+				<UseFromCardSwitch
+					name="{ownedId('likeness')}-fromCard"
+					label="Likeness"
+					checked={usesCard("likeness")}
+					onCheckedChange={(on) => useFromCard("likeness", on)}
+				/>
+			{/if}
+			{#if usesCard("likeness")}
+				<p class="text-surface-600-400 text-xs">
+					Uses the card's likeness.
+				</p>
+			{:else}
+				<LikenessTab
+					owner={{ castMemberId: member.id }}
+					active={activeFormTab === "likeness"}
+					avatarUrl={faceSrc}
+					bind:likeness={draft.likeness}
+				/>
+			{/if}
+		</section>
+		{#if (member.linked || ownSets.length > 0) && (spriteSets.length > 0 || draft.spriteSet)}
+			<div class="panel-inset flex flex-col gap-1">
+				<!-- ⚠ The missing set stays a row so choosing it again is possible
+				     and saving does not silently drop it. The card they resolve to
+				     here has no set by this name; another card may. -->
+				<Select
+					label="Sprite set"
+					class="text-sm"
+					options={[
+						{
+							value: "",
+							label: ownSetsShown
+								? "Their default set"
+								: "The card's default set"
+						},
+						...spriteSets.map((set) => ({
+							value: set.name,
+							label: `${set.name}${set.isDefault ? " (default)" : ""}`
+						})),
+						...(missingSet
+							? [
+									{
+										value: missingSet,
+										label: `${missingSet} — ${ownSetsShown ? "not in their sets" : "not on this card"}`
+									}
+								]
+							: [])
+					]}
+					bind:value={draft.spriteSet}
+				/>
+				{#if missingConfirmed}
+					<p class="text-warning-700-300 text-xs leading-relaxed">
+						{#if ownSetsShown}
+							They have no set called
+							<strong>{missingSet}</strong>
+							, so they fall back to their default. The name is kept.
+						{:else}
+							The card they are drawn with here has no set called
+							<strong>{missingSet}</strong>
+							, so they fall back to its default. The name is kept:
+							a card swap does not throw away what you wrote, and another
+							card may have it.
+						{/if}
+					</p>
+				{:else}
+					<p class="text-surface-700-300 text-xs leading-relaxed">
+						{#if ownSetsShown}
+							Which of their own sets this member is drawn with,
+							from the Sprites tab. Which one they use can be
+							dated like anything else on this page.
+						{:else}
+							Which of the card's sets this member is drawn with.
+							Sets belong to the card; which one they use is
+							theirs, and can be dated like anything else on this
+							page.
+						{/if}
+					</p>
+				{/if}
+			</div>
 		{/if}
 	</div>
 
+	<div
+		id="cast-member-form-speech"
+		role="tabpanel"
+		aria-labelledby="cast-member-form-speech-tab"
+		hidden={activeFormTab !== "speech"}
+		class="space-y-3"
+	>
+		<!-- The member's voice: the card's until the book gives them their own;
+		     the card form's Voice fields, reused. -->
+		<div class="panel-inset flex flex-col gap-2" data-cast-voice>
+			{#if member.linked}
+				<UseFromCardSwitch
+					name="castVoice-{member.id}-fromCard"
+					label="Voice"
+					checked={draft.timbre === null}
+					onCheckedChange={(on) =>
+						(draft.timbre = on ? null : emptyOwnTimbre())}
+				/>
+				{#if draft.timbre === null}
+					<p class="text-surface-600-400 text-xs">
+						Uses the card's voice.
+					</p>
+				{/if}
+			{/if}
+			{#if draft.timbre}
+				<VoiceTab
+					characterName={member.name}
+					castMember={{ linked: !!member.linked }}
+					bind:timbre={draft.timbre}
+				/>
+			{/if}
+		</div>
+	</div>
+
 	<div class="flex flex-wrap items-center gap-2">
+		{#if dirty && primaryLater > 0}
+			<div
+				class="flex min-w-0 flex-wrap items-center gap-2"
+				data-later-versions
+			>
+				<p class="text-surface-700-300 text-xs">
+					{laterVersionsLine(primaryLater)}
+				</p>
+				<button
+					class="btn btn-sm pointer-coarse:min-h-11 {changeLater
+						? 'preset-pressed'
+						: 'preset-tonal-surface'}"
+					type="button"
+					aria-pressed={changeLater}
+					disabled={saving}
+					title="Write the same change onto the later versions too. A version a session wrote keeps its words."
+					onclick={() => (changeLater = !changeLater)}
+				>
+					Change later versions too
+				</button>
+			</div>
+		{/if}
 		{#if onAmend && momentLabel}
 			<!-- The same two-action save the entry editor offers, and the same
 			     rule: the one that rewrites what was always true is in the
@@ -1074,9 +1907,16 @@
 				<button
 					class="btn btn-sm preset-filled-primary-500 rounded-r-none"
 					type="button"
-					disabled={saving || (!member.linked && !draft.name.trim())}
+					disabled={saving ||
+						ownNamesDirty ||
+						(!member.linked && !draft.name.trim()) ||
+						(member.linked &&
+							draft.ownName !== null &&
+							!draft.ownName.trim())}
 					onclick={amend}
-					title="File this change as an amendment dated {momentLabel}"
+					title={ownNamesDirty
+						? "A name in this book is not dated: Save keeps it for every moment"
+						: `File this change as an amendment dated ${momentLabel}`}
 				>
 					<Icons.Save size={14} aria-hidden="true" />
 					Save as of {momentLabel}
@@ -1121,12 +1961,23 @@
 										{momentLabel}, where it is who they
 										always were.
 									</p>
+									{#if dirty && outrightLater > 0 && outrightLater !== primaryLater}
+										<p
+											class="text-surface-700-300 text-xs"
+											data-later-versions-outright
+										>
+											{laterVersionsLine(outrightLater)}
+										</p>
+									{/if}
 									<button
 										class="btn btn-sm preset-tonal-warning w-full justify-start"
 										type="button"
 										disabled={saving ||
 											(!member.linked &&
-												!draft.name.trim())}
+												!draft.name.trim()) ||
+											(member.linked &&
+												draft.ownName !== null &&
+												!draft.ownName.trim())}
 										onclick={() => {
 											saveMenuOpen = false
 											save()
@@ -1148,7 +1999,11 @@
 			<button
 				class="btn btn-sm preset-filled-primary-500 ml-auto"
 				type="button"
-				disabled={saving || (!member.linked && !draft.name.trim())}
+				disabled={saving ||
+					(!member.linked && !draft.name.trim()) ||
+					(member.linked &&
+						draft.ownName !== null &&
+						!draft.ownName.trim())}
 				onclick={save}
 			>
 				<Icons.Save size={14} aria-hidden="true" /> Save

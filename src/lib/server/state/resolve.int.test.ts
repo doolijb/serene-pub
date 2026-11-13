@@ -417,6 +417,17 @@ describe("the cast, twice over", () => {
 
 // ── who (R16) ───────────────────────────────────────────────────────────────
 
+/** The cast entry of a card's seat, in either key form: found by the host-filled `id`. */
+function entryOf(state: any, cardId: number, kind: "character" | "player" = "character") {
+	return (Object.values(state.cast.byId) as any[]).find(
+		(e) =>
+			e.id === cardId &&
+			(kind === "player"
+				? typeof e.playerSeatId === "number"
+				: typeof e.playerSeatId !== "number")
+	)
+}
+
 describe("who", () => {
 	/** A session with two characters, a persona, and some turns. */
 	async function peopled() {
@@ -515,13 +526,13 @@ describe("who", () => {
 			speakerId: w.verity.id,
 			userId: w.user.id
 		})
-		const entry = state.cast.byId[String(w.verity.id)]
+		const entry = entryOf(state, w.verity.id)
 		expect(state.who.speaker).toBe(entry)
 		expect(state.who.last).toBe(entry)
 		expect(state.who.active[0]).toBe(entry)
 		// The asking user's own persona — a character, seated as their voice.
 		expect(state.who.user?.id).toBe(w.player.id)
-		expect(state.who.user).toBe(state.cast.byId[String(w.player.id)])
+		expect(state.who.user).toBe(entryOf(state, w.player.id, "player"))
 	})
 
 	test("a switched-off seat stays in the cast with enabled: false, and out of who.active", async () => {
@@ -540,10 +551,10 @@ describe("who", () => {
 		const { stateFor } = await import("$lib/server/state/resolve")
 		const state = await stateFor(db, w.session.id)
 		// Listed, and filterable (2026-09-27)…
-		expect(state.cast.byId[String(w.marrow.id)]?.enabled).toBe(false)
-		expect(state.cast.byId[String(w.verity.id)]?.enabled).toBe(true)
+		expect(entryOf(state, w.marrow.id)?.enabled).toBe(false)
+		expect(entryOf(state, w.verity.id)?.enabled).toBe(true)
 		// …a persona has no switch…
-		expect(state.cast.byId[String(w.player.id)]?.enabled).toBe(true)
+		expect(entryOf(state, w.player.id, "player")?.enabled).toBe(true)
 		// …and `who.active` still means the switched-on characters only.
 		expect(state.who.active.map((e) => e.id)).toEqual([w.verity.id])
 	})

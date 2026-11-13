@@ -254,7 +254,6 @@ describe("Describe new places, in the reckoning", () => {
 describe("the sweep", () => {
 	it("relationships are kept, cleaned, on Full and Review alike; Off drops them", async () => {
 		const json = {
-			summary: { name: "", content: "" },
 			lore: [],
 			cast: [],
 			worldState: [],
@@ -297,7 +296,7 @@ describe("the sweep", () => {
 	})
 
 	it("🚧 the new scene lands on the check's own line, by the duty's mode; out of range or not moved, nothing (sprint 2)", async () => {
-		const empty = { summary: { name: "", content: "" }, lore: [], cast: [], worldState: [], relationships: [], scenes: [], goals: "" }
+		const empty = { lore: [], cast: [], worldState: [], relationships: [], scenes: [], goals: "" }
 		const check = { due: true, channel: "main", lines: [11, 12] }
 		const json = (over: object = {}) => ({ ...empty, sceneMovedOn: { moved: true, line: 2, reason: "they left the inn", ...over } })
 		const cue = { at: 12, channel: "main", reason: "they left the inn" }

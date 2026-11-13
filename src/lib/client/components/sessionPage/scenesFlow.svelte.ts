@@ -7,7 +7,7 @@
  * every change the page makes.
  */
 import { untrack } from "svelte"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { extendCountsOf } from "$lib/shared/lorebooks/graphBuildScope"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
@@ -205,7 +205,7 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 
 	function openSummarizeModal(loreType: "world" | "character" | "scene") {
 		if (loreType === "scene" && hasSceneGap) {
-			toaster.error({
+			notify.error({
 				title: "Non-consecutive messages selected",
 				description:
 					"Scenes require a consecutive sequence of messages with no visible gaps. Deselect the skipped messages or hide them first."
@@ -236,7 +236,8 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 		// Page-level because the modal tears its listeners down on close, and
 		// this event is suppressed in Layout's generic toaster, so a failure
 		// while minimized was silent.
-		toaster.error({
+		notify.error({
+			source: "socket:sessions:summarize:error",
 			title: "Summarization failed",
 			description: msg?.error
 		})
@@ -300,11 +301,19 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 	 */
 	function processScene(sceneId: number) {
 		// One review window at a time: another scene's run stays on screen.
-		if (showProcessSceneModal && processSceneId !== null && processSceneId !== sceneId)
-			throw new Error("another scene's summary is open: finish or close it first")
+		if (
+			showProcessSceneModal &&
+			processSceneId !== null &&
+			processSceneId !== sceneId
+		)
+			throw new Error(
+				"another scene's summary is open: finish or close it first"
+			)
 		if (showProcessSceneModal && processSceneId === sceneId) return
 		const waiting = sceneSummarizesCtx?.activities.find(
-			(a) => a.sceneId === sceneId && (a.status === "review" || a.status === "running")
+			(a) =>
+				a.sceneId === sceneId &&
+				(a.status === "review" || a.status === "running")
 		)
 		if (waiting) {
 			processSceneId = sceneId
@@ -329,9 +338,17 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 	 */
 	function confirmRemoveScene(
 		scene: { id: number; name?: string | null; summary?: string | null },
-		into: { id: number; name?: string | null; summary?: string | null } | null = null
+		into: {
+			id: number
+			name?: string | null
+			summary?: string | null
+		} | null = null
 	): Promise<boolean> {
-		const said = (s: { id: number; name?: string | null; summary?: string | null }) => ({
+		const said = (s: {
+			id: number
+			name?: string | null
+			summary?: string | null
+		}) => ({
 			id: s.id,
 			name: s.name?.trim() ? s.name : null,
 			summarized: !!s.summary?.trim()

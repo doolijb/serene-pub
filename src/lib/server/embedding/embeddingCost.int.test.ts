@@ -197,7 +197,9 @@ describe("A9 — an entry write costs an embed only when the embedded text moved
 			.values(
 				historyValues([
 					{ lorebookId: bookId, content: "Year one.", year: 1 },
-					{ lorebookId: bookId, content: "Year two.", year: 2 }
+					// Year 3, not 2: iterateNext from Year 1 makes Year 2, which
+					// must be free — a taken day is reused (★H1, 2026-11-10).
+					{ lorebookId: bookId, content: "Year two.", year: 3 }
 				] as any)
 			)
 			.returning()

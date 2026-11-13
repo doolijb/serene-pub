@@ -115,6 +115,10 @@ export function cadenceWords(cadence: CadenceLike, opts: CadenceWordsOptions = {
 			return "After each turn"
 		case coreCadences.afterEachRound.id:
 			return "After each round"
+		case coreCadences.everyNRounds.id: {
+			const n = typeof o.n === "number" ? o.n : Number(coreCadences.everyNRounds.options.n?.default ?? 2)
+			return n === 1 ? "After each round" : `Every ${n} rounds`
+		}
 		case coreCadences.afterEachScene.id:
 			return "After each scene"
 		case coreCadences.whenIdle.id:

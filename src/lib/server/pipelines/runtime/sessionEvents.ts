@@ -267,11 +267,14 @@ export async function emitSessionEvent(
 		}
 	}
 
-	// (b5) 🚧 A line landed, so a scene boundary may belong at it (live
-	// scenes §4): the boundary watcher reads the session's scene settings and
-	// the line's stamp against the line before it, and records a scene cue
-	// (Suggested) or places the boundary (Automatic). One read when the
-	// session is Manual or places no scene; never throws.
+	// (b5) 🚧 A line landed: the boundary hook keeps only what is tied to this
+	// line (a person's *End scene here* is bound to it and the next scene
+	// opened or offered; a time action's marker is bound to it and stays
+	// pending) and the open scene's cast refresh. It fires no boundary
+	// trigger: the scenes routine (`core:spec/scene-boundaries`) finds those a
+	// couple of rounds later, and a session whose genre or preset registers
+	// none gets none. One read when the session is Manual or places no
+	// scene; never throws.
 	if (opts.event === sdkSessionEvents.messageCompleted) {
 		const messageId = (payload as { messageId?: unknown }).messageId
 		if (typeof messageId === "number") {
@@ -393,6 +396,10 @@ async function landedLineFacts(
 		.limit(1)
 	if (!row) return {}
 	const { canonicalChannel } = await import("$lib/server/messages/channels")
+	// ⏳ The stamp (`withSpeakerStamp`) leaves a seat's line with its member-form
+	// `metadata.speaker` once the flip is on, so `said` is the seat's ref; the
+	// card form below is the fallback of a line from before the stamp (the
+	// doors read it as its seat).
 	const said = (row.metadata as { speaker?: unknown } | null)?.speaker
 	const speaker =
 		typeof said === "string" && said

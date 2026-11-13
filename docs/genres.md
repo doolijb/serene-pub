@@ -46,7 +46,7 @@ Start one by picking the **Guide** genre on the start screen, or **Talk to an AI
 
 **Your own notes.** A Guide session can read a lorebook. Entries whose keywords come up in the conversation are handed to Serene beside the docs, as your own reference notes, so you can tell her how your own setup is arranged. She never writes to the lorebook.
 
-**Drafting for your library.** Ask Serene for a character or a lorebook and she drafts one. It waits in the session for **Accept** unless your **Library write mode** (Settings › User) says otherwise; **Back** takes it back. See [Sessions](./sessions.md#back-and-forward).
+**Drafting for your library.** Ask Serene for a character or a lorebook and she drafts one. It is added to your library at once unless your **Library write mode** (Settings › User) says otherwise (**Review** keeps it in the session for **Accept**); **Back** takes it back. See [Sessions](./sessions.md#back-and-forward).
 
 :::note Admins only
 What Serene is told is part of the Guide's pipeline settings: open **Admin › Pipelines** and edit the **System prompt** on the Guide's reply. The change reaches the next answer.

@@ -22,7 +22,8 @@
  *    pushes it to the person on the card's scoped socket family.
  *
  * Who may press it is the caller's to check BEFORE this runs (the card's
- * owner or an admin); the outlet checks again at the write.
+ * owner or an admin; for a cast member, whoever may edit its lorebook); the
+ * outlet checks again at the write.
  */
 
 import { v4 as uuidv4 } from "uuid"
@@ -44,7 +45,11 @@ import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
 import { ceilingFor } from "$lib/server/pipelines/runtime/callTether"
 import { PipelineUnavailableError } from "$lib/server/pipelines/runtime/runTurn"
 import { likenessOf } from "$lib/server/characters/likeness"
+import { ensureCardVersion } from "$lib/server/characters/versions"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { profileOf } from "$lib/shared/characters/profile"
 import { getMedia } from "$lib/server/media"
+import type { SpriteOwner } from "$lib/server/sprites"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 
 export class CardActionError extends Error {}
@@ -67,10 +72,32 @@ export interface CardActionFields {
 	[field: string]: unknown
 }
 
+/**
+ * 🚧 The owner a request names — a card, or a cast member's own art (the
+ * sprite owner, `SpriteOwner`) — or an error when it names none or both.
+ */
+export function cardActionOwnerOf(req: {
+	characterId?: number | null
+	castMemberId?: number | null
+}): SpriteOwner {
+	const card = req.characterId != null
+	const member = req.castMemberId != null
+	if (card === member)
+		throw new CardActionError(
+			"Name a character or a cast member, not both."
+		)
+	return card
+		? { characterId: req.characterId as number }
+		: { castMemberId: req.castMemberId as number }
+}
+
 export interface CardActionRequest {
 	db: Db
 	specId: string
-	characterId: number
+	/** The card the action runs on — name this or `castMemberId`, never both. */
+	characterId?: number | null
+	/** 🚧 The cast member the action runs on — name this or `characterId`, never both. */
+	castMemberId?: number | null
 	/** Who pressed it — the run's owner. Already checked by the caller. */
 	userId: number
 	fields: CardActionFields
@@ -113,38 +140,71 @@ function mediaRefOf(file: {
 }
 
 /**
- * The card action inlet's value (`core:inlet/card-action@1`): the card's
+ * The card action inlet's value (`core:inlet/card-action@1`): the owner's
  * likeness — prompt, negative, and the image (likeness image, else avatar)
  * as a one-item media list — and the form's answers, whole and per field.
+ * A bare number is a card id. For a cast member the likeness is the member as
+ * the story reads it at its book's present (`memberAsRead`).
  */
 export async function cardActionInput(
 	db: Db,
-	characterId: number,
+	owner: number | SpriteOwner,
 	fields: CardActionFields
 ): Promise<Record<string, unknown>> {
-	const character = await db.query.characters.findFirst({
-		where: eq(schema.characters.id, characterId),
-		columns: { id: true, extensions: true, avatarMediaId: true }
-	})
-	if (!character) throw new CardActionError("That character no longer exists.")
-	const likeness = likenessOf(character)
-	const draftId =
-		fields.likenessImageMediaId === null
-			? character.avatarMediaId
-			: fields.likenessImageMediaId
-	const draft =
-		typeof draftId === "number" ? await getMedia(db, draftId) : null
-	const image =
-		draft && (draft as { characterId?: number | null }).characterId === characterId
-			? draft
-			: likeness.imageMediaId != null
+	const o: SpriteOwner =
+		typeof owner === "number" ? { characterId: owner } : owner
+	let characterId: number | null = null
+	let castMemberId: number | null = null
+	let likeness: ReturnType<typeof likenessOf>
+	let image: Awaited<ReturnType<typeof getMedia>> | null
+	if ("characterId" in o) {
+		characterId = o.characterId
+		const character = await db.query.characters.findFirst({
+			where: eq(schema.characters.id, characterId),
+			columns: { id: true }
+		})
+		if (!character) throw new CardActionError("That character no longer exists.")
+		// The card's content is its current card version's (the row's columns are frozen).
+		const profile = profileOf((await ensureCardVersion(db, characterId)) ?? {})
+		likeness = likenessOf({
+			extensions: { serenepub: { likeness: profile.likeness } },
+			avatarMediaId: profile.faceMediaId
+		})
+		const draftId =
+			fields.likenessImageMediaId === null
+				? profile.faceMediaId
+				: fields.likenessImageMediaId
+		const draft =
+			typeof draftId === "number" ? await getMedia(db, draftId) : null
+		image =
+			draft &&
+			(draft as { characterId?: number | null }).characterId === characterId
+				? draft
+				: likeness.imageMediaId != null
+					? await getMedia(db, likeness.imageMediaId)
+					: null
+	} else {
+		castMemberId = o.castMemberId
+		const read = await memberAsRead(db, castMemberId)
+		if (!read)
+			throw new CardActionError("That cast member no longer exists.")
+		likeness = likenessOf({
+			extensions: { serenepub: { likeness: read.likeness } },
+			avatarMediaId: read.faceMediaId
+		})
+		// A member has no draft likeness image to try: `likenessImageMediaId`
+		// (any value, `null` included) is ignored — the face is the image.
+		image =
+			likeness.imageMediaId != null
 				? await getMedia(db, likeness.imageMediaId)
 				: null
+	}
 	const likenessImage =
 		image && image.kind === "image" ? [mediaRefOf(image as any)] : []
 	return {
-		main: { characterId, fields },
+		main: { characterId, castMemberId, fields },
 		characterId,
+		castMemberId,
 		likeness: likeness.prompt,
 		likenessNegative: likeness.negative,
 		likenessImage,
@@ -173,14 +233,17 @@ export async function runCardAction(req: CardActionRequest): Promise<Receipt> {
 		)
 
 	const runId = req.runId ?? uuidv4()
-	const input = await cardActionInput(db, req.characterId, req.fields)
+	const owner = cardActionOwnerOf(req)
+	const input = await cardActionInput(db, owner, req.fields)
 	const ownerPluginId = await specOwnerPluginId(db, specId)
 	const artifacts: RunArtifact[] = []
 
 	const scope: HostScope = {
 		runId,
 		userId: req.userId,
-		cardCharacterId: req.characterId,
+		...("characterId" in owner
+			? { cardCharacterId: owner.characterId }
+			: { cardActionCastMemberId: owner.castMemberId }),
 		specId,
 		ownerPluginId,
 		contributes: doc.contributes,

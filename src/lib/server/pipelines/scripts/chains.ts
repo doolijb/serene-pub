@@ -25,6 +25,11 @@
 
 import { eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import {
+	cardsNowAsSeatsRead,
+	seatCardsAsRead
+} from "$lib/server/pipelines/prompt/seatCards"
 import type {
 	ScriptChainApplier,
 	ScriptHookSite,
@@ -750,18 +755,28 @@ export async function scriptExtras(
 		// side-character turn's speaker is the trigger's, and a free-form name
 		// has no row to look up at all — reading the character row second would
 		// overwrite a typed name with whoever the scope happened to carry.
+		//
+		// Names are the cast member's own (seat-cast S2): the member the seat
+		// seats, read over the card the seat holds. The plain name, never the
+		// nickname-first form the prompt shows.
 		if (scope.currentCharacterId != null && out.speakerName == null) {
-			const [c] = await db
-				.select({ name: schema.characters.name })
-				.from(schema.characters)
-				.where(
-					inArray(schema.characters.id, [scope.currentCharacterId])
-				)
-			if (c?.name) out.speakerName = c.name
+			const id = scope.currentCharacterId
+			const shown =
+				(
+					await cardsNowAsSeatsRead(
+						db,
+						scope.sessionId ?? null,
+						[id]
+					)
+				).get(id)?.name ?? ""
+			if (shown) out.speakerName = shown
 		}
 		if (scope.sessionId != null) {
 			const rows = await db
-				.select({ name: schema.characters.name })
+				.select({
+					castMemberId: schema.sessionCharacters.castMemberId,
+					id: schema.characters.id
+				})
 				.from(schema.sessionCharacters)
 				.innerJoin(
 					schema.characters,
@@ -771,7 +786,23 @@ export async function scriptExtras(
 					)
 				)
 				.where(eq(schema.sessionCharacters.sessionId, scope.sessionId))
-			out.castNames = (rows as any[]).map((r) => r.name).filter(Boolean)
+			const cards = await cardsNow(
+				db,
+				rows.map((r) => r.id)
+			)
+			const seats = await seatCardsAsRead(
+				db,
+				scope.sessionId,
+				rows.flatMap((r) => {
+					const card = cards.get(r.id)
+					return card
+						? [{ castMemberId: r.castMemberId, character: card }]
+						: []
+				})
+			)
+			out.castNames = seats
+				.map((r) => (r.character as { name: string }).name)
+				.filter(Boolean)
 		}
 	} catch {
 		// Extras are conveniences; the turn is not.

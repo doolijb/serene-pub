@@ -89,13 +89,19 @@ describe("a core genre that ships an arrangement", () => {
 		expect(JSON.stringify(row.layout)).toBe(JSON.stringify(declared.preset))
 		const layout = row.layout as any
 		// No Inventory: R79 removed that widget for now. Shipped in `panels`
-		// alone: the old slots are gone from core's literals.
+		// version 2 alone: the old slots are gone from core's literals, and the
+		// conversation is the Messages log, the Turn line and the Composer.
+		expect(layout.panels.version).toBe(2)
 		expect(layout.panels.right.map((p: any) => p.tabs)).toEqual([
 			["scene-portraits"],
 			["stats"]
 		])
-		expect(layout.panels.middle.above.map((p: any) => p.tabs)).toEqual([["stats#world"]])
-		expect(layout.panels.middle.primary.tabs).toEqual(["messages"])
+		expect(layout.panels.middle.map((p: any) => p.tabs)).toEqual([
+			["stats#world"],
+			["messages"],
+			["turn-line"],
+			["composer"]
+		])
 		for (const slot of ["zoneLayout", "widgetGrid", "arrangedGrid"])
 			expect(layout[slot]).toBeUndefined()
 	}, 60_000)
@@ -109,20 +115,18 @@ describe("a core genre that ships an arrangement", () => {
 		}
 	}, 60_000)
 
-	test("Story's default places the Author's note, unpinned, in the right rail (2026-10-03)", async () => {
+	test("Story's default places the Author's note beside the Cast in the left rail (2026-10-03; version 2 has no pins)", async () => {
 		await sync(["core:genre/story"])
 		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/story"))
 		const layout = row.layout as any
 		expect(row.name).toBe("Story")
-		expect(layout.panels.right).toEqual([
-			expect.objectContaining({ tabs: ["authors-note"], pinned: false })
-		])
-		expect(layout.panels.middle.primary.tabs).toEqual(["messages"])
+		expect(layout.panels.left[0].tabs).toEqual(["stats", "authors-note"])
+		expect(layout.panels.middle[0].tabs).toContain("messages")
 	}, 60_000)
 
 	test("a core genre that declares none still gets the empty floor", async () => {
-		await sync(["core:genre/guide"])
-		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/guide"))
+		await sync(["core:genre/chat"])
+		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/chat"))
 		expect(row.name).toBe("Default")
 		expect(row.layout).toEqual({})
 	}, 60_000)
@@ -241,13 +245,13 @@ describe("writing only what changed", () => {
 
 describe("syncLayoutPresets", () => {
 	test("seeds a default preset per core genre, keyed by layoutPresetSeedKey", async () => {
-		await sync(["core:genre/guide", "plugin:genre/vn"])
+		await sync(["core:genre/chat", "plugin:genre/vn"])
 		const rows = await seededRows()
 		const keys = rows.map((r) => r.seedKey)
-		expect(keys).toContain(layoutPresetSeedKey("core:genre/guide"))
+		expect(keys).toContain(layoutPresetSeedKey("core:genre/chat"))
 		expect(keys).not.toContain(layoutPresetSeedKey("plugin:genre/vn"))
-		const [guide] = await bySeedKey(layoutPresetSeedKey("core:genre/guide"))
-		expect(guide.genreId).toBe("core:genre/guide")
+		const [guide] = await bySeedKey(layoutPresetSeedKey("core:genre/chat"))
+		expect(guide.genreId).toBe("core:genre/chat")
 		expect(guide.authorUserId).toBeNull()
 		expect(guide.name).toBe("Default")
 		// A genre that ships none gets "no overrides" — the empty layout
@@ -271,18 +275,18 @@ describe("syncLayoutPresets", () => {
 	}, 60_000)
 
 	test("re-forces an edited seeded row's content", async () => {
-		await sync(["core:genre/guide"])
+		await sync(["core:genre/chat"])
 		await testDb
 			.update(schema.sessionLayoutPresets)
 			.set({ name: "tampered", layout: { hacked: true } })
 			.where(
 				eq(
 					schema.sessionLayoutPresets.seedKey,
-					layoutPresetSeedKey("core:genre/guide")
+					layoutPresetSeedKey("core:genre/chat")
 				)
 			)
-		await sync(["core:genre/guide"])
-		const [r] = await bySeedKey(layoutPresetSeedKey("core:genre/guide"))
+		await sync(["core:genre/chat"])
+		const [r] = await bySeedKey(layoutPresetSeedKey("core:genre/chat"))
 		expect(r.name).toBe("Default")
 		expect(r.layout).toEqual({})
 	}, 60_000)
@@ -999,5 +1003,271 @@ describe("managing", () => {
 			.returning()
 		expect(byAuthor).toHaveLength(1)
 		expect((await rowById(saved.id)).name).toBe("Still mine")
+	}, 60_000)
+})
+
+/* ── panels version 2 is what is written (lay-E) ─────────────────────────── */
+
+describe("panels version 2 on copy and save", () => {
+	const LAIR = "core:genre/lair"
+	const V1_PANELS = {
+		version: 1,
+		left: [],
+		middle: { above: [], primary: { key: "p1", tabs: ["messages"] }, below: [] },
+		right: [{ key: "p2", tabs: ["stats"], pinned: false }]
+	}
+	const PIN = { id: 7, slug: "mine" }
+
+	const sessionFor = async (label: string) => {
+		const owner = await user(label)
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: true, genreId: LAIR })
+			.returning()
+		return { owner, session }
+	}
+
+	const settingsRows = async (sessionId: number, userId: number) =>
+		Object.fromEntries(
+			(
+				await testDb
+					.select()
+					.from(schema.widgetSettings)
+					.where(
+						and(
+							eq(schema.widgetSettings.sessionId, sessionId),
+							eq(schema.widgetSettings.userId, userId)
+						)
+					)
+			).map((r) => [r.widgetInstanceId, r.values])
+		)
+
+	test("a copy from a version 1 plugin preset is written as version 2, the preset untouched", async () => {
+		const { owner, session } = await sessionFor("copy-v1")
+		const [preset] = await testDb
+			.insert(schema.sessionLayoutPresets)
+			.values({
+				seedKey: `layout:${LAIR}:lay-e.plugin/v1-${n++}`,
+				genreId: LAIR,
+				origin: "plugin",
+				pluginId: "lay-e.plugin",
+				slug: `v1-${n}`,
+				name: "Old shape",
+				visibility: "shared",
+				layout: {
+					panels: V1_PANELS,
+					widgetSettings: {
+						messages: { composer: "quill", nextUp: "list", showComposer: true }
+					},
+					widgetStyles: { messages: PIN }
+				}
+			})
+			.returning()
+		const before = JSON.stringify(await rowById(preset.id))
+
+		const { copyLayoutIntoSession } = await presets()
+		const res = await testDb.transaction((tx) =>
+			copyLayoutIntoSession(tx, {
+				sessionId: session.id,
+				userId: owner.id,
+				genreId: LAIR,
+				layoutPresetId: preset.id
+			})
+		)
+		expect(res.ok).toBe(true)
+
+		const [row] = await testDb
+			.select()
+			.from(schema.sessionPanelLayouts)
+			.where(eq(schema.sessionPanelLayouts.sessionId, session.id))
+		const panels = (row.layout as any).panels
+		expect(panels.version).toBe(2)
+		const tabs = [...panels.left, ...panels.middle, ...panels.right].flatMap(
+			(p: any) => p.tabs
+		)
+		expect(tabs).toEqual(
+			expect.arrayContaining(["messages", "composer", "turn-line", "stats"])
+		)
+
+		const rows = await settingsRows(session.id, owner.id)
+		expect(rows.composer).toEqual({ composer: "quill" })
+		expect(rows["turn-line"]).toEqual({ nextUp: "list" })
+		for (const key of ["composer", "nextUp", "showComposer"])
+			expect(rows.messages ?? {}).not.toHaveProperty(key)
+		const pins = (row.layoutSettings as any).widgetStyles
+		expect(pins.messages).toEqual(PIN)
+		expect(pins.composer).toEqual(PIN)
+		expect(pins["turn-line"]).toEqual(PIN)
+
+		expect(JSON.stringify(await rowById(preset.id))).toBe(before)
+	}, 60_000)
+
+	/** Seat a session whose SENT layout is version 1 and whose `messages` row holds `composer: "writer"`. */
+	const v1Session = async (label: string) => {
+		const s = await sessionFor(label)
+		await testDb.insert(schema.widgetSettings).values({
+			sessionId: s.session.id,
+			userId: s.owner.id,
+			widgetInstanceId: "messages",
+			values: { composer: "writer" }
+		})
+		return s
+	}
+
+	test("Save as new layout from a version 1 session layout stores version 2 with the composer split off", async () => {
+		const { owner, session } = await v1Session("save-v1")
+		const { saveAsNewLayout } = await presets()
+		const res = await saveAsNewLayout({
+			sessionId: session.id,
+			genreId: LAIR,
+			userId: owner.id,
+			name: "From v1",
+			layout: { panels: V1_PANELS } as any,
+			drawnWidgetIds: ["messages", "stats"]
+		})
+		expect(res.ok).toBe(true)
+		if (!res.ok) return
+		const stored = (await rowById(res.preset.id)).layout as any
+		expect(stored.panels.version).toBe(2)
+		expect(stored.widgetSettings.composer.composer).toBe("writer")
+		expect(stored.widgetSettings.messages ?? {}).not.toHaveProperty("composer")
+	}, 60_000)
+
+	test("Save changes from a version 1 session layout writes version 2", async () => {
+		const { owner, session } = await v1Session("changes-v1")
+		const { saveUserLayoutPreset, saveChangesToLayout } = await presets()
+		const saved = await saveUserLayoutPreset({
+			genreId: LAIR,
+			userId: owner.id,
+			name: "To recapture",
+			layout: layoutNaming("stats")
+		})
+		const res = await saveChangesToLayout({
+			presetId: saved.id,
+			sessionId: session.id,
+			genreId: LAIR,
+			userId: owner.id,
+			layout: { panels: V1_PANELS } as any,
+			drawnWidgetIds: ["messages", "stats"]
+		})
+		expect(res.ok).toBe(true)
+		const stored = (await rowById(saved.id)).layout as any
+		expect(stored.panels.version).toBe(2)
+		expect(stored.widgetSettings.composer.composer).toBe("writer")
+	}, 60_000)
+})
+
+describe("a shipped slug-only style pin on copy", () => {
+	const LAIR = "core:genre/lair"
+	const SLUG = "scene-portraits:open-stage"
+
+	const sessionFor = async (label: string) => {
+		const owner = await user(label)
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: true, genreId: LAIR })
+			.returning()
+		return { owner, session }
+	}
+
+	const styleRow = async (over: { slug: string; widgetSlug: string; source: "system" | "user"; ownerUserId?: number }) => {
+		const [row] = await testDb
+			.insert(schema.widgetStyles)
+			.values({
+				slug: over.slug,
+				widgetSlug: over.widgetSlug,
+				source: over.source,
+				ownerUserId: over.ownerUserId ?? null,
+				visibility: over.source === "system" ? "system" : "private",
+				title: over.slug
+			})
+			.returning()
+		return row
+	}
+
+	const presetPinning = async (pins: Record<string, unknown>) => {
+		const [preset] = await testDb
+			.insert(schema.sessionLayoutPresets)
+			.values({
+				seedKey: `layout:${LAIR}:lay-pin.plugin/p-${n++}`,
+				genreId: LAIR,
+				origin: "plugin",
+				pluginId: "lay-pin.plugin",
+				slug: `pin-${n}`,
+				name: "Pinned",
+				visibility: "shared",
+				layout: { widgetStyles: pins }
+			})
+			.returning()
+		return preset
+	}
+
+	const pinsOf = async (sessionId: number) => {
+		const [row] = await testDb
+			.select()
+			.from(schema.sessionPanelLayouts)
+			.where(eq(schema.sessionPanelLayouts.sessionId, sessionId))
+		return (row.layoutSettings as any).widgetStyles ?? {}
+	}
+
+	const copy = async (
+		session: { id: number },
+		owner: { id: number },
+		layoutPresetId: number,
+		onlyIfAbsent: boolean
+	) => {
+		const { copyLayoutIntoSession } = await presets()
+		return testDb.transaction((tx) =>
+			copyLayoutIntoSession(tx, {
+				sessionId: session.id,
+				userId: owner.id,
+				genreId: LAIR,
+				layoutPresetId,
+				onlyIfAbsent
+			})
+		)
+	}
+
+	test("resolves to the seeded system row's { id, slug } — on the first open and on Start from", async () => {
+		const sys = await styleRow({ slug: SLUG, widgetSlug: "scene-portraits", source: "system" })
+		const preset = await presetPinning({ "scene-portraits": { slug: SLUG } })
+		const first = await sessionFor("pin-first")
+		expect((await copy(first.session, first.owner, preset.id, true)).ok).toBe(true)
+		expect((await pinsOf(first.session.id))["scene-portraits"]).toEqual({ id: sys.id, slug: SLUG })
+		const again = await sessionFor("pin-again")
+		await copy(again.session, again.owner, preset.id, true)
+		await copy(again.session, again.owner, preset.id, false)
+		expect((await pinsOf(again.session.id))["scene-portraits"]).toEqual({ id: sys.id, slug: SLUG })
+	}, 60_000)
+
+	test("an unknown slug is copied as it is, with no id; a numeric-id pin verbatim", async () => {
+		const preset = await presetPinning({
+			"scene-portraits": { slug: "scene-portraits:nowhere" },
+			stats: { id: 7, slug: "mine" }
+		})
+		const { owner, session } = await sessionFor("pin-unknown")
+		await copy(session, owner, preset.id, true)
+		const pins = await pinsOf(session.id)
+		expect(pins["scene-portraits"]).toEqual({ slug: "scene-portraits:nowhere" })
+		expect(pins.stats).toEqual({ id: 7, slug: "mine" })
+		await copy(session, owner, preset.id, false)
+		const replaced = await pinsOf(session.id)
+		expect(replaced["scene-portraits"]).toEqual({ slug: "scene-portraits:nowhere" })
+		expect(replaced.stats).toEqual({ id: 7, slug: "mine" })
+	}, 60_000)
+
+	test("a user row of the slug, or a system row of another widget, is not matched", async () => {
+		const { owner, session } = await sessionFor("pin-nomatch")
+		await styleRow({ slug: "stats:user-lookalike", widgetSlug: "stats", source: "user", ownerUserId: owner.id })
+		await styleRow({ slug: "album:not-yours", widgetSlug: "album", source: "system" })
+		const preset = await presetPinning({
+			stats: { slug: "stats:user-lookalike" },
+			"scene-portraits": { slug: "album:not-yours" }
+		})
+		await copy(session, owner, preset.id, true)
+		expect(await pinsOf(session.id)).toEqual({
+			stats: { slug: "stats:user-lookalike" },
+			"scene-portraits": { slug: "album:not-yours" }
+		})
 	}, 60_000)
 })

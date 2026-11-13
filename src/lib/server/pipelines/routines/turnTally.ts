@@ -4,7 +4,7 @@
  * session moments (`moments.ts`) read and the published values
  * (`session.turn`, `session.round`, `session.lastSpeaker`) show.
  *
- * Stored at `sessions.annex -> 'core' -> 'turnTally'` (`TurnTallyV1`), one entry per
+ * Stored in the `sessions.turn_tally` column (`TurnTallyV1`), one entry per
  * lane — a canonical channel string (`main`, `main:2`, `sanctum`):
  *
  *  · `turn` — the index of the last turn noted on the lane (lines that take
@@ -33,7 +33,7 @@
 import { sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
-import { coreAnnexKeySql, coreAnnexSetSql, lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
+import { lockSessionAnnex } from "$lib/server/sessions/coreAnnex"
 
 /** The speaker key of the pipeline's own voice — a narrator line names no participant. */
 export const NARRATOR_SPEAKER = "narrator"
@@ -53,7 +53,7 @@ export interface LaneTally {
 	round?: number
 }
 
-/** The `core` annex document's `turnTally`. */
+/** The `sessions.turn_tally` column's value. */
 export interface TurnTallyV1 {
 	v: 1
 	lanes: Record<string, LaneTally>
@@ -142,13 +142,13 @@ export function tallyTurn(
 	}
 }
 
-/** Write one lane of the tally — the one `turnTally` key of the `core` annex document, like the turn order's write. */
+/** Write one lane of the tally — the `turn_tally` column, like the turn order's write (raw SQL, no `updated_at` move). */
 export async function writeLaneTally(db: Db, sessionId: number, lane: string, tally: LaneTally): Promise<void> {
 	await db.transaction(async (tx: Db) => {
 		await lockSessionAnnex(tx, sessionId)
 		const [row] = rawRows<{ tally: unknown }>(
 			await tx.execute(sql`
-				select ${coreAnnexKeySql("turnTally")} as tally
+				select ${sql.identifier("turn_tally")} as tally
 				from ${schema.sessions}
 				where ${schema.sessions.id} = ${sessionId}
 			`)
@@ -158,7 +158,7 @@ export async function writeLaneTally(db: Db, sessionId: number, lane: string, ta
 		current.lanes[lane] = tally
 		await tx.execute(sql`
 			update ${schema.sessions}
-			set ${sql.identifier("annex")} = ${coreAnnexSetSql("turnTally", sql`${JSON.stringify(current)}::jsonb`)}
+			set ${sql.identifier("turn_tally")} = ${JSON.stringify(current)}::jsonb
 			where ${schema.sessions.id} = ${sessionId}
 		`)
 	})
@@ -166,7 +166,7 @@ export async function writeLaneTally(db: Db, sessionId: number, lane: string, ta
 
 /**
  * 🚧 Put a session's whole tally back as it stood (RF fix 5): **Forward**
- * restores the document Back read before it rewound. `null` removes the key
+ * restores the document Back read before it rewound. `null` sets the column NULL
  * (a session that had noted no turn yet). Under the annex lock.
  */
 export async function writeTurnTally(db: Db, sessionId: number, tally: TurnTallyV1 | null): Promise<void> {
@@ -174,7 +174,7 @@ export async function writeTurnTally(db: Db, sessionId: number, tally: TurnTally
 		await lockSessionAnnex(tx, sessionId)
 		await tx.execute(sql`
 			update ${schema.sessions}
-			set ${sql.identifier("annex")} = ${coreAnnexSetSql("turnTally", tally ? sql`${JSON.stringify(tally)}::jsonb` : null)}
+			set ${sql.identifier("turn_tally")} = ${tally ? sql`${JSON.stringify(tally)}::jsonb` : sql`NULL`}
 			where ${schema.sessions.id} = ${sessionId}
 		`)
 	})

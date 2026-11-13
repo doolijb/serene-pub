@@ -1,8 +1,34 @@
-<script lang="ts">
+<script module lang="ts">
 	import Badge from "$lib/client/components/Badge.svelte"
+	import { formatBytes } from "./modelManagement"
+	import { fitBar, quantFit, type QuantFile } from "./finder"
+	import type { MemoryTier } from "./memoryTier"
+
+	const TONE: Record<string, string> = {
+		good: "text-success-500",
+		warn: "text-warning-500",
+		bad: "text-error-600-400",
+		muted: "text-surface-600-400"
+	}
+	const BAR: Record<string, string> = {
+		good: "bg-success-500",
+		warn: "bg-warning-500",
+		bad: "bg-error-500",
+		muted: "bg-surface-500"
+	}
+
+	export { quantRows }
+</script>
+
+<script lang="ts">
 	/**
-	 * Which FILE of a repo to fetch — asked once, in one dialog, for both
-	 * managers.
+	 * Which FILE of a repo to fetch — asked once, inline, for both managers.
+	 *
+	 * It expands UNDER the row (or the Download button) that opened it, in the
+	 * detail pane's one scroller — never a dialog over the view (owner,
+	 * 2026-11-04: "quant picker and Add by name inline"). Focus moves to the
+	 * checked radio when it opens; Cancel and Escape close it and the host
+	 * returns focus to the button that opened it.
 	 *
 	 * A GGUF repo publishes the same weights a dozen times at different
 	 * precisions, and until the 2026-09-17 concept ruling (R3) there were two
@@ -27,13 +53,11 @@
 	 * `quantsFromKcpp` decides that, not this template.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import { formatBytes } from "./modelManagement"
-	import { preselectedQuantIndex, quantFit, type QuantFile } from "./finder"
-	import { tierLabel, type MemoryTier } from "./memoryTier"
+	import { tick } from "svelte"
+	import { preselectedQuantIndex } from "./finder"
+	import { tierLabel } from "./memoryTier"
 
 	interface Props {
-		open: boolean
 		/** The repo these files belong to, e.g. `TheBloke/Mistral-7B-GGUF`. */
 		repo: string
 		quants: readonly QuantFile[]
@@ -47,7 +71,6 @@
 		onDownload: (quant: QuantFile) => void
 	}
 	let {
-		open = $bindable(),
 		repo,
 		quants,
 		tier,
@@ -57,22 +80,34 @@
 	}: Props = $props()
 
 	/**
-	 * What is selected when the dialog opens: the list's own recommendation,
+	 * What is selected when the picker opens: the list's own recommendation,
 	 * else the largest file that still fits, else the first.
 	 *
-	 * Reset by repo rather than by `open`, so a person who scrolled to Q5 and
-	 * pressed Cancel does not come back to a dialog that forgot — and a
-	 * DIFFERENT repo never opens on the previous one's index.
+	 * Seeded per repo, so a DIFFERENT repo never opens on the previous one's
+	 * index.
 	 */
 	let selected = $state(0)
 	let seededFor = $state<string | null>(null)
 	$effect(() => {
-		if (!open || seededFor === repo) return
+		if (seededFor === repo) return
 		selected = Math.max(0, preselectedQuantIndex(quants, tier))
 		seededFor = repo
 	})
+
+	const headingId = $props.id()
+	let section = $state<HTMLElement>()
+	// Opening moves focus to the checked radio (the first control when the
+	// list is empty is Cancel).
 	$effect(() => {
-		if (!open) seededFor = null
+		if (!section) return
+		const el = section
+		void tick().then(() =>
+			el
+				.querySelector<HTMLElement>(
+					'[role="radio"][aria-checked="true"]'
+				)
+				?.focus()
+		)
 	})
 
 	const title = $derived(
@@ -85,125 +120,123 @@
 			? `Download ${formatBytes(chosen.bytes) ?? chosen.name}`
 			: "Download"
 	)
-
-	const TONE: Record<string, string> = {
-		good: "text-success-500",
-		warn: "text-warning-500",
-		bad: "text-error-600-400",
-		muted: "text-surface-600-400"
-	}
 </script>
 
-<Dialog {open} onOpenChange={(e) => !e.open && onCancel()}>
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-200-800 flex max-h-[80vh] w-[min(92vw,440px)] flex-col gap-3 border p-4 shadow-xl"
+{#snippet quantRows(
+	quants: readonly QuantFile[],
+	tier: MemoryTier,
+	selected: number,
+	onSelect: (index: number) => void,
+	label: string,
+	bars: boolean
+)}
+	<div class="flex flex-col gap-0.5" role="radiogroup" aria-label={label}>
+		{#each quants as quant, index (quant.name + index)}
+			{@const fit = quantFit(quant, tier)}
+			{@const bar = bars ? fitBar(quant, tier) : null}
+			<button
+				type="button"
+				role="radio"
+				aria-checked={selected === index}
+				class="rounded-base flex min-h-11 w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left {selected ===
+				index
+					? 'sidebar-row-active'
+					: 'hover:preset-tonal-primary'}"
+				onclick={() => onSelect(index)}
 			>
-				<header class="flex min-w-0 items-start gap-2">
-					<div class="min-w-0 flex-1">
-						<Dialog.Title
-							class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
+				<span class="min-w-0 flex-1">
+					<span class="flex min-w-0 items-center gap-1.5">
+						<span class="text-lead min-w-0 truncate font-medium">
+							{quant.name}
+						</span>
+						{#if quant.recommended}
+							<Badge tone="primary" size="sm" class="shrink-0">
+								Recommended
+							</Badge>
+						{/if}
+					</span>
+					<span class="text-surface-600-400 block truncate text-xs">
+						{formatBytes(quant.bytes) ?? "Size not listed"}{#if fit}
+							· <span class={TONE[fit.tone]}>
+								{fit.sentence}
+							</span>
+						{/if}
+					</span>
+					{#if bar}
+						<span
+							class="bg-surface-300-700 mt-1 block h-1 w-full overflow-hidden rounded-full"
+							aria-hidden="true"
 						>
-							{title}
-						</Dialog.Title>
-						<Dialog.Description
-							class="text-surface-600-400 mt-0.5 block truncate text-xs"
-						>
-							{repo} · {tierLabel(tier)} tier
-						</Dialog.Description>
-					</div>
-					<Dialog.CloseTrigger
-						class="btn btn-sm hover:preset-tonal-surface shrink-0 p-2"
-						aria-label="Close"
-					>
-						<Icons.X size={16} aria-hidden="true" />
-					</Dialog.CloseTrigger>
-				</header>
+							<span
+								class="block h-full rounded-full {BAR[
+									bar.tone
+								]}"
+								style={`width: ${bar.percent}%`}
+							></span>
+						</span>
+					{/if}
+				</span>
+			</button>
+		{/each}
+	</div>
+{/snippet}
 
-				{#if !quants.length}
-					<p class="text-surface-600-400 text-sm">
-						{noun === "precision"
-							? "This model lists no precisions to choose between."
-							: "This repo publishes no GGUF files to choose between."}
-					</p>
-				{:else}
-					<div
-						class="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1"
-						role="radiogroup"
-						aria-label={title}
-					>
-						{#each quants as quant, index (quant.name + index)}
-							{@const fit = quantFit(quant, tier)}
-							<button
-								type="button"
-								role="radio"
-								aria-checked={selected === index}
-								class="rounded-base flex min-h-11 w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left {selected ===
-								index
-									? 'sidebar-row-active'
-									: 'hover:preset-tonal-primary'}"
-								onclick={() => (selected = index)}
-							>
-								<span class="min-w-0 flex-1">
-									<span
-										class="flex min-w-0 items-center gap-1.5"
-									>
-										<span
-											class="text-lead min-w-0 truncate font-medium"
-										>
-											{quant.name}
-										</span>
-										{#if quant.recommended}
-											<Badge
-												tone="primary"
-												size="sm"
-												class="shrink-0"
-											>
-												Recommended
-											</Badge>
-										{/if}
-									</span>
-									<span
-										class="text-surface-600-400 block truncate text-xs"
-									>
-										{formatBytes(quant.bytes) ??
-											"Size not listed"}{#if fit}
-											· <span class={TONE[fit.tone]}>
-												{fit.sentence}
-											</span>
-										{/if}
-									</span>
-								</span>
-							</button>
-						{/each}
-					</div>
-				{/if}
+<section
+	data-quant-picker
+	bind:this={section}
+	class="panel-card flex flex-col gap-3"
+	aria-labelledby={headingId}
+	onkeydown={(e) => {
+		if (e.key !== "Escape") return
+		e.stopPropagation()
+		onCancel()
+	}}
+>
+	<header class="min-w-0">
+		<h3
+			id={headingId}
+			class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
+		>
+			{title}
+		</h3>
+		<p class="text-surface-600-400 mt-0.5 block truncate text-xs">
+			{repo} · {tierLabel(tier)} tier
+		</p>
+	</header>
 
-				<footer class="flex shrink-0 items-center justify-end gap-2">
-					<button
-						type="button"
-						class="btn btn-sm hover:preset-tonal-surface text-surface-600-400"
-						onclick={onCancel}
-					>
-						Cancel
-					</button>
-					<button
-						type="button"
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={!chosen}
-						onclick={() => chosen && onDownload(chosen)}
-					>
-						<Icons.Download size={14} aria-hidden="true" />
-						{downloadLabel}
-					</button>
-				</footer>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+	{#if !quants.length}
+		<p class="text-surface-600-400 text-sm">
+			{noun === "precision"
+				? "This model lists no precisions to choose between."
+				: "This repo publishes no GGUF files to choose between."}
+		</p>
+	{:else}
+		{@render quantRows(
+			quants,
+			tier,
+			selected,
+			(i) => (selected = i),
+			title,
+			false
+		)}
+	{/if}
+
+	<footer class="flex shrink-0 items-center justify-end gap-2">
+		<button
+			type="button"
+			class="btn btn-sm hover:preset-tonal-surface text-surface-600-400"
+			onclick={onCancel}
+		>
+			Cancel
+		</button>
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-primary-500"
+			disabled={!chosen}
+			onclick={() => chosen && onDownload(chosen)}
+		>
+			<Icons.Download size={14} aria-hidden="true" />
+			{downloadLabel}
+		</button>
+	</footer>
+</section>

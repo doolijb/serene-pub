@@ -17,7 +17,9 @@ const BOOK_TABLES = [
 	"lorebook_entries",
 	"lorebook_bindings",
 	"lorebook_branches",
-	"scenes"
+	"scenes",
+	// A cast member's own sprite sets are the book's; `sprites` hangs from them.
+	"sprite_sets"
 ]
 
 /**
@@ -42,7 +44,13 @@ const NOT_THE_BOOKS: Record<string, string> = {
 	lore_imprints: "a session's record of what its runs wrote on a book, taken back with their message; it goes with its session",
 	// 🚧 pr-6 (2026-10-25, pass 6): which stretch of a session's story one generated lore write was written from —
 	// the session's record (`session_id`, cascading), never the book's content; a copy was not written from that story.
-	lore_sources: "a session's record of the story lines a generated lore write came from; it goes with its session"
+	lore_sources: "a session's record of the story lines a generated lore write came from; it goes with its session",
+	// 🚧 Seat-cast S1 (0145, 2026-11-05): a seat and a line name the cast member they seat or quote
+	// (`cast_member_id`, SET NULL) — the session's rows, never the book's content.
+	session_characters: "a session's character seat names the cast member it seats; it goes with its session",
+	session_personas: "a session's player seat names the cast member it seats; it goes with its session",
+	session_messages: "a session line names the cast member who spoke it; it goes with its session",
+	messages: "the line mirror names the cast member who spoke it; it goes with its session"
 }
 
 const allTables = (Object.values(schema) as unknown[]).filter(

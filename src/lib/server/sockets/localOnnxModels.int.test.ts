@@ -33,7 +33,7 @@ import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
-import {  } from "$lib/server/loadouts/testing"
+import {} from "$lib/server/loadouts/testing"
 
 vi.mock("$lib/server/db", async (orig) => {
 	// `...actual` and not `{ db }` alone: `connections.ts` reaches
@@ -775,6 +775,60 @@ describe("downloading a model", () => {
 		expect(registered).toMatchObject({ quantization: "q4" })
 	}, 60_000)
 
+	it("keeps one registry row per modality when one Hub id is downloaded for both, and removing one leaves the other", async () => {
+		const hubId = "some-org/both-ways"
+		const { activeDownload } = await import(
+			"$lib/server/localModels/onnxCache"
+		)
+		const h = await handlers()
+		const downloaded: Array<{ conn: { id: number }; row: { id: number } }> =
+			[]
+		for (const [type, modality] of [
+			[CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS, "embeddings"],
+			[CONNECTION_TYPE.LOCAL_ONNX_NER, "ner"]
+		] as const) {
+			const made = await makeEndpoint(type, hubId)
+			await testDb
+				.update(schema.connectionModels)
+				.set({ extraJson: { onnx: { addedByUser: true } } })
+				.where(eq(schema.connectionModels.id, made.row.id))
+			const res = await h.connectionsDownloadModel.handler(
+				admin(),
+				{ id: made.conn.id, modelId: made.row.id },
+				noop
+			)
+			expect(res.error).toBeUndefined()
+			await activeDownload(modality, hubId)?.settled
+			downloaded.push(made)
+		}
+
+		const rows = await testDb
+			.select({
+				modality: schema.localModels.modality,
+				status: schema.localModels.status
+			})
+			.from(schema.localModels)
+			.where(eq(schema.localModels.filename, hubId))
+		expect(
+			rows.sort((a, b) => a.modality!.localeCompare(b.modality!))
+		).toEqual([
+			{ modality: "embeddings", status: "complete" },
+			{ modality: "ner", status: "complete" }
+		])
+
+		const removed = await h.connectionsRemoveModelFiles.handler(
+			admin(),
+			{ id: downloaded[0].conn.id, modelId: downloaded[0].row.id },
+			noop
+		)
+		expect(removed.error).toBeUndefined()
+		const left = await testDb
+			.select({ modality: schema.localModels.modality })
+			.from(schema.localModels)
+			.where(eq(schema.localModels.filename, hubId))
+		expect(left).toEqual([{ modality: "ner" }])
+	}, 60_000)
+
 	it("refuses a dtype the catalogue entry does not list, and an unknown one", async () => {
 		const { conn, row } = await makeEndpoint(
 			CONNECTION_TYPE.LOCAL_ONNX_NER,
@@ -793,7 +847,9 @@ describe("downloading a model", () => {
 			noop
 		)
 		expect(unknown.error).toMatch(/not a precision/)
-		expect(transformers.AutoModelForTokenClassification.from_pretrained).not.toHaveBeenCalled()
+		expect(
+			transformers.AutoModelForTokenClassification.from_pretrained
+		).not.toHaveBeenCalled()
 		const ok = await h.connectionsDownloadModel.handler(
 			admin(),
 			{ id: conn.id, modelId: row.id, dtype: "q8" },

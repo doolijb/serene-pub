@@ -10,17 +10,18 @@ import { deletionFor, type AdminDeletion } from "$lib/client/components/admin/ch
 
 type Preset = Pick<
 	Sockets.SessionAdmin.PresetRow,
-	"id" | "name" | "genreId" | "enabled" | "isDefault" | "isImmutable" | "staleBindings"
+	"id" | "name" | "genreId" | "enabled" | "isDefault" | "isImmutable" | "staleBindings" | "danglingVariableLayouts"
 >
 
 export const PRESET_NOUN = { singular: "preset", plural: "presets" }
 
 /** Stale first: the row that needs an administrator. */
-export const PRESET_STATUS_ORDER = ["stale", "hidden", "available"] as const
+export const PRESET_STATUS_ORDER = ["stale", "layouts", "hidden", "available"] as const
 export type PresetStatus = (typeof PRESET_STATUS_ORDER)[number]
 
 export function presetStatus(p: Preset): PresetStatus {
 	if (p.staleBindings?.length) return "stale"
+	if (p.danglingVariableLayouts?.length) return "layouts"
 	return p.enabled ? "available" : "hidden"
 }
 
@@ -28,6 +29,7 @@ export function presetStatusWord(s: string): string {
 	return (
 		{
 			stale: "Binding unavailable",
+			layouts: "Variable layout missing",
 			hidden: "Hidden from users",
 			available: "Available"
 		} as Record<string, string>

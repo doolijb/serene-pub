@@ -77,7 +77,10 @@ const LISTING = {
 }
 
 let app: ReturnType<typeof mount> | null = null
-function render(capabilityDefaults: Record<string, unknown> = {}) {
+function render(
+	capabilityDefaults: Record<string, unknown> = {},
+	kcppSettings: Record<string, unknown> = {}
+) {
 	const host = document.createElement("div")
 	document.body.append(host)
 	app = mount(Page, {
@@ -86,7 +89,7 @@ function render(capabilityDefaults: Record<string, unknown> = {}) {
 			["userCtx", { user: { id: 1, isAdmin: true } }],
 			[
 				"koboldCppSettingsCtx",
-				{ settings: { koboldCppManagerEnabled: true } }
+				{ settings: { koboldCppManagerEnabled: true, ...kcppSettings } }
 			],
 			["systemSettingsCtx", { settings: {}, capabilityDefaults }]
 		])
@@ -362,6 +365,47 @@ describe("Document View › KoboldCPP › getting a model", () => {
 			r.id.startsWith("a11y-kcpp-hub")
 		)
 		expect(quants.map((r) => r.checked)).toEqual([false, true, false])
+	})
+})
+
+/**
+ * In Managed mode the server makes the address from the port and refuses a
+ * typed one (`koboldcpp:setBaseUrl`), so the page shows it as words; External
+ * mode keeps its editable field.
+ */
+describe("Document View › KoboldCPP › Server URL", () => {
+	test("is words, not a field, in Managed mode", () => {
+		render(
+			{},
+			{
+				koboldCppManagedMode: "managed",
+				koboldCppManagerBaseUrl: "http://localhost:5005"
+			}
+		)
+		expect(document.getElementById("a11y-kcpp-base-url")).toBeNull()
+		expect(button(document.body, "Save URL")).toBeUndefined()
+		expect(document.body.textContent?.replace(/\s+/g, " ")).toContain(
+			"KoboldCPP Server URL: http://localhost:5005"
+		)
+		expect(document.body.textContent).toContain("Follows the port.")
+	})
+
+	test("stays an editable field in External mode", () => {
+		render(
+			{},
+			{
+				koboldCppManagedMode: "external",
+				koboldCppManagerBaseUrl: "http://192.168.1.4:5001"
+			}
+		)
+		const input = document.getElementById(
+			"a11y-kcpp-base-url"
+		) as HTMLInputElement | null
+		expect(input).not.toBeNull()
+		expect(input!.readOnly).toBe(false)
+		expect(input!.value).toBe("http://192.168.1.4:5001")
+		expect(button(document.body, "Save URL")).toBeDefined()
+		expect(document.body.textContent).not.toContain("Follows the port.")
 	})
 })
 

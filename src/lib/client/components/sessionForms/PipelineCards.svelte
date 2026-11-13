@@ -10,9 +10,12 @@
 	 * Two skins, one behaviour: `app` for the themed form, `document` for
 	 * Document View's plain controls.
 	 */
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	interface Props {
@@ -24,7 +27,12 @@
 		cardClass?: string
 	}
 
-	let { sessionId, canEdit, variant = "app", cardClass = "" }: Props = $props()
+	let {
+		sessionId,
+		canEdit,
+		variant = "app",
+		cardClass = ""
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 	type Card = Sockets.Sessions.Bindings.PipelineCards.Card
@@ -47,12 +55,23 @@
 		if (res.sessionId !== sessionId) return
 		if (pending !== `${res.spec}#${res.nodeKey}`) return
 		pending = null
-		if (res.error) toaster.error({ title: "Not changed", description: res.error })
-		else toaster.success({ title: "Saved" })
+		if (res.error)
+			notify.error({
+				source: "socket:sessions:setNodeRebind",
+				title: "Not changed",
+				description: res.error
+			})
+		else
+			notify.success({
+				source: "socket:sessions:setNodeRebind",
+				title: "Saved"
+			})
 	}
 
 	/** BARE: neither event has a `SCOPED_EVENTS` entry; the handlers filter. */
-	$effect(() => requestWithInterest("sessions:pipelineCards", { sessionId }, onCards))
+	$effect(() =>
+		requestWithInterest("sessions:pipelineCards", { sessionId }, onCards)
+	)
 	useInterest<"sessions:setNodeRebind">("sessions:setNodeRebind", onSet)
 
 	function apply(c: Card) {
@@ -68,10 +87,13 @@
 
 	const nodeLabel = (key: string) => {
 		const last = key.split(".").pop() ?? key
-		return last.charAt(0).toUpperCase() + last.slice(1).replace(/[-_]/g, " ")
+		return (
+			last.charAt(0).toUpperCase() + last.slice(1).replace(/[-_]/g, " ")
+		)
 	}
 	const defaultName = (c: Card) =>
-		c.options.find((o) => o.definitionId === c.default)?.name ?? "the pipeline's own"
+		c.options.find((o) => o.definitionId === c.default)?.name ??
+		"the pipeline's own"
 	function stored(c: Card): string {
 		return c.selected && c.selected !== c.default ? c.selected : DEFAULT
 	}
@@ -98,7 +120,9 @@
 			<label for={id}>{c.specName}: {nodeLabel(c.nodeKey)}</label>
 			<div class="a11y-inline-add">
 				<select {id} bind:value={draft[keyOf(c)]} disabled={!canEdit}>
-					<option value={DEFAULT}>Pipeline default ({defaultName(c)})</option>
+					<option value={DEFAULT}>
+						Pipeline default ({defaultName(c)})
+					</option>
 					{#each choices(c) as o (o.definitionId)}
 						<option value={o.definitionId}>{o.name}</option>
 					{/each}
@@ -133,7 +157,10 @@
 			{#each cards as c (keyOf(c))}
 				<div>
 					<!-- Visual only: the Select names itself with the same words. -->
-					<p class="text-surface-600-400 mb-1.5 block text-xs" aria-hidden="true">
+					<p
+						class="text-surface-600-400 mb-1.5 block text-xs"
+						aria-hidden="true"
+					>
 						{c.specName} · {nodeLabel(c.nodeKey)}
 					</p>
 					<div class="flex items-center gap-2">
@@ -142,8 +169,14 @@
 							labelHidden
 							class="min-w-0 flex-1"
 							options={[
-								{ value: DEFAULT, label: `Pipeline default (${defaultName(c)})` },
-								...choices(c).map((o) => ({ value: o.definitionId, label: o.name }))
+								{
+									value: DEFAULT,
+									label: `Pipeline default (${defaultName(c)})`
+								},
+								...choices(c).map((o) => ({
+									value: o.definitionId,
+									label: o.name
+								}))
 							]}
 							bind:value={draft[keyOf(c)]}
 							disabled={!canEdit}

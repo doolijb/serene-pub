@@ -3,7 +3,7 @@
  * configured with, in the SDK's one field language.
  *
  * A widget declares its settings as a `SettingsSchema`, the same `FieldDecl`
- * vocabulary a node's `params` use, so `SchemaForm` renders both. Core owns three
+ * vocabulary a node's `params` use, so `SchemaForm` renders both. Core owns two
  * keys on top of whatever the widget declares:
  *
  *   • `title` — an override of the descriptor's label, defaulting to it.
@@ -11,17 +11,9 @@
  *     only to a widget that declares channels, because a widget without them
  *     views the whole log and has no lane to narrow.
  *
- *   • `hostCard` — whether the host draws its card (surface, border, title
- *     bar) around the widget. Off by default: a placed widget sits flush in
- *     its cell (ruled 2026-09-27; `sessionLayout/hostCard`). Offered to every
- *     widget. Not `card`, which is a character file.
- *
- *   • `backingMode` — on a widget message styles skin (`messages`), in place
- *     of `hostCard`: the Card setting is Auto / On / Off over the message
- *     backing its style declares (note 18; `./messageBacking`). A stored
- *     `hostCard` boolean on such a widget is read as `on` / `off`.
- *
- * All four are reserved: a widget declaring one is ignored for that key.
+ * Both are reserved: a widget declaring one is ignored for that key. (The
+ * per-widget Card setting `hostCard` and Messages' `backingMode` are retired
+ * — the panel draws the card; a stored value is now an unknown key.)
  *
  * ## Three uses, one function
  *
@@ -45,19 +37,9 @@ import {
 	type FieldDecl,
 	type SettingsSchema
 } from "@serene-pub/sdk"
-import {
-	BACKING_MODE_KEY,
-	isBackedWidget,
-	withLegacyBackingMode
-} from "./messageBacking"
 
 /** Keys core owns on every widget. A widget declaring one is ignored for it. */
-export const CORE_SETTING_KEYS = [
-	"title",
-	"lane",
-	"hostCard",
-	BACKING_MODE_KEY
-] as const
+export const CORE_SETTING_KEYS = ["title", "lane"] as const
 
 /** The half of a widget declaration this module reads. */
 export interface WidgetSettingsDecl {
@@ -136,31 +118,6 @@ export function coreSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 				"Lane 1 is the channel's default.",
 			min: 1,
 			default: DEFAULT_LANE
-		}
-	if (isBackedWidget(decl.id))
-		schema[BACKING_MODE_KEY] = {
-			type: "enum",
-			label: "Card",
-			description:
-				"Auto follows the message style (a card behind it when you " +
-				"have an app background and the style asks for nothing); On " +
-				"always backs the messages; Off never does.",
-			of: ["auto", "on", "off"],
-			members: [
-				{ key: "auto", label: "Auto" },
-				{ key: "on", label: "On" },
-				{ key: "off", label: "Off" }
-			],
-			default: "auto"
-		}
-	else
-		schema.hostCard = {
-			type: "boolean",
-			label: "Card",
-			description:
-				"Draw this widget in a card, with a border and a title bar. " +
-				"A widget opened over the session always has one.",
-			default: false
 		}
 	return schema
 }
@@ -342,7 +299,7 @@ function isDefault(decl: FieldDecl, value: unknown): boolean {
  * World State's `layout: strip | list` (its row is read against Stats'
  * schema through the alias) is `arrangement`. A key already written the new
  * way wins (the old one then drops as undeclared, and is reported). Gated
- * on the schema's shape, as `withLegacyBackingMode` is: only a schema that
+ * on the schema's shape: only a schema that
  * declares the new key and not the old one reads it. The
  * remote's own fallback for a raw settings object is core-catalog's
  * `statsSettingsOf`. REMOVE in 0.7.0.
@@ -429,16 +386,9 @@ export function pruneWidgetSettings(
 ): PruneResult {
 	const out: PruneResult = { values: {}, dropped: [] }
 	if (!isPlainObject(raw)) return out
-	// A backed widget's Card was a boolean before it was a mode: read it as
-	// one, so the next write (or the boot reconcile) stores the mode.
 	const read = withLegacyScenePortraitsSettings(
 		schema,
-		withLegacyStatsSettings(
-			schema,
-			schema[BACKING_MODE_KEY] && !schema.hostCard
-				? (withLegacyBackingMode(raw) as Record<string, unknown>)
-				: raw
-		)
+		withLegacyStatsSettings(schema, raw)
 	)
 	for (const [key, value] of Object.entries(read)) {
 		const decl = schema[key]

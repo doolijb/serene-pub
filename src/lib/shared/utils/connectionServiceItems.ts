@@ -272,6 +272,10 @@ export function buildConnectionServiceItems(
 		if (isKoboldCppManagedType(t.value)) continue
 		// audio.cpp, run by Serene Pub: same reasoning (🚧 provisional).
 		if (isAudioCppManagedType(t.value)) continue
+		// The two local ONNX connections are Serene Pub's own, one per type, made
+		// at boot (`ensureLocalOnnxConnections`, owner 2026-11-04); `connections:create`
+		// refuses a second, so the picker offers neither.
+		if (t.value === "local-onnx" || t.value === "local-onnx-ner") continue
 		// Merged into `ollama` (owner ruling 2026-09-25): one Ollama connection
 		// per host serves every modality it has, and the boot sync renames any
 		// old row. Its option entry stays so a straggler still has a label.

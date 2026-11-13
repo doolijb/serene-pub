@@ -78,7 +78,7 @@
  * so" rule for a stale binding.
  */
 
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -110,6 +110,7 @@ import {
 	type StoryCalendar
 } from "@serene-pub/sdk"
 import {
+	castOwnerOf,
 	ownerFacet,
 	resolutionChain,
 	type OwnerKind,
@@ -119,8 +120,14 @@ import { deriveValue } from "$lib/server/state/derive"
 import { notCarriedFor } from "$lib/server/state/carries"
 // THE comparator for the book's calendar (one comparator per calendar): the
 // shared one, which delegates to the SDK's `compareStoryTimes`.
-import { bookCalendarOf, clockOfNow, sessionStoryNowOf, storyNowOf } from "$lib/server/state/storyTime"
-import { ownBookOf } from "$lib/server/lorebooks/ownBook"
+import {
+	bookCalendarOf,
+	clockOf,
+	clockOfNow,
+	sessionStoryNowOf,
+	storyNowOf
+} from "$lib/server/state/storyTime"
+import { keepsValuesInOwnBook, ownBookOf } from "$lib/server/lorebooks/ownBook"
 import { readingOf, rowsOnReading, sessionReadingOf, type LineReading } from "$lib/server/state/reading"
 import {
 	MAIN_HEAD,
@@ -134,9 +141,12 @@ import {
 import type { PlaceSight } from "$lib/shared/lorebooks/placeSight"
 import { declaresPrivateLore } from "$lib/server/utils/lorebookEntries"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
-import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
-import { castKey, castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { compareDates, type StoryClock, type StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { castKey, castLinkKey, castMemberKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
+import { cardsNow, seatedCastOf } from "$lib/server/cast/seatedCast"
+import type { MemberAsRead } from "$lib/server/cast/memberAsRead"
 import { keptRulesetDocument } from "$lib/server/rulesets/versions"
 import { offerableSlot, rulesetSettingAllows, sessionRulesets, withoutForeignRepertoire } from "$lib/server/rulesets/settings"
 import {
@@ -153,6 +163,22 @@ export interface CastMemberLink {
 	name: string
 	/** The `lorebook_bindings` row binding this character into the session's world. */
 	castMemberId: number | null
+	/**
+	 * 🚧 The cast member the character's **seat** stores (`session_characters.cast_member_id` / `session_personas.cast_member_id`) — who the seat is, wherever that member lives (the session's own book, or one an attach left it in). ⚠ Not `castMemberId` (the attached book's member, which routes durable values).
+	 */
+	seatMemberId?: number | null
+	/**
+	 * 🚧 The seat member's **active card on the timeline** at the session's reading (`MemberAsRead.activeCardId`; null when the member is drawn card-less). Absent when the seat's member was not read — the entry's `cardId` is then the card the seat holds.
+	 */
+	seatActiveCardId?: number | null
+	/**
+	 * 🚧 ⏳ S4, only once the flip is on (`memberForm.ts`): the `session_personas.id` of a **carded player seat**'s link — its values then live under `player_seat:<id>` (`castOwnerOf`, `castLinkKey`), and a card held by a character seat and a player seat is two links, one per seat (★K-2). Absent while the flip is off, and on a character seat's link.
+	 */
+	playerSeatId?: number | null
+	/**
+	 * 🚧 This character's cast member in the session's own book, when it has one — where a world-scope value of theirs is kept when the session can't write its book, or the attached book holds no member for them (`worldOwnerOf`). ⚠ Not `castMemberId` (the attached book's).
+	 */
+	ownBookMemberId?: number | null
 	/**
 	 * Seated as the player's voice rather than as a character the model writes.
 	 *
@@ -181,6 +207,30 @@ export interface PlayerSeatLink {
 	/** The seat name. */
 	name: string
 	position: number
+	/** 🚧 The cast member the seat stores (`session_personas.cast_member_id`), null when none. */
+	seatMemberId?: number | null
+	/** 🚧 That member's active card on the timeline at the session's reading; absent when the member was not read (a card-less seat holds no card, so its entry's `cardId` is then null). */
+	seatActiveCardId?: number | null
+	/** 🚧 false = benched (owner 2026-11-10); the seat stays in the links, out of play. */
+	isActive: boolean
+}
+
+/**
+ * 🚧 ⏳ S4 (flip on): one live **card-less character seat** — a `session_characters` row with no card and a `cast_member_id`; it is no `CastMemberLink`, whose `characterId` is a card id and which a member id must never fill. Its values live under `seated_member:<seatMemberId>`, through its member and no card.
+ */
+export interface SeatedMemberLink {
+	/** The seat's cast member (`session_characters.cast_member_id`) — the owner id and the entry's key. */
+	seatMemberId: number
+	/** The member as read. */
+	name: string
+	position: number
+	isActive: boolean
+	/** The member's active card on the timeline (null when drawn card-less). */
+	seatActiveCardId: number | null
+	/** The member when it lives in the attached book (a chain layer, as a card's `castMemberId`). */
+	castMemberId: number | null
+	/** The member when it lives in the session's own book (as a card's `ownBookMemberId`). */
+	ownBookMemberId: number | null
 }
 
 /**
@@ -209,6 +259,8 @@ export interface SessionLinks {
 	 * by hand stay valid; absent reads as no seats.
 	 */
 	playerSeats?: PlayerSeatLink[]
+	/** 🚧 ⏳ S4 (flip on): every live card-less character seat (`SeatedMemberLink`); absent reads as none. */
+	seatedMembers?: SeatedMemberLink[]
 	/** 🚧 The world's locations (phase 4), by entry id; none without a lorebook. */
 	locations: LocationLink[]
 	/** The story date, when the world has one — what `age` is measured against. */
@@ -233,6 +285,19 @@ export interface SessionLinks {
 	 * built links by hand).
 	 */
 	reading?: LineReading | null
+	/**
+	 * 🚧 (m3b-V2, ★M3b-W-1) The session's own book, when the session keeps its
+	 * world-scope values there (`keepsValuesInOwnBook`: it reads no book, or one
+	 * its owner does not own) — read before the attached book. Absent otherwise.
+	 */
+	valuesOwnBookId?: number | null
+	/**
+	 * 🚧 (★pl-1, owner 2026-11-05) The notes' overlay of the attached book's
+	 * places' world-scope values — entry id, then slot id, to the value
+	 * (`placeValuesOf`) — set only when `valuesOwnBookId` is. Read before the
+	 * book's own row for the place; null in it reads on to the book's.
+	 */
+	placeValues?: Record<string, Record<string, unknown>> | null
 }
 
 /**
@@ -304,7 +369,8 @@ interface CastEntryFields {
 	/**
 	 * The seat is switched on in the cast list (2026-09-27). Every seated
 	 * member is in `state.cast`, switched off or not; this is how a pipeline
-	 * or a widget tells them apart. A persona is always `true`.
+	 * or a widget tells them apart. 🚧 False = benched, on either seat table
+	 * (owner 2026-11-10): a player seat carries the bench too.
 	 */
 	enabled: boolean
 	[slot: string]: SlotValue
@@ -318,6 +384,16 @@ export type CastEntry = CastEntryFields & {
 	 * `player_seat:<playerSeatId>` (`castMemberKey`).
 	 */
 	playerSeatId?: number
+	/**
+	 * 🚧 Host-filled identity (plan §27 S3), all optional — a consumer matches
+	 * on these, never builds them. `ref`: the seat's participant reference
+	 * (`character:<card>`, or `player-seat:<id>` for a card-less player seat).
+	 */
+	ref?: string
+	/** 🚧 The seat's cast member (`CastMemberLink.seatMemberId`, ⚠ not the attached book's `castMemberId`); null when the seat stores none. */
+	castMemberId?: number | null
+	/** 🚧 The member's active card on the timeline; null when card-less. */
+	cardId?: number | null
 }
 
 
@@ -545,37 +621,44 @@ export async function sessionLinks(
 
 	const seated = await db
 		.select({
+			seatId: schema.sessionCharacters.id,
+			seatMemberId: schema.sessionCharacters.castMemberId,
 			characterId: schema.sessionCharacters.characterId,
-			name: schema.characters.name,
+			cardRowId: schema.characters.id,
 			isActive: schema.sessionCharacters.isActive,
 			position: schema.sessionCharacters.position
 		})
 		.from(schema.sessionCharacters)
-		.innerJoin(
+		// 🚧 Left, so a card-less seat (a member and no card) is read; a seat whose card row is gone is dropped below, as the inner join did.
+		.leftJoin(
 			schema.characters,
 			eq(schema.characters.id, schema.sessionCharacters.characterId)
 		)
 		.where(
 			and(
 				eq(schema.sessionCharacters.sessionId, sessionId),
-				isNull(schema.sessionCharacters.removedAt)
+				isNull(schema.sessionCharacters.removedAt),
+				// The seat filter: not an envoy, and has a member or a card.
+				isNull(schema.sessionCharacters.envoySlug),
+				or(
+					isNotNull(schema.sessionCharacters.characterId),
+					isNotNull(schema.sessionCharacters.castMemberId)
+				)
 			)
 		)
 
 	const voiced = await db
 		.select({
 			seatId: schema.sessionPersonas.id,
+			seatMemberId: schema.sessionPersonas.castMemberId,
 			characterId: schema.sessionPersonas.personaId,
-			// 🚧 A seat name wins over the card's name (2026-10-14).
-			name: sql<string | null>`coalesce(${schema.sessionPersonas.seatName}, ${schema.characters.name})`,
+			// The seat name alone, so a seated member's name can stand in for the card's.
+			seatName: schema.sessionPersonas.seatName,
 			seatUserId: schema.sessionPersonas.userId,
-			position: schema.sessionPersonas.position
+			position: schema.sessionPersonas.position,
+			isActive: schema.sessionPersonas.isActive
 		})
 		.from(schema.sessionPersonas)
-		.leftJoin(
-			schema.characters,
-			eq(schema.characters.id, schema.sessionPersonas.personaId)
-		)
 		.where(
 			and(
 				eq(schema.sessionPersonas.sessionId, sessionId),
@@ -583,23 +666,53 @@ export async function sessionLinks(
 			)
 		)
 
+	// The cards' names are their current card version's (never the ⏳ copies).
+	const cardNow = await cardsNow(db, [
+		...seated.flatMap((r) => (r.characterId != null ? [r.characterId] : [])),
+		...voiced.flatMap((r) => (r.characterId != null ? [r.characterId] : []))
+	])
+
+	// 🚧 Who each seated character *is*: its seat's cast member as read over the
+	// active card (S2). One read; skipped while no seat has a member.
+	const seatAsRead = new Map<string, MemberAsRead>()
+	if (
+		seated.some((r) => r.seatMemberId != null) ||
+		voiced.some((r) => r.seatMemberId != null)
+	)
+		for (const s of await seatedCastOf(db, sessionId))
+			if (s.asRead) seatAsRead.set(`${s.kind}:${s.seatId}`, s.asRead)
+
+	// 🚧 A seat whose member was read carries that member's active card (null when drawn card-less); one whose member was not read carries nothing, so its entry falls back to the card the seat holds.
+	const activeCardOf = (asRead: MemberAsRead | undefined) =>
+		asRead ? { seatActiveCardId: asRead.activeCardId } : {}
 	const cast: CastMemberLink[] = []
 	const seen = new Set<number>()
+	// 🚧 ⏳ S4 (`memberForm.ts`): once the flip is on, a link is deduped by its key (`castLinkKey`), so a card held by a character seat and a player seat stays two links (★K-2). Off: by card id.
+	const seenKeys = new Set<string>()
 	const take = (link: CastMemberLink) => {
+		if (memberFormOn()) {
+			const key = castLinkKey(link)
+			if (seenKeys.has(key)) return
+			seenKeys.add(key)
+			cast.push(link)
+			return
+		}
 		if (seen.has(link.characterId)) return
 		seen.add(link.characterId)
 		cast.push(link)
 	}
 	seated
 		.filter((r): r is typeof r & { characterId: number } =>
-			typeof r.characterId === "number"
+			typeof r.characterId === "number" && r.cardRowId != null
 		)
 		.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
 		.forEach((r, index) =>
 			take({
 				characterId: r.characterId,
-				name: r.name ?? "",
+				name: seatAsRead.get(`character:${r.seatId}`)?.name ?? cardNow.get(r.characterId)?.name ?? "",
 				castMemberId: null,
+				seatMemberId: r.seatMemberId ?? null,
+				...activeCardOf(seatAsRead.get(`character:${r.seatId}`)),
 				isPersona: false,
 				isActive: r.isActive !== false,
 				position: r.position ?? index
@@ -607,16 +720,27 @@ export async function sessionLinks(
 		)
 	// 🚧 Every live card-less player seat (`isCardlessPlayerSeat`; the name read is the
 	// seat name, there being no card to fall back on).
-	const playerSeats: PlayerSeatLink[] = voiced
+	// 🚧 A seat name wins over the card's name (2026-10-14).
+	const voicedNamed = voiced.map((r) => ({
+		...r,
+		name:
+			r.seatName ??
+			(r.characterId != null ? cardNow.get(r.characterId)?.name : undefined) ??
+			null
+	}))
+	const playerSeats: PlayerSeatLink[] = voicedNamed
 		.filter((r) => isCardlessPlayerSeat({ personaId: r.characterId, seatName: r.name }))
 		.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
 		.map((r, index) => ({
 			playerSeatId: r.seatId,
 			userId: r.seatUserId ?? null,
 			name: r.name!.trim(),
-			position: r.position ?? index
+			position: r.position ?? index,
+			seatMemberId: r.seatMemberId ?? null,
+			isActive: r.isActive !== false,
+			...activeCardOf(seatAsRead.get(`player:${r.seatId}`))
 		}))
-	voiced
+	voicedNamed
 		.filter((r): r is typeof r & { characterId: number } =>
 			typeof r.characterId === "number"
 		)
@@ -624,10 +748,18 @@ export async function sessionLinks(
 		.forEach((r, index) =>
 			take({
 				characterId: r.characterId,
-				name: r.name ?? "",
+				// A seat name still wins; else the member as read, else the card's name.
+				name:
+					r.seatName ??
+					seatAsRead.get(`player:${r.seatId}`)?.name ??
+					r.name ??
+					"",
 				castMemberId: null,
+				seatMemberId: r.seatMemberId ?? null,
+				...activeCardOf(seatAsRead.get(`player:${r.seatId}`)),
+				...(memberFormOn() ? { playerSeatId: r.seatId } : {}),
 				isPersona: true,
-				isActive: true,
+				isActive: r.isActive !== false,
 				position: r.position ?? index
 			})
 		)
@@ -640,24 +772,57 @@ export async function sessionLinks(
 			: new Map<number, number>()
 	for (const member of cast)
 		member.castMemberId = memberOf.get(member.characterId) ?? null
+	const ownBook = await ownBookOf(db, sessionId)
+	if (ownBook && ownBook.id !== lorebookId) {
+		const ownMemberOf = (await castMemberCards(db, ownBook.id)).memberOf
+		for (const member of cast)
+			member.ownBookMemberId = ownMemberOf.get(member.characterId) ?? null
+	}
+	// 🚧 ⏳ S4 (flip on): each live card-less character seat, by position, as its member reads (a member that did not read is no seat to show). Where the member lives sets its chain layer; none of it is a card. Deduped against the cast by key, so a member seated twice is one entry.
+	const seatedMembers: SeatedMemberLink[] = []
+	if (memberFormOn())
+		for (const r of seated
+			.filter((r) => r.characterId == null && r.seatMemberId != null)
+			.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))) {
+			const asRead = seatAsRead.get(`character:${r.seatId}`)
+			const key = `seated_member:${r.seatMemberId}`
+			if (!asRead || seenKeys.has(key)) continue
+			seenKeys.add(key)
+			const inOwn = ownBook != null && asRead.lorebookId === ownBook.id
+			const inAttached = lorebookId != null && asRead.lorebookId === lorebookId
+			seatedMembers.push({
+				seatMemberId: r.seatMemberId!,
+				name: asRead.name,
+				position: r.position ?? seatedMembers.length,
+				isActive: r.isActive !== false,
+				seatActiveCardId: asRead.activeCardId,
+				castMemberId: inAttached || !inOwn ? r.seatMemberId : null,
+				ownBookMemberId: inOwn ? r.seatMemberId : null
+			})
+		}
+	const keeps = await keepsValuesInOwnBook(db, sessionId)
+	const { placeValuesOf } = await import("$lib/server/rulesets/ties")
 
 	// The session's line and story clock (ruling 15, story-time P3): which
 	// durable rows it inherits, and where its story's now stands.
-	const reading = lorebookId ? await sessionReadingOf(db, sessionId) : null
+	const reading = await sessionReadingOf(db, sessionId)
 	const now = await sessionStoryNowOf(db, sessionId)
-	const readBookId = lorebookId ?? (await ownBookOf(db, sessionId))?.id ?? null
+	const readBookId = lorebookId ?? ownBook?.id ?? null
 	return {
 		sessionId,
 		lorebookId,
+		valuesOwnBookId: keeps && ownBook ? ownBook.id : null,
+		placeValues: keeps && ownBook ? placeValuesOf(ownBook.extraJson) : null,
 		clock: now ? clockOfNow(now) : null,
 		calendar: readBookId != null ? await bookCalendarOf(db, readBookId) : null,
-		storyDate: await storyDateOf(db, lorebookId, reading?.branchId ?? null, {
+		storyDate: await storyDateOf(db, reading?.lorebookId ?? lorebookId, reading?.branchId ?? null, {
 			sessionStoryClock: reading?.moment ?? null,
 			line: reading?.line ?? null
 		}),
 		reading,
 		cast,
 		playerSeats,
+		seatedMembers,
 		locations: await locationsOf(db, sessionId, lorebookId, reading)
 	}
 }
@@ -671,8 +836,9 @@ export async function sessionLinks(
  * is not a place in this session's story at all.
  *
  * 🚧 The union (PLAN-rulesets §26, "reads are the union"): then the places
- * the session's own notes hold, at the notes' head, marked `sessionOnly` — so
- * a session with no lorebook (a dungeon crawl) still has its rooms.
+ * the session's own notes hold, marked `sessionOnly` — at main's head beside
+ * an attached book, on the session's reading when the notes are read alone — so
+ * a session with no attached book (a dungeon crawl) still has its rooms.
  */
 async function locationsOf(
 	db: Db,
@@ -686,7 +852,12 @@ async function locationsOf(
 	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
 	const ownBook = await ownBookOf(db, sessionId)
 	if (ownBook && ownBook.id !== lorebookId)
-		for (const place of await placesOnReading(db, ownBook.id, MAIN_HEAD, "session"))
+		for (const place of await placesOnReading(
+			db,
+			ownBook.id,
+			lorebookId ? MAIN_HEAD : (reading ?? MAIN_HEAD),
+			"session"
+		))
 			out.push({ ...place, sessionOnly: true })
 	return out
 }
@@ -834,7 +1005,7 @@ export async function valueOf(
 			read: async (slotId) => valueOf(db, { ...query, slotId, reading }, { ...known, links })
 		})
 
-	const found = fromLayers(rows, chain, query.slotId, reading?.dates)
+	const found = fromLayers(rows, chain, query.slotId, reading?.dates, links?.placeValues)
 	if (found !== undefined) return found
 	// The derived default (`SlotConfig.derivation` on a stored slot): after the
 	// layers, before the declaration's default.
@@ -882,9 +1053,32 @@ function fromLayers(
 	chain: StateOwner[],
 	slotId: string,
 	/** The reading's history-entry dates (`rowsOnReading` fills them), which order the durable rows. */
-	dates: ReadonlyMap<number, StoryDate | null> | undefined
+	dates: ReadonlyMap<number, StoryDate | null> | undefined,
+	/** 🚧 (★pl-1) The notes' overlay of the book's places' values (`SessionLinks.placeValues`), read at a `location` layer before its rows. */
+	placeValues?: SessionLinks["placeValues"]
 ): SlotValue | undefined {
+	return answeringLayer(rows, chain, slotId, dates, placeValues)?.value
+}
+
+/**
+ * The layer that answers for the slot: its value and the stored row it came
+ * from (`row: null` when the answer is a place value laid in the notes'
+ * overlay, which no row holds). `fromLayers` and `valueStampsOf` share this.
+ */
+function answeringLayer<
+	R extends Layered & { ownerKind: string; ownerId: number; slotId: string; value: { v: unknown } | null }
+>(
+	rows: R[],
+	chain: StateOwner[],
+	slotId: string,
+	dates: ReadonlyMap<number, StoryDate | null> | undefined,
+	placeValues?: SessionLinks["placeValues"]
+): { value: SlotValue; row: R | null } | undefined {
 	for (const layer of chain) {
+		if (layer.kind === "location") {
+			const laid = placeValues?.[String(layer.id)]?.[slotId]
+			if (laid !== null && laid !== undefined) return { value: laid as SlotValue, row: null }
+		}
 		const row = inForce(
 			rows.filter((r) => ownerMatches(r, layer) && r.slotId === slotId),
 			dates
@@ -893,9 +1087,50 @@ function fromLayers(
 		const v = row.value?.v as SlotValue
 		// `null` is "this layer clears it" — keep falling through.
 		if (v === null || v === undefined) continue
-		return v
+		return { value: v, row }
 	}
 	return undefined
+}
+
+/** One stored value's write stamp (lane sense-age2): what `writtenAgo` counts from. */
+export interface ValueWriteStamp {
+	/** The writing session's story clock when a session wrote the row; null when no session did, it had no clock, or the row predates stamping. */
+	clock: StoryClock | null
+	/** When the row was written (`created_at`). */
+	writtenAt: Date
+}
+
+/**
+ * The write stamp of the exact row `valueOf` takes each slot's value from, or
+ * `null` when no stored row answers (a default, a derived slot, or a place
+ * value laid in the notes' overlay). One read of the rows for every slot.
+ */
+export async function valueStampsOf(
+	db: Db,
+	sessionId: number,
+	owner: StateOwner,
+	slotIds: readonly string[],
+	known: { links?: SessionLinks | null } = {}
+): Promise<Map<string, ValueWriteStamp | null>> {
+	const links =
+		known.links !== undefined ? known.links : await sessionLinks(db, sessionId)
+	const chain = chainFor(owner, links)
+	const reading = await readingForQuery(db, { owner, slotId: "", sessionId }, links)
+	const rows = await valueRows(db, chain, [...slotIds], sessionId, reading)
+	const out = new Map<string, ValueWriteStamp | null>()
+	for (const slotId of slotIds) {
+		// A derived slot is worked out before any layer (`valueOf`): no row answers it.
+		if (getAttributeSlot(slotId)?.type === "derived") {
+			out.set(slotId, null)
+			continue
+		}
+		const found = answeringLayer(rows, chain, slotId, reading?.dates, links?.placeValues)
+		out.set(
+			slotId,
+			found?.row ? { clock: clockOf(found.row), writtenAt: found.row.createdAt } : null
+		)
+	}
+	return out
 }
 
 /**
@@ -942,10 +1177,41 @@ export async function configFor(
 }
 
 function chainFor(owner: StateOwner, links: SessionLinks | null): StateOwner[] {
-	const member = links?.cast.find((c) => c.characterId === owner.id)
+	// 🚧 ⏳ S4, once the flip is on (`memberForm.ts`): a seat owner finds its link by owner, and ⚠ its `owner.id` is a member / seat id — the card is the link's.
+	const seatOwner =
+		memberFormOn() &&
+		(owner.kind === "seated_member" || owner.kind === "player_seat" || owner.kind === "session_cast")
+	const member = seatOwner
+		? (links?.cast.find((c) => {
+				const o = castOwnerOf(c)
+				return o.kind === owner.kind && o.id === owner.id
+			}) ??
+			(owner.kind === "session_cast" ? links?.cast.find((c) => c.characterId === owner.id) : undefined))
+		: links?.cast.find((c) => c.characterId === owner.id)
+	// 🚧 A card-less character seat has no card link: its member is its layer, and it has no card layer.
+	const cardless =
+		memberFormOn() && owner.kind === "seated_member" && !member
+			? links?.seatedMembers?.find((s) => s.seatMemberId === owner.id)
+			: undefined
+	const characterId =
+		owner.kind === "cast_member"
+			? null
+			: seatOwner && owner.kind !== "session_cast"
+				? (member?.characterId ?? null)
+				: owner.id
+	const layer = member ?? cardless
+	// 🚧 (m3b-V2) Where the session keeps its values in its own notes, those are read first.
+	if (links?.valuesOwnBookId != null)
+		return resolutionChain(owner, {
+			castMemberId: layer?.castMemberId ?? null,
+			ownBookMemberId: layer?.ownBookMemberId ?? null,
+			ownBookId: links.valuesOwnBookId,
+			characterId,
+			lorebookId: links.lorebookId ?? null
+		})
 	return resolutionChain(owner, {
-		castMemberId: member?.castMemberId ?? null,
-		characterId: owner.kind === "cast_member" ? null : owner.id,
+		castMemberId: layer?.castMemberId ?? layer?.ownBookMemberId ?? null,
+		characterId,
 		lorebookId: links?.lorebookId ?? null
 	})
 }
@@ -1176,6 +1442,9 @@ export async function worldAttributesFor(
 		owners.push({ kind: "lorebook", id: links.lorebookId })
 		for (const member of links.cast)
 			if (member.castMemberId) owners.push({ kind: "cast_member", id: member.castMemberId })
+		// 🚧 A card-less character seat's member holds its sheet where it lives.
+		for (const seat of links.seatedMembers ?? [])
+			if (seat.castMemberId) owners.push({ kind: "cast_member", id: seat.castMemberId })
 		// Its places too (phase 4): a sheet on a location entry, and what the
 		// timeline recorded of one, are the world's as much as its cast's are.
 		for (const place of links.locations) owners.push({ kind: "location", id: place.entryId })
@@ -1237,13 +1506,13 @@ export async function worldAttributesFor(
 	}
 }
 
-/** The session's own owners — itself, its cast seats and its places — nearest last. */
-const ownOwnersOf = (links: SessionLinks, sessionId: number): StateOwner[] => [
-	...links.cast.map((m) => ({ kind: "session_cast" as const, id: m.characterId })),
-	...(links.playerSeats ?? []).map((s) => ({ kind: "player_seat" as const, id: s.playerSeatId })),
-	...links.locations.map((l) => ({ kind: "session_location" as const, id: l.entryId })),
-	{ kind: "session", id: sessionId }
-]
+/** 🚧 ⏳ S4 (flip on): a cast link's participant ref in member form; ⏳ `character:<id>` for a member-less seat. */
+const memberFormRefOf = (link: CastMemberLink): string =>
+	typeof link.playerSeatId === "number"
+		? `player-seat:${link.playerSeatId}`
+		: typeof link.seatMemberId === "number"
+			? `seated-member:${link.seatMemberId}`
+			: `character:${link.characterId}`
 
 /** 🚧 The session's attribute picks, by slot: `false` drops, `true` adds. */
 export async function attributePicksFor(db: Db, sessionId: number): Promise<Map<string, boolean>> {
@@ -1258,6 +1527,7 @@ export async function attributePicksFor(db: Db, sessionId: number): Promise<Map<
 export const isSessionScoped = (kind: OwnerKind): boolean =>
 	kind === "session" ||
 	kind === "session_cast" ||
+	kind === "seated_member" ||
 	kind === "session_location" ||
 	kind === "player_seat"
 
@@ -1528,23 +1798,35 @@ export async function stateFor(
 	for (const member of links.cast) {
 		const entry: CastEntry = {
 			id: member.characterId,
+			// 🚧 ⏳ S4: a carded player seat is its own entry once the flip is on (★K-2).
+			...(memberFormOn() && typeof member.playerSeatId === "number"
+				? { playerSeatId: member.playerSeatId }
+				: {}),
 			key: castKey(member.name),
 			name: member.name,
-			enabled: member.isActive
+			enabled: member.isActive,
+			// 🚧 Host-filled identity (S3): the card form of the seat's ref; once the flip is on (S4) its member form (⏳ a member-less seat keeps `character:<id>`).
+			ref: memberFormOn() ? memberFormRefOf(member) : `character:${member.characterId}`,
+			castMemberId: member.seatMemberId ?? null,
+			cardId:
+				member.seatActiveCardId !== undefined
+					? member.seatActiveCardId
+					: member.characterId
 		}
-		for (const decl of declared.filter((d) => d.appliesTo.includes("cast") && carried(String(member.characterId), d.id)))
+		const memberKey = castMemberKey(entry)
+		for (const decl of declared.filter((d) => d.appliesTo.includes("cast") && carried(memberKey, d.id)))
 			await writeKeys(entry, decl, declared, () =>
 				valueOf(
 					db,
 					{
 						sessionId,
-						owner: { kind: "session_cast", id: member.characterId },
+						owner: castOwnerOf(member),
 						slotId: decl.id
 					},
 					known
 				)
 			)
-		byId[String(member.characterId)] = entry
+		byId[memberKey] = entry
 	}
 	// 🚧 Card-less player seats (2026-10-14): a player character with no card is a
 	// cast entry all the same, its values read off the `player_seat` owner. A seat
@@ -1556,7 +1838,11 @@ export async function stateFor(
 			playerSeatId: seat.playerSeatId,
 			key: castKey(seat.name),
 			name: seat.name,
-			enabled: true
+			enabled: seat.isActive,
+			// 🚧 Host-filled identity (S3); a card-less seat's member read may still draw a card.
+			ref: `player-seat:${seat.playerSeatId}`,
+			castMemberId: seat.seatMemberId ?? null,
+			cardId: seat.seatActiveCardId ?? null
 		}
 		for (const decl of declared.filter((d) => d.appliesTo.includes("cast") && carried(castMemberKey(entry), d.id)))
 			await writeKeys(entry, decl, declared, () =>
@@ -1565,6 +1851,31 @@ export async function stateFor(
 					{
 						sessionId,
 						owner: { kind: "player_seat", id: seat.playerSeatId },
+						slotId: decl.id
+					},
+					known
+				)
+			)
+		byId[castMemberKey(entry)] = entry
+	}
+	// 🚧 ⏳ S4: a card-less character seat is a cast entry of its own, keyed `seated_member:<member>`; ⚠ `id` is 0 — its member id is no card id — and `cardId` is the member's active card.
+	for (const seat of links.seatedMembers ?? []) {
+		const entry: CastEntry = {
+			id: 0,
+			key: castKey(seat.name),
+			name: seat.name,
+			enabled: seat.isActive,
+			ref: `seated-member:${seat.seatMemberId}`,
+			castMemberId: seat.seatMemberId,
+			cardId: seat.seatActiveCardId
+		}
+		for (const decl of declared.filter((d) => d.appliesTo.includes("cast") && carried(castMemberKey(entry), d.id)))
+			await writeKeys(entry, decl, declared, () =>
+				valueOf(
+					db,
+					{
+						sessionId,
+						owner: { kind: "seated_member", id: seat.seatMemberId },
 						slotId: decl.id
 					},
 					known
@@ -1625,7 +1936,9 @@ async function configsFor(
 			owner:
 				typeof entry.playerSeatId === "number"
 					? ({ kind: "player_seat", id: entry.playerSeatId } as StateOwner)
-					: ({ kind: "session_cast", id: entry.id } as StateOwner)
+					: memberFormOn() && typeof entry.castMemberId === "number"
+						? ({ kind: "seated_member", id: entry.castMemberId } as StateOwner)
+						: ({ kind: "session_cast", id: entry.id } as StateOwner)
 		}))
 	]
 	const chains = owners.map((o) => ({ ...o, chain: chainFor(o.owner, links) }))
@@ -1698,7 +2011,7 @@ async function locationsFor(
 			await writeKeys(entry, decl, declared, async () =>
 				decl.type === "derived"
 					? valueOf(db, { sessionId, owner, slotId: decl.id }, { links, vocabulary })
-					: (fromLayers(rows, chain, decl.id, links.reading?.dates) ?? defaultFor(decl, vocabulary))
+					: (fromLayers(rows, chain, decl.id, links.reading?.dates, links.placeValues) ?? defaultFor(decl, vocabulary))
 			)
 		}
 		byId[String(place.entryId)] = entry
@@ -2042,14 +2355,34 @@ async function whoFor(
 	byId: Record<string, CastEntry>,
 	opts: StateForOptions
 ): Promise<WhoKeys> {
+	// 🚧 ⏳ S4, flip on: entries are keyed by seat (`castLinkKey`), so a card id finds the first link holding it (character seats before player seats, as `take` ordered them).
 	const entry = (id: number | null | undefined): CastEntry | undefined =>
-		typeof id === "number" ? byId[String(id)] : undefined
+		typeof id !== "number"
+			? undefined
+			: memberFormOn()
+				? (() => {
+						const link = links.cast.find((c) => c.characterId === id)
+						return link ? byId[castLinkKey(link)] : undefined
+					})()
+				: byId[String(id)]
+	const entryOfLink = (link: CastMemberLink | undefined): CastEntry | undefined =>
+		link ? byId[castLinkKey(link)] : undefined
 
 	const who: WhoKeys = {
-		active: links.cast
-			.filter((c) => !c.isPersona && c.isActive)
+		// 🚧 Card-less character seats join the carded ones, in position order.
+		active: [
+			...links.cast
+				.filter((c) => !c.isPersona && c.isActive)
+				.map((c) => ({
+					position: c.position,
+					entry: memberFormOn() ? entryOfLink(c) : entry(c.characterId)
+				})),
+			...(links.seatedMembers ?? [])
+				.filter((s) => s.isActive)
+				.map((s) => ({ position: s.position, entry: byId[`seated_member:${s.seatMemberId}`] }))
+		]
 			.sort((a, b) => a.position - b.position)
-			.map((c) => entry(c.characterId))
+			.map((c) => c.entry)
 			.filter((e): e is CastEntry => !!e)
 	}
 
@@ -2103,12 +2436,14 @@ async function whoFor(
 		.sort((a, b) => a.position - b.position)
 	// The session owner voices the first persona seated; a guest's own persona
 	// is `who.user`, which is why the two are separate keys rather than one.
-	const owner = entry(personas[0]?.characterId)
+	const owner = memberFormOn() ? entryOfLink(personas[0]) : entry(personas[0]?.characterId)
 	if (owner) who.owner = owner
 	const asking = opts.userId
 		? await personaOf(db, sessionId, opts.userId, personas)
 		: undefined
-	const user = entry(asking)
+	const user = memberFormOn()
+		? entryOfLink(personas.find((p) => p.characterId === asking))
+		: entry(asking)
 	// 🚧 A player with no card seated is their card-less player seat (2026-10-14).
 	const seatOfAsker = opts.userId
 		? (links.playerSeats ?? []).find((s) => s.userId === opts.userId)
@@ -2119,7 +2454,14 @@ async function whoFor(
 	else if (owner && opts.userId && opts.userId === session?.userId)
 		who.user = owner
 
-	const next = entry(await nextTurn(db, sessionId, session?.isGroup ?? false))
+	const nextKey = memberFormOn()
+		? await nextTurnKey(db, sessionId, session?.isGroup ?? false, links)
+		: null
+	const next = memberFormOn()
+		? nextKey != null
+			? byId[nextKey]
+			: undefined
+		: entry(await nextTurn(db, sessionId, session?.isGroup ?? false))
 	if (next) who.next = next
 
 	return who
@@ -2180,9 +2522,40 @@ async function nextTurn(
 	const { headTurnEntry } = await import("$lib/server/sessions/fireTurn")
 	const head = await headTurnEntry(db, sessionId)
 	const ref = head?.ref
+	if (typeof ref === "string" && ref.startsWith("seated-member:")) {
+		// 🚧 A seated member's turn is its seat's card (null: no card).
+		const { seatOf } = await import("$lib/server/sessions/seats")
+		return (await seatOf(db, sessionId, ref))?.cardId ?? null
+	}
 	if (typeof ref !== "string" || !ref.startsWith("character:")) return null
 	const id = Number(ref.slice("character:".length))
 	return Number.isInteger(id) ? id : null
+}
+
+/**
+ * 🚧 ⏳ S4, flip on: `nextTurn` answering the head's **`byId` key** instead of a card id — a `seated-member:` ref by its seat (a player seat's `player_seat:<id>`, else `seated_member:<id>`), a `player-seat:` ref by its seat, a `character:` ref by the first link holding that card. Null when the head names nobody the cast has.
+ */
+async function nextTurnKey(
+	db: Db,
+	sessionId: number,
+	isGroup: boolean,
+	links: SessionLinks
+): Promise<string | null> {
+	if (!isGroup) return null
+	const { headTurnEntry } = await import("$lib/server/sessions/fireTurn")
+	const ref = (await headTurnEntry(db, sessionId))?.ref
+	if (typeof ref !== "string") return null
+	const { parseSeatRef, seatOf } = await import("$lib/server/sessions/seats")
+	const parsed = parseSeatRef(ref)
+	if (!parsed) return null
+	if (parsed.form === "player-seat") return `player_seat:${parsed.id}`
+	if (parsed.form === "seated-member") {
+		const seat = await seatOf(db, sessionId, ref)
+		if (!seat) return null
+		return seat.kind === "player" ? `player_seat:${seat.seatId}` : `seated_member:${parsed.id}`
+	}
+	const link = links.cast.find((c) => c.characterId === parsed.id)
+	return link ? castLinkKey(link) : null
 }
 
 export type { OwnerKind, StateOwner }

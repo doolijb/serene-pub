@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
 	import {
@@ -11,7 +12,7 @@
 	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onDestroy, untrack } from "svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { notRecordedToast } from "$lib/client/lorebooks/notRecordedToast"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import {
@@ -21,8 +22,6 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { attachLorebookToSession as attachToSession } from "$lib/client/utils/attachLorebookToSession"
-	import { READ_INTO_SESSION } from "$lib/client/lorebooks/scopes"
 	import { v4 as uuid } from "uuid"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
@@ -68,7 +67,6 @@
 		selectedMessageIds: number[]
 		initialLoreType?: "world" | "character" | "scene"
 		onSaved: () => void
-		onLorebookSet: (lorebookId: number) => void
 		sessionCharacters?: BindableEntity[]
 		sessionPersonas?: BindableEntity[]
 		hasSceneMessageGap?: boolean
@@ -97,7 +95,6 @@
 		selectedMessageIds,
 		initialLoreType = "world",
 		onSaved,
-		onLorebookSet,
 		sessionCharacters = [],
 		sessionPersonas = [],
 		hasSceneMessageGap = false,
@@ -141,9 +138,6 @@
 	let availableLorebooks = $state<
 		Sockets.Lorebooks.List.Response["lorebookList"]
 	>([])
-	let attachingLorebookId = $state("")
-	let isCreatingLorebook = $state(false)
-	let newLorebookName = $state("")
 	let historyEntryList = $state<History[]>([])
 
 	let selectedHistoryEntryId = $state("")
@@ -173,7 +167,9 @@
 	let lineClock = $state<StoryDate | null>(null)
 	let clockOf = $state<number | null>(null)
 	/** Where the session's story stands: its own clock, else its line's. */
-	let storyMoment = $derived(storyClock ?? (clockOf === lorebookId ? lineClock : null))
+	let storyMoment = $derived(
+		storyClock ?? (clockOf === lorebookId ? lineClock : null)
+	)
 	/** Whether that is known yet: a session with its own clock needs no fetch. */
 	let momentKnown = $derived(storyClock != null || clockOf === lorebookId)
 
@@ -221,9 +217,7 @@
 			if (b.characterId && (b as any).character)
 				add({
 					id: b.characterId,
-					name:
-						(b as any).character.nickname ||
-						(b as any).character.name
+					name: memberShownName(b, (b as any).character)
 				})
 		}
 		return result
@@ -309,7 +303,7 @@
 	const loreWrites = useLoreWritesOff(() => lorebookId)
 	let canGenerate = $derived(
 		!loreWrites.off &&
-		!!lorebookId &&
+			!!lorebookId &&
 			selectedMessageIds.length > 0 &&
 			(loreType !== "character" || topic.trim().length > 0) &&
 			(loreType !== "scene" || !!selectedHistoryEntryId) &&
@@ -373,9 +367,6 @@
 			selectedHistoryEntryId = ""
 			didPreselectHistoryEntry = false
 			isCreatingHistoryEntry = false
-			attachingLorebookId = ""
-			isCreatingLorebook = false
-			newLorebookName = ""
 			historyEntryList = []
 			// Re-read on every opening: the line's clock may have moved.
 			clockOf = null
@@ -465,8 +456,9 @@
 	 * else the first of this session's that was not there when Generate was
 	 * pressed — a session runs one summarize at a time (the server's lock).
 	 */
-	const sessionSummarizesCtx: SessionSummarizesCtx | undefined =
-		getContext("sessionSummarizesCtx")
+	const sessionSummarizesCtx: SessionSummarizesCtx | undefined = getContext(
+		"sessionSummarizesCtx"
+	)
 	let activitiesBeforeRun: Set<string> | null = null
 
 	$effect(() => {
@@ -544,66 +536,6 @@
 		availableLorebooks = withoutShared(data.lorebookList).filter(
 			(l) => !isStarterKit(l)
 		)
-	}
-
-	/**
-	 * Pushed to every tab of the user, and this modal is mounted on every
-	 * session page — so another tab's attach arrives here too. Only this
-	 * session's is ours; acting on another's would toast in every tab and
-	 * hand `onLorebookSet` a different session's book to write onto this one
-	 * (B8).
-	 */
-	function handleSetLorebook(data: Sockets.Sessions.SetLorebook.Response) {
-		if (data.session?.id !== sessionId) return
-		lorebookId = data.session.lorebookId
-		if (data.session.lorebookId) {
-			onLorebookSet(data.session.lorebookId)
-			toaster.success({ title: "Lorebook read into this session" })
-		}
-	}
-
-	/**
-	 * `lorebooks:create` is a broadcast, not a reply — it fires for creates made
-	 * anywhere, including the Lorebooks+ sidebar. This modal is mounted on every
-	 * session page, so attaching unconditionally here meant creating a lorebook from
-	 * the sidebar silently bound it to whatever session happened to be open.
-	 *
-	 * Only the create this modal asked for is its own: it sends a `requestId`,
-	 * which the server echoes on the broadcast and on `lorebooks:create:error`.
-	 * A bare flag, or the submitted name, is claimed by whichever answer lands
-	 * first — another surface's refusal, or another create of the same name.
-	 */
-	let pendingCreateRequestId: string | null = $state(null)
-
-	function handleLorebookCreate(data: any) {
-		if (!data.lorebook) return
-		availableLorebooks = [...availableLorebooks, data.lorebook]
-		if (
-			pendingCreateRequestId !== null &&
-			data.requestId === pendingCreateRequestId
-		) {
-			pendingCreateRequestId = null
-			attachLorebookToSession(data.lorebook.id)
-		}
-	}
-
-	function handleLorebookCreateError(data: {
-		error?: string
-		requestId?: string
-	}) {
-		// Only a create this modal asked for is its to report — the sidebar,
-		// in the same tab, reports its own.
-		if (
-			pendingCreateRequestId === null ||
-			data?.requestId !== pendingCreateRequestId
-		)
-			return
-		pendingCreateRequestId = null
-		isCreatingLorebook = false
-		toaster.error({
-			title: "Failed to create lorebook",
-			description: data?.error
-		})
 	}
 
 	function handleHistoryEntriesList(data: Sockets.Entries.List.Response) {
@@ -701,7 +633,8 @@
 		// reports itself inline — only a history create in flight is ours.
 		if (!isCreatingHistoryEntry) return
 		isCreatingHistoryEntry = false
-		toaster.error({
+		notify.error({
+			source: "socket:entries:create:error",
 			title: "Failed to create history entry",
 			description: data?.error
 		})
@@ -730,19 +663,10 @@
 	// events from the current one. See generate()'s per-dispatch interest
 	// below instead.
 	//
-	// These five are the modal's own, declared at initialisation and released
+	// These two are the modal's own, declared at initialisation and released
 	// on destroy by the registry. The book's three reads are scoped and held
 	// only while the window is open (the effect above).
 	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
-	useInterest<"sessions:setLorebook">(
-		"sessions:setLorebook",
-		handleSetLorebook
-	)
-	useInterest<"lorebooks:create">("lorebooks:create", handleLorebookCreate)
-	useInterest<"lorebooks:create:error">(
-		"lorebooks:create:error",
-		handleLorebookCreateError
-	)
 	useInterest<"entries:create:error">(
 		"entries:create:error",
 		handleHistoryEntryCreateError
@@ -753,36 +677,12 @@
 	})
 
 	onDestroy(() => {
-		// Only the per-dispatch interests are torn down by hand; the five
+		// Only the per-dispatch interests are torn down by hand; the two
 		// above are the registry's to release.
 		activeCleanup?.()
 	})
 
 	// ── Actions ──────────────────────────────────────────────────────
-	function attachLorebookToSession(id: number) {
-		attachToSession(typedSocket, sessionId, id)
-		attachingLorebookId = ""
-	}
-
-	function confirmAttachExisting() {
-		if (!attachingLorebookId) return
-		attachLorebookToSession(Number(attachingLorebookId))
-	}
-
-	function createAndAttachLorebook() {
-		if (!newLorebookName.trim()) return
-		// Claim the pending create so handleLorebookCreate knows which
-		// broadcast is ours to act on — see the comment there.
-		pendingCreateRequestId = uuid()
-		requestWithInterest(
-			"lorebooks:create",
-			{ name: newLorebookName.trim(), requestId: pendingCreateRequestId },
-			handleLorebookCreate
-		)
-		newLorebookName = ""
-		isCreatingLorebook = false
-	}
-
 	/**
 	 * A session write: the server files it on the session's line and dates
 	 * it at the session's story now (the step after its line's newest entry
@@ -793,22 +693,19 @@
 		// Answered on the book's scoped `entries:create` key, held while the
 		// window is open (above); the typed `emit` flushes its sync first.
 		// (A bare `requestWithInterest` here took a key it never let go of.)
-		typedSocket.emit(
-			"entries:create",
-			{
-				entry: {
-					typeId: HISTORY_TYPE_ID,
-					lorebookId,
-					content: "",
-					keys: [],
-					enabled: true,
-					constant: false,
-					useRegex: false,
-					caseSensitive: false
-				} as Sockets.Entries.Create.Params["entry"],
-				sessionId
-			}
-		)
+		typedSocket.emit("entries:create", {
+			entry: {
+				typeId: HISTORY_TYPE_ID,
+				lorebookId,
+				content: "",
+				keys: [],
+				enabled: true,
+				constant: false,
+				useRegex: false,
+				caseSensitive: false
+			} as Sockets.Entries.Create.Params["entry"],
+			sessionId
+		})
 		isCreatingHistoryEntry = true
 	}
 
@@ -852,7 +749,10 @@
 			// is said now (A18) — the processing that follows is its own.
 			const recorded = notRecordedToast("Scene saved", data.notRecorded)
 			if (recorded.kind === "warning")
-				toaster.warning({ title: recorded.title, description: recorded.description })
+				notify.warning({
+					title: recorded.title,
+					description: recorded.description
+				})
 
 			// Only now is it safe to drop the selection — see onSceneProcessStarted.
 			onSceneProcessStarted?.(data.scene.id)
@@ -1059,7 +959,9 @@
 					lorebookBindingCharacterId,
 					// The review this save keeps: what makes the row
 					// machine-written, checked by the server.
-					...(activeActivityId ? { activityId: activeActivityId } : {})
+					...(activeActivityId
+						? { activityId: activeActivityId }
+						: {})
 				},
 				replyKey: interestKey("entries:create", bookId),
 				errorEvent: "entries:create:error",
@@ -1081,7 +983,7 @@
 			return
 		}
 
-		toaster.success({
+		notify.success({
 			title:
 				savedAs === "character"
 					? "Character lore entry saved"
@@ -1114,11 +1016,9 @@
 			/>
 		{/if}
 		<!-- Lorebook status -->
-		<div class="border-surface-200-800 rounded-lg border p-3">
-			{#if hasLorebook}
-				{@const book = availableLorebooks.find(
-					(l) => l.id === lorebookId
-				)}
+		{#if hasLorebook}
+			{@const book = availableLorebooks.find((l) => l.id === lorebookId)}
+			<div class="border-surface-200-800 rounded-lg border p-3">
 				<div class="flex items-center gap-2 text-sm">
 					<Icons.BookMarked
 						size={16}
@@ -1126,79 +1026,13 @@
 					/>
 					<span class="text-surface-600-400">Saving to:</span>
 					<span class="font-semibold">
-						{lorebookId === ownBookId ? SESSION_NOTES_LABEL : (book?.name ?? `Lorebook #${lorebookId}`)}
+						{lorebookId === ownBookId
+							? SESSION_NOTES_LABEL
+							: (book?.name ?? `Lorebook #${lorebookId}`)}
 					</span>
 				</div>
-			{:else}
-				<div class="space-y-3">
-					<div class="flex items-start gap-2 text-sm">
-						<Icons.TriangleAlert
-							size={16}
-							class="text-warning-500 mt-0.5 shrink-0"
-						/>
-						<span>
-							This session reads no lorebook. Read one into this
-							session to continue.
-						</span>
-					</div>
-					{#if !isCreatingLorebook}
-						<div class="flex flex-wrap gap-2">
-							<Select
-								label="Lorebook to read into this session"
-								labelHidden
-								placeholder="Select existing lorebook…"
-								class="flex-1 text-sm"
-								options={availableLorebooks.map((lb) => ({
-									value: String(lb.id),
-									label: lb.name ?? ""
-								}))}
-								bind:value={attachingLorebookId}
-							/>
-							<button
-								class="btn btn-sm preset-filled-primary-500"
-								disabled={!attachingLorebookId}
-								onclick={confirmAttachExisting}
-							>
-								{READ_INTO_SESSION}
-							</button>
-							<button
-								class="btn btn-sm preset-tonal-surface"
-								onclick={() => (isCreatingLorebook = true)}
-							>
-								<Icons.Plus size={14} /> New
-							</button>
-						</div>
-					{:else}
-						<div class="flex gap-2">
-							<input
-								aria-label="New lorebook name"
-								class="input flex-1 text-sm"
-								type="text"
-								placeholder="New lorebook name…"
-								bind:value={newLorebookName}
-								onkeydown={(e) =>
-									e.key === "Enter" &&
-									createAndAttachLorebook()}
-							/>
-							<button
-								class="btn btn-sm preset-filled-primary-500"
-								disabled={!newLorebookName.trim()}
-								onclick={createAndAttachLorebook}
-							>
-								Create and read
-							</button>
-							<button
-								aria-label="Cancel new lorebook"
-								class="btn btn-sm preset-tonal-surface"
-								onclick={() => (isCreatingLorebook = false)}
-							>
-								<Icons.X size={14} />
-							</button>
-						</div>
-					{/if}
-				</div>
-			{/if}
-		</div>
+			</div>
+		{/if}
 
 		<!-- Entry type -->
 		<fieldset class="space-y-2">

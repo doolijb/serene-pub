@@ -251,6 +251,15 @@ export interface EngineInput {
 	 */
 	clock?: { now: StoryClock; calendar: StoryCalendar | null } | null
 	/**
+	 * 🚧 How long ago each owner's stat values were written (lane sense-age2), by owner key, then slot id:
+	 * `minutes` — story minutes from the row's story-clock stamp to the session's clock now (null: no stamp,
+	 * no clock, or it cannot be placed — including a stamp later than now); `realSeconds` — whole seconds from
+	 * the row's write to `realNow`, never below 0 (null: no stored row). Absent when no function with a body runs.
+	 */
+	writtenAgo?: Readonly<Record<string, Readonly<Record<string, { minutes: number | null; realSeconds: number | null }>>>>
+	/** 🚧 The host's real instant for this moment (ms since the epoch), taken ONCE; every `realSeconds` is measured against it. */
+	realNow?: number
+	/**
 	 * 🚧 Whose view the prompt is built for (earshot): `'gm'` — the owner's or
 	 * game master's — reads the `gm` block; an owner key reads that holder's
 	 * holder-only fields inline. Absent: the acting cast's shared view.

@@ -44,7 +44,6 @@ import {
 	type StoryTime
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { cadenceStateOf, saveCadenceState } from "$lib/server/pipelines/routines/state"
 import { routinesEnabled, type RoutineRunFact } from "$lib/server/pipelines/routines/runs"
@@ -111,6 +110,9 @@ export function causeOf(moment: CadenceMoment, ctx: { at: number; event?: string
 		if (typeof p.round === "number") base.round = p.round
 		if (p.turnsBy && typeof p.turnsBy === "object") base.turnsBy = { ...(p.turnsBy as Record<string, number>) }
 		if (Array.isArray(p.speakers)) base.speakers = p.speakers.filter((x): x is string => typeof x === "string")
+		// 🚧 Only a genre that declares `shape.turnSeatChanges: true` has it on the payload.
+		if (moment.kind === "turn-ended" && Array.isArray(p.turnSeatChanges))
+			base.turnSeatChanges = p.turnSeatChanges as NonNullable<RoutineCause["turnSeatChanges"]>
 	}
 	if (typeof p.sceneId === "number") base.sceneId = p.sceneId
 	const castMember = refOf(p.ref)
@@ -285,11 +287,11 @@ async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<strin
 	const { publishedTurns } = await import("$lib/server/pipelines/routines/turnTally")
 	try {
 		const [s] = await db
-			.select({ annex: schema.sessions.annex })
+			.select({ turnTally: schema.sessions.turnTally })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
-		return publishedTurns(coreAnnexIn(s?.annex ?? null))
+		return publishedTurns(s ?? null)
 	} catch {
 		// Never the reason a cadence is not judged: the script sees no turn facts.
 		return publishedTurns(null)

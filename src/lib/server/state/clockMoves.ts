@@ -19,24 +19,26 @@
  *    (`recordClockMove`);
  *  · `accepted` — a person accepted the keeper's proposal
  *    (`decideClockProposal`, which stamps `from` and `to` on it);
- *  · `skipped` — asked for and not made, because the story has no clock yet:
+ *  · `skipped` — asked for and not made (no clock yet, or a step the clock cannot take):
  *    the ledger says why, and nothing is taken back.
  *
  * ## Taking one back
  *
  * A message's moves go with it, as its values do: a delete or a retake
  * (`revertClockMovesAnchoredTo`, before the rows go), a swipe or a regenerate
- * (`retractStateAnchoredTo`). The one exception is a reply's **tick** on a
- * swipe or a regenerate: the re-driven reply never ticks again, so its tick
- * stands. The clock moves back by each recorded step, newest first
+ * (`retractStateAnchoredTo`). The one exception is the round's **tick** on a
+ * replacement (swipe, regenerate): the replaced line keeps its message id, so
+ * its round does not end again and would never tick again — the tick stands.
+ * 🚧 Interim, open ★ST2-1; Back and delete take it. The clock moves back by each recorded step, newest first
  * (`stepBackSessionStoryClock`): a delta, so a person's own move since is
  * kept. A step the calendar cannot place refuses the whole retraction, in
  * words.
  */
 
-import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm"
+import { and, desc, eq, gt, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { storyTimePartsOf, type StoryTimeParts } from "@serene-pub/core-catalog/session-state"
+import { NO_STORY_CLOCK_YET, clockSkipKindOf, type ClockSkipKind } from "$lib/shared/state/ledgerLines"
 import { anchorFor } from "$lib/server/state/write"
 import { ownBookOf } from "$lib/server/lorebooks/ownBook"
 import {
@@ -80,9 +82,7 @@ export interface ClockMovePayload {
 	skipped?: string
 }
 
-/** 🚧 The sentence a skipped move leaves when the story has no clock to move (§15 G7). */
-export const NO_STORY_CLOCK_YET =
-	"This story has no clock yet: set one in the lorebook to track time."
+export { NO_STORY_CLOCK_YET }
 
 /**
  * Why a refused move is skipped, in the person's words: no clock yet, else
@@ -164,7 +164,11 @@ export async function recordClockMove(
 		by: move.by,
 		unit: move.unit,
 		cause: move.cause,
-		...(skipped ? { skipped: move.skipped } : { from: move.from, to: move.to })
+		...(skipped
+			? // The sentence alone; why it was skipped is read off it
+				// (`clockSkipKindOf`), one way for every row ever written.
+				{ skipped: move.skipped }
+			: { from: move.from, to: move.to })
 	}
 	const now = new Date()
 	const [row] = await db
@@ -182,13 +186,68 @@ export async function recordClockMove(
 	return row!.id
 }
 
+/**
+ * Has a person already moved the clock this turn? "This turn" runs from the
+ * previous reply row to now: a *Time passes…* press files at the newest
+ * message of its moment (the previous reply, or the person's own line), and
+ * the keeper's move files at the reply being written — so the two anchors
+ * differ, and the hand move counts when its anchor is the previous reply row
+ * or anything after it. A hand move is an applied `cause: 'action'` row; one
+ * at the ledger head (no message yet) counts too. Read only.
+ */
+export async function handMovedThisTurn(db: Db, sessionId: number): Promise<boolean> {
+	const anchor = await anchorFor(
+		db,
+		{ sessionId, updatedBy: "" },
+		{ kind: "session", id: sessionId }
+	)
+	// The previous reply: the newest non-person message below the anchor
+	// (the anchor itself is the reply being written, or the person's line).
+	const [previous] = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				ne(schema.sessionMessages.role, "user"),
+				anchor === null ? sql`false` : lt(schema.sessionMessages.id, anchor)
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(1)
+	const since = previous?.id ?? null
+	const [standing] = await db
+		.select({ id: schema.stateProposals.id })
+		.from(schema.stateProposals)
+		.where(
+			and(
+				eq(schema.stateProposals.sessionId, sessionId),
+				since === null
+					? undefined
+					: or(isNull(schema.stateProposals.messageId), gte(schema.stateProposals.messageId, since)),
+				eq(schema.stateProposals.kind, "clock"),
+				eq(schema.stateProposals.status, "applied"),
+				sql`${schema.stateProposals.payload}->>'cause' = 'action'`
+			)
+		)
+		.limit(1)
+	return !!standing
+}
+
+/** The receipt's sentence for a keeper's move dropped after a hand move. */
+export function droppedKeeperMoveSentence(step: { by: number; unit: string } | null): string {
+	return `Dropped: the clock was already moved by hand this turn, so the model's ${
+		step ? clockSpanWords(step.by, step.unit) : "move"
+	} was not added.`
+}
+
 /** A tick, on the terms a swipe keeps it by: applied with `cause: 'tick'`. */
 const isTickSql = sql`(${schema.stateProposals.status} = 'applied' AND ${schema.stateProposals.payload}->>'cause' = 'tick')`
 
 /**
- * The SQL that keeps a reply's tick out of what a swipe or a regenerate takes
- * back — `retractStateAnchoredTo`'s delete reads it, so the tick's line stays
- * under the reply whose clock it still moved.
+ * The SQL that keeps the round's tick out of what a replacement (swipe,
+ * regenerate) takes back — `retractStateAnchoredTo`'s delete reads it, so the
+ * tick's line stays under the message that closed the round. 🚧 ★ST2-1.
  */
 export const notATickSql = sql`NOT (${schema.stateProposals.kind} = 'clock' AND ${isTickSql})`
 
@@ -275,7 +334,8 @@ export async function clockRetractProblem(
 /**
  * Take back the clock moves anchored to these messages — newest first, each
  * by its own step — before the messages (or their rows) go. `keepTicks`: a
- * swipe or a regenerate, whose re-driven reply never ticks again. Throws
+ * replacement (swipe, regenerate), whose round does not end again so its
+ * round's tick would never come again (🚧 ★ST2-1). Throws
  * `StoryClockRefusal` with the sentence, and moves nothing, when the
  * calendar cannot place a step; nothing to take back is not a refusal.
  *
@@ -412,6 +472,8 @@ export interface ClockLedgerRow {
 	from: StoryTimeParts | null
 	to: StoryTimeParts | null
 	skipped: string | null
+	/** Why it was skipped; null when it was not. */
+	reason: ClockSkipKind | null
 }
 
 /**
@@ -471,7 +533,11 @@ export async function clockLedgerRows(
 			toLabel: label(p.to),
 			from: parts(p.from),
 			to: parts(p.to),
-			skipped: row.status === "skipped" ? (p.skipped ?? NO_STORY_CLOCK_YET) : null
+			skipped: row.status === "skipped" ? (p.skipped ?? NO_STORY_CLOCK_YET) : null,
+			reason:
+				row.status === "skipped"
+					? clockSkipKindOf({ skipped: p.skipped ?? NO_STORY_CLOCK_YET })
+					: null
 		})
 	}
 	return out

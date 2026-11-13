@@ -248,6 +248,13 @@ export interface LayoutConfirm {
  */
 const COPY_KEEPS =
 	"Where it brings its own settings or style for a widget, those replace yours. Everything else you've set is kept."
+/**
+ * Owner 2026-11-04, item 15: **Reset to genre default layout** clears the
+ * person's settings and style for the widgets the layout places. (A card or
+ * _Start again_ keeps the merge: `COPY_KEEPS`.)
+ */
+const RESET_CLEARS =
+	"Your settings and style for the widgets it places are cleared, so they look as the genre ships them. Widgets it doesn't place keep yours."
 /** Owner LC: scratch is the minimal setup AT ITS DEFAULTS. */
 const SCRATCH_RESETS = "Every widget's settings and style go back to their defaults."
 /** Every copy: it is saved at once, so the editor's Cancel is no way back. */
@@ -303,7 +310,7 @@ export function copyConfirm(
 				: `Start again from ${what}?`,
 		lines: [
 			`This replaces this session's layout with a fresh copy of ${what}.`,
-			COPY_KEEPS,
+			ask.kind === "reset" ? RESET_CLEARS : COPY_KEEPS,
 			NO_WAY_BACK
 		],
 		confirmLabel: ask.kind === "reset" ? "Reset layout" : "Start again",
@@ -594,9 +601,14 @@ export interface StartFromProps {
 	 * `null` for Start from scratch. The page re-seeds the manager from
 	 * the server's answer, and the editor follows (`manager.seedCount`).
 	 * Resolves `false` when the copy was refused, so the editor stops
-	 * waiting for it.
+	 * waiting for it. `clearPlacedWidgets` is **Reset to genre default
+	 * layout** only: the server first clears the person's settings and style
+	 * pins for the widgets that layout places (owner 2026-11-04, item 15).
 	 */
-	onStartFrom?: (layoutPresetId: number | null) => Promise<boolean>
+	onStartFrom?: (
+		layoutPresetId: number | null,
+		opts?: { clearPlacedWidgets?: boolean }
+	) => Promise<boolean>
 	/**
 	 * Save as new layout: the page sends the committed arrangement, and
 	 * `drawn` — every widget instance this session draws, the floor's

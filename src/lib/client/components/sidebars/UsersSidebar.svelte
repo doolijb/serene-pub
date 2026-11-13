@@ -4,7 +4,7 @@
 	import InvitePanel from "$lib/client/components/userForms/InvitePanel.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import UserForm from "../userForms/UserForm.svelte"
 	import UserViewPanel from "../userForms/UserViewPanel.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
@@ -148,7 +148,8 @@
 	) {
 		userList = [...userList, response.user]
 		resetForm()
-		toaster.success({
+		notify.success({
+			source: "socket:users:create",
 			title: "User created",
 			description: `User "${response.user.username}" has been created successfully.`
 		})
@@ -164,7 +165,8 @@
 			viewingUser = response.user
 		}
 		resetForm()
-		toaster.success({
+		notify.success({
+			source: "socket:users:update",
 			title: "User updated",
 			description: `User "${response.user.username}" has been updated successfully.`
 		})
@@ -176,7 +178,8 @@
 		if (userToDelete) {
 			userList = userList.filter((u) => u.id !== userToDelete!.id)
 			if (viewingUser?.id === userToDelete.id) viewingUser = undefined
-			toaster.success({
+			notify.success({
+				source: "socket:users:delete",
 				title: "User deleted",
 				description: `User has been deleted successfully.`
 			})
@@ -318,7 +321,7 @@
 								>
 									<div class="min-w-0 flex-1 text-left">
 										<div
-											class="truncate text-lead font-medium"
+											class="text-lead truncate font-medium"
 										>
 											{name}
 										</div>
@@ -328,7 +331,7 @@
 										<!-- A fact about the row, not an action:
 										     the neutral chip, never filled. -->
 										<span
-											class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-meta font-medium"
+											class="preset-tonal-surface text-surface-700-300 text-meta shrink-0 rounded px-1.5 py-0.5 font-medium"
 										>
 											Admin
 										</span>

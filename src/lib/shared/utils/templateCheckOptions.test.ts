@@ -6,12 +6,14 @@
  */
 import { describe, expect, it } from "vitest"
 import Handlebars from "handlebars"
+import { VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
 import {
 	HANDLEBARS_BUILTIN_HELPERS,
 	checkTemplateSource
 } from "@serene-pub/sdk/template-check"
 import { registerContextHandlebarsHelpers } from "./contextHandlebarsHelpers"
 import { createContextLiquid } from "./contextLiquid"
+import { HANDLEBARS_HELPER_DOCS, LIQUID_FILTER_DOCS } from "./templateAssist"
 import {
 	CONTEXT_HANDLEBARS_HELPERS,
 	CONTEXT_LIQUID_BLOCK_TAGS,
@@ -31,7 +33,17 @@ describe("the checker's names match what the engines register", () => {
 		const registered = Object.keys(hbs.helpers).filter(
 			(h) => !HANDLEBARS_BUILTIN_HELPERS.includes(h)
 		)
-		expect(registered.sort()).toEqual([...CONTEXT_HANDLEBARS_HELPERS].sort())
+		expect(hbs.helpers[VARIABLE_LAYOUT_HELPER]).toBeTypeOf("function")
+		// `layout` is the SDK's own name, listed here as the literal (this file
+		// imports nothing at run time): it must equal the SDK's.
+		expect(CONTEXT_HANDLEBARS_HELPERS).toContain("layout")
+		expect("layout").toBe(VARIABLE_LAYOUT_HELPER)
+		expect(CONTEXT_LIQUID_FILTERS).toContain("layout")
+		expect(registered.sort()).toEqual(
+			[...CONTEXT_HANDLEBARS_HELPERS].sort()
+		)
+		expect(HANDLEBARS_HELPER_DOCS[VARIABLE_LAYOUT_HELPER]).toBeDefined()
+		expect(LIQUID_FILTER_DOCS[VARIABLE_LAYOUT_HELPER]).toBeDefined()
 	})
 
 	it("every Liquid tag and filter core registers is on the list", () => {

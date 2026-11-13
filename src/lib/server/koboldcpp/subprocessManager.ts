@@ -1,14 +1,14 @@
 /**
  * KoboldCPP's spec over the shared supervisor (`$lib/server/managed/supervisor`).
  *
- * Everything service-neutral — spawn, process groups, adoption of a process
+ * Everything service-neutral — spawn, process trees, reaping of a process
  * left by a previous session, health check, idle auto-stop, Stop, the HMR-safe
  * shared state — lives in the supervisor. This file keeps only what is
  * KoboldCPP's: its settings row, its admin password, its arguments, its ping,
  * and dropping which model it held when its process goes.
  *
  * The shared state keeps its historic `globalThis` key so a live process stays
- * adopted across the HMR that shipped the extraction.
+ * tracked across the HMR that shipped the extraction.
  */
 import * as path from "path"
 import { randomUUID } from "crypto"
@@ -22,6 +22,11 @@ import {
 } from "$lib/server/managed/supervisor"
 import { pingKoboldCPP } from "./kcppHttp"
 import { forgetResidency } from "./modelManager"
+import { managedBaseUrl } from "./managedEndpoint"
+import {
+	createUserEmitters,
+	type UserEmitterSlot
+} from "$lib/server/managed/emitters"
 
 export type SubprocessStatus = SupervisorStatus
 export type SubprocessStatusEvent = SupervisorStatusEvent
@@ -33,13 +38,14 @@ async function settings() {
 	return db.query.koboldCppSettings.findFirst()
 }
 
+/** The last co-load decision's sentence; null until one is made or after the process goes. */
+let coLoadReason: string | null = null
+
 const supervisor = createSupervisor({
 	id: "koboldcpp",
 	label: "KoboldCPP",
 	globalKey: "__SERENE_PUB_KCPP_SUBPROCESS__",
 	pidFileName: ".managed-subprocess.pid",
-	externalStopMessage:
-		"This KoboldCPP instance is running externally and wasn't started by Serene Pub, so it can't be stopped from here. Stop it manually, or point Serene Pub's KoboldCPP at a different port.",
 
 	async gate() {
 		const s = await settings()
@@ -73,6 +79,15 @@ const supervisor = createSupervisor({
 				.where(eq(schema.koboldCppSettings.id, 1))
 		}
 		launchPassword = password
+		// The address is made from the port. A row edited before that rule (or by
+		// any path that skipped it) is repaired here, as the process gets its port.
+		const wanted = managedBaseUrl(s?.koboldCppManagedPort)
+		if (s?.koboldCppManagerBaseUrl !== wanted) {
+			await db
+				.update(schema.koboldCppSettings)
+				.set({ koboldCppManagerBaseUrl: wanted })
+				.where(eq(schema.koboldCppSettings.id, 1))
+		}
 	},
 
 	async idleTimeoutMs() {
@@ -82,7 +97,10 @@ const supervisor = createSupervisor({
 
 	ping: (baseUrl, timeoutMs) => pingKoboldCPP(baseUrl, timeoutMs),
 
-	onProcessGone: () => forgetResidency(),
+	onProcessGone: () => {
+		forgetResidency()
+		coLoadReason = null
+	},
 
 	async args() {
 		const s = await settings()
@@ -129,10 +147,43 @@ const supervisor = createSupervisor({
 })
 
 export const checkForOrphanOnBoot = supervisor.checkForOrphanOnBoot
-export const registerEmitter = supervisor.registerEmitter
-export const unregisterEmitter = supervisor.unregisterEmitter
-export const isExternal = supervisor.isExternal
-export const getStatus = supervisor.getStatus
+
+type CoLoadStatusEvent = SubprocessStatusEvent & {
+	coLoadReason: string | null
+}
+
+// Survives Vite SSR HMR like the supervisor's own registry does.
+const COLOAD_EMITTERS_KEY = "__SERENE_PUB_KCPP_COLOAD_EMITTERS__"
+const coLoadEmitters = createUserEmitters<CoLoadStatusEvent>(
+	((globalThis as any)[COLOAD_EMITTERS_KEY] ??= new Map<
+		number,
+		UserEmitterSlot<CoLoadStatusEvent>
+	>())
+)
+
+export function getStatus(): CoLoadStatusEvent {
+	return { ...supervisor.getStatus(), coLoadReason }
+}
+
+/** Every supervisor push carries the co-load sentence; so does the local one. */
+export function registerEmitter(
+	userId: number,
+	fn: (s: CoLoadStatusEvent) => void
+): void {
+	supervisor.registerEmitter(userId, (s) => fn({ ...s, coLoadReason }))
+	coLoadEmitters.register(userId, fn)
+}
+
+export function unregisterEmitter(userId: number): void {
+	supervisor.unregisterEmitter(userId)
+	coLoadEmitters.unregister(userId)
+}
+
+/** Remember why the last load kept or dropped the other model, and push it. */
+export function noteCoLoadReason(reason: string): void {
+	coLoadReason = reason
+	coLoadEmitters.emit(getStatus())
+}
 export const isRunning = supervisor.isRunning
 export const pingActivity = supervisor.pingActivity
 export const suspendHealthCheck = supervisor.suspendHealthCheck

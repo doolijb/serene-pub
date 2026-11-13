@@ -16,7 +16,11 @@
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import { awaitReply } from "$lib/client/utils/awaitReply"
 import { interestKey } from "$lib/shared/sockets/interest"
-import { formatDate, type StoryDate } from "../sections/historyDates"
+import {
+	compareDates,
+	formatDate,
+	type StoryDate
+} from "../sections/historyDates"
 
 export interface CastAmendmentTarget {
 	lorebookId: number
@@ -30,6 +34,8 @@ export interface PlannedCastAmendment {
 	month?: number | null
 	day?: number | null
 	fields: Record<string, unknown>
+	/** ★CV-13: also write the same fields onto the later versions on the line. */
+	changeLaterVersions?: boolean
 }
 
 /** The one shape every `amendments:create` for a member is sent in. */
@@ -44,7 +50,8 @@ export function castAmendmentParams(
 		year: planned.year,
 		month: planned.month ?? null,
 		day: planned.day ?? null,
-		fields: planned.fields
+		fields: planned.fields,
+		...(planned.changeLaterVersions ? { changeLaterVersions: true } : {})
 	}
 }
 
@@ -92,7 +99,7 @@ export function fileCastAmendment(
 	target: CastAmendmentTarget,
 	planned: PlannedCastAmendment,
 	knownIds: Iterable<number>
-): Promise<Sockets.Amendments.List.Response> {
+): Promise<Sockets.Amendments.Create.Response> {
 	const params = castAmendmentParams(target, planned)
 	const seen = new Set(knownIds)
 	return awaitReply({
@@ -108,6 +115,88 @@ export function fileCastAmendment(
 }
 
 /** How a member's field is named in a sentence. Unknown keys read as themselves. */
+/** A row of the member's Changes list, as far as counting later versions reads it. */
+export interface DatedChange extends StoryDate {
+	/** The Changes row's id: what `shownVersionId` names, and the tie-break on one date. */
+	id?: number
+	year: number
+	branchId?: number | null
+}
+
+/** The save a count is for. */
+export type LaterVersionSave =
+	| {
+			kind: "base"
+			/**
+			 * The cast version the page shows (`row.castVersionId`). A Changes
+			 * row it names is not counted, nor any before it; no row named
+			 * (null, or the base version) = the base: every main row counts.
+			 */
+			shownVersionId?: number | null
+	  }
+	| { kind: "amend"; branchId: number | null; moment: StoryDate }
+
+/**
+ * How many later versions a save would leave with their own words (★CV-13).
+ *
+ * A base save writes the version shown, so it has the main versions after
+ * that one: dated later, or on its date with a higher id (every main row when
+ * the shown version is the base); a **Save as of**
+ * has the ones on the line being read (`null` = main) dated after the moment.
+ * The server counts sessions' own as kept; this is the client's count of the
+ * rows it has, for the line before the save.
+ */
+export function laterVersionCount(
+	rows: readonly DatedChange[],
+	save: LaterVersionSave
+): number {
+	if (save.kind === "base") {
+		const onMain = rows.filter((r) => (r.branchId ?? null) === null)
+		const shown =
+			save.shownVersionId == null
+				? undefined
+				: onMain.find((r) => r.id === save.shownVersionId)
+		if (!shown) return onMain.length
+		return onMain.filter((r) => {
+			const order = compareDates(r, shown)
+			return order > 0 || (order === 0 && (r.id ?? 0) > (shown.id ?? 0))
+		}).length
+	}
+	return rows.filter(
+		(r) =>
+			(r.branchId ?? null) === save.branchId &&
+			compareDates(r, save.moment) > 0
+	).length
+}
+
+/** The muted line beside the save controls, or null when none is later. */
+export function laterVersionsLine(count: number): string | null {
+	if (count <= 0) return null
+	return count === 1
+		? "1 later version keeps its own words."
+		: `${count} later versions keep their own words.`
+}
+
+/** The sentence a finished save adds to its toast, or null when it has nothing to add. */
+export function laterVersionsToast(
+	laterVersions: { changed: number; kept: number } | null | undefined
+): string | null {
+	if (!laterVersions) return null
+	const { changed, kept } = laterVersions
+	const parts: string[] = []
+	if (changed > 0)
+		parts.push(
+			`${plural(changed, "later version", "later versions")} changed too.`
+		)
+	if (kept > 0)
+		parts.push(
+			kept === 1
+				? "1 later version keeps its own words."
+				: `${kept} later versions keep their own words.`
+		)
+	return parts.length ? parts.join(" ") : null
+}
+
 const CAST_FIELD_WORDS: Record<string, string> = {
 	name: "the name",
 	aliases: "the other names",
@@ -123,8 +212,13 @@ const CAST_FIELD_WORDS: Record<string, string> = {
 	scenario: "the scenario",
 	firstMessage: "the first message",
 	alternateGreetings: "the alternate greetings",
+	groupOnlyGreetings: "the group-only greetings",
 	exampleDialogues: "the example dialogues",
 	faceMediaId: "the face",
+	// The version-only fields, dated with their flag (2026-11-10).
+	postHistoryInstructions: "the post-history instructions",
+	creatorNotes: "the creator notes",
+	likeness: "the likeness",
 	retold: "what is retold here"
 }
 
@@ -309,7 +403,10 @@ export function deletedMemberToast(
  * a warning that names what is missing.
  */
 export function undoMergeToast(
-	msg: Omit<Sockets.NarrativeGraph.UndoMerge.Response, "lorebookId" | "mergeLogId">
+	msg: Omit<
+		Sockets.NarrativeGraph.UndoMerge.Response,
+		"lorebookId" | "mergeLogId"
+	>
 ): {
 	kind: "success" | "warning"
 	title: string
@@ -382,7 +479,10 @@ export function absorbCastMember(
 			const named = data as
 				| Sockets.NarrativeGraph.MergeNode.ErrorResponse
 				| undefined
-			if (named?.nodeId === undefined && named?.parentNodeId === undefined)
+			if (
+				named?.nodeId === undefined &&
+				named?.parentNodeId === undefined
+			)
 				return true
 			return (
 				named.nodeId === ask.nodeId &&

@@ -8,7 +8,7 @@
 import { describe, expect, test } from "vitest"
 import { WIDGET_ID_ALIASES } from "@serene-pub/sdk"
 import { CORE_WIDGETS } from "$lib/shared/widgets/types"
-import { CORE_CONVERSATION, coreDefaultWidgets } from "./coreWidgets"
+import { ADMIN_ONLY_WIDGET_IDS, CORE_CONVERSATION, coreDefaultWidgets } from "./coreWidgets"
 
 const byId = (widgets: ReturnType<typeof coreDefaultWidgets>) => new Map(widgets.map((p) => [p.id, p]))
 /** The side widgets core offers: not the conversation, not an ⏳ alias (`world-state`, W7). */
@@ -16,16 +16,28 @@ const sideDecls = () => CORE_WIDGETS.filter((w) => w.role !== "primary" && !Obje
 
 describe("coreDefaultWidgets", () => {
 	test("every widget core declares but the conversation, in the catalogue's order", () => {
-		expect(coreDefaultWidgets().map((p) => p.id)).toEqual(sideDecls().map((w) => w.id))
+		expect(coreDefaultWidgets(true).map((p) => p.id)).toEqual(sideDecls().map((w) => w.id))
 		// Eleven: R79 removed the Inventory widget for now; the author's note
 		// (AN1), the turn order (W1), the actions (W8), the annex (W9), the
 		// album (W2), the chronicle (W3), the places (W4) and Who's here
 		// (W10, `attendance`) joined; World State became Stats (W7). Twelve
 		// with the backdrop (DESIGN-image-generation §6.4, 2026-10-12);
-		// thirteen with the routine log (PLAN-layering lane 7).
-		expect(coreDefaultWidgets().map((p) => p.id).sort()).toEqual(
-			["actions", "album", "annex", "attendance", "authors-note", "backdrop", "chronicle", "lore-entries", "places", "routine-log", "scene-portraits", "stats", "turn-order"]
+		// thirteen with the routine log (PLAN-layering lane 7); fifteen with
+		// the conversation split into `composer` and `turn-line`
+		// (PLAN-session-layout-simplify, owner R8 2026-11-05); sixteen with the
+		// Dialogue box (PLAN-visual-novel-layout 2026-11-11).
+		expect(coreDefaultWidgets(true).map((p) => p.id).sort()).toEqual(
+			["actions", "album", "annex", "attendance", "authors-note", "backdrop", "chronicle", "composer", "dialogue-box", "lore-entries", "places", "routine-log", "scene-portraits", "session-runs", "stats", "turn-line", "turn-order"]
 		)
+	})
+
+	test("a non-admin is not offered the admin-only widgets, and nothing else is dropped", () => {
+		const coreIds = new Set(CORE_WIDGETS.map((w) => w.id))
+		for (const id of ADMIN_ONLY_WIDGET_IDS) expect(coreIds.has(id), id).toBe(true)
+		const all = coreDefaultWidgets(true).map((p) => p.id)
+		const some = coreDefaultWidgets(false).map((p) => p.id)
+		expect(all.filter((id) => !some.includes(id)).sort()).toEqual([...ADMIN_ONLY_WIDGET_IDS].sort())
+		expect(some).toEqual(all.filter((id) => !ADMIN_ONLY_WIDGET_IDS.has(id)))
 	})
 
 	// ⏳ W7 (REMOVE in 0.7.0): World State is an alias of Stats. It stays
@@ -36,26 +48,30 @@ describe("coreDefaultWidgets", () => {
 	test("world-state stays declared while ⏳, and is not offered", () => {
 		expect(CORE_WIDGETS.some((w) => w.id === "world-state")).toBe(true)
 		expect(WIDGET_ID_ALIASES["world-state"]?.id).toBe("stats")
-		expect(coreDefaultWidgets().some((p) => p.id === "world-state")).toBe(false)
+		expect(coreDefaultWidgets(true).some((p) => p.id === "world-state")).toBe(false)
 	})
 
 	// The law (C2): a core widget is declared once. Title, icon and packing
 	// hints are the declaration's, never retyped beside it.
 	test("each row's title, icon and layout deep-equal its declaration's", () => {
-		const panels = byId(coreDefaultWidgets())
+		const panels = byId(coreDefaultWidgets(true))
 		for (const decl of sideDecls()) {
 			const p = panels.get(decl.id)!
 			expect(p.title, decl.id).toEqual(decl.title)
 			expect(p.icon, decl.id).toEqual(decl.icon)
 			expect(p.layout, decl.id).toEqual(decl.layout)
-			// Every core side widget declares the three, so none is projected empty.
+			// Composer and Turn line are conversation widgets that declare `panel`,
+			// not `layout`; their glyph is owner ★7, open. The Dialogue box is a
+			// stage widget, declared with neither glyph nor layout.
+			if (decl.id === "composer" || decl.id === "turn-line" || decl.id === "dialogue-box") continue
+			// Every other core side widget declares the three, so none is projected empty.
 			expect(decl.icon, decl.id).toBeTruthy()
 			expect(decl.layout, decl.id).toBeTruthy()
 		}
 	})
 
 	test("every one core's remote by default — none native (R79)", () => {
-		for (const p of coreDefaultWidgets()) {
+		for (const p of coreDefaultWidgets(true)) {
 			expect(p.role).toBe("secondary")
 			expect(p.surface).toEqual({ kind: "remote", owner: "core", component: p.surface.component })
 			expect(p.src).toBe(`/core-ui/${p.surface.component}`)
@@ -64,11 +80,11 @@ describe("coreDefaultWidgets", () => {
 
 	// Whether a widget starts on is the layout's (C2): the row says nothing about it.
 	test("no row carries an active-by-default flag", () => {
-		for (const p of coreDefaultWidgets()) expect(Object.hasOwn(p, "defaultActive"), p.id).toBe(false)
+		for (const p of coreDefaultWidgets(true)) expect(Object.hasOwn(p, "defaultActive"), p.id).toBe(false)
 	})
 
 	test("each carries its declaration's settings, reads and section scopes — read, never retyped", () => {
-		const panels = byId(coreDefaultWidgets())
+		const panels = byId(coreDefaultWidgets(true))
 		for (const decl of CORE_WIDGETS.filter((w) => panels.has(w.id))) {
 			const p = panels.get(decl.id)!
 			expect(p.settings).toEqual(decl.settings)
@@ -77,8 +93,9 @@ describe("coreDefaultWidgets", () => {
 		expect(panels.get("stats")!.grants).toEqual(["session:state"])
 		expect(panels.get("scene-portraits")!.grants).toEqual(["characters", "session:state"])
 		expect(panels.get("lore-entries")!.grants).toEqual(["lore"])
-		// The author's note asks for everything: no section, no scope.
-		expect(panels.get("authors-note")!.reads).toEqual([])
+		// The author's note reads only the viewer (its advanced controls
+		// switch, 2026-11-10); no scope.
+		expect(panels.get("authors-note")!.reads).toEqual(["viewer"])
 		expect(panels.get("authors-note")!.grants).toBeUndefined()
 	})
 
@@ -91,10 +108,19 @@ describe("coreDefaultWidgets", () => {
 	})
 
 	// The album (W2) is the one exception, by its plan: its pictures are the
-	// lines' own parts, so it is handed the log as the conversation is.
-	test("the side widgets read no log — but the album", () => {
-		for (const p of coreDefaultWidgets())
-			if (p.id === "album") expect(p.reads, p.id).toContain("messages")
+	// lines' own parts, so it is handed the log as the conversation is. The
+	// Composer and Turn line draw the same log and dossier as their Messages copy.
+	// The Dialogue box draws one line of the log, as the Composer and Turn line
+	// draw theirs.
+	test("the side widgets read no log — but the album and the conversation widgets", () => {
+		for (const p of coreDefaultWidgets(true))
+			if (p.id === "album" || p.id === "composer" || p.id === "turn-line" || p.id === "dialogue-box")
+				expect(p.reads, p.id).toContain("messages")
 			else expect(p.reads ?? [], p.id).not.toContain("messages")
+	})
+
+	test("the Dialogue box is granted the full session dossier", () => {
+		const box = coreDefaultWidgets(true).find((p) => p.id === "dialogue-box")!
+		expect(box.grants).toContain("session:full")
 	})
 })

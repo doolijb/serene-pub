@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
+	import { castNameOf, seatCardsAsShown } from "$lib/client/components/sessionPage/projections/characters"
 
 	const socket = useTypedSocket()
 	const interest = getInterestContext()
@@ -8,11 +9,17 @@
 	let loaded = $state(false)
 
 	function participantSummary(session: (typeof sessions)[number]): string {
-		const characters = (session.sessionCharacters || [])
-			.map((cc) => cc.character?.nickname || cc.character?.name)
+		const characters = seatCardsAsShown(session)
+			.map((c) => c.nickname || c.name)
 			.filter(Boolean)
 		const personas = (session.sessionPersonas || [])
-			.map((cp) => cp.persona?.name)
+			.map((cp) =>
+				// A player seat reads its cast member as a character seat does
+				// (s27 S2c); with nothing of the member's, the card's name.
+				cp.persona?.id != null && session.castNames?.[cp.persona.id]
+					? castNameOf(session, cp.persona.id, cp.persona, cp.persona.name)
+					: cp.persona?.name
+			)
 			.filter(Boolean)
 		return [...characters, ...personas].join(", ") || "No participants yet"
 	}

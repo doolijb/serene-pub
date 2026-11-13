@@ -1158,7 +1158,7 @@ export async function loadDocument(
 			...(b.repeatWhile ? { repeatWhile: b.repeatWhile } : {}),
 			...(b.onRef ? { on: b.onRef } : {}),
 			...(b.branches ? { branches: b.branches } : {}),
-			chains: chainsOf(nodeRows, clauseRows, b.clauseId),
+			chains: chainsOf(nodeRows, clauseRows, b.clauseId, b.branches),
 			...(b.parentClauseId ? { clauseId: b.parentClauseId } : {}),
 			...(b.parentClauseChain ? { clauseChain: b.parentClauseChain } : {}),
 			position: b.position
@@ -1180,11 +1180,20 @@ export async function loadDocument(
  * member is the `pick` junction — has no node of its own, and read off the
  * nodes alone it vanished on load, so the branch never ran. In declaration
  * (position) order, which is the order the builder listed them.
+ *
+ * The rule, one sentence: member-holding chains in position order, then
+ * member-less chains sorted by name (code-unit order). It is the SDK compile
+ * step's rule (`orderedChains` in the SDK's `document.ts`), so a loaded
+ * document hashes as it was saved. The member-less chains come from the
+ * stored `branches` (a junction's `{ chain: predicate }`; jsonb keeps no key
+ * order, hence the sort): an empty branch is a real branch — taking it runs
+ * nothing and keeps `otherwise` from firing — so it must not vanish on load.
  */
 function chainsOf(
 	nodeRows: any[],
 	clauseRows: any[],
-	clauseId: string
+	clauseId: string,
+	branches?: Record<string, unknown> | null
 ): string[] {
 	const members = [
 		...nodeRows
@@ -1196,6 +1205,9 @@ function chainsOf(
 	].sort((a, b) => a.position - b.position)
 	const seen: string[] = []
 	for (const m of members) if (!seen.includes(m.chain)) seen.push(m.chain)
-	return seen
+	const empty = Object.keys(branches ?? {})
+		.filter((c) => !seen.includes(c))
+		.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+	return [...seen, ...empty]
 }
 

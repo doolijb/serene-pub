@@ -18,6 +18,7 @@
 import { CORE_ACTION_SPEC } from "$lib/shared/actions/identity"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { memberFormOn } from "$lib/server/state/memberForm"
 import {
 	coreAction,
 	formBlocksOf,
@@ -470,7 +471,9 @@ export async function turnControlRefusal(
  * latitude to fire an unprepared entry (§4.7), an envoy's reference, the
  * pipeline's own voice on a channel with no narrator.
  *
- * - a `character:` reference is **Pick who speaks** (`pick`);
+ * - a `character:` reference — or a 🚧 `seated-member:` one, a person picking
+ *   who speaks by member, or ⏳ (flip on) a `player-seat:` one — is **Pick who
+ *   speaks** (`pick`);
  * - the null reference in a `voice: 'narrator'` genre is **the narrator's
  *   turn** (`narrate`) — elsewhere the null reference is the pipeline's own
  *   voice (a `voice: 'none'` folio channel's), not a narrator.
@@ -480,7 +483,13 @@ export function pressedTurnControl(
 	entry: { ref: string | null; channel?: string }
 ): TurnControl | null {
 	if (typeof entry.ref === "string")
-		return entry.ref.startsWith("character:") ? "pick" : null
+		return entry.ref.startsWith("character:") ||
+			entry.ref.startsWith("seated-member:") ||
+			// ⏳ A player seat is `player-seat:<id>` once the flip is on, carded
+			// or not — a person picking who speaks by seat.
+			(memberFormOn() && entry.ref.startsWith("player-seat:"))
+			? "pick"
+			: null
 	const voice = (shape as { voice?: unknown } | undefined)?.voice
 	return entry.ref === null && voice === "narrator" ? "narrate" : null
 }
@@ -651,15 +660,15 @@ export async function extendVerbRefusal(
 export const TURN_DELETE_REFUSALS = Object.freeze({
 	older: "Only the latest turn can be deleted — retake from there instead.",
 	notOwner: "Only the session owner can delete the latest turn.",
-	honourOff:
-		"Honour mode is off: turns can only be retaken. The session owner can turn it on in the session's settings."
+	keepEveryTurn:
+		"Keep every turn is on: every turn is kept — retake from the latest instead. The session owner can turn it off in the session's settings."
 })
 
 /**
  * 🚧 **A genre that keeps its turns** (owner rulings 2026-10-15, Dungeon
  * Crawler): what a delete of one row comes to. A genre keeps its turns by
- * declaring the session field `honorMode` (_Honour mode_) — a key core reads,
- * as it reads `autoAdvance`; absent from the settings document, nothing here
+ * declaring the session field `keepEveryTurn` (_Keep every turn_, was Honour
+ * mode, renamed 2026-11-05) — a key core reads, as it reads `autoAdvance`; absent from the settings document, nothing here
  * applies and the delete is the ordinary one (`null`).
  *
  * Read off the row's place against the story's turns (`turnAgeOf`), on a
@@ -668,7 +677,7 @@ export const TURN_DELETE_REFUSALS = Object.freeze({
  *  - an **older** turn's row is never deleted — the turn is retaken from the
  *    latest instead;
  *  - the **latest** turn's row is deleted by the session owner alone, and only
- *    while Honour mode is on. A row that turn's run wrote takes the whole turn
+ *    while Keep every turn is off. A row that turn's run wrote takes the whole turn
  *    with it (`{ turn }`: the reply, its roll line, its journal line — the
  *    yield, as a retake deletes it, and nothing fired again); a line of the
  *    round it answered goes alone (`null`);
@@ -678,7 +687,7 @@ export const TURN_DELETE_REFUSALS = Object.freeze({
  * Neither enabled-when could say this: core's own predicates for `delete`
  * beat a genre's defaults, and the grammar states one condition per
  * predicate, never "owner and on, but only for the latest turn". The retake
- * is not asked here: it is the owner's, whatever Honour mode says. A read
+ * is not asked here: it is the owner's, whatever Keep every turn says. A read
  * that fails refuses nothing (the `verbRefusal` posture).
  */
 export type TurnDeleteVerdict =
@@ -695,12 +704,12 @@ export type TurnDeleteVerdict =
 
 /**
  * 🚧 **Where this viewer's Delete is refused**, for the whole session at
- * once (2026-10-18, owner ruling ★9: Honour mode off hides Delete) — what
+ * once (2026-10-18, owner ruling ★9: Delete hidden where the turn is kept) — what
  * `turnDeleteVerdict` would answer, folded into one boundary the page reads
  * per row: on each channel that offers the retake, every row up to
- * `messageId`. For a player, or the owner with Honour mode off, that is the
+ * `messageId`. For a player, or the owner with Keep every turn on, that is the
  * whole of the latest turn and everything before it; for the owner with it
- * on, the older turns only — the rows before the round the latest turn
+ * off, the older turns only — the rows before the round the latest turn
  * answered and before its own rows. A boundary, never a list: a row past it
  * that the verdict would still refuse (an older turn's roll line written
  * after its reply) keeps Delete, and its press is refused in words. Null
@@ -713,9 +722,9 @@ export async function turnDeleteRefusedThrough(
 	userId: number
 ): Promise<{ channels: string[]; messageId: number } | null> {
 	try {
-		const { sessionHonourMode } = await import("$lib/server/sessions/settings")
-		const honour = await sessionHonourMode(db, sessionId)
-		if (honour === undefined) return null
+		const { sessionKeepsEveryTurn } = await import("$lib/server/sessions/settings")
+		const keepsEveryTurn = await sessionKeepsEveryTurn(db, sessionId)
+		if (keepsEveryTurn === undefined) return null
 		const [session] = await db
 			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
@@ -737,7 +746,7 @@ export async function turnDeleteRefusedThrough(
 		const { sessionAccessFor } = await import("$lib/server/messages/permissions")
 		const isOwner = (await sessionAccessFor(db, sessionId, userId)).isOwner
 		const messageId =
-			!isOwner || honour !== true
+			!isOwner || keepsEveryTurn === true
 				? Math.max(latest.headId, ...own)
 				: Math.min(latest.previousId ?? 0, (own.length ? Math.min(...own) : latest.headId) - 1)
 		return messageId > 0 ? { channels, messageId } : null
@@ -753,12 +762,12 @@ export async function turnDeleteVerdict(
 	messageId: number,
 	userId: number
 ): Promise<TurnDeleteVerdict> {
-	let honour: boolean | undefined
+	let keepsEveryTurn: boolean | undefined
 	let shape: unknown
 	try {
-		const { sessionHonourMode } = await import("$lib/server/sessions/settings")
-		honour = await sessionHonourMode(db, sessionId)
-		if (honour === undefined) return null
+		const { sessionKeepsEveryTurn } = await import("$lib/server/sessions/settings")
+		keepsEveryTurn = await sessionKeepsEveryTurn(db, sessionId)
+		if (keepsEveryTurn === undefined) return null
 		const [session] = await db
 			.select({ genreId: schema.sessions.genreId })
 			.from(schema.sessions)
@@ -778,7 +787,7 @@ export async function turnDeleteVerdict(
 	const { sessionAccessFor } = await import("$lib/server/messages/permissions")
 	if (!(await sessionAccessFor(db, sessionId, userId)).isOwner)
 		return { refusal: TURN_DELETE_REFUSALS.notOwner }
-	if (honour !== true) return { refusal: TURN_DELETE_REFUSALS.honourOff }
+	if (keepsEveryTurn === true) return { refusal: TURN_DELETE_REFUSALS.keepEveryTurn }
 	if (!age.turn) return null
 	const { revisionNotice, sessionOnRevision } = await import("$lib/server/sessions/revision")
 	return { turn: age.turn, revision: revisionNotice(await sessionOnRevision(db, sessionId), 1) }

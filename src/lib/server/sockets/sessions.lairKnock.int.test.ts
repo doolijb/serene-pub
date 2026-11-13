@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 import { JSON_INSTRUCTION } from "$lib/server/connections/structuredOutput"
@@ -353,6 +353,21 @@ async function pressKnock(
 	return { ack, messageId: knock.messageId, block }
 }
 
+/**
+ * What the sessions attached to `lorebookId` read: the lorebook and each of their own
+ * books (Session notes). A Lair pipeline's new room goes to the own book, and only
+ * Apply (a scene closing) carries it to the lorebook.
+ */
+async function booksRead(lorebookId: number) {
+	const schema = await import("$lib/server/db/schema")
+	const own = await testDb
+		.select({ id: schema.lorebooks.id })
+		.from(schema.lorebooks)
+		.innerJoin(schema.sessions, eq(schema.sessions.id, schema.lorebooks.sessionId))
+		.where(eq(schema.sessions.lorebookId, lorebookId))
+	return [lorebookId, ...own.map((b) => b.id)]
+}
+
 async function roomsNamed(lorebookId: number, name: string) {
 	const schema = await import("$lib/server/db/schema")
 	return testDb
@@ -360,7 +375,7 @@ async function roomsNamed(lorebookId: number, name: string) {
 		.from(schema.lorebookEntries)
 		.where(
 			and(
-				eq(schema.lorebookEntries.lorebookId, lorebookId),
+				inArray(schema.lorebookEntries.lorebookId, await booksRead(lorebookId)),
 				eq(schema.lorebookEntries.title, name)
 			)
 		)
@@ -844,7 +859,7 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		return testDb
 			.select()
 			.from(schema.narrativeRelationships)
-			.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
+			.where(inArray(schema.narrativeRelationships.lorebookId, await booksRead(lorebookId)))
 	}
 	async function standAt(w: Awaited<ReturnType<typeof lair>>, value: unknown) {
 		const { applyChange } = await import("$lib/server/state/write")
@@ -905,6 +920,58 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		// its ways out now include the room just built, said from the well.
 		const planner = jsonPrompts[0]!
 		expect(planner).toContain("From here:\\n- Leads to The Drowned Hall.")
+	})
+
+	test("the room and its links are in the session's own book until a scene closes, then in the lorebook", async () => {
+		const schema = await import("$lib/server/db/schema")
+		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+		const { openScene, closeScene } = await import("$lib/server/scenes/liveScenes")
+		const w = await lair()
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		await storyWentOn(w, 3)
+		const own = (await ownBookOf(testDb as unknown as Db, w.session.id))!
+		const inBook = async (lorebookId: number) => ({
+			rooms: await testDb
+				.select()
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.lorebookId, lorebookId),
+						eq(schema.lorebookEntries.title, "The Drowned Hall")
+					)
+				),
+			links: await testDb
+				.select()
+				.from(schema.narrativeRelationships)
+				.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
+		})
+		// Before: the session's own book holds the room and both its links; the lorebook holds neither.
+		const before = await inBook(own.id)
+		expect(before.rooms).toHaveLength(1)
+		expect(before.links.length).toBeGreaterThanOrEqual(2)
+		expect(await inBook(w.lorebookId)).toEqual({ rooms: [], links: [] })
+		// A scene covering the turn closes: Apply runs by itself (the owner owns the lorebook, Full).
+		const rows = await rowsOf(w.session.id)
+		const open = await openScene(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.owner.id,
+			channel: "main",
+			atMessageId: rows[0]!.id
+		})
+		await closeScene(testDb as unknown as Db, {
+			sceneId: open.scene.id,
+			userId: w.owner.id,
+			atMessageId: rows[rows.length - 1]!.id
+		})
+		const after = await inBook(w.lorebookId)
+		expect(after.rooms).toHaveLength(1)
+		expect(after.rooms[0]!.content).toBe(TYPED)
+		expect(after.links.length).toBe(before.links.length)
+		expect(await inBook(own.id)).toEqual({ rooms: [], links: [] })
 	})
 
 	test("drafted: the link is written once the master approves the draft", async () => {

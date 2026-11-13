@@ -44,6 +44,13 @@
 		 * answer read as "Main" and "nothing dated", which is not true.
 		 */
 		readOnly?: boolean
+		/**
+		 * 🚧 An owner who sees the reading read-only only because advanced
+		 * controls are off (2026-11-10): the same sentence says how to change
+		 * it, and the line and clock are spelled from the book (the owner may
+		 * read the book's lines; a guest may not).
+		 */
+		lockedByAdvanced?: boolean
 	}
 
 	let {
@@ -51,7 +58,8 @@
 		branchId = $bindable(),
 		clock = $bindable(),
 		disabled = false,
-		readOnly = false
+		readOnly = false,
+		lockedByAdvanced = false
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -65,7 +73,7 @@
 	const time = new BookTime()
 	$effect(() => {
 		const id = lorebookId
-		if (readOnly) return
+		if (readOnly && !lockedByAdvanced) return
 		return time.listen(socket, id)
 	})
 	let branches = $derived(time.branches)
@@ -217,17 +225,23 @@
 <div class="flex flex-col gap-1 text-sm" data-testid="session-lorebook-reading">
 	<p>
 		<span class="font-semibold">Line</span>
-		<span class="text-surface-700-300">{branchId == null ? "Main" : "A branch of this lorebook"}</span>
+		<span class="text-surface-700-300">{branchId == null
+			? "Main"
+			: lockedByAdvanced
+				? (branches.find((b) => b.id === branchId)?.name ?? "A branch of this lorebook")
+				: "A branch of this lorebook"}</span>
 	</p>
 	<p>
 		<span class="font-semibold">Story clock</span>
 		<span class="text-surface-700-300" data-testid="session-story-clock-readonly">
-			{clock ? formatDate(clock, null) : "Follows the line's present"}
+			{clock ? (lockedByAdvanced ? spell(clock) : formatDate(clock, null)) : "Follows the line's present"}
 		</span>
 	</p>
 	<p class="text-surface-600-400 text-xs">
 		The line is which version of the lorebook this session reads; Main is the original. The
-		story clock is the in-story date. The session owner chooses both.
+		story clock is the in-story date. {lockedByAdvanced
+			? "Turn on advanced controls to change them."
+			: "The session owner chooses both."}
 	</p>
 </div>
 {:else}

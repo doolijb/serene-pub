@@ -8,7 +8,8 @@
  * modules — so production reads exactly what development does, and nothing
  * is read from disk at run time. Loaded on first ask, not at boot.
  *
- * `messages` is view-only (`CORE_VIEW_ONLY_COMPONENTS`, owner ruling Q3): its
+ * The conversation widgets (`messages`, `composer`, `turn-line`) are view-only
+ * (`CORE_VIEW_ONLY_COMPONENTS`, owner ruling Q3): their
  * source is readable, but a clone could never have the core trust it runs
  * on, so it is never cloned.
  */
@@ -27,6 +28,9 @@ import type { AuthoredWidgetShape } from "$lib/server/db/schema"
  */
 const SOURCES: Readonly<Record<string, () => Promise<{ default: string }>>> = {
 	messages: () => import("@serene-pub/core-catalog/components/messages.source.json?raw"),
+	composer: () => import("@serene-pub/core-catalog/components/composer.source.json?raw"),
+	"turn-line": () => import("@serene-pub/core-catalog/components/turn-line.source.json?raw"),
+	"dialogue-box": () => import("@serene-pub/core-catalog/components/dialogue-box.source.json?raw"),
 	stats: () => import("@serene-pub/core-catalog/components/stats.source.json?raw"),
 	"lore-entries": () => import("@serene-pub/core-catalog/components/lore-entries.source.json?raw"),
 	"scene-portraits": () => import("@serene-pub/core-catalog/components/scene-portraits.source.json?raw"),
@@ -40,7 +44,9 @@ const SOURCES: Readonly<Record<string, () => Promise<{ default: string }>>> = {
 	places: () => import("@serene-pub/core-catalog/components/places.source.json?raw"),
 	attendance: () => import("@serene-pub/core-catalog/components/attendance.source.json?raw"),
 	// 🚧 While you were away (PLAN-layering A7, R23; lane 7).
-	"routine-log": () => import("@serene-pub/core-catalog/components/routine-log.source.json?raw")
+	"routine-log": () => import("@serene-pub/core-catalog/components/routine-log.source.json?raw"),
+	// 🚧 Runs (lay-R, owner 2026-11-06).
+	"session-runs": () => import("@serene-pub/core-catalog/components/session-runs.source.json?raw")
 }
 
 /** The slugs this module can load a source for — for the test that pins it to `CORE_COMPONENTS`. */

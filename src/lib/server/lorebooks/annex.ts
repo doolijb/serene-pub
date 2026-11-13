@@ -35,8 +35,10 @@ import {
 } from "@serene-pub/sdk"
 import { imprintField, type ImprintAnchor } from "$lib/server/lorebooks/imprints"
 import { resolvePortrayals } from "$lib/server/pipelines/runtime/portrayals"
-import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { actingPersonFor, personMay } from "$lib/server/auth/actingPerson"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormTargetsOf, type SeatMap } from "$lib/server/state/seatRefs"
 import { emitToUserRedacted } from "$lib/server/sockets/utils/broadcastHelpers"
 import type { AnnexView } from "$lib/server/sessions/annexViews"
 
@@ -237,15 +239,36 @@ export async function bookLorebookAnnex(
 	return isDocument(doc) ? doc : {}
 }
 
-/** The union of a session's books' stored audiences, the later book's key winning. */
-function unionAudiences(books: readonly { audiences: Record<string, Record<string, string[]>> }[]): DataAudiences {
+/**
+ * The union of a session's books' stored audiences, the later book's key
+ * winning. Book audiences stay in card form until S5 (★K-3). 🚧 ⏳ With the
+ * member-form switch on, the caller passes the session's `seats` and each
+ * card-form ref is read as every seat that holds the card (★K-2: who may see
+ * goes to every target); refs already in member form, and a card no seat can
+ * take, are kept. Off: no `seats`, the refs as stored.
+ */
+function unionAudiences(
+	books: readonly { audiences: Record<string, Record<string, string[]>> }[],
+	seats?: SeatMap
+): DataAudiences {
 	const out: Record<string, Record<string, ParticipantRef[]>> = {}
+	const read = (r: ParticipantRef): ParticipantRef[] => {
+		if (!seats) return [r]
+		const targets = memberFormTargetsOf(seats, r) as ParticipantRef[]
+		return targets.length ? targets : [r]
+	}
 	for (const book of books)
 		for (const [owner, keys] of Object.entries(book.audiences))
-			for (const [key, refs] of Object.entries(keys ?? {}))
-				(out[owner] ??= {})[key] = (refs ?? []).filter((r) => isParticipantRef(r)) as ParticipantRef[]
+			for (const [key, refs] of Object.entries(keys ?? {})) {
+				const well = (refs ?? []).filter((r) => isParticipantRef(r)) as ParticipantRef[]
+				;(out[owner] ??= {})[key] = seats ? [...new Set(well.flatMap(read))] : well
+			}
 	return out
 }
+
+/** 🚧 ⏳ The session's seats for `unionAudiences` when the switch is on; otherwise nothing. */
+const seatsForAudiences = (db: Db, sessionId: number): Promise<SeatMap | undefined> =>
+	memberFormOn() ? loadSeatMap(db, sessionId) : Promise.resolve(undefined)
 
 /**
  * One member's view of the lorebook annex their session reads, or null when
@@ -258,14 +281,15 @@ export async function lorebookAnnexViewFor(
 	sessionId: number,
 	userId: number
 ): Promise<AnnexView | null> {
-	const access = await checkSessionAccess(sessionId, userId)
-	if (!access.hasAccess) return null
+	const person = await actingPersonFor(db, { via: "view", userId })
+	if (!person || !(await personMay(db, person, "read", { kind: "session-annex", sessionId })).ok)
+		return null
 	const books = await booksOfSession(db, sessionId)
 	const values: Record<string, unknown> = {}
 	for (const book of books)
 		for (const [owner, doc] of Object.entries(book.annex))
 			if (isDocument(doc)) values[owner] = { ...(isDocument(values[owner]) ? values[owner] : {}), ...doc }
-	const audiences = unionAudiences(books)
+	const audiences = unionAudiences(books, await seatsForAudiences(db, sessionId))
 	// Only well-formed references reach the resolver: one malformed row must
 	// not fail every member's view (it holds for nobody instead).
 	const refs = [...new Set(Object.values(audiences).flatMap((keys) => Object.values(keys).flat()))]
@@ -287,7 +311,7 @@ export async function pushLorebookAnnexViews(db: Db, io: SessionIo, sessionId: n
 		.limit(1)
 	if (!session) return
 	// Nothing anybody may see: every view is `{}`, and was before.
-	const audiences = unionAudiences(await booksOfSession(db, sessionId))
+	const audiences = unionAudiences(await booksOfSession(db, sessionId), await seatsForAudiences(db, sessionId))
 	if (!Object.values(audiences).some((keys) => Object.keys(keys ?? {}).length)) return
 	const guests = await db
 		.select({ userId: schema.sessionGuests.userId })

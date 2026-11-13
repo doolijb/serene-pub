@@ -11,7 +11,7 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { z } from "zod"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import SettingSwitch from "./SettingSwitch.svelte"
@@ -22,7 +22,6 @@
 		passphraseSchema,
 		PASSPHRASE_MIN_LENGTH
 	} from "$lib/shared/validation/passphrase"
-
 
 	const socket = useTypedSocket()
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -121,19 +120,24 @@
 						: "User accounts are on now, so everyone signs in. Use your username and your passphrase."
 				)
 			if (message.success) {
-				toaster.success({
+				notify.success({
+					source: "socket:systemSettings:updateAccountsEnabled",
 					title: "User accounts turned on",
 					description: "Authentication is now required for all users"
 				})
 			} else {
-				toaster.error({ title: "Failed to turn on user accounts" })
+				notify.error({
+					source: "socket:systemSettings:updateAccountsEnabled",
+					title: "Failed to turn on user accounts"
+				})
 			}
 		}
 		// The switch is bound to `systemSettingsCtx.settings`, which the
 		// server only updates on success, so on failure it already reverts;
 		// this only says why. `:error` events are never gated (ruling 2).
 		const handleAccountsEnabledError = (message: { error?: string }) => {
-			toaster.error({
+			notify.error({
+				source: "socket:systemSettings:updateAccountsEnabled:error",
 				title: "Cannot turn on user accounts",
 				description: message.error
 			})
@@ -149,14 +153,18 @@
 				passphrase = ""
 				confirmPassphrase = ""
 				passphraseError = ""
-				toaster.success({ title: "Passphrase set" })
+				notify.success({
+					source: "socket:users:current:setPassphrase",
+					title: "Passphrase set"
+				})
 				socket?.emit("systemSettings:updateAccountsEnabled", {
 					enabled: true
 				})
 				showModal = false
 			} else {
 				passphraseError = message.message || "Failed to set passphrase"
-				toaster.error({
+				notify.error({
+					source: "socket:users:current:setPassphrase",
 					title: "Failed to set passphrase",
 					description: message.message
 				})
@@ -235,9 +243,15 @@
 
 <Dialog open={showModal} onOpenChange={(e) => (showModal = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="bg-surface-950/60 fixed inset-0 z-50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 max-w-lg space-y-6 p-6 shadow-xl">
+		<Dialog.Backdrop
+			class="bg-surface-950/60 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-lg space-y-6 p-6 shadow-xl"
+			>
 				<header class="flex items-center justify-between">
 					<Dialog.Title class="text-xl font-semibold">
 						Turn on user accounts?
@@ -254,7 +268,9 @@
 				<article class="space-y-4">
 					<div class="text-warning-600-400 flex items-center gap-2">
 						<Icons.TriangleAlert class="h-5 w-5" />
-						<span class="font-semibold">This cannot be reversed</span>
+						<span class="font-semibold">
+							This cannot be reversed
+						</span>
 					</div>
 					<p>
 						User accounts turn on sign-in and multi-user support.
@@ -269,16 +285,23 @@
 						<div
 							class="bg-warning-500/10 border-warning-500/20 space-y-3 rounded-lg border p-4"
 						>
-							<div class="text-warning-600-400 flex items-center gap-2">
+							<div
+								class="text-warning-600-400 flex items-center gap-2"
+							>
 								<Icons.Key class="h-4 w-4" />
-								<span class="font-semibold">Passphrase required</span>
+								<span class="font-semibold">
+									Passphrase required
+								</span>
 							</div>
 							<p class="text-sm">
 								Set a passphrase for your account to continue.
 							</p>
 							<div class="space-y-3">
 								<div>
-									<label class="mb-1 block text-xs text-surface-600-400" for="accounts-username">
+									<label
+										class="text-surface-600-400 mb-1 block text-xs"
+										for="accounts-username"
+									>
 										Username
 									</label>
 									<input
@@ -289,7 +312,10 @@
 									/>
 								</div>
 								<div>
-									<label class="mb-1 block text-xs text-surface-600-400" for="accounts-passphrase">
+									<label
+										class="text-surface-600-400 mb-1 block text-xs"
+										for="accounts-passphrase"
+									>
 										Passphrase
 									</label>
 									<input
@@ -297,11 +323,16 @@
 										type="password"
 										bind:value={passphrase}
 										placeholder="Enter your passphrase"
-										class="input w-full {passphraseError ? 'border-error-500' : ''}"
+										class="input w-full {passphraseError
+											? 'border-error-500'
+											: ''}"
 									/>
 								</div>
 								<div>
-									<label class="mb-1 block text-xs text-surface-600-400" for="accounts-confirm-passphrase">
+									<label
+										class="text-surface-600-400 mb-1 block text-xs"
+										for="accounts-confirm-passphrase"
+									>
 										Confirm passphrase
 									</label>
 									<input
@@ -309,7 +340,9 @@
 										type="password"
 										bind:value={confirmPassphrase}
 										placeholder="Confirm your passphrase"
-										class="input w-full {passphraseError ? 'border-error-500' : ''}"
+										class="input w-full {passphraseError
+											? 'border-error-500'
+											: ''}"
 									/>
 								</div>
 								{#if passphraseError}
@@ -317,8 +350,13 @@
 								{/if}
 								<div class="text-surface-600-400 text-xs">
 									<p>Requirements:</p>
-									<ul class="ml-2 list-inside list-disc space-y-1">
-										<li>At least {PASSPHRASE_MIN_LENGTH} characters long</li>
+									<ul
+										class="ml-2 list-inside list-disc space-y-1"
+									>
+										<li>
+											At least {PASSPHRASE_MIN_LENGTH} characters
+											long
+										</li>
 										<li>At least one lowercase letter</li>
 										<li>At least one uppercase letter</li>
 										<li>At least one special character</li>
@@ -347,7 +385,9 @@
 							Setting up…
 						{:else}
 							<Icons.Shield class="h-4 w-4" />
-							{hasPassphrase ? "Turn on accounts" : "Set passphrase and turn on"}
+							{hasPassphrase
+								? "Turn on accounts"
+								: "Set passphrase and turn on"}
 						{/if}
 					</button>
 				</footer>

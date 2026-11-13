@@ -71,4 +71,40 @@ describe("unpromptedEntries", () => {
 		const elsewhere = [user, { ...said(1), channel: "sanctum" }]
 		expect(unpromptedEntries([], candidates, elsewhere as never, ON)).toEqual([])
 	})
+
+	describe("narrator cadence (narrator-every)", () => {
+		const solo = [ash, me]
+		const mode = (every: unknown) => ({ "narrator-interjections": "full", "narrator-every": every })
+		const placed = [{ ref: null, via: "unprompted" }]
+		const run = (history: unknown[], modes: Record<string, unknown>) =>
+			unpromptedEntries([], solo, history as never, modes)
+
+		it("every 2nd round: the narrator comes after the cast on rounds 2, 4, ...", () => {
+			const m = mode(2)
+			expect(run([user, said(1)], m)).toEqual([])
+			expect(run([user, said(1), user, said(1)], m)).toEqual(placed)
+			expect(run([user, said(1), user, said(1), narration], m)).toEqual([])
+			expect(run([user, said(1), user, said(1), narration, user, said(1)], m)).toEqual([])
+			expect(run([user, said(1), user, said(1), narration, user, said(1), user, said(1)], m)).toEqual(placed)
+		})
+
+		it("every 3rd round places the narrator on round 3", () => {
+			const m = mode(3)
+			expect(run([user, said(1), user, said(1)], m)).toEqual([])
+			expect(run([user, said(1), user, said(1), user, said(1)], m)).toEqual(placed)
+		})
+
+		it("counts from the narrator's last line: a person's own Narrate press resets it", () => {
+			expect(run([user, said(1), narration, user, said(1)], mode(2))).toEqual([])
+		})
+
+		it("an absent narrator-every is every round; garbage reads as 1", () => {
+			expect(run([user, said(1)], { "narrator-interjections": "full" })).toEqual(placed)
+			for (const bad of [0, "2", -1, 1.5, null]) expect(run([user, said(1)], mode(bad))).toEqual(placed)
+		})
+
+		it("off places none", () => {
+			expect(run([user, said(1)], { "narrator-interjections": "off", "narrator-every": 1 })).toEqual([])
+		})
+	})
 })

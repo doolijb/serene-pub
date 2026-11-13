@@ -19,6 +19,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { LAIR_LAYOUT } from "@serene-pub/core-catalog"
+import { panelsV2Of } from "@serene-pub/sdk"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -42,12 +43,16 @@ const LAIR = "core:genre/lair"
 
 /**
  * 🚧 A layout as captured from a Lair session (lair fix 2, 2026-10-22): the
- * genre's layout sets the story's Messages settings (its tabs' composer), the
- * session holds them, and capturing packs them for the widget drawn.
+ * genre's layout sets the Composer's and the Cast's settings (since 2026-11-05 the
+ * Composer is its own widget), the session holds them, and capturing packs
+ * them for the widgets drawn.
  */
 const withStorySettings = <L extends Record<string, unknown>>(layout: L) => ({
 	...layout,
-	widgetSettings: { messages: LAIR_LAYOUT.widgetSettings!.messages }
+	widgetSettings: {
+		composer: LAIR_LAYOUT.widgetSettings!.composer,
+		stats: LAIR_LAYOUT.widgetSettings!.stats
+	}
 })
 const STORY = "core:genre/story"
 // On screen it is a **layout**, never a "preset" (NOMENCLATURE §9): the
@@ -243,6 +248,12 @@ const TWO_COLUMNS = {
 }
 
 /** The same, with the stats panel moved to the right. */
+/** A layout as it is stored now: its old slots stay, `panels` version 2 is added. */
+const asV2 = <L extends object>(layout: L) => ({
+	...layout,
+	panels: panelsV2Of(layout as any).panels
+})
+
 const STATS_RIGHT = {
 	...TWO_COLUMNS,
 	zoneLayout: {
@@ -457,12 +468,12 @@ describe("sessions:layoutPreset:share", () => {
 			const first = await sessionOf(friend.id)
 			const opened = await get(friend.id, first.id)
 			expect(opened.startedFromLayoutPresetId).toBe(layout.id)
-			expect(opened.layout).toEqual(TWO_COLUMNS)
+			expect(opened.layout).toEqual(asV2(TWO_COLUMNS))
 
 			await share(s.owner.id, s.session.id, layout.id, "private")
 			// The session they already have keeps its copy.
 			const again = await get(friend.id, first.id)
-			expect(again.layout).toEqual(TWO_COLUMNS)
+			expect(again.layout).toEqual(asV2(TWO_COLUMNS))
 			// A new one starts from the genre default layout.
 			const next = await sessionOf(friend.id)
 			const fresh = await get(friend.id, next.id)
@@ -635,10 +646,13 @@ describe("sessions:layoutPreset:update", () => {
 			expect(res.ok).toBe(true)
 			expect(res.id).toBe(s.mine.id)
 			expect(res.genreId).toBe(LAIR)
+			// Written as panels version 2: the pin on Messages is copied onto the
+			// Composer and Turn line it split into.
+			const quiet = { id: 4, slug: "quiet" }
 			expect(res.preset!.layout).toEqual({
-				...STATS_RIGHT,
+				...asV2(STATS_RIGHT),
 				widgetSettings: { stats: { density: "compact" } },
-				widgetStyles: { messages: { id: 4, slug: "quiet" } }
+				widgetStyles: { messages: quiet, composer: quiet, "turn-line": quiet }
 			})
 			const stored = await presetRow(s.mine.id)
 			expect(stored.layoutUpdatedAt.getTime()).toBeGreaterThan(LONG_AGO.getTime())
@@ -716,7 +730,7 @@ describe("sessions:layoutPreset:update", () => {
 			const second = await sessionOf(s.owner.id)
 			await get(s.owner.id, second.id)
 			const copied = await startFrom(s.owner.id, second.id, s.mine.id)
-			expect(copied.layout).toEqual(TWO_COLUMNS)
+			expect(copied.layout).toEqual(asV2(TWO_COLUMNS))
 			await testDb
 				.update(schema.sessionPanelLayouts)
 				.set({ layoutCopiedAt: LONG_AGO })
@@ -734,7 +748,7 @@ describe("sessions:layoutPreset:update", () => {
 			])
 			expect(res.ok).toBe(true)
 			const other = await get(s.owner.id, second.id)
-			expect(other.layout).toEqual(TWO_COLUMNS)
+			expect(other.layout).toEqual(asV2(TWO_COLUMNS))
 			expect(other.startedFromLayoutPresetId).toBe(s.mine.id)
 			expect(other.startedFromUpdated).toBe(true)
 		},
@@ -802,7 +816,7 @@ describe("sessions:layoutPreset:update", () => {
 			expect(byAdmin.ok).toBe(true)
 			// 🚧 The admin's Lair session carries the story's settings from the
 			// genre's layout (lair fix 2: its tabs' composer), captured with it.
-			expect((await presetRow(open.id)).layout).toEqual(withStorySettings(STATS_RIGHT))
+			expect((await presetRow(open.id)).layout).toEqual(withStorySettings(asV2(STATS_RIGHT)))
 			// …and without the admin bit, the same ask is refused.
 			const notAdmin = await update(admin.id, adminSession.id, open.id, TWO_COLUMNS, [])
 			expect(notAdmin.ok).toBe(false)
@@ -811,7 +825,7 @@ describe("sessions:layoutPreset:update", () => {
 			const guestOwn = await namedLayout(s.guest.id, "Guest's", TWO_COLUMNS)
 			const byGuest = await update(s.guest.id, s.session.id, guestOwn.id, STATS_RIGHT, [])
 			expect(byGuest.ok).toBe(true)
-			expect((await presetRow(guestOwn.id)).layout).toEqual(STATS_RIGHT)
+			expect((await presetRow(guestOwn.id)).layout).toEqual(asV2(STATS_RIGHT))
 			const hosts = await update(s.guest.id, s.session.id, hostOwn.id, STATS_RIGHT, [])
 			expect(hosts.ok).toBe(false)
 			expect(hosts.error).toBe(UNKNOWN)
@@ -843,7 +857,7 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			const first = await sessionOf(person.id)
 			const opened = await get(person.id, first.id)
 			expect(opened.startedFromLayoutPresetId).toBe(preferred.id)
-			expect(opened.layout).toEqual(TWO_COLUMNS)
+			expect(opened.layout).toEqual(asV2(TWO_COLUMNS))
 			expect(opened.widgetSettings.stats).toEqual({ density: "compact" })
 
 			const cleared = await setNewSessionLayout(person.id, LAIR, null)
@@ -944,7 +958,8 @@ describe("sessions:layoutPreset:setNewSessionLayout", () => {
 			const story = await sessionOf(chooser.id, STORY)
 			const storyOpened = await get(chooser.id, story.id)
 			expect(storyOpened.startedFromLayoutPresetId).toBe(storyDef.id)
-			expect(storyOpened.layout).toEqual(storyDef.layout)
+			// The session holds the arrangement; the layout's settings go to their own homes.
+			expect(storyOpened.layout).toEqual({ panels: (storyDef.layout as any).panels })
 		},
 		60_000
 	)

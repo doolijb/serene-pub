@@ -6,7 +6,11 @@
 import { describe, expect, test, vi } from "vitest"
 import { flushSync } from "svelte"
 
-vi.mock("$app/environment", () => ({ dev: true, building: false, browser: true }))
+vi.mock("$app/environment", () => ({
+	dev: true,
+	building: false,
+	browser: true
+}))
 
 import { createActionList } from "./actionList.svelte"
 import { withinAudience } from "./audienceVenues"
@@ -27,17 +31,28 @@ const action = (key: string, over: Record<string, unknown> = {}) => ({
 	venue: "composer",
 	...over
 })
-const REST = action("rest", { audience: { see: ["participant"], act: ["owner"] }, canAct: false })
+const REST = action("rest", {
+	audience: { see: ["participant"], act: ["owner"] },
+	canAct: false
+})
 const LOOK = action("look")
-const EDIT = action("edit", { venue: "message", canAct: false, itemGated: true })
+const EDIT = action("edit", {
+	venue: "message",
+	canAct: false,
+	itemGated: true
+})
 
 describe("the composer's actions for a guest", () => {
 	test("an action whose audience excludes the viewer is not listed anywhere", () => {
 		const handlers: Record<string, (m: any) => void> = {}
 		const list = createActionList({
 			socket: { emit() {} } as any,
-			inbox: { on: (event: string, fn: (m: any) => void) => (handlers[event] = fn) } as any,
+			inbox: {
+				on: (event: string, fn: (m: any) => void) =>
+					(handlers[event] = fn)
+			} as any,
 			sessionId: () => 5,
+			advancedControls: () => true,
 			data: {
 				session: { id: 5, sessionMessages: [] },
 				lastMessage: undefined,
@@ -60,11 +75,15 @@ describe("the composer's actions for a guest", () => {
 		expect(list.paletteActions.map((a: any) => a.key)).not.toContain("rest")
 		expect(list.actionVenues.composer.overflow).toEqual([])
 		// Item-gated stays: it is decided per message.
-		expect(list.actionVenues.message.primary.map((a: any) => a.key)).toEqual(["edit"])
+		expect(
+			list.actionVenues.message.primary.map((a: any) => a.key)
+		).toEqual(["edit"])
 	})
 
 	test("the pure filter keeps what the viewer may press", () => {
-		const out = withinAudience({ composer: { primary: [REST, LOOK], overflow: [REST] } })
+		const out = withinAudience({
+			composer: { primary: [REST, LOOK], overflow: [REST] }
+		})
 		expect(out.composer!.primary).toEqual([LOOK])
 		expect(out.composer!.overflow).toEqual([])
 	})

@@ -51,6 +51,23 @@ describe("answerStatTrail", () => {
 		})
 	})
 
+	it("a seated_member owner reaches the read unchanged", async () => {
+		const read = vi.fn(async (ask: { sessionId: number }) => ({
+			sessionId: ask.sessionId,
+			trail: { changes }
+		}))
+		await answerStatTrail(
+			{ owner: { kind: "seated_member", id: 41 }, slotId: "hp" },
+			7,
+			read
+		)
+		expect(read).toHaveBeenCalledWith({
+			sessionId: 7,
+			owner: { kind: "seated_member", id: 41 },
+			slotId: "hp"
+		})
+	})
+
 	it("refuses a malformed ask before asking the server", async () => {
 		const read = vi.fn()
 		const ask = (p: unknown, sessionId: number | null = 7) =>

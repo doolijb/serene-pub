@@ -245,10 +245,12 @@ describe("sprites storage", () => {
 			capture().emit
 		)
 		const neutral = b.sets[0].sprites.find((s) => s.label === "neutral")!
-		await testDb
-			.update(schema.characters)
-			.set({ avatarMediaId: neutral.media!.id })
-			.where(eq(schema.characters.id, character.id))
+		const { charactersSetAvatar } = await import("./characters")
+		await charactersSetAvatar.handler(
+			socket(user.id),
+			{ characterId: character.id, mediaId: neutral.media!.id },
+			capture().emit
+		)
 
 		await charactersDeleteSprite.handler(
 			socket(user.id),

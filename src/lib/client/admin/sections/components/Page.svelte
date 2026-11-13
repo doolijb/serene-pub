@@ -32,7 +32,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import CodeEditor from "$lib/client/components/componentEditor/CodeEditor.svelte"
 	import { adminRedirect } from "$lib/client/components/componentEditor/editorState"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
@@ -55,7 +55,9 @@
 
 	let authored = $state<Summary[]>([])
 	let core = $state<CoreRow[]>([])
-	let compiler = $state<{ available: boolean; reason?: string }>({ available: true })
+	let compiler = $state<{ available: boolean; reason?: string }>({
+		available: true
+	})
 	let loading = $state(true)
 	let refusal = $state<string | null>(null)
 	/** A clone or create in flight, so a second press does not make two. */
@@ -125,21 +127,52 @@
 		exporting = false
 		wantSource = null
 		pending = Math.max(0, pending - 1)
-		if (res.error) toaster.error({ title: res.error })
+		if (res.error)
+			notify.error({
+				source: "admin:components:refusal",
+				title: res.error
+			})
 	}
 
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			interest.declareInterest<"components:list:error">("components:list:error", handleListError),
-			interest.declareInterest<"components:coreList:error">("components:coreList:error", handleListError),
-			interest.declareInterest<"components:clone">("components:clone", handleMade),
-			interest.declareInterest<"components:create">("components:create", handleMade),
-			interest.declareInterest<"components:setEnabled">("components:setEnabled", handleRowChanged),
-			interest.declareInterest<"components:delete">("components:delete", handleDeleted),
-			interest.declareInterest<"components:export">("components:export", handleExport),
-			interest.declareInterest<"components:coreSource">("components:coreSource", handleCoreSource),
-			interest.declareInterest<"components:changed">("components:changed", handleChanged),
+			interest.declareInterest<"components:list:error">(
+				"components:list:error",
+				handleListError
+			),
+			interest.declareInterest<"components:coreList:error">(
+				"components:coreList:error",
+				handleListError
+			),
+			interest.declareInterest<"components:clone">(
+				"components:clone",
+				handleMade
+			),
+			interest.declareInterest<"components:create">(
+				"components:create",
+				handleMade
+			),
+			interest.declareInterest<"components:setEnabled">(
+				"components:setEnabled",
+				handleRowChanged
+			),
+			interest.declareInterest<"components:delete">(
+				"components:delete",
+				handleDeleted
+			),
+			interest.declareInterest<"components:export">(
+				"components:export",
+				handleExport
+			),
+			interest.declareInterest<"components:coreSource">(
+				"components:coreSource",
+				handleCoreSource
+			),
+			interest.declareInterest<"components:changed">(
+				"components:changed",
+				handleChanged
+			),
 			...(
 				[
 					"components:coreSource:error",
@@ -149,8 +182,17 @@
 					"components:delete:error",
 					"components:export:error"
 				] as const
-			).map((e) => interest.declareInterest<"components:clone:error">(e, handleError)),
-			interest.requestWithInterest("components:coreList", {}, handleCoreList),
+			).map((e) =>
+				interest.declareInterest<"components:clone:error">(
+					e,
+					handleError
+				)
+			),
+			interest.requestWithInterest(
+				"components:coreList",
+				{},
+				handleCoreList
+			),
 			interest.requestWithInterest("components:list", {}, handleList)
 		]
 		return () => {
@@ -174,7 +216,14 @@
 	}
 	const noun = { singular: "component", plural: "components" }
 	type Status = "draft" | "failed" | "refused" | "waiting" | "on" | "off"
-	const STATUS_ORDER: Status[] = ["failed", "refused", "draft", "waiting", "on", "off"]
+	const STATUS_ORDER: Status[] = [
+		"failed",
+		"refused",
+		"draft",
+		"waiting",
+		"on",
+		"off"
+	]
 	function statusOf(c: Summary): Status {
 		if (c.lastError) return "failed"
 		if (c.refusal) return "refused"
@@ -199,7 +248,13 @@
 		off: "bg-surface-400-600"
 	}
 	const columns: AdminChangelistColumn<Summary>[] = [
-		{ key: "label", label: "Name", primary: true, text: (c) => text(c.label), sortValue: (c) => text(c.label) },
+		{
+			key: "label",
+			label: "Name",
+			primary: true,
+			text: (c) => text(c.label),
+			sortValue: (c) => text(c.label)
+		},
 		{
 			key: "status",
 			label: "Status",
@@ -216,7 +271,8 @@
 		{
 			key: "basedOn",
 			label: "Based on",
-			text: (c) => (c.basedOn ? `Clone of ${c.basedOn.component}` : "Blank"),
+			text: (c) =>
+				c.basedOn ? `Clone of ${c.basedOn.component}` : "Blank",
 			sortValue: (c) => c.basedOn?.component ?? null
 		},
 		{
@@ -247,7 +303,8 @@
 			key: "framework",
 			label: "Framework",
 			values: (c) => c.framework,
-			optionLabel: (v) => (v === "svelte" ? "Svelte" : v === "vanilla" ? "Vanilla" : v)
+			optionLabel: (v) =>
+				v === "svelte" ? "Svelte" : v === "vanilla" ? "Vanilla" : v
 		}
 	]
 	const bulkActions: AdminBulkAction<Summary>[] = [
@@ -255,13 +312,15 @@
 			key: "on",
 			label: "Turn selected components on",
 			icon: Icons.Power,
-			run: (s) => s.filter((c) => !c.enabled).forEach((c) => setEnabled(c, true))
+			run: (s) =>
+				s.filter((c) => !c.enabled).forEach((c) => setEnabled(c, true))
 		},
 		{
 			key: "off",
 			label: "Turn selected components off",
 			icon: Icons.PowerOff,
-			run: (s) => s.filter((c) => c.enabled).forEach((c) => setEnabled(c, false))
+			run: (s) =>
+				s.filter((c) => c.enabled).forEach((c) => setEnabled(c, false))
 		},
 		{
 			key: "export",
@@ -278,12 +337,20 @@
 				deletionFor(s, {
 					noun,
 					label: (c) => text(c.label),
-					related: (c) => [{ label: "Layouts that place it show", items: [`${c.widgetId} as missing`] }]
+					related: (c) => [
+						{
+							label: "Layouts that place it show",
+							items: [`${c.widgetId} as missing`]
+						}
+					]
 				}),
 			run: (s) => {
 				for (const c of s) {
 					pending++
-					socket.emit("components:delete", { id: c.id, expectedUpdatedAt: c.updatedAt })
+					socket.emit("components:delete", {
+						id: c.id,
+						expectedUpdatedAt: c.updatedAt
+					})
 				}
 			}
 		}
@@ -317,7 +384,8 @@
 		{bulkActions}
 		{loading}
 		{noun}
-		searchText={(c) => `${text(c.label)} ${c.widgetId} ${c.framework} ${c.basedOn?.component ?? ""}`}
+		searchText={(c) =>
+			`${text(c.label)} ${c.widgetId} ${c.framework} ${c.basedOn?.component ?? ""}`}
 		rowHref={(c) => `/admin/components/${c.id}`}
 		addHref={compiler.available ? "/admin/components/new" : undefined}
 		defaultSort="label"
@@ -338,13 +406,21 @@
 		{/snippet}
 		{#snippet headerExtra()}
 			{#if !compiler.available}
-				<p class="text-surface-700-300 flex items-start gap-2 text-sm" role="status">
-					<span class="bg-warning-500 mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
+				<p
+					class="text-surface-700-300 flex items-start gap-2 text-sm"
+					role="status"
+				>
+					<span
+						class="bg-warning-500 mt-1.5 size-2 shrink-0 rounded-full"
+						aria-hidden="true"
+					></span>
 					<span>
-						Authoring is not available on this pub: it has no component compiler{compiler.reason
+						Authoring is not available on this pub: it has no
+						component compiler{compiler.reason
 							? ` (${compiler.reason})`
-							: ""}. You can still switch components on and off, review their scopes, export and delete
-						them, and import share files that carry their compiled module.
+							: ""}. You can still switch components on and off,
+						review their scopes, export and delete them, and import
+						share files that carry their compiled module.
 					</span>
 				</p>
 			{/if}
@@ -357,9 +433,15 @@
 				{@const st = statusOf(row)}
 				<span
 					class="inline-flex items-center gap-1.5"
-					title={row.lastError ?? (row.refusal ? `Its compiled module was ${row.refusal}` : undefined)}
+					title={row.lastError ??
+						(row.refusal
+							? `Its compiled module was ${row.refusal}`
+							: undefined)}
 				>
-					<span class="size-2 shrink-0 rounded-full {STATUS_DOT[st]}" aria-hidden="true"></span>
+					<span
+						class="size-2 shrink-0 rounded-full {STATUS_DOT[st]}"
+						aria-hidden="true"
+					></span>
 					{STATUS_WORD[st]}
 				</span>
 			{/if}
@@ -375,8 +457,12 @@
 			{#each core as c (c.slug)}
 				<li class="component-row">
 					<div class="row-main">
-						<p class="truncate text-lead font-medium">{c.title}</p>
-						<p class="text-surface-600-400 truncate font-mono text-xs">{c.slug} · {c.framework}</p>
+						<p class="text-lead truncate font-medium">{c.title}</p>
+						<p
+							class="text-surface-600-400 truncate font-mono text-xs"
+						>
+							{c.slug} · {c.framework}
+						</p>
 					</div>
 					<div class="row-controls">
 						<button
@@ -385,7 +471,10 @@
 							aria-expanded={viewing?.slug === c.slug}
 							onclick={() => viewSource(c.slug)}
 						>
-							<Icons.FileCode size={14} /> {viewing?.slug === c.slug ? "Hide source" : "View source"}
+							<Icons.FileCode size={14} />
+							{viewing?.slug === c.slug
+								? "Hide source"
+								: "View source"}
 						</button>
 						{#if c.cloneable && compiler.available}
 							<button
@@ -395,25 +484,33 @@
 								onclick={() => clone(c.slug)}
 							>
 								{#if making === `clone:${c.slug}`}
-									<Icons.LoaderCircle size={14} class="animate-spin" />
+									<Icons.LoaderCircle
+										size={14}
+										class="animate-spin"
+									/>
 								{:else}
 									<Icons.Copy size={14} />
 								{/if}
 								Clone
 							</button>
 						{:else if !c.cloneable}
-							<span class="text-surface-600-400 px-2 text-xs">View only</span>
+							<span class="text-surface-600-400 px-2 text-xs">
+								View only
+							</span>
 						{/if}
 					</div>
 				</li>
 			{:else}
-				<li class="text-surface-600-400 text-sm">Reading core's components…</li>
+				<li class="text-surface-600-400 text-sm">
+					Reading core's components…
+				</li>
 			{/each}
 		</ul>
 		{#if viewing}
 			<div class="core-source flex flex-col gap-2">
 				<FieldHelp>
-					{viewing.slug} as core ships it ({viewing.catalogVersion}) — read only.
+					{viewing.slug} as core ships it ({viewing.catalogVersion}) —
+					read only.
 				</FieldHelp>
 				{#key viewing.slug}
 					<CodeEditor
@@ -445,7 +542,11 @@
 		border-radius: 10px;
 	}
 	.component-row:hover {
-		background: color-mix(in oklab, var(--color-surface-500) 8%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-surface-500) 8%,
+			transparent
+		);
 	}
 	.row-main {
 		flex: 1 1 0%;

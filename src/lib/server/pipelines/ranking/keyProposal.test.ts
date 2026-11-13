@@ -113,6 +113,16 @@ describe("⚠ gate 1 — a name the cast answers to is never a key", () => {
 		expect(keysOf({ text, corpus, cast: CAST })).not.toContain("nix")
 	})
 
+	it("refuses a card-less cast member as readily as a character", () => {
+		const cast: GazetteerName[] = [
+			{ name: "Cade", ref: { kind: "cast_member", id: 4 } }
+		]
+		expect(keysOf({ text, corpus, cast })).not.toContain("cade")
+		expect(reasonFor({ text, corpus, cast }, "cade")).toBe(
+			reasonFor({ text, corpus, cast: CAST }, "cade")
+		)
+	})
+
 	it("keeps what the passage is about", () => {
 		expect(keysOf({ text, corpus, cast: CAST })).toContain("thornfield")
 	})

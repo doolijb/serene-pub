@@ -872,17 +872,21 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 
 		// Firing the plugin's runs the PLUGIN spec — not the companion the
 		// verdict would otherwise choose for `sum`.
-		const before = (await runsOf(session.id)).length
+		// The round's tick is left out: whether this press ends a round is
+		// the turn order's business, not this test's.
+		const pressRuns = async () =>
+			(await runsOf(session.id)).filter((slug) => slug !== "core:spec/round-tick")
+		const before = (await pressRuns()).length
 		const viaPlugin = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{ sessionId: session.id, action: "acme:spec/sum#sum" },
 			noopEmit
 		)
 		expect(viaPlugin.error ?? "").not.toMatch(/not yours|Session not found/)
-		const after = await runsOf(session.id)
+		const after = await pressRuns()
 		// The action's run, and the recompute its write causes — which runs
 		// on the session's queue, so it may save either side (PLAN §8 (27)).
-		expect(after.length).toBe(before + 2)
+		expect(after.slice(before)).toHaveLength(2)
 		expect(after.filter((slug) => !slug.endsWith("-turn-order")).at(-1)).toBe("acme:spec/sum")
 
 		// Firing core's is refused — the plugin's audience is the plugin's.
@@ -907,7 +911,7 @@ describe("sessions:fireAction reads the declaration it was handed", () => {
 				"'sum' names 2 actions here — core:spec/test-sum#sum, acme:spec/sum#sum. Say which."
 			)
 		}
-		expect((await runsOf(session.id)).length).toBe(before + 2)
+		expect((await pressRuns()).length).toBe(before + 2)
 
 		// Switching core's off by identity leaves the plugin's on: the
 		// owner's named fire of core's is "turned off", the guest's of the
@@ -1543,7 +1547,10 @@ describe("sessions:fireAction announces its run (R-19)", () => {
 		// the action's own — were relayed with the caller's `io`, never
 		// `undefined`, which is what silently dropped every status this
 		// route ever set.
-		expect(statusRelayHooks.ioSeen).toEqual([socket.io, socket.io])
+		// Every run the fire makes carries it, the round's tick included
+		// when the press ends a round.
+		expect(statusRelayHooks.ioSeen.length).toBeGreaterThanOrEqual(2)
+		expect(statusRelayHooks.ioSeen.every((io) => io === socket.io)).toBe(true)
 	}, 60_000)
 
 	test("🚧 M2a a6: a press's answer names its run, and its end is told to the session as sessions:runEnded", async () => {

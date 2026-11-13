@@ -130,7 +130,7 @@
 							class="badge preset-tonal-success inline-flex items-center gap-1 text-xs"
 						>
 							<Icons.Check size={12} aria-hidden="true" />
-							{picked ? "Picked" : "In your characters"}
+							{picked ? "Picked" : "In your character cards"}
 						</span>
 					{/if}
 				</div>

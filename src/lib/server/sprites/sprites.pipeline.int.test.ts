@@ -12,7 +12,13 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import { PNG } from "pngjs"
 import * as schema from "$lib/server/db/schema"
+import {
+	ensureCardVersion,
+	insertCharacterVersions,
+	writeCastVersion
+} from "$lib/server/characters/versions"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 let dataDir: string
@@ -78,10 +84,12 @@ async function scene(username: string, opts: { lorebook?: boolean } = {}) {
 			.values({ userId: user.id, name: "Ashfall" })
 			.returning()
 		lorebookId = book.id
-		const [binding] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, characterId: character.id, binding: "{{char:1}}", name: "Verity" })
-			.returning()
+		const { member: binding } = await insertCastMember(testDb as unknown as Db, {
+			lorebookId: book.id,
+			characterId: character.id,
+			binding: "{{char:1}}",
+			name: "Verity"
+		})
 		bindingId = binding.id
 	}
 	const [session] = await testDb
@@ -101,6 +109,33 @@ async function scene(username: string, opts: { lorebook?: boolean } = {}) {
 		})
 		.returning()
 	return { user, character, session, message, lorebookId, bindingId }
+}
+
+/**
+ * From `year` on main the member is drawn with `cardId`: a cast version whose
+ * parent is that card's version, reading from it what the member's base reads
+ * from its own card. The base is written first if the member has none.
+ */
+async function drawnWithFrom(memberId: number, lorebookId: number, cardId: number, year: number) {
+	const { version: base } = await writeCastVersion(testDb as any, {
+		member: memberId,
+		changes: { nodeState: "active" },
+		writtenBy: "user:0",
+		at: { branchId: null, date: null, personalPosition: null }
+	})
+	const card = await ensureCardVersion(testDb as any, cardId)
+	await insertCharacterVersions(testDb as any, [
+		{
+			castMemberId: memberId,
+			lorebookId,
+			parentVersionId: card!.id,
+			follows: base.follows,
+			nodeState: "active",
+			nodeVisibility: "normal",
+			year,
+			writtenBy: "user:0"
+		}
+	])
 }
 
 describe("which set a line's speaker is shown in", () => {
@@ -145,16 +180,16 @@ describe("which set a line's speaker is shown in", () => {
 		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
 		const { session, message, bindingId } = await scene("sprites-choices-member", { lorebook: true })
 		await testDb
-			.update(schema.lorebookBindings)
+			.update(schema.characterVersions)
 			.set({ spriteSet: "armour" })
-			.where(eq(schema.lorebookBindings.id, bindingId!))
+			.where(eq(schema.characterVersions.castMemberId, bindingId!))
 		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({ set: "armour", decidedBy: "amendment" })
 
 		await testDb
-			.update(schema.lorebookBindings)
+			.update(schema.characterVersions)
 			.set({ spriteSet: "winter" })
-			.where(eq(schema.lorebookBindings.id, bindingId!))
+			.where(eq(schema.characterVersions.castMemberId, bindingId!))
 		const missing = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(missing).toMatchObject({
 			set: "default",
@@ -171,9 +206,9 @@ describe("which set a line's speaker is shown in", () => {
 		})
 		// The member asks for a set the card HAS; the session asks for one it lacks.
 		await testDb
-			.update(schema.lorebookBindings)
+			.update(schema.characterVersions)
 			.set({ spriteSet: "armour" })
-			.where(eq(schema.lorebookBindings.id, bindingId!))
+			.where(eq(schema.characterVersions.castMemberId, bindingId!))
 		await setSessionSpriteSet(testDb as any, {
 			sessionId: session.id,
 			characterId: character.id,
@@ -191,16 +226,15 @@ describe("which set a line's speaker is shown in", () => {
 
 	test("resolves at the session's reading: its fork cut and its story clock (finding #39)", async () => {
 		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
-		const { session, message, bindingId, lorebookId } = await scene("sprites-choices-reading", {
+		const { session, message, bindingId, lorebookId, user } = await scene("sprites-choices-reading", {
 			lorebook: true
 		})
 		// Main puts her in armour at Y10. A branch forked at Y5 never sees it.
-		await testDb.insert(schema.castAmendments).values({
-			lorebookId: lorebookId!,
-			lorebookBindingId: bindingId!,
-			branchId: null,
-			year: 10,
-			fields: { spriteSet: "armour" }
+		await writeCastVersion(testDb as any, {
+			member: bindingId!,
+			changes: { spriteSet: "armour" },
+			writtenBy: `user:${user.id}`,
+			at: { branchId: null, date: { year: 10 }, personalPosition: null }
 		})
 		const [fork] = await testDb
 			.insert(schema.lorebookBranches)
@@ -238,13 +272,7 @@ describe("which set a line's speaker is shown in", () => {
 			.insert(schema.characters)
 			.values({ userId: user.id, name: "Verity, older", description: "" })
 			.returning()
-		await testDb.insert(schema.castAmendments).values({
-			lorebookId: lorebookId!,
-			lorebookBindingId: bindingId!,
-			branchId: null,
-			year: 20,
-			fields: { characterId: bare.id }
-		})
+		await drawnWithFrom(bindingId!, lorebookId!, bare.id, 20)
 		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, characterId: message.characterId! })
 		expect(c).toMatchObject({ characterId: character.id, set: "default" })
 		expect(c.labels.length).toBeGreaterThan(0)
@@ -262,13 +290,7 @@ describe("which set a line's speaker is shown in", () => {
 			.values({ userId: user.id, name: "The Lamp Keeper", description: "" })
 			.returning()
 		await importSprites(testDb as any, user.id, keeper.id, [{ label: "lamp", bytes: png(seed++) }], "upload")
-		await testDb.insert(schema.castAmendments).values({
-			lorebookId: lorebookId!,
-			lorebookBindingId: bindingId!,
-			branchId: null,
-			year: 20,
-			fields: { characterId: keeper.id }
-		})
+		await drawnWithFrom(bindingId!, lorebookId!, keeper.id, 20)
 		// The session seats the keeper's card and she speaks with it.
 		await testDb
 			.update(schema.sessionCharacters)

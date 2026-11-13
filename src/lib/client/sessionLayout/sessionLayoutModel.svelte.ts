@@ -4,33 +4,41 @@
  * (./SessionLayout) builds one per page.
  *
  * - **The stored layout, read once.** The manager couriers the person's saved
- *   layout; this file is the one seam that reads it — as PANELS
- *   (PLAN-session-panels-2026-10-14), through ./primaryFloor
- *   `readStoredLayout` (the SDK's `panelsOf`: the stored `panels`, else the ⏳
- *   old slots converted — only those get the primary floor). Stored panels
- *   may hold no conversation at all, and their primary any widget (R-B,
- *   owner review 2026-10-14): every reader below degrades to "draw what is
- *   there". Everything downstream
- *   reads the DRAWN layout — `drawn`, the SDK's `resolveDrawn` — never the
- *   blob.
+ *   layout; this file is the one seam that reads it — as PANELS v2 (PLAN
+ *   2026-11-05: three flat stacks, no primary panel, no pin), through
+ *   ./primaryFloor `readStoredLayout` (the SDK's `panelsOf`: the stored
+ *   `panels` of version 1 or 2, else the ⏳ old slots converted — only those
+ *   get the primary floor). Stored panels may hold no conversation at all
+ *   (R-B, owner review 2026-10-14): every reader below degrades to "draw
+ *   what is there". Everything downstream reads the DRAWN layout — `drawn`,
+ *   the SDK's `resolveDrawn` — never the blob.
  * - **Measured width, never the viewport** (`containerW`, written by the root's
  *   ResizeObserver), the breakpoint, and the root's offsets.
  * - **The screen-size simulator** and the editor's mode flags the live session
  *   reads (`placing`, `liveStowed`, the toolbar's height).
- * - **The sides**: each a column of panels plus its rail — the rung, the
- *   tuck, the flow widths, the slots, the stage — and **the side rail model**
- *   (the transient open state of each panel, and the column layout over it).
+ * - **The zones and the zone switch** (PLAN D11): the three zones' panels,
+ *   the width each side takes, and — when the sides do not fit beside a
+ *   readable middle, and always below `lg` — which one zone is drawn
+ *   (`shownZone`). Full screen draws the whole opening zone and no switch.
+ *   There is no rail, no pin, no tuck and no stage: every panel is open.
+ * - **A Composer / Turn line follows a Messages copy** (PLAN D7): the
+ *   dossier it is handed is its target's, told which channel and style.
  *
  * A factory rather than a class so the code reads as it did in the component:
  * plain `$derived`s over each other, handed out through getters. Nothing here
- * touches the DOM; the components measure and write the measured fields.
+ * touches the DOM; the components measure and write the measured fields. The
+ * model never writes `sessionZones` — the render publishes it.
  */
 import type { ConversationDossierV1 } from "$lib/shared/widgets/conversation"
 import * as Icons from "@lucide/svelte"
+import { untrack } from "svelte"
 import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 import type { PanelInstance } from "$lib/client/surfaces/types"
-import { readStoredLayout, withPrimaryFilled } from "./primaryFloor"
-import { primaryLogPick, stageOf, type StagePick } from "./placementRules"
+import { CORE_WIDGETS } from "$lib/shared/widgets/types"
+import { shownChannels } from "$lib/client/components/sessionPage/requests/showChannel"
+import { clearShownLine } from "$lib/client/components/sessionPage/requests/showLine"
+import { readStoredLayout } from "./primaryFloor"
+import { fullscreenActive, openingZone as openingZoneOf } from "./placementRules"
 import {
 	SIM_HEIGHT_PX,
 	SIM_OPTIONS,
@@ -42,17 +50,14 @@ import {
 } from "./simulator"
 import {
 	dockedZoneWidths,
-	MIN_CENTER_PX,
 	emptyColumnPx,
 	emptyColumnsPx,
 	sideFlowPx,
 	sidePopulated,
 	sideSlot,
-	type SideMode
+	sideWidthPx
 } from "./sideSlot"
 import { createSideRailModel } from "./sideRailModel.svelte"
-import { tuckedSidesOf } from "./tuckedSides"
-import { fullscreenActive, stagePanelOf } from "./stagePanel"
 import {
 	channelClaims,
 	channelsForCopy,
@@ -61,24 +66,26 @@ import {
 	pageIdsHolders,
 	primaryLogOf
 } from "./channelClaims"
-import { mobileSidePanels } from "./mobileSidePanels.svelte"
+import { conversationKindOf, conversationTargetOf } from "./conversationTarget"
+import {
+	sessionZones,
+	switchOn as switchOnFn,
+	type ZoneId
+} from "./sessionZones.svelte"
 import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
-import { desktop } from "$lib/client/utils/breakpoint.svelte"
 import {
 	type DrawnPanel,
 	drawnInstances,
 	isInstanceOf,
 	layoutWidgetIds,
 	type PanelLayoutV1,
-	type PanelV1,
+	type PanelLayoutV2,
+	type PanelV2,
+	panelsOf,
 	resolveDrawn,
 	type SessionChannelV1,
-	type SessionLayoutV1,
-	type ZoneRung
+	type SessionLayoutV1
 } from "@serene-pub/sdk"
-
-/** `.layout-body`'s 0.5rem flex gap — one per side actually in the flow. */
-export const BODY_GAP_PX = 8
 
 /** The shell's panels context, as far as the session reads it. */
 export type PanelsCtx = {
@@ -94,29 +101,25 @@ export type EditTab = "layouts" | "arrange"
 export interface SideView {
 	/** Its panels, top to bottom — only what this session can draw. */
 	panels: DrawnPanel[]
-	/** Its width ladder's rung at the measured width (`resolveDrawn`). */
-	rung: ZoneRung
-	/**
-	 * The mode it docks at: the rung's, except that the side holding the
-	 * layout's primary log is a docked rail whatever its rung or pins (brief
-	 * 7a review) — never a drawer, never a rail of icons.
-	 */
-	mode: SideMode
-	/** The rung's footprint, `width × columns`. */
+	/** Its width in the flow (./sideSlot `sideWidthPx`). */
 	widthPx: number
-	/** It draws at least one panel on a visible rung (./sideSlot `sidePopulated`). */
+	/** It draws at least one panel (./sideSlot `sidePopulated`). */
 	populated: boolean
 }
 
-/** Is this a panel layout a reader can walk (the editor's working copy)? */
-function isPanelLayout(x: unknown): x is PanelLayoutV1 {
+/** Is this a panel layout (version 1 or 2) a reader can walk (the editor's working copy)? */
+function isPanelLayout(x: unknown): x is PanelLayoutV1 | PanelLayoutV2 {
 	if (!x || typeof x !== "object") return false
-	const p = x as Partial<PanelLayoutV1>
+	const p = x as Partial<PanelLayoutV1> & Partial<PanelLayoutV2>
+	if (p.version === 2)
+		return (
+			Array.isArray(p.left) && Array.isArray(p.middle) && Array.isArray(p.right)
+		)
 	return (
 		p.version === 1 &&
 		!!p.middle &&
 		typeof p.middle === "object" &&
-		!!p.middle.primary
+		!!(p.middle as { primary?: unknown }).primary
 	)
 }
 
@@ -135,8 +138,8 @@ export interface SessionLayoutModelInput {
 	/** The layout editor is open. */
 	readonly editing: boolean
 	/**
-	 * The editor's working arrangement while it is open — a `PanelLayoutV1`,
-	 * what the live view draws then, so the Layouts tab previews
+	 * The editor's working arrangement while it is open — a `PanelLayoutV1` or
+	 * `PanelLayoutV2` (the editor still emits v1), what the live view draws then, so the Layouts tab previews
 	 * the arrangement in progress. Anything else (null while it is closed)
 	 * draws the saved layout.
 	 */
@@ -179,12 +182,12 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	 * reader reads a stored layout (./primaryFloor `readStoredLayout`): the
 	 * omitted widgets' tabs out; the floor only for a converted blob.
 	 */
-	let savedPanels = $derived<PanelLayoutV1>(
+	let savedPanels = $derived<PanelLayoutV2>(
 		readStoredLayout(
 			input.manager.arrangement,
 			primaryId,
 			input.manager.omitted
-		).panels!
+		).panels
 	)
 	// Widgets activated after the layout was saved (channel intents, the old
 	// grid menu) still need a home: each becomes a panel of its own at the
@@ -197,13 +200,17 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	/**
 	 * What the LIVE view draws: the editor's working panels while it is open
 	 * (so the preview under the Layouts tab shows the arrangement in
-	 * progress), else the saved ones — with the extras above.
+	 * progress; a version 1 working copy is converted), else the saved ones
+	 * — with the extras above.
 	 */
-	let panels = $derived.by((): PanelLayoutV1 => {
+	let panels = $derived.by((): PanelLayoutV2 => {
 		// The working copy draws as it is: no floor (R-B, no lock).
-		const base =
-			input.editing && isPanelLayout(input.working)
-				? input.working
+		const w = input.working
+		const base: PanelLayoutV2 =
+			input.editing && isPanelLayout(w)
+				? w.version === 2
+					? w
+					: panelsOf({ panels: w })
 				: savedPanels
 		const placed = new Set(layoutWidgetIds({ panels: base }))
 		const extras = activeSecondaryIds.filter((id) => !placed.has(id))
@@ -211,22 +218,13 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 		return {
 			...base,
 			right: [
-				...(base.right ?? []),
-				...extras.map((id): PanelV1 => ({ key: `x:${id}`, tabs: [id] }))
+				...base.right,
+				...extras.map((id): PanelV2 => ({ key: `x:${id}`, tabs: [id] }))
 			]
 		}
 	})
-	/**
-	 * The layout the SDK draws: the panels, and — ⏳ only for the width
-	 * ladder each side walks (a side's `rules`) — the row's old `zoneLayout`.
-	 * With `panels` present the old slots are never read as an arrangement.
-	 */
-	let layoutDoc = $derived<SessionLayoutV1>({
-		panels,
-		...(input.manager.zoneLayout !== undefined
-			? { zoneLayout: input.manager.zoneLayout as SessionLayoutV1["zoneLayout"] }
-			: {})
-	})
+	/** The layout the SDK draws: the panels (the old slots are never read beside them). */
+	let layoutDoc = $derived<SessionLayoutV1>({ panels })
 	/** ⏳ The message pack pinned by name in the old `zoneLayout.styles`. */
 	let legacyStyles = $derived(legacyStylesOf(input.manager.zoneLayout))
 
@@ -236,8 +234,7 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	 *
 	 * `mLeft` IS the nav rail — 64px, or 208 while the rail is wide — plus any
 	 * sidebar view open beside it, and `mRight` is 0. `bLeft` / `bRight` are
-	 * `.layout-body`'s own edges, for the flyout (`bodyEl`, bound by the
-	 * renderer). */
+	 * `.layout-body`'s own edges (`bodyEl`, bound by the renderer). */
 	let containerW = $state(1024)
 	let vw = $state(1024)
 	let mLeft = $state(0)
@@ -249,8 +246,7 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	let isDesktop = $state(false)
 	/**
 	 * Below the app's 1024px breakpoint (P6, ruled 2026-08-30): side zones take
-	 * NO layout space — no rails, no icon strips — and a populated side is
-	 * reached only through the header's panels menu.
+	 * NO layout space, and the zone switch is always on (`switchOn`).
 	 *
 	 * `mounted` guards the pre-hydration frame: `isDesktop` starts optimistically
 	 * false and is only told the truth on mount, so without it every desktop
@@ -302,23 +298,33 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	/**
 	 * What this layout DRAWS, and where, at the measured width — the SDK's one
 	 * reader (`resolveDrawn`): per zone its panels, each with its tabs, the
-	 * tab shown, its pin and its height, and each side's rung.
+	 * tab shown, its height and priority (the declared defaults come from the
+	 * core widgets: Messages fill / low, Composer fit / high, Turn line fit /
+	 * normal), and the layout's look.
 	 */
-	let drawn = $derived(resolveDrawn(layoutDoc, { inline: containerW }))
+	let drawn = $derived(
+		resolveDrawn(layoutDoc, { inline: containerW }, { widgets: CORE_WIDGETS })
+	)
+	/** The layout's look (backing, opacity, gap), read. */
+	let look = $derived(drawn.look)
+	/** The gap between panels, and between the zones, in px. */
+	let gapPx = $derived(drawn.look.gapPx)
 
 	/* ── what a panel holds ─────────────────────────────────────────────── */
 	function inst(id: string): PanelInstance | undefined {
 		return input.manager.instances.find((p) => p.id === id)
 	}
+	/** A `messages` instance — the bare id or a copy (`messages#sanctum`, S1). */
+	const isMessages = (id: string) => isInstanceOf(id, "messages")
 	/**
-	 * Is this placed id drawn as the conversation — a `messages` instance, the
-	 * bare id included (brief 7a: the log may sit in a side), or a copy
-	 * (`messages#sanctum`, S1)? Never a panel instance, so `inst()` does not
-	 * know it. A genre that withholds the conversation (R71) draws none.
+	 * Is this placed id drawn as the conversation — a `messages`, `composer` or
+	 * `turn-line` instance, the bare id included (brief 7a: the log may sit in
+	 * a side) or a copy? Never a panel instance, so `inst()` does not know it.
+	 * A genre that withholds the conversation (R71) draws none.
 	 */
 	const isConversation = (id: string) =>
-		isInstanceOf(id, "messages") && !input.manager.omitted.has("messages")
-	/** Something this session can draw: a conversation or a panel instance. */
+		conversationKindOf(id) !== null && !input.manager.omitted.has("messages")
+	/** Something this session can draw: a conversation part or a panel instance. */
 	const drawable = (id: string) => isConversation(id) || !!inst(id)
 	/** A panel narrowed to the tabs this session can draw (none: not drawn). */
 	function liveOf(p: DrawnPanel): DrawnPanel {
@@ -343,183 +349,32 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	function iconOf(p: PanelInstance) {
 		return (p.icon && (Icons as any)[p.icon]) || Icons.LayoutPanelTop
 	}
-	/** Each side's panels, as this session draws them. */
-	let sidePanels = $derived({
+	/** Each zone's panels, as this session draws them — a plain stack, top to bottom. */
+	let zones = $derived({
 		left: live(drawn.left.panels),
+		middle: live(drawn.middle.panels),
 		right: live(drawn.right.panels)
 	})
-	/**
-	 * The middle's three places, as this session draws them. A primary that
-	 * draws nothing here gives its place to the nearest middle panel
-	 * (./primaryFloor `withPrimaryFilled`) — the primary is a place, never a
-	 * widget, so it is never left blank while the middle holds something.
-	 */
-	let middle = $derived(
-		withPrimaryFilled({
-			above: live(drawn.middle.above),
-			primary: liveOf(drawn.middle.primary),
-			below: live(drawn.middle.below)
-		})
-	)
-
-	/* ── one mount per side, three places (the no-reload law) ───────────────
-	 * The live render writes each side ONCE and moves the container around
-	 * it; `sideSlot` is the whole decision (and its unit tests). */
-	let mobileSide = $derived(isNarrow ? mobileSidePanels.open : null)
-	let leftSlot = $derived.by(() =>
-		sideSlot({
-			narrow: isNarrow,
-			overlayOwns: mobileSide === "left",
-			stage: stageSide === "left"
-		})
-	)
-	let rightSlot = $derived.by(() =>
-		sideSlot({
-			narrow: isNarrow,
-			overlayOwns: mobileSide === "right",
-			stage: stageSide === "right"
-		})
-	)
-	const slotOf = (side: "left" | "right") =>
-		side === "left" ? leftSlot : rightSlot
 
 	/* ── the sides ──────────────────────────────────────────────────────── */
 	function viewOf(side: "left" | "right"): SideView {
-		const z = drawn[side]
-		const rung = z.rung ?? { mode: "rail" as const, width: 264, columns: 1 }
-		const ps = sidePanels[side]
-		const mode: SideMode =
-			logSide === side && rung.mode !== "hidden" ? "rail" : rung.mode
+		const ps = zones[side]
 		return {
 			panels: ps,
-			rung,
-			mode,
-			widthPx: rung.width * rung.columns,
-			populated: sidePopulated({ mode, panels: ps.length })
+			widthPx: sideWidthPx(containerW),
+			populated: sidePopulated({ panels: ps.length })
 		}
 	}
 	let sides = $derived({ left: viewOf("left"), right: viewOf("right") })
-	/**
-	 * Is this side RAIL ONLY (lane E1): every panel in the rail, or a rung
-	 * that does not dock (a drawer, on a narrow desktop)? Then nothing in it
-	 * is docked — every panel is a rail icon until opened — so it is drawn
-	 * the way a tucked side is (its rail, the panel asked for out over the
-	 * session) and takes a rail's width in the flow, never the ladder's
-	 * column (./sideSlot `sideFlowPx`). "Rail only" is not stored: it is
-	 * every panel `pinned: false`.
-	 *
-	 * Never the side holding the primary log: the log is what a session is
-	 * read and written in, and it is never put behind a rail icon.
-	 */
-	function railOnlyAt(side: "left" | "right"): boolean {
-		const v = sides[side]
-		if (logSide === side || !v.populated) return false
-		return v.mode !== "rail" || v.panels.every((p) => !p.pinned)
-	}
-	/** The rail-only sides (`railOnlyAt`). */
-	let railOnly = $derived({
-		left: railOnlyAt("left"),
-		right: railOnlyAt("right")
-	})
-
-	/* ── tucked sides (ruled 2026-09-27; ./tuckedSides) ─────────────────────
-	 * Decided from the session's own measured box (`containerW`), never the
-	 * viewport. The threshold is each side's DOCKED footprint plus a gap each,
-	 * plus the stage's measure, so tucking cannot free the room that would
-	 * untuck it. Not below the breakpoint and not while the editor is open. */
-	const flowOf = (side: "left" | "right", tucked: boolean) =>
-		sideFlowPx({
-			slot: slotOf(side),
-			populated: sides[side].populated,
-			mode: sides[side].mode,
-			widthPx: sides[side].widthPx,
-			tucked
-		})
-	let dockedFlow = $derived({
-		left: flowOf("left", railOnly.left),
-		right: flowOf("right", railOnly.right)
-	})
-	/**
-	 * Which sides the WIDTH tucks (./tuckedSides `tuckedSidesOf`): the side
-	 * holding the primary log never is (`logSide`, brief 7a review) and the
-	 * other side tucks once the body cannot hold both docked sides and the
-	 * middle's own reserve.
-	 */
-	let tuckedByWidth = $derived.by((): { left: boolean; right: boolean } =>
-		mounted && !isNarrow && !input.editing
-			? tuckedSidesOf({
-					leftPx: dockedFlow.left,
-					rightPx: dockedFlow.right,
-					gapPx: BODY_GAP_PX,
-					bodyPx: containerW,
-					logSide,
-					middleMinPx: MIN_CENTER_PX
-				})
-			: { left: false, right: false }
-	)
-	/**
-	 * Which sides are DRAWN tucked — their icon rail, one panel at a time out
-	 * over the session: the ones the width tucks, and a rail-only side at any
-	 * width, which has nothing docked to draw. Below the breakpoint a side is
-	 * stowed or a sheet, and neither has a rail.
-	 */
-	let tucked = $derived({
-		left: tuckedByWidth.left || (railOnly.left && !isNarrow),
-		right: tuckedByWidth.right || (railOnly.right && !isNarrow)
-	})
-	/** Is either side tucked by the WIDTH — for what the whole body does about it. */
-	let sidesAreTucked = $derived(tuckedByWidth.left || tuckedByWidth.right)
-	/** What each side DRAWS in the row — 0 for an empty side. */
-	let drawnFlow = $derived({
-		left: flowOf("left", tucked.left),
-		right: flowOf("right", tucked.right)
-	})
-	/**
-	 * An EMPTY side keeps its column (ruled 2026-09-29; ./sideSlot
-	 * `emptyColumnPx` / `emptyColumnsPx`): a side that docks at this width
-	 * asks for the width its first panel will have. The ask is soft: granted
-	 * only from room the populated sides and the stage's measure do not need.
-	 */
-	const emptyAsk = (side: "left" | "right") =>
-		emptyColumnPx({
-			slot: slotOf(side),
-			tucked: tucked[side],
-			populated: sides[side].populated,
-			mode: sides[side].mode,
-			widthPx: sides[side].widthPx
-		})
-	let emptyColumns = $derived(
-		emptyColumnsPx({
-			hardLeftPx: drawnFlow.left,
-			hardRightPx: drawnFlow.right,
-			emptyLeftPx: emptyAsk("left"),
-			emptyRightPx: emptyAsk("right"),
-			bodyPx: containerW,
-			gapPx: BODY_GAP_PX
-		})
-	)
-	let sideWidths = $derived(
-		dockedZoneWidths({
-			left: drawnFlow.left || emptyColumns.left,
-			right: drawnFlow.right || emptyColumns.right,
-			bodyPx: containerW,
-			gapPx: BODY_GAP_PX
-		})
-	)
 
 	/* ── reading order, the channel claims, the primary log ──────────────── */
 	const ids = (list: readonly DrawnPanel[]) =>
 		list.flatMap((p) => p.tabs.map((t) => t.instanceId))
-	/**
-	 * Every zone's drawn ids in reading order — the middle's primary panel,
-	 * left, right, and the strips (above, then below), which the stage never
-	 * draws but the claims count.
-	 */
+	/** Every zone's drawn ids in reading order (top to bottom). */
 	let readingOrder = $derived({
-		middle: middle.primary.floor ? [] : ids([middle.primary]),
-		left: ids(sidePanels.left),
-		right: ids(sidePanels.right),
-		strips: [...ids(middle.above), ...ids(middle.below)]
+		middle: ids(zones.middle),
+		left: ids(zones.left),
+		right: ids(zones.right)
 	})
 	/**
 	 * Every id this layout places, anywhere: what its panels name and what
@@ -550,11 +405,7 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 	let readingIds = $derived([
 		...readingOrder.middle,
 		...readingOrder.left,
-		...readingOrder.right,
-		// The strips too: `claims` counts a copy placed there, so a primary log
-		// picked without them would hand the claiming copy the rest while the
-		// strip's unclaimed copy showed it as well — the same rows twice.
-		...readingOrder.strips
+		...readingOrder.right
 	])
 	/** The layout's primary log (./channelClaims `primaryLogOf`). */
 	let primaryLog = $derived.by(() => primaryLogOf(readingIds, claims))
@@ -566,12 +417,145 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 			input.conversationDossier?.composer.channels ?? []
 		)
 	)
+
+	/* ── the zone switch (PLAN ★2/D11, ★3) ───────────────────────────────── */
+	/** Full screen (never while editing): the whole opening zone, no switch. */
+	let fullscreen = $derived(
+		!input.editing && fullscreenActive(input.panelsCtx)
+	)
+	/** The zones that draw at least one panel, in Left · Middle · Right order. */
+	let availableZones = $derived(
+		(["left", "middle", "right"] as const).filter((z) => zones[z].length > 0)
+	)
 	/**
-	 * The dossier one conversation copy is handed: the page's, with its
-	 * composer told only this copy's channels. The page's own object when
-	 * nothing narrows it.
+	 * The zone a phone or full screen opens on (★3): the zone of the layout's
+	 * primary log, else the first holding a Messages copy, else the middle —
+	 * and, if that zone draws nothing, the first one that does.
 	 */
-	function dossierFor(id: string): ConversationDossierV1 | null {
+	let openingZone = $derived.by((): ZoneId => {
+		const z = openingZoneOf({
+			...readingOrder,
+			claims,
+			primaryId,
+			isMessages
+		})
+		return availableZones.includes(z) ? z : (availableZones[0] ?? "middle")
+	})
+	/**
+	 * What a side takes in the flow IF it were inline — the zone switch's
+	 * question is whether the sides fit, so it is asked of the inline width
+	 * whatever slot the side is in now, which keeps it from flickering.
+	 */
+	let dockedFlow = $derived({
+		left: sideFlowPx({
+			slot: "inline",
+			populated: sides.left.populated,
+			widthPx: sides.left.widthPx
+		}),
+		right: sideFlowPx({
+			slot: "inline",
+			populated: sides.right.populated,
+			widthPx: sides.right.widthPx
+		})
+	})
+	/**
+	 * Is the zone switch on (./sessionZones `switchOn`)? Always below `lg`; on
+	 * a desktop when the sides, their gaps and the stage's measure do not fit
+	 * the box. Never before mount, while editing or in full screen.
+	 */
+	let switchOn = $derived(
+		mounted &&
+			!input.editing &&
+			!fullscreen &&
+			switchOnFn({
+				narrow: isNarrow,
+				bodyPx: containerW,
+				leftPx: dockedFlow.left,
+				rightPx: dockedFlow.right,
+				gapPx
+			})
+	)
+	/**
+	 * The one zone drawn right now, or null for all three. Full screen: the
+	 * opening zone. Switch on: the person's choice (`sessionZones.shown`, which
+	 * the render publishes) while that zone is still available, else the
+	 * opening zone.
+	 */
+	let shownZone = $derived.by((): ZoneId | null => {
+		if (fullscreen) return openingZone
+		if (!switchOn) return null
+		const chosen = sessionZones.shown
+		return chosen !== null && availableZones.includes(chosen)
+			? chosen
+			: openingZone
+	})
+
+	/* ── one mount per side, three places (the no-reload law) ───────────────
+	 * The live render writes each side ONCE and moves the container around
+	 * it; `sideSlot` is the whole decision (and its unit tests). */
+	let leftSlot = $derived(
+		sideSlot({ narrow: isNarrow, shown: shownZone, side: "left" })
+	)
+	let rightSlot = $derived(
+		sideSlot({ narrow: isNarrow, shown: shownZone, side: "right" })
+	)
+	/** The middle: in the flow, or stowed while a side is the one zone drawn. */
+	let centerSlot = $derived<"flow" | "stowed">(
+		shownZone === null || shownZone === "middle" ? "flow" : "stowed"
+	)
+	const slotOf = (side: "left" | "right") =>
+		side === "left" ? leftSlot : rightSlot
+	/** What each side DRAWS in the row — 0 for an empty, stowed or solo side. */
+	let drawnFlow = $derived({
+		left: sideFlowPx({
+			slot: slotOf("left"),
+			populated: sides.left.populated,
+			widthPx: sides.left.widthPx
+		}),
+		right: sideFlowPx({
+			slot: slotOf("right"),
+			populated: sides.right.populated,
+			widthPx: sides.right.widthPx
+		})
+	})
+	/**
+	 * An EMPTY side keeps its column (ruled 2026-09-29; ./sideSlot
+	 * `emptyColumnPx` / `emptyColumnsPx`): a side in the flow asks for the
+	 * width its first panel will have. The ask is soft: granted only from room
+	 * the populated sides and the stage's measure do not need.
+	 */
+	const emptyAsk = (side: "left" | "right") =>
+		emptyColumnPx({
+			slot: slotOf(side),
+			populated: sides[side].populated,
+			widthPx: sides[side].widthPx
+		})
+	let emptyColumns = $derived(
+		emptyColumnsPx({
+			hardLeftPx: drawnFlow.left,
+			hardRightPx: drawnFlow.right,
+			emptyLeftPx: emptyAsk("left"),
+			emptyRightPx: emptyAsk("right"),
+			bodyPx: containerW,
+			gapPx
+		})
+	)
+	let sideWidths = $derived(
+		dockedZoneWidths({
+			left: drawnFlow.left || emptyColumns.left,
+			right: drawnFlow.right || emptyColumns.right,
+			bodyPx: containerW,
+			gapPx
+		})
+	)
+
+	/* ── the dossier a conversation part is handed ───────────────────────── */
+	/**
+	 * The dossier one Messages copy is handed: the page's, with its composer
+	 * told only this copy's channels. The page's own object when nothing
+	 * narrows it.
+	 */
+	function narrowedDossier(id: string): ConversationDossierV1 | null {
 		const d = input.conversationDossier
 		if (!d) return d
 		const all = d.composer.channels
@@ -580,108 +564,126 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 			return d
 		return { ...d, composer: { ...d.composer, channels: mine } }
 	}
-
-	/* ── the stage (QE, ./placementRules; brief 7a) ─────────────────────────
-	 * Full screen and the phone draw ONE widget as the stage — the layout's
-	 * primary log, in whichever zone holds it. In a side that side's mount
-	 * becomes the stage (./sideSlot's `stage` slot); the middle is hidden with
-	 * the rest, and on the phone its panels join the panels menu as "Middle".
-	 * Marks and containers only — nothing unmounts, and nothing is written. */
-	let fullscreen = $derived(
-		!input.editing && fullscreenActive(input.panelsCtx)
-	)
 	/**
-	 * With no conversation placed (R-B) the stage is the primary panel, else
-	 * — a middle with nothing in it — the first panel drawn anywhere.
+	 * True when a drawn tab is a Dialogue box. Every tab stays mounted, so a
+	 * Messages copy beside it would otherwise autoplay the newest line and take
+	 * the one automatic voice from the box.
 	 */
-	let stagePick = $derived<StagePick | null>(
-		stageOf({ ...readingOrder, claims, primaryId })
-	)
-	/** Where the layout's primary log IS, whatever QE draws. */
-	let logPick = $derived<StagePick | null>(
-		primaryLogPick({ ...readingOrder, claims, primaryId })
-	)
-	/**
-	 * The side holding the primary log on the DESKTOP, or null when the middle
-	 * holds it (brief 7a review). That side never tucks, is never rail only,
-	 * and the panel holding the log is docked whatever its pin. Not below the
-	 * breakpoint and not while editing.
-	 */
-	let logSide = $derived<"left" | "right" | null>(
-		mounted &&
-			!isNarrow &&
-			!input.editing &&
-			logPick &&
-			logPick.zone !== "middle"
-			? logPick.zone
-			: null
-	)
-	/** The panel holding the log, keyed, on the side holding it (else none). */
-	function logPanelKeys(side: "left" | "right"): ReadonlySet<string> {
-		if (logSide !== side || !logPick) return new Set()
-		const p = sidePanels[side].find((x) =>
-			x.tabs.some((t) => t.instanceId === logPick!.id)
-		)
-		return new Set(p ? [p.key] : [])
-	}
-	/**
-	 * The side drawn as the stage right now, or null: on the phone, and in
-	 * Full screen, while the stage sits in a side. Never while editing.
-	 */
-	let stageSide = $derived<"left" | "right" | null>(
-		!input.editing &&
-			(isNarrow || fullscreen) &&
-			stagePick &&
-			stagePick.zone !== "middle"
-			? stagePick.zone
-			: null
-	)
-	/**
-	 * The middle on the phone while a side is the stage: stowed (mounted,
-	 * `display: none`), or opened from the panels menu as a sheet of its own.
-	 */
-	let centerSlot = $derived<"flow" | "stowed" | "overlay">(
-		stageSide && isNarrow
-			? mobileSide === "middle"
-				? "overlay"
-				: mobileSide === stageSide
-					? "flow"
-					: "stowed"
-			: "flow"
-	)
-	/** The key of the panel on `side` holding the stage, or null. */
-	function stagePanelKey(side: "left" | "right"): string | null {
-		return stagePanelOf(
-			sidePanels[side],
-			stagePick?.zone === side ? stagePick.id : null
-		)
-	}
-	/** The middle's stage while full screen draws it there, else null. */
-	let stageMiddleId = $derived(
-		fullscreen && stagePick?.zone === "middle" ? stagePick.id : null
-	)
-	/** The middle panel holding the stage while full screen draws it there. */
-	let stageMiddleKey = $derived(
-		stagePanelOf(
-			[...middle.above, middle.primary, ...middle.below],
-			stageMiddleId
+	let holdsDialogueBox = $derived(
+		(["left", "middle", "right"] as const).some((z) =>
+			zones[z].some((p) =>
+				p.tabs.some((t) => isInstanceOf(t.instanceId, "dialogue-box"))
+			)
 		)
 	)
 	/**
-	 * Is this middle panel hidden while full screen draws the middle's stage?
-	 * Never when no panel holds it: hiding every panel would leave it blank.
+	 * While a Dialogue box is drawn, a Messages copy's dossier waits for a click
+	 * (`auto` becomes `click`; `never` and `click` stay): the box speaks on its
+	 * own, the Log's player still plays a line when pressed. The same object when
+	 * nothing changes.
 	 */
-	function middleStageHidden(p: DrawnPanel): boolean {
-		return stageMiddleKey !== null && p.key !== stageMiddleKey
+	function oneVoice(d: ConversationDossierV1 | null): ConversationDossierV1 | null {
+		if (!d || !holdsDialogueBox) return d
+		if (d.spokenPlayback !== undefined && d.spokenPlayback !== "auto") return d
+		return { ...d, spokenPlayback: "click" }
 	}
-
-	/* ── the side rail model (ruled 2026-09-10; ./sideRailModel) ──────────── */
-	const rail = createSideRailModel({
-		inst,
-		iconOf,
-		middleWidgetIcon,
-		widgetLabel: (id) => input.widgetLabel(id)
+	// The Dialogue box sends nothing when it unmounts (SDK `show-line`), so
+	// without this the stage stays held on an old line after a switch to a
+	// layout with no box. The clear is untracked: it writes the map it reads.
+	$effect(() => {
+		if (!holdsDialogueBox) untrack(clearShownLine)
 	})
+	// Leaving the page drops the line too.
+	$effect(() => () => untrack(clearShownLine))
+	/**
+	 * The Messages copy each Composer / Turn line last followed (memory, not
+	 * state: it feeds the pick and must never become a dependency loop). A
+	 * panel showing a non-Messages tab keeps writing to it ("Writing to").
+	 */
+	const lastTargets = new Map<string, string>()
+	/** The Messages copy a Composer / Turn line follows (./conversationTarget, PLAN D7). */
+	function targetPick(id: string) {
+		const kind = conversationKindOf(id)
+		if (kind !== "composer" && kind !== "turn-line") return null
+		const asZones = (list: readonly DrawnPanel[]) =>
+			list.map((p) => ({
+				key: p.key,
+				tabs: p.tabs.map((t) => t.instanceId),
+				open: p.open
+			}))
+		const pick = conversationTargetOf({
+			zones: {
+				left: asZones(zones.left),
+				middle: asZones(zones.middle),
+				right: asZones(zones.right)
+			},
+			instanceId: id,
+			isMessages,
+			last: lastTargets.get(id) ?? null
+		})
+		if (pick) lastTargets.set(id, pick.target)
+		return pick
+	}
+	/**
+	 * The Messages copy a Composer / Turn line follows, or null (not one of
+	 * those, or no Messages placed). The render uses it so a Composer / Turn
+	 * line WEARS its target's style unless pinned its own (D8).
+	 */
+	function conversationTargetFor(id: string): string | null {
+		return targetPick(id)?.target ?? null
+	}
+	const titleCased = (slug: string) =>
+		slug
+			.split(/[-_\s]+/)
+			.filter(Boolean)
+			.map((w) => w[0].toUpperCase() + w.slice(1))
+			.join(" ")
+	/**
+	 * The dossier one conversation part is handed. A Messages copy: the page's,
+	 * narrowed to its channels. A Composer / Turn line: its target's, told the
+	 * channel that copy shows, its label, and its line width and presentation
+	 * (PLAN D7). With no target, the page's own (the Composer then writes to the
+	 * first writable channel).
+	 */
+	function dossierFor(id: string): ConversationDossierV1 | null {
+		const pick = targetPick(id)
+		if (!pick) {
+			const n = narrowedDossier(id)
+			return conversationKindOf(id) === "messages" ? oneVoice(n) : n
+		}
+		const td = narrowedDossier(pick.target)
+		if (!td) return td
+		const channel =
+			shownChannels.get(pick.target) ?? td.composer.channels[0] ?? "main"
+		const slug = channel.split(":")[0]
+		const label = td.composer.channelLabels?.[slug] ?? titleCased(slug)
+		const settings = widgetSettingValues(pick.target)
+		const lineWidth = settings.lineWidth
+		const presentation = settings.presentation
+		return {
+			...td,
+			composer: {
+				...td.composer,
+				target: {
+					instance: pick.target,
+					channel,
+					label,
+					...(lineWidth === "column" ||
+					lineWidth === "full" ||
+					lineWidth === "comfortable"
+						? { lineWidth }
+						: {}),
+					...(presentation === "rows" || presentation === "folio"
+						? { presentation }
+						: {})
+				},
+				...(pick.writingTo ? { writingTo: { channel, label } } : {})
+			}
+		}
+	}
+
+	/* ── the panel placement and tab icons (./sideRailModel) ──────────────── */
+	const rail = createSideRailModel({ inst, iconOf, middleWidgetIcon })
 
 	return {
 		// the stored layout
@@ -820,8 +822,17 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 		get drawn() {
 			return drawn
 		},
-		get middle() {
-			return middle
+		get look() {
+			return look
+		},
+		get gapPx() {
+			return gapPx
+		},
+		get zones() {
+			return zones
+		},
+		get holdsDialogueBox() {
+			return holdsDialogueBox
 		},
 		get sides() {
 			return sides
@@ -829,31 +840,16 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 		// what a panel holds
 		inst,
 		isConversation,
+		isMessages,
 		middleWidgetLabel,
 		middleWidgetIcon,
 		iconOf,
-		// flows, tuck, slots
-		get railOnly() {
-			return railOnly
-		},
-		get tucked() {
-			return tucked
-		},
-		get sidesAreTucked() {
-			return sidesAreTucked
-		},
-		/** The middle is one column of panels, always: it carries the balance. */
-		get middleOneColumn() {
-			return true
-		},
+		// flows, slots
 		get emptyColumns() {
 			return emptyColumns
 		},
 		get sideWidths() {
 			return sideWidths
-		},
-		get mobileSide() {
-			return mobileSide
 		},
 		get leftSlot() {
 			return leftSlot
@@ -861,7 +857,26 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 		get rightSlot() {
 			return rightSlot
 		},
-		// reading order, claims, stage
+		get centerSlot() {
+			return centerSlot
+		},
+		// the zone switch
+		get availableZones() {
+			return availableZones
+		},
+		get openingZone() {
+			return openingZone
+		},
+		get switchOn() {
+			return switchOn
+		},
+		get shownZone() {
+			return shownZone
+		},
+		get fullscreen() {
+			return fullscreen
+		},
+		// reading order, claims, the dossier
 		get placedIds() {
 			return placedIds
 		},
@@ -869,25 +884,8 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 			return pageIdsHeld
 		},
 		dossierFor,
-		get fullscreen() {
-			return fullscreen
-		},
-		get stagePick() {
-			return stagePick
-		},
-		get stageSide() {
-			return stageSide
-		},
-		get centerSlot() {
-			return centerSlot
-		},
-		stagePanelKey,
-		get stageMiddleKey() {
-			return stageMiddleKey
-		},
-		middleStageHidden,
-		logPanelKeys,
-		// the side rail model
+		conversationTargetFor,
+		// panel placement and tab icons
 		rail
 	}
 }

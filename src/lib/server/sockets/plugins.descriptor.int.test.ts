@@ -91,7 +91,7 @@ describe("one descriptor builder (M2b fix)", () => {
 		// And in force at once: the hook writes the person's own file and reads the package's.
 		const mgr = getManager()
 		mgr.markReady()
-		const res = await mgr.callHook(ID, "use", { n: 1 }, { kind: "outlet", timeoutMs: 15_000, user: "1" })
+		const res = await mgr.callHook(ID, "use", { n: 1 }, { kind: "outlet", timeoutMs: 15_000, user: "1", frameCause: { pluginId: ID } })
 		expect(res.ok && res.value).toEqual({ w: "ok", r: "hi 1", a: '{"shelf":1}' })
 		register.mockRestore()
 	}, 120_000)

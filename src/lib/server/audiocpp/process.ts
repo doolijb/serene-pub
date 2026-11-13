@@ -2,7 +2,7 @@
  * audio.cpp's spec over the shared supervisor (`$lib/server/managed/supervisor`),
  * mirroring `koboldcpp/subprocessManager.ts`.
  *
- * Everything service-neutral (spawn, process groups, adoption, health check,
+ * Everything service-neutral (spawn, process trees, the watchdog, health check,
  * idle auto-stop, Stop) lives in the supervisor. This file keeps what is
  * audio.cpp's: its settings row, its `server.json`, its arguments, its ping,
  * and the record of which config the live process was spawned with.
@@ -81,8 +81,6 @@ export const audioCppSupervisor = createSupervisor({
 	id: "audiocpp",
 	label: "audio.cpp",
 	pidFileName: ".audiocpp-subprocess.pid",
-	externalStopMessage:
-		"This audio.cpp is running externally and wasn't started by Serene Pub, so it can't be stopped from here. Stop it manually, or point Serene Pub's audio.cpp at a different port.",
 
 	async gate() {
 		const s = await settings()
@@ -187,7 +185,7 @@ export const startAudioCpp = audioCppSupervisor.start
 export const stopAudioCpp = audioCppSupervisor.stop
 export const restartAudioCpp = audioCppSupervisor.restart
 
-/** Hash the live process was spawned with; for an adopted one, the saved one. */
+/** Hash the live process was spawned with; before any spawn, the saved one. */
 function spawnedHashOf(row: Pick<AudioCppSettingsRow, "configHash">) {
 	return bag.spawnedHash ?? row.configHash
 }
@@ -229,7 +227,6 @@ async function ensureOnce(): Promise<{ baseUrl: string }> {
 	const st = audioCppSupervisor.getStatus()
 	if (
 		st.status === "running" &&
-		!st.isExternal &&
 		spawnedHashOf(s) !== written.hash
 	) {
 		await audioCppSupervisor.restart()
@@ -261,7 +258,7 @@ export async function applyAudioCppConfig(
 	const written = await writeAudioCppConfig(db)
 	bag.fileHash = written.hash
 	const st = audioCppSupervisor.getStatus()
-	if (st.status !== "running" || st.isExternal) return { restarted: false }
+	if (st.status !== "running") return { restarted: false }
 	// Nothing left to serve (the last package removed or disabled): a restart
 	// would only hit the no-package gate after the file is gone (lane MV
 	// finding V4, 2026-10-29). Stop instead; the next enable starts it again.
@@ -294,7 +291,6 @@ export function statusViewFromEvent(
 		pid: event.pid,
 		startedAt: event.startedAt,
 		restartCount: event.restartCount,
-		isExternal: event.isExternal,
 		port: s.port,
 		baseUrl: audioCppBaseUrl(s),
 		loaded: extras?.loaded ?? [],

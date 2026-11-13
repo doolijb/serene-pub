@@ -2,7 +2,11 @@
 // Decision-2 helper (see lorebookBindings/narrativeNodes merge plan): a
 // lorebookBindings row's NAME is a stored snapshot of its bound
 // character/persona, kept in sync one-directionally — the card is the source
-// of truth for it. Its ALIASES are the member's own (cast-first, #114, ruled
+// of truth for it, UNLESS the member has a name or nickname of its own in this
+// book (`own_name` / `own_nickname`, playtest §0-D), which the snapshot applies
+// (`memberShownName`). Because `name` is the stored shown name, every server
+// reader of `binding.name` (graph, scene cast list, side characters, embed
+// text, write proposals, castMemberCards refusals) follows without edits. Its ALIASES are the member's own (cast-first, #114, ruled
 // 2026-09-28): the sync merges the card's names in and never removes one, and
 // `lorebooks:updateBinding` lets the author edit them on a carded member.
 //
@@ -26,12 +30,21 @@
 // instance explicitly (characterBindingSync.test.ts).
 
 import * as schema from "$lib/server/db/schema"
-import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import {
-	resolveCharacterName
-} from "$lib/shared/utils/resolveCharacterName"
+	hasOwnNames,
+	memberShownName
+} from "$lib/shared/lorebooks/memberIdentity"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import { memberOfCard } from "$lib/server/utils/castMemberCards"
+import {
+	ensureCardVersion,
+	insertCastMember,
+	writeBackShownName,
+	writeCastVersion
+} from "$lib/server/characters/versions"
+import { memberColumnsOfVersion } from "$lib/server/lorebooks/retold"
 
 async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
@@ -52,9 +65,12 @@ async function defaultDb(): Promise<Db> {
  * whoever owns it — the attach-time sync, when a card is first linked into a
  * book whose owner the caller has already checked.
  *
- * ⚠ **The name is the card's; the aliases are the member's** (#114,
- * cast-first, ruled 2026-09-28). `name` is replaced with the card's
- * projection. `aliases` are MERGED: the card's names (and its real name,
+ * ⚠ **The name is the card's unless the member has its own in this book; the
+ * aliases are the member's** (#114, cast-first, ruled 2026-09-28; own names
+ * §0-D, ruled 2026-11-04). `name` is replaced with the card's projection, or
+ * with the member's own name/nickname when it carries one — then the card's
+ * shown name and real name are merged into the aliases, so the member still
+ * answers to the card's names. `aliases` are MERGED: the card's names (and its real name,
  * below) are added to whatever the member already answers to, never written
  * over it — an alias the author gave the member, or one the member had before
  * a card was linked, survives every sync. The cost is deliberate: a name the
@@ -88,9 +104,12 @@ export async function syncLorebookBindingsForCharacter(
 
 		const character = await tx.query.characters.findFirst({
 			where: eq(schema.characters.id, characterId),
-			columns: { name: true, nickname: true, aliases: true, userId: true }
+			columns: { name: true, nickname: true, userId: true }
 		})
 		if (!character) return
+		// The card's own aliases are its current version's (`characters.aliases`
+		// is frozen); name and nickname are the row's copies, written with it.
+		const currentCard = await ensureCardVersion(tx, characterId)
 
 		// The real name is part of the PROJECTION, not user data.
 		//
@@ -104,15 +123,15 @@ export async function syncLorebookBindingsForCharacter(
 		// time, is deliberate. A first attempt did the latter and it was a
 		// side-effect: it silently edited a user-owned field during a save the
 		// user made for another reason. The card's names are MERGED into the
-		// member's aliases below (#114) — `name` is still a full replace.
-		const derived = character.aliases ?? []
+		// member's aliases below (#114).
+		const derived = currentCard?.aliases ?? []
 		const realName = character.name?.trim()
 		const aliases =
 			realName && realName !== resolveCharacterName(character)
 				? [...derived, realName]
 				: derived
 
-		const name = resolveCharacterName(character)
+		const cardName = resolveCharacterName(character)
 		const bound = await tx
 			.select({
 				id: schema.lorebookBindings.id,
@@ -131,11 +150,94 @@ export async function syncLorebookBindingsForCharacter(
 						: eq(schema.lorebooks.userId, character.userId)
 				)
 			)
-		for (const row of bound)
+		// The members' base versions: the own name and nickname are read from
+		// them, and the merged aliases are written to them too.
+		const V = schema.characterVersions
+		const bases = bound.length
+			? await tx
+					.select()
+					.from(V)
+					.where(
+						and(
+							inArray(
+								V.castMemberId,
+								bound.map((m) => m.id)
+							),
+							isNull(V.cardId),
+							isNull(V.branchId),
+							isNull(V.year),
+							isNull(V.personalPosition),
+							isNull(V.sourceSessionId)
+						)
+					)
+			: []
+		const baseOf = new Map(bases.map((b) => [b.castMemberId, b]))
+		// The base name, as its base reads it: a followed name or nickname is
+		// the base's PARENT card version's, which a member left behind on an
+		// older card version does not share with the card's current name
+		// (★chr-read-1). It is the stored `name` here, and keeps the member's
+		// own name out of its aliases; `writeBackShownName` then sets the name
+		// to what the member reads on Main, so a dated rename survives a card
+		// edit (★cp-names-1).
+		const parentIds = bases
+			.map((b) => b.parentVersionId)
+			.filter((id): id is number => id != null)
+		const parents = new Map(
+			(parentIds.length
+				? await tx
+						.select({
+							id: V.id,
+							name: V.name,
+							nickname: V.nickname
+						})
+						.from(V)
+						.where(inArray(V.id, parentIds))
+				: []
+			).map((p) => [p.id, p])
+		)
+		for (const row of bound) {
+			const base = baseOf.get(row.id)
+			// A base with no parent card version is card-less (a member linked
+			// to a card since: see the link gap in lorebooks.castVersions.int.test),
+			// so it holds no own names to apply; no base (an error) has none.
+			const names =
+				base && base.parentVersionId != null
+					? memberColumnsOfVersion(base, { carded: true })
+					: { ownName: null, ownNickname: null }
+			const parent =
+				base?.parentVersionId != null
+					? parents.get(base.parentVersionId)
+					: undefined
+			const name = memberShownName(names, parent ?? character)
+			// A member with its own names still answers to the card's.
+			const cardAliases = hasOwnNames(names)
+				? [...aliases, cardName]
+				: aliases
+			const merged = mergeAliases(row.aliases, cardAliases, name)
+			// The stored name has one writer, `writeBackShownName` (below); only a
+			// row with no base version (nothing for it to read) is named here.
 			await tx
 				.update(schema.lorebookBindings)
-				.set({ name, aliases: mergeAliases(row.aliases, aliases, name) })
+				.set(base ? { aliases: merged } : { name, aliases: merged })
 				.where(eq(schema.lorebookBindings.id, row.id))
+			// The card owner's edit is what this carries: the base's own
+			// aliases follow the binding's. The name stays the card's (followed)
+			// unless the member has its own.
+			if (
+				base &&
+				(base.aliases.length !== merged.length ||
+					base.aliases.some((a, i) => a !== merged[i]))
+			)
+				await writeCastVersion(tx, {
+					member: row.id,
+					changes: { aliases: merged },
+					writtenBy: `user:${character.userId}`,
+					at: { branchId: null, date: null, personalPosition: null }
+				})
+			// The stored name is the member's shown name at its book's present
+			// on Main (the card's, or a dated rename's).
+			if (base) await writeBackShownName(tx, row.id)
+		}
 	})
 }
 
@@ -249,17 +351,26 @@ export async function resolveOrCreateBindingRow(
  * here with it. A member the card already has is found as before; with none,
  * this answers null and inserts nothing — so unlinking a deleted card from its
  * member, then touching the session again, does not mint a second member
- * linked to it. A card id with no card behind it answers the same.
+ * linked to it. A card id with no card behind it answers the same. 🚧
+ * `mintDeleted` lifts that for one caller only: the boot fill of seats whose
+ * card was deleted before the delete-time fill existed (★RF-1 at startup,
+ * owner 2026-11-10), which turns the new member card-less in the same
+ * transaction.
  *
  * ⚠ The caller holds the book's advisory lock
  * (`pg_advisory_xact_lock(lorebookId)`) before calling, and syncs a new row's
  * name and aliases from the card after the commit
  * (`syncLorebookBindingsForCharacter`), as `resolveOrCreateBindingRow` does.
+ *
+ * The member is born with its **base version** (`insertCastMember`, plan §32
+ * §8): the one writer of `character_versions` writes it in the same
+ * transaction.
  */
 export async function findOrInsertBinding(
 	tx: Db,
 	lorebookId: number,
-	characterId: number
+	characterId: number,
+	opts: { mintDeleted?: boolean } = {}
 ): Promise<{
 	row: typeof schema.lorebookBindings.$inferSelect
 	created: boolean
@@ -277,18 +388,15 @@ export async function findOrInsertBinding(
 		where: eq(schema.characters.id, characterId),
 		columns: { isDeleted: true }
 	})
-	if (!card || card.isDeleted) return null
+	if (!card || (card.isDeleted && !opts.mintDeleted)) return null
 
 	const token = await deriveNextBindingToken(lorebookId, tx)
-	const [inserted] = await tx
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId,
-			binding: token,
-			characterId
-		})
-		.returning()
-	return { row: inserted, created: true }
+	const { member } = await insertCastMember(tx, {
+		lorebookId,
+		binding: token,
+		characterId
+	})
+	return { row: member, created: true }
 }
 
 /**

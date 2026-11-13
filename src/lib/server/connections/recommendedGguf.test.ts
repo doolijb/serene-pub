@@ -13,6 +13,7 @@ models:
     pull: hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M
     size: 2.74
     recommended_vram: 3
+    mmproj: mmproj-F16.gguf
     tags: [roleplay, utility, vision, long-context]
     details:
       parameter_size: 4B
@@ -40,6 +41,7 @@ describe("the recommended GGUF list, read once", () => {
 			pull: "hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
 			size: 2.74,
 			recommended_vram: 3,
+			mmproj: "mmproj-F16.gguf",
 			tags: ["roleplay", "utility", "vision", "long-context"],
 			details: {
 				parameter_size: "4B",
@@ -68,6 +70,7 @@ describe("the recommended GGUF list, read once", () => {
 	it("an entry with no tags line has none, not undefined", () => {
 		const [e] = parseRecommendedYaml("models:\n  - name: x\n    pull: y\n")
 		expect(e.tags).toEqual([])
+		expect(e.mmproj).toBe("")
 	})
 
 	it("ignores comment lines, including ones that look like fields", () => {

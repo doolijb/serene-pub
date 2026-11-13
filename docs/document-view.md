@@ -66,7 +66,7 @@ On a session's page:
 - A hidden message says it's left out of what the AI sees.
 - **Get a Response From** says who is next in the turn order and has them ready. Pick someone else, or **The narrator**, and press **Get response**. When it's your turn to write, it says so.
 
-The edit page covers the name, characters, personas, guests, the turn order and the other choices the session's genre offers, the scenario and tags. For reading a lorebook into the session, benching a character, and the session's preset and actions, use the usual interface. See [Sessions](./sessions.md).
+The edit page covers the name, characters, personas, guests, the turn order and the other choices the session's genre offers, the scenario and tags. For reading a lorebook into the session, benching a seat, and the session's preset and actions, use the usual interface. See [Sessions](./sessions.md).
 
 ### Characters
 
@@ -112,7 +112,7 @@ An administrator can make Document View the default for browsers that haven't ch
 Document View covers less, on purpose: one simple, reliable page per task. Use the usual interface for:
 
 - Lorebooks, tags, sampling, pipelines and context templates.
-- Reading a lorebook into a session, benching characters, and a session's preset and actions.
+- Reading a lorebook into a session, benching seats, and a session's preset and actions.
 - Character pictures, galleries, sprites and the extra card fields.
 - Downloading embedding and entity models that run on this machine.
 - Themes, background images, and browsing CharaVault (connecting the account works in Pub settings).

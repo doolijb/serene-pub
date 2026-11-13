@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { appletMount } from "./appletMount"
+import { appletMount, appletCardOf } from "./appletMount"
 import { declaredPermissions, reviewMarks } from "./permissions"
 
 const manifest = {
@@ -37,5 +37,52 @@ describe("appletMount", () => {
 		const marks = reviewMarks(declaredPermissions(manifest as any))
 		const m = appletMount("acme.cards", { enabled: true, name: "C", manifest, adminDenied: [...marks, "applet:annex:user"] }, genres)
 		expect(m?.grants.sort()).toEqual(["applet:characters:read", "storage"])
+	})
+
+	describe("appletCard (🚧 M2d)", () => {
+		const card = {
+			poster: "assets/poster.png",
+			logo: "assets/img/logo.svg",
+			blurb: { en: "Play cards", fr: "Jouer" }
+		}
+		const row = (extra: Record<string, unknown>, version: string | null = "1.0.0") => ({
+			enabled: true,
+			name: "C",
+			version,
+			manifest: { ...manifest, assets: { dir: "assets" }, ...extra },
+			adminDenied: []
+		})
+		it("serves poster and logo under the encoded version, and resolves the blurb", () => {
+			const m = appletMount("acme.cards", row({ appletCard: card }, "1.0.0+b1"), genres)
+			expect(m?.poster).toBe("/plugin-assets/acme.cards/1.0.0%2Bb1/assets/poster.png")
+			expect(m?.logo).toBe("/plugin-assets/acme.cards/1.0.0%2Bb1/assets/img/logo.svg")
+			expect(m?.blurb).toBe("Play cards")
+		})
+		it("omits a path outside assets, an unsafe one, or any path without a version", () => {
+			const out = appletMount("acme.cards", row({ appletCard: { poster: "ui/p.png", logo: "assets/../x.png" } }), genres)
+			expect(out && "poster" in out).toBe(false)
+			expect(out && "logo" in out).toBe(false)
+			const nov = appletMount("acme.cards", row({ appletCard: card }, null), genres)
+			expect(nov && "poster" in nov).toBe(false)
+			expect(nov && "logo" in nov).toBe(false)
+			expect(nov?.blurb).toBe("Play cards")
+			const noAssets = appletMount("acme.cards", { ...row({ appletCard: card }), manifest: { ...manifest, appletCard: card } }, genres)
+			expect(noAssets && "poster" in noAssets).toBe(false)
+		})
+		it("without an appletCard the mount carries no new keys", () => {
+			const m = appletMount("acme.cards", row({}), genres)
+			expect(Object.keys(m!).sort()).toEqual(["genres", "grants", "src", "title"])
+		})
+		it("the card of a mount is the row's shape", () => {
+			const m = appletMount("acme.cards", row({ appletCard: card }), genres)!
+			expect(appletCardOf(m)).toEqual({
+				title: "Card table",
+				poster: m.poster,
+				logo: m.logo,
+				blurb: "Play cards"
+			})
+			const bare = appletMount("acme.cards", row({}), genres)!
+			expect(appletCardOf(bare)).toEqual({ title: "Card table" })
+		})
 	})
 })

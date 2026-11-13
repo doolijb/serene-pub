@@ -42,7 +42,7 @@ The importer is offered to administrators only, and not in the [Android app](./a
 | --- | --- |
 | Chat | [Session](./sessions.md) |
 | Group chat | A session with several characters, plus a [turn order](./group-sessions.md#choose-how-the-turn-order-works). The **Turn order** widget keeps who is due next on screen, and **Who's here** shows which people have the session open (see [the widgets](./session-layout.md#the-widgets)) |
-| Muting a group member | [Benching](./group-sessions.md#bench-a-character) them |
+| Muting a group member | [Benching](./group-sessions.md#bench-a-seat) them |
 | Persona | [Persona](./personas.md): a character you play |
 | API connection | A [connection](./connections.md) and one of its models |
 | Connection profile | A [loadout](./connections.md#loadouts): a model on a connection plus a sampling config, named for a kind of work (_Reply_, _Extraction_, _Images_). Each kind of work has a default loadout (_the Reply loadout_ for replies), and an administrator can give a pipeline step a different one. A session never picks its own. |

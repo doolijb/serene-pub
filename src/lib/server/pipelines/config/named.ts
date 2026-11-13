@@ -66,13 +66,14 @@ import {
 import { presetConfigForSpec } from "$lib/server/pipelines/entities/presetBindings"
 import {
 	declarations,
+	declarationsAndVariableKeys,
 	humanizeCamel,
-	type Decl
+	type Decl,
+	type VariableKey
 } from "$lib/server/pipelines/config/panel"
 import { defaultPromptFor } from "$lib/server/pipelines/boot/seedPrompts"
 import { scriptIdFor } from "$lib/server/pipelines/boot/seedScripts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
-import { defaultVariableTemplateFor } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { defaultContextTemplateFor } from "$lib/server/pipelines/boot/seedContextTemplates"
 import { defaultEngineOf } from "$lib/shared/pipelines/templateEngines"
 import {
@@ -153,9 +154,6 @@ async function refDefaults(
 	// of them would hand three of the four steps a prompt with none of the
 	// fields they read.
 	const prompts = new Map<string, number | null>()
-	// Per *variable*, not per spec: a layout row is keyed by what it renders,
-	// so the shipped characters layout is the same row in every pipeline.
-	const layouts = new Map<string, number | null>()
 	// Per *node type*, for the same reason: session reply and the narrator run the
 	// same assemble node, so core's story string is one row serving both.
 	const templates = new Map<string, number | null>()
@@ -219,36 +217,6 @@ async function refDefaults(
 					await defaultContextTemplateFor(db, d.nodeDefinitionId, engine)
 				)
 			const id = templates.get(pool)
-			if (id != null) out.set(key, id)
-			continue
-		}
-		if (d.control === "variable-template-ref" && d.variableId) {
-			const named = await namedTemplateId(
-				db,
-				schema.pipelineVariableTemplates,
-				templateRefOf(presetValues.get(key)),
-				{ specSlug, nodeKey: d.nodeKey, what: "variable layout" }
-			)
-			// Only a row for the variable the key renders. A preset naming
-			// core's row for a key the spec's `renders` points elsewhere
-			// (2026-10-13) would be written here, culled by
-			// `repointedLayoutPicks` and written back on every boot — so it
-			// falls through to that variable's own default instead.
-			if (named != null && (await layoutVariableOf(db, named)) === d.variableId) {
-				out.set(key, named)
-				continue
-			}
-			if (named != null)
-				console.warn(
-					`[pipelines] ${specSlug}: ${d.nodeKey}'s preset names a layout for another ` +
-						`variable than '${d.variableId}', which the key renders; using its default`
-				)
-			if (!layouts.has(d.variableId))
-				layouts.set(
-					d.variableId,
-					await defaultVariableTemplateFor(db, d.variableId)
-				)
-			const id = layouts.get(d.variableId)
 			if (id != null) out.set(key, id)
 			continue
 		}
@@ -657,6 +625,50 @@ export async function shippedConfigValuesOf(
 }
 
 /**
+ * The layouts an author preset **names** for a `variables` slot's keys, by
+ * address (`nodeKey\0slot\0key`) — the package default's first half: the
+ * layout the pipeline's author chose for that step, `{ seedKey }` /
+ * `{ templateId }` resolved to its row id, a bare row id passed through. The
+ * second half, a variable's own default, is `defaultVariableTemplateFor`; the
+ * run (`world.ts`) tries this one first. A key the author named nothing for is
+ * absent, and so is one naming a row that lays out another variable than the
+ * key renders (said out loud): never a layout for some other shape.
+ */
+export async function declaredVariableLayouts(
+	db: Db,
+	specSlug: string,
+	specVersionId: number,
+	keys: readonly VariableKey[]
+): Promise<Map<string, number>> {
+	const out = new Map<string, number>()
+	if (!keys.length) return out
+	const { values } = await presetValuesFor(db, specVersionId)
+	for (const k of keys) {
+		const key = addr(k.nodeKey, k.slot, k.path)
+		const stated = values.get(key)
+		const id =
+			typeof stated === "number"
+				? stated
+				: await namedTemplateId(
+						db,
+						schema.pipelineVariableTemplates,
+						templateRefOf(stated),
+						{ specSlug, nodeKey: k.nodeKey, what: "variable layout" }
+					)
+		if (id == null) continue
+		if ((await layoutVariableOf(db, id)) !== k.variableId) {
+			console.warn(
+				`[pipelines] ${specSlug}: ${k.nodeKey}'s preset names a layout for another ` +
+					`variable than '${k.variableId}', which the key renders; using its default`
+			)
+			continue
+		}
+		out.set(key, id)
+	}
+	return out
+}
+
+/**
  * 🚧 What the shipped Default config holds at each address, by key — the
  * author preset over the declaration, a seed reference resolved to its row
  * (`refDefaults`), an address with neither absent. What `ensureDefaultConfig`
@@ -709,9 +721,7 @@ function isSeedRef(d: Decl, value: unknown): boolean {
 	return (
 		(d.control === "sampling-ref" && samplingSeedKeyOf(value) !== null) ||
 		(d.control === "scripts-chain" && scriptChainRefsOf(value) !== null) ||
-		((d.control === "prompts-ref" ||
-			d.control === "context-template-ref" ||
-			d.control === "variable-template-ref") &&
+		((d.control === "prompts-ref" || d.control === "context-template-ref") &&
 			templateRefOf(value) !== null)
 	)
 }
@@ -950,18 +960,19 @@ async function layoutVariableOf(db: Db, id: number): Promise<string | undefined>
 }
 
 /**
- * The layout picks at a `variable-template-ref` address whose row lays out a
- * different variable than the address now renders — what a spec's `renders`
- * leaves behind when it re-points a key (owner rulings 2026-10-13). A pick
- * naming no row at all is not one of these: a dangle stays visible.
+ * The layout picks at a variables-slot key whose row lays out a different
+ * variable than the key now renders — what a spec's `renders` leaves behind
+ * when it re-points a key (owner rulings 2026-10-13). The run ignores them
+ * (`world.ts`), so they are no leftover pick either; culled with a notice like
+ * an address that is gone. A pick naming no row at all is not one of these: a
+ * dangle stays visible.
  */
 async function repointedLayoutPicks<
 	R extends { nodeKey: string; slot: string; path: string | null; value: unknown }
->(db: Db, rows: readonly R[], declByAddr: ReadonlyMap<string, Decl>): Promise<R[]> {
-	const picks = rows.filter((r) => {
-		const d = declByAddr.get(addr(r.nodeKey, r.slot, r.path ?? ""))
-		return d?.control === "variable-template-ref" && d.variableId && typeof r.value === "number"
-	})
+>(db: Db, rows: readonly R[], variableAt: ReadonlyMap<string, string>): Promise<R[]> {
+	const picks = rows.filter(
+		(r) => variableAt.has(addr(r.nodeKey, r.slot, r.path ?? "")) && typeof r.value === "number"
+	)
 	if (!picks.length) return []
 	const layouts = await db
 		.select({
@@ -978,7 +989,7 @@ async function repointedLayoutPicks<
 	const variableOf = new Map(layouts.map((l: { id: number; variableId: string }) => [l.id, l.variableId]))
 	return picks.filter((r) => {
 		const theirs = variableOf.get(r.value as number)
-		const ours = declByAddr.get(addr(r.nodeKey, r.slot, r.path ?? ""))?.variableId
+		const ours = variableAt.get(addr(r.nodeKey, r.slot, r.path ?? ""))
 		return theirs !== undefined && theirs !== ours
 	})
 }
@@ -991,9 +1002,19 @@ export async function reconcileConfigs(
 ): Promise<ReconcileReport[]> {
 	await ensureDefaultConfig(db, specId, specVersionId, specSlug)
 
-	const decls = await declarations(db, specVersionId)
+	const { decls, variableKeys } = await declarationsAndVariableKeys(db, specVersionId)
 	const declByAddr = new Map(
 		decls.map((d) => [addr(d.nodeKey, d.slot, d.path), d])
+	)
+	// A variables slot's keys declare no setting, yet a layout stored at one is
+	// a **leftover pick** ⏳ and still read by the run (`world.ts`): never
+	// orphaned for want of a declaration, so the cull passes over it. A key the
+	// spec doesn't render is a different matter and is culled.
+	const variableKeyAddrs = new Set(
+		variableKeys.map((k) => addr(k.nodeKey, k.slot, k.path))
+	)
+	const variableAtAddr = new Map(
+		variableKeys.map((k) => [addr(k.nodeKey, k.slot, k.path), k.variableId] as const)
 	)
 	// The nodes this version still has, beside their rows — what tells an
 	// unplaced chain (kept) from an orphaned value (culled).
@@ -1061,7 +1082,7 @@ export async function reconcileConfigs(
 		// halts for a stop guard, so a guard never silently stops applying.
 		// A node that is gone still takes its chains with it.
 		const undeclared = (rows as any[]).filter(
-			(r) => !declByAddr.has(addrOf(r))
+			(r) => !declByAddr.has(addrOf(r)) && !variableKeyAddrs.has(addrOf(r))
 		)
 		const unplacedRows = undeclared.filter((r) =>
 			isUnplacedChain(chainNodes, r.nodeKey, r.slot, r.path ?? "")
@@ -1070,10 +1091,10 @@ export async function reconcileConfigs(
 			...undeclared.filter((r) => !unplacedRows.includes(r)),
 			// A layout picked for a different variable than the key renders —
 			// the spec's `renders` points the key at another one (2026-10-13).
-			// The run ignores it (`world.ts`); left in place it would sit in
-			// the picker as a choice that is not one. Culled with a notice,
-			// like an address that is gone.
-			...(await repointedLayoutPicks(db, rows as any[], declByAddr))
+			// The run ignores it (`world.ts`); left in place it would be a
+			// stored value nothing reads or shows. Culled with a notice, like
+			// an address that is gone.
+			...(await repointedLayoutPicks(db, rows as any[], variableAtAddr))
 		]
 		for (const r of unplacedRows)
 			report.unplaced.push({

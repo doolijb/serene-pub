@@ -145,12 +145,12 @@ describe("SurfaceManager — a copy replaces the layout", () => {
 	})
 })
 
-describe("SurfaceManager — a panel's tab and pin, from the session", () => {
+describe("SurfaceManager — a panel's tab, from the session", () => {
 	const two = () =>
 		panels({
 			right: [
 				{ key: "p2", tabs: ["tasks", "notes"] },
-				{ key: "p3", tabs: ["album"], pinned: false }
+				{ key: "p3", tabs: ["album"] }
 			]
 		})
 
@@ -180,17 +180,6 @@ describe("SurfaceManager — a panel's tab and pin, from the session", () => {
 		m.setPanelOpen("nope", "tasks")
 		vi.advanceTimersByTime(1000)
 		expect(save).not.toHaveBeenCalled()
-	})
-
-	it("the pin docks a side panel or moves it to the rail; `false` is the only value written", () => {
-		const m = make({ panels: two() })
-		m.setPanelPinned("p3", true)
-		expect("pinned" in (m.panels as PanelLayoutV1).right[1]).toBe(false)
-		m.setPanelPinned("p2", false)
-		expect((m.panels as PanelLayoutV1).right[0].pinned).toBe(false)
-		// The middle never pins.
-		m.setPanelPinned("p1", false)
-		expect("pinned" in (m.panels as PanelLayoutV1).middle.primary).toBe(false)
 	})
 
 	it("a first edit of a row with only the old slots writes the converted panels", () => {

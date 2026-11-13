@@ -270,13 +270,7 @@
 					]
 				]
 			},
-			"rows": [
-				{
-					"text": "This lorebook has no entries yet.",
-					"struck": false,
-					"buttons": []
-				}
-			],
+			"rows": [],
 			"buttons": [
 				{
 					"label": "Refresh",
@@ -304,7 +298,7 @@
 	},
 	"a session with no lorebook": {
 		"drawn": {
-			"message": "This session reads no lorebook.",
+			"message": null,
 			"search": null,
 			"radiogroup": null,
 			"radios": [],

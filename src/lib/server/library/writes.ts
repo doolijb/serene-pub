@@ -1,11 +1,10 @@
 /**
  * 🚧 (M2c, path B) **Library writes**: a genre's pipeline makes or changes
- * what is in a person's library — a character, a lorebook, a lorebook read
- * into a session — as the ACTING PERSON, under their consent.
+ * what is in a person's library — a character, a lorebook — as the ACTING PERSON, under their consent.
  *
  *  · rights: the person's own (`personMay`), never beyond what a click could;
  *  · consent: their **library write mode** (`user_settings.library_write_mode`,
- *    NULL reads Review) — Off halts, Review holds a `state_proposals` row of
+ *    NULL reads Full) — Off halts, Review holds a `state_proposals` row of
  *    kind `library` for them to Accept or Reject, Full writes now and keeps an
  *    `applied` row so Back can take it back.
  *
@@ -20,46 +19,70 @@
  */
 import { and, desc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { removedNodeDefinitionSentence } from "@serene-pub/sdk"
 import { personMay, type ActingPerson } from "$lib/server/auth/actingPerson"
+import {
+	ensureCardVersion,
+	updateCardVersion
+} from "$lib/server/characters/versions"
+import { greetingsWithOpener } from "$lib/server/characters/cardIO"
+import {
+	profileOf,
+	type CharacterGreeting,
+	type CharacterProfileV1
+} from "$lib/shared/characters/profile"
 
-/** 🚧 The four library writes (the outlets' ops). */
+/** 🚧 The three library writes (the outlets' ops). */
 // One name each across the app: the op is the ledger's (`shared/state/ledgerLines.ts`), the mode the setting's (`shared/library/libraryWriteMode.ts`).
 import type { LibraryOp } from "$lib/shared/state/ledgerLines"
-import type { LibraryWriteMode } from "$lib/shared/library/libraryWriteMode"
+import {
+	effectiveLibraryWriteMode,
+	type LibraryWriteMode
+} from "$lib/shared/library/libraryWriteMode"
 export type { LibraryOp, LibraryWriteMode }
 export const LIBRARY_OPS: readonly LibraryOp[] = [
 	"create-character",
 	"update-character",
-	"create-lorebook",
-	"attach-lorebook"
+	"create-lorebook"
 ]
 
-/** 🚧 What a person's library write mode can be. NULL reads Review. */
+/** 🚧 What a person's library write mode can be. NULL reads Full. */
 
-/** The text fields of a card a library write may change (the outlet's names). */
+/**
+ * The fields of a card a library write may change: the character profile's
+ * names (owner, 2026-11-05: "New names now, old removed" — `first_mes` and
+ * `mes_example` are gone from a new request; only a stored row may still carry
+ * them, see `profileChangesOf`).
+ */
 export const CHARACTER_CHANGE_FIELDS = [
 	"name",
 	"description",
 	"personality",
 	"scenario",
-	"first_mes",
-	"mes_example"
+	"greetings",
+	"exampleDialogues"
 ] as const
 type ChangeField = (typeof CHARACTER_CHANGE_FIELDS)[number]
+/** What a field holds: text, or a list (the greetings, the example dialogues). */
+type ChangeValue = string | CharacterGreeting[] | string[] | null
 
 /** 🚧 The payload of a `library` row in `state_proposals`. */
 export interface LibraryChangePayload {
 	kind: "library"
 	op: LibraryOp
-	/** The outlet's ports (attach: `sessionId` always filled in by the host). */
+	/** The outlet's ports. */
 	input: Record<string, unknown>
 	/** The person whose library it is. */
 	by: number
 	/** The card's or book's name, for the ledger. */
 	label: string
 	result?: { characterId?: number; lorebookId?: number; sessionId?: number }
-	/** What an update or an attach replaced. */
-	before?: { fields?: Partial<Record<ChangeField, string | null>>; lorebookId?: number | null }
+	/** What an update replaced. */
+	// ⏳ A row written before the profile names holds `first_mes` / `mes_example` here and in `input.changes`; Back and Forward still read them.
+	before?: {
+		fields?: Partial<Record<ChangeField, ChangeValue>> &
+			Record<string, unknown>
+	}
 	/** A deleted book's export, for Forward. */
 	document?: unknown
 	/** 🚧 Why nothing was made (a `skipped` row: the person's library write mode is Off). */
@@ -76,7 +99,7 @@ export const LIBRARY_OFF_SENTENCE =
 	"Your library write mode is Off, so nothing is added to your library. You can change it under Settings › User."
 export const NOBODY_ACTING_SENTENCE = "Nobody is acting for this run, so nothing is added to a library."
 
-/** A person's library write mode: NULL (never chosen) reads Review. */
+/** A person's library write mode: NULL (never chosen) reads Full. */
 export async function libraryWriteModeFor(db: Db, userId: number): Promise<LibraryWriteMode> {
 	const [own] = await db
 		.select({ mode: schema.userSettings.libraryWriteMode })
@@ -84,7 +107,7 @@ export async function libraryWriteModeFor(db: Db, userId: number): Promise<Libra
 		.where(eq(schema.userSettings.userId, userId))
 		.limit(1)
 	const mode = own?.mode
-	return mode === "full" || mode === "off" ? mode : "review"
+	return effectiveLibraryWriteMode(mode)
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -119,13 +142,41 @@ function cardDataOf(card: unknown): Record<string, unknown> {
 	return out
 }
 
-/** `changes` read whole: only the six text fields, each text, at least one. */
-function changesOf(changes: unknown): Partial<Record<ChangeField, string>> {
-	if (!isRecord(changes)) throw new LibraryWriteRefusal("The changes are an object of the card's text fields.")
-	const out: Partial<Record<ChangeField, string>> = {}
+/** `changes` read whole: only the profile's six fields, each of its own kind, at least one. */
+function changesOf(
+	changes: unknown
+): Partial<Record<ChangeField, ChangeValue>> {
+	if (!isRecord(changes))
+		throw new LibraryWriteRefusal(
+			"The changes are an object of the card's fields."
+		)
+	const out: Partial<Record<ChangeField, ChangeValue>> = {}
 	for (const [k, v] of Object.entries(changes)) {
 		if (!(CHARACTER_CHANGE_FIELDS as readonly string[]).includes(k))
 			throw new LibraryWriteRefusal(`'${k}' is not a field that can be changed on a character here.`)
+		if (k === "greetings") {
+			if (
+				!Array.isArray(v) ||
+				!v.every((g) => isRecord(g) && typeof g.text === "string")
+			)
+				throw new LibraryWriteRefusal(
+					"'greetings' is a list of greetings, each with its text."
+				)
+			out.greetings = v.map((g) =>
+				g.groupOnly === true
+					? { text: g.text as string, groupOnly: true }
+					: { text: g.text as string }
+			)
+			continue
+		}
+		if (k === "exampleDialogues") {
+			if (!Array.isArray(v) || !v.every((d) => typeof d === "string"))
+				throw new LibraryWriteRefusal(
+					"'exampleDialogues' is a list of text."
+				)
+			out.exampleDialogues = [...(v as string[])]
+			continue
+		}
 		if (typeof v !== "string") throw new LibraryWriteRefusal(`'${k}' is text.`)
 		if (k === "name" && !v.trim()) throw new LibraryWriteRefusal("A character needs a name.")
 		out[k as ChangeField] = v
@@ -134,46 +185,109 @@ function changesOf(changes: unknown): Partial<Record<ChangeField, string>> {
 	return out
 }
 
+/**
+ * ⏳ `changes` as a STORED row holds them (Forward): the same judgement as a new
+ * request, but `first_mes` / `mes_example` — the names before the profile's —
+ * pass through for `profileChangesOf` to map.
+ */
+function storedChangesOf(changes: unknown): Record<string, unknown> {
+	if (!isRecord(changes)) return changesOf(changes)
+	const legacy: Record<string, unknown> = {}
+	const rest: Record<string, unknown> = {}
+	for (const [k, v] of Object.entries(changes)) {
+		if ((k === "first_mes" || k === "mes_example") && typeof v === "string")
+			legacy[k] = v
+		else rest[k] = v
+	}
+	if (!Object.keys(legacy).length) return changesOf(changes)
+	return { ...(Object.keys(rest).length ? changesOf(rest) : {}), ...legacy }
+}
+
 const START = "<START>"
-/** The card's fields as columns (`mes_example` is the column's list, joined as the card export joins it). */
-function columnsOf(fields: Partial<Record<ChangeField, string | null>>) {
-	const set: Record<string, unknown> = {}
-	if (fields.name != null) set.name = fields.name
-	if (fields.description != null) set.description = fields.description
-	if (fields.personality !== undefined) set.personality = fields.personality
-	if (fields.scenario !== undefined) set.scenario = fields.scenario
-	if (fields.first_mes !== undefined) set.firstMessage = fields.first_mes
+/**
+ * The profile changes a set of fields makes on a card whose current version is
+ * `current`. ⏳ A stored row (Back, Forward) may still hold the old names:
+ * `first_mes` sets the opener of the greetings (`greetingsWithOpener`),
+ * `mes_example` is the example dialogues split on `<START>`.
+ */
+function profileChangesOf(
+	fields: Record<string, unknown>,
+	current: CharacterProfileV1
+): Partial<CharacterProfileV1> {
+	const set: Partial<CharacterProfileV1> = {}
+	if (typeof fields.name === "string") set.name = fields.name
+	if (typeof fields.description === "string")
+		set.description = fields.description
+	if (fields.personality !== undefined)
+		set.personality = (fields.personality as string | null) ?? null
+	if (fields.scenario !== undefined)
+		set.scenario = (fields.scenario as string | null) ?? null
+	if (Array.isArray(fields.greetings))
+		set.greetings = fields.greetings as CharacterGreeting[]
+	if (Array.isArray(fields.exampleDialogues))
+		set.exampleDialogues = fields.exampleDialogues as string[]
+	if (fields.first_mes !== undefined)
+		set.greetings = greetingsWithOpener(
+			set.greetings ?? current.greetings,
+			(fields.first_mes as string | null) ?? null
+		)
 	if (fields.mes_example !== undefined)
-		set.exampleDialogues = fields.mes_example ? fields.mes_example.split(START) : []
+		set.exampleDialogues = fields.mes_example
+			? String(fields.mes_example).split(START)
+			: []
 	return set
 }
 
-/** Write text fields onto a card — the strokes rule, and a stale embedding cleared when its text moved. */
+/** Run `work` in one transaction — or directly when `db` already is one (Back runs inside the retraction's). */
+function inOneTransaction<T>(db: Db, work: (h: Db) => Promise<T>): Promise<T> {
+	if (
+		typeof (db as unknown as { rollback?: unknown }).rollback === "function"
+	)
+		return work(db)
+	return db.transaction((tx) => work(tx as unknown as Db))
+}
+
+/**
+ * Write fields onto a card's **current version** — the strokes rule, and a
+ * stale embedding cleared (on the card, a library fact) when its name or
+ * description moved.
+ */
 async function writeCardFields(
 	db: Db,
 	characterId: number,
-	fields: Partial<Record<ChangeField, string | null>>
+	fields: Record<string, unknown>
 ): Promise<string> {
-	const [stored] = await db
-		.select({ name: schema.characters.name, description: schema.characters.description })
-		.from(schema.characters)
-		.where(eq(schema.characters.id, characterId))
-		.limit(1)
-	if (!stored) throw new LibraryWriteRefusal("Character not found.")
-	const { applyStrokesToCard } = await import("$lib/server/characters/strokes")
-	const set = applyStrokesToCard(columnsOf(fields) as any) as Record<string, unknown>
-	const movesText =
-		(typeof fields.name === "string" && fields.name !== stored.name) ||
-		(typeof fields.description === "string" && fields.description !== stored.description)
-	await db
-		.update(schema.characters)
-		.set({
-			...set,
-			updatedAt: new Date(),
-			...(movesText ? { embedding: null, embeddingModel: null, embeddingSourceHash: null, vectorizedAt: null } : {})
-		})
-		.where(eq(schema.characters.id, characterId))
-	return typeof fields.name === "string" ? fields.name : stored.name
+	const { applyStrokesToCard } = await import(
+		"$lib/server/characters/strokes"
+	)
+	return await inOneTransaction(db, async (h) => {
+		const version = await ensureCardVersion(h, characterId)
+		if (!version) throw new LibraryWriteRefusal("Character not found.")
+		const current = profileOf(version)
+		const set = applyStrokesToCard(
+			profileChangesOf(fields, current) as any
+		) as Partial<CharacterProfileV1>
+		const movesText =
+			(typeof set.name === "string" && set.name !== current.name) ||
+			(typeof set.description === "string" &&
+				set.description !== current.description)
+		await updateCardVersion(h, version.id, set)
+		await h
+			.update(schema.characters)
+			.set({
+				updatedAt: new Date(),
+				...(movesText
+					? {
+							embedding: null,
+							embeddingModel: null,
+							embeddingSourceHash: null,
+							vectorizedAt: null
+						}
+					: {})
+			})
+			.where(eq(schema.characters.id, characterId))
+		return typeof set.name === "string" ? set.name : (current.name ?? "")
+	})
 }
 
 /** The after-effects of a card's text moving, outside any transaction. */
@@ -184,59 +298,24 @@ async function afterCardWrite(characterId: number, name: string): Promise<void> 
 	autoEnqueueCharacter(characterId, name).catch(console.error)
 }
 
-/** A card's six fields as they stand, in the outlet's names. */
+/** A card's fields as they stand on its current version, in the profile's names. */
 async function cardFieldsOf(db: Db, characterId: number, names: readonly ChangeField[]) {
-	const [c] = await db
-		.select()
-		.from(schema.characters)
-		.where(eq(schema.characters.id, characterId))
-		.limit(1)
-	if (!c) throw new LibraryWriteRefusal("Character not found.")
-	const all: Record<ChangeField, string | null> = {
-		name: c.name,
-		description: c.description,
-		personality: c.personality ?? null,
-		scenario: c.scenario ?? null,
-		first_mes: c.firstMessage ?? null,
-		mes_example: Array.isArray(c.exampleDialogues) ? c.exampleDialogues.join(START) : null
-	}
-	return Object.fromEntries(names.map((n) => [n, all[n]])) as Partial<Record<ChangeField, string | null>>
+	const version = await ensureCardVersion(db, characterId)
+	if (!version) throw new LibraryWriteRefusal("Character not found.")
+	const profile = profileOf(version)
+	return Object.fromEntries(names.map((n) => [n, profile[n]])) as Partial<
+		Record<ChangeField, ChangeValue>
+	>
 }
 
-// ── The session's book (the one line path `sessions:update` uses) ──────────
-
-/** Point a session at a book (or none) through `sessionLinePatch`, as `sessions:update` does. */
-async function setSessionBook(db: Db, sessionId: number, lorebookId: number | null): Promise<void> {
-	const [before] = await db
-		.select({
-			id: schema.sessions.id,
-			name: schema.sessions.name,
-			lorebookId: schema.sessions.lorebookId,
-			lorebookBranchId: schema.sessions.lorebookBranchId
-		})
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	if (!before) throw new LibraryWriteRefusal("Session not found.")
-	const { sessionLinePatch } = await import("$lib/server/sockets/sessions")
-	try {
-		await db.transaction(async (tx) => {
-			const patch = await sessionLinePatch(tx as unknown as Db, {
-				before: { lorebookId: before.lorebookId, lorebookBranchId: before.lorebookBranchId },
-				session: { id: before.id, name: before.name },
-				lorebookId
-			})
-			await tx
-				.update(schema.sessions)
-				.set({ ...patch, lorebookId, updatedAt: new Date() })
-				.where(eq(schema.sessions.id, sessionId))
-		})
-	} catch (e) {
-		throw new LibraryWriteRefusal(e instanceof Error ? e.message : String(e))
-	}
-	const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
-	await ownBookFor(db, sessionId)
-}
+/**
+ * An op that is not live reaching a writer (an old pending Review row someone
+ * accepts): the SDK's removal sentence when the op's outlet was removed, else a plain one.
+ */
+const notLiveRefusal = (op: string): LibraryWriteRefusal =>
+	new LibraryWriteRefusal(
+		removedNodeDefinitionSentence(`core:outlet/${op}`) ?? "That library change is not known."
+	)
 
 /** The text a lorebook document is handed over as. */
 const documentText = (raw: unknown): string => {
@@ -284,23 +363,8 @@ export async function describeLibraryChange(
 				throw new LibraryWriteRefusal(e instanceof Error ? e.message : String(e))
 			}
 		}
-		case "attach-lorebook": {
-			const lorebookId = intOf(input.lorebookId)
-			const sessionId = intOf(input.sessionId)
-			if (lorebookId === null) throw new LibraryWriteRefusal("That names no lorebook.")
-			if (sessionId === null) throw new LibraryWriteRefusal("That names no session to read it into.")
-			const readable = await personMay(db, person, "read", { kind: "lorebook", id: lorebookId })
-			if (!readable.ok) throw new LibraryWriteRefusal(readable.reason)
-			const writable = await personMay(db, person, "write", { kind: "session", id: sessionId })
-			if (!writable.ok) throw new LibraryWriteRefusal(writable.reason)
-			const [book] = await db
-				.select({ name: schema.lorebooks.name, sessionId: schema.lorebooks.sessionId, kind: schema.lorebooks.kind })
-				.from(schema.lorebooks)
-				.where(eq(schema.lorebooks.id, lorebookId))
-				.limit(1)
-			if (!book || book.sessionId != null || book.kind !== "book") throw new LibraryWriteRefusal("Lorebook not found.")
-			return { label: book.name }
-		}
+		default:
+			throw notLiveRefusal(op)
 	}
 }
 
@@ -358,34 +422,8 @@ export async function applyLibraryChange(
 				throw new LibraryWriteRefusal(e instanceof Error ? e.message : String(e))
 			}
 		}
-		case "attach-lorebook": {
-			const lorebookId = intOf(input.lorebookId)
-			const sessionId = intOf(input.sessionId)
-			if (lorebookId === null) throw new LibraryWriteRefusal("That names no lorebook.")
-			if (sessionId === null) throw new LibraryWriteRefusal("That names no session to read it into.")
-			const readable = await personMay(db, person, "read", { kind: "lorebook", id: lorebookId })
-			if (!readable.ok) throw new LibraryWriteRefusal(readable.reason)
-			const writable = await personMay(db, person, "write", { kind: "session", id: sessionId })
-			if (!writable.ok) throw new LibraryWriteRefusal(writable.reason)
-			// A session's own notes and a starter lorebook are never read into a session.
-			const [book] = await db
-				.select({ name: schema.lorebooks.name, sessionId: schema.lorebooks.sessionId, kind: schema.lorebooks.kind })
-				.from(schema.lorebooks)
-				.where(eq(schema.lorebooks.id, lorebookId))
-				.limit(1)
-			if (!book || book.sessionId != null || book.kind !== "book") throw new LibraryWriteRefusal("Lorebook not found.")
-			const [session] = await db
-				.select({ lorebookId: schema.sessions.lorebookId })
-				.from(schema.sessions)
-				.where(eq(schema.sessions.id, sessionId))
-				.limit(1)
-			await setSessionBook(db, sessionId, lorebookId)
-			return {
-				label: book.name,
-				result: { lorebookId, sessionId },
-				before: { lorebookId: session?.lorebookId ?? null }
-			}
-		}
+		default:
+			throw notLiveRefusal(op)
 	}
 }
 
@@ -435,8 +473,7 @@ async function writePayload(db: Db, row: Row, payload: LibraryChangePayload): Pr
 
 /**
  * Take one applied or accepted library change back: a made character is
- * hidden (`is_deleted`), an updated one gets its fields back, an attached
- * book comes off the session (only while it is still the one attached), a
+ * hidden (`is_deleted`), an updated one gets its fields back, a
  * made lorebook is deleted (its export, `payload.document`, was kept for
  * Forward — see `exportLibraryBooksAnchoredTo`). Writes what it learned onto
  * the row's payload. Hand it the `tx` inside a transaction.
@@ -457,17 +494,6 @@ export async function undoLibraryChange(db: Db, row: Row): Promise<void> {
 			if (id != null && p.before?.fields) await writeCardFields(db, id, p.before.fields)
 			return
 		}
-		case "attach-lorebook": {
-			const { lorebookId, sessionId } = p.result ?? {}
-			if (lorebookId == null || sessionId == null) return
-			const [s] = await db
-				.select({ lorebookId: schema.sessions.lorebookId })
-				.from(schema.sessions)
-				.where(eq(schema.sessions.id, sessionId))
-				.limit(1)
-			if (s?.lorebookId === lorebookId) await setSessionBook(db, sessionId, p.before?.lorebookId ?? null)
-			return
-		}
 		case "create-lorebook": {
 			const id = p.result?.lorebookId
 			if (id == null) return
@@ -486,7 +512,7 @@ export async function undoLibraryChange(db: Db, row: Row): Promise<void> {
 
 /**
  * Put one library change back (Forward): a hidden character shown again, the
- * changes written again, the book attached again, the book re-imported from
+ * changes written again, the book re-imported from
  * its export as `by` (a new id, written back to `result.lorebookId`).
  * `remap`: books re-imported earlier in the same Forward, old id → new.
  * Call it OUTSIDE a transaction — the book's importer takes the module handle.
@@ -507,20 +533,12 @@ export async function redoLibraryChange(
 		case "update-character": {
 			const id = p.result?.characterId
 			if (id == null) return
-			const name = await writeCardFields(db, id, changesOf(p.input.changes))
+			const name = await writeCardFields(
+				db,
+				id,
+				storedChangesOf(p.input.changes)
+			)
 			await afterCardWrite(id, name)
-			return
-		}
-		case "attach-lorebook": {
-			const { lorebookId, sessionId } = p.result ?? {}
-			if (lorebookId == null || sessionId == null) return
-			const now = remap.get(lorebookId) ?? lorebookId
-			const [b] = await db
-				.select({ id: schema.lorebooks.id })
-				.from(schema.lorebooks)
-				.where(eq(schema.lorebooks.id, now))
-				.limit(1)
-			if (b) await setSessionBook(db, sessionId, now)
 			return
 		}
 		case "create-lorebook": {

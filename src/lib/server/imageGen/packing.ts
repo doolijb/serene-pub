@@ -51,6 +51,8 @@ export interface PlannedImageCall {
 	ignored?: string[]
 	/** Filled in after the call: how many pictures came back. */
 	returned?: number
+	/** Filled in after the call: why it drew nothing, when it threw. */
+	error?: string
 }
 
 /** The plan, as written to the receipt BEFORE the first adapter call. */
@@ -68,6 +70,19 @@ export interface ImageCallPlan {
 	missing?: Array<{ key: string; wanted: number; got: number }>
 	/** Pictures kept with no key (surplus outside any key's call). */
 	unkeyed?: number
+	/**
+	 * The workflow a template-payload pair drew with, and how it was found:
+	 * named on the loadout's slot, or the starter chosen for the sampling
+	 * preset when the slot was empty (`STARTER_FOR_SAMPLING`) — the receipt's
+	 * record of an automatic choice.
+	 */
+	workflow?: { id: number; name: string; chosen: "slot" | "for-sampling" }
+	/**
+	 * The series stopped early: a later call threw after earlier ones had
+	 * drawn. What was drawn is kept and filed; the rest is in `missing`, and
+	 * this says why — the sentence a sheet shows beside the kept pictures.
+	 */
+	stoppedOn?: { call: number; error: string }
 }
 
 /**

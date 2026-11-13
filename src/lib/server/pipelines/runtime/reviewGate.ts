@@ -76,6 +76,36 @@ export interface PendingReviewView {
 	requestedAt: number
 	/** One sentence on what this card is asking about (`whatIsReviewed`). */
 	whatIsReviewed: string
+	/**
+	 * 🚧 A picture step's prompt rows, as templates over the reviewed fields
+	 * (`sentAs`, owner ruling 2026-11-08): the card shows the prompt AS IT
+	 * WILL BE SENT — the person's part editable, the row's fixed words
+	 * around it read-only — instead of a bare likeness line that hid the
+	 * ", portrait, head and shoulders…" tail. Keyed by the field each wraps.
+	 */
+	sentAs?: Record<string, string>
+}
+
+/**
+ * The templates a picture step's reviewed fields are sent through, by field —
+ * `generate-image`'s `prompts` slot, `{ positive, negative }` over
+ * `{{prompt}}` / `{{negative}}`. Undefined for any other step, or a step with
+ * no row (the field is sent as typed).
+ */
+export function sentAsOf(e: {
+	definitionId: string
+	payload: unknown
+}): Record<string, string> | undefined {
+	if (!e.definitionId.startsWith("core:oracle/generate-image")) return undefined
+	const rows = (e.payload as { prompts?: unknown } | null | undefined)?.prompts as
+		| { positive?: unknown; negative?: unknown }
+		| null
+		| undefined
+	if (!rows || typeof rows !== "object") return undefined
+	const out: Record<string, string> = {}
+	if (typeof rows.positive === "string" && rows.positive.trim()) out.prompt = rows.positive
+	if (typeof rows.negative === "string" && rows.negative.trim()) out.negative = rows.negative
+	return Object.keys(out).length ? out : undefined
 }
 
 /**
@@ -148,7 +178,8 @@ const viewOf = (e: PendingReview): PendingReviewView => ({
 	schema: e.schema,
 	values: e.values,
 	requestedAt: e.requestedAt,
-	whatIsReviewed: whatIsReviewed(e)
+	whatIsReviewed: whatIsReviewed(e),
+	...(sentAsOf(e) ? { sentAs: sentAsOf(e) } : {})
 })
 
 /** Everything waiting on this person, oldest first. */

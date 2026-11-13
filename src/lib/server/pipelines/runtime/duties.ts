@@ -17,6 +17,16 @@ const DUTY_MODE_KEYS: Readonly<Record<string, Readonly<Record<string, string>>>>
 	[C.replyDuties.id]: { lore: "lore-retrieval", scene: "scene-reading", changes: "reply-changes" }
 }
 
+/**
+ * 🚧 Duty keys a contract retired (owner 2026-11-04, §0-B: *Summarize the story*):
+ * a stored override that still carries one neither names a mode nor keeps
+ * the routine's `any` true — otherwise a session with every live duty off
+ * would still pay for the call.
+ */
+const RETIRED_DUTY_KEYS: Readonly<Record<string, ReadonlySet<string>>> = {
+	[C.sweepDuties.id]: new Set(["summary"])
+}
+
 const kebab = (key: string): string => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
 
 /** 🚧 The duties contracts core binds — their ids, from the contracts (never spelled). */
@@ -83,7 +93,9 @@ export function dutyModes(
 	const cedes = facts.replyChanges === "full" ? new Set(CEDES_TO_REPLY_CHANGES[contract] ?? []) : new Set<string>()
 	const modes: Record<string, "full" | "review" | "off"> = {}
 	const ceded: Record<string, string> = {}
+	const retired = RETIRED_DUTY_KEYS[contract]
 	for (const [key, value] of Object.entries(p)) {
+		if (retired?.has(key)) continue
 		const named = names[key] ?? kebab(key)
 		if (value === true && cedes.has(key)) {
 			modes[named] = "off"

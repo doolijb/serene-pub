@@ -43,6 +43,7 @@ import {
 	type ImageGenResult
 } from "./BaseImageAdapter"
 import type { ImageEditRequest } from "$lib/server/adapters/actions"
+import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import type { SettingsSchema } from "@serene-pub/sdk"
 import type { MediaRef } from "@serene-pub/sdk"
 import type {
@@ -74,6 +75,15 @@ import {
 	type ObjectInfoSummary
 } from "$lib/server/imageGen/comfy/objectInfo"
 
+
+/** What each ComfyUI stage is called where a person reads it. */
+const COMFY_STAGE_WORDS = {
+	loading: "Loading the model",
+	conditioning: "Reading the prompt",
+	sampling: "Drawing",
+	decoding: "Finishing the picture",
+	saving: "Saving"
+} as const
 export const COMFY_DEFAULT_URL = "http://localhost:8188"
 
 /** How often the history is asked when the socket cannot be used. */
@@ -173,7 +183,10 @@ function packKeyedGraph(
 /** The connection's auth header, when it has a key. */
 function authHeaders(connection: { extraJson?: unknown }): Record<string, string> {
 	const extra = (connection.extraJson ?? {}) as Record<string, any>
-	const key = typeof extra.apiKey === "string" ? extra.apiKey.trim() : ""
+	// A stored row carries the key encrypted at rest; a draft carries it plain.
+	// Reading it here, like every other adapter does, means no caller can hand
+	// this one an envelope and get a request with no auth header.
+	const key = (decryptApiKeyField(extra.apiKey) ?? "").trim()
 	if (!key) return {}
 	const name =
 		typeof extra.profile?.authHeader === "string" && extra.profile.authHeader.trim()
@@ -627,18 +640,21 @@ class ComfyAdapter extends BaseImageAdapter {
 							return
 						}
 						const cls = prompt[String(data.node)]?.class_type ?? ""
+						const stage = /Loader/.test(cls)
+							? "loading"
+							: /VAEDecode/.test(cls)
+								? "decoding"
+								: /Encode/.test(cls)
+									? "conditioning"
+									: /Save/.test(cls)
+										? "saving"
+										: "sampling"
+						// The message reaches people (the run card, the gallery): the
+						// stage in words, never the node's class name.
 						onProgress?.({
-							stage: /Loader/.test(cls)
-								? "loading"
-								: /VAEDecode/.test(cls)
-									? "decoding"
-									: /Encode/.test(cls)
-										? "conditioning"
-										: /Save/.test(cls)
-											? "saving"
-											: "sampling",
+							stage,
 							percent: lastPercent,
-							message: cls
+							message: COMFY_STAGE_WORDS[stage]
 						})
 						return
 					}

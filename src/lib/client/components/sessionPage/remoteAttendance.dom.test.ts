@@ -208,7 +208,7 @@ describe("core's remote Who's here", () => {
 			expect(faces[0]!.tagName.toLowerCase()).toBe("img")
 			expect(faces[0]!.getAttribute("src")).toBe(FACE)
 			expect(faces[1]!.hasAttribute("data-blank")).toBe(true)
-			expect(view.query(part("empty"))).toBeNull()
+			expect(view.query(part("empty")) === null).toBe(true)
 			expect(view.errors).toEqual([])
 		}
 	)
@@ -257,24 +257,25 @@ describe("core's remote Who's here", () => {
 		expect(rows(view, "here")).toHaveLength(2)
 	})
 
-	test("alone: Nobody else is here.", { timeout: 120_000 }, async () => {
+	test("alone: no sentence (R10) — just the viewer's own row", { timeout: 120_000 }, async () => {
 		const view = await mount({
 			people: [MIRA, { ...MARCO, here: false, lastSeenAt: null }]
 		})
 		expect(rows(view, "here").map((r) => r.name)).toEqual(["Mira"])
-		expect(text(view.query(part("empty")))).toBe("Nobody else is here.")
+		expect(view.query(part("empty")) === null).toBe(true)
+		expect(text(view.query(part("root")))?.includes("Nobody else is here")).toBe(false)
 		expect(rows(view, "away")[0]!.away).toBe("Not seen lately")
-		// Before the first push: nobody at all, and the same sentence.
+		// Before the first push: nobody at all, and still no sentence.
 		await view.push("attendance", { v: 1, people: [] })
 		await view.settle()
 		expect(rows(view, "here")).toEqual([])
-		expect(text(view.query(part("empty")))).toBe("Nobody else is here.")
+		expect(view.query(part("empty")) === null).toBe(true)
 	})
 })
 
 describe("the page mounts Who's here remote", () => {
 	test("core's own module at /core-ui/attendance, granted the cast, reading its declaration's sections", () => {
-		const widget = coreDefaultWidgets().find((p) => p.id === "attendance")!
+		const widget = coreDefaultWidgets(true).find((p) => p.id === "attendance")!
 		expect(widget.surface).toEqual({
 			kind: "remote",
 			owner: "core",

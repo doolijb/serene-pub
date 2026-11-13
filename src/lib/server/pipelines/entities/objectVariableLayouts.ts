@@ -41,6 +41,12 @@ import {
 	type VarDecl,
 	type VariableDecl
 } from "@serene-pub/sdk"
+import {
+	formatVariableLayoutReference,
+	parseVariableLayoutReference,
+	type VariableLayoutReferenceParts
+} from "@serene-pub/sdk"
+import { SHIPPED_SPEECH_VARIABLE_LAYOUTS } from "@serene-pub/core-catalog"
 import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
@@ -205,4 +211,75 @@ export function coreObjectLayouts(
 				}
 			]
 		})
+}
+
+// ── 🚧 layout references (PLAN variable-layouts 2026-11-10) ────────────────
+// A **layout reference** is `<owner>/<slug>@<major>`: how a context template
+// and a preset name one variable layout, unique within its variable. Pure,
+// so the data upgrade (0151) and the boot pass share one mapping.
+
+export type LayoutReferenceParts = VariableLayoutReferenceParts
+
+/** `{ owner, slug, major }` as `<owner>/<slug>@<major>` — the SDK's one spelling; throws outside its grammar. */
+export const formatLayoutReference = formatVariableLayoutReference
+
+/** The parts of a layout reference, or null when it is malformed (the SDK's grammar). */
+export const parseLayoutReference = parseVariableLayoutReference
+
+/**
+ * A name as a slug: lower-case, runs of anything outside `[a-z0-9]` → `-`,
+ * trimmed. Empty when the name has no letters or digits; a non-empty result
+ * always satisfies the SDK's `VARIABLE_LAYOUT_SLUG`.
+ */
+export const layoutSlugOf = (name: string): string =>
+	name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+
+/** A variable id's major (`core:var/characters@1` → 1); null when it carries none. */
+export function variableMajorOf(variableId: string): number | null {
+	const m = /@(\d+)$/.exec(variableId)
+	return m ? Number(m[1]) : null
+}
+
+/**
+ * The slug core fixed for each shipped name (PLAN Data item 2): the name's own
+ * kebab form, except the two titled rows, whose fixed slugs drop `block`
+ * (`titled-json`, `titled`).
+ */
+const CORE_SLUG_OF_NAME: Readonly<Record<string, string>> = {
+	"Titled JSON block": "titled-json",
+	"Titled block": "titled"
+}
+
+let coreReferences: Map<string, string> | undefined
+
+/**
+ * The layout reference of one row core ships, by seed key; null for a seed key
+ * core ships nothing under (a person's row, a plugin's). Names come from the
+ * **code** (`SHIPPED_VARIABLE_TEMPLATES`, the speech catalogue,
+ * `coreObjectLayouts`) — never from a stored name, which can carry a
+ * `(Built-in)` suffix. Pure: no schema, no database.
+ */
+export function coreLayoutReferenceFor(seedKey: string | null | undefined): string | null {
+	if (!seedKey) return null
+	if (!coreReferences) {
+		const refs = new Map<string, string>()
+		const add = (variableId: string, seedKey: string, slug: string) => {
+			const major = variableMajorOf(variableId)
+			if (major != null)
+				refs.set(seedKey, formatLayoutReference({ owner: "core", slug, major }))
+		}
+		for (const t of SHIPPED_VARIABLE_TEMPLATES)
+			add(t.variableId, seedKeyFor(t), CORE_SLUG_OF_NAME[t.name] ?? layoutSlugOf(t.name))
+		// The automatic rows for core's object variables: `core/json@<major>`.
+		for (const t of coreObjectLayouts()) add(t.variableId, t.seedKey, "json")
+		// The catalogue's rows take their variable's `content` seed key and win
+		// over the automatic row for the same variable, as seeding has it.
+		for (const t of SHIPPED_SPEECH_VARIABLE_LAYOUTS)
+			add(t.variableId, t.seedKey, layoutSlugOf(t.name))
+		coreReferences = refs
+	}
+	return coreReferences.get(seedKey) ?? null
 }

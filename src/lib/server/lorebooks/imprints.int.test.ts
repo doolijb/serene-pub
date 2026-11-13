@@ -18,6 +18,12 @@
  *  6. a delete takes back what a swipe does, and a kept note outlives it;
  *  7. a retake takes back what the turn's runs wrote, wherever anchored;
  *  8. a person's press writes as the person: nothing is imprinted.
+ *
+ * (sense-b4) Pins the direct-writer rule: the kept/revert rule is tested through
+ * sessions whose scenes do not end by themselves (their pipeline writes land in
+ * the real book); for a session whose scenes do, the same run's new entry and
+ * link are in its own book and carry an own-book imprint. The predicate is
+ * switched per session below.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -32,6 +38,12 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 let testDb: TestDb
 let dataDir: string
+
+const scenesEnd = vi.hoisted(() => new Set<number>())
+vi.mock("$lib/server/lorebooks/ownBook", async (importOriginal) => ({
+	...(await importOriginal<typeof import("$lib/server/lorebooks/ownBook")>()),
+	scenesEndByThemselves: async (_db: unknown, sessionId: number) => scenesEnd.has(sessionId)
+}))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -56,7 +68,7 @@ const CREATE = { key: "file", definitionId: "core:outlet/create-lore-entry" } as
 let n = 0
 
 /** A user, their book, a session reading it at `mode`, and a way to post messages. */
-async function world(opts: { mode?: "full" | "review" } = {}) {
+async function world(opts: { mode?: "full" | "review"; ends?: boolean } = {}) {
 	const suffix = `${++n}`
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `imprints-${suffix}`)
@@ -66,6 +78,7 @@ async function world(opts: { mode?: "full" | "review" } = {}) {
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: false, name: `Run ${suffix}`, lorebookId: book!.id })
 		.returning()
+	if (opts.ends) scenesEnd.add(session!.id)
 	const message = async () => {
 		const [legacy] = await testDb
 			.insert(schema.sessionMessages)
@@ -105,9 +118,48 @@ const imprints = async (sessionId: number) => {
 	const { imprintsOf } = await import("./imprints")
 	return imprintsOf(db(), sessionId)
 }
+/**
+ * A run's write onto a real book's entry, as the write-through made it: the
+ * update and the lore imprints it files. A session's change to an attached
+ * lorebook's entry is held now (`host.heldEntryChange.int.test.ts`), so the
+ * imprint rule — retract, keep, splice, restore, settle — is tested on the
+ * writer itself, through `imprintChanges`.
+ */
+const wroteOnBook = async (
+	w: { session: { id: number } },
+	messageId: number,
+	runId: string,
+	entryId: number,
+	patch: { content?: string; category?: string }
+) => {
+	const { imprintChanges, entryFieldAddress } = await import("./imprints")
+	const was = (await entry(entryId))!
+	const [wrote] = await testDb
+		.update(schema.lorebookEntries)
+		.set({
+			...(patch.content !== undefined ? { content: patch.content } : {}),
+			...(patch.category !== undefined
+				? { fields: { ...(was.fields as Record<string, unknown>), category: patch.category } }
+				: {}),
+			updatedAt: new Date()
+		})
+		.where(eq(schema.lorebookEntries.id, entryId))
+		.returning()
+	await imprintChanges(
+		db(),
+		{ sessionId: w.session.id, messageId, runId },
+		{ lorebookId: was.lorebookId, subject: "entry", subjectId: entryId },
+		was as Record<string, unknown>,
+		wrote as Record<string, unknown>,
+		[
+			...(patch.content !== undefined ? ["content"] : []),
+			...(patch.category !== undefined ? [entryFieldAddress("category")] : [])
+		]
+	)
+}
 const swipe = async (messageId: number) => {
 	const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-	return retractStateAnchoredTo(db(), messageId)
+	return retractStateAnchoredTo(db(), messageId, "replaced")
 }
 
 describe("a run's write on a real book", () => {
@@ -115,7 +167,7 @@ describe("a run's write on a real book", () => {
 		const w = await world()
 		const vault = await place(w.book.id, "The Vault", "Rooms")
 		const m = await w.message()
-		await (await w.host("run-a")).commit!({ entry: vault.id, content: "Sealed.", fields: { category: "Vaults" } }, UPDATE)
+		await wroteOnBook(w, m.id, "run-a", vault.id, { content: "Sealed.", category: "Vaults" })
 		expect(await categoryOf(vault.id)).toBe("Vaults")
 		const filed = await imprints(w.session.id)
 		expect(filed.map((i) => [i.field, i.messageId, i.runId, i.status]).sort()).toEqual([
@@ -140,7 +192,7 @@ describe("a run's write on a real book", () => {
 		const w = await world()
 		const vault = await place(w.book.id, "The Vault", "Rooms")
 		const m = await w.message()
-		await (await w.host("run-b")).commit!({ entry: vault.id, content: "Sealed.", fields: { category: "Vaults" } }, UPDATE)
+		await wroteOnBook(w, m.id, "run-b", vault.id, { content: "Sealed.", category: "Vaults" })
 		// Someone retitles the category after the reply.
 		await testDb
 			.update(schema.lorebookEntries)
@@ -179,7 +231,7 @@ describe("a run's write on a real book", () => {
 
 		// Keep: the field stays as it is now, and the note goes.
 		const m2 = await w.message()
-		await (await w.host("run-c")).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		await wroteOnBook(w, m2.id, "run-c", vault.id, { category: "Vaults" })
 		await testDb.update(schema.lorebookEntries).set({ fields: { category: "Hoard" } }).where(eq(schema.lorebookEntries.id, vault.id))
 		await swipe(m2.id)
 		const [keptAgain] = await imprints(w.session.id)
@@ -191,7 +243,7 @@ describe("a run's write on a real book", () => {
 		).rejects.toThrow(/no longer waiting/)
 	})
 
-	test("a room and its way out a run filed go with its message and come back on restore; one someone linked to since stays", async () => {
+	test("(scenes do not end by themselves) a room and its way out a run filed go with its message and come back on restore; one someone linked to since stays", async () => {
 		const w = await world()
 		const hall = await place(w.book.id, "The Hall", "Rooms")
 		const m = await w.message()
@@ -231,6 +283,28 @@ describe("a run's write on a real book", () => {
 	})
 })
 
+describe("a run's write for a session whose scenes end by themselves", () => {
+	test("its new room and link are in the own book, with own-book imprints, not real-book ones", async () => {
+		const w = await world({ ends: true })
+		const hall = await place(w.book.id, "The Hall", "Rooms")
+		await w.message()
+		const { ownBookFor } = await import("./ownBook")
+		const own = await ownBookFor(db(), w.session.id)
+		const out: any = await (await w.host("run-own")).commit!(
+			{ name: "The Shaft", content: "Wet rock.", params: { entryType: LOCATION_TYPE_ID }, links: [{ to: hall.id, linkType: "leads up to" }] },
+			CREATE
+		)
+		expect(out).toMatchObject({ route: "own-book", lorebookId: own.id })
+		expect((await entry(out.id))!.lorebookId).toBe(own.id)
+		const R = schema.narrativeRelationships
+		expect(await testDb.select().from(R).where(eq(R.lorebookId, w.book.id))).toEqual([])
+		expect((await testDb.select().from(R).where(eq(R.lorebookId, own.id)))[0]).toMatchObject({ fromEntryId: out.id, toEntryId: hall.id })
+		const filed = await imprints(w.session.id)
+		expect(filed.length).toBeGreaterThan(0)
+		expect(filed.every((i) => i.lorebookId === own.id)).toBe(true)
+	})
+})
+
 describe("the session's own notes", () => {
 	test("always revert, an edit since or not", async () => {
 		const w = await world({ mode: "review" })
@@ -259,9 +333,9 @@ describe("two messages wrote one field", () => {
 		const w = await world()
 		const vault = await place(w.book.id, "The Vault", "Rooms")
 		const m1 = await w.message()
-		await (await w.host("run-h")).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		await wroteOnBook(w, m1.id, "run-h", vault.id, { category: "Vaults" })
 		const m2 = await w.message()
-		await (await w.host("run-i")).commit!({ entry: vault.id, fields: { category: "Treasury" } }, UPDATE)
+		await wroteOnBook(w, m2.id, "run-i", vault.id, { category: "Treasury" })
 
 		await swipe(m1.id)
 		expect(await categoryOf(vault.id)).toBe("Treasury")
@@ -277,14 +351,14 @@ describe("a delete", () => {
 		const w = await world()
 		const vault = await place(w.book.id, "The Vault", "Rooms")
 		const m1 = await w.message()
-		await (await w.host("run-j")).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		await wroteOnBook(w, m1.id, "run-j", vault.id, { category: "Vaults" })
 		const { deleteLegacy } = await import("$lib/server/messages/store")
 		await testDb.transaction(async (tx) => deleteLegacy(tx as unknown as Db, m1.id))
 		expect(await categoryOf(vault.id)).toBe("Rooms")
 		expect(await imprints(w.session.id)).toEqual([])
 
 		const m2 = await w.message()
-		await (await w.host("run-k")).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		await wroteOnBook(w, m2.id, "run-k", vault.id, { category: "Vaults" })
 		await testDb.update(schema.lorebookEntries).set({ fields: { category: "Hoard" } }).where(eq(schema.lorebookEntries.id, vault.id))
 		await testDb.transaction(async (tx) => deleteLegacy(tx as unknown as Db, m2.id))
 		expect(await categoryOf(vault.id)).toBe("Hoard")
@@ -296,8 +370,8 @@ describe("a retake", () => {
 	test("takes back what the turn's runs wrote on the lorebook, wherever it is anchored", async () => {
 		const w = await world()
 		const vault = await place(w.book.id, "The Vault", "Rooms")
-		await w.message()
-		await (await w.host("run-m")).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		const first = await w.message()
+		await wroteOnBook(w, first.id, "run-m", vault.id, { category: "Vaults" })
 		const later = await w.message()
 		const { takeRunWritesElsewhere } = await import("$lib/server/sessions/rewind")
 		await testDb.transaction(async (tx) =>
@@ -315,13 +389,18 @@ describe("a retake", () => {
 describe("a person's press", () => {
 	test("writes as the person: nothing is imprinted, and a swipe leaves it", async () => {
 		const w = await world()
-		const vault = await place(w.book.id, "The Vault", "Rooms")
 		const m = await w.message()
 		const { withRunFamily } = await import("$lib/server/utils/llmQueue")
 		const host = await w.host("run-l")
+		// A session's change to an attached entry is held and imprints nothing; a
+		// person's filing is the write that lands in the real book.
+		const vault = await place(w.book.id, "The Vault", "Rooms")
 		await withRunFamily("action", () => host.commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE))
+		const filed: any = await withRunFamily("action", () =>
+			host.commit!({ name: "The Cellar", content: "Cold.", params: { entryType: LOCATION_TYPE_ID } }, CREATE)
+		)
 		expect(await imprints(w.session.id)).toEqual([])
 		await swipe(m.id)
-		expect(await categoryOf(vault.id)).toBe("Vaults")
+		expect((await entry(filed.id))?.title).toBe("The Cellar")
 	})
 })

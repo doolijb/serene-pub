@@ -20,17 +20,27 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { historyValues, insertSessionMessageRow } from "$lib/server/pipelines/testing/fixtures"
+import {
+	historyValues,
+	insertSessionMessageRow
+} from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { FakeTextAdapter } from "$lib/server/connectionAdapters/fakeTextAdapter"
 import type { CompiledPrompt } from "$lib/server/connectionAdapters/types"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 120_000 })
 
-const NO_PAYLOAD: CompiledPrompt = { prompt: undefined, messages: undefined, meta: {} as any }
+const NO_PAYLOAD: CompiledPrompt = {
+	prompt: undefined,
+	messages: undefined,
+	meta: {} as any
+}
 
 /** Every model step answers the same: a drafted, combined and named summary. */
 class FakeStepAdapter implements FakeTextAdapter {
+	/** Model calls so far; from call N on, throw (null: never). */
+	static calls = 0
+	static failFromCall: number | null = null
 	stops: any
 	withStops(s: any) {
 		this.stops = s
@@ -39,11 +49,19 @@ class FakeStepAdapter implements FakeTextAdapter {
 	abort() {}
 	async preflight() {}
 	async generateText() {
+		FakeStepAdapter.calls++
+		if (
+			FakeStepAdapter.failFromCall != null &&
+			FakeStepAdapter.calls >= FakeStepAdapter.failFromCall
+		)
+			throw new Error("the naming step failed")
 		return {
 			compiledPrompt: NO_PAYLOAD,
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
-				onContent("<content>They talked by the gate until dark.</content>")
+				onContent(
+					"<content>They talked by the gate until dark.</content>"
+				)
 			}
 		}
 	}
@@ -73,10 +91,14 @@ const CHAT_SPEC = "core:spec/story-summarize-scene"
 const LAIR_SPEC = "core:spec/lair-summarize-scene"
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-scenes-review-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-scenes-review-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	testDb = (await import("$lib/server/db")).db as unknown as TestDb
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(testDb as any)
 
 	// Every step resolves its model through the instance default, as the
@@ -89,9 +111,17 @@ beforeAll(async () => {
 		.insert(schema.samplingConfigs)
 		.values({ name: "Fake sampling", isImmutable: false })
 		.returning()
-	const { ensureConnectionModel } = await import("$lib/server/connections/models")
-	const model = await ensureConnectionModel(testDb as any, connection.id, "fake-7b")
-	const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const model = await ensureConnectionModel(
+		testDb as any,
+		connection.id,
+		"fake-7b"
+	)
+	const { setCapabilityDefault } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
 	await setCapabilityDefault(testDb as any, "text->text", {
 		connectionId: connection.id,
 		connectionModelId: model!.id,
@@ -117,13 +147,24 @@ async function makeScene(genreId: string) {
 		.returning()
 	const [history] = await testDb
 		.insert(schema.lorebookEntries)
-		.values(historyValues([{ lorebookId: lorebook.id, year: 5, month: 1, day: 2 }]))
+		.values(
+			historyValues([
+				{ lorebookId: lorebook.id, year: 5, month: 1, day: 2 }
+			])
+		)
 		.returning()
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: user.id, isGroup: false, lorebookId: lorebook.id, genreId } as any)
+		.values({
+			userId: user.id,
+			isGroup: false,
+			lorebookId: lorebook.id,
+			genreId
+		} as any)
 		.returning()
-	const m1 = await insertSessionMessageRow(testDb, session.id, { content: "Meet me at the gate." })
+	const m1 = await insertSessionMessageRow(testDb, session.id, {
+		content: "Meet me at the gate."
+	})
 	const m2 = await insertSessionMessageRow(testDb, session.id, {
 		role: "assistant",
 		content: "I waited there until dark."
@@ -145,13 +186,20 @@ async function makeScene(genreId: string) {
 }
 
 async function sceneRow(id: number) {
-	const [row] = await testDb.select().from(schema.scenes).where(eq(schema.scenes.id, id))
+	const [row] = await testDb
+		.select()
+		.from(schema.scenes)
+		.where(eq(schema.scenes.id, id))
 	return row!
 }
 
 async function runProcess(userId: number, sceneId: number) {
 	const { sceneProcessHandler } = await import("./scenes")
-	return (await sceneProcessHandler.handler(fakeSocket(userId), { sceneId }, quiet)) as any
+	return (await sceneProcessHandler.handler(
+		fakeSocket(userId),
+		{ sceneId },
+		quiet
+	)) as any
 }
 
 /** Settle the background restore a discard kicks off. */
@@ -159,9 +207,15 @@ const settle = () => new Promise((r) => setTimeout(r, 100))
 
 describe("G10: a genre's declared summarize-scene spec runs when it is published", () => {
 	test("the catalogue publishes both genres' specs, and the genres declare them", async () => {
-		const { publishedVersionOf } = await import("$lib/server/pipelines/boot/bootstrap")
-		expect(await publishedVersionOf(testDb as any, CHAT_SPEC)).not.toBeNull()
-		expect(await publishedVersionOf(testDb as any, LAIR_SPEC)).not.toBeNull()
+		const { publishedVersionOf } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
+		expect(
+			await publishedVersionOf(testDb as any, CHAT_SPEC)
+		).not.toBeNull()
+		expect(
+			await publishedVersionOf(testDb as any, LAIR_SPEC)
+		).not.toBeNull()
 		const { getGenre } = await import("@serene-pub/sdk")
 		expect((getGenre(CHAT_GENRE) as any)?.summarize?.scene).toBe(CHAT_SPEC)
 		expect((getGenre(LAIR_GENRE) as any)?.summarize?.scene).toBe(LAIR_SPEC)
@@ -187,14 +241,18 @@ describe("G10: a genre's declared summarize-scene spec runs when it is published
 				.from(schema.pipelineRuns)
 				.where(eq(schema.pipelineRuns.sessionId, w.session.id))
 			expect(runs.map((r) => r.spec)).toContain(specId)
-			expect(runs.map((r) => r.spec)).not.toContain("core:spec/summarize-scene")
+			expect(runs.map((r) => r.spec)).not.toContain(
+				"core:spec/summarize-scene"
+			)
 		})
 	}
 })
 
 describe("G8: the summary status follows the review", () => {
 	test("a run leaves `review`, never `done`; Apply makes it `done`", async () => {
-		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const { activityStore } = await import(
+			"$lib/server/utils/activityStore"
+		)
 		const { sceneUpdateHandler } = await import("./scenes")
 		const w = await makeScene(CHAT_GENRE)
 		const res = await runProcess(w.user.id, w.scene.id)
@@ -204,7 +262,10 @@ describe("G8: the summary status follows the review", () => {
 
 		const saved: any = await sceneUpdateHandler.handler(
 			fakeSocket(w.user.id),
-			{ scene: { id: w.scene.id, summary: res.content }, activityId: res.activityId },
+			{
+				scene: { id: w.scene.id, summary: res.content },
+				activityId: res.activityId
+			},
 			quiet
 		)
 		expect(saved.scene.summaryStatus).toBe("done")
@@ -215,7 +276,9 @@ describe("G8: the summary status follows the review", () => {
 	})
 
 	test("a discarded review puts back what the scene was: `none`, and `done` over an applied summary", async () => {
-		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const { activityStore } = await import(
+			"$lib/server/utils/activityStore"
+		)
 		const w = await makeScene(CHAT_GENRE)
 		const first = await runProcess(w.user.id, w.scene.id)
 		activityStore.remove(first.activityId, "dismissed")
@@ -237,7 +300,9 @@ describe("G8: the summary status follows the review", () => {
 	})
 
 	test("a regenerate from the review, then a discard, restores the status from before the FIRST run", async () => {
-		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const { activityStore } = await import(
+			"$lib/server/utils/activityStore"
+		)
 		const w = await makeScene(CHAT_GENRE)
 		await runProcess(w.user.id, w.scene.id)
 		// The review window's regenerate: a second run over a scene in `review`.
@@ -252,7 +317,9 @@ describe("G8: the summary status follows the review", () => {
 	})
 
 	test("a discard never overwrites a status that moved while the review waited", async () => {
-		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const { activityStore } = await import(
+			"$lib/server/utils/activityStore"
+		)
 		const w = await makeScene(CHAT_GENRE)
 		await testDb
 			.update(schema.scenes)
@@ -270,7 +337,9 @@ describe("G8: the summary status follows the review", () => {
 	})
 
 	test("a cancelled run puts back what the scene was, as before", async () => {
-		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const { activityStore } = await import(
+			"$lib/server/utils/activityStore"
+		)
 		const w = await makeScene(CHAT_GENRE)
 		await testDb
 			.update(schema.scenes)
@@ -282,7 +351,10 @@ describe("G8: the summary status follows the review", () => {
 		for (let i = 0; i < 200 && !id; i++) {
 			id = activityStore
 				.getFor(w.user.id, false)
-				.find((a) => a.kind === "scene_summarize" && a.sceneId === w.scene.id)?.id
+				.find(
+					(a) =>
+						a.kind === "scene_summarize" && a.sceneId === w.scene.id
+				)?.id
 			if (!id) await new Promise((r) => setTimeout(r, 5))
 		}
 		expect(id).toBeTruthy()
@@ -293,17 +365,27 @@ describe("G8: the summary status follows the review", () => {
 	})
 
 	test("at boot, a scene left `running` or `review` with no run behind it is settled to `none`; a live run's is kept", async () => {
-		const { reconcileDerelictSceneSummaries } = await import("$lib/server/scenes/summaryStatus")
+		const { reconcileDerelictSceneSummaries } = await import(
+			"$lib/server/scenes/summaryStatus"
+		)
 		const a = await makeScene(CHAT_GENRE)
 		const b = await makeScene(CHAT_GENRE)
 		const c = await makeScene(CHAT_GENRE)
-		await testDb.update(schema.scenes).set({ summaryStatus: "running" }).where(eq(schema.scenes.id, a.scene.id))
+		await testDb
+			.update(schema.scenes)
+			.set({ summaryStatus: "running" })
+			.where(eq(schema.scenes.id, a.scene.id))
 		await testDb
 			.update(schema.scenes)
 			.set({ summaryStatus: "review", summary: "Text kept." })
 			.where(eq(schema.scenes.id, b.scene.id))
-		await testDb.update(schema.scenes).set({ summaryStatus: "running" }).where(eq(schema.scenes.id, c.scene.id))
-		const moved = await reconcileDerelictSceneSummaries(testDb as any, [c.scene.id])
+		await testDb
+			.update(schema.scenes)
+			.set({ summaryStatus: "running" })
+			.where(eq(schema.scenes.id, c.scene.id))
+		const moved = await reconcileDerelictSceneSummaries(testDb as any, [
+			c.scene.id
+		])
 		expect(moved).toBeGreaterThanOrEqual(2)
 		expect((await sceneRow(a.scene.id)).summaryStatus).toBe("none")
 		const rb = await sceneRow(b.scene.id)
@@ -316,5 +398,76 @@ describe("G8: the summary status follows the review", () => {
 			.from(schema.scenes)
 			.where(and(eq(schema.scenes.summaryStatus, "review")))
 		expect(left).toEqual([])
+	})
+})
+
+describe("the review's draft name is the shown name", () => {
+	test("after an earlier scene is deleted, the draft is the shown name and Apply keeps the scene automatic", async () => {
+		const { activityStore } = await import(
+			"$lib/server/utils/activityStore"
+		)
+		const { sceneUpdateHandler, sceneDeleteHandler, sceneListHandler } =
+			await import("./scenes")
+		const w = await makeScene(CHAT_GENRE)
+		const m3 = await insertSessionMessageRow(testDb, w.session.id, {
+			content: "Later, at the dock."
+		})
+		const m4 = await insertSessionMessageRow(testDb, w.session.id, {
+			role: "assistant",
+			content: "The boats were gone."
+		})
+		const [second] = await testDb
+			.insert(schema.scenes)
+			.values({
+				lorebookId: w.lorebook.id,
+				sessionId: w.session.id,
+				historyEntryId: w.scene.historyEntryId,
+				name: "Scene 2",
+				nameIsDefault: true,
+				channel: "main",
+				openedAtMessageId: m3.id,
+				closedAtMessageId: m4.id,
+				selectedMessageIds: [m3.id, m4.id]
+			} as any)
+			.returning()
+		await sceneDeleteHandler.handler(
+			fakeSocket(w.user.id),
+			{ id: w.scene.id },
+			quiet
+		)
+
+		FakeStepAdapter.calls = 0
+		FakeStepAdapter.failFromCall = 3
+		let res: any
+		try {
+			res = await runProcess(w.user.id, second.id)
+		} finally {
+			FakeStepAdapter.failFromCall = null
+		}
+		expect(res.name).toBe("Scene 1")
+		expect((activityStore.getById(res.activityId) as { pendingResult?: { name?: string } } | undefined)?.pendingResult?.name).toBe(
+			"Scene 1"
+		)
+
+		await sceneUpdateHandler.handler(
+			fakeSocket(w.user.id),
+			{
+				scene: { id: second.id, name: res.name, summary: res.content },
+				activityId: res.activityId
+			},
+			quiet
+		)
+		await settle()
+		const row = await sceneRow(second.id)
+		expect(row.nameIsDefault).toBe(true)
+		expect(row.name).toBe("Scene 2")
+		const listed = await sceneListHandler.handler(
+			fakeSocket(w.user.id),
+			{ sessionId: w.session.id },
+			quiet
+		)
+		expect(
+			listed.sceneList.find((r: any) => r.id === second.id)?.name
+		).toBe("Scene 1")
 	})
 })

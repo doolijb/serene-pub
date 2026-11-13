@@ -445,13 +445,14 @@ const COMPACT_CSS = `/* Compact — one dense line per message. The name is its 
 /**
  * CAMEO — after Moonlit Echoes' "Echo" style: a large, unframed portrait in a
  * column of its own at the leading edge of a glass card — beside the text,
- * never under it, never outside the card (note 17, 2026-10-02). Declares no
- * backing (`--sp-backing: none`): every card carries its own glass.
+ * never under it, never outside the card (note 17, 2026-10-02). Clears its
+ * panel's backing (`--sp-widget-background` / `--sp-widget-border`,
+ * 2026-11-05): every card carries its own glass.
  */
 const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message style: each line is a
    soft, borderless glass card, and the speaker's portrait is LARGE and
    unframed, laid into the card's leading top corner at a fixed WIDTH and its
-   own height up to twice its width — a tall picture shows that much and the
+   own height, with no cap — a tall picture shows its full height and the
    card grows to hold it; a long line grows the card, never the picture — its
    text-side and bottom edges feathered into the glass. The portrait has a
    column of its own, just wide enough for it: the text never sits on the picture, and the picture
@@ -460,19 +461,21 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 
    The glass is the THEME's (\`--sp-glass-*\`, the same tokens as the glass
    backing), so a custom theme restyles it; this style only lays it out. Each
-   card carries its own surface, so the style asks for no backing behind the
-   log (\`--sp-backing: none\`, note 18) — the Card setting can still add one.
+   card carries its own surface, so the style clears its panel's backing
+   while it shows (\`--sp-widget-background\` / \`--sp-widget-border\`; the
+   layout's Backing setting draws it everywhere else).
 
    The portrait's size answers the widget's box (\`cqi\`, the \`sp-widget\`
    container the host gives every widget), never the window. */
 [data-widget-part~="messages.root"] {
-	--sp-backing: none;
+	--sp-widget-background: transparent;
+	--sp-widget-border: none;
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-speaker: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-700), var(--color-surface-300));
-	--sp-portrait: clamp(5.5rem, 22cqi, 9.5rem);
+	--sp-portrait: clamp(6rem, 28cqi, 15rem);
 	--sp-portrait-h: calc(var(--sp-portrait) * 1.25);	/* the no-picture column only */
 	--sp-cameo-radius: 18px;
 	--sp-cameo-pad-top: 0.8rem;
@@ -526,8 +529,7 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 /* The portrait: its own column, from the card's top edge (it bleeds through
    the card's top padding), no frame, clipped to the card's leading corners.
    The column's width is fixed; the picture keeps its own aspect ratio, so a
-   tall one shows its height up to twice the column's width, from the top
-   (full-body art shows the upper part, fading out at the bottom). A long line
+   tall one shows its whole height, fading out at the bottom. A long line
    grows the card below it; the picture keeps its size. It feathers into the
    glass toward the text and at its bottom — never at its top — inside its
    own column, so it never runs under the text. */
@@ -559,7 +561,6 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 	inline-size: 100%;
 	block-size: auto;
 	max-inline-size: 100%;
-	max-block-size: calc(var(--sp-portrait) * 2);
 	object-fit: cover;
 	object-position: top;
 	--sp-feather-toward: to right;
@@ -692,9 +693,55 @@ export const MESSAGE_STYLE_PRESETS: WidgetStylePreset[] = [
 	{ slug: "cameo", title: "Dreamlit Cameo", css: folioGuarded(CAMEO_CSS) }
 ]
 
+/** The Visual novel layout's stage for Scene Portraits (Open stage). */
+const OPEN_STAGE_CSS = `/* Open stage — Scene Portraits for the Visual novel layout: the last two
+   speakers stand on the session's backdrop, with no card around them. The
+   panel draws no background or border (the style's vars), the stage is not
+   capped at 40% of the screen, each figure hangs from the top of its half and
+   is cut by the panel's foot, and the name and rank are left off. Widget parts
+   only; theme tokens only. */
+[data-widget-part~="scene-portraits.root"] {
+	padding: 0;
+}
+[data-widget-part~="scene-portraits.root"][data-arrangement="stage"] {
+	max-block-size: none;
+}
+[data-widget-part~="scene-portraits.root"] [data-widget-part~="scene-portraits.stage"] {
+	overflow: hidden;
+}
+[data-widget-part~="scene-portraits.root"] [data-widget-part~="scene-portraits.stage"] > [data-widget-part~="scene-portraits.face"] {
+	justify-content: flex-start;
+}
+[data-widget-part~="scene-portraits.root"] [data-widget-part~="scene-portraits.stage"] [data-widget-part~="scene-portraits.face-img"]:not([data-blank]) {
+	max-height: none;
+	block-size: 125%;
+	object-fit: contain;
+	object-position: top center;
+}
+[data-widget-part~="scene-portraits.face-name"],
+[data-widget-part~="scene-portraits.recent-rank"] {
+	display: none;
+}
+`
+
+/** Scene Portraits' styles: the SDK's bare default (kept as it seeds today) and Open stage. */
+export const SCENE_PORTRAITS_STYLE_PRESETS: WidgetStylePreset[] = [
+	{ slug: "default", title: "Default", css: "" },
+	{
+		slug: "open-stage",
+		title: "Open stage",
+		css: OPEN_STAGE_CSS,
+		vars: {
+			"--sp-widget-background": "transparent",
+			"--sp-widget-border": "none"
+		}
+	}
+]
+
 /** The app's preset contribution, by widget id. */
 export const CORE_STYLE_PRESETS: Record<string, WidgetStylePreset[]> = {
-	messages: MESSAGE_STYLE_PRESETS
+	messages: MESSAGE_STYLE_PRESETS,
+	"scene-portraits": SCENE_PORTRAITS_STYLE_PRESETS
 }
 
 /**

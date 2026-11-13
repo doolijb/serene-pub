@@ -121,3 +121,16 @@ describe("the chip's sentence", () => {
 		expect(worldRosterLine(out)).toBe("4 in the world · 2 doubled")
 	})
 })
+
+describe("a member's own name in the book", () => {
+	it("names a carded row by its own name, and one without by the card", () => {
+		const out = worldRoster(
+			[
+				row({ id: 1, characterId: 7, ownName: "Vera" }),
+				row({ id: 2, name: "Tomas", characterId: 8 })
+			],
+			(id) => (id === 7 ? "Verity" : "Thomas")
+		)
+		expect(out.map((i) => i.name)).toEqual(["Thomas", "Vera"])
+	})
+})

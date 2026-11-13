@@ -222,42 +222,53 @@ describe("🚧 before anything was said (§15 G13)", () => {
 		])
 	})
 
-	test("a move skipped for want of a clock, before any line, heads the ledger too", async () => {
+	test("a move the calendar cannot place, before any line, heads the ledger too", async () => {
 		const { ledgerHeadLines } = await import("$lib/shared/state/ledgerLines")
-		const { NO_STORY_CLOCK_YET } = await import("./clockMoves")
 		const w = await world({ silent: true, clock: false })
+		// A time of day with no date cannot run past midnight (docs/lorebook-time.md).
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: 1, storyClockHour: 23, storyClockMinute: 0 })
+			.where(eq(schema.sessions.id, w.session.id))
 		await (await host(w)).commit!({ by: 3, unit: "hours", cause: "action", onRefusal: "skip" }, advance)
 		const lines = await linesOf(w.session.id, w.session.lorebookId)
 		expect(ledgerHeadLines(lines).map((l) => l.text)).toEqual([
-			`Time passes: 3 hours, not on the clock. ${NO_STORY_CLOCK_YET}`
+			"Time passes: 3 hours, not moved. The clock has no date at Year 1, 23:00, so it can't run past midnight."
 		])
 	})
 })
 
 describe("a story with no clock yet", () => {
-	test("onRefusal 'skip': nothing moves, the line says why, the run goes on", async () => {
+	test("a move BY an amount starts the clock on the story's first day, stored, and records an applied move", async () => {
 		const w = await world({ clock: false })
 		noted.length = 0
 		const out: any = await (await host(w)).commit!(
 			{ by: 3, unit: "hours", cause: "action", onRefusal: "skip" },
 			advance
 		)
-		const { NO_STORY_CLOCK_YET } = await import("./clockMoves")
-		expect(out.skipped).toBe(NO_STORY_CLOCK_YET)
-		expect(out.clock).toBeNull()
-		expect((await clockOf(w.session.id)).year).toBeNull()
-		expect(noted).toEqual([])
+		expect(out.skipped ?? "").toBe("")
+		expect(await clockOf(w.session.id)).toEqual({ year: 1, month: 1, day: 1, hour: 3, minute: 0 })
+		expect(noted).not.toEqual([])
 		const [row] = await clockRows(w.session.id)
-		expect(row).toMatchObject({ status: "skipped", messageId: w.message.id })
+		expect(row).toMatchObject({
+			status: "applied",
+			messageId: w.message.id,
+			payload: {
+				by: 3,
+				unit: "hours",
+				from: { year: 1, month: 1, day: 1, hour: 0, minute: 0 },
+				to: { year: 1, month: 1, day: 1, hour: 3, minute: 0 }
+			}
+		})
 		const [line] = await linesOf(w.session.id, w.session.lorebookId)
-		expect(line.text).toBe(`Time passes: 3 hours, not on the clock. ${NO_STORY_CLOCK_YET}`)
+		expect(line.text).toMatch(/^Time passes: 3 hours \(.*00:00 → .*03:00\)$/)
 	})
 
-	test("a session with no shared lorebook keeps its clock in its own book: unset, so it skips as any unset clock does", async () => {
+	test("a session with no shared lorebook keeps its clock in its own book: unset, it starts on the first day; set, it moves from there", async () => {
 		const unset = await world({ book: false, clock: false })
-		const skipped: any = await (await host(unset)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
-		const { NO_STORY_CLOCK_YET } = await import("./clockMoves")
-		expect(skipped.skipped).toBe(NO_STORY_CLOCK_YET)
+		const started: any = await (await host(unset)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
+		expect(started.skipped ?? "").toBe("")
+		expect((await clockOf(unset.session.id)).day).toBe(2)
 		// Set, it moves: the session's clock is its own, whatever book it reads.
 		const set = await world({ book: false })
 		const moved: any = await (await host(set)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
@@ -278,7 +289,11 @@ describe("a story with no clock yet", () => {
 
 	test("unwired, a refusal still halts with the sentence and writes nothing", async () => {
 		const w = await world({ clock: false })
-		await expect((await host(w)).commit!({ by: 3, unit: "hours" }, advance)).rejects.toThrow(/no present/)
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: 1, storyClockHour: 23, storyClockMinute: 0 })
+			.where(eq(schema.sessions.id, w.session.id))
+		await expect((await host(w)).commit!({ by: 3, unit: "hours" }, advance)).rejects.toThrow(/no date/)
 		expect(await clockRows(w.session.id)).toEqual([])
 	})
 
@@ -296,7 +311,7 @@ describe("a clock move goes back with its message", () => {
 		const w = await world()
 		await (await host(w)).commit!({ by: 3, unit: "hours", cause: "keeper" }, advance)
 		const { retractStateAnchoredTo } = await import("./write")
-		expect(await retractStateAnchoredTo(db(), w.message.id)).toMatchObject({ clockMoved: true, changed: true })
+		expect(await retractStateAnchoredTo(db(), w.message.id, "replaced")).toMatchObject({ clockMoved: true, changed: true })
 		expect(await clockOf(w.session.id)).toMatchObject({ day: 5, hour: 9, minute: 0 })
 		expect(await clockRows(w.session.id)).toEqual([])
 	})
@@ -306,7 +321,7 @@ describe("a clock move goes back with its message", () => {
 		await (await host(w)).commit!({ by: 5, unit: "minutes", cause: "tick" }, advance)
 		const { retractStateAnchoredTo } = await import("./write")
 		// Nothing taken back, so nothing to announce (§15 G14).
-		expect(await retractStateAnchoredTo(db(), w.message.id)).toMatchObject({ clockMoved: false, changed: false })
+		expect(await retractStateAnchoredTo(db(), w.message.id, "replaced")).toMatchObject({ clockMoved: false, changed: false })
 		expect(await clockOf(w.session.id)).toMatchObject({ hour: 9, minute: 5 })
 		expect((await clockRows(w.session.id)).map((r) => r.status)).toEqual(["applied"])
 	})
@@ -338,7 +353,7 @@ describe("a clock move goes back with its message", () => {
 		expect(row.payload).toMatchObject({ cause: "keeper", from: { hour: 9 }, to: { hour: 17 } })
 		const [line] = await linesOf(w.session.id, w.session.lorebookId)
 		expect(line.text).toMatch(/^Time passes: 8 hours \(.*09:00 → .*17:00\)$/)
-		await retractStateAnchoredTo(db(), w.message.id)
+		await retractStateAnchoredTo(db(), w.message.id, "replaced")
 		expect(await clockOf(w.session.id)).toMatchObject({ hour: 9, minute: 0 })
 	})
 
@@ -363,7 +378,7 @@ describe("a clock move goes back with its message", () => {
 		const problem = await clockRetractProblem(db(), [w.message.id], { keepTicks: true })
 		expect(problem).toMatch(/^The story clock can't be taken back by 2 months: /)
 		const { retractStateAnchoredTo } = await import("./write")
-		await expect(retractStateAnchoredTo(db(), w.message.id)).rejects.toThrow(/can't be taken back by 2 months/)
+		await expect(retractStateAnchoredTo(db(), w.message.id, "replaced")).rejects.toThrow(/can't be taken back by 2 months/)
 		expect(await clockOf(w.session.id)).toMatchObject({ month: 1, day: 5 })
 		expect(await clockRows(w.session.id)).toHaveLength(1)
 	})
@@ -377,7 +392,98 @@ describe("a clock move goes back with its message", () => {
 			.where(eq(schema.sessions.id, w.session.id))
 		const { retractStateAnchoredTo } = await import("./write")
 		// The clock stays; the move's line still goes, and that is a change (§15 G14).
-		expect(await retractStateAnchoredTo(db(), w.message.id)).toMatchObject({ clockMoved: false, changed: true })
+		expect(await retractStateAnchoredTo(db(), w.message.id, "replaced")).toMatchObject({ clockMoved: false, changed: true })
 		expect((await clockOf(w.session.id)).year).toBeNull()
+	})
+})
+
+describe("why a clock move was skipped (reason)", () => {
+	test("recordClockMove stores the sentence only; the ledger reads the kind off it", async () => {
+		const { recordClockMove, clockLedgerRows, NO_STORY_CLOCK_YET } = await import("./clockMoves")
+		const w = await world()
+		const base = { sessionId: w.session.id, by: 3, unit: "hours" as const, cause: "action" as const, updatedBy: "u" }
+		await recordClockMove(db(), { ...base, skipped: NO_STORY_CLOCK_YET })
+		await recordClockMove(db(), { ...base, skipped: "The clock has no date at Year 1, 23:00, so it can't run past midnight." })
+		const stored = (await clockRows(w.session.id)).map((r) => (r.payload as any).reason)
+		expect(stored).toEqual([undefined, undefined])
+		const rows = await clockLedgerRows(db(), w.session.id, w.session.lorebookId)
+		expect(rows.map((r) => r.reason).sort()).toEqual(["no-clock", "refused"])
+	})
+
+	test("a row written any time reads back with the derived reason, both arms", async () => {
+		const { clockLedgerRows, NO_STORY_CLOCK_YET } = await import("./clockMoves")
+		const w = await world()
+		const old = (skipped: string) =>
+			testDb.insert(schema.stateProposals).values({
+				sessionId: w.session.id,
+				messageId: null,
+				kind: "clock",
+				payload: { kind: "clock", by: 3, unit: "hours", cause: "action", skipped },
+				status: "skipped",
+				proposedBy: "u",
+				decidedAt: new Date()
+			})
+		await old(NO_STORY_CLOCK_YET)
+		await old("The clock has no day at Year 1, so it can't count days.")
+		const rows = await clockLedgerRows(db(), w.session.id, w.session.lorebookId)
+		expect(rows.map((r) => r.reason).sort()).toEqual(["no-clock", "refused"])
+	})
+})
+
+describe("a hand move this turn drops the model's own (★13a)", () => {
+	test("an action move then a keeper move at the same anchor: the keeper's moves nothing, writes no row, says so", async () => {
+		const { droppedKeeperMoveSentence } = await import("./clockMoves")
+		const w = await world()
+		const h = await host(w)
+		await h.commit!({ by: 2, unit: "hours", cause: "action" }, advance)
+		noted.length = 0
+		const out: any = await h.commit!({ by: 3, unit: "hours", cause: "keeper", onRefusal: "skip" }, advance)
+		expect(out).toMatchObject({
+			clock: null,
+			moved: 0,
+			skipped: droppedKeeperMoveSentence({ by: 3, unit: "hours" })
+		})
+		expect(out.skipped).toBe(
+			"Dropped: the clock was already moved by hand this turn, so the model's 3 hours was not added."
+		)
+		expect(await clockOf(w.session.id)).toMatchObject({ hour: 11 })
+		expect(await clockRows(w.session.id)).toHaveLength(1)
+		expect(noted).toEqual([])
+	})
+
+	test("a keeper move with no hand move at its anchor still moves", async () => {
+		const w = await world()
+		const out: any = await (await host(w)).commit!({ by: 3, unit: "hours", cause: "keeper" }, advance)
+		expect(out.skipped).toBe("")
+		expect(await clockOf(w.session.id)).toMatchObject({ hour: 12 })
+		expect(await clockRows(w.session.id)).toHaveLength(1)
+	})
+
+	test("a hand move since the previous reply drops this reply's keeper move, wherever the anchors fall", async () => {
+		// The real order: the press files at the previous reply, the person's
+		// line lands, the reply's keeper runs — three different anchors.
+		const w = await world()
+		const h = await host(w)
+		await h.commit!({ by: 2, unit: "hours", cause: "action" }, advance)
+		await testDb
+			.insert(schema.sessionMessages)
+			.values({ sessionId: w.session.id, userId: w.user.id, role: "user", content: "We walk on." })
+		await w.line("The road climbs.")
+		const out: any = await h.commit!({ by: 3, unit: "hours", cause: "keeper" }, advance)
+		expect(out.moved).toBe(0)
+		expect(await clockOf(w.session.id)).toMatchObject({ hour: 11 })
+		expect(await clockRows(w.session.id)).toHaveLength(1)
+	})
+
+	test("a hand move from an earlier turn (a reply has landed since) does not drop the keeper's", async () => {
+		const w = await world()
+		const h = await host(w)
+		await h.commit!({ by: 2, unit: "hours", cause: "action" }, advance)
+		await w.line("The next morning.")
+		await w.line("And the day after.")
+		const out: any = await h.commit!({ by: 3, unit: "hours", cause: "keeper" }, advance)
+		expect(out.skipped).toBe("")
+		expect(await clockOf(w.session.id)).toMatchObject({ hour: 14 })
+		expect(await clockRows(w.session.id)).toHaveLength(2)
 	})
 })

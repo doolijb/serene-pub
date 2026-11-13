@@ -45,7 +45,7 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
@@ -391,7 +391,7 @@
 			})
 		} catch (err) {
 			if (isReplyTimeout(err))
-				toaster.error({
+				notify.error({
 					title: "The embedding model was not chosen",
 					description: "The server did not answer in time."
 				})
@@ -503,7 +503,7 @@
 
 		<button
 			type="button"
-			class="border-surface-300-700 hover:preset-tonal-primary flex items-center gap-2.5 rounded-base border border-dashed px-3 py-2.5 text-left"
+			class="border-surface-300-700 hover:preset-tonal-primary rounded-base flex items-center gap-2.5 border border-dashed px-3 py-2.5 text-left"
 			onclick={onGetModels}
 		>
 			<Icons.Download
@@ -512,10 +512,8 @@
 				aria-hidden="true"
 			/>
 			<span class="min-w-0 flex-1">
-				<span class="block text-chip font-medium">
-					Get more…
-				</span>
-				<span class="text-surface-600-400 block text-meta">
+				<span class="text-chip block font-medium">Get more…</span>
+				<span class="text-surface-600-400 text-meta block">
 					Recommended lists and Hugging Face
 				</span>
 			</span>

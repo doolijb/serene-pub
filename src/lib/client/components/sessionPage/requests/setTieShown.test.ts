@@ -29,4 +29,15 @@ describe("answerSetTieShown", () => {
 		await expect(answerSetTieShown(params, 9, write, { widgetId: "acme:x", owner: "acme", grants: [] } as never)).rejects.toThrow(/write grant/)
 		expect(await answerSetTieShown(params, 9, write, { widgetId: "acme:x", owner: "acme", grants: ["session:state:write"] } as never)).toEqual({ shown: false })
 	})
+
+	test("a seated_member side is written through as given", async () => {
+		const asked: Parameters<TieShownWrite>[0][] = []
+		const write: TieShownWrite = async (ask) => {
+			asked.push(ask)
+			return { sessionId: ask.sessionId, shown: ask.shown }
+		}
+		const params = { owner: { kind: "seated_member", id: 41 }, entryType: "bond", towards: "seated-member:42", shown: true }
+		expect(await answerSetTieShown(params, 9, write)).toEqual({ shown: true })
+		expect(asked).toEqual([{ sessionId: 9, owner: { kind: "seated_member", id: 41 }, entryType: "bond", towards: "seated-member:42", shown: true }])
+	})
 })

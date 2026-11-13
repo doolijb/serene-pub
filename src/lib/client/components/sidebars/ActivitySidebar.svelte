@@ -11,6 +11,10 @@
 	} from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import { notifications } from "$lib/client/notifications/notifications.svelte"
 	import {
+		lorebookIndexing,
+		type LorebookIndexingState
+	} from "$lib/client/stores/lorebookIndexing.svelte"
+	import {
 		notificationKind,
 		type NotificationLevel,
 		type NotificationRow
@@ -55,14 +59,18 @@
 	let sessionSummarizeActivities = $derived(
 		sessionSummarizesCtx?.activities ?? []
 	)
+	/** Books being indexed for Search by meaning, one card each. */
+	let indexingActivities = $derived(lorebookIndexing.activities)
 	let hasActivity = $derived(
 		builds.length > 0 ||
+			indexingActivities.length > 0 ||
 			sceneActivities.length > 0 ||
 			compileActivities.length > 0 ||
 			sessionSummarizeActivities.length > 0
 	)
 	let activityCount = $derived(
 		builds.length +
+			indexingActivities.length +
 			sceneActivities.length +
 			compileActivities.length +
 			sessionSummarizeActivities.length
@@ -232,6 +240,16 @@
 			lorebookId: build.lorebookId,
 			scope: "all",
 			lens: "graph"
+		}
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+
+	/** Only the book's owner opens it from here; an administrator just reads. */
+	function navigateToIndexedBook(activity: LorebookIndexingState) {
+		if (activity.userId !== userCtx?.user?.id) return
+		panelsCtx.digest.lore = {
+			lorebookId: activity.lorebookId,
+			scope: "all"
 		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
@@ -533,6 +551,46 @@
 											</button>
 										{/if}
 									{/if}
+								</div>
+							</div>
+						{/each}
+						{#each indexingActivities as indexing (indexing.lorebookId)}
+							<div class="panel-card mx-4 mt-4 space-y-3">
+								<div class="min-w-0">
+									{#if indexing.userId === userCtx?.user?.id}
+										<button
+											class="hover:text-primary-ink block w-full truncate text-left text-sm font-medium transition-colors"
+											onclick={() =>
+												navigateToIndexedBook(indexing)}
+											title="Open this lorebook"
+										>
+											{indexing.lorebookLabel}
+										</button>
+									{:else}
+										<p class="truncate text-sm font-medium">
+											{indexing.lorebookLabel}
+										</p>
+									{/if}
+									<p class="text-surface-700-300 text-xs">
+										Indexing for Search by meaning · {indexing.indexedCount}
+										of {indexing.total} entries
+									</p>
+								</div>
+								<div class="text-primary-500">
+									<SpProgress
+										attrs={{
+											value: String(
+												indexing.total > 0
+													? Math.round(
+															(indexing.indexedCount /
+																indexing.total) *
+																100
+														)
+													: 0
+											),
+											label: "Indexing progress"
+										}}
+									/>
 								</div>
 							</div>
 						{/each}

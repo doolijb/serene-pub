@@ -114,35 +114,6 @@ describe("a plugin's variables, installed from the real Twenty Questions package
 		])
 	})
 
-	it("offers that layout in the respond pipeline's picker", async () => {
-		const [prior] = await db
-			.select({ enabled: schema.plugins.enabled })
-			.from(schema.plugins)
-			.where(eq(schema.plugins.pluginId, PLUGIN))
-		await db
-			.update(schema.plugins)
-			.set({ enabled: true })
-			.where(eq(schema.plugins.pluginId, PLUGIN))
-		try {
-			const [spec] = await db
-				.select({ id: schema.pipelineSpecs.id })
-				.from(schema.pipelineSpecs)
-				.where(eq(schema.pipelineSpecs.slug, RESPOND))
-			const { choiceSets } = await import(
-				"$lib/server/pipelines/config/panel/choices"
-			)
-			const sets = await choiceSets(db, spec!.id)
-			expect(
-				(sets.variableTemplatesBy.get(SECRET_VAR) ?? []).map((c) => c.label)
-			).toEqual(["JSON"])
-		} finally {
-			await db
-				.update(schema.plugins)
-				.set({ enabled: !!prior?.enabled })
-				.where(eq(schema.plugins.pluginId, PLUGIN))
-		}
-	})
-
 	it("puts secretEntry (and briefing) in the respond Assemble step's typed scope", async () => {
 		const scope = await scopeAt(RESPOND, "speakPrompt")
 		expect(scope).toHaveProperty("secretEntry")

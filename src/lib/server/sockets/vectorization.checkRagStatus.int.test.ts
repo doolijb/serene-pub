@@ -20,6 +20,9 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
+/** What `resolveEmbeddingTarget` answers; null is "no model starred". */
+const target = vi.hoisted(() => ({ modelId: "test-model" as string | null }))
+
 vi.mock("$lib/server/db", async (orig) => {
 	const actual = (await orig()) as any
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -31,7 +34,8 @@ vi.mock("$lib/server/embedding/target", async (orig) => {
 	const actual = (await orig()) as any
 	return {
 		...actual,
-		resolveEmbeddingTarget: async () => ({ modelId: "test-model" })
+		resolveEmbeddingTarget: async () =>
+			target.modelId ? { modelId: target.modelId } : null
 	}
 })
 
@@ -129,13 +133,19 @@ describe("vectorization:checkRagStatus", () => {
 			} as any)
 
 		const { vectorizationCheckRagStatus } = await import("./vectorization")
+		const emitted: any[] = []
 		const res = await vectorizationCheckRagStatus.handler(
 			{ user: { id: user.id } } as any,
 			{ sessionId: session!.id },
-			() => {}
+			(_event: string, data: any) => {
+				emitted.push(data)
+			}
 		)
 
 		expect(res.applicable).toBe(true)
+		expect(res.sessionId).toBe(session!.id)
+		expect(res.lorebookId).toBe(book!.id)
+		expect(emitted).toEqual([res])
 		expect(res.lorebook).toEqual({
 			total: 3,
 			nullCount: 1,
@@ -147,9 +157,60 @@ describe("vectorization:checkRagStatus", () => {
 			"applicable",
 			"canHide",
 			"lorebook",
+			"lorebookId",
 			"queueRunning",
-			"ragIgnored"
+			"ragIgnored",
+			"sessionId"
 		])
+	})
+
+	test("every arm names its session, which scopes the reply", async () => {
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const user = await createTestUser(testDb, "check-rag-arms")
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Arms", userId: user.id })
+			.returning()
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: user.id,
+				isGroup: false,
+				name: "Arms",
+				lorebookId: book!.id
+			} as any)
+			.returning()
+		const { vectorizationCheckRagStatus } = await import("./vectorization")
+		const ask = async () => {
+			const emitted: any[] = []
+			await vectorizationCheckRagStatus.handler(
+				{ user: { id: user.id } } as any,
+				{ sessionId: session!.id },
+				(_event: string, data: any) => {
+					emitted.push(data)
+				}
+			)
+			return emitted
+		}
+
+		// Ten messages or fewer: the book is known, nothing is counted.
+		const few = await ask()
+		expect(few).toHaveLength(1)
+		expect(few[0].applicable).toBe(false)
+		expect(few[0].sessionId).toBe(session!.id)
+		expect(few[0].lorebookId).toBe(book!.id)
+
+		// No model starred: answered before the session is read.
+		target.modelId = null
+		try {
+			const none = await ask()
+			expect(none).toHaveLength(1)
+			expect(none[0].applicable).toBe(false)
+			expect(none[0].sessionId).toBe(session!.id)
+			expect(none[0].lorebookId).toBeNull()
+		} finally {
+			target.modelId = "test-model"
+		}
 	})
 })
 

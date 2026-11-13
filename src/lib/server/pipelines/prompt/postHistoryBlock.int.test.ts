@@ -253,7 +253,9 @@ describe("the post-history block on the wire", () => {
 			key: "worldLore",
 			variableId: "core:var/world-lore@1",
 			line: "built-in default",
-			floor: true
+			floor: true,
+			why: null,
+			missingReference: null
 		})
 		expect(lastUser).toMatch(/\[System note\]\nResponse reminder:/)
 		expect(system).toContain("Response reminder:")

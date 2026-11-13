@@ -8,6 +8,9 @@
  * server), a descriptor here, and — only when it draws a screen no lens draws
  * yet — a mount in `mounts.ts`.
  *
+ * Advanced controls (a per-person preference) leave Graph and Lives out of the
+ * track and their shortcuts; a route naming one draws List.
+ *
  * Every lens stands in every book and for every scope: a lens with nothing to
  * draw shows its own empty state rather than being taken away, because a
  * control that vanishes teaches the reader the capability does not exist.
@@ -18,6 +21,7 @@
 
 import * as Icons from "@lucide/svelte"
 import {
+	DEFAULT_LENS,
 	isListScope,
 	LORE_LENSES,
 	type LoreLens,
@@ -147,6 +151,23 @@ export const LORE_LENS_REGISTRY: readonly LensDescriptor[] = LORE_LENSES.map(
 	(id) => BY_ID[id]
 )
 
+/** The lenses advanced controls hide (see the header). */
+const ADVANCED_LENSES: readonly LoreLens[] = ["graph", "lives"]
+
+/** The lenses the track offers: all of them, less Graph and Lives unless advanced. */
+export function lensesShown(advanced: boolean): readonly LensDescriptor[] {
+	return advanced
+		? LORE_LENS_REGISTRY
+		: LORE_LENS_REGISTRY.filter((d) => !ADVANCED_LENSES.includes(d.id))
+}
+
+/** The lens to draw for a named one: itself when shown, else the default (List). */
+export function lensShown(lens: LoreLens, advanced: boolean): LoreLens {
+	return lensesShown(advanced).some((d) => d.id === lens)
+		? lens
+		: DEFAULT_LENS
+}
+
 /** One lens's descriptor. */
 export function lensDescriptor(id: LoreLens): LensDescriptor {
 	return BY_ID[id]
@@ -242,11 +263,14 @@ function typingTarget(target: EventTarget | null): boolean {
  * The lens a key press asks for, or null. Not while typing in a field, and
  * not a key somebody closer to the action already claimed.
  */
-export function lensForKey(event: KeyboardEvent): LoreLens | null {
+export function lensForKey(
+	event: KeyboardEvent,
+	advanced: boolean
+): LoreLens | null {
 	if (event.defaultPrevented || event.repeat) return null
 	if (typingTarget(event.target)) return null
 	return (
-		LORE_LENS_REGISTRY.find((d) => matchesShortcut(event, d.shortcut))
+		lensesShown(advanced).find((d) => matchesShortcut(event, d.shortcut))
 			?.id ?? null
 	)
 }

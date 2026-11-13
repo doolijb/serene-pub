@@ -179,7 +179,8 @@ describe("listEnabledAudioCppPackages against the real tree", () => {
 			put("tts/whatever/lister-guess/g.gguf", Buffer.alloc(64, 2))
 			await db.update(audiocppSettings).set({ enabledPackageIds: ["local_whatever_lister", "local_whatever_lister_guess", "ghost"] })
 			const got = await listEnabledAudioCppPackages(db as never)
-			expect(got).toEqual([{ id: "local_whatever_lister", name: "lister", task: "tts", family: "kokoro_tts" }])
+			// The size rides along: it becomes the model row's facts (Models list totals).
+			expect(got).toEqual([{ id: "local_whatever_lister", name: "lister", task: "tts", family: "kokoro_tts", sizeBytes: audioGguf("kokoro_tts").length }])
 		} finally {
 			vi.unstubAllGlobals()
 			warn.mockRestore()

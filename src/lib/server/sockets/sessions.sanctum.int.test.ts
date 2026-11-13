@@ -28,7 +28,6 @@
  *     by name, and no greeting is written for it.
  */
 
-import { coreAnnexIn } from "$lib/server/sessions/coreAnnex"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -238,10 +237,10 @@ async function personSays(sessionId: number, content: string, channel = "main") 
 async function orderOf(sessionId: number) {
 	const { readTurnOrder } = await import("@serene-pub/sdk")
 	const [row] = await db
-		.select({ annex: schema.sessions.annex })
+		.select({ turnOrder: schema.sessions.turnOrder })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
-	return readTurnOrder(coreAnnexIn(row!.annex)).order
+	return readTurnOrder(row!).order
 }
 
 async function pressContinue(sessionId: number, params: Record<string, unknown>) {

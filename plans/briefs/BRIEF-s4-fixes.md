@@ -1,0 +1,21 @@
+# BRIEF — lane `s4-fixes` (wave 5) — timbre check, base-name vocabulary, card-less seats in every state reader, doc merges
+
+Read `plans/briefs/BRIEF-s4-common.md`, plan §34 and its last bullets (owner rulings 2026-11-08, later), and the reports `plans/REPORT-s4-cp-2026-11-08.md` (★cp-names-1, the timbre gap), `plans/REPORT-s4-seat-live-2026-11-08.md` ("Noticed": outside readers; the `lorebook-cast.md` paragraphs; Edit form gaps), `plans/REPORT-s4-bk-fold-2026-11-08.md` (`docs/sessions.md` ~480), `plans/REPORT-s4-f-door-2026-11-08.md` and `plans/REPORT-s4-f-emit-2026-11-08.md` (★f-emit-3: only a character seat files a member's durable record).
+
+## Goal
+
+1. **Timbre gap (owner: fix now):** the cast-member save path in `sockets/lorebooks.ts` runs `validateTimbre` exactly as the card path does, so a non-admin can't store a voicebank `voice` members mustn't pick (see `characters/timbre.ts`). Refusal test (non-admin refused, admin allowed per the card rule).
+2. **★cp-names-1 (owner 2026-11-08: "Both, via base name"):** `annotations/index.ts` `loadVocabulary` claims names by each member's **base (undated Main) shown name**, so the 2026-09-30 R1 "hybrid" rule ("An amended name never takes a name another member or entry already holds") holds; `amendedNamesOf` adds the parent card version's name and nickname for versions that follow `name`; then the ~10-line hook in `characters/versions.ts` (`writeCastVersion` / `updateCastVersion`) writes a dated Main rename back to `lorebook_bindings.name` **for sort and search only** (s4-cp built and removed it — see its report). Flip the last `test.fails` in `src/lib/server/cast/characterRows.storedNames.int.test.ts`; `annotations/amendedNames.int.test.ts` stays green unchanged.
+3. **Card-less seats in every state reader:** the readers that walk `links.cast` only also walk `links.seatedMembers` (s4-seat-live's 🚧 ⏳ `SeatedMemberLink`): `sockets/state.ts` ~454, ~632, ~1853, ~1867 (owner rows and holder lists — so the sheet widget shows a card-less seat's sheet), `state/statTrail.ts` ~139, ~376, `state/handEdits.ts` ~190, 260, 325, 488, `state/supply.ts:156`, `state/lorebookState.ts` ~172–404, `sessions/convertRuleset.ts:226`, `state/earshot.ts`, `state/presencesOnReading.ts:159`. `state/durable.ts` ~337, 370: a card-less **character** seat files its member's durable record, following ★f-emit-3's rule (only character seats file) — flag it ★ in the report as following an unruled recommendation. Drop `resolve.ts` `ownOwnersOf` if nothing calls it. Tests per reader with a card-less seat (owner row present, sheet readable, stat trail, hand edit by its seater, earshot, supply).
+4. **Doc merges:** `docs/lorebook-cast.md` — replace the line-22 opening and lines 74–75 with the exact paragraphs in `REPORT-s4-seat-live-2026-11-08.md`; `docs/sessions.md` ~480 → "…start a new one from a copy of it (the start screen lists a session's shared lorebook under *Start from a session's lorebook*)" (s4-bk-fold); remove the duplicate stub line at ~376–377.
+5. **Edit form gaps** (`EditSessionForm.svelte`): offer the card-less members of the session's **own notes** too (today only an attached book's); `removedCharacters` must not map a removed card-less seat with `id: null` (no Reassign offer for it).
+
+## Files owned
+
+`src/lib/server/sockets/lorebooks.ts` (the timbre check only), `src/lib/server/annotations/index.ts`, `src/lib/server/characters/versions.ts` (the hook only), `src/lib/server/state/**`, `src/lib/server/sockets/state.ts`, `src/lib/server/sockets/statTrail.ts`, `src/lib/server/sessions/convertRuleset.ts`, `src/lib/client/components/sessionForms/EditSessionForm.svelte`, `docs/{lorebook-cast,sessions}.md`, tests next to all of these (incl. the storedNames test).
+
+**Lane s4-st runs beside you** (starters, provided books, `cast/cardless.ts` cause, `tableRegistry.ts` `remapEntityKey`, `cast/characterRows.ts` predicate, card list/picker/search readers, `sockets/sessions.ts` ~1521, Mundi, `docs/{lorebooks,getting-started,plugins}.md`). Don't touch its files.
+
+## Done means
+
+The tests above; `amendedNames.int`, `characterRows.storedNames.int` (all passing, no `test.fails`), the state/rulesets neighbours green; tsc + check no new errors. Report `plans/REPORT-s4-fixes-2026-11-08.md`.

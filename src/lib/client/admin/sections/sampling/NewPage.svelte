@@ -20,7 +20,7 @@
 		adminPage,
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { S } from "@serene-pub/sdk"
 	import { capabilityForSamplingShape } from "$lib/shared/capabilities/samplingShape"
 	import Select from "$lib/client/components/inputs/Select.svelte"
@@ -28,7 +28,9 @@
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 	import { samplingModality, type SamplingRow } from "./samplingAdmin"
 
 	const socket = useTypedSocket()
@@ -57,19 +59,31 @@
 	/** A config id as a string, or `NOTHING`; "" until the list lands. */
 	let startFrom = $state("")
 	/** What the form held when it opened; only a change from it is unsaved. */
-	let seeded = $state<{ name: string; shape: string; startFrom: string } | null>(null)
+	let seeded = $state<{
+		name: string
+		shape: string
+		startFrom: string
+	} | null>(null)
 
 	const ofShape = $derived(
-		rows.filter((r) => samplingModality(r.shape) === samplingModality(shape))
+		rows.filter(
+			(r) => samplingModality(r.shape) === samplingModality(shape)
+		)
 	)
 
 	/** The modality's default config, else its first built-in, else nothing. */
 	function defaultStartFor(s: string): string {
 		const cap = capabilityForSamplingShape(s)
-		const def = cap ? systemSettingsCtx?.capabilityDefaults?.[cap]?.samplingConfigId : null
-		const pool = rows.filter((r) => samplingModality(r.shape) === samplingModality(s))
+		const def = cap
+			? systemSettingsCtx?.capabilityDefaults?.[cap]?.samplingConfigId
+			: null
+		const pool = rows.filter(
+			(r) => samplingModality(r.shape) === samplingModality(s)
+		)
 		const pick =
-			pool.find((r) => r.id === def) ?? pool.find((r) => r.isImmutable) ?? pool[0]
+			pool.find((r) => r.id === def) ??
+			pool.find((r) => r.isImmutable) ??
+			pool[0]
 		return pick ? String(pick.id) : NOTHING
 	}
 
@@ -87,7 +101,9 @@
 	function uniqueCopyName(base: string, s: string): string {
 		const taken = new Set(
 			rows
-				.filter((r) => samplingModality(r.shape) === samplingModality(s))
+				.filter(
+					(r) => samplingModality(r.shape) === samplingModality(s)
+				)
 				.map((r) => r.name.trim().toLowerCase())
 		)
 		let candidate = `${base} copy`
@@ -118,7 +134,9 @@
 
 	function save(intent: AdminSaveIntent) {
 		const trimmed = name.trim()
-		const taken = ofShape.some((r) => r.name.trim().toLowerCase() === trimmed.toLowerCase())
+		const taken = ofShape.some(
+			(r) => r.name.trim().toLowerCase() === trimmed.toLowerCase()
+		)
 		nameError = !trimmed
 			? "A sampling config needs a name."
 			: taken
@@ -149,9 +167,10 @@
 		const intent = pendingIntent
 		pendingIntent = null
 		saving = false
-		toaster.success({ title: `Added ${msg.sampling.name}` })
+		notify.success({ title: `Added ${msg.sampling.name}` })
 		if (intent !== "another") landed = true
-		if (intent === "continue") void adminGoto(`/admin/sampling/${msg.sampling.id}`)
+		if (intent === "continue")
+			void adminGoto(`/admin/sampling/${msg.sampling.id}`)
 		else if (intent === "save") void adminGoto("/admin/sampling")
 		else {
 			name = ""
@@ -167,7 +186,10 @@
 		if (/name/i.test(error)) nameError = error
 		else formErrors = [error]
 	}
-	useInterest<"samplingConfigs:create">("samplingConfigs:create", handleCreate)
+	useInterest<"samplingConfigs:create">(
+		"samplingConfigs:create",
+		handleCreate
+	)
 	useInterest<"samplingConfigs:create:error">(
 		"samplingConfigs:create:error",
 		handleCreateError
@@ -207,14 +229,17 @@
 		<div class="flex flex-col gap-1.5" data-field="new-sampling-modality">
 			<Select
 				label="Modality"
-				options={SHAPES.map((s) => ({ value: s.shape, label: s.label }))}
+				options={SHAPES.map((s) => ({
+					value: s.shape,
+					label: s.label
+				}))}
 				value={shape}
 				onValueChange={(v) => v && pickShape(v)}
 				describedBy="new-sampling-modality-help"
 			/>
 			<FieldHelp id="new-sampling-modality-help">
-				Which parameters it has. Text and image sampling share none, and a
-				config never changes modality once made.
+				Which parameters it has. Text and image sampling share none, and
+				a config never changes modality once made.
 			</FieldHelp>
 		</div>
 	</AdminFieldset>
@@ -231,14 +256,17 @@
 						value: String(r.id),
 						label: `Copy of ${r.name}${r.isImmutable ? " (built-in)" : ""}`
 					})),
-					{ value: NOTHING, label: "Nothing switched on — the backend's own defaults" }
+					{
+						value: NOTHING,
+						label: "Nothing switched on — the backend's own defaults"
+					}
 				]}
 				bind:value={startFrom}
 				describedBy="new-sampling-from-help"
 			/>
 			<FieldHelp id="new-sampling-from-help">
-				A parameter switched off is not sent, so the backend uses its own value
-				for it.
+				A parameter switched off is not sent, so the backend uses its
+				own value for it.
 			</FieldHelp>
 		</div>
 	</AdminFieldset>

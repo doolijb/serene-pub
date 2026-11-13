@@ -27,6 +27,7 @@
  */
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { sessionsDrawingCard } from "$lib/server/cast/seatedCast"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 
 /** A refusal said to the person or written on the receipt, in words. */
@@ -105,12 +106,55 @@ export async function backdropFileFor(
 	if (await isFileReferencedInSession(db, row.id, who.sessionId)) return { id: row.id }
 	if (who.castImages && row.characterId != null && (await inCast(db, who.sessionId, row.characterId)))
 		return { id: row.id }
+	if (who.castImages) {
+		const holders = await db
+			.select({ castMemberId: schema.castMemberFiles.castMemberId })
+			.from(schema.castMemberFiles)
+			.where(eq(schema.castMemberFiles.fileId, row.id))
+		for (const h of holders)
+			if (await memberInCast(db, who.sessionId, h.castMemberId))
+				return { id: row.id }
+	}
 	throw new BackdropRefusal(
 		"That picture belongs to neither this session nor you, so it cannot be its backdrop."
 	)
 }
 
-/** Is this character seated in the session, as a character or a persona. */
+/**
+ * 🚧 Is this cast member seated in the session, on either seat table? A file
+ * in the member's own gallery (a `cast_member_files` link) is a cast image of
+ * the session it is seated in.
+ */
+async function memberInCast(db: Db, sessionId: number, castMemberId: number): Promise<boolean> {
+	const [seat] = await db
+		.select({ id: schema.sessionCharacters.id })
+		.from(schema.sessionCharacters)
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				eq(schema.sessionCharacters.castMemberId, castMemberId)
+			)
+		)
+		.limit(1)
+	if (seat) return true
+	const [voice] = await db
+		.select({ id: schema.sessionPersonas.id })
+		.from(schema.sessionPersonas)
+		.where(
+			and(
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				eq(schema.sessionPersonas.castMemberId, castMemberId)
+			)
+		)
+		.limit(1)
+	return !!voice
+}
+
+/**
+ * Is this card seated in the session (as a character or a persona), is a
+ * cast member linked to this card seated there, or does the session's reading
+ * draw a seated member with it (their active card — owner ruling 2026-11-05).
+ */
 async function inCast(db: Db, sessionId: number, characterId: number): Promise<boolean> {
 	const [seat] = await db
 		.select({ id: schema.sessionCharacters.characterId })
@@ -133,7 +177,39 @@ async function inCast(db: Db, sessionId: number, characterId: number): Promise<b
 			)
 		)
 		.limit(1)
-	return !!persona
+	if (persona) return true
+	const [memberSeat] = await db
+		.select({ id: schema.sessionCharacters.id })
+		.from(schema.sessionCharacters)
+		.innerJoin(
+			schema.lorebookBindings,
+			eq(schema.lorebookBindings.id, schema.sessionCharacters.castMemberId)
+		)
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				eq(schema.lorebookBindings.characterId, characterId)
+			)
+		)
+		.limit(1)
+	if (memberSeat) return true
+	const [memberVoice] = await db
+		.select({ id: schema.sessionPersonas.id })
+		.from(schema.sessionPersonas)
+		.innerJoin(
+			schema.lorebookBindings,
+			eq(schema.lorebookBindings.id, schema.sessionPersonas.castMemberId)
+		)
+		.where(
+			and(
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				eq(schema.lorebookBindings.characterId, characterId)
+			)
+		)
+		.limit(1)
+	if (memberVoice) return true
+	// The member the session's reading draws with this card (a dated card).
+	return (await sessionsDrawingCard(db, characterId, [sessionId])).length > 0
 }
 
 /**

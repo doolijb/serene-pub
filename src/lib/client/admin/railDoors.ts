@@ -19,7 +19,7 @@ type DoorCtx = Pick<PanelsCtx, "digest" | "openPanel">
 export interface ModelsDoor {
 	connectionsJob?: string
 	/**
-	 * Also open the **Get a model** dialog, pre-scoped: a runtime's **Get
+	 * Also open **Get a model** in the view's detail pane, pre-scoped: a runtime's **Get
 	 * more…** names its connection, a loadout's **Get a model…** its
 	 * capability. The Models view consumes it once.
 	 */

@@ -65,16 +65,19 @@ export function sameSceneSettings(a: SceneSettings, b: SceneSettings): boolean {
  * day changed". A genre's own **declared** trigger (★9) says its declared
  * label (`sceneCueReason`'s `labels`), else its key.
  */
-export const SCENE_CUE_REASONS: Readonly<Record<string, string>> = Object.freeze({
-	// 🚧 Not a setting: a person's *End scene here* (lane E).
-	endedHere: "the last scene ended",
-	dayCrossed: "the day changed",
-	timeAction: "time passed",
-	placeChanged: "the place changed",
-	narration: "a narrator line",
-	length: "the scene is long",
-	pause: "a long pause"
-})
+export const SCENE_CUE_REASONS: Readonly<Record<string, string>> =
+	Object.freeze({
+		// 🚧 Not a setting: the genre's first scene (shape.scenes.first).
+		opening: "the story began",
+		// 🚧 Not a setting: a person's *End scene here* (lane E).
+		endedHere: "the last scene ended",
+		dayCrossed: "the day changed",
+		timeAction: "time passed",
+		placeChanged: "the place changed",
+		narration: "a narrator line",
+		length: "the scene is long",
+		pause: "a long pause"
+	})
 
 /**
  * The chip's reason for the triggers that fired at one line, joined. `labels`

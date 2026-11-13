@@ -1,8 +1,10 @@
 import { db } from "$lib/server/db"
+import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray, asc, and, sql } from "drizzle-orm"
+import { eq, inArray, asc, and, sql, isNull } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { askerOf, refusable } from "./refusable"
+import { relistEntries } from "./entries"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	HISTORY_TYPE_ID,
@@ -38,7 +40,8 @@ import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
 import {
 	compareDates,
 	formatDate,
-	readStoryCalendar
+	readStoryCalendar,
+	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
 import {
 	rowReadsOnLine,
@@ -54,6 +57,16 @@ import {
 } from "$lib/server/state/reading"
 import { onLineSql } from "$lib/server/state/lineSql"
 import { lockBookCalendar } from "$lib/server/state/storyTime"
+import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
+import {
+	sceneDay,
+	unfiledScenesByEntry
+} from "$lib/server/scenes/unfiledScenesByEntry"
+import {
+	dayOnly,
+	historyEntryOfDate,
+	sceneStartOf
+} from "$lib/server/scenes/historyEntryOfDate"
 import {
 	assertOwnedBook,
 	assertReadableBook,
@@ -235,15 +248,22 @@ async function buildSceneList(
 		(scenes as Array<{ id: number }>).map((s) => s.id),
 		db
 	)
-	const { sceneLoreSourcesOf } = await import("$lib/server/scenes/liveScenes")
-	const sources = await sceneLoreSourcesOf(
-		db,
-		(scenes as Array<{ id: number }>).map((s) => s.id)
-	)
+	const { sceneLoreSourcesOf, sceneDisplayNames, sceneCauses, causeKeys } =
+		await import("$lib/server/scenes/liveScenes")
+	const [causes, sources, shownNames] = await Promise.all([
+		sceneCauses(db, scenes as any[]),
+		sceneLoreSourcesOf(
+			db,
+			(scenes as Array<{ id: number }>).map((s) => s.id)
+		),
+		sceneDisplayNames(db, scenes as any[])
+	])
 	const sceneList = (scenes as any[]).map((s) => ({
 		...s,
+		name: shownNames.get(s.id) ?? s.name,
 		...castFor(casts, s.id),
 		loreSources: sources.get(s.id) ?? null,
+		...causeKeys(causes.get(s.id)),
 		historyEntry: s.historyEntry
 			? {
 					id: s.historyEntry.id,
@@ -305,6 +325,10 @@ export const sceneCreateHandler: Handler<
 
 		// Verify lorebook ownership
 		const lorebook = await assertOwnedBook(db, userId, lorebookId)
+		{
+			const primerProblem = await primerRowEditProblem(db, lorebook.id)
+			if (primerProblem) throw new Error(primerProblem)
+		}
 
 		// A scene written from a session is on the session's line — the branch
 		// it reads this book on — and a scene written anywhere else is on main.
@@ -374,53 +398,57 @@ export const sceneCreateHandler: Handler<
 			// historyEntryId alone, so the injected scene's content would feed
 			// directly into the victim's own LLM-driven compile call the next
 			// time they compile that history entry.
-			const [historyEntry] = await tx
-				.select({
-					lorebookId: schema.lorebookEntries.lorebookId,
-					branchId: schema.lorebookEntries.branchId,
-					fields: schema.lorebookEntries.fields
-				})
-				.from(schema.lorebookEntries)
-				.where(
-					and(
-						eq(schema.lorebookEntries.id, historyEntryId),
-						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
-					)
-				)
-			if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
-				throw new Error(
-					"History entry not found or does not belong to this lorebook."
-				)
-			}
-			// Filed only under a history entry the scene's line reads (plan A8),
-			// by the rule `scenes:compile` reads it by: never a sibling line's
-			// entry, nor an ancestor's dated after the line forked. A scene under
-			// an entry its line never read goes with a line it is not on: a main
-			// scene with a deleted branch's entry, a fork's with the line it left
-			// (`keepHistoryForForks` keeps for a fork only the entries it reads).
-			let line: Line
-			try {
-				line = await lineOfBook(tx, lorebookId, branchId)
-			} catch (e) {
-				if (e instanceof BranchRefusal)
-					throw new Error("This session's line is not one of this lorebook's.", {
-						cause: e
+			// A scene saved with no history entry is unfiled (§0-B): its compile
+			// files it under the history entry of its date.
+			if (historyEntryId != null) {
+				const [historyEntry] = await tx
+					.select({
+						lorebookId: schema.lorebookEntries.lorebookId,
+						branchId: schema.lorebookEntries.branchId,
+						fields: schema.lorebookEntries.fields
 					})
-				throw e
-			}
-			if (
-				!rowReadsOnLine(historyEntry, line, historyEntryDate(historyEntry.fields))
-			)
-				throw new Error(
-					onSessionLine
-						? "That history entry is not on this session's line of the lorebook, so the scene cannot be filed under it."
-						: "That history entry is not on main, where this scene is saved, so the scene cannot be filed under it."
+					.from(schema.lorebookEntries)
+					.where(
+						and(
+							eq(schema.lorebookEntries.id, historyEntryId),
+							eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+						)
+					)
+				if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
+					throw new Error(
+						"History entry not found or does not belong to this lorebook."
+					)
+				}
+				// Filed only under a history entry the scene's line reads (plan A8),
+				// by the rule `scenes:compile` reads it by: never a sibling line's
+				// entry, nor an ancestor's dated after the line forked. A scene under
+				// an entry its line never read goes with a line it is not on: a main
+				// scene with a deleted branch's entry, a fork's with the line it left
+				// (`keepHistoryForForks` keeps for a fork only the entries it reads).
+				let line: Line
+				try {
+					line = await lineOfBook(tx, lorebookId, branchId)
+				} catch (e) {
+					if (e instanceof BranchRefusal)
+						throw new Error("This session's line is not one of this lorebook's.", {
+							cause: e
+						})
+					throw e
+				}
+				if (
+					!rowReadsOnLine(historyEntry, line, historyEntryDate(historyEntry.fields))
 				)
+					throw new Error(
+						onSessionLine
+							? "That history entry is not on this session's line of the lorebook, so the scene cannot be filed under it."
+							: "That history entry is not on main, where this scene is saved, so the scene cannot be filed under it."
+					)
+			}
 
 			const sceneRow: InsertScene = {
 				lorebookId,
 				sessionId: sessionId ?? null,
-				historyEntryId,
+				historyEntryId: historyEntryId ?? null,
 				branchId,
 				...(name !== undefined ? { name } : {}),
 				...(summary !== undefined ? { summary } : {}),
@@ -466,7 +494,7 @@ export const sceneCreateHandler: Handler<
 				const report = await recordToTimeline(db, newScene.sessionId, {
 					reason: "scene",
 					sceneId: newScene.id,
-					historyEntryId: newScene.historyEntryId
+					historyEntryId: newScene.historyEntryId ?? undefined
 				})
 				notRecorded = report.refused
 			} catch (e) {
@@ -495,6 +523,8 @@ export const sceneCreateHandler: Handler<
 				buildScenedMessageIds(sessionId, userId)
 			)
 		}
+		// The history list's unfiledSceneCount follows the scenes (Compile's gate).
+		await relistEntries(socket, newScene.lorebookId, HISTORY_TYPE_ID, emitToUser)
 
 		const res: Sockets.Scenes.Create.Response = {
 			scene: {
@@ -531,6 +561,10 @@ export const sceneUpdateHandler: Handler<
 
 		if (!lorebook) {
 			throw new Error("Scene not found or access denied.")
+		}
+		{
+			const primerProblem = await primerRowEditProblem(db, lorebook.id)
+			if (primerProblem) throw new Error(primerProblem)
 		}
 		// A session's scene saved is a session writing the book: lore writes
 		// Off refuses it, as it refuses the scene's creation (plan A22). A
@@ -622,6 +656,49 @@ export const sceneUpdateHandler: Handler<
 			| Awaited<ReturnType<typeof import("$lib/server/sessions/settle").settleThrough>>
 			| undefined
 
+		// 🚧 ★4b: a rename is read against the name as shown. The shown name sent
+		// back changes nothing (it stays automatic); blank makes the automatic
+		// name again; anything else is custom.
+		let namePatch: { name?: string | null; nameIsDefault?: boolean } = {}
+		if (name !== undefined) {
+			const { sceneDisplayNames, sceneNameFor, sceneClockOf } = await import(
+				"$lib/server/scenes/liveScenes"
+			)
+			const shown = (await sceneDisplayNames(db, [existing])).get(existing.id) ?? null
+			if (name !== null && name.trim() === (shown ?? "").trim() && shown !== null) {
+				namePatch = {}
+			} else if (
+				name !== null &&
+				existing.nameIsDefault &&
+				name.trim() === (existing.name ?? "").trim()
+			) {
+				// A review opened before a renumber still carries the old stored name.
+				namePatch = {}
+			} else if (name === null || !name.trim()) {
+				// The scene as it will be after this save: its start, so its
+				// number, comes from the selection the save sets.
+				const after =
+					selectedMessageIds !== undefined
+						? { ...existing, selectedMessageIds }
+						: existing
+				const start = sceneStartOf(after)
+				namePatch =
+					after.sessionId != null && start != null
+						? {
+								name: await sceneNameFor(
+									db,
+									after.sessionId,
+									after.channel,
+									after.lorebookId,
+									sceneClockOf(after, "opened"),
+									start
+								),
+								nameIsDefault: true
+							}
+						: { name: null, nameIsDefault: false }
+			} else namePatch = { name, nameIsDefault: false }
+		}
+
 		await db.transaction(async (tx) => {
 			// The same two capture rules `scenes:create` holds — this session's
 			// messages only, none already in another scene — minus this scene's
@@ -636,10 +713,8 @@ export const sceneUpdateHandler: Handler<
 						existing.id
 					)) ?? undefined
 
-			await tx
-				.update(schema.scenes)
-				.set({
-					...(name !== undefined ? { name } : {}),
+			const sceneSet = {
+					...namePatch,
 					...(summary !== undefined ? { summary } : {}),
 					// 🚧 A summary written (by a review's save or by hand) is a
 					// summary done; cleared, there is none (lane E) — so a
@@ -656,8 +731,13 @@ export const sceneUpdateHandler: Handler<
 					// touched for any reason would claim it needs no extraction.
 					...(carriesCast ? { castResolvedAt: new Date() } : {}),
 					...(graphed !== undefined ? { graphed } : {})
-				})
-				.where(eq(schema.scenes.id, params.scene.id))
+			}
+			// The shown name sent back alone writes nothing (★4b).
+			if (Object.keys(sceneSet).length)
+				await tx
+					.update(schema.scenes)
+					.set(sceneSet)
+					.where(eq(schema.scenes.id, params.scene.id))
 
 			if (carriesCast) {
 				await writeSceneCast(
@@ -723,6 +803,17 @@ export const sceneUpdateHandler: Handler<
 			} catch (err) {
 				console.warn("[scenes:update] scene-summary-applied emit failed:", err)
 			}
+		}
+
+		// The summary is saved: the held changes its wait kept back apply now (after the commit; never fails the save).
+		if (applied && existing.sessionId != null) {
+			const { applyHeldAutomaticallyAndTell } = await import("./sessions")
+			await applyHeldAutomaticallyAndTell(db, {
+				sessionId: existing.sessionId,
+				automatic: "scene-summary",
+				sceneId: existing.id,
+				io: socket.io
+			})
 		}
 
 		const [updated] = await db
@@ -797,6 +888,10 @@ export const sceneDeleteHandler: Handler<
 		if (!lorebook) {
 			throw new Error("Scene not found or access denied.")
 		}
+		{
+			const primerProblem = await primerRowEditProblem(db, lorebook.id)
+			if (primerProblem) throw new Error(primerProblem)
+		}
 
 		const sessionId = existing.sessionId
 
@@ -812,6 +907,8 @@ export const sceneDeleteHandler: Handler<
 				buildScenedMessageIds(sessionId, userId)
 			)
 		}
+		// The history list's unfiledSceneCount follows the scenes (Compile's gate).
+		await relistEntries(socket, existing.lorebookId, HISTORY_TYPE_ID, emitToUser)
 
 		/**
 		 * The delete itself, told to every view of this person's.
@@ -929,9 +1026,19 @@ export const sceneListByLorebookHandler: Handler<
 		// One indexed query for the whole page's cast, not one per scene.
 		const casts = await readSceneCasts(scenes.map((s) => s.id))
 
+		const { sceneDisplayNames, sceneCauses, causeKeys } = await import(
+			"$lib/server/scenes/liveScenes"
+		)
+		const [shownNames, causes] = await Promise.all([
+			sceneDisplayNames(db, scenes),
+			sceneCauses(db, scenes)
+		])
+
 		const sceneList: Sockets.Scenes.SceneWithMeta[] = scenes.map((s) => ({
 			...s,
+			name: shownNames.get(s.id) ?? s.name,
 			...castFor(casts, s.id),
+			...causeKeys(causes.get(s.id)),
 			sessionName: s.sessionId
 				? (sessionMap.get(s.sessionId) ?? null)
 				: null
@@ -982,12 +1089,72 @@ async function placesInPlay(
 	return (id) => copyOf.get(id) ?? id
 }
 
+/**
+ * 🚧 Who pressed Compile, by activity id (only runs that read unfiled
+ * scenes): the Apply that files them has no socket in scope, so it re-sends
+ * the scene list to the user through the pressing socket's server, so a tab
+ * that closed meanwhile loses nothing. Memory only; filing never depends on it.
+ */
+const compileReplyTo = new Map<string, { io: unknown; userId: number }>()
+
+// 🚧 Provisional copy: the owner has not seen this sentence.
+const BRANCH_SESSION_SCENES =
+	"The scenes waiting here belong to a branch session, which compiles them on its own line."
+
+/**
+ * Compiling forks the session first (owner 2026-11-10): a waiting scene of a
+ * session still riding its parent's line is not this line's to compile, so
+ * that session's line is forked now (carrying its uncompiled scenes) and the
+ * scene compiles on its own line. Only sessions attached to the compiled book
+ * are forked, so no second book's lock is ever taken. Runs under the book's
+ * calendar lock inside the caller's transaction; returns the scene ids it
+ * forked away.
+ */
+async function forkRidingSessions(
+	tx: Parameters<typeof ensureSessionLine>[0],
+	lorebookId: number,
+	scenes: { id: number; sessionId: number | null; branchId: number | null }[]
+): Promise<number[]> {
+	const sessionIds = [
+		...new Set(
+			scenes.map((s) => s.sessionId).filter((id): id is number => id != null)
+		)
+	]
+	if (sessionIds.length === 0) return []
+	const ridden = new Map(
+		(
+			await tx
+				.select({
+					id: schema.sessions.id,
+					branchId: schema.sessions.lorebookBranchId
+				})
+				.from(schema.sessions)
+				.where(
+					and(
+						inArray(schema.sessions.id, sessionIds),
+						eq(schema.sessions.lineOnFirstWrite, true),
+						eq(schema.sessions.lorebookId, lorebookId)
+					)
+				)
+		).map((r) => [r.id, r.branchId ?? null])
+	)
+	const riding = scenes.filter(
+		(s) =>
+			s.sessionId != null &&
+			ridden.has(s.sessionId) &&
+			ridden.get(s.sessionId) === (s.branchId ?? null)
+	)
+	for (const sessionId of new Set(riding.map((s) => s.sessionId!)))
+		await ensureSessionLine(tx, sessionId)
+	return riding.map((s) => s.id)
+}
+
 export const sceneCompileHandler: Handler<
 	Sockets.Scenes.Compile.Params,
 	Sockets.Scenes.Compile.Response
 > = {
 	event: "scenes:compile",
-	handler: async (socket, params, emitToUser) => {
+	handler: async (socket, asked, emitToUser) => {
 		const userId = socket.user!.id
 
 		/**
@@ -1005,17 +1172,228 @@ export const sceneCompileHandler: Handler<
 		 * (a lorebook docked beside a session page) is not flipped to the
 		 * error step by this one's failure (plan B8).
 		 */
-		const about =
-			typeof params?.historyEntryId === "number" &&
-			Number.isInteger(params.historyEntryId)
-				? { historyEntryId: params.historyEntryId }
+		const askedEntryId =
+			asked && typeof asked === "object" && "historyEntryId" in asked
+				? asked.historyEntryId
+				: undefined
+		let about: { historyEntryId?: number } =
+			typeof askedEntryId === "number" && Number.isInteger(askedEntryId)
+				? { historyEntryId: askedEntryId }
 				: {}
+		// 🚧 ★S6-1: a by-date ask's own id, echoed on its refusals (never an entry ask's).
+		const askedRequestId =
+			asked &&
+			typeof asked === "object" &&
+			!("historyEntryId" in asked) &&
+			typeof asked.requestId === "string"
+				? asked.requestId
+				: undefined
 		const refuse = (error: string, cause?: unknown): never => {
 			emitToUser("scenes:compile:error", {
 				...about,
+				...(askedRequestId !== undefined && { requestId: askedRequestId }),
 				error
 			} satisfies Sockets.Scenes.Compile.ErrorResponse)
 			throw new Error(error, cause === undefined ? undefined : { cause })
+		}
+
+		/**
+		 * The synthesis step's config comes from the **history summarize
+		 * pipeline** — its `synth` node's connection, sampling and prompt,
+		 * resolved through the same chain the pipeline panel edits. The
+		 * compile itself stays outside the executor for now (it *updates* an
+		 * existing entry from pre-drafted scene summaries — a shape the
+		 * messages-to-batches spec does not carry), but what it runs on is the
+		 * pipeline's to decide. A by-date ask runs it before it creates the
+		 * day's entry, so a refused compile creates nothing; an entry ask runs
+		 * it after its own ownership, lore-writes and line refusals.
+		 */
+		const resolveCompileModel = async () => {
+			const { resolveStepConfigs } = await import(
+				"$lib/server/pipelines/config/stepConfig"
+			)
+			// 🚧 Book-scoped: the history compile has no session to resolve through — book-scoped registrations come after pr-6 (A12, ruled 2026-10-24).
+			const { SUMMARIZE_HISTORY_SPEC_ID, SUMMARIZE_VERSION } =
+				await import("$lib/server/pipelines/specs/summarize")
+			const synthCfg = (
+				await resolveStepConfigs(db, SUMMARIZE_HISTORY_SPEC_ID, [
+					"synth"
+				])
+			)["synth"]
+
+			// The synth node's own pick, over the instance's `text->text` default.
+			//
+			// It used to be `synthCfg?.connection ?? connection`, where `connection`
+			// came from `getUserConfigurations` — a fourth tier, and one that read
+			// the instance default from a different column than every other
+			// consumer. `resolveCapabilityTarget` is the whole chain: the capability
+			// default underneath, the synth node's selection over it, and the
+			// refusal sentence when neither spoke. `resolveStepConfigs` hands back
+			// rows, so their ids go in as the pipelineConfig tier.
+			const target = await resolveCapabilityTarget(db, {
+				capability: TEXT_CAPABILITY,
+				pipelineConfig: {
+					connectionId: synthCfg?.connection?.id ?? null,
+					samplingConfigId: synthCfg?.sampling?.id ?? null
+				}
+			})
+			if (!target.ok) return refuse(target.problem.message)
+			const compileConnection = target.connection
+			// ⚠ A missing sampling config is NOT fatal to the chain — `resolveSampling
+			// (null)` means "let the backend use its own defaults" — but it is fatal
+			// to THIS caller: `compileScenesForEntry` takes a row and reads
+			// `sampling.name` off it to label the queue entry. So it is refused here,
+			// where the sentence can name a screen, rather than reaching the
+			// summarizer as a null and surfacing as a property access on undefined.
+			// It is only reachable if somebody clears the sampling half explicitly —
+			// `db/defaults.ts` re-seeds `text->text` on every boot while it is unset.
+			if (!target.sampling)
+				return refuse(
+					"The Reply loadout has no sampling config, and summarizing needs one. " +
+						"Choose one in Admin › Models › Loadouts."
+				)
+			const compileSampling = target.sampling
+			return {
+				synthCfg,
+				compileConnection,
+				compileSampling,
+				SUMMARIZE_HISTORY_SPEC_ID,
+				SUMMARIZE_VERSION
+			}
+		}
+
+		/**
+		 * 🚧 S-B2 (owner, 2026-11-04): compile by date. The ask names a day,
+		 * not an entry; it becomes the entry-id ask below once the day's
+		 * history entry is known (made here when the line has none, and only
+		 * after every refusal that could leave it empty). From then on this is
+		 * the entry path, unchanged.
+		 */
+		let params: Sockets.Scenes.Compile.ByEntry
+		// 🚧 ★S7-2: set only by a by-date ask; rides on its activity.
+		let byDate: { date: StoryDate | null; requestId?: string } | undefined
+		/** Scenes this press forked away from riding branch sessions (below). */
+		let forkedAway = 0
+		let resolvedModel:
+			| Awaited<ReturnType<typeof resolveCompileModel>>
+			| undefined
+		if (asked && typeof asked === "object" && "historyEntryId" in asked) {
+			params = asked
+		} else {
+			const lorebookId = asked?.lorebookId
+			const [book] =
+				typeof lorebookId === "number"
+					? await db
+							.select({ userId: schema.lorebooks.userId })
+							.from(schema.lorebooks)
+							.where(eq(schema.lorebooks.id, lorebookId))
+					: []
+			if (!book || book.userId !== userId)
+				return refuse("Lorebook not found or access denied.")
+			if ((await bookLoreWriteMode(db, lorebookId!)) === "off")
+				return refuse(LORE_WRITES_OFF)
+			const date = asked.date == null ? null : storyDateFrom(asked.date)
+			if (asked.date != null && !date)
+				return refuse("That date is not a story date.")
+			const askedBranchId = asked.branchId ?? null
+			const askedMoment = asked.moment == null ? null : storyDateFrom(asked.moment)
+			if (asked.moment != null && !askedMoment)
+				return refuse("That moment is not a story date.")
+			try {
+				await lineOfBook(db, lorebookId!, askedBranchId)
+			} catch (e) {
+				if (e instanceof BranchRefusal)
+					return refuse("That line is not one of this lorebook's.", e)
+				throw e
+			}
+			if (askedMoment && date && compareDates(askedMoment, dayOnly(date)) < 0)
+				return refuse(
+					"That moment is before this history entry's date, so there is nothing to compile into yet."
+				)
+			// A stale press must never leave an empty entry: the asked line's
+			// OWN unfiled scenes of that day have to exist before one is made.
+			// The check runs under the book's calendar lock, so a concurrent
+			// Apply cannot file those scenes between the check and the creation.
+			const day = date ? dayOnly(date) : null
+			// The model and its sampling, before anything is made.
+			resolvedModel = await resolveCompileModel()
+			let resolved: { historyEntryId: number; created: boolean } | null
+			try {
+				resolved = await db.transaction(async (tx) => {
+					await lockBookCalendar(tx, lorebookId!)
+					const waiting = (
+						await tx.query.scenes.findMany({
+							where: and(
+								isNull(schema.scenes.historyEntryId),
+								eq(schema.scenes.lorebookId, lorebookId!),
+								askedBranchId === null
+									? isNull(schema.scenes.branchId)
+									: eq(schema.scenes.branchId, askedBranchId)
+							)
+						})
+					).filter((s) => {
+						const d = sceneDay(s)
+						return d === null || day === null
+							? d === day
+							: compareDates(d, day) === 0
+					})
+					// Compiling forks the session first (owner 2026-11-10): the day's
+					// riding scenes leave `waiting`; the forks commit even when
+					// nothing else is left.
+					const forked = new Set(
+						await forkRidingSessions(tx, lorebookId!, waiting)
+					)
+					if (forked.size > 0) forkedAway += forked.size
+					const compilable = waiting.filter((s) => !forked.has(s.id))
+					if (compilable.length === 0) return null
+					// The line check below is satisfied by construction here:
+					// `historyEntryOfDate` returns only an entry `rowReadsOnLine`
+					// passes for the asked line, or one it creates on the line that
+					// OWNS the date (rule C, `historyOwnerStep`: the asked line or an
+					// ancestor whose cut covers the date), which the asked line reads — so the entry path's "That history entry is not on the
+					// line you are reading." cannot fire after a creation.
+					// Likewise a compile can only be in progress for an entry that
+					// exists; when the day's entry exists it is found
+					// (`created: false`) and nothing is made.
+					const made = await historyEntryOfDate(
+						tx,
+						{ lorebookId: lorebookId!, branchId: askedBranchId, date },
+						{ create: true }
+					)
+					// A dateless press on a line with no dated entry makes Year 1,
+					// Month 1, Day 1; a moment before that is a refusal the entry
+					// path would make anyway, so the creation is rolled back here.
+					if (
+						made.created &&
+						askedMoment &&
+						compareDates(askedMoment, made.date) < 0
+					)
+						throw new Error(
+							"That moment is before this history entry's date, so there is nothing to compile into yet."
+						)
+					return made
+				})
+			} catch (e: any) {
+				return refuse(e?.message || "That date could not be compiled into.", e)
+			}
+			if (!resolved)
+				return refuse(
+					forkedAway > 0
+						? BRANCH_SESSION_SCENES
+						: "No scenes of that day are waiting to be compiled."
+				)
+			if (resolved.created)
+				await relistEntries(socket, lorebookId!, HISTORY_TYPE_ID, emitToUser)
+			params = {
+				historyEntryId: resolved.historyEntryId,
+				branchId: askedBranchId,
+				moment: askedMoment
+			}
+			about = { historyEntryId: resolved.historyEntryId }
+			byDate = {
+				date,
+				...(askedRequestId !== undefined && { requestId: askedRequestId })
+			}
 		}
 
 		// Verify history entry ownership via lorebook
@@ -1089,6 +1467,43 @@ export const sceneCompileHandler: Handler<
 				"That moment is before this history entry's date, so there is nothing to compile into yet."
 			)
 
+		// §0-B: a scene opens unfiled. The press READS the unfiled scenes of its
+		// entry's date and compiles them with the filed ones; Apply files them
+		// (`setCompileReviewApplied`, below), so a discarded review leaves them
+		// unfiled. Only scenes whose date's entry IS this one (`create: false` —
+		// compiling one entry never makes entries for other days); the rest stay
+		// unfiled for their own compile.
+		// Compiling forks the session first (owner 2026-11-10), under the
+		// book's calendar lock, before the day's scenes are read. With scenes
+		// waiting the model is resolved first, so a press refused for it forks
+		// nothing (without them nothing forks, and its refusal comes later).
+		if (
+			!resolvedModel &&
+			((
+				await unfiledScenesByEntry(db, { lorebookId: historyEntry.lorebookId, line })
+			).get(params.historyEntryId)?.length ?? 0) > 0
+		)
+			resolvedModel = await resolveCompileModel()
+		forkedAway += (
+			await db.transaction(async (tx) => {
+				await lockBookCalendar(tx, historyEntry.lorebookId)
+				return forkRidingSessions(
+					tx,
+					historyEntry.lorebookId,
+					(
+						await unfiledScenesByEntry(tx, {
+							lorebookId: historyEntry.lorebookId,
+							line
+						})
+					).get(params.historyEntryId) ?? []
+				)
+			})
+		).length
+		const dayUnfiled =
+			(
+				await unfiledScenesByEntry(db, { lorebookId: historyEntry.lorebookId, line })
+			).get(params.historyEntryId) ?? []
+
 		// The scenes this line reads under this entry: main's shared ones and
 		// the chain's own, each ancestor's only up to its fork cut — never a
 		// sibling line's. Scoped to this lorebook too (already known-owned),
@@ -1106,66 +1521,28 @@ export const sceneCompileHandler: Handler<
 			line,
 			() => entryDate
 		)
+		const compiledScenes = [...lineScenes, ...dayUnfiled]
 		const scenes = inPlayOrder(
-			lineScenes,
-			await placesInPlay(lineScenes.flatMap((s) => s.selectedMessageIds ?? []))
+			compiledScenes,
+			await placesInPlay(compiledScenes.flatMap((s) => s.selectedMessageIds ?? []))
 		)
 
 		if (scenes.length === 0)
-			return refuse("No scenes found for this history entry.")
-
-		/**
-		 * The synthesis step's config comes from the **history summarize
-		 * pipeline** — its `synth` node's connection, sampling and prompt,
-		 * resolved through the same chain the pipeline panel edits. The
-		 * compile itself stays outside the executor for now (it *updates* an
-		 * existing entry from pre-drafted scene summaries — a shape the
-		 * messages-to-batches spec does not carry), but what it runs on is the
-		 * pipeline's to decide.
-		 */
-		const { resolveStepConfigs } = await import(
-			"$lib/server/pipelines/config/stepConfig"
-		)
-		// 🚧 Book-scoped: the history compile has no session to resolve through — book-scoped registrations come after pr-6 (A12, ruled 2026-10-24).
-		const { SUMMARIZE_HISTORY_SPEC_ID, SUMMARIZE_VERSION } = await import(
-			"$lib/server/pipelines/specs/summarize"
-		)
-		const synthCfg = (
-			await resolveStepConfigs(db, SUMMARIZE_HISTORY_SPEC_ID, ["synth"])
-		)["synth"]
-
-		// The synth node's own pick, over the instance's `text->text` default.
-		//
-		// It used to be `synthCfg?.connection ?? connection`, where `connection`
-		// came from `getUserConfigurations` — a fourth tier, and one that read
-		// the instance default from a different column than every other
-		// consumer. `resolveCapabilityTarget` is the whole chain: the capability
-		// default underneath, the synth node's selection over it, and the
-		// refusal sentence when neither spoke. `resolveStepConfigs` hands back
-		// rows, so their ids go in as the pipelineConfig tier.
-		const target = await resolveCapabilityTarget(db, {
-			capability: TEXT_CAPABILITY,
-			pipelineConfig: {
-				connectionId: synthCfg?.connection?.id ?? null,
-				samplingConfigId: synthCfg?.sampling?.id ?? null
-			}
-		})
-		if (!target.ok) return refuse(target.problem.message)
-		const compileConnection = target.connection
-		// ⚠ A missing sampling config is NOT fatal to the chain — `resolveSampling
-		// (null)` means "let the backend use its own defaults" — but it is fatal
-		// to THIS caller: `compileScenesForEntry` takes a row and reads
-		// `sampling.name` off it to label the queue entry. So it is refused here,
-		// where the sentence can name a screen, rather than reaching the
-		// summarizer as a null and surfacing as a property access on undefined.
-		// It is only reachable if somebody clears the sampling half explicitly —
-		// `db/defaults.ts` re-seeds `text->text` on every boot while it is unset.
-		if (!target.sampling)
 			return refuse(
-				"The Reply loadout has no sampling config, and summarizing needs one. " +
-					"Choose one in Admin › Models › Loadouts."
+				forkedAway > 0
+					? BRANCH_SESSION_SCENES
+					: "No scenes found for this history entry."
 			)
-		const compileSampling = target.sampling
+
+		// The entry ask resolves its model here, after every refusal above; the
+		// by-date ask resolved it before it made anything.
+		const {
+			synthCfg,
+			compileConnection,
+			compileSampling,
+			SUMMARIZE_HISTORY_SPEC_ID,
+			SUMMARIZE_VERSION
+		} = resolvedModel ?? (await resolveCompileModel())
 
 		const lorebook = historyEntry.lorebook
 		// In the book's own calendar — the free-form "Year X, Mo. Y, Day Z"
@@ -1186,7 +1563,9 @@ export const sceneCompileHandler: Handler<
 					lorebookId: historyEntry.lorebookId,
 					lorebookLabel: lorebook.name,
 					branchId,
-					moment
+					moment,
+					...(dayUnfiled.length > 0 && { sceneIds: dayUnfiled.map((x) => x.id) }),
+					...(byDate && { byDate })
 				},
 				abortController
 			)
@@ -1194,11 +1573,28 @@ export const sceneCompileHandler: Handler<
 			// "A compile of this entry is already in progress for this line and moment." — ours.
 			return refuse(e?.message || "That history entry could not be compiled.", e)
 		}
+		// Prune on EVERY press, so a discarded or lapsed run's `{ io, userId }` entry goes.
+		for (const id of compileReplyTo.keys())
+			if (!activityStore.getById(id)) compileReplyTo.delete(id)
+		if (dayUnfiled.length > 0) compileReplyTo.set(activityId, { io: socket.io, userId })
 
 		let result
 		try {
 			result = await compileScenesForEntry({
-				scenes,
+				// A scene's notes ride beside its summary ("Noted in this
+				// scene:"); a scene with no summary compiles as it was.
+				scenes: scenes.map((s) => {
+					const lines = (s.notes ?? [])
+						.map((n) => n.text.trim())
+						.filter(Boolean)
+						.map((t) => `- ${t}`)
+					return s.summary?.trim() && lines.length
+						? {
+								...s,
+								summary: `${s.summary.trim()}\n\nNoted in this scene:\n${lines.join("\n")}`
+							}
+						: s
+				}),
 				connection: compileConnection,
 				sampling: compileSampling,
 				synthSystemPrompt: synthCfg?.prompts?.synth ?? null,
@@ -1247,6 +1643,7 @@ export const sceneCompileHandler: Handler<
 			})
 			emitToUser("scenes:compile:error", {
 				...about,
+				...(askedRequestId !== undefined && { requestId: askedRequestId }),
 				error: failure.errorMessage
 			} satisfies Sockets.Scenes.Compile.ErrorResponse)
 			throw err
@@ -1333,6 +1730,10 @@ export async function processScene(
 
 	const lorebook = await findOwnedBook(db, userId, scene.lorebookId)
 	if (!lorebook) throw new Error("Scene not found or access denied.")
+	{
+		const primerProblem = await primerRowEditProblem(db, lorebook.id)
+		if (primerProblem) throw new Error(primerProblem)
+	}
 	// Nothing drafted here could be saved with lore writes Off, so none is
 	// drafted — refused before a card starts, as a summarize is (plan A22).
 	if (scene.sessionId != null) {
@@ -1384,11 +1785,13 @@ export async function processScene(
 			: (scene.summaryStatus ?? "none"))
 
 	const abortController = new AbortController()
+	const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
+	const shownSceneName = (await sceneDisplayNames(db, [scene])).get(scene.id)
 	const activityId = activityStore.startScene(
 		{
 			userId,
 			sceneId: params.sceneId,
-			sceneName: scene.name ?? undefined,
+			sceneName: shownSceneName ?? undefined,
 			lorebookId: scene.lorebookId,
 			lorebookLabel: lorebook.name,
 			historyEntryId: scene.historyEntryId ?? undefined,
@@ -1439,6 +1842,12 @@ export async function processScene(
 			} catch (e) {
 				console.warn("[scenes:process] scene list not sent:", e)
 			}
+		// A summary that stops waiting without being saved (failed, cancelled) releases the held changes
+		// its wait kept back (never fails the run; no socket here, so the room push finds the server itself).
+		if (sessionId != null && status !== "running" && status !== "review" && status !== "done") {
+			const { applyHeldAutomaticallyAndTell } = await import("./sessions")
+			await applyHeldAutomaticallyAndTell(db, { sessionId, automatic: "scene-close", sceneId: params.sceneId })
+		}
 	}
 	const failRun = (error: string): never => {
 		ended = true
@@ -1574,6 +1983,9 @@ export async function processScene(
 			} satisfies Sockets.Scenes.Process.Progress)
 		}
 
+		const sceneNotes = (scene.notes ?? [])
+			.map((n) => n.text.trim())
+			.filter(Boolean)
 		const receipt = await runSpec({
 			db,
 			sessionId: scene.sessionId,
@@ -1600,7 +2012,12 @@ export async function processScene(
 					channel: scene.channel,
 					// What the transcript's preamble names (`render`'s
 					// `scene` port reads `request.scene`).
-					scene: await sceneHeaderOf(db, scene),
+					// The transcript preamble does not render `scene.notes` yet
+					// (`transcript.ts` `sceneOf` keeps name/place/date only); that half is queued.
+					scene: {
+						...(await sceneHeaderOf(db, scene)),
+						...(sceneNotes.length ? { notes: sceneNotes } : {})
+					},
 					...(scene.openedAtMessageId != null
 						? {
 								openedAt: scene.openedAtMessageId,
@@ -1746,7 +2163,7 @@ export async function processScene(
 
 		const pendingResult = {
 			content: result.content ?? result.raw ?? "",
-			name: result.name ?? scene.name ?? undefined,
+			name: result.name ?? shownSceneName ?? scene.name ?? undefined,
 			participantCharacters: resolvedParticipants,
 			mentionedCharacters: resolvedMentioned,
 			suggestedParticipantCharacters: suggestedParticipants,
@@ -1865,7 +2282,78 @@ activityStore.setEphemeralSceneCleanup(async (sceneId, userId) => {
  */
 activityStore.setSceneReviewDiscarded(async (sceneId, statusBefore) => {
 	const { restoreDiscardedReview } = await import("$lib/server/scenes/summaryStatus")
-	await restoreDiscardedReview(db, sceneId, statusBefore)
+	const moved = await restoreDiscardedReview(db, sceneId, statusBefore)
+	// The review is dismissed unapplied: the wait is over, so the held changes it kept back apply.
+	if (!moved) return
+	const [scene] = await db
+		.select({ sessionId: schema.scenes.sessionId })
+		.from(schema.scenes)
+		.where(eq(schema.scenes.id, sceneId))
+		.limit(1)
+	if (scene?.sessionId == null) return
+	const { applyHeldAutomaticallyAndTell } = await import("./sessions")
+	await applyHeldAutomaticallyAndTell(db, { sessionId: scene.sessionId, automatic: "scene-close", sceneId })
+})
+
+/**
+ * 🚧 A compile review that was applied (`acted`) files the scenes it read
+ * unfiled (`sceneIds`) under its entry, in one transaction. A scene is
+ * skipped unless it is still unfiled, in this book, and its day's entry is
+ * still this one. Then the person who compiled gets the scene list again.
+ */
+activityStore.setCompileReviewApplied(async (activity) => {
+	await db.transaction(async (tx) => {
+		await lockBookCalendar(tx, activity.lorebookId)
+		let line: Line
+		try {
+			line = await lineOfBook(tx, activity.lorebookId, activity.branchId)
+		} catch (e) {
+			if (e instanceof BranchRefusal) return
+			throw e
+		}
+		const byRule =
+			(
+				await unfiledScenesByEntry(tx, { lorebookId: activity.lorebookId, line })
+			).get(activity.historyEntryId) ?? []
+		const asked = new Set(activity.sceneIds ?? [])
+		const ids = byRule.map((s) => s.id).filter((id) => asked.has(id))
+		if (ids.length === 0) return
+		await tx
+			.update(schema.scenes)
+			.set({ historyEntryId: activity.historyEntryId })
+			.where(
+				and(
+					inArray(schema.scenes.id, ids),
+					eq(schema.scenes.lorebookId, activity.lorebookId),
+					isNull(schema.scenes.historyEntryId)
+				)
+			)
+	})
+	const to = compileReplyTo.get(activity.id)
+	if (to?.io) {
+		const { io, userId } = to
+		const emitToOwner = async (event: string, data: any) => {
+			if (!io) return
+			const { emitToUserRedacted } = await import(
+				"$lib/server/sockets/utils/broadcastHelpers"
+			)
+			await emitToUserRedacted(io as any, userId, event, data)
+		}
+		const asOwner = { io, user: { id: userId } } as any
+		await sceneListByLorebookHandler.handler(
+			asOwner,
+			{ lorebookId: activity.lorebookId },
+			emitToOwner
+		)
+		// The history list's unfiledSceneCount follows the filing (Compile's gate).
+		await relistEntries(asOwner, activity.lorebookId, HISTORY_TYPE_ID, emitToOwner)
+	}
+	compileReplyTo.delete(activity.id)
+})
+
+// 🚧 Backs the delete above: a compile removed any other way (dismissed, superseded, lapsed) leaves no socket in the map.
+activityStore.setCompileCleared((activity) => {
+	compileReplyTo.delete(activity.id)
 })
 
 // ── 🚧 Live scenes: boundaries (PROPOSAL-live-scenes §3, §14 B) ────────────
@@ -1899,9 +2387,6 @@ async function replyLiveScene(
 		scene: (await sceneReplyRow(db, result.scene)) as any,
 		...(result.closedScene
 			? { closedScene: (await sceneReplyRow(db, result.closedScene)) as any }
-			: {}),
-		...(result.createdHistoryEntry !== undefined
-			? { createdHistoryEntry: result.createdHistoryEntry }
 			: {}),
 		...(result.castProposal ? { castProposal: result.castProposal } : {}),
 		...(extra.openedScene
@@ -1949,9 +2434,22 @@ export const sceneOpenHandler: Handler<
 		// a session's numbers are written onto the world's timeline, as
 		// `scenes:close` writes them — best-effort, the scene stands.
 		if (closeAt != null) await recordClose(result)
-		return replyLiveScene("scenes:open", result, params, userId, emitToUser, {
-			closesScene: closeAt != null
-		})
+		const reply = await replyLiveScene(
+			"scenes:open",
+			result,
+			params,
+			userId,
+			emitToUser,
+			{ closesScene: closeAt != null }
+		)
+		// The history list's unfiledSceneCount follows the scenes (Compile's gate).
+		await relistEntries(
+			socket,
+			result.scene.lorebookId,
+			HISTORY_TYPE_ID,
+			emitToUser
+		)
+		return reply
 	},
 	"The scene could not be opened.",
 	undefined,
@@ -1991,9 +2489,23 @@ export const sceneCloseHandler: Handler<
 				})
 			).opened
 		}
-		return replyLiveScene("scenes:close", result, params, userId, emitToUser, {
-			openedScene
-		})
+		const reply = await replyLiveScene(
+			"scenes:close",
+			result,
+			params,
+			userId,
+			emitToUser,
+			{ openedScene }
+		)
+		// The history list's unfiledSceneCount follows the scenes (Compile's gate).
+		if (openedScene)
+			await relistEntries(
+				socket,
+				openedScene.scene.lorebookId,
+				HISTORY_TYPE_ID,
+				emitToUser
+			)
+		return reply
 	},
 	"The scene could not be closed.",
 	undefined,
@@ -2071,7 +2583,7 @@ async function recordClose(
 		await recordToTimeline(db, result.sessionId, {
 			reason: "scene",
 			sceneId: result.scene.id,
-			historyEntryId: result.scene.historyEntryId
+			historyEntryId: result.scene.historyEntryId ?? undefined
 		})
 	} catch (e) {
 		console.warn("[scenes] state was not recorded to the timeline:", e)
@@ -2257,7 +2769,12 @@ export async function pushSceneList(
  */
 export async function afterBoundaryPlaced(
 	io: unknown,
-	params: { sessionId: number; userId: number; closedSceneIds: number[] }
+	params: {
+		sessionId: number
+		userId: number
+		lorebookId: number | null
+		closedSceneIds: number[]
+	}
 ): Promise<void> {
 	const { sessionId, userId } = params
 	const emitToOwner = async (event: string, data: any) => {
@@ -2281,6 +2798,14 @@ export async function afterBoundaryPlaced(
 			() => buildScenedMessageIds(sessionId, userId)
 		)
 		await emitToOwner("scenes:cues", () => buildSceneCuesReply(sessionId))
+		// The history list's unfiledSceneCount follows the scenes (Compile's gate).
+		if (params.lorebookId != null)
+			await relistEntries(
+				{ io, user: { id: userId } },
+				params.lorebookId,
+				HISTORY_TYPE_ID,
+				emitToOwner
+			)
 	}
 	if (params.closedSceneIds.length)
 		await summarizeOnClose(sessionId, params.closedSceneIds, userId, emitToOwner)
@@ -2325,6 +2850,13 @@ export const sceneDecideCueHandler: Handler<
 			// The scene opened as *Start scene here* opens one: its reply's
 			// cascades, and *On close* for the scene it closed.
 			await replyLiveScene("scenes:open", decided.opened, params, userId, emitToUser)
+			// The history list's unfiledSceneCount follows the scenes (Compile's gate).
+			await relistEntries(
+				socket,
+				decided.opened.scene.lorebookId,
+				HISTORY_TYPE_ID,
+				emitToUser
+			)
 		} else {
 			await emitToUser("scenes:cues", () => buildSceneCuesReply(decided.sessionId))
 		}
@@ -2429,8 +2961,10 @@ export const sceneOpenScenesHandler: Handler<
 		const sessionId = Number(params?.sessionId)
 		const access = await checkSessionAccess(sessionId, socket.user!.id)
 		if (!access.hasAccess) throw new Error("Session not found or access denied.")
-		const [{ readCastProposal, sceneClockOf }, { sessionSceneContext }] =
-			await Promise.all([
+		const [
+			{ readCastProposal, sceneClockOf, sceneDisplayNames, sceneCauses, causeKeys },
+			{ sessionSceneContext }
+		] = await Promise.all([
 				import("$lib/server/scenes/liveScenes"),
 				import("$lib/server/sessions/sceneSettings")
 			])
@@ -2446,13 +2980,17 @@ export const sceneOpenScenesHandler: Handler<
 				)
 			)
 			.orderBy(asc(schema.scenes.id))
+		const [shownNames, causes] = await Promise.all([
+			sceneDisplayNames(db, open),
+			sceneCauses(db, open)
+		])
 		const scenes: Sockets.Scenes.OpenScenes.Response["scenes"] = []
 		for (const scene of open) {
 			const proposal = await readCastProposal(db, scene)
 			const clock = sceneClockOf(scene, "opened")
 			scenes.push({
 				id: scene.id,
-				name: scene.name ?? null,
+				name: shownNames.get(scene.id) ?? null,
 				channel: scene.channel,
 				openedAtMessageId: scene.openedAtMessageId!,
 				since: clock
@@ -2468,8 +3006,10 @@ export const sceneOpenScenesHandler: Handler<
 				lineCount: proposal?.lineCount ?? 0,
 				cast: (proposal?.participants ?? []).map((p) => ({
 					name: p.name,
-					evidence: p.evidenceLabel
-				}))
+					// Words for the name's tooltip, never the turn-cited review label.
+					evidence: p.evidenceWords
+				})),
+				...causeKeys(causes.get(scene.id))
 			})
 		}
 		const ctx = await sessionSceneContext(db, sessionId)

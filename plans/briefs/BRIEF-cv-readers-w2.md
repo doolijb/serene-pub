@@ -1,0 +1,32 @@
+# BRIEF cv-readers-w2 — no reader of `cast_amendments` left
+
+Read `plans/briefs/BRIEF-cv-readers-wcommon.md` first (the rules and the design). Lane cv-readers, worker 2 (Sonnet). Report as your final message: `# REPORT cv-readers-w2 (2026-11-06)`.
+
+## Goal
+`cast_amendments` is frozen: nothing writes it any more, so a dated change made today (a cast version) is **invisible** to every reader still folding `cast_amendments` — a bug. Move every remaining product reader onto character versions:
+- member names/aliases at a reading → `membersAsRead(db, ids, { reading })` or `{ sessionId }` (never `castOverlaysFor` / `castMemberAt` from `state/entriesOnReading.ts`, which fold amendments over whole frozen member rows);
+- "which cards a member is drawn with" (a **dated card**) → a cast version's **parent card version's card** (`character_versions` aliased as parent, `parent.card_id`), as `utils/castMemberCards.ts` already does for its `versioned` leg.
+Remove the amendment-row fixtures the guards lane kept in tests for these readers, and test with versions (`insertDatedCardVersion(db, memberId, cardId, year)` in `pipelines/testing/fixtures.ts`, or `writeCastVersion` / `updateCastVersion`).
+
+## Files owned (edit only these, plus the tests named below and new tests)
+- `utils/castMemberCards.ts` — drop the ⏳ `cast_amendments` leg from `castMemberCards`, `memberOfCard`, `cardTakenBy` (and `datedCardSql`, `cardIdOf` if unused); fix the header (no "⏳ dated card … amendments").
+- `cast/seatedCast.ts` — **only** `sessionsDrawingCard` (the candidates: seats whose member has a cast version whose parent card version is of `cardId`; the confirm step through `membersAsRead` stays). Don't touch `cardsNow` / `seatedCastOf` (supervisor's).
+- `conversations/store.ts` ~1160 — the `EXISTS … cast_amendments … fields->>'characterId'` prefilter → the same over cast versions' parents.
+- `utils/castTags.ts` — stop listing `castAmendment` (`cast_amendments`) in `CAST_TAG_SITES` (it is frozen, nothing writes it). **Do not** add `character_versions` as a tag site: that would be a second writer of versions (P2) — write it in your report as a ★ (versions hold summary/description text a `{{char:N}}` tag can sit in; a merge/delete rewrite of them needs a writer in `characters/versions.ts`, cv-fix2's file).
+- `state/lorebookState.ts` `lorebookLinks` (~95–150) — cast names as read on `reading` via `membersAsRead`, not `castOverlaysFor`/`castMemberAt`. `characterId` stays the member's OWN linked card (read the comment there).
+- `pipelines/entities/sideCharacter.ts` — `lorebookNames` (~103–150): names + aliases from `membersAsRead(db, ids, { reading })`, `absorbedAliases` from the binding row (not frozen); drop the whole-row `select().from(lorebookBindings)`. **And** the four card-copy reads at ~202–203 (`pickedId` row) and ~324–325 (`listSideCharacterOptions`): names via `cardsNow` (`cast/seatedCast.ts`) — the offered cards are the user's library cards shown in a session picker, read as the card's current version; the existing `cardsAsSeatsRead` layering for held cards stays.
+- `pipelines/prompt/characterLore.ts` — `castTagName` / `populateLorebookEntryBindings`: the `{{char:N}}` reader names the member **as read** (`MemberAsRead.shownName` = nickname || name, the same rule `memberShownName` applies today — confirm). Keep the change minimal (e.g. the hydrated binding carries the as-read names); `isCharacterLoreEntryVisible` / `memberCards` keep working.
+- `pipelines/runtime/host.ts` — **only** these three places:
+  1. ~4215–4400, the lore read: `bindings` (whole `lorebook_bindings` rows) → `castMemberAt` → `hydrateBindings`. Replace with `membersAsRead(db, ids, { reading })` (the session's reading already in scope there) and build the hydrated binding from it (id, `binding` number, lorebookId, `characterId` = the member's own linked card as today, names as read, `memberCards`), with `character` from `cardsNow` (deleted cards → null, as today). No frozen column read, no whole-row member select.
+  2. ~5085–5135, `lorebookBindings` for the gazetteer: names/aliases as read via `membersAsRead(db, ids, { sessionId })`; `absorbedAliases` from the row.
+  3. `hydrateBindings` (~11220): its `select().from(schema.characters)` whole-row read → `cardsNow` (filter `isDeleted` as today).
+  Leave every other part of `host.ts` alone (worker 3 edits other parts later).
+
+## Tests (Done means)
+- Convert these fixtures from `cast_amendments` inserts to cast versions and keep the tests green: `cast/sessionsDrawingCard.int.test.ts`, `utils/castMemberCards.versions.int.test.ts`, `utils/sessionAccess.seatMember.int.test.ts`, `pipelines/runtime/datedCardLore.int.test.ts`, `pipelines/runtime/promptAtReading.int.test.ts` (the row kept for the `{{char:N}}` reader), `state/datedRows.versions.int.test.ts`, `sockets/sessions.seatCast.int.test.ts` (fixture only). `sockets/lorebooks.castTags.int.test.ts`: change only the cast-amendment-site case (cv-fix2 owns `sockets/lorebooks.ts`, not this test — touch nothing else there; say so in the report). Leave `sessions/seats.int.test.ts` alone (worker 1 converts its fixtures).
+- New assertions: a dated card change **written as a version** counts for `sessionsDrawingCard` (access) and for `castMemberCards`; the `{{char:N}}` tag names a member with an own name (version) and a later dated rename on the session's line; `lorebookLinks` / `lorebookNames` read a dated rename written as a version.
+- Run with `--maxWorkers=2`: the files above, plus `state/lorebookState*.test.ts`, `pipelines/entities/sideCharacter*.test.ts`, `pipelines/prompt/characterLore*.test.ts`, `utils/castTags*.test.ts`, `conversations/store*.test.ts` (the person-tab tests), `cast/*.test.ts`, every `pipelines/runtime/host*.test.ts` that exercises lore/character lore (grep for `characterLore`/`lorebookBindings`/`castTag`), and `characters/frozenColumns.guard.test.ts` (its stale-allowlist test will name `sideCharacter.ts` — expected).
+- `npx tsc --noEmit -p .` clean on your files. `grep -rn "castAmendments\|cast_amendments\|castOverlaysFor\|castMemberAt" <your product files>` → nothing.
+
+## Out of scope (note, don't fix)
+`state/entriesOnReading.ts` (`castOverlaysFor` / `castMemberAt` definitions — say in your report whether they are now dead), `utils/forkHistory.ts` (its reads may stay), `sessions/seatMembers.ts` (a boot pass), `characters/versionsLift.ts`, `sockets/narrativeGraph.ts`, `sockets/amendments.ts`, `sockets/lorebooks.ts`, `lorebooks/tableRegistry.ts`.

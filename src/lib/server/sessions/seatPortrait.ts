@@ -17,6 +17,8 @@
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { BackdropRefusal, backdropFileFor } from "./backdrop"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
+import { storedSeatOwner } from "$lib/server/state/seatRefs"
 
 /** Thrown with the sentence the caller shows. */
 export class SeatPortraitRefusal extends Error {}
@@ -37,11 +39,16 @@ export async function writeSeatPortrait(
 		sessionId: number
 		userId: number
 		isOwner: boolean
-		owner: FaceOwner
+		/** 🚧 Or a `seated_member` owner (plan §27 S2), read as its seat's stored one. */
+		owner: FaceOwner | { kind: "seated_member"; id: number }
 		mediaRef: string | null
 	}
 ): Promise<{ playerSeatId: number; portraitMediaId: number | null }> {
-	const { sessionId, userId, isOwner, owner } = params
+	const { sessionId, userId, isOwner } = params
+	// 🚧 A member with no seat in the session is a seat that is gone.
+	const stored = (await storedSeatOwner(db, sessionId, params.owner)) as FaceOwner | null
+	if (!stored) throw new SeatPortraitRefusal("That seat is no longer in this session.")
+	const owner = stored
 	if (owner.kind === "session" || owner.kind === "session_location")
 		throw new SeatPortraitRefusal("The world and its places have no face to set.")
 	if (owner.kind !== "session_cast" && owner.kind !== "player_seat")
@@ -50,6 +57,8 @@ export async function writeSeatPortrait(
 		.select({
 			id: schema.sessionPersonas.id,
 			userId: schema.sessionPersonas.userId,
+			personaId: schema.sessionPersonas.personaId,
+			castMemberId: schema.sessionPersonas.castMemberId,
 			cardOwner: schema.characters.userId
 		})
 		.from(schema.sessionPersonas)
@@ -70,7 +79,21 @@ export async function writeSeatPortrait(
 				? "That seat is no longer in this session."
 				: "Only a player's seat has a portrait to set; a character's face is its card's picture."
 		)
-	if (!isOwner && (seat.userId ?? seat.cardOwner) !== userId)
+	// 🚧 Whose card the seat is: its cast member's active card, else the card as today;
+	// a card-less member has no card to read and falls back to the seat's.
+	let cardOwner = seat.cardOwner
+	if (seat.castMemberId != null && seat.personaId != null) {
+		const read = await memberAsRead(db, seat.castMemberId, { sessionId })
+		if (read?.activeCardId != null && read.activeCardId !== seat.personaId) {
+			const [card] = await db
+				.select({ userId: schema.characters.userId })
+				.from(schema.characters)
+				.where(eq(schema.characters.id, read.activeCardId))
+				.limit(1)
+			cardOwner = card?.userId ?? null
+		}
+	}
+	if (!isOwner && (seat.userId ?? cardOwner) !== userId)
 		throw new SeatPortraitRefusal("Only that seat's player or the session's owner can change its portrait.")
 
 	let portraitMediaId: number | null = null

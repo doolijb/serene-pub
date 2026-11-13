@@ -18,7 +18,7 @@
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 
 	type State = Sockets.Updates.State
@@ -40,7 +40,10 @@
 
 	function handleError(res: Sockets.ErrorResponse) {
 		busy = false
-		toaster.error({ title: res.error })
+		notify.error({
+			source: "admin:updates:refusal",
+			title: res.error
+		})
 	}
 
 	const ERROR_EVENTS = [
@@ -50,7 +53,8 @@
 		"updates:discard:error",
 		"updates:apply:error"
 	] as const
-	for (const e of ERROR_EVENTS) interest.useInterest<"updates:get:error">(e, handleError)
+	for (const e of ERROR_EVENTS)
+		interest.useInterest<"updates:get:error">(e, handleError)
 
 	interest.useInterest<"updates:download">("updates:download", take)
 	interest.useInterest<"updates:cancel">("updates:cancel", take)
@@ -71,7 +75,12 @@
 	}
 
 	function discard() {
-		if (!confirm("Discard the downloaded update? You can download it again later.")) return
+		if (
+			!confirm(
+				"Discard the downloaded update? You can download it again later."
+			)
+		)
+			return
 		busy = true
 		socket.emit("updates:discard", {})
 	}
@@ -124,10 +133,13 @@
 			"Serene Pub is taking longer than expected to come back. Reload this page in a minute; if it still does not answer, open Serene Pub from its launcher."
 	}
 
-	const mb = (n: number) => `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`
+	const mb = (n: number) =>
+		`${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`
 
 	let percent = $derived(
-		st && st.total ? Math.min(100, Math.round((st.received / st.total) * 100)) : null
+		st && st.total
+			? Math.min(100, Math.round((st.received / st.total) * 100))
+			: null
 	)
 	let newer = $derived(st?.latestTag ?? null)
 </script>
@@ -166,12 +178,21 @@
 	<div class="flex flex-col gap-4">
 		{#if !st}
 			<p class="text-surface-600-400 flex items-center gap-2 text-sm">
-				<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+				<Icons.Loader2
+					size={16}
+					class="animate-spin"
+					aria-hidden="true"
+				/>
 				Checking…
 			</p>
 		{:else}
-			<section class="panel-card flex flex-col gap-3" aria-labelledby="updates-version-heading">
-				<h2 id="updates-version-heading" class="text-sm font-medium">This version</h2>
+			<section
+				class="panel-card flex flex-col gap-3"
+				aria-labelledby="updates-version-heading"
+			>
+				<h2 id="updates-version-heading" class="text-sm font-medium">
+					This version
+				</h2>
 				<p class="flex items-start gap-2 text-sm">
 					<span
 						class="mt-1.5 size-2 shrink-0 rounded-full {newer
@@ -189,7 +210,9 @@
 					</span>
 				</p>
 				{#if !st.inApp.allowed}
-					<p class="text-surface-600-400 text-sm">{st.inApp.message}</p>
+					<p class="text-surface-600-400 text-sm">
+						{st.inApp.message}
+					</p>
 					{#if newer}
 						<a
 							href={st.releasesUrl}
@@ -210,11 +233,18 @@
 					aria-labelledby="updates-progress-heading"
 					aria-live="polite"
 				>
-					<h2 id="updates-progress-heading" class="text-sm font-medium">Update</h2>
+					<h2
+						id="updates-progress-heading"
+						class="text-sm font-medium"
+					>
+						Update
+					</h2>
 
 					{#if st.phase === "downloading"}
 						<p class="text-sm">
-							Downloading {st.tag}{percent !== null ? ` — ${percent}%` : "…"}
+							Downloading {st.tag}{percent !== null
+								? ` — ${percent}%`
+								: "…"}
 						</p>
 						<div
 							class="bg-surface-200-800 h-1.5 overflow-hidden rounded-full"
@@ -230,7 +260,10 @@
 							></div>
 						</div>
 						<p class="text-surface-600-400 text-xs">
-							{mb(st.received)}{st.total ? ` of ${mb(st.total)}` : ""}. Checked against its published checksum before anything is unpacked.
+							{mb(st.received)}{st.total
+								? ` of ${mb(st.total)}`
+								: ""}. Checked against its published checksum
+							before anything is unpacked.
 						</p>
 						<button
 							type="button"
@@ -242,23 +275,37 @@
 						</button>
 					{:else if st.phase === "extracting"}
 						<p class="flex items-center gap-2 text-sm">
-							<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+							<Icons.Loader2
+								size={16}
+								class="animate-spin"
+								aria-hidden="true"
+							/>
 							Checksum matched. Unpacking {st.tag}…
 						</p>
 					{:else if st.phase === "applying"}
 						<p class="flex items-center gap-2 text-sm">
-							<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
-							Restarting to update to {st.tag}. This page reloads when Serene Pub is back.
+							<Icons.Loader2
+								size={16}
+								class="animate-spin"
+								aria-hidden="true"
+							/>
+							Restarting to update to {st.tag}. This page reloads
+							when Serene Pub is back.
 						</p>
 						{#if restartNote}
-							<p class="text-surface-600-400 text-sm">{restartNote}</p>
+							<p class="text-surface-600-400 text-sm">
+								{restartNote}
+							</p>
 						{/if}
 					{:else if st.staged}
 						<p class="flex items-start gap-2 text-sm">
-							<span class="bg-primary-500 mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
+							<span
+								class="bg-primary-500 mt-1.5 size-2 shrink-0 rounded-full"
+								aria-hidden="true"
+							></span>
 							<span>
-								{st.staged.tag} is downloaded and verified. Restart to update when nobody is in the
-								middle of something.
+								{st.staged.tag} is downloaded and verified. Restart
+								to update when nobody is in the middle of something.
 							</span>
 						</p>
 						<button
@@ -271,34 +318,58 @@
 						</button>
 					{:else if st.phase === "error"}
 						<p class="flex items-start gap-2 text-sm" role="alert">
-							<span class="bg-error-500 mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
-							<span>{st.error ?? "The update could not be prepared."}</span>
+							<span
+								class="bg-error-500 mt-1.5 size-2 shrink-0 rounded-full"
+								aria-hidden="true"
+							></span>
+							<span>
+								{st.error ??
+									"The update could not be prepared."}
+							</span>
 						</p>
 						{#if newer}
 							<p class="text-surface-600-400 text-xs">
-								Nothing was changed. Download update tries again from the start.
+								Nothing was changed. Download update tries again
+								from the start.
 							</p>
 						{/if}
 					{:else if newer}
 						<p class="text-sm">
-							Download update fetches {newer}, checks it against its published checksum and
-							unpacks it beside this version. Nothing changes until you restart.
+							Download update fetches {newer}, checks it against
+							its published checksum and unpacks it beside this
+							version. Nothing changes until you restart.
 						</p>
 					{:else}
 						<p class="flex items-start gap-2 text-sm">
-							<span class="bg-success-500 mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
-							<span>You are on the newest release. Serene Pub checks once a day.</span>
+							<span
+								class="bg-success-500 mt-1.5 size-2 shrink-0 rounded-full"
+								aria-hidden="true"
+							></span>
+							<span>
+								You are on the newest release. Serene Pub checks
+								once a day.
+							</span>
 						</p>
 					{/if}
 				</section>
 
-				<section class="panel-card flex flex-col gap-2" aria-labelledby="updates-safety-heading">
-					<h2 id="updates-safety-heading" class="text-sm font-medium">If something goes wrong</h2>
+				<section
+					class="panel-card flex flex-col gap-2"
+					aria-labelledby="updates-safety-heading"
+				>
+					<h2 id="updates-safety-heading" class="text-sm font-medium">
+						If something goes wrong
+					</h2>
 					<FieldHelp>
-						The launcher keeps this version until the new one has started properly. If it does
-						not start, the launcher puts this version back and tells you. Your data is not part
-						of the update, and a backup is taken before the new version changes it;
-						<a class="anchor" href="/admin/data">Data and backups</a> lists every backup.
+						The launcher keeps this version until the new one has
+						started properly. If it does not start, the launcher
+						puts this version back and tells you. Your data is not
+						part of the update, and a backup is taken before the new
+						version changes it;
+						<a class="anchor" href="/admin/data">
+							Data and backups
+						</a>
+						lists every backup.
 					</FieldHelp>
 				</section>
 			{/if}

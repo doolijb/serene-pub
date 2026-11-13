@@ -37,6 +37,7 @@ import type * as C from "@serene-pub/contracts"
 import type { CoreQueryCtx, NodeInput } from "./bindingTypes"
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
 import type { ClockChange, StateChange } from "$lib/server/state/write"
+import { memberFormOn } from "$lib/server/state/memberForm"
 
 /**
  * A change the node was handed, sanity-checked before anything is written.
@@ -65,24 +66,72 @@ function readChanges(raw: unknown): Array<StateChange | ClockChange> {
 const isClockLine = (c: StateChange | ClockChange): c is ClockChange =>
 	(c as { kind?: unknown }).kind === "clock"
 
-/** A cast owner a participant reference names — a seated card, or 🚧 a card-less player seat. */
-export type CastOwner = { kind: "session_cast" | "player_seat"; id: number }
+/**
+ * A cast owner a participant reference names — a seated card, 🚧 a card-less
+ * player seat, or ⏳ (S4, once `state/memberForm.ts` is on) a character seat by
+ * its member (`seated_member`) and any player seat.
+ */
+export type CastOwner = {
+	kind: "session_cast" | "seated_member" | "player_seat"
+	id: number
+}
+
+/**
+ * Whether an owner is a cast owner (a seat's, not the world's or a place's).
+ * ⏳ A `player_seat` counts only once the flip is on: until then it named no
+ * delver here (`keeps` read it as the world's).
+ */
+function isCastKind(kind: string): boolean {
+	if (kind === "session_cast" || kind === "seated_member") return true
+	return kind === "player_seat" && memberFormOn()
+}
 
 /**
  * The cast owner a participant reference names: `character:<id>` a seated
- * card's session layer, 🚧 `player-seat:<id>` a card-less player seat
- * (2026-10-15 — Dungeon Crawler writes a player's sheet on their seat).
- * Null for anything else. Whether the owner is this session's is
- * `assertSessionOwner`'s to say.
+ * card's session layer, 🚧 `player-seat:<id>` a player seat (2026-10-15 —
+ * Dungeon Crawler writes a player's sheet on their seat), and ⏳ once the
+ * flip is on `seated-member:<id>` a character seat by its member. Null for
+ * anything else. Whether the owner is this session's is `assertSessionOwner`'s
+ * to say.
  */
 export function castOwnerOfRef(ref: unknown): CastOwner | null {
 	if (typeof ref !== "string") return null
-	const m = /^(character|player-seat):(\d+)$/.exec(ref.trim())
+	const m = /^(character|player-seat|seated-member):(\d+)$/.exec(ref.trim())
 	if (!m) return null
+	if (m[1] === "seated-member" && !memberFormOn()) return null
 	return {
-		kind: m[1] === "character" ? "session_cast" : "player_seat",
+		kind:
+			m[1] === "character"
+				? "session_cast"
+				: m[1] === "seated-member"
+					? "seated_member"
+					: "player_seat",
 		id: Number(m[2])
 	}
+}
+
+/** The sentence for a reference that names no cast member of the session. */
+const notCastMember = (ref: unknown, sessionId: number): string =>
+	`${JSON.stringify(ref)} is not a cast member of session ${sessionId}, so nothing was set on it.`
+
+/**
+ * 🚧 A participant reference read as its seat's stored one (`storedSeatRef`):
+ * off, a `seated-member:<id>` is its seat's card form (`character:<cardId>` /
+ * `player-seat:<id>`); ⏳ on (S4), a `character:<cardId>` is its seat's member
+ * form and a `seated-member:<id>` of a member who sits only in a player seat
+ * is its `player-seat:<id>`. Any other value comes back as it was. A
+ * `seated-member:` with no seat — or no `db` to ask — comes back as `null`,
+ * so the reader behind it refuses it like any reference that names no cast
+ * member; a `character:` with no seat (⏳ a member-less one included) comes
+ * back as it was. Dynamic import: see this file's header.
+ */
+async function storedCastRef(db: Db, sessionId: number, ref: unknown): Promise<unknown> {
+	if (typeof ref !== "string") return ref
+	const asked = ref.trim()
+	const member = asked.startsWith("seated-member:")
+	if (!member && !(memberFormOn() && asked.startsWith("character:"))) return ref
+	const { storedSeatRef } = await import("$lib/server/state/seatRefs")
+	return (await storedSeatRef(db, sessionId, asked)) ?? (member ? null : ref)
 }
 
 /**
@@ -92,22 +141,28 @@ export function castOwnerOfRef(ref: unknown): CastOwner | null {
  * 🚧 `player-seat:<id>`, or an owner the session does not hold (`seated`
  * throws its sentence), is a sentence on `refused` and no owner; a reference
  * named twice counts once.
+ *
+ * 🚧 A reference reads as its seat's stored one (`storedCastRef`) before any
+ * of that — this is the door that translates it: a `seated-member:<id>` to
+ * the card form (flip off) or its seat's member form (⏳ on, which also reads
+ * `character:<cardId>` as member form); a member with no seat is refused like
+ * any reference that names no cast member.
  */
 export async function ownersFrom(
 	raw: unknown,
 	sessionId: number,
 	seated: (owner: CastOwner) => Promise<void>,
-	refused: string[]
+	refused: string[],
+	db: Db
 ): Promise<Array<CastOwner> | null> {
 	if (raw === undefined || raw === null) return null
 	const refs = Array.isArray(raw) ? raw : [raw]
 	const out: Array<CastOwner> = []
-	for (const ref of refs) {
+	for (const asked of refs) {
+		const ref = await storedCastRef(db, sessionId, asked)
 		const owner = castOwnerOfRef(ref)
 		if (!owner) {
-			refused.push(
-				`${JSON.stringify(ref)} is not a cast member of session ${sessionId}, so nothing was set on it.`
-			)
+			refused.push(notCastMember(asked, sessionId))
 			continue
 		}
 		if (out.some((o) => o.kind === owner.kind && o.id === owner.id)) continue
@@ -132,10 +187,13 @@ export async function ownersFrom(
  * unwired: any owner. Anything else keeps nobody: every change refused,
  * rather than every change let through.
  */
-type Keeps = { world: boolean; cast: Set<number> }
+/** `cast` holds the kept seats' owners in the form the session stores (`${kind}:${id}`, `canon`). */
+type Keeps = { world: boolean; cast: Set<string> }
 async function keepsFrom(
 	raw: unknown,
-	castNamed: (name: string) => Promise<number | null>
+	castNamed: (name: string) => Promise<CastOwner | null>,
+	stored: (ref: unknown) => Promise<unknown>,
+	canon: (owner: { kind: string; id: number }) => Promise<string>
 ): Promise<Keeps | null> {
 	if (raw === undefined || raw === null) return null
 	const keeps: Keeps = { world: false, cast: new Set() }
@@ -146,16 +204,19 @@ async function keepsFrom(
 			continue
 		}
 		if (typeof item === "string") {
-			const m = /^character:(\d+)$/.exec(item.trim())
-			if (m) keeps.cast.add(Number(m[1]))
+			// 🚧 A `seated-member:<id>` item keeps that member's seat (plan §27 S2).
+			const owner = castOwnerOfRef(await stored(item))
+			// ⏳ A `player-seat:` names a delver only once the flip is on.
+			if (owner && isCastKind(owner.kind)) keeps.cast.add(await canon(owner))
 			continue
 		}
 		if (!item || typeof item !== "object") continue
 		const fact = item as { characterId?: unknown; name?: unknown }
-		if (typeof fact.characterId === "number") keeps.cast.add(fact.characterId)
+		if (typeof fact.characterId === "number")
+			keeps.cast.add(await canon({ kind: "session_cast", id: fact.characterId }))
 		else if (typeof fact.name === "string" && fact.name.trim()) {
-			const id = await castNamed(fact.name)
-			if (id !== null) keeps.cast.add(id)
+			const owner = await castNamed(fact.name)
+			if (owner !== null) keeps.cast.add(await canon(owner))
 		}
 	}
 	return keeps
@@ -577,29 +638,44 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				 * `character:<id>` — that member alone. A change to anybody
 				 * else is a sentence, never a write. Unwired, anyone.
 				 */
+				/**
+				 * ⏳ An owner as the session stores it, as a key — so a keeper's
+				 * seat named by card, by member or by seat is one owner whichever
+				 * form the flip stores (`storedSeatOwner`); an owner no seat
+				 * answers keeps its own form.
+				 */
+				const canonOwner = async (owner: { kind: string; id: number }) => {
+					if (!isCastKind(owner.kind)) return `${owner.kind}:${owner.id}`
+					const { storedSeatOwner } = await import("$lib/server/state/seatRefs")
+					const at = (await storedSeatOwner(db, sessionId, owner)) ?? owner
+					return `${at.kind}:${at.id}`
+				}
 				const keeps = await keepsFrom(
 					(input as { keeps?: unknown })?.keeps,
 					async (name) => {
 						try {
 							const owner = await ownerFor(toolCtx, name)
-							return owner.kind === "session_cast" ? owner.id : null
+							return isCastKind(owner.kind) ? (owner as CastOwner) : null
 						} catch (e) {
 							if (e instanceof ToolError) return null
 							throw e
 						}
-					}
+					},
+					(ref) => storedCastRef(db, sessionId, ref),
+					canonOwner
 				)
-				const keptRefusal = (
+				const keptRefusal = async (
 					owner: { kind: string; id: number },
 					named: string
-				): string | null => {
+				): Promise<string | null> => {
 					if (!keeps) return null
-					const who = named.trim() || (owner.kind === "session_cast" ? "a delver" : "the world")
-					if (owner.kind !== "session_cast")
+					const isCast = isCastKind(owner.kind)
+					const who = named.trim() || (isCast ? "a delver" : "the world")
+					if (!isCast)
 						return keeps.world
 							? null
 							: `the world's stats (${who}) are kept on the world's turn, so this keeper — a delver's own — left them alone.`
-					if (keeps.cast.has(owner.id)) return null
+					if (keeps.cast.has(await canonOwner(owner))) return null
 					if (!keeps.world)
 						return `${who} is not whose turn this was, so this keeper — that delver's own — left their stats alone.`
 					return keeps.cast.size
@@ -612,13 +688,18 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				/** Coerce, validate, and take the change or leave a sentence. */
 				const take = async (
 					owner: {
-						kind: "session" | "session_cast" | "session_location" | "player_seat"
+						kind:
+							| "session"
+							| "session_cast"
+							| "seated_member"
+							| "session_location"
+							| "player_seat"
 						id: number
 					},
 					slotId: string,
 					written: unknown
 				): Promise<void> => {
-					const kept = keptRefusal(owner, namedOwner)
+					const kept = await keptRefusal(owner, namedOwner)
 					if (kept) {
 						refused.push(kept)
 						return
@@ -640,7 +721,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 						getAttributeSlot(slotId)?.scope === "world"
 							? await (
 									await import("$lib/server/state/worldScope")
-								).worldOwnerOf(db, sessionId, owner)
+								).worldOwnerOf(db, sessionId, owner, null)
 							: owner
 					// Throws a sentence naming the slot and what it accepts,
 					// which is the whole of why nothing invalid is proposed.
@@ -666,7 +747,8 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					(input as { owners?: unknown })?.owners,
 					sessionId,
 					(owner) => assertSessionOwner(db, sessionId, owner),
-					refused
+					refused,
+					db
 				)
 				const lines: Array<{
 					line: Record<string, unknown>
@@ -686,7 +768,13 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 						// 🚧 A change may name its owner by participant
 						// reference (`player-seat:<id>`, `character:<id>`) —
 						// a genre's script knows the seat, not a name.
-						const byRef = castOwnerOfRef(line.owner)
+						const storedRef = await storedCastRef(db, sessionId, line.owner)
+						// 🚧 A seated member's reference whose member has no seat is no name to look up: refused as any reference that names no cast member.
+						if (storedRef === null) {
+							refused.push(notCastMember(line.owner, sessionId))
+							continue
+						}
+						const byRef = castOwnerOfRef(storedRef)
 						if (byRef) await assertSessionOwner(db, sessionId, byRef)
 						const owner =
 							given ??
@@ -710,7 +798,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 								Number.isFinite(asked) && asked !== 0
 									? Math.trunc(asked)
 									: 1
-							const kept = keptRefusal(owner, namedOwner)
+							const kept = await keptRefusal(owner, namedOwner)
 							if (kept) {
 								refused.push(kept)
 								continue

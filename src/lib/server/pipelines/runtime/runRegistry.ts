@@ -9,8 +9,10 @@
  *
  * A module-level map rather than anything durable: a run only exists while this
  * process is running it, and a restart cancels every run by definition. The
- * `userId` rides along so a run can only be stopped by whoever started it — a run
- * id is unguessable, but unguessable is not an access rule.
+ * `userId` rides along so `cancel` stops a run only for whoever started it. Who
+ * else may stop one (a member a waiting reply, the owner an action) is the
+ * handler's rule, asked through `personMay` and carried out with `cancelAs` — a
+ * run id is unguessable, but unguessable is not an access rule.
  */
 
 import type { RunKind, StatusText } from "@serene-pub/sdk"
@@ -122,6 +124,11 @@ const runs = new Map<string, RunHandle>()
 /** 🚧 The kind of a registered run in flight (sprint 2, G3); undefined when none is registered under the id (a preview, a test). */
 export function runKindOf(runId: string): RunKind | undefined {
 	return runs.get(runId)?.kind
+}
+
+/** The session a registered run is in; undefined when none is registered under the id or it has no session. */
+export function runSessionOf(runId: string): number | undefined {
+	return runs.get(runId)?.sessionId
 }
 
 /** 🚧 Is this registered run line-bound (`RunHandle.lineBound`)? False when none is registered under the id. */
@@ -260,6 +267,8 @@ export function start(args: {
  * `found: false` for a run that has already finished — that is not an error, it
  * is a cancel that arrived late, which is the normal outcome of pressing Cancel
  * just as the result lands.
+ *
+ * Allowed only for whoever started the run.
  */
 export function cancel(
 	runId: string,

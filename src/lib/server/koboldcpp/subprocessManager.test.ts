@@ -28,7 +28,17 @@ vi.mock("$lib/server/db", () => ({
 }))
 
 vi.mock("child_process", () => ({
-	spawn: vi.fn()
+	spawn: vi.fn(),
+	execFile: vi.fn(),
+	spawnSync: vi.fn()
+}))
+
+// The watchdog sidecar spawns a real Node process beside every child; the
+// real-process suite (managed/supervisor.test.ts) covers it. Here it would
+// only add a call to the spawn mock.
+vi.mock("../managed/watchdog", () => ({
+	spawnWatchdog: vi.fn().mockResolvedValue({ pid: null }),
+	WATCHDOG_FILE_NAME: "serene-pub-watchdog.mjs"
 }))
 
 const pingKoboldCPPMock = vi.fn().mockResolvedValue(false)
@@ -64,7 +74,6 @@ import {
 	stop,
 	checkForOrphanOnBoot,
 	getStatus,
-	isExternal,
 	isRunning
 } from "./subprocessManager"
 
@@ -93,6 +102,7 @@ const REAL_SETTINGS_BASE = {
 	koboldCppManagedBinaryDir: "/opt/koboldcpp",
 	koboldCppManagedBinaryVariant: "koboldcpp-linux",
 	koboldCppManagedPort: 5001,
+	koboldCppManagerBaseUrl: "http://localhost:5001",
 	koboldCppManagedAdminPassword: "pw",
 	koboldCppManagedSubprocessTimeoutSecs: 0
 }
@@ -191,7 +201,7 @@ async function freshImport() {
 	return mod
 }
 
-describe("subprocessManager — adopting an already-running instance", () => {
+describe("subprocessManager — nothing is adopted (owner ruling, 2026-11-10)", () => {
 	beforeEach(() => {
 		findFirstMock.mockReset()
 		pingKoboldCPPMock.mockReset()
@@ -200,23 +210,41 @@ describe("subprocessManager — adopting an already-running instance", () => {
 		readFileSyncMock.mockReset()
 	})
 
-	test("start() adopts a verified-owned process from a previous session without spawning a new one", async () => {
+	test("start() kills our own leftover process (pid file + cmdline match) and spawns fresh", async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
-		pingKoboldCPPMock.mockResolvedValue(true) // already responding
-		vi.mocked(fsPromises.readFile).mockResolvedValue("9999")
-		readFileSyncMock.mockReturnValue("koboldcpp-linux --host 127.0.0.1")
-		vi.spyOn(process, "kill").mockImplementation(() => true as any) // pid 9999 "alive"
+		// The leftover answers until it is killed; then the port is free.
+		pingKoboldCPPMock.mockResolvedValueOnce(false).mockResolvedValue(true)
+		vi.mocked(fsPromises.readFile).mockImplementation(async (p: any) =>
+			String(p).includes("/proc/9999/cmdline")
+				? "koboldcpp-linux\u0000--host\u0000127.0.0.1"
+				: "9999"
+		)
+		const alive = new Set([9999])
+		const killSpy = vi
+			.spyOn(process, "kill")
+			.mockImplementation(((pid: number, signal?: any) => {
+				const target = Math.abs(pid)
+				if (signal === 0) {
+					if (alive.has(target)) return true
+					throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
+				}
+				alive.delete(target)
+				return true
+			}) as any)
+		const child = makeFakeChild(777)
+		vi.mocked(spawn).mockReturnValue(child as any)
 
 		await sm.start()
 
-		expect(spawn).not.toHaveBeenCalled()
+		// Killed as a tree (negative pid), then replaced.
+		expect(killSpy).toHaveBeenCalledWith(-9999, "SIGTERM")
+		expect(spawn).toHaveBeenCalledTimes(1)
 		expect(sm.isRunning()).toBe(true)
-		expect(sm.isExternal()).toBe(false)
-		expect(sm.getStatus().pid).toBe(9999)
+		expect(sm.getStatus().pid).toBe(777)
 	})
 
-	test("start() adopts an already-running instance as external when it can't verify ownership", async () => {
+	test("start() refuses, in words, when the port answers and nothing of ours is recorded", async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
 		pingKoboldCPPMock.mockResolvedValue(true)
@@ -224,11 +252,13 @@ describe("subprocessManager — adopting an already-running instance", () => {
 			new Error("no pidfile")
 		)
 
-		await sm.start()
+		await expect(sm.start()).rejects.toThrow(
+			/Port 5001 is already in use by a program Serene Pub didn't start/
+		)
 
 		expect(spawn).not.toHaveBeenCalled()
-		expect(sm.isRunning()).toBe(true)
-		expect(sm.isExternal()).toBe(true)
+		expect(sm.isRunning()).toBe(false)
+		expect(sm.getStatus().status).toBe("crashed")
 		expect(sm.getStatus().pid).toBeNull()
 	})
 })
@@ -262,36 +292,42 @@ describe("subprocessManager.checkForOrphanOnBoot", () => {
 	})
 
 	// The startup module re-runs its tasks on every dev re-evaluation, and this
-	// check is one of them. Re-adopting a process that is already tracked
-	// re-stamped `startedAt` — the card's uptime jumped back to zero on a
-	// process minutes old — and restarted the health check for no change.
+	// sweep is one of them. The pid file then names the process this bag
+	// already supervises; sweeping it would kill our own live child.
 	test("is a no-op for a process this evaluation already tracks", async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
-		pingKoboldCPPMock.mockResolvedValue(true)
-		vi.mocked(fsPromises.readFile).mockResolvedValue("9999")
-		readFileSyncMock.mockReturnValue("koboldcpp-linux --host 127.0.0.1")
-		vi.spyOn(process, "kill").mockImplementation(() => true as any)
-
+		pingKoboldCPPMock.mockResolvedValueOnce(false).mockResolvedValue(true)
+		vi.mocked(fsPromises.readFile).mockRejectedValue(new Error("no pidfile"))
+		const child = makeFakeChild(4242)
+		vi.mocked(spawn).mockReturnValue(child as any)
 		await sm.start()
 		const before = sm.getStatus()
+		// The pid file now names our own live child.
+		vi.mocked(fsPromises.readFile).mockResolvedValue("4242")
+		const killSpy = vi.spyOn(process, "kill")
+
 		await new Promise((r) => setTimeout(r, 5))
 		await sm.checkForOrphanOnBoot()
 
+		expect(killSpy).not.toHaveBeenCalled()
 		expect(sm.getStatus().startedAt).toBe(before.startedAt)
-		expect(sm.getStatus().pid).toBe(9999)
+		expect(sm.getStatus().pid).toBe(4242)
 		expect(sm.isRunning()).toBe(true)
 	})
 
-	test("adopts an instance that's already responding, so status is accurate immediately at boot", async () => {
+	test("leaves a stranger on the port alone and tracks nothing", async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
 		pingKoboldCPPMock.mockResolvedValue(true)
 		vi.mocked(fsPromises.readFile).mockRejectedValue(
 			new Error("no pidfile")
 		)
+		const killSpy = vi.spyOn(process, "kill")
 		await sm.checkForOrphanOnBoot()
-		expect(sm.isRunning()).toBe(true)
+		expect(killSpy).not.toHaveBeenCalled()
+		expect(sm.isRunning()).toBe(false)
+		expect(sm.getStatus().status).toBe("stopped")
 	})
 
 	test("silently no-ops when nothing is responding and there's no stale pidfile to clean up", async () => {
@@ -325,24 +361,11 @@ describe("subprocessManager.stop", () => {
 		expect(sm.getStatus().status).toBe("stopped")
 	})
 
-	test("refuses to stop an adopted-but-unverified external instance", async () => {
-		const sm = await freshImport()
-		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
-		pingKoboldCPPMock.mockResolvedValue(true)
-		vi.mocked(fsPromises.readFile).mockRejectedValue(
-			new Error("no pidfile")
-		)
-		await sm.start()
-		expect(sm.isExternal()).toBe(true)
-
-		await expect(sm.stop()).rejects.toThrow(/wasn't started by/)
-	})
-
 	test("terminates a process this session actually spawned", async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // doStart()'s adopt check: nothing there yet
+			.mockResolvedValueOnce(false) // doStart()'s port-in-use probe: nothing there yet
 			.mockResolvedValueOnce(true) // waitForReady: subprocess came up
 		vi.mocked(fsPromises.readFile).mockRejectedValue(
 			new Error("no pidfile")
@@ -387,7 +410,7 @@ describe("subprocessManager.start — admin password fallback (Round-7 audit fix
 			koboldCppManagedAdminPassword: null
 		})
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // doStart()'s adopt check: nothing there yet
+			.mockResolvedValueOnce(false) // doStart()'s port-in-use probe: nothing there yet
 			.mockResolvedValueOnce(true) // waitForReady: subprocess came up
 		vi.mocked(fsPromises.readFile).mockRejectedValue(
 			new Error("no pidfile")
@@ -435,6 +458,56 @@ describe("subprocessManager.start — admin password fallback (Round-7 audit fix
 		expect(spawnArgs[pwIndex + 1]).toBe(
 			REAL_SETTINGS_BASE.koboldCppManagedAdminPassword
 		)
+	})
+
+	test("writes the address made from the port when the stored one is stale", async () => {
+		const sm = await freshImport()
+		findFirstMock.mockResolvedValue({
+			...REAL_SETTINGS_BASE,
+			koboldCppManagedPort: 5002,
+			koboldCppManagerBaseUrl: "http://localhost:5001"
+		})
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false)
+			.mockResolvedValueOnce(true)
+		vi.mocked(fsPromises.readFile).mockRejectedValue(
+			new Error("no pidfile")
+		)
+		vi.mocked(spawn).mockReturnValue(makeFakeChild(54325) as any)
+		vi.spyOn(process, "kill").mockImplementation(() => true as any)
+
+		await sm.start()
+
+		expect(updateSetMock).toHaveBeenCalledTimes(1)
+		expect(updateSetMock.mock.calls[0][0]).toEqual({
+			koboldCppManagerBaseUrl: "http://localhost:5002"
+		})
+	})
+
+	test("the co-load reason is forgotten when the process goes", async () => {
+		const sm = await freshImport()
+		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
+		pingKoboldCPPMock
+			.mockResolvedValueOnce(false)
+			.mockResolvedValueOnce(true)
+		vi.mocked(fsPromises.readFile).mockRejectedValue(
+			new Error("no pidfile")
+		)
+		const child = makeFakeChild(54326)
+		vi.mocked(spawn).mockReturnValue(child as any)
+		vi.spyOn(process, "kill").mockImplementation((pid: any, signal?: any) => {
+			if (Math.abs(pid) === child.pid) {
+				queueMicrotask(() => child.emit("exit", 0, signal))
+			}
+			return true
+		})
+		await sm.start()
+
+		sm.noteCoLoadReason("kept both")
+		expect(sm.getStatus().coLoadReason).toBe("kept both")
+
+		await sm.stop()
+		expect(sm.getStatus().coLoadReason).toBeNull()
 	})
 
 	// Bugfix: without --jinja, koboldcpp renders /v1/chat/completions through
@@ -523,7 +596,7 @@ describe("subprocessManager.start — a spawn that fails", () => {
 			.mockReturnValue(child as any)
 		pingKoboldCPPMock
 			.mockReset()
-			.mockResolvedValueOnce(false) // adopt check: nothing there
+			.mockResolvedValueOnce(false) // port-in-use probe: nothing there
 			.mockResolvedValueOnce(true) // waitForReady: came up
 
 		await sm.start()
@@ -542,7 +615,7 @@ describe("subprocessManager.start — a spawn that fails", () => {
 			})
 			.mockReturnValueOnce(child as any)
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(false) // port-in-use probe
 			.mockResolvedValueOnce(true) // waitForReady
 
 		await sm.start()
@@ -592,7 +665,7 @@ describe("subprocessManager.start — a spawn that fails", () => {
 		const child = makeFakeChild(54332)
 		vi.mocked(spawn).mockReturnValue(child as any)
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(false) // port-in-use probe
 			.mockResolvedValueOnce(true) // waitForReady
 
 		await sm.start()
@@ -659,7 +732,7 @@ describe("subprocessManager.suspendHealthCheck — counted, not a flag", () => {
 		vi.useFakeTimers()
 		vi.mocked(spawn).mockReturnValue(makeFakeChild(54333) as any)
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(false) // port-in-use probe
 			.mockResolvedValueOnce(true) // waitForReady
 		await sm.start()
 		expect(sm.isRunning()).toBe(true)
@@ -745,7 +818,7 @@ describe("subprocessManager — a Stop is a stop, and residency goes with the pr
 		const child = killableChild(54402)
 		vi.mocked(spawn).mockReturnValue(child as any)
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(false) // port-in-use probe
 			.mockResolvedValueOnce(true) // waitForReady
 		await sm.start()
 		seedSignature()
@@ -761,7 +834,7 @@ describe("subprocessManager — a Stop is a stop, and residency goes with the pr
 		const child = makeFakeChild(54403)
 		vi.mocked(spawn).mockReturnValue(child as any)
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(false) // port-in-use probe
 			.mockResolvedValueOnce(true) // waitForReady
 		await sm.start()
 		seedSignature()
@@ -779,7 +852,7 @@ describe("subprocessManager — a Stop is a stop, and residency goes with the pr
 		vi.spyOn(process, "kill").mockImplementation(() => true as any)
 		vi.mocked(spawn).mockReturnValue(makeFakeChild(54404) as any)
 		pingKoboldCPPMock
-			.mockResolvedValueOnce(false) // adopt check
+			.mockResolvedValueOnce(false) // port-in-use probe
 			.mockResolvedValueOnce(true) // waitForReady
 		await sm.start()
 		expect(getLoadedSignature()).toBeNull()

@@ -20,6 +20,8 @@
 	import { socketCardStatsApi } from "./cardStatsApi"
 	import { cardStatGroups, valueText } from "./cardStats"
 	import { getContext } from "svelte"
+	import CastLine from "./CastLine.svelte"
+	import type { CastBannerMember } from "./castBannerWords"
 	import SharePeopleModal from "$lib/client/components/sharing/SharePeopleModal.svelte"
 	import SharedWithLine from "$lib/client/components/sharing/SharedWithLine.svelte"
 
@@ -86,6 +88,31 @@
 			id
 		} satisfies Sockets.Characters.Get.Params)
 		return release
+	})
+
+	/**
+	 * The cast members this card is, in this user's lorebooks — the cast line
+	 * under the hero. Asked per card, BARE: `lorebooks:bindingsForCharacter`
+	 * has no `SCOPED_EVENTS` entry, so the id check is the filter. A failed
+	 * ask just leaves the line out.
+	 */
+	let castMembers = $state<CastBannerMember[]>([])
+	let castAsk = $state(0)
+	let castAskedFor: number | null = null
+	$effect(() => {
+		void castAsk
+		const id = characterId
+		// A re-ask for the same card keeps the line (the offer vanishes when the reply lands).
+		if (castAskedFor !== id) castMembers = []
+		castAskedFor = id
+		return requestWithInterest(
+			"lorebooks:bindingsForCharacter",
+			{ characterId: id },
+			(msg: Sockets.Lorebooks.BindingsForCharacter.Response) => {
+				if (msg.characterId !== id) return
+				castMembers = (msg as { members?: CastBannerMember[] }).members ?? []
+			}
+		)
 	})
 
 	/**
@@ -324,6 +351,11 @@
 				: undefined}
 			actions={character.isOwner ? heroActions : undefined}
 		/>
+		{#if castMembers.length > 0}
+			<div class="-mt-1 px-1">
+				<CastLine members={castMembers} onChanged={() => castAsk++} />
+			</div>
+		{/if}
 		{#if character.isOwner}
 			<SharedWithLine people={character.sharedWith} class="-mt-1 px-1" />
 		{/if}
@@ -546,7 +578,7 @@
 				class="min-h-0 flex-1 overflow-y-auto"
 			>
 				<EntityGalleryTab
-					entityId={character.id}
+					owner={{ characterId: character.id }}
 					entityName={character.nickname || character.name}
 					isOwner={!!character.isOwner}
 					currentAvatarMediaId={character.avatarMediaId ?? null}
@@ -564,7 +596,7 @@
 				     character's sprites, which a person reading Details never needs. -->
 				{#if activeTab === "sprites" || spritesOpened}
 					<SpritesTab
-						characterId={character.id}
+						owner={{ characterId: character.id }}
 						characterName={character.nickname || character.name}
 						isOwner={!!character.isOwner}
 					/>

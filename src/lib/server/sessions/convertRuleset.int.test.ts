@@ -10,7 +10,14 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { defineAttributeSlot, defineRuleset, getAttributeSlot, rulesetAttributeSlotId, _clearAttributeSlots, _withdrawRuleset } from "@serene-pub/sdk"
+import {
+	defineAttributeSlot,
+	defineRuleset,
+	getAttributeSlot,
+	rulesetAttributeSlotId,
+	_clearAttributeSlots,
+	_withdrawRuleset
+} from "@serene-pub/sdk"
 import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -26,11 +33,16 @@ vi.mock("$lib/server/db", async () => {
 })
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-vitest-convert-ruleset-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-vitest-convert-ruleset-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
-	await testDb.insert(schema.systemSettings).values({ id: 1 }).onConflictDoNothing()
+	await testDb
+		.insert(schema.systemSettings)
+		.values({ id: 1 })
+		.onConflictDoNothing()
 }, 60_000)
 
 afterAll(async () => {
@@ -45,12 +57,23 @@ const ADDED = "acme.lab:slot/focus@1"
 function declareSlots() {
 	_clearAttributeSlots()
 	for (const id of [OLD, NEW, GONE, ADDED])
-		defineAttributeSlot(id, { type: "integer", descriptor: `The ${id} number.`, appliesTo: ["world"], config: { min: 0, max: 20 } })
+		defineAttributeSlot(id, {
+			type: "integer",
+			descriptor: `The ${id} number.`,
+			appliesTo: ["world"],
+			config: { min: 0, max: 20 }
+		})
 }
 
 let n = 0
 
-async function world(over: { pinned?: string | null; published?: string | null; upgrades?: unknown[] } = {}) {
+async function world(
+	over: {
+		pinned?: string | null
+		published?: string | null
+		upgrades?: unknown[]
+	} = {}
+) {
 	declareSlots()
 	const k = ++n
 	const rulesetId = `acme.lab:ruleset/convert-${k}@1`
@@ -59,14 +82,24 @@ async function world(over: { pinned?: string | null; published?: string | null; 
 	const other = await createTestUser(testDb, `convert-guest-${k}`)
 	const published = over.published === undefined ? "2.0.0" : over.published
 	const upgrades = over.upgrades ?? [
-		{ from: "1.0.0", to: "2.0.0", slots: { renamed: { [OLD]: NEW }, removed: [GONE], added: { [ADDED]: 7 } } }
+		{
+			from: "1.0.0",
+			to: "2.0.0",
+			slots: {
+				renamed: { [OLD]: NEW },
+				removed: [GONE],
+				added: { [ADDED]: 7 }
+			}
+		}
 	]
 	await testDb.insert(schema.rulesets).values({
 		rulesetId,
 		ownerSlug: "acme.lab",
 		label: `Convert ${k}`,
 		draft: {},
-		published: published ? { id: rulesetId, version: published, upgrades } : null,
+		published: published
+			? { id: rulesetId, version: published, upgrades }
+			: null,
 		publishedVersion: published
 	})
 	const [session] = await testDb
@@ -87,21 +120,43 @@ const owner = (w: World) => ({ kind: "session" as const, id: w.session.id })
 
 const put = async (w: World, slotId: string, value: number) => {
 	const { setValue } = await import("$lib/server/state/write")
-	return setValue(testDb as unknown as Db, { sessionId: w.session.id, updatedBy: "user", userId: w.user.id }, { owner: owner(w), slotId, value })
+	return setValue(
+		testDb as unknown as Db,
+		{ sessionId: w.session.id, updatedBy: "user", userId: w.user.id },
+		{ owner: owner(w), slotId, value }
+	)
 }
 
 const read = async (w: World, slotId: string) => {
 	const { valueOf } = await import("$lib/server/state/resolve")
-	return await valueOf(testDb as unknown as Db, { sessionId: w.session.id, owner: owner(w), slotId })
+	return await valueOf(testDb as unknown as Db, {
+		sessionId: w.session.id,
+		owner: owner(w),
+		slotId
+	})
 }
 
-const convert = async (w: World, over: { to?: string; userId?: number } = {}) => {
-	const { convertSessionRuleset } = await import("$lib/server/sessions/convertRuleset")
-	return convertSessionRuleset(testDb as unknown as Db, { sessionId: w.session.id, to: over.to ?? "2.0.0", userId: over.userId ?? w.user.id })
+const convert = async (
+	w: World,
+	over: { to?: string; userId?: number } = {}
+) => {
+	const { convertSessionRuleset } = await import(
+		"$lib/server/sessions/convertRuleset"
+	)
+	return convertSessionRuleset(testDb as unknown as Db, {
+		sessionId: w.session.id,
+		to: over.to ?? "2.0.0",
+		userId: over.userId ?? w.user.id
+	})
 }
 
 const versionOf = async (w: World) =>
-	(await testDb.select({ v: schema.sessions.rulesetVersion }).from(schema.sessions).where(eq(schema.sessions.id, w.session.id)))[0]!.v
+	(
+		await testDb
+			.select({ v: schema.sessions.rulesetVersion })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, w.session.id))
+	)[0]!.v
 
 describe("converting a session's rules", () => {
 	test("re-keys the renamed slot, clears the removed one, inserts the added default, sets the version", async () => {
@@ -116,7 +171,11 @@ describe("converting a session's rules", () => {
 			rulesetId: w.rulesetId,
 			from: "1.0.0",
 			to: "2.0.0",
-			slots: { renamed: { [OLD]: NEW }, removed: [GONE], added: { [ADDED]: 7 } }
+			slots: {
+				renamed: { [OLD]: NEW },
+				removed: [GONE],
+				added: { [ADDED]: 7 }
+			}
 		})
 		expect(await read(w, NEW)).toBe(9)
 		expect(await read(w, OLD)).toBeUndefined()
@@ -130,14 +189,31 @@ describe("converting a session's rules", () => {
 		await put(w, OLD, 9)
 		const [message] = await testDb
 			.insert(schema.messages)
-			.values({ sessionId: w.session.id, role: "assistant", content: "…" } as never)
+			.values({
+				sessionId: w.session.id,
+				role: "assistant",
+				content: "…"
+			} as never)
 			.returning()
 		await convert(w)
-		const rows = await testDb.select().from(schema.attributeValues).where(and(eq(schema.attributeValues.sessionId, w.session.id)))
-		const anchors = new Set(rows.filter((r) => r.slotId !== OLD || (r.value as { v: unknown }).v === null).map((r) => r.validFromMessageId))
+		const rows = await testDb
+			.select()
+			.from(schema.attributeValues)
+			.where(and(eq(schema.attributeValues.sessionId, w.session.id)))
+		const anchors = new Set(
+			rows
+				.filter(
+					(r) =>
+						r.slotId !== OLD ||
+						(r.value as { v: unknown }).v === null
+				)
+				.map((r) => r.validFromMessageId)
+		)
 		expect(anchors.has(message!.id)).toBe(true)
-		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-		await retractStateAnchoredTo(testDb as unknown as Db, message!.id)
+		const { retractStateAnchoredTo } = await import(
+			"$lib/server/state/write"
+		)
+		await retractStateAnchoredTo(testDb as unknown as Db, message!.id, "replaced")
 		expect(await read(w, OLD)).toBe(9)
 		expect(await read(w, NEW)).toBeUndefined()
 	})
@@ -145,7 +221,16 @@ describe("converting a session's rules", () => {
 
 describe("Back past a conversion", () => {
 	const withMessage = async (w: World) =>
-		(await testDb.insert(schema.messages).values({ sessionId: w.session.id, role: "assistant", content: "…" } as never).returning())[0]!
+		(
+			await testDb
+				.insert(schema.messages)
+				.values({
+					sessionId: w.session.id,
+					role: "assistant",
+					content: "…"
+				} as never)
+				.returning()
+		)[0]!
 
 	test("retractStateAnchoredTo restores ruleset_version with the values; restoreRetractedState re-applies it", async () => {
 		const w = await world()
@@ -153,18 +238,36 @@ describe("Back past a conversion", () => {
 		const message = await withMessage(w)
 		await convert(w)
 		expect(await versionOf(w)).toBe("2.0.0")
-		const { retractStateAnchoredTo, restoreRetractedState } = await import("$lib/server/state/write")
-		const undone = await retractStateAnchoredTo(testDb as unknown as Db, message.id)
+		const { retractStateAnchoredTo, restoreRetractedState } = await import(
+			"$lib/server/state/write"
+		)
+		const undone = await retractStateAnchoredTo(
+			testDb as unknown as Db,
+			message.id,
+			"replaced"
+		)
 		expect(undone.changed).toBe(true)
 		expect(await versionOf(w)).toBe("1.0.0")
 		expect(await read(w, OLD)).toBe(9)
-		const { readCoreAnnex } = await import("$lib/server/sessions/coreAnnex")
-		expect((await readCoreAnnex(testDb as unknown as Db, w.session.id))?.rulesetConversions ?? []).toEqual([])
+		const conversions = async () =>
+			(
+				await testDb
+					.select()
+					.from(schema.sessionImprints)
+					.where(eq(schema.sessionImprints.sessionId, w.session.id))
+			).filter((r) => r.subjectKind === "ruleset-conversion")
+		expect(await conversions()).toEqual([])
 		await restoreRetractedState(testDb as unknown as Db, undone.taken)
 		expect(await versionOf(w)).toBe("2.0.0")
 		expect(await read(w, NEW)).toBe(9)
-		expect((await readCoreAnnex(testDb as unknown as Db, w.session.id))?.rulesetConversions).toEqual([
-			{ messageId: message.id, rulesetId: w.rulesetId, from: "1.0.0", to: "2.0.0" }
+		expect(await conversions()).toMatchObject([
+			{
+				messageId: message.id,
+				subjectKey: w.rulesetId,
+				before: { v: "1.0.0" },
+				after: { v: "2.0.0" },
+				status: "standing"
+			}
 		])
 	})
 })
@@ -175,16 +278,39 @@ describe("Back and Forward through the history", () => {
 		await put(w, OLD, 9)
 		// a turn: the person's line, then a reply — the conversion anchors to the reply, the newest message
 		const { insertLegacy } = await import("$lib/server/messages/store")
-		await insertLegacy(testDb as unknown as Db, { sessionId: w.session.id, userId: w.user.id, role: "user", content: "hello", channel: "main" } as never)
-		await insertLegacy(testDb as unknown as Db, { sessionId: w.session.id, role: "assistant", content: "…", channel: "main" } as never)
+		await insertLegacy(
+			testDb as unknown as Db,
+			{
+				sessionId: w.session.id,
+				userId: w.user.id,
+				role: "user",
+				content: "hello",
+				channel: "main"
+			} as never
+		)
+		await insertLegacy(
+			testDb as unknown as Db,
+			{
+				sessionId: w.session.id,
+				role: "assistant",
+				content: "…",
+				channel: "main"
+			} as never
+		)
 		await convert(w)
 		expect(await versionOf(w)).toBe("2.0.0")
 		const { rewindTurn, forwardTurn } = await import("./rewind")
-		const back = await rewindTurn(testDb as unknown as Db, { sessionId: w.session.id, userId: w.user.id })
+		const back = await rewindTurn(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.user.id
+		})
 		expect(back).toMatchObject({ ok: true })
 		expect(await versionOf(w)).toBe("1.0.0")
 		expect(await read(w, OLD)).toBe(9)
-		const fwd = await forwardTurn(testDb as unknown as Db, { sessionId: w.session.id, userId: w.user.id })
+		const fwd = await forwardTurn(testDb as unknown as Db, {
+			sessionId: w.session.id,
+			userId: w.user.id
+		})
 		expect(fwd).toMatchObject({ ok: true })
 		expect(await versionOf(w)).toBe("2.0.0")
 		expect(await read(w, NEW)).toBe(9)
@@ -196,22 +322,59 @@ describe("autoConvert at open", () => {
 		const { genre } = await import("@serene-pub/sdk")
 		const w = await world()
 		const genreId = `test:genre/auto-convert-${n}`
-		genre(genreId, { name: { en: "Auto" }, family: "test", events: {}, rulesets: { only: [w.rulesetId], autoConvert: true } } as never)
-		await testDb.update(schema.sessions).set({ genreId }).where(eq(schema.sessions.id, w.session.id))
+		genre(genreId, {
+			name: { en: "Auto" },
+			family: "test",
+			events: {},
+			rulesets: { only: [w.rulesetId], autoConvert: true }
+		} as never)
+		await testDb
+			.update(schema.sessions)
+			.set({ genreId })
+			.where(eq(schema.sessions.id, w.session.id))
 		await put(w, OLD, 5)
-		const { sessionsGetHandler } = await import("$lib/server/sockets/sessions")
-		const socket = { user: { id: w.user.id }, io: { to: () => ({ emit: () => {} }) } } as any
-		await sessionsGetHandler.handler(socket, { id: w.session.id } as any, () => {})
+		const { sessionsGetHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		const socket = {
+			user: { id: w.user.id },
+			io: { to: () => ({ emit: () => {} }) }
+		} as any
+		await sessionsGetHandler.handler(
+			socket,
+			{ id: w.session.id } as any,
+			() => {}
+		)
 		expect(await versionOf(w)).toBe("2.0.0")
 		expect(await read(w, NEW)).toBe(5)
-		const rowsAfterFirst = (await testDb.select().from(schema.attributeValues).where(eq(schema.attributeValues.sessionId, w.session.id))).length
-		await sessionsGetHandler.handler(socket, { id: w.session.id } as any, () => {})
-		expect((await testDb.select().from(schema.attributeValues).where(eq(schema.attributeValues.sessionId, w.session.id))).length).toBe(rowsAfterFirst)
+		const rowsAfterFirst = (
+			await testDb
+				.select()
+				.from(schema.attributeValues)
+				.where(eq(schema.attributeValues.sessionId, w.session.id))
+		).length
+		await sessionsGetHandler.handler(
+			socket,
+			{ id: w.session.id } as any,
+			() => {}
+		)
+		expect(
+			(
+				await testDb
+					.select()
+					.from(schema.attributeValues)
+					.where(eq(schema.attributeValues.sessionId, w.session.id))
+			).length
+		).toBe(rowsAfterFirst)
 	})
 })
 
 describe("what is refused", () => {
-	const refuses = async (w: World, sentence: string, over: { to?: string; userId?: number } = {}) => {
+	const refuses = async (
+		w: World,
+		sentence: string,
+		over: { to?: string; userId?: number } = {}
+	) => {
 		const { StateRefusal } = await import("$lib/server/state/write")
 		const err = await convert(w, over).catch((e) => e)
 		expect(err).toBeInstanceOf(StateRefusal)
@@ -220,25 +383,45 @@ describe("what is refused", () => {
 	}
 
 	test("a session that has not pinned a version", async () => {
-		await refuses(await world({ pinned: null }), "This session has not pinned a version of its rules yet, so there is nothing to convert from.")
+		await refuses(
+			await world({ pinned: null }),
+			"This session has not pinned a version of its rules yet, so there is nothing to convert from."
+		)
 	})
 	test("rules with nothing published", async () => {
-		await refuses(await world({ published: null }), "These rules have no published version to convert to.")
+		await refuses(
+			await world({ published: null }),
+			"These rules have no published version to convert to."
+		)
 	})
 	test("a target that is not the published version", async () => {
-		await refuses(await world(), "Only version 2.0.0 of these rules is installed.", { to: "3.0.0" })
+		await refuses(
+			await world(),
+			"Only version 2.0.0 of these rules is installed.",
+			{ to: "3.0.0" }
+		)
 	})
 	test("no step from the pin", async () => {
-		await refuses(await world({ pinned: "1.5.0" }), "There is no upgrade from 1.5.0 towards 2.0.0 in these rules.")
+		await refuses(
+			await world({ pinned: "1.5.0" }),
+			"There is no upgrade from 1.5.0 towards 2.0.0 in these rules."
+		)
 	})
 	test("rules whose plugin is gone", async () => {
 		const w = await world()
-		await testDb.delete(schema.rulesets).where(eq(schema.rulesets.rulesetId, w.rulesetId))
-		await refuses(w, "These rules came with a plugin that is no longer installed.")
+		await testDb
+			.delete(schema.rulesets)
+			.where(eq(schema.rulesets.rulesetId, w.rulesetId))
+		await refuses(
+			w,
+			"These rules came with a plugin that is no longer installed."
+		)
 	})
 	test("someone who does not own the session", async () => {
 		const w = await world()
-		await refuses(w, "Only the session's owner can change its rules.", { userId: w.other.id })
+		await refuses(w, "Only the session's owner can change its rules.", {
+			userId: w.other.id
+		})
 	})
 })
 
@@ -248,27 +431,75 @@ describe("a session pinned to an older kept version (M2b a7)", () => {
 	const GENRE = "acme.lab:genre/kept-versions"
 	const OLDS = rulesetAttributeSlotId(RS, "old-nerve")
 	const NEWS = rulesetAttributeSlotId(RS, "nerve")
-	const attr = (id: string) => ({ id, name: { en: id }, kind: "number", bounds: { min: 0, max: 20 }, start: 0, owner: "world", prose: `${id}: a number.` })
+	const attr = (id: string) => ({
+		id,
+		name: { en: id },
+		kind: "number",
+		bounds: { min: 0, max: 20 },
+		start: 0,
+		owner: "world",
+		prose: `${id}: a number.`
+	})
 
 	test("it is offered its pinned version's ids, spends under them, and the conversion keeps what was spent and what was written later", async () => {
-		const { keepRulesetVersion, registerKeptRulesetSlots } = await import("$lib/server/rulesets/versions")
+		const { keepRulesetVersion, registerKeptRulesetSlots } = await import(
+			"$lib/server/rulesets/versions"
+		)
 		const { vocabularyFor } = await import("$lib/server/state/resolve")
 		const { genreKeeping } = await import("$lib/server/utils/testGenre")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		_clearAttributeSlots()
-		const v1 = { id: RS, name: { en: "Kept" }, version: "1.0.0", attributes: [attr("old-nerve")] }
+		const v1 = {
+			id: RS,
+			name: { en: "Kept" },
+			version: "1.0.0",
+			attributes: [attr("old-nerve")]
+		}
 		const v2 = {
 			id: RS,
 			name: { en: "Kept" },
 			version: "1.1.0",
 			attributes: [attr("nerve")],
-			upgrades: [{ from: "1.0.0", to: "1.1.0", slots: { renamed: { [OLDS]: NEWS } } }]
+			upgrades: [
+				{
+					from: "1.0.0",
+					to: "1.1.0",
+					slots: { renamed: { [OLDS]: NEWS } }
+				}
+			]
 		}
-		defineRuleset(RS, { name: { en: "Kept" }, attributes: v2.attributes as never })
-		genreKeeping(GENRE, { name: { en: "Kept" }, family: "test", slots: [], events: {} })
-		await testDb.insert(schema.rulesets).values({ rulesetId: RS, ownerSlug: "acme.lab", label: "Kept", draft: {}, published: v2, publishedVersion: "1.1.0" })
-		await keepRulesetVersion(testDb as unknown as Db, { rulesetId: RS, version: "1.0.0", document: v1, publishedBy: null })
-		await keepRulesetVersion(testDb as unknown as Db, { rulesetId: RS, version: "1.1.0", document: v2, publishedBy: null })
+		defineRuleset(RS, {
+			name: { en: "Kept" },
+			attributes: v2.attributes as never
+		})
+		genreKeeping(GENRE, {
+			name: { en: "Kept" },
+			family: "test",
+			slots: [],
+			events: {}
+		})
+		await testDb
+			.insert(schema.rulesets)
+			.values({
+				rulesetId: RS,
+				ownerSlug: "acme.lab",
+				label: "Kept",
+				draft: {},
+				published: v2,
+				publishedVersion: "1.1.0"
+			})
+		await keepRulesetVersion(testDb as unknown as Db, {
+			rulesetId: RS,
+			version: "1.0.0",
+			document: v1,
+			publishedBy: null
+		})
+		await keepRulesetVersion(testDb as unknown as Db, {
+			rulesetId: RS,
+			version: "1.1.0",
+			document: v2,
+			publishedBy: null
+		})
 		await registerKeptRulesetSlots(testDb as unknown as Db, RS)
 		expect(getAttributeSlot(OLDS)).toBeDefined()
 
@@ -276,7 +507,14 @@ describe("a session pinned to an older kept version (M2b a7)", () => {
 			const user = await createTestUser(testDb, `kept-${tag}-${++n}`)
 			const [session] = await testDb
 				.insert(schema.sessions)
-				.values({ userId: user.id, isGroup: false, name: `Kept ${tag}`, genreId: GENRE, primaryRuleset: RS, rulesetVersion: "1.0.0" })
+				.values({
+					userId: user.id,
+					isGroup: false,
+					name: `Kept ${tag}`,
+					genreId: GENRE,
+					primaryRuleset: RS,
+					rulesetVersion: "1.0.0"
+				})
 				.returning()
 			return { user, session: session! }
 		}
@@ -287,15 +525,33 @@ describe("a session pinned to an older kept version (M2b a7)", () => {
 
 		const put = async (x: typeof w, slotId: string, value: number) => {
 			const { setValue } = await import("$lib/server/state/write")
-			return setValue(testDb as unknown as Db, { sessionId: x.session.id, updatedBy: "user", userId: x.user.id }, { owner: { kind: "session", id: x.session.id }, slotId, value })
+			return setValue(
+				testDb as unknown as Db,
+				{
+					sessionId: x.session.id,
+					updatedBy: "user",
+					userId: x.user.id
+				},
+				{ owner: { kind: "session", id: x.session.id }, slotId, value }
+			)
 		}
 		const get = async (x: typeof w, slotId: string) => {
 			const { valueOf } = await import("$lib/server/state/resolve")
-			return valueOf(testDb as unknown as Db, { sessionId: x.session.id, owner: { kind: "session", id: x.session.id }, slotId })
+			return valueOf(testDb as unknown as Db, {
+				sessionId: x.session.id,
+				owner: { kind: "session", id: x.session.id },
+				slotId
+			})
 		}
 		const convertTo = async (x: typeof w) => {
-			const { convertSessionRuleset } = await import("$lib/server/sessions/convertRuleset")
-			return convertSessionRuleset(testDb as unknown as Db, { sessionId: x.session.id, to: "1.1.0", userId: x.user.id })
+			const { convertSessionRuleset } = await import(
+				"$lib/server/sessions/convertRuleset"
+			)
+			return convertSessionRuleset(testDb as unknown as Db, {
+				sessionId: x.session.id,
+				to: "1.1.0",
+				userId: x.user.id
+			})
 		}
 		await put(w, OLDS, 9)
 		await put(w, OLDS, 6) // the spend
@@ -314,4 +570,96 @@ describe("a session pinned to an older kept version (M2b a7)", () => {
 		expect(await get(x, OLDS)).toBe(0) // cleared: its declared start
 		_withdrawRuleset(RS)
 	})
+})
+
+describe("a conversion and the write stamp", () => {
+	// A session reads a story clock only through its book.
+	const bookFor = async (w: World) => {
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: w.user.id, name: `Book ${w.session.id}` })
+			.returning()
+		await testDb
+			.update(schema.sessions)
+			.set({ lorebookId: book!.id })
+			.where(eq(schema.sessions.id, w.session.id))
+	}
+	const setClock = (w: World, hour: number, minute: number) =>
+		testDb
+			.update(schema.sessions)
+			.set({
+				storyClockYear: 1204,
+				storyClockMonth: 3,
+				storyClockDay: 5,
+				storyClockHour: hour,
+				storyClockMinute: minute
+			})
+			.where(eq(schema.sessions.id, w.session.id))
+	const rowsFor = async (w: World, slotId: string) =>
+		(
+			await testDb
+				.select()
+				.from(schema.attributeValues)
+				.where(
+					and(
+						eq(schema.attributeValues.sessionId, w.session.id),
+						eq(schema.attributeValues.slotId, slotId)
+					)
+				)
+		).sort((a, b) => a.id - b.id)
+	const columnsOf = (r: typeof schema.attributeValues.$inferSelect) => [
+		r.storyClockYear,
+		r.storyClockMonth,
+		r.storyClockDay,
+		r.storyClockHour,
+		r.storyClockMinute
+	]
+
+	test("a renamed value keeps its old row's stamp and createdAt, and counts from the original write", async () => {
+		const w = await world()
+		await bookFor(w)
+		await setClock(w, 9, 30)
+		await put(w, OLD, 9)
+		const [old] = await rowsFor(w, OLD)
+		// The conversion happens half an hour of story later.
+		await setClock(w, 10, 0)
+		await convert(w)
+		const renamed = (await rowsFor(w, NEW)).at(-1)!
+		expect(columnsOf(renamed)).toEqual([1204, 3, 5, 9, 30])
+		expect(columnsOf(renamed)).toEqual(columnsOf(old!))
+		expect(renamed.createdAt).toEqual(old!.createdAt)
+
+		await setClock(w, 11, 30)
+		const { valueStampsOf } = await import("$lib/server/state/resolve")
+		const stamp = (
+			await valueStampsOf(testDb as unknown as Db, w.session.id, owner(w), [NEW])
+		).get(NEW)
+		expect(stamp).toEqual({
+			clock: { year: 1204, month: 3, day: 5, hour: 9, minute: 30 },
+			writtenAt: old!.createdAt
+		})
+		const { minutesBetween } = await import("$lib/server/rulesets/clockHours")
+		const sessionNow = {
+			year: 1204,
+			month: 3,
+			day: 5,
+			hour: 11,
+			minute: 30
+		}
+		// 120 from the original write; counting from the conversion would say 90.
+		expect(minutesBetween(stamp!.clock!, sessionNow, null)).toBe(120)
+	})
+
+	test("an added default has no stamp", async () => {
+		const w = await world()
+		await bookFor(w)
+		await setClock(w, 9, 30)
+		await convert(w)
+		const rows = await rowsFor(w, ADDED)
+		expect(rows).toHaveLength(1)
+		expect(columnsOf(rows[0]!)).toEqual([null, null, null, null, null])
+	})
+
+	// An ordinary `setValue` (no symbol) still stamps the session's clock now:
+	// proved by valueStamp.int.test.ts "a session with a clock stamps all five".
 })

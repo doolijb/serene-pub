@@ -47,6 +47,19 @@ describe("LayoutCopyAsks", () => {
 		expect(persist).not.toHaveBeenCalled()
 	})
 
+	it("abandon settles every ask as not landed and sends no save", async () => {
+		const asks = new LayoutCopyAsks()
+		const persist = vi.fn()
+		const first = asks.ask(true)
+		const second = asks.ask(false)
+		asks.abandon()
+		expect(asks.pending).toBe(0)
+		await expect(first).resolves.toBe(false)
+		await expect(second).resolves.toBe(false)
+		expect(asks.settle(true, persist)).toBe(false)
+		expect(persist).not.toHaveBeenCalled()
+	})
+
 	it("reports an answer it has no ask for (another tab's copy)", () => {
 		const asks = new LayoutCopyAsks()
 		const persist = vi.fn()

@@ -85,7 +85,13 @@ const NO_PROMPT = new Set([
 	// `transcribeFiles` constructs the TRANSCRIPTION adapter
 	// `getTranscriptionAdapter` returns (O9) for `transcribeAudio`: audio in,
 	// text out, no prompt and no completion to stop.
-	"lib/server/attachments/transcribe.ts"
+	"lib/server/attachments/transcribe.ts",
+	// The SPEECH adapter `getSpeechAdapter` returns, for `synthesizeSpeech`:
+	// text in, audio out, no completion to stop. `preview.ts` constructs it
+	// for the voice try-out; `speechTarget.ts` only documents the shape
+	// (`new mod.Adapter(connection)`) its callers construct (speech, 2026-10-31).
+	"lib/server/speech/preview.ts",
+	"lib/server/speech/speechTarget.ts"
 ])
 
 interface Site {

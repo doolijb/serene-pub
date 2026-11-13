@@ -6,10 +6,12 @@
  * retraction may not reach: what is at or before it is in the lorebook now
  * ("This part of the story is in the lorebook now."). It moves forward only —
  * at a generated write (one with `sources`, R-a: the NEWEST attributed
- * message fixes the line) or a person's touch — and as it moves, what lies
+ * message fixes the line), a person's touch, or an Apply to the lorebook
+ * (through the newest applied anchor, never past the message before the oldest
+ * item still held; a take-back leaves the line where it is) — and as it moves, what lies
  * below it is compacted: each attribute slot folds to one timeline-anchored
  * row (the anchor swap, pass 12), decided proposals and old zone snapshots
- * drop, standing imprints settle, annex deltas and consumed session changes
+ * drop, standing imprints (lore and session) settle, and consumed session changes
  * go. A genre that says `history.settle: 'on-write'` settles every line as it
  * lands (G2, R-m): Back is refused there with its own sentence; Hide and
  * Branch still work.
@@ -29,6 +31,7 @@ import {
 import * as schema from "$lib/server/db/schema"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { sessionGenreOf } from "$lib/server/sessions/annexFields"
+import { settleSessionImprints } from "$lib/server/sessions/sessionImprints"
 import { REWIND_REFUSALS } from "$lib/shared/sessions/rewind"
 
 /** Back's sentence below the line, and every retraction's (pass 4, ruled) — spelled once, in `REWIND_REFUSALS`. */
@@ -260,14 +263,12 @@ async function compactThrough(tx: Db, sessionId: number, line: number): Promise<
 			and(
 				eq(schema.loreImprints.sessionId, sessionId),
 				lte(schema.loreImprints.messageId, line),
-				eq(schema.loreImprints.status, "standing")
+				eq(schema.loreImprints.status, "standing"),
+				// An applied change is the lorebook's ("Only Apply settles"): its record keeps `before` for take-back.
+				ne(schema.loreImprints.origin, "apply")
 			)
 		)
-	await tx
-		.delete(schema.annexDeltas)
-		.where(
-			and(eq(schema.annexDeltas.sessionId, sessionId), lte(schema.annexDeltas.messageId, line))
-		)
+	await settleSessionImprints(tx, sessionId, line)
 	await tx
 		.delete(schema.sessionChanges)
 		.where(

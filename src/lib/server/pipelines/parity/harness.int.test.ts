@@ -102,6 +102,7 @@ import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/context
 import { renderParity, parityGate, splitCandidates } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
+import { insertCastMember } from "$lib/server/characters/versions"
 import {
 	HISTORY_TYPE_ID,
 	WORLD_LORE_TYPE_ID,
@@ -478,7 +479,7 @@ const decoratedLore: ParityFixture = {
 		// substitution has nothing to resolve and the placeholder would survive
 		// on *both* paths, which would make the fixture agree for the wrong
 		// reason.
-		await db.insert(schema.lorebookBindings).values({
+		await insertCastMember(db, {
 			lorebookId: w.lorebook.id,
 			characterId: w.characters[0]!.id,
 			binding: "{{char:1}}"
@@ -579,12 +580,12 @@ const datedHistory: ParityFixture = {
 }
 
 /**
- * A switched-off character beside the speaker.
+ * A benched character beside the speaker.
  *
- * The two filters are not the same filter — the cards include a switched-off
- * character while the joined names exclude them. This is the fixture that
- * holds that apart; collapsing them is the obvious cleanup and it changes
- * prompts.
+ * 0.5's two filters were not the same filter — its cards included a
+ * switched-off character while the joined names excluded them. A benched card
+ * leaves the block now (owner ruling 2026-11-10), so this fixture is a
+ * deliberate departure, held in `DEPARTED` and bounded to Cara's card.
  *
  * ⚠ **Dala is gone from the seed (2026-09-27), and the golden did not move.**
  * She was the per-character *hidden* half of this fixture, and that setting
@@ -909,7 +910,6 @@ const CORPUS = [
 	macroHeavy,
 	decoratedLore,
 	postHistory,
-	mixedVisibility,
 	allHidden,
 	narrator,
 	overBudget
@@ -1033,6 +1033,21 @@ const DEPARTED: Array<{
 			"match it (§13.11 predicted exactly this). The golden is a record " +
 			"of 0.5's arithmetic and cannot be re-derived.",
 		normalise: sortObjects
+	},
+	{
+		fixture: mixedVisibility,
+		because:
+			"A benched character leaves the prompt's characters block (owner " +
+			"ruling 2026-11-10, benched seats: \"benched and fallen seats leave " +
+			"the block\"). 0.5 still printed a switched-off character's card " +
+			"while dropping its name from the joined names; 0.6 drops both, so " +
+			"the two filters are one now. Stated way: the same prompt, without " +
+			"Cara's card in the characters JSON.",
+		normalise: (prompt) =>
+			prompt.replace(
+				',\n  {\n    "name": "Cara",\n    "description": "A scout."\n  }',
+				""
+			)
 	}
 ]
 

@@ -1,4 +1,4 @@
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 
 /**
  * The client-side courtesy check every Instance card makes before a write.
@@ -7,7 +7,7 @@ import { toaster } from "$lib/client/utils/toaster"
  */
 export function requireAdmin(user: { isAdmin?: boolean } | null | undefined) {
 	if (user?.isAdmin) return true
-	toaster.error({
+	notify.error({
 		title: "Access denied",
 		description: "Admin privileges required"
 	})

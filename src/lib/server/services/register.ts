@@ -9,8 +9,8 @@ import { registerService } from "./index"
  *
  * Each service adapts an existing manager rather than replacing it. That is
  * deliberate: `subprocessManager.ts` in particular carries hard-won behaviour
- * around PID files, adopting an already-running instance and distinguishing an
- * external process from one we spawned. None of that is generic, none of it
+ * around PID files, reaping its own leftover process and refusing a port held
+ * by one it did not start. None of that is generic, none of it
  * belongs in a registry, and rewriting it to fit an abstraction would trade
  * working code for symmetry.
  */
@@ -138,7 +138,7 @@ export async function registerCoreServices() {
 		shutdown: () => koboldcpp.stop()
 	})
 
-	// audio.cpp, run by Serene Pub: adopt-or-reap a leftover process, then
+	// audio.cpp, run by Serene Pub: reap a leftover process of ours, then
 	// keep the managed endpoint's display base URL in step with the port.
 	const audiocpp = await import("$lib/server/audiocpp/process")
 	registerService({

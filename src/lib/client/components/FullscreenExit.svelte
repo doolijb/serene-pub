@@ -17,7 +17,8 @@
 		sessionName: string | null
 		notice: string | null
 		onExit: () => void
-		onLayout: () => void
+		/** Absent with advanced controls off: no Customize layout entry. */
+		onLayout?: () => void
 		onDisplay: () => void
 		onNoticeShown: () => void
 	}
@@ -76,7 +77,11 @@
 	})
 
 	const backTitle = $derived(
-		rewind?.back.reason ? `Back one turn — ${rewind.back.reason}` : "Back one turn"
+		rewind?.back.reason
+			? `Back one turn — ${rewind.back.reason}`
+			: rewind?.back.takes
+				? `Back: ${rewind.back.takes}`
+				: "Back one turn"
 	)
 	const forwardTitle = $derived(
 		rewind?.forward.reason
@@ -114,7 +119,7 @@
 			onSelect: () => rewind.regenerate!.press()
 		},
 		rewind && { separator: true },
-		{
+		onLayout && {
 			label: "Customize layout",
 			icon: Icons.LayoutDashboard,
 			onSelect: onLayout

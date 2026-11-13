@@ -60,7 +60,9 @@ async function install(pluginId: string, fields: unknown[]) {
 
 /** Drive the real handler; collect what it emits to the asker. */
 async function ask(user: { id: number; isAdmin?: boolean }, sid = sessionId) {
-	const { sessionsAnnexInspectHandler } = await import("$lib/server/sockets/sessions")
+	const { sessionsAnnexInspectHandler } = await import(
+		"$lib/server/sockets/sessions"
+	)
 	const emits: Array<{ event: string; data: any }> = []
 	await sessionsAnnexInspectHandler.handler(
 		{ user } as any,
@@ -73,7 +75,9 @@ async function ask(user: { id: number; isAdmin?: boolean }, sid = sessionId) {
 }
 
 beforeAll(async () => {
-	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-annex-inspect-int-test-"))
+	dataDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-annex-inspect-int-test-")
+	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 
@@ -81,7 +85,10 @@ beforeAll(async () => {
 	ownerId = (await createTestUser(db, "annex-inspect-owner")).id
 	guestId = (await createTestUser(db, "annex-inspect-guest")).id
 	adminId = (await createTestUser(db, "annex-inspect-admin")).id
-	await db.update(schema.users).set({ isAdmin: true }).where(eq(schema.users.id, adminId))
+	await db
+		.update(schema.users)
+		.set({ isAdmin: true })
+		.where(eq(schema.users.id, adminId))
 
 	await install("acme.dice", [
 		annexField({
@@ -92,11 +99,22 @@ beforeAll(async () => {
 			label: "Last roll"
 		}),
 		annexField({ key: "streak", shape: { type: "integer" } }),
-		annexField({ key: "lair-only", shape: { type: "string" }, genre: "core:genre/lair" })
+		annexField({
+			key: "lair-only",
+			shape: { type: "string" },
+			genre: "core:genre/lair"
+		})
 	])
 	// A stored manifest an SDK check would refuse: a secret-shaped key. The
 	// declaration is skipped, so its stored value reads as legacy — withheld.
-	await install("acme.vault", [{ __decl: "annex-field", key: "token", shape: { type: "secret" }, see: [] }])
+	await install("acme.vault", [
+		{
+			__decl: "annex-field",
+			key: "token",
+			shape: { type: "secret" },
+			see: []
+		}
+	])
 
 	const [session] = await db
 		.insert(schema.sessions)
@@ -155,7 +173,10 @@ describe("sessions:annexInspect — what it returns", () => {
 	it("groups declared keys by owner, with declaration and stored value", async () => {
 		const [{ data }] = await ask({ id: ownerId })
 		const dice = data.groups.find((g: any) => g.owner === "acme.dice")
-		expect(dice.fields.map((f: any) => f.key)).toEqual(["last-roll", "streak"])
+		expect(dice.fields.map((f: any) => f.key)).toEqual([
+			"last-roll",
+			"streak"
+		])
 		expect(dice.fields[0]).toMatchObject({
 			key: "last-roll",
 			label: "Last roll",
@@ -166,10 +187,17 @@ describe("sessions:annexInspect — what it returns", () => {
 			value: 17
 		})
 		// Pipelines-written only, and nothing stored yet.
-		expect(dice.fields[1]).toMatchObject({ key: "streak", see: [], act: null, hasValue: false })
+		expect(dice.fields[1]).toMatchObject({
+			key: "streak",
+			see: [],
+			act: null,
+			hasValue: false
+		})
 		expect(dice.fields[1]).not.toHaveProperty("value")
 		// An owner whose only field was refused declares nothing here.
-		expect(data.groups.find((g: any) => g.owner === "acme.vault")).toBeUndefined()
+		expect(
+			data.groups.find((g: any) => g.owner === "acme.vault")
+		).toBeUndefined()
 	})
 
 	it("lists every undeclared stored key as legacy, and withholds a secret one", async () => {
@@ -187,16 +215,37 @@ describe("groupAnnex — pure", () => {
 	it("puts core first and withholds a declared secret-shaped value", async () => {
 		const { groupAnnex } = await import("./annexInspect")
 		const decl = (key: string, shape: any) =>
-			({ __decl: "annex-field", key, shape, see: ["owner"] }) as unknown as AnnexFieldDecl
+			({
+				__decl: "annex-field",
+				key,
+				shape,
+				see: ["owner"]
+			}) as unknown as AnnexFieldDecl
 		const out = groupAnnex(
 			{ zeta: { a: 1 }, core: { clock: 3 }, alpha: { pin: "1234" } },
 			[
-				{ owner: "zeta", identity: "zeta:annex#a", decl: decl("a", { type: "integer" }) },
-				{ owner: "alpha", identity: "alpha:annex#pin", decl: decl("pin", { type: "secret" }) },
-				{ owner: "core", identity: "core:annex#clock", decl: decl("clock", { type: "integer" }) }
+				{
+					owner: "zeta",
+					identity: "zeta:annex#a",
+					decl: decl("a", { type: "integer" })
+				},
+				{
+					owner: "alpha",
+					identity: "alpha:annex#pin",
+					decl: decl("pin", { type: "secret" })
+				},
+				{
+					owner: "core",
+					identity: "core:annex#clock",
+					decl: decl("clock", { type: "integer" })
+				}
 			]
 		)
-		expect(out.groups.map((g) => g.owner)).toEqual(["core", "alpha", "zeta"])
+		expect(out.groups.map((g) => g.owner)).toEqual([
+			"core",
+			"alpha",
+			"zeta"
+		])
 		const pin = out.groups[1]!.fields[0]!
 		expect(pin).toMatchObject({ hasValue: true, withheld: true })
 		expect(pin).not.toHaveProperty("value")
@@ -205,7 +254,9 @@ describe("groupAnnex — pure", () => {
 
 	it("an owner entry that is not a document is legacy, shown whole", async () => {
 		const { groupAnnex } = await import("./annexInspect")
-		expect(groupAnnex({ odd: 5 }, []).legacy).toEqual([{ owner: "odd", key: null, value: 5 }])
+		expect(groupAnnex({ odd: 5 }, []).legacy).toEqual([
+			{ owner: "odd", key: null, value: 5 }
+		])
 		expect(groupAnnex(null, [])).toEqual({ groups: [], legacy: [] })
 	})
 })

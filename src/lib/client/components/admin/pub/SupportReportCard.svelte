@@ -15,7 +15,7 @@
 		declareInterest,
 		requestWithInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	type Report = Sockets.Admin.SupportReport.Response
 
@@ -51,7 +51,9 @@
 	}
 
 	function refresh(): Promise<Report | null> {
-		const done = new Promise<Report | null>((resolve) => waiting.push(resolve))
+		const done = new Promise<Report | null>((resolve) =>
+			waiting.push(resolve)
+		)
 		if (loading) return done
 		loading = true
 		failed = null
@@ -60,7 +62,11 @@
 			report = data
 			settle(data)
 		}
-		release = requestWithInterest("admin:supportReport", browserFacts(), onReply)
+		release = requestWithInterest(
+			"admin:supportReport",
+			browserFacts(),
+			onReply
+		)
 		return done
 	}
 
@@ -114,11 +120,12 @@
 		const r = report ?? (await refresh())
 		if (!r) return
 		if (await writeClipboard(r.markdown))
-			toaster.success({ title: "Support report copied" })
+			notify.success({ title: "Support report copied" })
 		else
-			toaster.error({
+			notify.error({
 				title: "Could not copy",
-				description: "Select the text in the preview and copy it yourself."
+				description:
+					"Select the text in the preview and copy it yourself."
 			})
 	}
 
@@ -129,7 +136,9 @@
 	async function download() {
 		const r = report ?? (await refresh())
 		if (!r) return
-		const blob = new Blob([r.markdown], { type: "text/markdown;charset=utf-8" })
+		const blob = new Blob([r.markdown], {
+			type: "text/markdown;charset=utf-8"
+		})
 		const url = URL.createObjectURL(blob)
 		const a = document.createElement("a")
 		a.href = url
@@ -143,8 +152,13 @@
 	const kb = (n: number) => `${Math.max(1, Math.round(n / 1024))} KB`
 </script>
 
-<section class="panel-card flex flex-col gap-3" aria-labelledby="support-report-heading">
-	<h2 id="support-report-heading" class="text-sm font-medium">Support report</h2>
+<section
+	class="panel-card flex flex-col gap-3"
+	aria-labelledby="support-report-heading"
+>
+	<h2 id="support-report-heading" class="text-sm font-medium">
+		Support report
+	</h2>
 	<FieldHelp>
 		Everything a bug report needs about this pub — versions, settings,
 		connections, plugins, recent failures and server warnings — in one
@@ -178,7 +192,11 @@
 			onclick={() => refresh()}
 			disabled={loading}
 		>
-			<Icons.RefreshCw size={16} aria-hidden="true" class={loading ? "animate-spin" : ""} />
+			<Icons.RefreshCw
+				size={16}
+				aria-hidden="true"
+				class={loading ? "animate-spin" : ""}
+			/>
 			Refresh
 		</button>
 		<span class="text-surface-600-400 text-xs" aria-live="polite">
@@ -199,7 +217,7 @@
 		     nothing focusable inside is unreachable otherwise). -->
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<pre
-			class="bg-surface-50-950 border-surface-200-800 max-h-96 overflow-auto rounded-base border p-3 font-mono text-xs whitespace-pre-wrap break-words"
+			class="bg-surface-50-950 border-surface-200-800 rounded-base max-h-96 overflow-auto border p-3 font-mono text-xs break-words whitespace-pre-wrap"
 			tabindex="0"
 			role="region"
 			aria-label="Support report preview">{report.markdown}</pre>

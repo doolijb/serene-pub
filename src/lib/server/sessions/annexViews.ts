@@ -25,7 +25,7 @@ import {
 	type ParticipantRef
 } from "@serene-pub/sdk"
 import { resolvePortrayals } from "$lib/server/pipelines/runtime/portrayals"
-import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { actingPersonFor, personMay } from "$lib/server/auth/actingPerson"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { emitToUserRedacted } from "$lib/server/sockets/utils/broadcastHelpers"
 import { declaredAudiences } from "$lib/server/sessions/annexFields"
@@ -38,8 +38,9 @@ export async function annexViewFor(
 	sessionId: number,
 	userId: number
 ): Promise<AnnexView | null> {
-	const access = await checkSessionAccess(sessionId, userId)
-	if (!access.hasAccess) return null
+	const person = await actingPersonFor(db, { via: "view", userId })
+	if (!person || !(await personMay(db, person, "read", { kind: "session-annex", sessionId })).ok)
+		return null
 	const [row] = await db
 		.select({
 			annex: schema.sessions.annex,

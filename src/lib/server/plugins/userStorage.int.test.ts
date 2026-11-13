@@ -72,11 +72,18 @@ function setup(
 		userStorageQuotaBytes: grant.user
 	})
 	mgr.markReady()
-	const call = (hook: string, input: Record<string, unknown>, user?: string) =>
+	// The plugin's own frame is open unless a test passes another cause (or none).
+	const call = (
+		hook: string,
+		input: Record<string, unknown>,
+		user?: string,
+		frameCause: { pluginId: string } | null = { pluginId: ID }
+	) =>
 		mgr.callHook(ID, hook, input, {
 			kind: "outlet",
 			timeoutMs: 5000,
-			user
+			user,
+			frameCause: frameCause ?? undefined
 		})
 	return { dir, mgr, call }
 }
@@ -124,6 +131,20 @@ describe.each(["quickjs", "ses"] as const)("ctx.storage.user on %s", (backend) =
 			const r = await call("refused", {}, user)
 			expect(r.ok && r.value).toBe("storage.user: no person is acting for this call")
 		}
+	}, 30_000)
+
+	it("refuses with the one closed sentence unless the plugin's own frame caused the call", async () => {
+		const { dir, call } = setup(backend)
+		for (const cause of [null, { pluginId: "acme/other" }]) {
+			const r = await call("refused", {}, "7", cause)
+			expect(r.ok && r.value).toBe(
+				"storage.user: Per-person storage is only available while the app is open."
+			)
+		}
+		expect(fs.existsSync(path.join(dir, "extensions_user_data", "acme_atlas", "7"))).toBe(false)
+		// The pub-wide store is not applet-group reach.
+		const pub = await call("pub", {}, "7", null)
+		expect(pub.ok && pub.value).toEqual(["pub.txt"])
 	}, 30_000)
 
 	it("refuses with a sentence when per-user storage is not granted", async () => {

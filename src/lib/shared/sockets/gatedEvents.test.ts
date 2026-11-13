@@ -167,7 +167,10 @@ const MIGRATED_EVENTS = [
 	"models:presence",
 	// 🚧 Lane C, 2026-10-30: one consumer, `useMachineHardware.svelte.ts`, on
 	// the registry from its first line.
-	"models:machineHardware"
+	"models:machineHardware",
+	// 🚧 shelf-B, 2026-11-08: one consumer, `ModelFinderView.svelte` (the
+	// finder model page), on the registry from its first line.
+	"models:hubCard"
 ]
 
 describe("GATED_EVENTS", () => {
@@ -316,7 +319,7 @@ describe("scopeOfPayload", () => {
 		for (const event of [
 			"sessions:genreOf",
 			"sessions:shareAsLorebook",
-			"sessions:cloneWithChanges",
+			"sessions:foldInParent",
 			"sessions:archive",
 			"sessions:unarchive",
 			"sessions:closeOut",
@@ -489,5 +492,42 @@ describe("models:presence (model consolidation, MV pin)", () => {
 	test("is gated — a tab that never opened a finder is not sent presence answers — and its error sibling is not", () => {
 		expect(isGatedEvent("models:presence")).toBe(true)
 		expect(isGatedEvent("models:presence:error")).toBe(false)
+	})
+})
+
+describe("a card's or a cast member's gallery and sprite replies (★cp-scope-1)", () => {
+	const OWNER_FAMILY = [
+		"characters:listGallery",
+		"characters:uploadGalleryImage",
+		"characters:deleteGalleryImage",
+		"characters:listSprites",
+		"characters:createSpriteSet",
+		"characters:updateSpriteSet",
+		"characters:deleteSpriteSet",
+		"characters:uploadSprite",
+		"characters:addStandardSprites",
+		"characters:updateSprite",
+		"characters:deleteSprite",
+		"characters:reorderSprites",
+		"characters:testSprite"
+	]
+
+	test("a card payload scopes on the card id, a member's on member:<id>, neither on nothing", () => {
+		for (const event of OWNER_FAMILY) {
+			expect(scopeOfPayload(event, { characterId: 7 }), event).toBe("7")
+			expect(scopeOfPayload(event, { castMemberId: 5 }), event).toBe(
+				"member:5"
+			)
+			expect(scopeOfPayload(event, { images: [] }), event).toBeNull()
+		}
+	})
+
+	test("one gallery and one sprite event, by name", () => {
+		expect(
+			scopeOfPayload("characters:listGallery", { castMemberId: 5 })
+		).toBe("member:5")
+		expect(
+			scopeOfPayload("characters:listSprites", { characterId: 9 })
+		).toBe("9")
 	})
 })

@@ -455,7 +455,7 @@ module.exports = {
 							? utx.api
 							: makeDeniedUserStorage(
 									bundle.config && bundle.config.userQuotaBytes
-										? "no person is acting for this call"
+										? job.userStorageDenied || "no person is acting for this call"
 										: "per-user storage is not granted"
 								)
 					)
@@ -783,6 +783,7 @@ export class QuickJsSandbox implements PluginSandbox {
 			memoryLimitBytes: this.memoryLimitBytes,
 			secrets: opts.secrets,
 			userStorageDir: opts.userStorageDir,
+			userStorageDenied: opts.userStorageDenied,
 			userAnnexJob: opts.userAnnexJob,
 			// Derived here, on the host, from the kind the caller named — the
 			// worker never sees the kind, only what it grants (R-3). Throws on

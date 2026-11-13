@@ -7,7 +7,7 @@
  */
 import { untrack } from "svelte"
 import { goto } from "$app/navigation"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 import { sessionAddress } from "$lib/client/components/sessionPage/deleteReply"
 import {
 	EMPTY_TURN_ORDER,
@@ -30,6 +30,7 @@ import type {
 	Narrations,
 	NarratorRequest
 } from "$lib/client/components/sessionPage/collects"
+import { pendingReplyRunOf } from "$lib/client/components/sessionPage/pendingReply"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import type { SessionPageInbox } from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
 import type { SessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
@@ -186,7 +187,9 @@ export function createTurnFlow(d: TurnFlowDeps) {
 			if (playedFrom !== at) playedFrom = at
 		})
 	})
-	let headPlayed = $derived(playedFrom !== null && turnOrderDoc.basedOnAt === playedFrom)
+	let headPlayed = $derived(
+		playedFrom !== null && turnOrderDoc.basedOnAt === playedFrom
+	)
 
 	// Determine if we should show the next character block
 	let shouldShowNextCharacterBlock: boolean = $derived.by(() => {
@@ -224,11 +227,16 @@ export function createTurnFlow(d: TurnFlowDeps) {
 
 	function handleAbortLastMessage(e: Event) {
 		e.stopPropagation()
-		if (lastMessage)
-			socket.emit("sessionMessages:cancel", {
-				id: lastMessage.id,
-				sessionId
-			})
+		if (!lastMessage) return
+		const runId = pendingReplyRunOf(lastMessage)
+		if (runId) {
+			socket.emit("pipelines:cancelRun", { runId })
+			return
+		}
+		socket.emit("sessionMessages:cancel", {
+			id: lastMessage.id,
+			sessionId
+		})
 	}
 	function handleAdvance(e: Event, channel?: string) {
 		e.stopPropagation()
@@ -246,7 +254,10 @@ export function createTurnFlow(d: TurnFlowDeps) {
 	function handleRegenerateLastMessage(e: Event) {
 		e.stopPropagation()
 		if (lastMessage && canRegenerateLastMessage) {
-			d.data.rerunRefusals.asked("sessionMessages:regenerate", lastMessage.id)
+			d.data.rerunRefusals.asked(
+				"sessionMessages:regenerate",
+				lastMessage.id
+			)
 			socket.emit("sessionMessages:regenerate", { id: lastMessage.id })
 		}
 	}
@@ -303,9 +314,11 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		// branched does, rather than staying on the unchanged original.
 		if (mine && typeof msg.branchedTo === "number") {
 			clearFireInFlight()
-			toaster.info({
+			notify.info({
+				source: "socket:sessions:retakeTurn",
 				title: "Regenerated in a branch",
-				description: "The turn was taken again in a new branch; the old one stays where it was."
+				description:
+					"The turn was taken again in a new branch; the old one stays where it was."
 			})
 			void goto(sessionAddress(msg.branchedTo))
 		}
@@ -315,13 +328,17 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		if (retake.hear(msg)) return
 		retakeSent = false
 		clearFireInFlight()
-		if (msg.error) toaster.error({ title: msg.error })
+		if (msg.error)
+			notify.error({
+				source: "socket:sessions:retakeTurn:error",
+				title: msg.error
+			})
 	}
 
-	function onPickSpeaker(characterId: number) {
+	function onPickSpeaker(ref: string) {
 		showPickSpeakerModal = false
 		markFireInFlight()
-		fireTurn(socket, sessionId, { characterId })
+		fireTurn(socket, sessionId, { ref })
 	}
 
 	function openNarrateModal() {
@@ -409,7 +426,9 @@ export function createTurnFlow(d: TurnFlowDeps) {
 	 */
 	function takeSeat(name: string) {
 		socket.emit("sessions:update", {
-			session: { id: sessionId } as Sockets.Sessions.Update.Params["session"],
+			session: {
+				id: sessionId
+			} as Sockets.Sessions.Update.Params["session"],
 			seatName: name
 		})
 	}
@@ -427,7 +446,8 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		// A generation that failed before any isGenerating row would otherwise
 		// leave the next-character block suppressed for the full settle timeout.
 		clearFireInFlight()
-		toaster.error({
+		notify.error({
+			source: "socket:sessionMessage:error",
 			title: "Failed to load message",
 			description: msg?.error
 		})
@@ -465,18 +485,26 @@ export function createTurnFlow(d: TurnFlowDeps) {
 		if (msg.sessionId !== sessionId) return
 		clearFireInFlight()
 		const sentence = fireTurnRefusal(msg, sessionId)
-		if (sentence) toaster.error({ title: sentence })
+		if (sentence)
+			notify.error({
+				source: "socket:sessions:fireTurn:error",
+				title: sentence
+			})
 	}
 
 	function handleSessionsAddPersona(
 		msg: Sockets.Sessions.AddPersona.Response
 	) {
 		if (msg.success) {
-			toaster.success({
+			notify.success({
+				source: "socket:sessions:addPersona",
 				title: "Persona added to session successfully"
 			})
 		} else if (msg.error) {
-			toaster.error({ title: msg.error })
+			notify.error({
+				source: "socket:sessions:addPersona",
+				title: msg.error
+			})
 		}
 	}
 

@@ -37,7 +37,7 @@
 		CORE_LIQUID_ENGINE,
 		CORE_TEMPLATE_ENGINE
 	} from "$lib/shared/pipelines/templateEngines"
-	import type { TemplateScope } from "@serene-pub/sdk"
+	import { laidOutScope, type TemplateScope } from "@serene-pub/sdk"
 	import {
 		filterShelvedTree,
 		insertionFor,
@@ -48,6 +48,8 @@
 	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import ScopeTree from "./ScopeTree.svelte"
+	import TemplateLayoutsList from "./TemplateLayoutsList.svelte"
+	import { occurrenceAt, writeOccurrence } from "./templateLayoutRewrite"
 	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
 	import { templateLanguageFor } from "$lib/client/components/codeField/templateLanguage"
 	import {
@@ -86,6 +88,13 @@
 		 * assurance nobody earned.
 		 */
 		engine?: string
+		/**
+		 * W5: each laid-out key this template can read, with the layout it is
+		 * written with and the layouts it may name
+		 * (`pipelines:templateVariableLayouts`). Absent: no layout help,
+		 * exactly as today.
+		 */
+		variableLayouts?: readonly Sockets.Pipelines.VariableLayouts.TemplateKey[]
 		readonly?: boolean
 		rows?: number
 		/** The accessible name, when no wrapping `<label>` provides one. */
@@ -102,6 +111,7 @@
 		scopeNote,
 		showTree,
 		engine = CORE_TEMPLATE_ENGINE,
+		variableLayouts,
 		readonly = false,
 		rows = 8,
 		label,
@@ -118,16 +128,89 @@
 	let blurred = $state(true)
 	let treeOpen = $state(true)
 
-	const options = $derived({ engine, declarers })
+	/**
+	 * What the save checks against: the scope with each laid-out key marked,
+	 * and the layouts each variable may name — so the editor and the save
+	 * never disagree.
+	 */
+	const layoutOffers = $derived(
+		variableLayouts
+			? Object.fromEntries(variableLayouts.map((k) => [k.variableId, k.offers]))
+			: undefined
+	)
+	const checkScope = $derived(
+		scope && variableLayouts
+			? laidOutScope(
+					scope,
+					Object.fromEntries(variableLayouts.map((k) => [k.key, k.variableId]))
+				)
+			: scope
+	)
+	const layoutKeys = $derived(variableLayouts?.map((k) => k.key) ?? [])
+
+	const options = $derived({ engine, declarers, layoutOffers })
 
 	const hover = $derived(
-		scope && assisted ? describeAt(value, caret, scope, options) : null
+		checkScope && assisted ? describeAt(value, caret, checkScope, options) : null
+	)
+
+	const REASONS = {
+		pub: "this pub's choice",
+		default: "the default",
+		automatic: "automatic"
+	} as const
+
+	/** The laid-out tag the caret is on, and how it is written there. */
+	const layoutAt = $derived.by(() => {
+		if (!variableLayouts?.length || !assisted) return null
+		const o = occurrenceAt(engine, value, caret, layoutKeys)
+		if (!o) return null
+		const k = variableLayouts.find((x) => x.key === o.key)!
+		const offered =
+			o.reference === null ? undefined : k.offers.find((x) => x.reference === o.reference)
+		const writtenAs =
+			o.reference !== null
+				? offered
+					? { name: offered.label, reason: "named by the template" }
+					: null
+				: k.inUse
+					? { name: k.inUse.name, reason: REASONS[k.inUse.reason] }
+					: null
+		const current = o.reference ?? k.inUse?.reference ?? null
+		return {
+			occurrence: o,
+			writtenAs,
+			others: k.offers.filter((x) => x.reference !== current)
+		}
+	})
+
+	function writeAs(reference: string) {
+		const at = layoutAt
+		if (!at || readonly) return
+		field?.replace(
+			at.occurrence.start,
+			at.occurrence.end,
+			writeOccurrence(engine, value, at.occurrence, reference)
+		)
+	}
+
+	/** Root row id → the layout it is written with (the tree's meta line). */
+	const writtenAs = $derived(
+		Object.fromEntries(
+			(variableLayouts ?? [])
+				.filter((k) => k.inUse)
+				.map((k) => [k.key, k.inUse!.name])
+		)
 	)
 
 	/** Every finding, before the mid-word rule. */
 	const allDiagnostics = $derived.by<TemplateDiagnostic[]>(() => {
-		if (!scope || readonly || !assisted) return []
-		return templateDiagnostics(engine, value, scope, { untyped, lenient }).diagnostics
+		if (!checkScope || readonly || !assisted) return []
+		return templateDiagnostics(engine, value, checkScope, {
+			untyped,
+			lenient,
+			variableLayoutOffers: layoutOffers
+		}).diagnostics
 	})
 
 	/**
@@ -142,7 +225,7 @@
 	)
 
 	const treeNodes = $derived(
-		scope && assisted ? scopeTreeNodes(scope, options) : []
+		checkScope && assisted ? scopeTreeNodes(checkScope, options) : []
 	)
 	const wantsTree = $derived(
 		(showTree ?? true) && treeNodes.length > 0
@@ -179,8 +262,14 @@
 		const language = templateLanguageFor(engine)
 		const out: Extension[] = []
 		if (language) out.push(language)
-		if (!scope || !assisted) return out
-		const assist = { scope, options: { engine, declarers }, untyped, lenient, readonly }
+		if (!checkScope || !assisted) return out
+		const assist = {
+			scope: checkScope,
+			options: { engine, declarers, layoutOffers },
+			untyped,
+			lenient,
+			readonly
+		}
 		if (language && !readonly) {
 			out.push(
 				language.data.of({
@@ -206,7 +295,11 @@
 						assist.options.engine ?? CORE_TEMPLATE_ENGINE,
 						view.state.doc.toString(),
 						assist.scope,
-						{ untyped: assist.untyped, lenient: assist.lenient }
+						{
+							untyped: assist.untyped,
+							lenient: assist.lenient,
+							variableLayoutOffers: assist.options.layoutOffers
+						}
 					)
 					return toCmDiagnostics(
 						visibleDiagnostics(diagnostics, view.hasFocus),
@@ -278,7 +371,16 @@
 			? '@min-[40rem]/tpl:grid-cols-[minmax(0,1fr)_16rem]'
 			: ''}"
 	>
-		<div class="relative min-w-0">
+		<div class="relative flex min-w-0 flex-col gap-1">
+			{#if !readonly && variableLayouts && assisted}
+				<TemplateLayoutsList
+					{engine}
+					source={value}
+					{variableLayouts}
+					{uid}
+					onapply={(changes) => field?.editor()?.dispatch({ changes })}
+				/>
+			{/if}
 			<CodeField
 				bind:this={field}
 				{value}
@@ -350,6 +452,7 @@
 									nodes={filtered.nodes}
 									reveal={filtered.reveal}
 									insertable={!readonly}
+									{writtenAs}
 									oninsert={insertNode}
 								/>
 							</div>
@@ -386,6 +489,27 @@
 				</span>
 			{/if}
 		</p>
+	{/if}
+
+	{#if layoutAt}
+		{#if layoutAt.writtenAs}
+			<p class="text-surface-600-400 text-xs" aria-live="polite">
+				Written as {layoutAt.writtenAs.name} ({layoutAt.writtenAs.reason})
+			</p>
+		{/if}
+		{#if !readonly && layoutAt.others.length}
+			<div class="flex flex-wrap gap-1">
+				{#each layoutAt.others as offer (offer.reference)}
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface pointer-coarse:min-h-11"
+						onclick={() => writeAs(offer.reference)}
+					>
+						Write as {offer.label} here
+					</button>
+				{/each}
+			</div>
+		{/if}
 	{/if}
 
 	{#if diagnostics.length}

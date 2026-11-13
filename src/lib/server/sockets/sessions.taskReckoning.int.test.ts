@@ -13,6 +13,8 @@
  * are its duties and its mode (`applyLegacyTasks` writes them there).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf } from "$lib/server/state/seatRefs"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -296,8 +298,11 @@ describe("the reckoning (lane 2; a routine since lane 6)", () => {
 		expect((await sessionDutiesOf(db as any, sessionId, reckoningDuties.id))!.conditions).toBe("full")
 
 		const { stateFor } = await import("$lib/server/state/resolve")
+		// ⏳ The cast is keyed by the seat as stored: `seated_member:<id>` / `player_seat:<id>` with the switch on, else the card id.
+		const seatMap = await loadSeatMap(db as any, sessionId)
+		const castKey = memberFormOn() ? (() => { const o: any = memberFormOf(seatMap, { kind: "session_cast", id: gwen }); return o ? `${o.kind}:${o.id}` : String(gwen) })() : String(gwen)
 		const nerveOf = async () => {
-			const bag = ((await stateFor(db as any, sessionId)).cast.byId as Record<string, Record<string, unknown>>)[String(gwen)] ?? {}
+			const bag = ((await stateFor(db as any, sessionId)).cast.byId as Record<string, Record<string, unknown>>)[castKey] ?? {}
 			return bag["wherewithal-nerve"]
 		}
 		const before = await nerveOf()

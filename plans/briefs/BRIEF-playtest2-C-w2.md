@@ -1,0 +1,55 @@
+# BRIEF playtest2-C-w2 — the quant picker and Add by name come out of their dialogs (client)
+
+Lane `playtest2-C` (supervisor wrote this). Report: put your full report in your final hand-back (changed files, tests run with exact command and pass/fail counts, decisions, new user-facing strings, Noticed-not-done). You are a `lane-worker`.
+
+## Background (already built this morning — do not redo)
+**Get a model** (the model finder, `ModelFinderView.svelte`) is the Models view's detail pane: `ModelsSidebar.svelte` holds one `pane` state (`{kind:"model",…} | {kind:"finder",scope,key} | null`), `{#key pane.key}` remounts the finder, `closePane()` returns to the list, the finder renders under a pinned `PanelNavHeader` with **Back** and one scroller and focuses `[data-panel-title]` on mount. Tests in `finder.dom.test.svelte.ts` (+6 this morning) and `finderViews.ssr.test.ts`.
+
+STYLE-GUIDE §5.2 (2026-11-04), the rule you extend: *"**A tool in the detail pane** (Models, 2026-11-04). The Models view's detail pane holds a model's own view or **Get a model**, the model finder, and every door into the finder opens it there … It is a pane, never a dialog over the view, so the library stays beside it at desk and compact swaps it in like any detail. It opens under a `PanelNavHeader` with **Back** at every width, as a model's view does, focus moves to its heading, and everything under the header is one scroller. Pressing **Get** never closes it; the downloads tray shows the progress."*
+
+## Owner ruling (2026-11-04, final)
+*"20 Models view: quant picker and Add by name **inline**; **Set up chat stays a dialog**."* (Plan ★20a: *"A modal inside a pane is the same interruption you're removing."*) The quant picker's choice and its recommended pre-selection stay exactly as ruled (D2, 2026-10-29).
+
+## Build
+1. **Quant picker inline** (`src/lib/client/components/connections/QuantPicker.svelte`). It stops being a Skeleton `Dialog`: no `Dialog`/`Portal`/backdrop, no `open` prop. It renders as an inline section that **expands under the row it was opened from**: a `<section>` with `aria-labelledby` its own heading (the same title, *Pick a size* / *Choose a precision*, and the same muted `repo · tier` line), the same `role="radiogroup"` rows, the same pre-selection (`preselectedQuantIndex`, seeded per repo — keep that logic, re-keyed on mount/repo since there is no `open`), the same empty-list sentences, and the same footer (**Cancel**, **Download …**). Styling: a `panel-card`-style inset under the row (STYLE-GUIDE §6.4 cards; no new colour roles); no fixed max-height of its own beyond letting a long list scroll inside the pane's one scroller (drop `max-h-[80vh]` and the inner `overflow-y-auto` if that would create a second scroller — the finder pane has ONE scroller). On mount, focus moves to the checked radio; **Cancel** and **Escape** (keydown on the section) close it and return focus to the button that opened it (pass an `onCancel`; the host restores focus). Update its doc comment (it is no longer "one dialog").
+   - `ModelFinderView.svelte`: the `picker` state gains the opening row's key; the picker renders inside `resultRow` under the row whose key matches, not as the `{#if picker}<QuantPicker open …/>` block at the bottom of the file (delete that block). Only one picker open at a time; opening another row's picker replaces it. **Download** behaves exactly as `downloadPicked` does now. Works inside Set up chat's embedded finder too (Set up chat itself stays a dialog — do not touch `SetupChatFlow.svelte`).
+   - `OnnxModelView.svelte`: its `{#if choosing}<QuantPicker open … />` renders inline in place, under the control that opened it (read the file to find the Download button that sets `choosing`); same callbacks.
+2. **Add by name as a pane** (`ModelsSidebar.svelte` + the component). Add a pane kind `{ kind: "add-by-name"; key: number }` to the `Pane` union; the list's `onAddByName` sets it (instead of `addByNameOpen = true`); delete `addByNameOpen`. Replace `AddModelByNameDialog.svelte` with a new `src/lib/client/components/connections/AddModelByNameView.svelte` (the `ModelFinderView` / `ModelDetailView` / `OnnxModelView` naming pattern) and delete the old file: the same fields, copy and validation (*Add a model by name* heading; *For a host that doesn't list its models. The name has to be the one the host answers to.*; **Connection** select over `targets`; *Model identifier*; *Display name (optional)*; **Add model**), rendered as the finder pane is: pinned `PanelNavHeader` with **Back** at every width (`onBack`), focus to `[data-panel-title]` on mount, one scroller. **Add model** calls `onAdd(...)` then `onBack()` (closes the pane, as the dialog closed); Cancel is the header's **Back** (no separate Cancel button). `detailPane` renders it for `pane.kind === "add-by-name"`; `hasDetail` already follows `pane != null`. Update the `ModelsSidebar.svelte` header comment (lines ~21-27: "Set up chat … and Add a model by name are still dialogs" → only Set up chat is a dialog).
+3. **The finder's dead end** (`ModelFinderView.svelte`, the `{:else}` card under *Download to*, ~lines 1145-1180): delete the `{:else if scope === "embeddings" || scope === "entities"}` branch and its *"Add → A connection makes the local connection this pub downloads them into."* paragraph — the app now creates the two local ONNX connections itself (owner 2026-11-04, item 17), so the card is just *Nothing here can hold … yet.* (plus the KoboldCPP / audio.cpp buttons, unchanged). Fix the HTML comment above it to match.
+4. **Tests.**
+   - `src/lib/client/components/connections/finder.test.ts`: `destinationsFor("entities", [<a row of type CONNECTION_TYPE.LOCAL_ONNX_NER, id 7, name "Local named entities">])` is non-empty, its one destination `kind: "onnx"`, `connectionId: 7`; and `destinationsFor("embeddings", [<LOCAL_ONNX_EMBEDDINGS row>])` likewise.
+   - `finder.dom.test.svelte.ts`: a repo row with several quants → pressing **Get** shows the picker **inline** (inside the results, not in a dialog: no visible `[role=dialog]`), the recommended quant is pre-checked, **Download** sends what `downloadPicked` sent before, **Cancel** removes it and focus returns to that row's Get; **Add by name** from the list toolbar opens a pane (no dialog), its heading focused, **Back** returns to the list, **Add model** emits `connections:createModel` with the same payload as before and closes the pane; the dead-end card for `entities` with no rows no longer contains "A connection". Read the file first and follow its existing harness (mock socket, contexts).
+   - `finderViews.ssr.test.ts`: update its two `render(QuantPicker, …)` cases for the new props (no `open`), and keep what they assert.
+   - Run `axe` the way the existing pane test does on the inline picker (0 violations).
+
+## Files owned (edit only these)
+`src/lib/client/components/connections/QuantPicker.svelte`, `ModelFinderView.svelte`, `OnnxModelView.svelte` (the QuantPicker mount only), `AddModelByNameDialog.svelte` (delete), `AddModelByNameView.svelte` (new), `src/lib/client/components/sidebars/ModelsSidebar.svelte`, `finder.test.ts`, `finder.dom.test.svelte.ts`, `finderViews.ssr.test.ts` (all under `src/lib/client/components/connections/` unless pathed).
+
+## Files readable
+Everything. Before using or restyling a Skeleton component: `grep -n "^# Dialog" AI-TEMP/skeleton-llms-svelte.txt` then `sed -n` that section only (you are removing Dialog use, so you likely need nothing). STYLE-GUIDE §5.2 (line ~495-586), §6.4 (cards), §6.6 (dialogs, ~1182), §9 (accessibility). `PanelNavHeader` usage: copy from `ModelFinderView.svelte`'s pane branch.
+
+## Out of scope (never build)
+Moving or restyling Set up chat (`SetupChatFlow.svelte` stays a dialog); a `?get=` URL state; any server file; docs (`docs/connections.md` — the next worker's); `STYLE-GUIDE.md` / `NOMENCLATURE.md` (the lead's — list wording changes you think they need in your report); new socket events; any setting.
+
+## Stop and ask when
+A new user-facing string is needed beyond what is quoted above (list it; prefer reusing existing copy); the inline picker needs a layout the STYLE-GUIDE doesn't cover; CLAUDE.md §Decisions applies.
+
+## Rules you work under (quoted from CLAUDE.md)
+- *"`$state(new Set())` / `new Map()` is not reactive on mutation — use `SvelteSet` / `SvelteMap`."*
+- *"`socket.off(event)` with no handler removes **every** listener app-wide; always pass the handler."*
+- *"Sockets: one domain context per event family … is the only listener, and the only place that toasts; views register listeners for local state and never call `toaster`."*
+- *"Browser code runs on plain-http LAN addresses and phones: no `crypto.randomUUID`, no `navigator.clipboard`."*
+- *"It is a **session**, never a *chat* — except in chat-completions wire vocabulary."* (Set up chat is a proper name; leave it.)
+- Another programme and lane S2 are building in the same trees: **re-read every file immediately before editing it; use Edit, never Write, on an existing file** (Write only for the new `AddModelByNameView.svelte`).
+- Tests: run only your files. Command (n = 1, 2, …):
+  `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 --quiet bash -c 'cd /home/jody/github/serene-pub && NODE_OPTIONS=--max-old-space-size=4096 npx vitest run <files> > /tmp/claude-1000/-home-jody-github-serene-pub/c41f3a32-b4a2-4ba6-ada8-2d81ff90e6ed/scratchpad/playtest2-C-w2-<n>.log 2>&1; echo exit=$?'` then read the log. **Never pipe vitest into `head`.** A failing `assert` on a happy-dom element has OOM-killed VS Code: keep DOM assertions on strings/booleans (`expect(el?.textContent).toContain(…)`, `expect(!!el).toBe(true)`), never `expect(element)` objects.
+- Never a full `npm test`, `npm run check`, or project-wide `tsc`. You may run `npx svelte-check --workspace . --threshold error` ONLY if it can be limited to your files; otherwise skip it and say so. `npx prettier --check <file>` is fine.
+
+## Verbatim from the guide
+- *"This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work."*
+- *"Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`."* Also never `git checkout`, `git restore` or `git clean` in either repo.
+- *"Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`."*
+- *"Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'."* (You should need no sdk:build.)
+
+## Done means
+Green: `src/lib/client/components/connections/finder.test.ts`, `finder.dom.test.svelte.ts`, `finderViews.ssr.test.ts`, plus any other test file that imports `QuantPicker`, `AddModelByNameDialog` or renders `OnnxModelView` (grep for them and run those). Report each with pass/fail counts.

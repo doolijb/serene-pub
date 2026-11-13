@@ -2,7 +2,7 @@
  * **A dated card reads its member's private lore** (plan lorebooks
  * consolidation A25).
  *
- * A card a cast amendment draws a member with from a date is that member's
+ * A card a cast version draws a member with from a date is that member's
  * (`castMemberCards`): a seat holding it is her, on any line and at any date.
  * The host's `lorebook_entries` read gates character lore by who is speaking,
  * so the gate must know every card of a member, not only the linked one —
@@ -25,7 +25,11 @@ import os from "os"
 import path from "path"
 import { type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { characterLoreValues } from "$lib/server/pipelines/testing/fixtures"
+import {
+	characterLoreValues,
+	insertDatedCardVersion
+} from "$lib/server/pipelines/testing/fixtures"
+import { insertCastMember } from "$lib/server/characters/versions"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 
 vi.mock("$lib/server/db", async () => {
@@ -100,28 +104,17 @@ beforeAll(async () => {
 	brask = await card("Brask")
 	ashCard = await card("The Ashguard's face")
 
-	const [verityMember, braskMember, ashguard] = await db
-		.insert(schema.lorebookBindings)
-		.values([
-			{ lorebookId: book.id, binding: "{{char:1}}", name: "Verity", characterId: young },
-			{ lorebookId: book.id, binding: "{{char:2}}", name: "Brask", characterId: brask },
-			{ lorebookId: book.id, binding: "{{char:3}}", name: "The Ashguard" }
-		])
-		.returning()
-	await db.insert(schema.castAmendments).values([
-		{
-			lorebookId: book.id,
-			lorebookBindingId: verityMember.id,
-			year: 20,
-			fields: { characterId: keeper }
-		},
-		{
-			lorebookId: book.id,
-			lorebookBindingId: ashguard.id,
-			year: 30,
-			fields: { characterId: ashCard }
-		}
+	const members: Array<typeof schema.lorebookBindings.$inferSelect> = []
+	for (const row of [
+		{ lorebookId: book.id, binding: "{{char:1}}", name: "Verity", characterId: young },
+		{ lorebookId: book.id, binding: "{{char:2}}", name: "Brask", characterId: brask },
+		{ lorebookId: book.id, binding: "{{char:3}}", name: "The Ashguard" }
 	])
+		members.push((await insertCastMember(db as any, row)).member)
+	const [verityMember, braskMember, ashguard] = members
+	// A dated card is a cast version parented on that card's version.
+	await insertDatedCardVersion(db, verityMember.id, keeper, 20)
+	await insertDatedCardVersion(db, ashguard.id, ashCard, 30)
 	// The session seats the keeper's card, not the linked one.
 	await db
 		.insert(schema.sessionCharacters)

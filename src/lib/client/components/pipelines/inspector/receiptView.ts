@@ -953,6 +953,21 @@ export interface LayoutLine {
 	line: string
 	/** True when no row rendered it — the variable's built-in default did. */
 	floor: boolean
+	/** Why that layout was the one used, in words; null when not recorded. */
+	why: string | null
+	/** A reference the template named that matched no layout. */
+	missingReference: string | null
+}
+
+const REASON_LABEL: Record<string, string> = {
+	template: "named by the template",
+	leftover: "leftover pick",
+	preset: "the preset's",
+	pub: "the pub's",
+	authored: "the pipeline's choice for this step",
+	default: "the variable's default",
+	automatic: "automatic",
+	"no-layout": "no layout for it"
 }
 
 const ORIGIN_LABEL: Record<string, string> = {
@@ -980,15 +995,22 @@ export function layoutsView(node: ReceiptNode | null | undefined): LayoutLine[] 
 			const layout = asString(u.layout)
 			const origin = asString(u.origin)
 			const floor = layout === null
+			const reason = asString(u.reason)
+			const missingReference = asString(u.missingReference)
+			const used = floor
+				? "built-in default"
+				: origin && ORIGIN_LABEL[origin]
+					? `${layout} (${ORIGIN_LABEL[origin]})`
+					: layout
 			return {
 				key: u.key as string,
 				variableId: asString(u.variableId),
-				line: floor
-					? "built-in default"
-					: origin && ORIGIN_LABEL[origin]
-						? `${layout} (${ORIGIN_LABEL[origin]})`
-						: layout,
-				floor
+				line: missingReference
+					? `named ${missingReference}, which wasn't found; used ${floor ? "built-in default" : layout}`
+					: used,
+				floor,
+				why: (reason && REASON_LABEL[reason]) || null,
+				missingReference
 			}
 		})
 }

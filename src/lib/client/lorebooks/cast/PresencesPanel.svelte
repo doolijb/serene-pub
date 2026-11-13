@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import {
 		appearancesOf,
 		holdsAt,
@@ -199,7 +199,7 @@
 			branchId,
 			...parsed.fields
 		} satisfies Sockets.Amendments.Place.Params)
-		toaster.success({
+		notify.success({
 			title: `${memberName} placed at ${parsed.fields.personalPosition}`
 		})
 		reset()
@@ -272,7 +272,7 @@
 						</span>
 						{#if whereFrom(p)}
 							<span
-								class="badge preset-tonal-primary shrink-0 text-meta"
+								class="badge preset-tonal-primary text-meta shrink-0"
 							>
 								{whereFrom(p)}
 							</span>
@@ -460,7 +460,7 @@
 			{/if}
 
 			<div class="flex items-center gap-2">
-				<p class="text-surface-600-400 min-w-0 flex-1 text-meta">
+				<p class="text-surface-600-400 text-meta min-w-0 flex-1">
 					Written to <strong>{lineName}</strong>
 					{#if branchId != null}, so it is not a presence on main.{/if}
 				</p>

@@ -36,11 +36,17 @@ import {
 } from "$lib/shared/connections/imagePrice"
 import { listSpriteSets } from "$lib/server/sprites"
 import { buildSpriteSeries, emptySpriteLabels, fillLabels } from "$lib/server/sprites/fill"
-import { cardActionInput } from "$lib/server/pipelines/runtime/cardAction"
+import {
+	cardActionInput,
+	cardActionOwnerOf
+} from "$lib/server/pipelines/runtime/cardAction"
 import { normalizeSpriteName, type SpriteSetView } from "$lib/shared/sprites"
 
 export interface SpriteFillPreview {
-	characterId: number
+	/** The card's id; absent for a cast member. */
+	characterId?: number
+	/** 🚧 The cast member's id; absent for a card. */
+	castMemberId?: number
 	setId: number | null
 	setName: string
 	/** The labels this fill would draw: the person's pick, else every empty sprite. */
@@ -130,14 +136,16 @@ export async function perImagePrice(
 export async function previewSpriteFill(
 	db: Db,
 	req: {
-		characterId: number
+		characterId?: number
+		castMemberId?: number
 		setId?: number | null
 		labels?: string[] | null
 		userId: number
 		isAdmin: boolean
 	}
 ): Promise<SpriteFillPreview> {
-	const sets = await listSpriteSets(db, req.characterId)
+	const owner = cardActionOwnerOf(req)
+	const sets = await listSpriteSets(db, owner)
 	const set = chooseSet(sets, req.setId)
 	const emptyLabels = emptySpriteLabels(set)
 	const allLabels = set
@@ -145,7 +153,7 @@ export async function previewSpriteFill(
 		: []
 	const labels = req.labels?.length ? fillLabels(req.labels) : emptyLabels
 	const base = {
-		characterId: req.characterId,
+		...owner,
 		setId: set?.id ?? null,
 		setName: set?.name ?? "",
 		labels,
@@ -161,7 +169,7 @@ export async function previewSpriteFill(
 			notices: []
 		}
 
-	const input = await cardActionInput(db, req.characterId, {
+	const input = await cardActionInput(db, owner, {
 		setName: base.setName,
 		labels
 	})
@@ -176,7 +184,9 @@ export async function previewSpriteFill(
 	const hasImage = (input.likenessImage as unknown[]).length > 0
 	if (!hasImage && !String(input.likeness ?? "").trim())
 		notices.push(
-			"This character has no likeness yet, so each picture is drawn from its sprite label alone. Add a picture or a description on the Likeness tab for a set that looks like them."
+			"castMemberId" in owner
+				? "This cast member has no likeness yet, so each picture is drawn from its sprite label alone."
+				: "This character has no likeness yet, so each picture is drawn from its sprite label alone. Add a picture or a description on the Likeness tab for a set that looks like them."
 		)
 
 	const { previewImageRun } = await import(
@@ -254,7 +264,10 @@ export async function previewSpriteFill(
 export const pictureCount = (n: number) => `${n} ${n === 1 ? "picture" : "pictures"}`
 
 export interface SpriteFillProgress {
-	characterId: number
+	/** The card's id; absent for a cast member. */
+	characterId?: number
+	/** 🚧 The cast member's id; absent for a card. */
+	castMemberId?: number
 	runId: string
 	/** Where the run is. `done` and `failed` are final. */
 	phase: "drawing" | "cutting" | "attaching" | "done" | "failed"
@@ -262,6 +275,8 @@ export interface SpriteFillProgress {
 	labels: string[]
 	setId: number | null
 	status?: unknown
+	/** The backend's own line (*In the Horde's queue…*), when no `status` is. */
+	message?: string
 	percent?: number
 	/** Pictures drawn so far (before the cut-out), keyed to their label. */
 	drawn?: Array<{ label: string; uuid: string }>
@@ -280,7 +295,8 @@ export interface SpriteFillProgress {
 export async function runSpriteFill(
 	db: Db,
 	req: {
-		characterId: number
+		characterId?: number
+		castMemberId?: number
 		setId?: number | null
 		labels?: string[] | null
 		userId: number
@@ -290,11 +306,12 @@ export async function runSpriteFill(
 		report: (p: SpriteFillProgress) => void
 	}
 ): Promise<void> {
-	const sets = await listSpriteSets(db, req.characterId)
+	const owner = cardActionOwnerOf(req)
+	const sets = await listSpriteSets(db, owner)
 	const set = chooseSet(sets, req.setId)
 	const labels = req.labels?.length ? fillLabels(req.labels) : emptySpriteLabels(set)
 	const head = {
-		characterId: req.characterId,
+		...owner,
 		runId: req.runId,
 		labels,
 		setId: set?.id ?? null
@@ -321,7 +338,7 @@ export async function runSpriteFill(
 		const receipt = await runCardAction({
 			db,
 			specId: SPRITE_SET_FILL_SPEC_ID,
-			characterId: req.characterId,
+			...owner,
 			userId: req.userId,
 			fields: { setName: set?.name ?? "", labels },
 			runId: req.runId,
@@ -332,7 +349,12 @@ export async function runSpriteFill(
 					...head,
 					phase,
 					...(e.percent != null ? { percent: e.percent } : {}),
-					...(e.status ? { status: e.status } : {})
+					...(e.status ? { status: e.status } : {}),
+					// The adapter's sentence — a queue position, a wait, "this
+					// server does not say how far along it is" — is plain
+					// text beside the structured status, and is what a person
+					// waiting on the Horde needs to see.
+					...(e.message ? { message: e.message } : {})
 				}),
 			onStatus: (_node, text) => req.report({ ...head, phase, status: text }),
 			onNode: (e) => {
@@ -365,12 +387,17 @@ export async function runSpriteFill(
 			return
 		}
 		const out = node(SPRITE_SET_FILL_NODES.attach) ?? {}
+		// The series stopped early (`plan.stoppedOn`): the kept pictures are
+		// attached and the reason rides along, so the sheet says why the rest
+		// came back empty instead of only that they did.
+		const stoppedOn = (node(SPRITE_SET_FILL_NODES.draw)?.plan as any)?.stoppedOn
 		req.report({
 			...head,
 			phase: "done",
 			drawn,
 			attached: Array.isArray(out.attached) ? (out.attached as any) : [],
-			missing: Array.isArray(out.missing) ? (out.missing as any) : []
+			missing: Array.isArray(out.missing) ? (out.missing as any) : [],
+			...(stoppedOn?.error ? { error: String(stoppedOn.error) } : {})
 		})
 	} catch (e) {
 		req.report({

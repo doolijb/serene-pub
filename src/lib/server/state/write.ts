@@ -58,7 +58,9 @@
  * chances for one of them to forget.
  *
  * Author-layer edits (`card`, `cast_member`, `lorebook`) are **not** locked.
- * Authoring is not play.
+ * Authoring is not play. The exception is the session's own notes: its
+ * `lorebook` row and its cast members are tied to the turn like a session
+ * value (★pl2-2, 2026-11-05); every real book's rows are still never anchored.
  *
  * ## The state version (plans/29 R-15 *Staleness and order*; 30 §U5f)
  *
@@ -103,7 +105,7 @@
  * same insert with different anchors rather than two writers.
  */
 
-import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from "drizzle-orm"
+import { and, asc, desc, eq, getTableColumns, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
@@ -141,7 +143,8 @@ import {
 	vocabularyFor,
 	sessionLorebookIds,
 	nameLoreRefs,
-	type CastEntry
+	type CastEntry,
+	type ValueWriteStamp
 } from "$lib/server/state/resolve"
 import {
 	createExpressionBudget,
@@ -157,17 +160,28 @@ import {
 	type StateOwner
 } from "$lib/server/state/owners"
 import { castMemberKey, locationOwnerKey } from "$lib/server/state/keys"
+import { memberFormOn } from "$lib/server/state/memberForm"
+import { loadSeatMap, memberFormOf } from "$lib/server/state/seatRefs"
 import { carries } from "$lib/server/state/carries"
 import { isCardlessPlayerSeat } from "$lib/server/sessions/seatName"
+import { seatOf } from "$lib/server/sessions/seats"
+import type { SeatChange } from "$lib/server/sessions/seats"
+import { sessionImprintsFromOldRecord, type TakenSessionImprint } from "$lib/server/sessions/sessionImprints"
+import { cardsNow } from "$lib/server/cast/seatedCast"
+import { memberAsRead } from "$lib/server/cast/memberAsRead"
 import { sessionReadingOf, writeDatingAt } from "$lib/server/state/reading"
 import {
 	advanceSessionStoryClock,
 	bookCalendarOf,
+	clockColumns,
+	clockOfNow,
+	sessionStoryNowOf,
 	StoryClockRefusal
 } from "$lib/server/state/storyTime"
 import { dateProblem, type StoryTimeUnit } from "$lib/shared/lorebooks/storyDate"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
-import { lorebooksReadBy } from "$lib/server/lorebooks/ownBook"
+import { keepsValuesInOwnBook, lorebooksReadBy, ownBookFor, ownBookOf } from "$lib/server/lorebooks/ownBook"
+import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
 import {
 	LORE_WRITES_OFF,
 	type LoreWriteMode
@@ -318,7 +332,8 @@ export async function turnMessages(
 		.select({
 			id: schema.messages.id,
 			characterId: schema.messages.characterId,
-			personaId: schema.messages.personaId
+			personaId: schema.messages.personaId,
+			castMemberId: schema.messages.castMemberId
 		})
 		.from(schema.messages)
 		.where(
@@ -371,6 +386,9 @@ export async function turnMessages(
 	return rows.map((r) => ({
 		id: r.id,
 		speakerId: r.characterId ?? r.personaId ?? null,
+		// 🚧 The speaker's cast member (seat-cast S3): what a `seated_member`
+		// owner's anchor is matched on (`openAnchorFor`), never `speakerId`.
+		castMemberId: r.castMemberId ?? null,
 		turn: turnOf.get(planOf.get(r.id) ?? r.id) ?? null
 	}))
 }
@@ -392,18 +410,48 @@ export const isBookLayer = (kind: OwnerKind): boolean =>
  * (`WriteContext.branchId` set): an accepted proposal lands where it was
  * made, and a recording names its scene's history entry. Nothing for a
  * session-layer owner, which has no line of its own.
+ *
+ * 🚧 **Where the line forks.** A branch session still riding its parent's line
+ * (`sessions.line_on_first_write`) forks its own (`ensureSessionLine`) here,
+ * on its first write to the attached book — so call this on the write's
+ * transaction handle (`tx`), after the write's own checks, immediately before
+ * the insert: a refused write forks nothing, and the lock lasts to the commit.
+ * `opts.fork: false` (`proposeChange`) only reads the place and forks nothing.
+ * A caller that names a line (`ctx.branchId`, an accepted proposal) lands on
+ * the new line when the line it names is the one the session rode; any other
+ * line it names is kept.
  */
 async function bookWritePlace(
 	db: Db,
 	ctx: WriteContext,
-	owner: StateOwner
+	owner: StateOwner,
+	opts?: { fork?: boolean }
 ): Promise<{ branchId?: number | null; historyEntryId?: number | null }> {
 	if (!isBookLayer(owner.kind)) return {}
-	if (ctx.branchId !== undefined)
-		return {
-			branchId: ctx.branchId,
-			historyEntryId: ctx.historyEntryId ?? null
+	// One indexed read in the common case; the notes' own rows are the
+	// session's, never the book's, and fork nothing.
+	const [session] = await db
+		.select({
+			flag: schema.sessions.lineOnFirstWrite,
+			lineId: schema.sessions.lorebookBranchId
+		})
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, ctx.sessionId))
+		.limit(1)
+	const forks =
+		opts?.fork !== false &&
+		!!session?.flag &&
+		!(await isOwnBookOwner(db, ctx.sessionId, owner))
+	const rode = session?.lineId ?? null
+	if (ctx.branchId !== undefined) {
+		let branchId = ctx.branchId
+		if (forks) {
+			const line = await ensureSessionLine(db, ctx.sessionId)
+			if (branchId === rode) branchId = line
 		}
+		return { branchId, historyEntryId: ctx.historyEntryId ?? null }
+	}
+	if (forks) await ensureSessionLine(db, ctx.sessionId)
 	const reading = await sessionReadingOf(db, ctx.sessionId)
 	if (!reading) return { branchId: null, historyEntryId: null }
 	return {
@@ -411,6 +459,61 @@ async function bookWritePlace(
 		historyEntryId:
 			(await writeDatingAt(db, reading))?.historyEntryId ?? null
 	}
+}
+
+/**
+ * 🚧 Moves a session's **pending value proposals for a book-layer owner** from
+ * the line it rode to the line it forked (`ensureSessionLine` calls this in
+ * the fork's transaction): a proposal held at the parent's line would
+ * otherwise land there when accepted after the fork. A null line is main.
+ */
+export async function moveRidingProposals(
+	tx: Db,
+	sessionId: number,
+	fromBranchId: number | null,
+	toBranchId: number
+): Promise<void> {
+	await tx
+		.update(schema.stateProposals)
+		.set({ branchId: toBranchId })
+		.where(
+			and(
+				eq(schema.stateProposals.sessionId, sessionId),
+				eq(schema.stateProposals.status, "pending"),
+				eq(schema.stateProposals.kind, "value"),
+				sql`${schema.stateProposals.branchId} is not distinct from ${fromBranchId}`,
+				sql`${schema.stateProposals.payload}->'owner'->>'kind' in ('lorebook', 'cast_member', 'location')`
+			)
+		)
+}
+
+/**
+ * 🚧 (m3b-V2, ★M3b-W-3, owner 2026-11-05) Whether a book-layer owner is a row
+ * of the session's own notes — its `lorebook` row, a member of it, or a place
+ * in it. The notes are exempt from the lore write mode, as lore written there
+ * is (`loreWriteRoute`): they are the session's own, never the book's.
+ */
+async function isOwnBookOwner(db: Db, sessionId: number, owner: StateOwner): Promise<boolean> {
+	const own = (await lorebooksReadBy(db, sessionId)).ownBookId
+	if (own == null) return false
+	if (owner.kind === "lorebook") return owner.id === own
+	if (owner.kind === "cast_member") {
+		const [row] = await db
+			.select({ lorebookId: schema.lorebookBindings.lorebookId })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, owner.id))
+			.limit(1)
+		return row?.lorebookId === own
+	}
+	if (owner.kind === "location") {
+		const [row] = await db
+			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, owner.id))
+			.limit(1)
+		return row?.lorebookId === own
+	}
+	return false
 }
 
 /**
@@ -427,7 +530,10 @@ async function assertBookWritesOn(
 	owner: StateOwner
 ): Promise<void> {
 	if (!isBookLayer(owner.kind)) return
-	if ((await sessionLoreWriteMode(db, sessionId)) === "off")
+	if (
+		(await sessionLoreWriteMode(db, sessionId)) === "off" &&
+		!(await isOwnBookOwner(db, sessionId, owner))
+	)
 		throw new StateRefusal(LORE_WRITES_OFF)
 }
 
@@ -439,6 +545,41 @@ const turnOwnerOf = (owner: StateOwner, sessionId: number): TurnOwner =>
 	owner.kind === "session_cast"
 		? { kind: "session_cast", id: owner.id }
 		: { kind: "session", id: sessionId }
+
+/**
+ * 🚧 ⏳ S4, flip on: whose turn a write to a seat in member form follows — the turn of the card the seat holds (`session_cast` by the card id, as its card-form owner did; a speaker is a card id), the world's for a card-less seat.
+ */
+async function seatTurnOwnerOf(db: Db, owner: StateOwner, sessionId: number): Promise<TurnOwner> {
+	const cs = schema.sessionCharacters
+	const ps = schema.sessionPersonas
+	let cardId: number | null = null
+	if (owner.kind === "player_seat") {
+		const [seat] = await db
+			.select({ personaId: ps.personaId })
+			.from(ps)
+			.where(and(eq(ps.id, owner.id), eq(ps.sessionId, sessionId)))
+			.limit(1)
+		cardId = seat?.personaId ?? null
+	} else {
+		const [seat] = await db
+			.select({ characterId: cs.characterId })
+			.from(cs)
+			.where(and(eq(cs.castMemberId, owner.id), eq(cs.sessionId, sessionId), isNull(cs.envoySlug)))
+			.orderBy(asc(cs.removedAt), asc(cs.id))
+			.limit(1)
+		cardId = seat?.characterId ?? null
+		if (cardId == null) {
+			const [persona] = await db
+				.select({ personaId: ps.personaId })
+				.from(ps)
+				.where(and(eq(ps.castMemberId, owner.id), eq(ps.sessionId, sessionId)))
+				.orderBy(asc(ps.removedAt), asc(ps.id))
+				.limit(1)
+			cardId = persona?.personaId ?? null
+		}
+	}
+	return cardId == null ? { kind: "session", id: sessionId } : { kind: "session_cast", id: cardId }
+}
 
 /**
  * A cast member's open anchor, moved up to the newest live row that already
@@ -459,12 +600,16 @@ async function notBehindOwnRows(
 	tail: TurnMessage[],
 	open: number | null
 ): Promise<number | null> {
+	// An own-book member's rows (★pl2-2) carry no `session_id`; they are this
+	// session's alone, so only a session-scoped owner is filtered by it.
 	const held = await db
 		.selectDistinct({ id: schema.attributeValues.validFromMessageId })
 		.from(schema.attributeValues)
 		.where(
 			and(
-				eq(schema.attributeValues.sessionId, sessionId),
+				isSessionScoped(owner.kind)
+					? eq(schema.attributeValues.sessionId, sessionId)
+					: undefined,
 				eq(schema.attributeValues.ownerKind, owner.kind),
 				eq(schema.attributeValues.ownerId, owner.id)
 			)
@@ -484,6 +629,54 @@ async function notBehindOwnRows(
 }
 
 /**
+ * 🚧 (★pl2-2, owner 2026-11-05: "tie the notes' rows to the turn like session
+ * values") Whose turn a write to the session's OWN notes follows, or `null`
+ * for any row that is not one the ruling names. The notes' `lorebook` row
+ * moves with the world, so it takes the world's turn; a cast member row of the
+ * notes takes that character's own turn, as a session value of a cast member
+ * does (a `session_cast` owner's id is the character id — `worldOwnerOf`); a
+ * member with no character takes the world's; a `location` whose entry is in
+ * the notes takes the world's turn, as a place does (`turnOwnerOf`). Those
+ * rows lose the tie when they leave the own book into a real book — *Clone
+ * with changes* and *Apply to the lorebook* drop it (`lorebooks/ownBook.ts`).
+ * A real book's rows are `null` — author layers are never anchored. (★pl2-2;
+ * places: lead decision 2026-11-05, lane pl4.)
+ */
+async function notesTurnOwnerOf(
+	db: Db,
+	sessionId: number,
+	owner: StateOwner
+): Promise<TurnOwner | null> {
+	const own = (await lorebooksReadBy(db, sessionId)).ownBookId
+	if (own == null) return null
+	if (owner.kind === "lorebook")
+		return owner.id === own ? { kind: "session", id: sessionId } : null
+	if (owner.kind === "cast_member") {
+		const [row] = await db
+			.select({
+				lorebookId: schema.lorebookBindings.lorebookId,
+				characterId: schema.lorebookBindings.characterId
+			})
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, owner.id))
+			.limit(1)
+		if (row?.lorebookId !== own) return null
+		return row.characterId == null
+			? { kind: "session", id: sessionId }
+			: { kind: "session_cast", id: row.characterId }
+	}
+	if (owner.kind === "location") {
+		const [row] = await db
+			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, owner.id))
+			.limit(1)
+		return row?.lorebookId === own ? { kind: "session", id: sessionId } : null
+	}
+	return null
+}
+
+/**
  * The anchor this write gets, or the refusal saying the reply is sealed.
  *
  * The **one** place an anchor is decided. Three cases, and the middle one is
@@ -500,17 +693,37 @@ async function notBehindOwnRows(
  *    proposal all land in.
  *
  * Author layers are never locked: a `card`, a `cast_member` or a `lorebook` row
- * is authoring, and authoring has no turn to be after.
+ * is authoring, and authoring has no turn to be after. The exception is the
+ * session's own notes (★pl2-2, 2026-11-05; places: lead decision 2026-11-05,
+ * lane pl4): its `lorebook` row, its cast members and its places take the
+ * turn like a session value (`notesTurnOwnerOf`), so Back takes them and
+ * Forward restores them; every real book's rows are `null`. The exception to
+ * the exception is a cast member's **story write** (`opts.storyWrite`, the
+ * versions writer's, plan §32 §4): a real book's member row then follows the
+ * world's turn (`isAnchorOpen`), so Back takes it too.
  */
 export async function anchorFor(
 	db: Db,
 	ctx: WriteContext,
 	owner: StateOwner,
-	messages?: TurnMessage[]
+	messages?: TurnMessage[],
+	opts?: { storyWrite?: boolean }
 ): Promise<number | null> {
-	if (!isSessionScoped(owner.kind)) return null
+	let turnOwner: TurnOwner
+	if (isSessionScoped(owner.kind))
+		turnOwner =
+			memberFormOn() && (owner.kind === "seated_member" || owner.kind === "player_seat")
+				? await seatTurnOwnerOf(db, owner, ctx.sessionId)
+				: turnOwnerOf(owner, ctx.sessionId)
+	else {
+		if (!isBookLayer(owner.kind) || ctx.messageId === null) return null
+		const notes = await notesTurnOwnerOf(db, ctx.sessionId, owner)
+		if (notes) turnOwner = notes
+		else if (opts?.storyWrite && owner.kind === "cast_member")
+			turnOwner = { kind: "session", id: ctx.sessionId }
+		else return null
+	}
 	const tail = messages ?? (await turnMessages(db, ctx.sessionId))
-	const turnOwner = turnOwnerOf(owner, ctx.sessionId)
 	if (ctx.messageId === undefined)
 		return turnOwner.kind === "session_cast"
 			? notBehindOwnRows(db, ctx.sessionId, owner, tail, openAnchorFor(tail, turnOwner))
@@ -519,7 +732,7 @@ export async function anchorFor(
 	if (isAnchorOpen(tail, turnOwner, ctx.messageId ?? null))
 		return ctx.messageId ?? null
 	throw new StateRefusal(
-		`that reply is sealed: ${await sealerName(db, tail, turnOwner)} has spoken ` +
+		`that reply is sealed: ${await sealerName(db, ctx.sessionId, tail, turnOwner)} has spoken ` +
 			`since. Edit their latest reply instead.`
 	)
 }
@@ -533,6 +746,7 @@ export async function anchorFor(
  */
 async function sealerName(
 	db: Db,
+	sessionId: number,
 	messages: TurnMessage[],
 	owner: TurnOwner
 ): Promise<string> {
@@ -542,12 +756,47 @@ async function sealerName(
 			? owner.id
 			: (messages.find((m) => m.id === anchor)?.speakerId ?? null)
 	if (typeof speakerId !== "number") return "someone"
-	const [row] = await db
-		.select({ name: schema.characters.name })
-		.from(schema.characters)
-		.where(eq(schema.characters.id, speakerId))
-		.limit(1)
-	return row?.name || "someone"
+	// 🚧 A seated member is named by what it is read as (its own name, else the
+	// card's), over its active card.
+	const seat = await seatOf(db, sessionId, `character:${speakerId}`)
+	if (seat?.castMemberId != null) {
+		const read = await memberAsRead(db, seat.castMemberId, { sessionId })
+		if (read?.name) return read.name
+	}
+	const card = (await cardsNow(db, [speakerId])).get(speakerId)
+	return card?.name || "someone"
+}
+
+/**
+ * 🚧 `keepOnRetell` as a row predicate for `retractSessionImprints`: true only
+ * for an `annex` row whose key the session's genre declares `keepOnRetell` for
+ * that owner (session scope). A replacement skips those rows; every other row
+ * is taken.
+ */
+function keepOnRetellRow(
+	t: Db,
+	sessionId: number
+): (row: typeof schema.sessionImprints.$inferSelect) => Promise<boolean> {
+	let genre: Promise<string | null> | null = null
+	const kept = new Map<string, Promise<ReadonlySet<string>>>()
+	return async (row) => {
+		if (row.subjectKind !== "annex") return false
+		genre ??= import("$lib/server/sessions/annexFields").then((m) => m.sessionGenreOf(t, sessionId))
+		const genreId = await genre
+		if (!genreId) return false
+		const at = row.subjectKey.lastIndexOf("/")
+		const owner = row.subjectKey.slice(0, at)
+		const key = row.subjectKey.slice(at + 1)
+		let keys = kept.get(owner)
+		if (!keys) {
+			keys = import("$lib/server/sessions/annexFields").then(async (m) => {
+				const fields = await m.annexFieldsOfOwner(t, genreId, owner, "session")
+				return new Set(fields.filter((d) => d.keepOnRetell === true).map((d) => d.key)) as ReadonlySet<string>
+			})
+			kept.set(owner, keys)
+		}
+		return (await keys).has(key)
+	}
 }
 
 /**
@@ -555,31 +804,63 @@ async function sealerName(
  * **what a message changed goes with it** (RF fix 4, 2026-10-23,
  * NOMENCLATURE §24).
  *
- * ⚠ **Called on REPLACEMENT** (a swipe, a regenerate, a reply that failed
- * empty). A swipe or a regenerate keeps the row and its id and replaces only
- * the text: nothing is deleted, so nothing cascades, and what the old reply
- * wrote would otherwise survive the reply itself. A **delete** takes the
- * same things back by its own road — the `messages.id` cascade for every
- * keyed anchor, and `retractLoreAnchoredTo` (`messages/store.ts`) inside the
- * delete's transaction for the plain-int ones — so the two behave the same.
+ * **One rule, two cases** (owner 2026-11-11: "a turn owns what it wrote";
+ * swipe, regenerate and Back all take back the same set):
  *
- * What goes, in one transaction:
+ *  · `"replaced"` — the message stays and is told again: a swipe, a
+ *    regenerate, a failed run's cleanup. It keeps its row and id, so nothing
+ *    cascades, and what the old reply wrote would otherwise survive it;
+ *  · `"leaves"` — the message leaves the history: **Back**, **delete**. (A
+ *    delete's own road is the `messages.id` cascade for every keyed anchor and
+ *    `retractLoreAnchoredTo` for the plain-int ones; this takes the same.)
+ *
+ * Both take back everything the message wrote. Exactly two differences:
+ *
+ *  1. 🚧 ★ST2-1 (ruled, owner 2026-11-11: "Keep the round's move on a swipe")
+ *     **the round's tick.** The per-reply tick is
+ *     gone: every `cause: 'tick'` move is a round's tick (`core:spec/round-tick`,
+ *     or the Lair keeper's round worth), filed on `round-ended` and anchored
+ *     to the message that closed the round. A replaced line keeps its message
+ *     id and the turn tally never counts an id twice (`tallyTurn`,
+ *     `messageId <= prev.lastMessageId`), so the re-driven line does not end
+ *     its round again and would never tick again. So `"replaced"` keeps the
+ *     round's tick (row, move, proposal);
+ *     `"leaves"` takes every move including ticks, and Forward steps the
+ *     clock forward by each again;
+ *  2. **`keepOnRetell` annex fields.** `"replaced"` skips the session
+ *     imprint rows of an annex key whose declaration says `keepOnRetell: true`
+ *     (the turn is told again from what it decided): they stay standing, not
+ *     taken, not listed; `"leaves"` takes them like the rest.
+ *
+ * What goes, in one transaction (both cases unless said):
  *
  *  · the **values**, **configurations** and **proposals** anchored to it;
  *  · 🚧 **the clock** (live scenes §15 G5, 2026-10-13): the moves this
  *    message carried — the keeper's under Trust the narrator, an accepted
  *    clock proposal, a *Time passes…* filed against it — are taken back by
- *    their steps before their rows go (`revertClockMovesAnchoredTo`). A
- *    reply's **tick** stays, row and move: the re-driven reply never ticks
- *    again. Throws `StoryClockRefusal` with the sentence, and takes nothing
- *    back, when the calendar cannot place a step back;
+ *    their steps before their rows go (`revertClockMovesAnchoredTo`), the
+ *    round's tick only on `"leaves"` (above). Throws `StoryClockRefusal` with
+ *    the sentence, and takes nothing back, when the calendar cannot place a
+ *    step back;
+ *  · 🚧 the **scene boundaries** anchored to it — a scene opened at it, a
+ *    close at it, its place in a selection (`takeSceneBoundariesAt`) — and
+ *    the scene notes it wrote; a scene whose channel has a later live line
+ *    that stays is left exactly as it is, as a boundary goes with the newest
+ *    line only;
+ *  · 🚧 the **session imprints** anchored to it (`sessions/sessionImprints.ts`:
+ *    a deck draw, a seat bench, a ruleset conversion, an annex write), by the
+ *    one rule, bar the `keepOnRetell` annex keys on `"replaced"`;
  *  · 🚧 the **zone snapshots** anchored to it (`zone_contents`), so the row
  *    before shows through, as a delete's cascade does;
  *  · 🚧 what it wrote on a **lorebook** (`retractLoreAnchoredTo`): its lore
  *    imprints by the one rule — the session's notes always revert, a real
  *    book only while the field is still exactly as the run left it, else it
  *    stays and says so (`lorebooks/imprints.ts`) — then the notes' entries
- *    anchored to it (`source_message_id`) that carry no imprint.
+ *    anchored to it (`source_message_id`) that carry no imprint;
+ *  · 🚧 the **cast versions** the session's story writes anchored to it
+ *    (`source_message_id`): deleted, or **retired** when a branch still reads
+ *    them (plan §33.2; `retireOrTakeVersions`);
+ *  · its library changes.
  *
  * ⚠ A message **edit** (its prose) calls nothing here: what a reply changed
  * is its own block, kept or undone there, never by rewording the text.
@@ -592,25 +873,21 @@ async function sealerName(
 export async function retractStateAnchoredTo(
 	db: Db,
 	messageId: number,
+	turnCase: "replaced" | "leaves",
 	/**
-	 * 🚧 `ticks: 'take'` (RF fix 5, **Back**): the message leaves the
-	 * history, so its reply's tick goes too, row and move, as a delete's
-	 * does — and comes back with the rest on **Forward**
-	 * (`restoreRetractedState` steps the clock forward by each move taken).
-	 * Absent: a replacement's rule above, the tick stands.
-	 *
-	 * 🚧 `scenes: 'take'` (pr-6 C9, **Back**): the scene boundaries anchored
-	 * to the message go too — a scene opened at it, a close at it, its place
-	 * in a selection (`takeSceneBoundariesAt`) — and come back on Forward.
-	 * Absent: a replacement keeps every boundary where it is.
-	 *
-	 * 🚧 `annex: 'keep'` (pr-6, a **swipe**): the turn is told again from what
-	 * it decided, so what it wrote in the annex stands — a swipe re-tells,
-	 * never re-plans (Dungeon Crawler, ruled 2026-10-17). Absent: every annex
-	 * delta anchored to the message is taken.
+	 * `leavingWith`: the other rows leaving in the same unit (Back takes a whole
+	 * turn, newest first). A scene boundary stays only for a later line that is
+	 * NOT leaving too (`takeSceneBoundariesAt`).
 	 */
-	opts: { ticks?: "keep" | "take"; scenes?: "keep" | "take"; annex?: "keep" | "take" } = {}
-): Promise<{ clockMoved: boolean; changed: boolean; taken: RetractedState }> {
+	opts: {
+		leavingWith?: readonly number[]
+		/**
+		 * Session imprint rows with an id above this are taken in full,
+		 * `keepOnRetell` or not (a failed re-tell's own writes; `restoreRetractedState`).
+		 */
+		above?: number
+	} = {}
+): Promise<{ clockMoved: boolean; changed: boolean; taken: RetractedState; seatChanges: SeatChange[] }> {
 	// 🚧 The settle line (pr-6 B4): nothing at or before it is taken back —
 	// throws `SettledRefusal` with the sentence, before anything is written.
 	const { assertRetractable } = await import("$lib/server/sessions/settle")
@@ -618,14 +895,13 @@ export async function retractStateAnchoredTo(
 	const { notATickSql, revertClockMovesAnchoredTo } = await import(
 		"$lib/server/state/clockMoves"
 	)
-	const { retractAnnexDeltasAnchoredTo } = await import("$lib/server/sessions/annexChanges")
-	const { takeSceneBoundariesAt } = await import("$lib/server/scenes/liveScenes")
-	const takeTicks = opts.ticks === "take"
+	const { takeSceneBoundariesAt, takeSceneNotesAt } = await import("$lib/server/scenes/liveScenes")
+	const takeTicks = turnCase === "leaves"
 	// 🚧 (M2c) A made lorebook's export, for Forward — read through the module
 	// handle, so before the transaction.
 	const library = await import("$lib/server/library/writes")
 	await library.exportLibraryBooksAnchoredTo(db, [messageId])
-	return await db.transaction(async (tx) => {
+	const out = await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
 		const { sessionIds } = await revertClockMovesAnchoredTo(
 			t,
@@ -655,10 +931,13 @@ export async function retractStateAnchoredTo(
 			.delete(schema.zoneContents)
 			.where(eq(schema.zoneContents.validFromMessageId, messageId))
 			.returning()
-		// 🚧 The annex deltas anchored to it (pr-6 B5), and — on Back — its
-		// scene boundaries (pr-6 C9).
-		const annexDeltas = opts.annex === "keep" ? [] : await retractAnnexDeltasAnchoredTo(t, messageId)
-		const scenes = opts.scenes === "take" ? await takeSceneBoundariesAt(t, messageId) : []
+		// 🚧 Its scene boundaries (pr-6 C9), in both cases, and the scene notes (B2-1).
+		// Rows that already left earlier in this transaction (a turn leaving
+		// newest first) are not later lines. A handle used outside a transaction
+		// only ever lists rows its callers delete or rewind, so the list is harmless there.
+		const leavingWith = turnCase === "leaves" ? (opts.leavingWith ?? []) : []
+		const scenes = await takeSceneBoundariesAt(t, messageId, { leavingWith: [...leavingWith] })
+		const sceneNotes = await takeSceneNotesAt(t, messageId)
 		const [message] = await t
 			.select({ sessionId: schema.messages.sessionId })
 			.from(schema.messages)
@@ -666,26 +945,31 @@ export async function retractStateAnchoredTo(
 			.limit(1)
 		const lore = message
 			? await retractLoreAnchoredTo(t, message.sessionId, [messageId])
-			: { imprints: [], ownBookEntries: [], changed: false }
-		// 🚧 A conversion of the session's rules anchored to it (M0, lane T4): Back puts
-		// the version it moved from back, and the record leaves the list.
-		let conversions: RulesetConversionRecord[] = []
+			: { imprints: [], ownBookEntries: [], castVersions: [], heldAmendments: [], changed: false }
+		// 🚧 What the turn changed on its session (ST3): a deck draw, a seat bench, a
+		// ruleset conversion, an annex write — one call, the one retraction rule.
+		// A replacement skips the `keepOnRetell` annex keys; Back and delete take every row.
+		let imprintMark = 0
+		let sessionImprints: TakenSessionImprint[] = []
+		let imprintSeatChanges: SeatChange[] = []
+		let imprintsChanged = false
 		if (message) {
-			const { readCoreAnnex, coreAnnexSetSql, lockSessionAnnex } = await import("$lib/server/sessions/coreAnnex")
-			const doc = await readCoreAnnex(t, message.sessionId)
-			const list = (Array.isArray(doc?.rulesetConversions) ? doc!.rulesetConversions : []) as RulesetConversionRecord[]
-			conversions = list.filter((r) => r?.messageId === messageId)
-			if (conversions.length) {
-				await lockSessionAnnex(t, message.sessionId)
-				const kept = list.filter((r) => r?.messageId !== messageId)
-				await t
-					.update(schema.sessions)
-					.set({
-						rulesetVersion: conversions[0]!.from,
-						annex: coreAnnexSetSql("rulesetConversions", kept.length ? sql`${JSON.stringify(kept)}::jsonb` : null)
-					})
-					.where(eq(schema.sessions.id, message.sessionId))
-			}
+			const [top] = await t
+				.select({ top: sql<number>`coalesce(max(${schema.sessionImprints.id}), 0)`.mapWith(Number) })
+				.from(schema.sessionImprints)
+				.where(eq(schema.sessionImprints.sessionId, message.sessionId))
+			imprintMark = top?.top ?? 0
+			const { retractSessionImprints } = await import("$lib/server/sessions/sessionImprints")
+			const done = await retractSessionImprints(
+				t,
+				{ sessionId: message.sessionId, messageIds: [messageId] },
+				turnCase === "replaced"
+					? { keep: keepOnRetellRow(t, message.sessionId), above: opts.above }
+					: {}
+			)
+			sessionImprints = done.taken
+			imprintSeatChanges = done.seatChanges
+			imprintsChanged = done.changed
 		}
 		const clockMoved = sessionIds.length > 0
 		return {
@@ -693,13 +977,13 @@ export async function retractStateAnchoredTo(
 			changed:
 				clockMoved ||
 				libraryBack.changed ||
-				conversions.length > 0 ||
+				imprintsChanged ||
 				values.length > 0 ||
 				configs.length > 0 ||
 				proposals.length > 0 ||
 				zones.length > 0 ||
-				annexDeltas.length > 0 ||
 				scenes.length > 0 ||
+				sceneNotes.length > 0 ||
 				lore.changed,
 			taken: {
 				messageId,
@@ -709,13 +993,18 @@ export async function retractStateAnchoredTo(
 				zones,
 				imprints: lore.imprints,
 				ownBookEntries: lore.ownBookEntries,
+				castVersions: lore.castVersions,
+				heldAmendments: lore.heldAmendments,
 				clockSessions: sessionIds,
-				annexDeltas,
 				scenes,
-				conversions
-			}
+				sceneNotes,
+				sessionImprints,
+				imprintMark
+			},
+			seatChanges: imprintSeatChanges
 		}
 	})
+	return out
 }
 
 /**
@@ -723,7 +1012,10 @@ export async function retractStateAnchoredTo(
  * imprints by the one rule (`retractImprints`), then the session's notes'
  * entries anchored to it that no imprint covers (`source_message_id`, a
  * plain int — written before imprints were, or by a writer that files
- * none). The plain-int half of a retraction: `retractStateAnchoredTo` calls
+ * none), then 🚧 the **cast versions** anchored to it (`source_message_id`, a
+ * plain int too — `valid_from_message_id`'s SET NULL would leave them
+ * behind): taken, or retired when a branch still reads them (plan §33.2). The
+ * plain-int half of a retraction: `retractStateAnchoredTo` calls
  * it on a replacement, the message store's deletes inside their own
  * transaction (the cascade cannot reach a plain int). Hand it the `tx`.
  */
@@ -734,17 +1026,72 @@ export async function retractLoreAnchoredTo(
 ): Promise<{
 	imprints: import("$lib/server/lorebooks/imprints").TakenImprint[]
 	ownBookEntries: (typeof schema.lorebookEntries.$inferSelect)[]
+	castVersions: (typeof schema.characterVersions.$inferSelect)[]
+	heldAmendments: (typeof schema.entryAmendments.$inferSelect)[]
 	changed: boolean
 }> {
-	if (!messageIds.length) return { imprints: [], ownBookEntries: [], changed: false }
+	if (!messageIds.length)
+		return { imprints: [], ownBookEntries: [], castVersions: [], heldAmendments: [], changed: false }
 	const { retractImprints, imprintsChanged } = await import("$lib/server/lorebooks/imprints")
 	const { takeOwnBookEntriesAnchoredTo } = await import("$lib/server/lorebooks/ownBook")
 	const imprints = await retractImprints(tx, { messageIds })
 	const ownBookEntries = await takeOwnBookEntriesAnchoredTo(tx, sessionId, messageIds)
+	// 🚧 The session's cast versions anchored to them. A fork takes the same
+	// lock on the parent before it reads its mark, so none straddles this.
+	let castVersions: (typeof schema.characterVersions.$inferSelect)[] = []
+	// Only the books the session reads: a book it was folded out of keeps the rows it was tied to.
+	const readBooks = (await lorebooksReadBy(tx, sessionId)).ids
+	const anchored = readBooks.length
+		? await tx
+				.select()
+				.from(schema.characterVersions)
+				.where(
+					and(
+						inArray(schema.characterVersions.sourceMessageId, [...messageIds]),
+						inArray(schema.characterVersions.lorebookId, readBooks),
+						isNull(schema.characterVersions.retiredOrder)
+					)
+				)
+		: []
+	if (anchored.length) {
+		await lockStateVersion(tx, sessionId)
+		const { retireOrTakeVersions } = await import("$lib/server/characters/versions")
+		const out = await retireOrTakeVersions(tx, anchored)
+		castVersions = [...out.taken, ...out.retired]
+		// The stored name follows what Main now reads (★cp-names-1).
+		const { writeBackShownName } = await import("$lib/server/characters/versions")
+		const onMain = new Set(
+			castVersions.filter((r) => r.branchId == null && r.castMemberId != null).map((r) => r.castMemberId!)
+		)
+		for (const memberId of onMain) await writeBackShownName(tx, memberId)
+	}
+	// 🚧 The held amendments the turn wrote (`source_message_id`, a plain int): whole
+	// rows of the session's own book, deleted as they stand — a turn owns what it
+	// wrote, and nothing of an earlier turn is touched. No splice: a held
+	// amendment is one turn's one change.
+	const ownBook = await ownBookOf(tx, sessionId)
+	const heldAmendments = ownBook
+		? await tx
+				.delete(schema.entryAmendments)
+				.where(
+					and(
+						eq(schema.entryAmendments.lorebookId, ownBook.id),
+						isNotNull(schema.entryAmendments.base),
+						inArray(schema.entryAmendments.sourceMessageId, [...messageIds])
+					)
+				)
+				.returning()
+		: []
 	return {
 		imprints,
 		ownBookEntries,
-		changed: imprintsChanged(imprints) || ownBookEntries.length > 0
+		castVersions,
+		heldAmendments,
+		changed:
+			imprintsChanged(imprints) ||
+			ownBookEntries.length > 0 ||
+			castVersions.length > 0 ||
+			heldAmendments.length > 0
 	}
 }
 
@@ -760,22 +1107,37 @@ export interface RetractedState {
 	imprints: import("$lib/server/lorebooks/imprints").TakenImprint[]
 	/** 🚧 The notes' entries anchored to it with no imprint, as they were. */
 	ownBookEntries: (typeof schema.lorebookEntries.$inferSelect)[]
+	/**
+	 * 🚧 The cast versions anchored to it, as they were — deleted, or retired
+	 * when a branch still reads them (plan §33.2). Absent on a record written
+	 * before them.
+	 */
+	castVersions?: (typeof schema.characterVersions.$inferSelect)[]
+	/**
+	 * 🚧 The held amendments the turn wrote in the session's own book, as they
+	 * were. Absent on a record written before them.
+	 */
+	heldAmendments?: (typeof schema.entryAmendments.$inferSelect)[]
 	/** The sessions whose own clock was stepped back. */
 	clockSessions: number[]
-	/** 🚧 The annex deltas anchored to it (pr-6 B5, `sessions/annexChanges.ts`). */
-	annexDeltas: import("$lib/server/sessions/annexChanges").AnnexDeltaTaken[]
 	/** 🚧 What Back did to the scene boundaries anchored to it, in the order taken (pr-6 C9). */
 	scenes: import("$lib/server/scenes/liveScenes").SceneBoundaryTaken[]
-	/** 🚧 The conversions of the session's rules anchored to it (M0, lane T4), as recorded. */
-	conversions?: RulesetConversionRecord[]
-}
-
-/** 🚧 One conversion of a session's rules, kept in the `core` annex key `rulesetConversions`. */
-export interface RulesetConversionRecord {
-	messageId: number
-	rulesetId: string
-	from: string
-	to: string
+	/** 🚧 The scene notes written under it (B2-1), as taken. Absent on a record written before them. */
+	sceneNotes?: import("$lib/server/scenes/liveScenes").SceneNotesTaken[]
+	/**
+	 * 🚧 What the retraction did to the session imprints anchored to it (ST3: a
+	 * deck draw, a seat bench, a ruleset conversion, an annex write), newest
+	 * first, for `restoreSessionImprints`. A record written before ST3 carries
+	 * `annexDeltas`, `seatBenches` and `conversions` instead; the revive turns
+	 * them into rows here.
+	 */
+	sessionImprints: TakenSessionImprint[]
+	/**
+	 * The highest `session_imprints.id` of the session when the retraction ran:
+	 * a row above it was written after (a failed re-tell's own), and the
+	 * restore's inner retraction takes it in full, `keepOnRetell` or not.
+	 */
+	imprintMark?: number
 }
 
 /**
@@ -796,7 +1158,10 @@ export function takenSummaryOf(taken: RetractedState, clockMoved: boolean) {
 		zones: (taken.zones ?? []).length,
 		imprints,
 		notesEntries: (taken.ownBookEntries ?? []).length,
-		annexDeltas: (taken.annexDeltas ?? []).length,
+		// The key keeps its name (it rides the outlet's `taken` port): the annex rows reverted or spliced.
+		annexDeltas: (taken.sessionImprints ?? []).filter(
+			(t) => t.imprint.subjectKind === "annex" && t.act !== "dropped"
+		).length,
 		scenes: (taken.scenes ?? []).length,
 		clockMoved
 	}
@@ -808,9 +1173,11 @@ export function takenSummaryOf(taken: RetractedState, clockMoved: boolean) {
  * **Forward**): every timestamp column of every row it holds a `Date`
  * again, so the restore's inserts take them. Null for anything that is not
  * one. The lore imprints' own rows likewise; a made row's snapshot is
- * revived by its subject's insert (`withDates`).
+ * revived by its subject's insert (`withDates`). A record written before ST3
+ * (`annexDeltas`, `seatBenches`, `conversions`) is turned into session imprint
+ * rows (`sessionImprintsFromOldRecord`, which needs `sessionId`).
  */
-export function reviveRetractedState(raw: unknown): RetractedState | null {
+export function reviveRetractedState(raw: unknown, sessionId?: number): RetractedState | null {
 	if (!raw || typeof raw !== "object") return null
 	const r = raw as Record<string, unknown>
 	if (typeof r.messageId !== "number") return null
@@ -825,6 +1192,8 @@ export function reviveRetractedState(raw: unknown): RetractedState | null {
 		proposals: rows(schema.stateProposals, r.proposals),
 		zones: rows(schema.zoneContents, r.zones),
 		ownBookEntries: rows(schema.lorebookEntries, r.ownBookEntries),
+		castVersions: rows(schema.characterVersions, r.castVersions),
+		heldAmendments: rows(schema.entryAmendments, r.heldAmendments),
 		imprints: list(r.imprints).map((t) => {
 			const taken = { ...(t as Record<string, unknown>) }
 			taken.imprint = imprintRow(taken.imprint)
@@ -832,17 +1201,23 @@ export function reviveRetractedState(raw: unknown): RetractedState | null {
 			return taken
 		}) as RetractedState["imprints"],
 		clockSessions: list(r.clockSessions).filter((n): n is number => typeof n === "number"),
-		// 🚧 pr-6: absent on a record written before them.
-		annexDeltas: list(r.annexDeltas).map((d) => {
-			const taken = { ...(d as Record<string, unknown>) }
-			taken.row = reviveDates(schema.annexDeltas, taken.row)
-			return taken
-		}) as unknown as RetractedState["annexDeltas"],
 		scenes: list(r.scenes).map((d) => {
 			const taken = { ...(d as Record<string, unknown>) }
 			taken.row = reviveDates(schema.scenes, taken.row)
 			return taken
-		}) as unknown as RetractedState["scenes"]
+		}) as unknown as RetractedState["scenes"],
+		sceneNotes: list(r.sceneNotes) as unknown as RetractedState["sceneNotes"],
+		sessionImprints: [
+			...list(r.sessionImprints).map((t) => {
+				const taken = { ...(t as Record<string, unknown>) }
+				taken.imprint = reviveDates(schema.sessionImprints, taken.imprint)
+				return taken
+			}),
+			...(sessionId != null && (r.annexDeltas !== undefined || r.seatBenches !== undefined || r.conversions !== undefined)
+				? sessionImprintsFromOldRecord(r, sessionId)
+				: [])
+		] as unknown as RetractedState["sessionImprints"],
+		imprintMark: typeof r.imprintMark === "number" ? r.imprintMark : undefined
 	}
 }
 
@@ -858,25 +1233,111 @@ export function reviveDates(table: Parameters<typeof getTableColumns>[0], row: u
 }
 
 /**
+ * 🚧 ⏳ S4, flip on (`memberForm.ts`): rows about to be put back (by
+ * `restoreRetractedState`, and Forward's rows from other turns in
+ * `sessions/rewind.ts`) with a `session_cast` owner — taken before the flip,
+ * or written by a door that had not caught up — read in their seat's member
+ * form, the translation the `seat-keys` pass makes (`memberFormOf`): values,
+ * configurations and zone rows by their owner columns, proposals by
+ * `payload.owner` and an offer's giver `payload.offer.from`. A row whose card has no seat, or whose seat has no member,
+ * comes back as it was. Flip off: everything comes back unchanged. Pass the
+ * transaction's handle when inside one.
+ */
+export async function restoredInMemberForm<
+	V extends { ownerKind: string; ownerId: number; sessionId: number | null },
+	C extends { ownerKind: string; ownerId: number; sessionId: number | null },
+	Z extends { ownerKind: string; ownerId: number; sessionId: number | null },
+	P extends { sessionId: number | null; payload: unknown }
+>(db: Db, rows: { values: V[]; configs: C[]; zones: Z[]; proposals: P[] }): Promise<{ values: V[]; configs: C[]; zones: Z[]; proposals: P[] }> {
+	if (!memberFormOn()) return rows
+	const seatMaps = new Map<number, Awaited<ReturnType<typeof loadSeatMap>>>()
+	const memberOwnerOf = async (sessionId: number | null, owner: { kind: string; id: number }) => {
+		if (owner.kind !== "session_cast" || sessionId == null) return null
+		let map = seatMaps.get(sessionId)
+		if (!map) seatMaps.set(sessionId, (map = await loadSeatMap(db, sessionId)))
+		return memberFormOf(map, owner as StateOwner) as StateOwner | null
+	}
+	const owned = async <R extends { ownerKind: string; ownerId: number; sessionId: number | null }>(list: R[]): Promise<R[]> => {
+		const out: R[] = []
+		for (const r of list) {
+			const to = await memberOwnerOf(r.sessionId, { kind: r.ownerKind, id: r.ownerId })
+			out.push(to ? { ...r, ownerKind: to.kind, ownerId: to.id } : r)
+		}
+		return out
+	}
+	const proposals: P[] = []
+	for (const r of rows.proposals) {
+		const owner = (r.payload as { owner?: { kind?: unknown; id?: unknown } } | null)?.owner
+		const to =
+			owner && typeof owner.kind === "string" && typeof owner.id === "number"
+				? await memberOwnerOf(r.sessionId, { kind: owner.kind, id: owner.id })
+				: null
+		const payload = r.payload as { offer?: { from?: { kind?: unknown; id?: unknown } } } | null
+		const from = payload?.offer?.from
+		const giver =
+			from && typeof from.kind === "string" && typeof from.id === "number"
+				? await memberOwnerOf(r.sessionId, { kind: from.kind, id: from.id })
+				: null
+		if (!to && !giver) {
+			proposals.push(r)
+			continue
+		}
+		const next = { ...(r.payload as object) } as Record<string, unknown>
+		if (to) next.owner = to
+		if (giver) next.offer = { ...(payload!.offer as object), from: giver }
+		proposals.push({ ...r, payload: next })
+	}
+	return {
+		values: await owned(rows.values),
+		configs: await owned(rows.configs),
+		zones: await owned(rows.zones),
+		proposals
+	}
+}
+
+/**
  * 🚧 **Put back what a retraction took** (2026-10-16 walk): a swipe takes
  * back the world its reply changed before the run that replaces it — and a
  * run that then fails (halts empty, errors) replaced nothing, so the world
  * goes back as it was before the swipe. Whatever the failed run itself
- * anchored to the message is taken back first (a Dungeon Crawler swipe
- * re-applies its stored plan before the Narrator's call), then the rows the
- * retraction took go back, ids and all — values, configurations,
- * proposals, 🚧 zone snapshots, the notes' entries and every lore imprint
- * as it stood (RF fix 4) — and the clock steps forward again by each move
- * it was stepped back by. Returns whether anything changed.
+ * anchored to the message is taken back first (`"replaced"`: the failed run
+ * replaced nothing, so the round's tick stays and the swipe's original taken
+ * rows go back over it; a Dungeon Crawler swipe re-applies its stored plan
+ * before the Narrator's call), then the rows the retraction took go back, ids
+ * and all — values, configurations, proposals, 🚧 zone snapshots, the notes'
+ * entries and every lore imprint as it stood (RF fix 4) — and the clock steps
+ * forward again by each move it was stepped back by. Returns whether anything
+ * changed.
+ *
+ * The session imprints (ST3) go by the one rule on both sides: the inner
+ * retraction takes every row above `taken.imprintMark` — the failed run's own,
+ * `keepOnRetell` keys too, so none of its annex values stands over the
+ * swipe's — and the rows the swipe's retraction skipped (a `keepOnRetell` key,
+ * at or below the mark) stay. Then `restoreSessionImprints` lands the swipe's
+ * own taken rows again, in the transaction. Forward (Back's record) finds
+ * nothing anchored to the message above its mark and is unchanged.
+ *
+ * `opts.seatChanges`: when given, the seat changes this call made are pushed
+ * into it (its own retraction's, and each bench it re-applies), for the
+ * caller to announce with `announceSeatChanges` after its transaction commits.
  */
-export async function restoreRetractedState(db: Db, taken: RetractedState): Promise<boolean> {
-	const undone = await retractStateAnchoredTo(db, taken.messageId)
+export async function restoreRetractedState(
+	db: Db,
+	taken: RetractedState,
+	opts?: { seatChanges?: SeatChange[] }
+): Promise<boolean> {
+	// "replaced": the failed run replaced nothing, so the swipe's kept tick stays; the
+	// session imprints above the mark (its own writes) go in full, `keepOnRetell` too.
+	const undone = await retractStateAnchoredTo(db, taken.messageId, "replaced", { above: taken.imprintMark })
+	opts?.seatChanges?.push(...undone.seatChanges)
 	const zones = taken.zones ?? []
 	const imprints = taken.imprints ?? []
 	const ownBookEntries = taken.ownBookEntries ?? []
-	const annexDeltas = taken.annexDeltas ?? []
+	const castVersions = taken.castVersions ?? []
+	const heldAmendments = taken.heldAmendments ?? []
+	const sessionImprints = taken.sessionImprints ?? []
 	const scenes = taken.scenes ?? []
-	const conversions = taken.conversions ?? []
+	const sceneNotes = taken.sceneNotes ?? []
 	if (
 		!taken.values.length &&
 		!taken.configs.length &&
@@ -884,47 +1345,64 @@ export async function restoreRetractedState(db: Db, taken: RetractedState): Prom
 		!zones.length &&
 		!imprints.length &&
 		!ownBookEntries.length &&
-		!annexDeltas.length &&
+		!castVersions.length &&
+		!heldAmendments.length &&
+		!sessionImprints.length &&
 		!scenes.length &&
-		!conversions.length
+		!sceneNotes.length
 	)
 		return undone.changed
 	await db.transaction(async (tx) => {
 		const t = tx as unknown as Db
-		if (taken.configs.length) await t.insert(schema.attributeConfigs).values(taken.configs as any)
-		if (taken.values.length) await t.insert(schema.attributeValues).values(taken.values as any)
-		if (taken.proposals.length) await t.insert(schema.stateProposals).values(taken.proposals as any)
-		if (zones.length) await t.insert(schema.zoneContents).values(zones as any)
+		// 🚧 ⏳ S4, flip on: rows put back in card form go back in member form (`restoredInMemberForm`). The annex rows among the session imprints are translated by `restoreSessionImprints` in the same transaction.
+		const { values, configs, zones: zoneRows, proposals } = await restoredInMemberForm(t, {
+			values: taken.values,
+			configs: taken.configs,
+			zones,
+			proposals: taken.proposals
+		})
+		if (configs.length) await t.insert(schema.attributeConfigs).values(configs as any)
+		if (values.length) await t.insert(schema.attributeValues).values(values as any)
+		if (proposals.length) await t.insert(schema.stateProposals).values(proposals as any)
+		if (zoneRows.length) await t.insert(schema.zoneContents).values(zoneRows as any)
 		if (ownBookEntries.length) await t.insert(schema.lorebookEntries).values(ownBookEntries as any)
 		if (imprints.length) {
 			const { restoreImprints } = await import("$lib/server/lorebooks/imprints")
 			await restoreImprints(t, imprints)
 		}
-		// 🚧 pr-6: the annex deltas (B5), then the scene boundaries (C9).
-		if (annexDeltas.length) {
-			const { restoreAnnexDeltas } = await import("$lib/server/sessions/annexChanges")
-			await restoreAnnexDeltas(t, annexDeltas)
+		// 🚧 The held amendments, ids and all. A row whose entry is gone is not put back (its entry's delete would have cascaded it).
+		if (heldAmendments.length) {
+			const entries = await t
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
+				.where(inArray(schema.lorebookEntries.id, [...new Set(heldAmendments.map((h) => h.entryId))]))
+			const live = new Set(entries.map((e) => e.id))
+			const back = heldAmendments.filter((h) => live.has(h.entryId))
+			if (back.length) await t.insert(schema.entryAmendments).values(back as any)
+		}
+		// 🚧 The cast versions, ids and write orders kept; a retire mark cleared.
+		if (castVersions.length) {
+			const { restoreVersions } = await import("$lib/server/characters/versions")
+			await restoreVersions(t, castVersions)
+			const { writeBackShownName } = await import("$lib/server/characters/versions")
+			const onMain = new Set(
+				castVersions.filter((r) => r.branchId == null && r.castMemberId != null).map((r) => r.castMemberId!)
+			)
+			for (const memberId of onMain) await writeBackShownName(t, memberId)
+		}
+		// 🚧 ST3: the session imprints (deck, bench, conversion, annex), then pr-6's scene boundaries (C9).
+		if (sessionImprints.length) {
+			const { restoreSessionImprints } = await import("$lib/server/sessions/sessionImprints")
+			const back = await restoreSessionImprints(t, sessionImprints)
+			opts?.seatChanges?.push(...back.seatChanges)
 		}
 		if (scenes.length) {
 			const { restoreSceneBoundaries } = await import("$lib/server/scenes/liveScenes")
 			await restoreSceneBoundaries(t, scenes)
 		}
-		// 🚧 The conversion again: its `to`, and its record back in the list.
-		if (conversions.length) {
-			const { readCoreAnnex, coreAnnexSetSql, lockSessionAnnex } = await import("$lib/server/sessions/coreAnnex")
-			const [m] = await t.select({ sessionId: schema.messages.sessionId }).from(schema.messages).where(eq(schema.messages.id, taken.messageId)).limit(1)
-			if (m) {
-				await lockSessionAnnex(t, m.sessionId)
-				const doc = await readCoreAnnex(t, m.sessionId)
-				const list = (Array.isArray(doc?.rulesetConversions) ? doc!.rulesetConversions : []) as RulesetConversionRecord[]
-				await t
-					.update(schema.sessions)
-					.set({
-						rulesetVersion: conversions[conversions.length - 1]!.to,
-						annex: coreAnnexSetSql("rulesetConversions", sql`${JSON.stringify([...list, ...conversions])}::jsonb`)
-					})
-					.where(eq(schema.sessions.id, m.sessionId))
-			}
+		if (sceneNotes.length) {
+			const { restoreSceneNotes } = await import("$lib/server/scenes/liveScenes")
+			await restoreSceneNotes(t, sceneNotes)
 		}
 	})
 	// 🚧 (M2c) The library changes put back, outside the transaction (a book's
@@ -1154,11 +1632,14 @@ export async function assertLoreRefsInSession(
 	const books = new Set(readBy.ids)
 	// The session's line: a sibling fork's own entry is not a thing this
 	// session's story has, and a shelved one is not one it may hand out.
-	// The notes have no line of their own: they are read at their head, as
-	// every union reader reads them (`sessionEntriesAsRead`).
-	const sessionReading = (await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+	// Beside an attached book the notes are read at their head; a session
+	// that reads its notes alone reads them on its reading, as every union
+	// reader does (`sessionEntriesAsRead`).
+	const readOfSession = await sessionReadingOf(db, sessionId)
+	const sessionReading = readOfSession ?? MAIN_HEAD
+	const ownAt = readOfSession?.onOwnBook ? readOfSession : MAIN_HEAD
 	const readingOf = (lorebookId: number) =>
-		lorebookId === readBy.ownBookId ? MAIN_HEAD : sessionReading
+		lorebookId === readBy.ownBookId ? ownAt : sessionReading
 	const rows = await db
 		.select({
 			id: schema.lorebookEntries.id,
@@ -1168,7 +1649,7 @@ export async function assertLoreRefsInSession(
 			enabled: schema.lorebookEntries.enabled,
 			archived: schema.lorebookEntries.archived,
 			onLine: sql<boolean>`(${entryOnLineSql(sessionReading)})`,
-			onHead: sql<boolean>`(${entryOnLineSql(MAIN_HEAD)})`
+			onHead: sql<boolean>`(${entryOnLineSql(ownAt)})`
 		})
 		.from(schema.lorebookEntries)
 		.where(inArray(schema.lorebookEntries.id, ids))
@@ -1281,37 +1762,25 @@ export async function loreRefNamed(
 }
 
 /**
- * 🚧 The sentence a player's hand edit of their own sheet is refused with
- * while Honour mode is off (owner ruling 2026-10-16). Exported for the tests
- * that pin it.
+ * The person a state write acts as: its user's press, or — a run with no user — the session's owner (★B).
+ * Null when nobody can act.
  */
-export const PLAYER_SHEET_REFUSAL =
-	"Sheets are the Planner's to change — ask in the Planner panel, or turn on Honour mode."
-
-/** Whether `userId` owns the session. */
-async function sessionOwnerIs(db: Db, sessionId: number, userId: number): Promise<boolean> {
-	const [session] = await db
-		.select({ userId: schema.sessions.userId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	return session?.userId === userId
+async function actorOf(db: Db, sessionId: number, userId: number | null | undefined) {
+	const { actingPersonFor } = await import("$lib/server/auth/actingPerson")
+	return actingPersonFor(
+		db,
+		userId != null ? { via: "press", userId } : { via: "routine", sessionId }
+	)
 }
 
-/**
- * 🚧 Whether a player may edit their own seat's sheet by hand in this session
- * (owner ruling 2026-10-16): while Honour mode is on, or where the genre does
- * not declare it. A read that fails says no — the sheet stays the Planner's.
- * The widget's `editable` fact asks the same question.
- */
-export async function playerEditsOwnSheet(db: Db, sessionId: number): Promise<boolean> {
-	try {
-		const { sessionHonourMode } = await import("$lib/server/sessions/settings")
-		return (await sessionHonourMode(db, sessionId)) !== false
-	} catch (e) {
-		console.warn("[state] whether Honour mode is on could not be read:", e)
-		return false
-	}
+/** Whether `userId` owns the session — `personMay` write on a session is the owner's alone. */
+async function sessionOwnerIs(db: Db, sessionId: number, userId: number): Promise<boolean> {
+	// No user is never the owner: the routine fallback in `actorOf` is `assertMayDecide`'s alone.
+	if (userId == null) return false
+	const person = await actorOf(db, sessionId, userId)
+	if (!person) return false
+	const { personMay } = await import("$lib/server/auth/actingPerson")
+	return (await personMay(db, person, "write", { kind: "session", id: sessionId })).ok
 }
 
 /** 🚧 The sentence a locked stat refuses a write with (PLAN-sheet §10, 2026-10-17). */
@@ -1370,9 +1839,7 @@ async function assertUnlocked(db: Db, ctx: WriteContext, config: SlotConfig): Pr
  * - `session` — the session itself;
  * - `session_cast` — a seated character, or a voiced persona;
  * - 🚧 `player_seat` — a player seat of this session (`session_personas.id`),
- *   card or not, while it is not removed — written by a person only when they
- *   own the session, or when it is their seat and Honour mode is on (or the
- *   genre has none); a run always (2026-10-16);
+ *   card-less and not removed (2026-10-16);
  * - `lorebook` — the session's own book;
  * - `location` / `session_location` — a live location entry of that book, on
  *   the session's line;
@@ -1388,6 +1855,12 @@ async function assertUnlocked(db: Db, ctx: WriteContext, config: SlotConfig): Pr
  * the app's rule everywhere else (`sessions:update` keeps a guest off the
  * session's lorebook; `entries:*` is owner-only). The session-layer kinds are
  * play, and any player may write them.
+ *
+ * ⚠ It keeps only **is this owner this session's, and may the writer touch the
+ * durable layer**. *Who may change a value by hand* — the session's owner, a
+ * player on their own character, a watcher, the sheet latitude, `changedBy`, a
+ * lock — is `state/handEdits.ts`, asked by the sockets and by `givePiece`
+ * before any write; a run never asks it.
  */
 export async function assertSessionOwner(
 	db: Db,
@@ -1399,14 +1872,17 @@ export async function assertSessionOwner(
 	if (!isOwnerKind(owner.kind))
 		throw new StateRefusal(`'${String(owner.kind)}' is not an owner kind.`)
 	if (owner.kind === "lorebook") {
-		const books = await sessionLorebookIds(db, sessionId)
-		if (!books.includes(owner.id))
+		const read = await lorebooksReadBy(db, sessionId)
+		if (!read.ids.includes(owner.id))
+			throw new StateRefusal("that lorebook is not this session's lorebook.")
+		// The own book's own row holds the session's values only where it keeps them there.
+		if (owner.id === read.ownBookId && !(await keepsValuesInOwnBook(db, sessionId)))
 			throw new StateRefusal("that lorebook is not this session's lorebook.")
 		await assertBookWriter(db, sessionId, owner.id, userId)
 		return
 	}
 	if (owner.kind === "cast_member") {
-		const books = await sessionLorebookIds(db, sessionId)
+		const books = (await lorebooksReadBy(db, sessionId)).ids
 		const [member] = await db
 			.select({ lorebookId: schema.lorebookBindings.lorebookId })
 			.from(schema.lorebookBindings)
@@ -1436,6 +1912,34 @@ export async function assertSessionOwner(
 		throw new StateRefusal(
 			"a session owner is the session itself; the id does not match."
 		)
+	// 🚧 ⏳ S4 (reachable only once the flip is on — `isOwnerKind` gates it): a seated member is the cast member of a seat of THIS session, a character seat's (envoy seats hold no cast), else a player seat's; live or departed, as `session_cast` is.
+	if (owner.kind === "seated_member") {
+		const [seated] = await db
+			.select({ id: schema.sessionCharacters.id })
+			.from(schema.sessionCharacters)
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, sessionId),
+					eq(schema.sessionCharacters.castMemberId, owner.id),
+					isNull(schema.sessionCharacters.envoySlug)
+				)
+			)
+			.limit(1)
+		if (seated) return
+		const [voiced] = await db
+			.select({ id: schema.sessionPersonas.id })
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					eq(schema.sessionPersonas.castMemberId, owner.id)
+				)
+			)
+			.limit(1)
+		if (!voiced)
+			throw new StateRefusal("that character is not in this session's cast.")
+		return
+	}
 	if (owner.kind === "session_cast") {
 		const seated = await db
 			.select({ characterId: schema.sessionCharacters.characterId })
@@ -1452,15 +1956,8 @@ export async function assertSessionOwner(
 		// than in one query because the seat is the common case and this is the
 		// one nobody had before.
 		const voiced = await db
-			.select({
-				personaId: schema.sessionPersonas.personaId,
-				userId: schema.sessionPersonas.userId,
-				removedAt: schema.sessionPersonas.removedAt,
-				cardOwner: schema.characters.userId,
-				name: schema.characters.name
-			})
+			.select({ personaId: schema.sessionPersonas.personaId })
 			.from(schema.sessionPersonas)
-			.leftJoin(schema.characters, eq(schema.characters.id, schema.sessionPersonas.personaId))
 			.where(
 				and(
 					eq(schema.sessionPersonas.sessionId, sessionId),
@@ -1471,18 +1968,9 @@ export async function assertSessionOwner(
 			throw new StateRefusal(
 				"that character is not in this session's cast."
 			)
-		// 🚧 A CARDED player seat is written as its card (W2 follow-up,
-		// 2026-10-17): the same hands as a card-less seat's sheet — the
-		// session's owner always; its own player only while Honour mode is
-		// on; another player never. A run (no `userId`) always.
-		const live = voiced.filter((v) => v.removedAt == null)
-		if (userId != null && live.length && !(await sessionOwnerIs(db, sessionId, userId))) {
-			if (!live.some((v) => (v.userId ?? v.cardOwner) === userId))
-				throw new StateRefusal(
-					`only ${live[0]!.name?.trim() || "that seat"}'s player or the session's owner can change ${live[0]!.name?.trim() ? "their" : "its"} sheet.`
-				)
-			if (!(await playerEditsOwnSheet(db, sessionId))) throw new StateRefusal(PLAYER_SHEET_REFUSAL)
-		}
+		// 🚧 A CARDED player seat is written as its card (W2 follow-up, 2026-10-17): it is this
+		// session's character like any seated one. Whose hand may change it is not asked here —
+		// `state/handEdits.ts` decides that, for a person's write.
 	}
 	if (owner.kind === "player_seat") {
 		// A seat with a card is addressed by its card (`character:<id>`);
@@ -1502,26 +1990,14 @@ export async function assertSessionOwner(
 				)
 			)
 			.limit(1)
-		if (!seat || !isCardlessPlayerSeat(seat))
+		// 🚧 ⏳ S4 (flip on): a carded player seat is its own owner too — any seat of this session, live or departed, as a card's `session_cast` is.
+		const carded = memberFormOn() && seat?.personaId != null
+		if (!seat || (!carded && !isCardlessPlayerSeat(seat)))
 			throw new StateRefusal(
 				"that seat is not a player's seat in this session; a seat with a card is written as its card."
 			)
-		// 🚧 Who writes a seat's sheet by hand (owner rulings 2026-10-16):
-		//  · a run (no `userId`) — the session's own, always;
-		//  · the session's owner — any seat, always;
-		//  · the seat's own player — only while Honour mode is on, where the
-		//    genre declares it (`sessionHonourMode`); off, the sheet is the
-		//    Planner's to change. A genre without the field keeps the player's
-		//    hand on their own sheet;
-		//  · anybody else — never: a guest never edits another player's character.
-		if (userId != null && !(await sessionOwnerIs(db, sessionId, userId))) {
-			if (seat.userId !== userId)
-				throw new StateRefusal(
-					`only ${seat.seatName?.trim() || "that seat"}'s player or the session's owner can change ${seat.seatName?.trim() ? "their" : "its"} sheet.`
-				)
-			if (!(await playerEditsOwnSheet(db, sessionId)))
-				throw new StateRefusal(PLAYER_SHEET_REFUSAL)
-		}
+		// Whose hand may change the seat's sheet is not asked here — `state/handEdits.ts` decides
+		// that, for a person's write; this checks only that the seat is this session's.
 		return
 	}
 	if (owner.kind === "session_location" || owner.kind === "location") {
@@ -1536,8 +2012,9 @@ export async function assertSessionOwner(
 				? reading.lorebookId
 				: null
 		// 🚧 Or a place the session's own notes hold (PLAN-rulesets §26), at
-		// the notes' head — the union `sessionLinks` lists.
-		if (book == null) {
+		// the notes' head — the union `sessionLinks` lists. A reading of the
+		// notes themselves has already asked.
+		if (book == null && !reading?.onOwnBook) {
 			const { ownBookId } = await lorebooksReadBy(db, sessionId)
 			if (
 				ownBookId != null &&
@@ -1563,7 +2040,9 @@ const OWNER_ROWS = {
 	session: schema.sessions,
 	location: schema.lorebookEntries,
 	session_location: schema.lorebookEntries,
-	player_seat: schema.sessionPersonas
+	player_seat: schema.sessionPersonas,
+	// 🚧 S4: the seated cast member (`memberForm.ts`).
+	seated_member: schema.lorebookBindings
 } as const satisfies Record<OwnerKind, unknown>
 
 /** What a write is told when its owner went while it was being made. */
@@ -1575,7 +2054,8 @@ const OWNER_GONE: Record<OwnerKind, string> = {
 	session: "that session no longer exists.",
 	location: "that place is no longer in this session's lorebook.",
 	session_location: "that place is no longer in this session's lorebook.",
-	player_seat: "that seat is no longer in this session."
+	player_seat: "that seat is no longer in this session.",
+	seated_member: "that seat is no longer in this session."
 }
 
 /**
@@ -1629,6 +2109,24 @@ async function assertBookWriter(
 	userId: number | null | undefined
 ): Promise<void> {
 	if (!(await ownsBook(db, lorebookId, await writerOf(db, sessionId, userId))))
+		throw new StateRefusal(`${NOT_YOUR_BOOK}; change this session's instead.`)
+}
+
+/**
+ * The session's own book's writer (m3b-V2 scope finding 1, ★M3b-W-2), checked
+ * before anything makes or touches the own book — read only. The own book is
+ * the session owner's: when it exists, its writer (`assertBookWriter`); when it
+ * does not yet, only the session's owner, or a run, may cause it to be made.
+ */
+export async function assertOwnBookWriter(
+	db: Db,
+	sessionId: number,
+	userId: number | null | undefined
+): Promise<void> {
+	const own = await ownBookOf(db, sessionId)
+	if (own) return await assertBookWriter(db, sessionId, own.id, userId)
+	const sessionOwner = await writerOf(db, sessionId, null)
+	if (sessionOwner == null || (await writerOf(db, sessionId, userId)) !== sessionOwner)
 		throw new StateRefusal(`${NOT_YOUR_BOOK}; change this session's instead.`)
 }
 
@@ -1722,8 +2220,13 @@ export interface WriteContext {
  * under it sees that commit; made before it, two writers make the same check
  * or the same read and both land. Re-entrant within one transaction, so
  * `nextStateVersion` taking it again is nothing.
+ *
+ * Exported for the versions writer, plan §32 §4.
  */
-async function lockStateVersion(tx: Db, sessionId: number): Promise<void> {
+export async function lockStateVersion(
+	tx: Db,
+	sessionId: number
+): Promise<void> {
 	await tx.execute(
 		sql`select pg_advisory_xact_lock(hashtext('stateVersion'), ${sessionId})`
 	)
@@ -1972,6 +2475,94 @@ async function nextValue(
 }
 
 /**
+ * 🚧 (★pl-1, owner 2026-11-05: "In the notes' overlay, like the rules' place
+ * fields.") Whether a write names a place whose world-scope value is kept in
+ * the notes' rule-fed overlay, not on the book: a `location` of the session's
+ * attached book (never the notes' own), on a world-scope slot, in a session
+ * that can't write its book. Cheapest checks first.
+ */
+async function overlaidPlace(
+	db: Db,
+	sessionId: number,
+	owner: StateOwner,
+	slotId: string
+): Promise<boolean> {
+	if (owner.kind !== "location" || getAttributeSlot(slotId)?.scope !== "world") return false
+	const [place] = await db
+		.select({ lorebookId: schema.lorebookEntries.lorebookId })
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.id, owner.id))
+		.limit(1)
+	if (!place) return false
+	const [session] = await db
+		.select({ lorebookId: schema.sessions.lorebookId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (session?.lorebookId == null || session.lorebookId !== place.lorebookId) return false
+	return await keepsValuesInOwnBook(db, sessionId)
+}
+
+/**
+ * 🚧 (★pl-1) `setValue` for an overlaid place: the value is laid in the
+ * notes' overlay (`layPlaceValue`) under the world's open anchor, so Back
+ * takes it — never an `attribute_values` row, never a copied entry. In
+ * `setValue`'s order: the place is one the session sees, the writer is the
+ * notes' (before the notes are made or touched), the slot is unlocked. The
+ * notes are exempt from the lore write mode (★M3b-W-3). Returns 0: no row.
+ */
+async function setOverlaidPlaceValue(
+	db: Db,
+	ctx: WriteContext,
+	change: ValueChange,
+	messages?: TurnMessage[]
+): Promise<number> {
+	const seen: StateOwner = { kind: "session_location", id: change.owner.id }
+	await assertSessionOwner(db, ctx.sessionId, seen, ctx.userId)
+	await assertOwnBookWriter(db, ctx.sessionId, ctx.userId)
+	const config = await configFor(db, {
+		sessionId: ctx.sessionId,
+		owner: change.owner,
+		slotId: change.slotId
+	})
+	await assertUnlocked(db, ctx, config)
+	const anchor = await anchorFor(db, ctx, seen, messages)
+	const notes = await ownBookFor(db, ctx.sessionId)
+	const { layPlaceValue } = await import("$lib/server/rulesets/ties")
+	await db.transaction(async (tx) => {
+		await lockStateVersion(tx, ctx.sessionId)
+		await holdOwner(tx, change.owner)
+		const moved = await movedSinceBase(tx, ctx.sessionId, change, change.base)
+		if (moved) throw new StateRefusal(moved)
+		const value = slotValueForStorage(await nextValue(tx, ctx, change, config))
+		await validateValue(tx, {
+			sessionId: ctx.sessionId,
+			owner: change.owner,
+			slotId: change.slotId,
+			value,
+			config
+		})
+		await nextStateVersion(tx, ctx.sessionId)
+		await layPlaceValue(tx, notes.id, change.owner.id, change.slotId, value, {
+			sessionId: ctx.sessionId,
+			messageId: anchor,
+			runId: null
+		})
+	})
+	return 0
+}
+
+/**
+ * A write stamp `setValue` keeps instead of working one out: the stamp to file
+ * the row under, or `null` for "no stamp" (all five clock columns null).
+ *
+ * Symbol-keyed and not on `ValueChange`, so the published set-state shape is
+ * unchanged and no JSON payload (pipeline, plugin, socket) can carry it. Used
+ * by the ruleset conversion's re-key, which keeps a renamed value's time.
+ */
+export const GIVEN_WRITE_STAMP: unique symbol = Symbol("given write stamp")
+
+/**
  * Write one attribute value.
  *
  * An append, always: the row in force is the one with the highest anchor, so a
@@ -1980,9 +2571,11 @@ async function nextValue(
 export async function setValue(
 	db: Db,
 	ctx: WriteContext,
-	change: ValueChange,
+	change: ValueChange & { readonly [GIVEN_WRITE_STAMP]?: ValueWriteStamp | null },
 	messages?: TurnMessage[]
 ): Promise<number> {
+	if (await overlaidPlace(db, ctx.sessionId, change.owner, change.slotId))
+		return await setOverlaidPlaceValue(db, ctx, change, messages)
 	await assertSessionOwner(db, ctx.sessionId, change.owner, ctx.userId)
 	await assertBookWritesOn(db, ctx.sessionId, change.owner)
 	const config = await configFor(db, {
@@ -1992,7 +2585,6 @@ export async function setValue(
 	})
 	await assertUnlocked(db, ctx, config)
 	const anchor = await anchorFor(db, ctx, change.owner, messages)
-	const place = await bookWritePlace(db, ctx, change.owner)
 	// The base check, the read of the current value, and the write are ONE
 	// locked transaction (U5f review). Judged ahead of the lock, two writers
 	// with one base both pass and both land — the second blind over the
@@ -2013,7 +2605,11 @@ export async function setValue(
 			value,
 			config
 		})
+		// After every check: a refused write forks nothing.
+		const place = await bookWritePlace(tx, ctx, change.owner)
 		const stateVersion = await nextStateVersion(tx, ctx.sessionId)
+		const given = change[GIVEN_WRITE_STAMP]
+		const now = given === undefined ? await sessionStoryNowOf(tx, ctx.sessionId) : null
 		const [row] = await tx
 			.insert(schema.attributeValues)
 			.values({
@@ -2026,6 +2622,8 @@ export async function setValue(
 				updatedBy: ctx.updatedBy,
 				note: change.note ?? ctx.note ?? null,
 				stateVersion,
+				...clockColumns(given ? given.clock : now ? clockOfNow(now) : null),
+				...(given ? { createdAt: given.writtenAt } : {}),
 				...provenance(ctx),
 				...place
 			})
@@ -2096,9 +2694,9 @@ export async function configure(
 				`which no value fits. Raise the max or lower the min with it.`
 		)
 	const anchor = await anchorFor(db, ctx, input.owner)
-	const place = await bookWritePlace(db, ctx, input.owner)
 	return await db.transaction(async (tx) => {
 		await holdOwner(tx, input.owner)
+		const place = await bookWritePlace(tx, ctx, input.owner)
 		const [row] = await tx
 			.insert(schema.attributeConfigs)
 			.values({
@@ -2190,7 +2788,13 @@ export async function applyAutomatic(
 	messages?: TurnMessage[],
 	modeOf?: () => Promise<LoreWriteMode>
 ): Promise<{ applied: number } | { proposed: number }> {
-	if (isValueChange(change) && isBookLayer(change.owner.kind)) {
+	if (
+		isValueChange(change) &&
+		isBookLayer(change.owner.kind) &&
+		!(await isOwnBookOwner(db, ctx.sessionId, change.owner)) &&
+		// 🚧 (★pl-1) The notes' overlay is exempt from the write mode, as the notes are (★M3b-W-3).
+		!(await overlaidPlace(db, ctx.sessionId, change.owner, change.slotId))
+	) {
 		const mode = await (modeOf ? modeOf() : sessionLoreWriteMode(db, ctx.sessionId))
 		if (mode === "review") return { proposed: await proposeChange(db, ctx, change, messages) }
 		if (mode === "off") throw new StateRefusal(`${changeTargetName(change)}: ${LORE_WRITES_OFF}`)
@@ -2255,17 +2859,19 @@ export async function proposeChange(
 	// delete. A caller naming NO reply (`messageId: null`) holds it under
 	// none: a recording is the capture's, not a turn's, and a regenerate of
 	// whichever reply is newest must not take it (it waits in the session's
-	// list of held changes instead). The row an accept writes carries no
-	// message: authoring has no turn to be after (`anchorFor`).
+	// list of held changes instead). A real book's row carries no message
+	// (authoring has no turn to be after); a row of the session's own book is
+	// held under the turn `anchorFor` gives it (that character's, or the
+	// world's), and the accept writes it there.
+	const anchorOwner: StateOwner = !isBookLayer(change.owner.kind)
+		? change.owner
+		: (await notesTurnOwnerOf(db, ctx.sessionId, change.owner))
+			? change.owner
+			: { kind: "session", id: ctx.sessionId }
 	const anchor =
 		isBookLayer(change.owner.kind) && ctx.messageId === null
 			? null
-			: await anchorFor(
-					db,
-					ctx,
-					isBookLayer(change.owner.kind) ? { kind: "session", id: ctx.sessionId } : change.owner,
-					messages
-				)
+			: await anchorFor(db, ctx, anchorOwner, messages)
 	// The base rides the row, not the payload (U5f): the caller's when it
 	// named one, else the version as it stands now — either way, what the
 	// accept will compare against.
@@ -2274,7 +2880,9 @@ export async function proposeChange(
 	// A change to the book keeps where it was proposed — the line, and the
 	// dating the write would have had now (plan A22): an accept applies it
 	// THERE, whatever the session's clock says by then.
-	const place = await bookWritePlace(db, ctx, change.owner)
+	// It never forks the line: a proposal holds the line the session rides now,
+	// and the accept forks it (`bookWritePlace`, `moveRidingProposals`).
+	const place = await bookWritePlace(db, ctx, change.owner, { fork: false })
 	return await db.transaction(async (tx) => {
 		await holdOwner(tx, change.owner)
 		// The same change to the book, asked again while it waits at the same
@@ -2441,6 +3049,7 @@ export async function decideProposal(
 			await mark("rejected")
 			return { status: "rejected" }
 		}
+		await assertSeatDecider(tx, proposal.sessionId, change.owner, userId)
 		const moved = await movedSinceBase(
 			tx,
 			proposal.sessionId,
@@ -2609,6 +3218,41 @@ async function decideClockProposal(
 }
 
 /**
+ * 🚧 Who decides a held change on a player's seat (card-less, or a carded live seat): the
+ * session's owner or its own player — never a watcher or another player (lane ed,
+ * 2026-11-05: the same people who may accept may reject). Not judged by sheet latitude: deciding the model's change is not
+ * a hand edit. No person (`userId` null) and every other owner: nothing to ask here.
+ */
+async function assertSeatDecider(
+	db: Db,
+	sessionId: number,
+	owner: StateOwner,
+	userId: number | null | undefined
+): Promise<void> {
+	if (userId == null || (owner.kind !== "player_seat" && owner.kind !== "session_cast")) return
+	if (owner.kind === "session_cast") {
+		const [seat] = await db
+			.select({ id: schema.sessionPersonas.id })
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					eq(schema.sessionPersonas.personaId, owner.id),
+					isNull(schema.sessionPersonas.removedAt)
+				)
+			)
+			.limit(1)
+		if (!seat) return
+	}
+	const { handEditJudge } = await import("$lib/server/state/handEdits")
+	const judge = await handEditJudge(db, sessionId, userId)
+	if (judge.role === "owner") return
+	await judge.know(owner)
+	if (judge.role === "watcher") throw new StateRefusal(judge.says("watching", { owner, slotId: "" }))
+	if (judge.whose(owner) === "other") throw new StateRefusal(judge.says("not-theirs", { owner, slotId: "" }))
+}
+
+/**
  * Who may decide a held change: for the session's own layers, anyone the
  * session admits — that is play; for the book's layers or a card, only whoever
  * could write it (`assertSessionOwner`'s rule): the book's owner, the card's.
@@ -2620,15 +3264,17 @@ async function assertMayDecide(
 	owner: StateOwner,
 	userId: number | null | undefined
 ): Promise<void> {
-	if (isSessionScoped(owner.kind)) return
+	if (isSessionScoped(owner.kind)) {
+		await assertSeatDecider(db, sessionId, owner, userId)
+		return
+	}
 	const writer = await writerOf(db, sessionId, userId)
 	if (owner.kind === "card") {
-		const [card] = await db
-			.select({ userId: schema.characters.userId })
-			.from(schema.characters)
-			.where(eq(schema.characters.id, owner.id))
-			.limit(1)
-		if (card && writer != null && card.userId === writer) return
+		const person = writer == null ? null : await actorOf(db, sessionId, userId)
+		if (person) {
+			const { personMay } = await import("$lib/server/auth/actingPerson")
+			if ((await personMay(db, person, "write", { kind: "character", id: owner.id })).ok) return
+		}
 		throw new StateRefusal("that change is to a card, and only whoever owns the card decides it.")
 	}
 	const [session] = await db
@@ -2940,7 +3586,13 @@ async function fireRules(
 							| CastEntry
 							| undefined)
 					: (state.cast.byId[
-							castMemberKey(owner.kind === "player_seat" ? { playerSeatId: owner.id } : owner)
+							castMemberKey(
+								owner.kind === "player_seat"
+									? { playerSeatId: owner.id }
+									: owner.kind === "seated_member"
+										? { castMemberId: owner.id }
+										: owner
+							)
 						] as CastEntry | undefined)
 		const ownerKey =
 			owner.kind === "session"

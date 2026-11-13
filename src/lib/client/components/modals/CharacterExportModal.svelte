@@ -6,7 +6,7 @@
 		requestWithInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	interface ExportableCharacter {
@@ -52,7 +52,8 @@
 	function handleLorebooksBindingsForCharacterError(
 		msg: Sockets.ErrorResponse
 	) {
-		toaster.error({
+		notify.error({
+			source: "socket:lorebooks:bindingsForCharacter:error",
 			title: msg.error || "Failed to fetch lorebooks for this character"
 		})
 	}
@@ -153,7 +154,10 @@
 								class="btn preset-filled-primary-500 justify-start"
 								onclick={handleExportAsCharx}
 							>
-								<Icons.FileArchive size={20} aria-hidden="true" />
+								<Icons.FileArchive
+									size={20}
+									aria-hidden="true"
+								/>
 								<span>Export as CHARX, with sprites</span>
 							</button>
 							{#if avatarSrc(character)}

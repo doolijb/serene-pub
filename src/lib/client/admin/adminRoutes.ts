@@ -61,9 +61,15 @@ const S = {
 	context: () => import("./sections/context-templates/Page.svelte"),
 	contextNew: () => import("./sections/context-templates/NewPage.svelte"),
 	contextId: () => import("./sections/context-templates/IdPage.svelte"),
-	variables: () => import("./sections/variable-templates/Page.svelte"),
-	variablesNew: () => import("./sections/variable-templates/NewPage.svelte"),
-	variablesId: () => import("./sections/variable-templates/IdPage.svelte"),
+	variableLayouts: () => import("./sections/variable-layouts/Page.svelte"),
+	variableLayoutsVariable: () =>
+		import("./sections/variable-layouts/VariablePage.svelte"),
+	variableLayoutsNew: () =>
+		import("./sections/variable-layouts/NewLayoutPage.svelte"),
+	variableLayoutsId: () =>
+		import("./sections/variable-layouts/LayoutPage.svelte"),
+	variableTemplatesLegacy: () =>
+		import("./sections/variable-layouts/LegacyIdRedirect.svelte"),
 	completion: () => import("./sections/completion-templates/Page.svelte"),
 	completionNew: () => import("./sections/completion-templates/NewPage.svelte"),
 	completionId: () => import("./sections/completion-templates/IdPage.svelte"),
@@ -118,9 +124,23 @@ export const ADMIN_ROUTES: AdminRoute[] = [
 	{ pattern: "/admin/context-templates", page: S.context },
 	{ pattern: "/admin/context-templates/new", page: S.contextNew },
 	{ pattern: "/admin/context-templates/:id", page: S.contextId },
-	{ pattern: "/admin/variable-templates", page: S.variables },
-	{ pattern: "/admin/variable-templates/new", page: S.variablesNew },
-	{ pattern: "/admin/variable-templates/:id", page: S.variablesId },
+	{ pattern: "/admin/variable-layouts", page: S.variableLayouts },
+	{
+		pattern: "/admin/variable-layouts/:variable",
+		page: S.variableLayoutsVariable
+	},
+	{
+		pattern: "/admin/variable-layouts/:variable/new",
+		page: S.variableLayoutsNew
+	},
+	{
+		pattern: "/admin/variable-layouts/:variable/:id",
+		page: S.variableLayoutsId
+	},
+	{
+		pattern: "/admin/variable-templates/:id",
+		page: S.variableTemplatesLegacy
+	},
 	{ pattern: "/admin/completion-templates", page: S.completion },
 	{ pattern: "/admin/completion-templates/new", page: S.completionNew },
 	{ pattern: "/admin/completion-templates/:id", page: S.completionId },
@@ -141,7 +161,9 @@ export const ADMIN_ROUTES: AdminRoute[] = [
 /** Addresses that moved, kept working (`/admin/settings` was one page). */
 const ALIASES: Record<string, string> = {
 	"/admin/settings": "/admin/general",
-	"/admin/servers": "/admin/network"
+	"/admin/servers": "/admin/network",
+	"/admin/variable-templates": "/admin/variable-layouts",
+	"/admin/variable-templates/new": "/admin/variable-layouts"
 }
 
 export function resolveAdminAlias(href: string): string {

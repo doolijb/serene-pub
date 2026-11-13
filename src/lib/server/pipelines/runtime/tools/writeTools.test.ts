@@ -45,6 +45,16 @@ describe("the filing tools", () => {
 		expect(held.message).toContain("waiting for the person")
 	})
 
+	it("write_entry refuses history and files nothing", async () => {
+		const { ctx, filed } = doors(false)
+		const err = await writeEntry.run({ name: "The Siege", content: "It fell.", kind: "history" }, ctx).catch((e: unknown) => e)
+		expect(err).toBeInstanceOf(ToolError)
+		expect((err as ToolError).message).toBe(
+			"History comes from scenes: capture the moment and compile it, or write world lore."
+		)
+		expect(filed).toEqual([])
+	})
+
 	it("remember titles a note from its words when none is given", async () => {
 		const { ctx, filed } = doors(false)
 		await remember.run({ content: "Their cat is called Miso and hates thunder." }, ctx)

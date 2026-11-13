@@ -819,13 +819,12 @@
 					{/each}
 				</div>
 				{#if armedId}
-					<span class="palette-hint">tap a panel's tabs, a gap, or a rail to place</span>
+					<span class="palette-hint">tap a panel's tabs or a gap to place</span>
 				{/if}
 				<span class="flex-1"></span>
 				<span class="palette-tip">
-					Drag onto a panel's tabs or between panels · onto a
-					side's rail to put it in the rail · drop a tab here to
-					remove it
+					Drag onto a panel's tabs or between panels · drop a tab
+					here to remove it
 				</span>
 			</div>
 			<!-- The screen-size simulator (P5, ruled 2026-08-30): a LENS
@@ -839,8 +838,7 @@
 			     phone can never clamp away a desktop arrangement.
 
 			     The last preset, Ultrawide, is the one that is not a
-			     container tier: it previews the width where the side
-			     rails branch to 2-column in `DEFAULT_SIDE_RULES`, which
+			     container tier: it previews the widest monitor, which
 			     nothing else here could show. -->
 			<div class="move-sim">
 				<span class="move-sim-label">

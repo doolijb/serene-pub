@@ -1,0 +1,25 @@
+# BRIEF s27-S2core — "the cast member as read": one reader every S2 lane builds on (seat-cast programme, stage S2, first lane)
+
+You are a `lane-supervisor` (fresh, Opus). Read `.claude/guides/multi-agent.md`, this brief, plan `plans/PLAN-sdk-creation-seams-2026-10-30.md` **§26b, §27 and every bullet after it** (rulings, v2 stages, the user-POV direction: cast reads its active linked card by default, made visible; members own voice and sprites, own over card), `plans/REPORT-s27-S1-2026-11-05.md` (the schema and `sessions/seats.ts`), memory `/home/jody/.claude/projects/-home-jody-github-serene-pub/memory/project_seat_cast_programme_2026_11_05.md` and `feedback_there_is_always_a_lorebook.md` (**every session has a lorebook — its own book or an overlay; never write "no book"**), NOMENCLATURE §1, §24, §8 (cast member, retold), the seat rows. Lane id **s27-S2core**. Two workers at most (Sonnet). App `/home/jody/github/serene-pub`. Lane **pl4** runs in `state/**`, `sessions/rewind.ts`, `ownBook.ts` copy paths, the lorebook duplicate handler — don't edit those.
+
+## What this lane delivers (no reader switched yet — the S2 lanes after you switch them)
+1. **`src/lib/server/cast/memberAsRead.ts`** 🚧 (new module; name per §24 — "as read" is the codebase's word for a value after layering): for a cast member (and the session's reading where dated cards apply), the **one** function every reader uses to get what the member *is*: name (`own_name` else the active card's), each retold text field (the member's own when its `retold` flag is on, else the card's), face (the member's `face` else the card's avatar), **voice** (the member's `timbre` else the card's `extensions.serenepub.timbre`), **sprite sets** (the member's sets else the card's), tags/gallery (card-only), `activeCardId` (the member's linked card, or the dated card at the reading via `castMemberCards`), `cardless: boolean`. Batch form for many members (one round of queries). Pure mapping helpers unit-tested; DB read int-tested.
+2. **`seatOf(db, sessionId, ref)`** 🚧 in `sessions/seats.ts` (additive): resolves a session participant ref — `character:<cardId>` (today's), 🚧 `seated-member:<memberId>` (new), `player-seat:<id>` — to the seat row (character seat or player seat) with its `castMemberId`, `cardId` (nullable), `seatId`; the S2 compatibility read (S5 removes the card form). Unit + int tests incl. overlapping card/member id ranges.
+3. **`SessionLinks`** stays as is (lane S2-state widens it after pl4). Instead export a read 🚧 `seatedCastOf(db, sessionId)` → every live seat with `{ seatId, kind: 'character' | 'player', castMemberId, cardId, asRead }` for the S2 lanes to switch onto.
+4. **Card profile reach (owner direction, user POV):** server read `lorebooks:bindingsForCharacter` already lists a card's members; extend its payload (additive) with, per member, which fields still **follow the card** (retold flag off) — the data the card profile needs for _Editing this changes Bianca in Porto Alto and The Shared House (her description and greetings; her personality is her own there)._ The client line is lane S2-client's.
+5. **Tests**: unit (the pure layering rules), int (`memberAsRead` batch over a book with carded, card-less, retold and dated members; `seatOf` for each ref form; `seatedCastOf`; the bindings payload).
+6. **NOMENCLATURE §25** rows for each new name (qualified, R3; "as read" sense consistent with `entriesAsRead`).
+
+## Files owned
+`src/lib/server/cast/**` (new), `src/lib/server/sessions/seats.ts` (additive), the `lorebooks:bindingsForCharacter` handler in `src/lib/server/sockets/lorebooks.ts` (that handler only) and its type in `src/lib/shared/sockets/types.ts` (additive), tests, `NOMENCLATURE.md` (§25 rows).
+## Out of scope
+Switching any existing reader (prompt, state, speech, sprites, client, branch — the S2 lanes); SDK; the key flip (S4).
+## Rules (quote into the worker brief)
+CLAUDE.md Principles/Decisions/Hard rules; NOMENCLATURE R1–R6, §24; `tx` only inside transactions; no static `$lib/server/db` import in modules tests mock (pass `db`); targeted tests only; never pipe vitest into `head`; 60 s int timeouts; delete only your own `/tmp/serene-pub-vitest-*` dirs by name. Never write "no book"/"no lorebook".
+Every implementation brief adds, verbatim:
+- *"This is an implementation task. Answer any relayed status question in one line in your report, and still do all the work."*
+- *"Never run `git stash` in any form, including `--keep-index` or to probe prettier; it stashes every other lane's uncommitted work. Use `npx prettier --check <file>`."*
+- *"Never commit. Never `npm test` or `npm run build` at the SDK root. Delete only the `/tmp/serene-pub-vitest-*` dirs your own tests made, by name; never a glob over `/tmp/serene-pub-*`."*
+- *"Before any `sdk:build`, check `pgrep -af "vite dev"` for a serene-pub server. If one is up, don't build; report 'blocked on your dev server'."*
+## Done means
+Tests green; `tsc` clean on lane files. Full report in your hand-back (the lead saves it): the exported names and signatures FIRST (the S2 lanes build on them), changed files, tests, §25 rows, open ★, Noticed, not done.

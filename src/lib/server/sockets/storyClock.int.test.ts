@@ -140,7 +140,7 @@ describe("the Chronicle's story clock doors", () => {
 			unit: "days"
 		})
 		expect(refused[0]![0]).toBe("sessions:setStoryClock:error")
-		expect(refused[0]![1].error).toMatch(/no day to count days from/)
+		expect(refused[0]![1].error).toMatch(/so it can't count days/)
 		const stepped = await ask(sessionsSetStoryClock, f.owner.id, {
 			sessionId,
 			by: 1,

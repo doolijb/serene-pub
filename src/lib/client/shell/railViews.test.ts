@@ -82,19 +82,19 @@ describe("the shell's sidebar views", () => {
 			expect(source).toContain("<HelpSidebar />")
 		})
 
-		it("is drawn at the foot of Tune", () => {
+		it("is drawn at the foot of the rail, under Activity", () => {
 			// Excluded from the Tune loop, which would otherwise append it
-			// among the managers rather than under them…
+			// among the managers…
 			expect(source).toMatch(
 				/navOrdered\(\s*panelsCtx\.leftNav,\s*SYSTEM_ORDER,\s*\[[^\]]*"help"[^\]]*\]/
 			)
-			// …and pushed back into that same group afterwards.
-			expect(source).toMatch(/\.\.\.help,[\s\S]{0,120}group: "system"/)
-			const loopAt = source.indexOf("SYSTEM_ORDER,")
+			// …and pushed into the foot group, after Activity.
+			expect(source).toMatch(/\.\.\.help,[\s\S]{0,120}group: "foot"/)
+			const activityAt = source.indexOf('key: "activity",')
 			const pushAt = source.search(/\.\.\.help,/)
-			const footAt = source.indexOf('key: "activity",')
-			expect(pushAt).toBeGreaterThan(loopAt)
-			expect(footAt).toBeGreaterThan(pushAt)
+			const adminAt = source.search(/\.\.\.admin,/)
+			expect(pushAt).toBeGreaterThan(activityAt)
+			expect(adminAt).toBeGreaterThan(pushAt)
 		})
 	})
 
@@ -113,7 +113,7 @@ describe("the shell's sidebar views", () => {
 
 		it("leads the Tune group", () => {
 			expect(source).toMatch(
-				/SYSTEM_ORDER = \[\s*"connections",\s*"models",\s*"loadouts",\s*"sampling",\s*"settings"\s*\]/
+				/SYSTEM_ORDER = \[\s*"connections",\s*"models",\s*"sampling",\s*"loadouts",\s*"settings"\s*\]/
 			)
 		})
 	})

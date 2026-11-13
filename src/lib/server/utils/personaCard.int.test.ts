@@ -61,6 +61,17 @@ async function personasOf(userId: number) {
 	})
 }
 
+/** A card's versions, oldest first. */
+async function versionsOf(cardId: number) {
+	const { asc, eq } = await import("drizzle-orm")
+	const schema = await import("$lib/server/db/schema")
+	return testDb
+		.select()
+		.from(schema.characterVersions)
+		.where(eq(schema.characterVersions.cardId, cardId))
+		.orderBy(asc(schema.characterVersions.number))
+}
+
 describe("persona cards (PGlite integration)", () => {
 	test("a plain persona card creates a character flagged as a persona", async () => {
 		const { createPersonaFromParsedData } = await import("./personaCard")
@@ -80,6 +91,57 @@ describe("persona cards (PGlite integration)", () => {
 		// user plays.
 		expect(persona.isPersona).toBe(true)
 		expect(persona.isDefaultPersona).toBe(false)
+
+		// …and it has its first card version (cv-writers).
+		const versions = await versionsOf(persona.id)
+		expect(versions).toHaveLength(1)
+		expect(versions[0]).toMatchObject({
+			number: 1,
+			name: "Jordan",
+			description: "A curious traveler"
+		})
+	})
+
+	test("the avatar of a persona card becomes the face of its current card version", async () => {
+		const { createPersonaFromParsedData, overwritePersonaFromParsedData } =
+			await import("./personaCard")
+		const { PNG } = await import("pngjs")
+		const picture = (seed: number) => {
+			const img = new PNG({ width: 2, height: 2 })
+			img.data.fill(200)
+			img.data[0] = seed
+			return PNG.sync.write(img)
+		}
+		const user = await makeUser("persona-face-user")
+		const warnings: string[] = []
+		const persona = await createPersonaFromParsedData(
+			minimalPersonaCard,
+			picture(1),
+			user.id,
+			testDb as any,
+			warnings
+		)
+		expect(warnings).toEqual([])
+		expect(persona.avatarMediaId).toEqual(expect.any(Number))
+		let versions = await versionsOf(persona.id)
+		expect(versions).toHaveLength(1)
+		expect(versions[0].faceMediaId).toBe(persona.avatarMediaId)
+
+		// An overwrite's new picture is the new version's face; v1 keeps the old one.
+		const again = await overwritePersonaFromParsedData(
+			persona.id,
+			{ ...minimalPersonaCard, description: "Changed" },
+			picture(2),
+			testDb as any,
+			warnings
+		)
+		expect(warnings).toEqual([])
+		expect(again.avatarMediaId).not.toBe(persona.avatarMediaId)
+		versions = await versionsOf(persona.id)
+		expect(versions.map((v) => v.faceMediaId)).toEqual([
+			persona.avatarMediaId,
+			again.avatarMediaId
+		])
 	})
 
 	test("re-reading a row's own exported card hashes identical — the 'unchanged' decision", async () => {
@@ -113,7 +175,7 @@ describe("persona cards (PGlite integration)", () => {
 		expect(await personasOf(user.id)).toHaveLength(1)
 	})
 
-	test("an edited card of the same row hashes differently — the 'conflict' decision — and overwrite lands in place", async () => {
+	test("an edited card of the same row hashes differently — the 'conflict' decision — and overwrite adds a card version", async () => {
 		const {
 			createPersonaFromParsedData,
 			overwritePersonaFromParsedData,
@@ -152,12 +214,21 @@ describe("persona cards (PGlite integration)", () => {
 			testDb as any
 		)
 		expect(overwritten.id).toBe(created.id)
+		// the row's description is the current version's ⏳ copy
 		expect(overwritten.description).toBe(
 			"A completely different description"
 		)
 		// An overwrite must not silently un-flag it.
 		expect(overwritten.isPersona).toBe(true)
 		expect(await personasOf(user.id)).toHaveLength(1)
+		// No write in place: v1 is as it was, v2 holds the file's card.
+		const versions = await versionsOf(created.id)
+		expect(versions.map((v) => v.number)).toEqual([1, 2])
+		expect(versions[0]).toMatchObject({ description: "A curious traveler" })
+		expect(versions[1]).toMatchObject({
+			name: "Jordan",
+			description: "A completely different description"
+		})
 	})
 
 	test("an explicit external uuid is stamped onto the new row", async () => {
@@ -333,30 +404,36 @@ describe("persona cards (PGlite integration)", () => {
 		)
 		expect(readLikeness(fromSt.extensions)).toEqual({ prompt: "red scarf", negative: "glasses" })
 
-		// An overwrite merges: other stored keys survive, the likeness is replaced.
-		const { eq } = await import("drizzle-orm")
-		const schema = await import("$lib/server/db/schema")
-		await testDb
-			.update(schema.characters)
-			.set({ extensions: { other: { kept: true }, serenepub: { likeness } } as any })
-			.where(eq(schema.characters.id, copy.id))
+		// An overwrite adds a version: the version's other keys survive, the likeness is replaced.
+		const { updateCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const [first] = await versionsOf(copy.id)
+		await updateCardVersion(testDb as any, first.id, {
+			extensions: { other: { kept: true } }
+		})
 		const overwritten = await overwritePersonaFromParsedData(
 			copy.id,
 			{ ...exported, extensions: { serenepub: { likeness: { prompt: "clean-shaven" } } } },
 			undefined,
 			testDb as any
 		)
-		expect(readLikeness(overwritten.extensions)).toEqual({ prompt: "clean-shaven" })
-		expect((overwritten.extensions as any).other).toEqual({ kept: true })
+		const afterOverwrite = await versionsOf(overwritten.id)
+		expect(afterOverwrite.map((v) => v.number)).toEqual([1, 2])
+		expect(afterOverwrite[0].likeness).toEqual(likeness)
+		expect(afterOverwrite[1].likeness).toEqual({ prompt: "clean-shaven" })
+		expect(afterOverwrite[1].extensions).toEqual({ other: { kept: true } })
 
-		// A card with no likeness leaves the stored one alone.
-		const untouched = await overwritePersonaFromParsedData(
+		// A card with no likeness leaves the current version's alone.
+		await overwritePersonaFromParsedData(
 			copy.id,
 			minimalPersonaCard,
 			undefined,
 			testDb as any
 		)
-		expect(readLikeness(untouched.extensions)).toEqual({ prompt: "clean-shaven" })
+		const afterUntouched = await versionsOf(copy.id)
+		expect(afterUntouched).toHaveLength(3)
+		expect(afterUntouched[2].likeness).toEqual({ prompt: "clean-shaven" })
 	})
 
 	test("character-only fields on a persona card are not written", async () => {

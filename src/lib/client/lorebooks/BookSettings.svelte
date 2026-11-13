@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import { showsAdvancedControls } from "$lib/client/advancedControls"
+	import AdvancedHiddenLine from "$lib/client/components/AdvancedHiddenLine.svelte"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import EditLorebookForm from "$lib/client/components/lorebookForms/EditLorebookForm.svelte"
 	import {
@@ -7,11 +10,12 @@
 		HISTORY_TYPE_ID
 	} from "$lib/shared/entries/types"
 	import { bookReadout, nestingOf, READOUT_NOTE } from "./bookReadout"
-	import { readingActionLabel } from "./scopes"
+	import { primerRowLine } from "./starterKitCards"
 	import { compareDates, formatDate } from "./sections/historyDates"
 	import StoryCalendarEditor from "./time/StoryCalendarEditor.svelte"
 	import StoryClockEditor from "./time/StoryClockEditor.svelte"
 	import BookRulesCard from "./BookRulesCard.svelte"
+	import type { RulesetGenreFit } from "./rulesFitWords"
 	import BookWritesCard from "./BookWritesCard.svelte"
 
 	/**
@@ -57,9 +61,10 @@
 		readBy?: readonly { id: number; name: string | null }[]
 		/** The book's rules (`lorebooks.primary_ruleset`). */
 		primaryRuleset: string | null
+		/** 🚧 s22-V: how each enabled genre rates the book's rules (`rulesetFitByGenre`); absent for Freeform. */
+		rulesFit?: RulesetGenreFit[] | null
 		/** The book's own lore write mode (`lorebooks.lore_write_mode`). */
 		loreWriteMode: string | null
-		canChangeReading: boolean
 		/**
 		 * 🚧 The book is a starter lorebook (PLAN-lorebook-kinds §B): sessions start
 		 * from it and never read or write it, so Writes from sessions and
@@ -67,13 +72,23 @@
 		 * lorebook made from it and its delete.
 		 */
 		isStarterKit?: boolean
+		/** 🚧 (M2e) A provided book (comes with the pub or a plugin): no Delete is drawn. */
+		isProvided?: boolean
+		/**
+		 * 🚧 (m2e-F-C) The server's primer-row mark: no edit control is drawn;
+		 * the way out is Clone.
+		 */
+		readOnly?: boolean
+		/** The primer row's own line (`primerRowLine(book)`), when read-only. */
+		readOnlyLine?: string
+		/** 🚧 (m2e-F-C) Clone this primer row into a starter lorebook of the reader's own. */
+		onClone?: () => void
 		/** 🚧 An admin's ordinary book: copy it as a new starter lorebook. */
 		onSaveAsStarterKit?: () => void
 		/** 🚧 A starter lorebook: start a lorebook of the reader's own from it. */
 		onMakeBookFromKit?: () => void
 		hasUnsavedChanges: boolean
 		onClose: () => void
-		onChangeReading: () => void
 		onImport: () => void
 		/** Asks for a copy of this book; the prompt names it. */
 		onDuplicate: () => void
@@ -95,18 +110,33 @@
 		readingInto,
 		readBy = [],
 		primaryRuleset,
+		rulesFit = null,
 		loreWriteMode,
-		canChangeReading,
 		isStarterKit = false,
+		isProvided = false,
+		readOnly = false,
+		readOnlyLine,
+		onClone,
 		onSaveAsStarterKit,
 		onMakeBookFromKit,
 		hasUnsavedChanges = $bindable(false),
 		onClose,
-		onChangeReading,
 		onImport,
 		onDuplicate,
 		onDelete
 	}: Props = $props()
+
+	// 🚧 Advanced controls (2026-11-10): the book's rules and its calendar are
+	// hidden, never changed, while this person's switch is off.
+	const userSettingsCtx = getContext<UserSettingsCtx | undefined>(
+		"userSettingsCtx"
+	)
+	let advanced = $derived(showsAdvancedControls(userSettingsCtx?.settings))
+	// The rules card and the calendar editor are what the switch hides; the
+	// line at the foot says so only when one of them would have been drawn.
+	// The calendar is drawn on every page that isn't read-only, so that is
+	// the whole condition.
+	let rulesOrCalendarHidden = $derived(!advanced && !readOnly)
 
 	// Two editors on one page, one unsaved flag for the tab.
 	let formUnsaved = $state(false)
@@ -193,8 +223,8 @@
 				? `The open session reads this book as it plays; so does ${joinNames(otherReaders)}.`
 				: "The open session reads this book as it plays."
 			: otherReaders.length
-				? "Those sessions read this book as they play. Open a session you own to read it in there too."
-				: "No session reads this book. Open a session you own to read it in."
+				? "Those sessions read this book as they play."
+				: "No session reads this book."
 	)
 
 	let lines = $derived(
@@ -254,23 +284,43 @@
 		</h2>
 	</div>
 
-	<EditLorebookForm {lorebookId} bind:hasUnsavedChanges={formUnsaved} />
+	{#if readOnly}
+		<div class="flex flex-wrap items-center gap-2">
+			<p class="text-surface-600-400 text-xs" data-book-settings-read-only>
+				{readOnlyLine ?? primerRowLine(null)}
+			</p>
+			<button
+				class="btn btn-sm preset-tonal-surface"
+				type="button"
+				data-book-settings-clone
+				onclick={onClone}
+			>
+				<Icons.CopyPlus size={14} aria-hidden="true" /> Clone
+			</button>
+		</div>
+	{:else}
+		<EditLorebookForm {lorebookId} bind:hasUnsavedChanges={formUnsaved} />
 
-	{#if primaryRuleset}
-		<BookRulesCard {lorebookId} current={primaryRuleset} />
+		{#if advanced && primaryRuleset}
+			<BookRulesCard {lorebookId} current={primaryRuleset} fits={rulesFit} />
+		{/if}
+
+		{#if !isStarterKit}
+			<BookWritesCard {lorebookId} current={loreWriteMode} />
+		{/if}
+
+		<StoryClockEditor {branchId} {branchName} {present} {onSetClock} />
+
+		<!-- Hidden, not unmounted, with advanced controls off: the calendar's
+		     draft lives inside the editor, so a mid-edit flip keeps it. -->
+		<div hidden={!advanced}>
+			<StoryCalendarEditor
+				{lorebookId}
+				sample={present?.date ?? null}
+				bind:hasUnsavedChanges={calendarUnsaved}
+			/>
+		</div>
 	{/if}
-
-	{#if !isStarterKit}
-		<BookWritesCard {lorebookId} current={loreWriteMode} />
-	{/if}
-
-	<StoryClockEditor {branchId} {branchName} {present} {onSetClock} />
-
-	<StoryCalendarEditor
-		{lorebookId}
-		sample={present?.date ?? null}
-		bind:hasUnsavedChanges={calendarUnsaved}
-	/>
 
 	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
 		<p
@@ -298,12 +348,7 @@
 			{@render behaviour(
 				"Reading into a session",
 				readingValue,
-				readingExplain,
-				{
-					label: readingActionLabel(!!readingInto),
-					run: onChangeReading,
-					disabled: !canChangeReading
-				}
+				readingExplain
 			)}
 		</section>
 	{/if}
@@ -316,11 +361,13 @@
 			{isStarterKit ? "This starter lorebook" : "This book"}
 		</p>
 		{#if isStarterKit}
-			<p class="text-surface-700-300 text-sm" data-book-settings-kit>
-				Everyone on the pub can start a lorebook or a session from this
-				starter lorebook. Each one started gets its own copy, so what you
-				change here reaches the ones started next.
-			</p>
+			{#if !readOnly}
+				<p class="text-surface-700-300 text-sm" data-book-settings-kit>
+					Everyone on the pub can start a lorebook or a session from this
+					starter lorebook. Each one started gets its own copy, so what you
+					change here reaches the ones started next.
+				</p>
+			{/if}
 			<div class="flex flex-wrap gap-2">
 				{#if onMakeBookFromKit}
 					<button
@@ -333,15 +380,17 @@
 						from it
 					</button>
 				{/if}
-				<button
-					class="btn btn-sm preset-filled-error-500"
-					type="button"
-					data-book-settings-delete-kit
-					onclick={onDelete}
-				>
-					<Icons.Trash2 size={14} aria-hidden="true" />
-					Delete starter lorebook
-				</button>
+				{#if !isProvided}
+					<button
+						class="btn btn-sm preset-filled-error-500"
+						type="button"
+						data-book-settings-delete-kit
+						onclick={onDelete}
+					>
+						<Icons.Trash2 size={14} aria-hidden="true" />
+						Delete starter lorebook
+					</button>
+				{/if}
 			</div>
 		{:else}
 			<div class="flex flex-wrap gap-2">
@@ -385,14 +434,16 @@
 						lorebook
 					</button>
 				{/if}
-				<button
-					class="btn btn-sm preset-filled-error-500"
-					type="button"
-					onclick={onDelete}
-				>
-					<Icons.Trash2 size={14} aria-hidden="true" />
-					Delete “{bookName}”
-				</button>
+				{#if !isProvided}
+					<button
+						class="btn btn-sm preset-filled-error-500"
+						type="button"
+						onclick={onDelete}
+					>
+						<Icons.Trash2 size={14} aria-hidden="true" />
+						Delete “{bookName}”
+					</button>
+				{/if}
 			</div>
 			<p
 				id="book-settings-export-paused"
@@ -402,4 +453,8 @@
 			</p>
 		{/if}
 	</section>
+
+	{#if rulesOrCalendarHidden}
+		<AdvancedHiddenLine />
+	{/if}
 </div>

@@ -19,6 +19,7 @@ import path from "path"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { annexField, annexFieldAction } from "@serene-pub/sdk"
+import { insertCastMember } from "$lib/server/characters/versions"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 
@@ -243,5 +244,63 @@ describe("R3 · recipients are validated at the door", () => {
 		expect(recipientsRefusal([b, v], { min: 1, max: 1 }, seated)).toBe("takes at most 1 recipient.")
 		expect(recipientsRefusal("x", one, seated)).toMatch(/as a list of cast members/)
 		expect(recipientsRefusal([7], one, seated)).toMatch(/as a list of cast members/)
+	})
+})
+
+describe("an answered form names its answerer as the book does (§0-D)", () => {
+	it("a member with an own name is refused by that name", async () => {
+		const { appendParts } = await import("$lib/server/messages/store")
+		const { eq } = await import("drizzle-orm")
+		const [book] = await db
+			.insert(schema.lorebooks)
+			.values({ name: "Own names", userId: ownerId })
+			.returning()
+		await insertCastMember(db, {
+			lorebookId: book!.id,
+			binding: "{{char:own-names}}",
+			characterId: cast.brannoc,
+			ownName: "Maren"
+		} as any)
+		await db
+			.update(schema.sessions)
+			.set({ lorebookId: book!.id })
+			.where(eq(schema.sessions.id, lairSessionId))
+		try {
+			const id = await row("Which way?")
+			await appendParts(db as any, id, [
+				{
+					type: "core:blocks",
+					data: {
+						blocks: [
+							{
+								kind: "choices",
+								id: "answered-own-name",
+								head: id,
+								question: "Which way?",
+								actions: [{ fn: "nudge", action: NUDGE, label: "Say which", choice: "say" }],
+								answered: {
+									by: `character:${cast.brannoc}`,
+									at: new Date().toISOString(),
+									choice: "say"
+								}
+							}
+						]
+					}
+				} as any
+			])
+			const out = await press({
+				sessionId: lairSessionId,
+				action: NUDGE,
+				messageId: id,
+				blockId: "answered-own-name"
+			})
+			expect(out.kind).toBe("refused")
+			if (out.kind === "refused") expect(out.error).toMatch(/already answered by Maren\./)
+		} finally {
+			await db
+				.update(schema.sessions)
+				.set({ lorebookId: null })
+				.where(eq(schema.sessions.id, lairSessionId))
+		}
 	})
 })

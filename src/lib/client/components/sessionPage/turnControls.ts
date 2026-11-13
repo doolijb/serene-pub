@@ -15,8 +15,8 @@ export interface FireTurnSocket {
 /**
  * Press a turn: Continue (`advance`) — the first entry prepared on
  * `channel`, the channel of the composer it was pressed in (lair re-plan
- * R5; `main`, the default, is not said); with `characterId` the named
- * character, recorded as a pick (Pick who speaks, §4.6); with `narrator`
+ * R5; `main`, the default, is not said); with `ref` the named
+ * seat (its participant ref), recorded as a pick (Pick who speaks, §4.6); with `narrator`
  * the genre's own voice (the `narrate` turn control, B8) — the null ref,
  * with the composer's `channel` so the server knows where Narrate was
  * pressed (R8). The server judges each against the genre's turn controls.
@@ -24,7 +24,7 @@ export interface FireTurnSocket {
 export function fireTurn(
 	socket: FireTurnSocket,
 	sessionId: number,
-	pick?: { characterId: number } | { narrator: true },
+	pick?: { ref: string } | { narrator: true },
 	channel?: string
 ): void {
 	const onChannel = channel && channel !== DEFAULT_CHANNEL ? { channel } : {}
@@ -34,10 +34,7 @@ export function fireTurn(
 			? {
 					sessionId,
 					entry: {
-						ref:
-							"characterId" in pick
-								? `character:${pick.characterId}`
-								: null,
+						ref: "ref" in pick ? pick.ref : null,
 						via: "pick"
 					},
 					// Narrate says where it was pressed (lair pass R8): the

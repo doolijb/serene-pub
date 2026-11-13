@@ -284,6 +284,7 @@ function threadsFrom(value: unknown): number | undefined {
  * nobody asked this app to start those, and trying would be a surprise.
  */
 async function ensureManagedInstanceReady(
+	db: Db,
 	connection: AdapterConnection,
 	opts: {
 		signal?: AbortSignal
@@ -304,10 +305,12 @@ async function ensureManagedInstanceReady(
 
 	// Dynamically imported for the reason the adapter loaders document: these
 	// modules are heavy, and one of them cannot be loaded on Android at all.
-	const [{ ensureManagedReady }, { sdQuantToInt }] = await Promise.all([
-		import("$lib/server/koboldcpp/managedPreflight"),
-		import("$lib/server/imageAdapters/KoboldCppManagedImageAdapter")
-	])
+	const [{ ensureManagedReady }, { sdQuantToInt }, { clearTtl }] =
+		await Promise.all([
+			import("$lib/server/koboldcpp/managedPreflight"),
+			import("$lib/server/imageAdapters/KoboldCppManagedImageAdapter"),
+			import("$lib/server/koboldcpp/modelManager")
+		])
 
 	// A SPEC, not a path: which directory a bare filename lives in is a
 	// two-column question with a fallback for installs that predate the second
@@ -342,6 +345,15 @@ async function ensureManagedInstanceReady(
 		},
 		{ connectionId: connection.id, signal: opts.signal }
 	)
+	// The load armed the idle-unload timer. Processing starts now, and the
+	// timer is armed again only when it FINISHES (`touchManagedTtl`, in the
+	// render's `finally`) — never while a render is in flight (owner ruling,
+	// 2026-11-08). Re-arming afterwards alone was not enough: a render longer
+	// than the TTL from its own load, or a sprite series crossing it, had
+	// `unload_model` POSTed under its running `/sdapi/v1/txt2img`, and the
+	// pictures already drawn went with it.
+	const settings = await db.query.koboldCppSettings.findFirst()
+	if (settings) clearTtl(settings.koboldCppManagerBaseUrl)
 }
 
 /**
@@ -368,8 +380,7 @@ async function touchManagedTtl(
 		// already fired, or the subprocess died, re-arming would advertise a
 		// model that is not there and mask the real state from the next load.
 		const isAlive =
-			settings.koboldCppManagedMode === "managed" &&
-			!subprocessManager.isExternal()
+			settings.koboldCppManagedMode === "managed"
 				? subprocessManager.isRunning()
 				: true
 		if (!isAlive || !getLoadedSignature()) return
@@ -430,13 +441,31 @@ function serialize<T>(key: string, work: () => Promise<T>): Promise<T> {
 async function resolveWorkflow(
 	db: Db,
 	connection: SelectConnection,
-	workflowId: number | null | undefined
-): Promise<ImageWorkflowDocument> {
-	if (workflowId == null)
-		throw new ImageDispatchError(
-			"Choose a workflow for this step — its image server draws with a ComfyUI workflow.",
-			connectionIdentity(connection)
+	workflowId: number | null | undefined,
+	sampling: { seedKey?: string | null; name?: string } | null
+): Promise<{ workflow: ImageWorkflowDocument; chosenNotice: string | null }> {
+	// An empty slot: the built-in text-to-image starter paired with the
+	// step's sampling preset, by seed key (`STARTER_FOR_SAMPLING`), and said
+	// so in the form's notices and the receipt — an automatic choice shown
+	// with its cause and where to change it (P1). A sampling with no paired
+	// starter keeps the refusal.
+	let chosenNotice: string | null = null
+	if (workflowId == null) {
+		const { starterWorkflowForSampling } = await import(
+			"$lib/server/imageGen/comfy/starters"
 		)
+		const starter = await starterWorkflowForSampling(db, sampling?.seedKey)
+		if (!starter)
+			throw new ImageDispatchError(
+				"Choose a workflow for this step in its loadout — its image server draws with a ComfyUI workflow.",
+				connectionIdentity(connection)
+			)
+		workflowId = starter.id
+		chosenNotice =
+			`Drawing with the built-in "${starter.name}" workflow, chosen because ` +
+			`the step's sampling is ${sampling?.name ?? "a core preset"} and its loadout ` +
+			`names no workflow. Pick one on the loadout to change it.`
+	}
 	const { getWorkflowDocument } = await import(
 		"$lib/server/imageGen/comfy/workflows"
 	)
@@ -468,7 +497,7 @@ async function resolveWorkflow(
 				connectionIdentity(connection)
 			)
 	}
-	return workflow
+	return { workflow, chosenNotice }
 }
 
 /**
@@ -513,10 +542,11 @@ async function prepareImageRun(db: Db, call: ImageCall) {
 	// A template-payload pair draws with a workflow (§4.10): the slot is
 	// required for it, the sheet is derived from it, and it is checked
 	// against this server before anything is sent (§4.9).
-	const workflow =
+	const resolvedWorkflow =
 		sheet.payload === "template"
-			? await resolveWorkflow(db, connection, call.workflowId)
+			? await resolveWorkflow(db, connection, call.workflowId, sampling)
 			: null
+	const workflow = resolvedWorkflow?.workflow ?? null
 	if (workflow && exports.sheetForWorkflow)
 		sheet = await exports.sheetForWorkflow(connection, workflow)
 
@@ -535,6 +565,10 @@ async function prepareImageRun(db: Db, call: ImageCall) {
 			verdict.refusal,
 			connectionIdentity(connection)
 		)
+	// A workflow chosen for an empty slot is said before the run, with the
+	// sheet's own notices — the form shows it, the result carries it.
+	if (resolvedWorkflow?.chosenNotice)
+		verdict.preRunNotices.push(resolvedWorkflow.chosenNotice)
 
 	// The run the templates render under, in the shape `renderTemplate`
 	// takes. `user` comes off the call rather than being asked for twice: it is
@@ -616,6 +650,12 @@ async function prepareImageRun(db: Db, call: ImageCall) {
 	}
 
 	const plan = planImageCalls(items, sheet, exports)
+	if (workflow)
+		plan.workflow = {
+			id: workflow.id,
+			name: workflow.name,
+			chosen: resolvedWorkflow?.chosenNotice ? "for-sampling" : "slot"
+		}
 	if (
 		sampled.width !== base.width ||
 		sampled.height !== base.height ||
@@ -767,8 +807,7 @@ export async function dispatchImage(
 	// The stored apiKey is encrypted at rest (tokenCrypto.ts) — decrypted into
 	// the adapter's copy only, never persisted and never returned.
 	const conn =
-		connection.extraJson &&
-		typeof (connection.extraJson as any).apiKey === "string"
+		connection.extraJson && (connection.extraJson as any).apiKey
 			? {
 					...connection,
 					extraJson: {
@@ -822,7 +861,7 @@ export async function dispatchImage(
 		// under it. Closing that properly means one critical section per backend
 		// shared by both paths, which is a change to the loader and not to this
 		// file — recorded here rather than papered over.
-		await ensureManagedInstanceReady(connection, {
+		await ensureManagedInstanceReady(db, connection, {
 			signal: call.signal,
 			onProgress: call.onProgress
 		})
@@ -841,34 +880,49 @@ export async function dispatchImage(
 					...(isMediaRef(call.mask) ? { mask: call.mask } : {}),
 					...(verdict.transparent ? { transparent: true } : {})
 				}
-				const result = await adapter.generateImage(req, {
-					signal: call.signal,
-					loadMedia,
-					// The workflow a template-payload pair draws with, and —
-					// for a keyed-graph call — every item it draws (§4.7).
-					...(workflow ? { workflow } : {}),
-					...(call.runId ? { runId: call.runId } : {}),
-					...(plan.packing === "keyed-graph"
-						? {
-								series: planned.keys.map((k) => {
-									const it = byKey.get(k)!
-									return {
-										key: k,
-										prompt: it.prompt,
-										...(it.negative ? { negative: it.negative } : {}),
-										...(it.vars ? { vars: it.vars } : {})
-									}
-								})
-							}
-						: {}),
-					// ⚠ Withheld rather than ignored, and the difference is the
-					// cost. An adapter that is handed no callback runs no progress
-					// poll and decodes no preview frame, which is what `off` is
-					// asking for; one handed a callback it must not call would pay
-					// for both and throw the answers away.
-					onProgress:
-						call.streaming === "off" ? undefined : call.onProgress
-				})
+				let result: Awaited<ReturnType<typeof adapter.generateImage>>
+				try {
+					result = await adapter.generateImage(req, {
+						signal: call.signal,
+						loadMedia,
+						// The workflow a template-payload pair draws with, and —
+						// for a keyed-graph call — every item it draws (§4.7).
+						...(workflow ? { workflow } : {}),
+						...(call.runId ? { runId: call.runId } : {}),
+						...(plan.packing === "keyed-graph"
+							? {
+									series: planned.keys.map((k) => {
+										const it = byKey.get(k)!
+										return {
+											key: k,
+											prompt: it.prompt,
+											...(it.negative ? { negative: it.negative } : {}),
+											...(it.vars ? { vars: it.vars } : {})
+										}
+									})
+								}
+							: {}),
+						// ⚠ Withheld rather than ignored, and the difference is the
+						// cost. An adapter that is handed no callback runs no progress
+						// poll and decodes no preview frame, which is what `off` is
+						// asking for; one handed a callback it must not call would pay
+						// for both and throw the answers away.
+						onProgress:
+							call.streaming === "off" ? undefined : call.onProgress
+					})
+				} catch (e) {
+					// Nothing drawn yet: the step fails as it always did. After
+					// a picture has landed, a later call's failure is a SHORTFALL
+					// — the pictures already drawn are filed, the rest reported
+					// missing, and the reason kept on the plan. Seen 2026-11-08:
+					// a sprite fill lost its finished first picture when the
+					// second call died (KoboldCPP restarted beneath it).
+					if (!drawn.length) throw e
+					const error = e instanceof Error ? e.message : String(e)
+					planned.error = error
+					plan.stoppedOn = { call: planned.index, error }
+					break
+				}
 				// Per call, onto the plan the receipt already holds.
 				planned.applied = result.applied
 				planned.ignored = result.ignored
@@ -1089,7 +1143,20 @@ async function render(
 		variables,
 		...run
 	})
-	return out.trim() ? out : fallback
+	return out.trim() ? tidyTagList(out) : fallback
+}
+
+/**
+ * A rendered tag list with the seams an empty placeholder leaves closed:
+ * `"{{negative}}, text, watermark"` over no negative came out as
+ * `", text, watermark"` (seen on the Horde 2026-11-10), and a blank in the
+ * middle leaves `"a, , b"`. Separators only — the words are untouched.
+ */
+export function tidyTagList(text: string): string {
+	return text
+		.replace(/^[\s,]+/, "")
+		.replace(/(?:\s*,\s*){2,}/g, ", ")
+		.replace(/[\s,]+$/, "")
 }
 
 const EXT_BY_MIME: Record<string, string> = {

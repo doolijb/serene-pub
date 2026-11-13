@@ -143,42 +143,6 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 		expect(bound.name).toBe(character.name)
 	}, 60_000)
 
-	test("attaching a lorebook afterwards binds the members already there", async () => {
-		const { sessionsCreateHandler } = await import("./sessions")
-		const { sessionsSetLorebookHandler } = await import("./summarize")
-		const user = await makeUser()
-		const lorebook = await makeLorebook(user.id)
-		const character = await makeCharacter(user.id)
-		const persona = await makePersona(user.id)
-
-		const created = await sessionsCreateHandler.handler(
-			fakeSocket(user.id),
-			{
-				session: { name: "No book yet" },
-				characterIds: [character.id],
-				personaIds: [persona.id]
-			} as any,
-			noEmit
-		)
-		expect(await bindingsOf(lorebook.id)).toHaveLength(0)
-
-		await sessionsSetLorebookHandler.handler(
-			fakeSocket(user.id),
-			{ sessionId: created.session!.id, lorebookId: lorebook.id } as any,
-			noEmit
-		)
-
-		const bindings = await bindingsOf(lorebook.id)
-		// A bound persona is a bound character now (0133) — both land on
-		// `characterId`, so there's no separate `personaId` column to check.
-		expect(
-			bindings
-				.map((b) => b.characterId)
-				.filter(Boolean)
-				.sort()
-		).toEqual([character.id, persona.id].sort())
-	}, 60_000)
-
 	test("a member added after the book is attached is bound too", async () => {
 		const { sessionsCreateHandler, sessionsUpdateHandler } = await import(
 			"./sessions"
@@ -276,8 +240,7 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 	}, 60_000)
 
 	test("attaching the same book twice binds each member once", async () => {
-		const { sessionsCreateHandler } = await import("./sessions")
-		const { sessionsSetLorebookHandler } = await import("./summarize")
+		const { sessionsCreateHandler, sessionsUpdateHandler } = await import("./sessions")
 		const user = await makeUser()
 		const lorebook = await makeLorebook(user.id)
 		const character = await makeCharacter(user.id)
@@ -290,9 +253,10 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 			} as any,
 			noEmit
 		)
-		await sessionsSetLorebookHandler.handler(
+		// The same book posted again (an old client posts every field) changes nothing.
+		await sessionsUpdateHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: created.session!.id, lorebookId: lorebook.id } as any,
+			{ session: { id: created.session!.id, lorebookId: lorebook.id } } as any,
 			noEmit
 		)
 

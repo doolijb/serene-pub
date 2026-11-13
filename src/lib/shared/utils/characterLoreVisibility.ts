@@ -17,6 +17,8 @@
  * editor, so an entry is never left out of a prompt with nothing saying why.
  */
 
+import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
+
 export type CharacterLoreVisibilityKind =
 	| "unbound"
 	| "orphaned"
@@ -33,6 +35,8 @@ export interface BindingLike {
 	id: number
 	characterId?: number | null
 	character?: { nickname?: string | null; name: string } | null
+	ownName?: string | null
+	ownNickname?: string | null
 }
 
 export function getCharacterLoreVisibility(
@@ -67,10 +71,7 @@ export function getCharacterLoreVisibility(
 				"Bound to a background character with no linked character sheet — only included in prompts generated with no current character (Narrator perspective), never visible to any specific character."
 		}
 	}
-	const name =
-		binding.character?.nickname ||
-		binding.character?.name ||
-		"this character"
+	const name = memberShownName(binding, binding.character, "this character")
 	return {
 		kind: "character",
 		label: `Private to ${name}`,

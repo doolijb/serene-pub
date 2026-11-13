@@ -24,7 +24,7 @@
  */
 import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
-import { toaster } from "$lib/client/utils/toaster"
+import { notify } from "$lib/client/utils/notify"
 
 type Target = Sockets.Vectorization.ReindexCost.Target
 
@@ -105,7 +105,7 @@ export function useEmbeddingEditConfirm() {
 				(err) => {
 					if (mine !== ticket) return
 					if (isReplyTimeout(err))
-						toaster.error({
+						notify.error({
 							title: "Not saved",
 							description:
 								"The server didn't say whether this change re-embeds your index. Try saving again."

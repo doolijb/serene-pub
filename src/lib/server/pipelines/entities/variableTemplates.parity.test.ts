@@ -463,12 +463,16 @@ describe("the shipped set", () => {
 		// Automatic object layouts (`coreObjectLayouts`, 2026-09-27) ship a row too: `likenesses` (2026-10-12) is the first.
 		const { coreObjectLayouts } = await import("$lib/server/pipelines/entities/objectVariableLayouts")
 		const automaticKeys = coreObjectLayouts().flatMap((l) => Object.keys(getVariable(l.variableId as any)?.scope ?? {}))
+		// …and the catalogue's speech layouts (`inflectionTag`…), keyed by their own `key`.
+		const { SHIPPED_SPEECH_VARIABLE_LAYOUTS } = await import("@serene-pub/core-catalog")
+		const speechKeys = SHIPPED_SPEECH_VARIABLE_LAYOUTS.map((l) => l.key)
 		expect(Object.keys(renders).sort()).toEqual(
-			[...new Set([...SHIPPED_VARIABLE_TEMPLATES.map((t) => t.key), ...automaticKeys])].sort()
+			[...new Set([...SHIPPED_VARIABLE_TEMPLATES.map((t) => t.key), ...automaticKeys, ...speechKeys])].sort()
 		)
 		const byKey = new Map<string, { variableId: string }>(shippedByKey)
 		for (const l of coreObjectLayouts())
 			for (const k of Object.keys(getVariable(l.variableId as any)?.scope ?? {})) byKey.set(k, l)
+		for (const l of SHIPPED_SPEECH_VARIABLE_LAYOUTS) byKey.set(l.key, l)
 		for (const [key, variableId] of Object.entries(renders))
 			expect(byKey.get(key)?.variableId).toBe(variableId)
 	})

@@ -606,7 +606,16 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 							? {
 									pluginAction: (key: string, args?: { payload?: Record<string, unknown> }) => {
 										pluginRan = true
-										invokePluginAction(i.owner!, key, args?.payload).then(
+										// 🚧 M2e: an applet mount names itself so the server can judge "the applet is open"
+										// from its own data; a widget or a plugin page sends nothing.
+										const fromApplet =
+											i.mount === "applet"
+												? {
+														pluginId: i.owner!,
+														...(i.session?.id != null ? { sessionId: i.session.id } : {})
+													}
+												: undefined
+										invokePluginAction(i.owner!, key, args?.payload, fromApplet).then(
 											(result) => answerInvoke(true, { result }),
 											(e) => {
 												if (!reqId) console.warn(`${opts.label()}: ${(e as Error).message}`)

@@ -5,6 +5,7 @@ import {
 	drawnRulesLists,
 	drawsRulesList,
 	rulesListFacets,
+	otherRulesFacetGroups,
 	facetCounts,
 	mergeCastCount,
 	nothingMatchesLine,
@@ -23,8 +24,6 @@ import {
 	BOOK_ENTRY_TYPES,
 	entryTotal,
 	matchSessionRoute,
-	readingActionLabel,
-	replaceReadingSentence,
 	sessionMomentKey,
 	timeLensEntries,
 	timeLensKinds
@@ -469,24 +468,6 @@ describe("sessionMomentKey / matchSessionRoute — stand where the session stand
 	})
 })
 
-describe("reading verbs (NOMENCLATURE §8)", () => {
-	it("offers one action, named by what it does", () => {
-		expect(readingActionLabel(false)).toBe("Read into this session")
-		expect(readingActionLabel(true)).toBe("Stop reading")
-	})
-
-	it("the replace confirmation names both books and says nothing changes in them", () => {
-		const sentence = replaceReadingSentence(
-			"The Open Door",
-			"Old Book",
-			"New Book"
-		)
-		expect(sentence).toContain("The Open Door reads Old Book")
-		expect(sentence).toContain("stops reading Old Book")
-		expect(sentence).toContain("nothing in either book changes")
-	})
-})
-
 describe("book entry types and figures (#85, #89)", () => {
 	it("loads every entry kind the pool draws, items included, plus places", () => {
 		expect(BOOK_ENTRY_TYPES).toContain("core:entry/item")
@@ -641,5 +622,31 @@ describe("🚧 the book's rules lists (lane C1, ruled 2026-10-21)", () => {
 			"core:entry/vis-itineris.weapons"
 		])
 		expect(scopeChipLabel("list:core:entry/vis-itineris.weapons", null)).toBe("Weapons")
+	})
+})
+
+describe("🚧 ★50 lists of other rules than the book's", () => {
+	const list = (id: string, label: string, libraryRows = 0) => ({
+		typeId: `core:entry/vis-itineris.${id}`,
+		label,
+		repertoireId: id,
+		piece: { type: "object" as const, fields: {} },
+		libraryRows
+	})
+	const groups = [
+		{ rulesName: "Vis Itineris", types: [list("weapons", "Weapons"), list("spells", "Spells")] },
+		{ rulesName: "Nothing Here", types: [list("rocks", "Rocks")] }
+	]
+
+	it("draws a group per rules name, only the lists with something in them", () => {
+		const drawn = otherRulesFacetGroups(groups, { "core:entry/vis-itineris.weapons": 1 })
+		expect(drawn.map((g) => g.label)).toEqual(["Vis Itineris"])
+		expect(drawn[0]!.facets.map((f) => f.label)).toEqual(["Weapons"])
+		expect(drawn[0]!.facets[0]!.count).toBe(1)
+	})
+
+	it("draws no group while nothing is held", () => {
+		expect(otherRulesFacetGroups(groups, {})).toEqual([])
+		expect(otherRulesFacetGroups([], { x: 1 })).toEqual([])
 	})
 })

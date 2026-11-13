@@ -33,13 +33,11 @@
 	 * actually at. A runtime installed through the managed view instead counts
 	 * exactly the same.
 	 *
-	 * ## The one side effect
+	 * ## No side effect on models
 	 *
-	 * When the first model lands and no chat default is registered, that pair
-	 * becomes the model for Chat replies — once per opening, and only while
-	 * nothing is set. A pub that already answers with something is never
-	 * re-pointed; the Done step says out loud what happened ("Gemma 3 is now
-	 * the model for Chat replies.").
+	 * When a downloaded model lands and the Reply loadout is empty, the SERVER
+	 * puts it there (`fillReplyOnArrival.ts`) — dialog open or not. This dialog
+	 * only reads Reply's state and says what happened on the Done step.
 	 *
 	 * ⚠ Every side effect waits for `open`: the dialog's root stays mounted
 	 * while it is closed, and a flow that installed KoboldCPP because the
@@ -56,12 +54,12 @@
 	import KoboldCppBinaryVariantPicker from "$lib/client/components/koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
 	import ModelFinderView from "./ModelFinderView.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import type { JobPair } from "./jobPicker"
 	import {
 		SETUP_CHAT_STEPS,
+		doneHeading,
 		doneSentence,
 		findKcppTextConnection,
-		firstModelToRegister,
+		registeredChatDefault,
 		setupChatStep,
 		type SetupChatFacts
 	} from "./setupChatFlow"
@@ -87,8 +85,6 @@
 		/** Switch the KoboldCPP manager on and create its connection when
 		 * none exists (the same `enableManager` the Add menu uses). */
 		onEnsureRuntime: () => void
-		/** The sidebar's one `chooseJobModel`. */
-		onChooseJobModel: (job: string, pair: JobPair) => void
 		/**
 		 * Close the stepper and open this connection — the managed view, for
 		 * the person who wants External mode, and Done's Open KoboldCPP.
@@ -102,7 +98,6 @@
 		open,
 		connections,
 		onEnsureRuntime,
-		onChooseJobModel,
 		onOpenConnection,
 		onClose,
 		onOpenSessions
@@ -117,7 +112,7 @@
 				capabilityDefaults?: Record<
 					string,
 					| {
-							connectionId: number
+							connectionId?: number | null
 							connectionModelId?: number | null
 					  }
 					| undefined
@@ -145,7 +140,9 @@
 		managedMode,
 		hasBinary:
 			!!koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant,
-		chatDefault: systemSettingsCtx?.capabilityDefaults?.[CHAT] ?? null
+		chatDefault: registeredChatDefault(
+			systemSettingsCtx?.capabilityDefaults?.[CHAT]
+		)
 	})
 	const step = $derived(setupChatStep(facts))
 	const stepIndex = $derived(
@@ -160,15 +157,11 @@
 	 */
 	let ensured = false
 	let modeAsked = false
-	let registerAsked = false
-	let registeredName = $state<string | null>(null)
 	$effect(() => {
 		if (open) return
 		// Closed: the next opening asks again from the facts it finds.
 		ensured = false
 		modeAsked = false
-		registerAsked = false
-		registeredName = null
 	})
 	$effect(() => {
 		if (!open || ensured) return
@@ -185,22 +178,17 @@
 		socket.emit("koboldcpp:setManagedMode", { mode: "managed" })
 	})
 
-	// ── The one side effect: the first model becomes the chat model ─────────
-
-	$effect(() => {
-		if (!open || registerAsked) return
-		const pair = firstModelToRegister(facts)
-		if (!pair) return
-		registerAsked = true
-		registeredName = pair.model.name
-		onChooseJobModel(CHAT, pair)
-	})
-
-	const sentence = $derived(doneSentence(facts, registeredName))
+	const sentence = $derived(doneSentence(facts))
+	const heading = $derived(doneHeading(facts))
 </script>
 
 <Dialog
 	{open}
+	// Zag listens for Escape in the capture phase; the quant picker closes itself.
+	onEscapeKeyDown={(e) => {
+		if ((e.target as Element | null)?.closest?.("[data-quant-picker]"))
+			e.preventDefault()
+	}}
 	onOpenChange={(e) => {
 		if (!e.open) onClose()
 	}}
@@ -323,7 +311,7 @@
 				<h3
 					class="[font-family:var(--typo-heading--font-family)] text-lg font-semibold"
 				>
-					Chat is set up
+					{heading}
 				</h3>
 				<p class="text-surface-600-400 text-sm" role="status">
 					{sentence}

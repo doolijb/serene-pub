@@ -13,19 +13,24 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import {
 		adminGoto,
 		adminPage,
 		adminUnsavedEdits
 	} from "$lib/client/admin/adminRouter.svelte"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
 	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
-	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminField, {
+		describedBy
+	} from "$lib/client/components/admin/AdminField.svelte"
 
 	type Prompt = Sockets.Pipelines.Library.LibraryPrompt
 
@@ -41,7 +46,8 @@
 			if (loading) {
 				loading = false
 				const from = adminPage.url.searchParams.get("from")
-				if (from && prompts.some((p) => String(p.id) === from)) startFrom = from
+				if (from && prompts.some((p) => String(p.id) === from))
+					startFrom = from
 			}
 		})
 	)
@@ -51,7 +57,8 @@
 		[...prompts]
 			.sort(
 				(a, b) =>
-					a.poolLabel.localeCompare(b.poolLabel) || a.name.localeCompare(b.name)
+					a.poolLabel.localeCompare(b.poolLabel) ||
+					a.name.localeCompare(b.name)
 			)
 			.map((p) => ({
 				value: String(p.id),
@@ -60,7 +67,10 @@
 				hint: p.isImmutable ? "Built-in" : undefined
 			}))
 	)
-	const dirty = $derived(!!name.trim() || (!!startFrom && !adminPage.url.searchParams.get("from")))
+	const dirty = $derived(
+		!!name.trim() ||
+			(!!startFrom && !adminPage.url.searchParams.get("from"))
+	)
 	adminUnsavedEdits(() => dirty && !saving)
 
 	let saving = $state(false)
@@ -79,19 +89,29 @@
 			...(name.trim() ? { name: name.trim() } : {})
 		})
 	}
-	useInterest<"pipelines:libraryClonePrompt">("pipelines:libraryClonePrompt", (res) => {
-		const intent = pendingIntent
-		if (!intent) return
-		pendingIntent = null
-		saving = false
-		const made = ((res.library?.prompts ?? []) as Prompt[]).find((p) => p.id === res.createdId)
-		toaster.success({ title: `Added ${made?.name ?? "the prompt"}` })
-		name = ""
-		if (intent === "save") void adminGoto("/admin/prompts")
-		else if (intent === "continue" && res.createdId)
-			void adminGoto(`/admin/prompts/${res.createdId}`, { replaceState: true })
-		else void adminGoto(`/admin/prompts/new${startFrom ? `?from=${startFrom}` : ""}`)
-	})
+	useInterest<"pipelines:libraryClonePrompt">(
+		"pipelines:libraryClonePrompt",
+		(res) => {
+			const intent = pendingIntent
+			if (!intent) return
+			pendingIntent = null
+			saving = false
+			const made = ((res.library?.prompts ?? []) as Prompt[]).find(
+				(p) => p.id === res.createdId
+			)
+			notify.success({ title: `Added ${made?.name ?? "the prompt"}` })
+			name = ""
+			if (intent === "save") void adminGoto("/admin/prompts")
+			else if (intent === "continue" && res.createdId)
+				void adminGoto(`/admin/prompts/${res.createdId}`, {
+					replaceState: true
+				})
+			else
+				void adminGoto(
+					`/admin/prompts/new${startFrom ? `?from=${startFrom}` : ""}`
+				)
+		}
+	)
 	useInterest<"pipelines:libraryClonePrompt:error">(
 		"pipelines:libraryClonePrompt:error",
 		(res) => {
@@ -132,13 +152,18 @@
 					bind:value={startFrom}
 					placeholder={loading ? "Loading prompts…" : "Pick a prompt"}
 					invalid={!!sourceError}
-					describedBy={describedBy("prompt-new-source", !!sourceError)}
+					describedBy={describedBy(
+						"prompt-new-source",
+						!!sourceError
+					)}
 				/>
 			</AdminField>
 			<AdminField
 				id="prompt-new-name"
 				label="Name"
-				help={source ? `Left empty: "${source.name} (copy)".` : "Unique within its step."}
+				help={source
+					? `Left empty: "${source.name} (copy)".`
+					: "Unique within its step."}
 			>
 				<input
 					id="prompt-new-name"

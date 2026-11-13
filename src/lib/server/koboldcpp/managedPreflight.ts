@@ -207,11 +207,10 @@ export async function ensureManagedReady(
 }
 
 /** One full "make sure the server is up and the right model is loaded"
- * pass. Always re-verifies actual liveness with a real ping rather than
- * trusting subprocessManager's in-memory isRunning() flag, which can go
- * stale (a health-check false-positive, or the process having exited/been
- * restarted outside this app's tracking) — so every request gets a
- * fresh check, not just the first one after a cold start. */
+ * pass. In "external" mode liveness is a real ping of the address every
+ * time. In managed mode the question is whether OUR process runs
+ * (`isRunning()`): a port that answers while it does not belongs to a
+ * stranger, which start() refuses rather than uses. */
 async function attemptLoad(
 	initialSettings: KoboldCppSettings,
 	adminDir: string,
@@ -227,7 +226,7 @@ async function attemptLoad(
 	const readSettings = async () =>
 		(await db.query.koboldCppSettings.findFirst()) ?? initialSettings
 	let settings = await readSettings()
-	const baseUrl = settings.koboldCppManagerBaseUrl
+	let baseUrl = settings.koboldCppManagerBaseUrl
 	const alreadyResponding = await pingKoboldCPP(baseUrl, 3000)
 
 	// Only spawn a subprocess in "managed" mode — in "external" mode the
@@ -244,9 +243,15 @@ async function attemptLoad(
 			`KoboldCPP is not reachable at ${baseUrl} and KoboldCPP, run by Serene Pub, is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCPP externally, or switch it to "Managed" mode in its Settings tab.`
 		)
 	}
-	if (settings.koboldCppManagedMode === "managed" && !alreadyResponding) {
+	// Managed mode trusts only its own process: a port that answers while
+	// nothing of ours runs belongs to a stranger, and start() says so rather
+	// than using it (nothing is adopted — owner ruling, 2026-11-10).
+	if (
+		settings.koboldCppManagedMode === "managed" &&
+		!subprocessManager.isRunning()
+	) {
 		console.log(
-			`[KoboldCPP] preflight attempt ${attemptNum}: subprocess not responding, starting...`
+			`[KoboldCPP] preflight attempt ${attemptNum}: our subprocess is not running, starting...`
 		)
 		try {
 			await subprocessManager.start()
@@ -272,6 +277,8 @@ async function attemptLoad(
 			`[KoboldCPP] preflight attempt ${attemptNum}: subprocess started`
 		)
 		settings = await readSettings()
+		// A start realigns the address with the port (`prepare`); load against it.
+		baseUrl = settings.koboldCppManagerBaseUrl
 	}
 
 	// A model load can leave koboldcpp unresponsive to other requests for
@@ -288,14 +295,13 @@ async function attemptLoad(
 			adminDir,
 			adminPassword: settings.koboldCppManagedAdminPassword ?? "",
 			ttlSecs: settings.koboldCppManagedModelTtlSecs ?? 300,
+			coLoad: settings.koboldCppManagedCoLoad ?? true,
 			signal: opts.signal,
-			// Only trust process liveness as the wait signal when we
-			// actually spawned/own this subprocess — an adopted external
-			// instance has no such guarantee, so ensureModelLoaded falls
-			// back to its fixed-timeout tolerance for that case instead.
+			// Process liveness is the wait signal only for a process we
+			// spawned; in "external" mode ensureModelLoaded falls back to its
+			// fixed-timeout tolerance instead.
 			isAlive:
-				settings.koboldCppManagedMode === "managed" &&
-				!subprocessManager.isExternal()
+				settings.koboldCppManagedMode === "managed"
 					? () => subprocessManager.isRunning()
 					: undefined
 		})
@@ -335,11 +341,6 @@ async function attemptLoad(
 		if (settings.koboldCppManagedMode === "external") {
 			throw new Error(
 				`${named}. KoboldCPP at ${baseUrl} rejected the model-load request: ${err?.message || err}. Make sure it was started with --admin --adminpassword <matching the one configured here> --admindir <matching the one configured here>.`
-			)
-		}
-		if (subprocessManager.isExternal()) {
-			throw new Error(
-				`${named}. KoboldCPP is running on this port but wasn't started by Serene Pub, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let Serene Pub start its own, or point KoboldCPP, run by Serene Pub, at a different port.`
 			)
 		}
 		throw new Error(`${named}: ${err?.message || err}`)

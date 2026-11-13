@@ -51,9 +51,9 @@ export type FaceRasterizer = (src: string, drawing: Readonly<FaceDrawing>) => Pr
 /**
  * The box a remote face is drawn for, in CSS pixels: the widest avatar a
  * core message skin draws — Dreamlit Cameo's portrait column, `--sp-portrait`,
- * at most 9.5rem (Stage's is 2.5rem, Bubbles' 2rem, Compact's 1.75rem).
+ * at most 15rem (Stage's is 2.5rem, Bubbles' 2rem, Compact's 1.75rem).
  */
-export const REMOTE_FACE_PX = 152
+export const REMOTE_FACE_PX = 240
 /** Drawn at twice that, for a high-density screen. */
 const REMOTE_FACE_DENSITY = 2
 

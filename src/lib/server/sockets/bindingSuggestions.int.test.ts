@@ -412,7 +412,7 @@ describe("adding creates the binding and records that it did", () => {
 		expect(res.addedId).toBe(target.id)
 	}, 60_000)
 
-	it("stays added on the next scan, though the name is still unresolved", async () => {
+	it("stays added on the next scan, and the name answers to the new member", async () => {
 		const { user, lorebook } = await makeBook()
 		await annotate(lorebook.id)
 		const first = await list(user.id, lorebook.id)
@@ -428,12 +428,10 @@ describe("adding creates the binding and records that it did", () => {
 		)
 
 		/**
-		 * ⚠ The reason `added` has to be its own suppressor.
-		 *
-		 * `loadVocabulary` skips a binding with no character and no persona —
-		 * there is no row for it to resolve *to* — so re-annotating leaves
-		 * "emberfall" in the open tier for ever. If the status were cosmetic,
-		 * the user would be asked to add what they just added, on every scan.
+		 * Added under the transcript's own name, the member answers to it
+		 * (`cast_member`) from the next annotation on, so it leaves the open
+		 * tier; the row keeps `added` as the record of why. (`added` is the
+		 * only suppressor when the member is added under another name.)
 		 */
 		await annotate(lorebook.id)
 		const rescan = await list(user.id, lorebook.id)

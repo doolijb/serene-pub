@@ -131,8 +131,9 @@ export async function seedPluginLoadouts(db: Db): Promise<LoadoutSeedReport> {
 /**
  * Which core loadout becomes a transform's default the first time that default
  * is set — `CORE_LOADOUTS[].defaultFor`. Null for a transform core ships no
- * default loadout for (Vision, say): the default then gets a `pub` loadout of
- * its own, named after the transform.
+ * default loadout for (a plugin's transform, say; Vision has one since
+ * 2026-11-10): the default then gets a `pub` loadout of its own, named after
+ * the transform.
  */
 export async function coreDefaultSeedFor(transform: string): Promise<string | null> {
 	const { CORE_LOADOUTS } = await import("@serene-pub/core-catalog")

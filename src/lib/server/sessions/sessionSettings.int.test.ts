@@ -277,7 +277,7 @@ describe("the document and its widget projection (§4.12)", () => {
 		await db.insert(schema.sessionCharacters).values({
 			sessionId: session.id,
 			characterId: character!.id,
-			isActive: true,
+			isActive: true
 		})
 		const doc = (await resolveSessionSettings(db, session.id))!
 		expect(doc.cast.sessionCharacters.map((c) => c.character.name)).toEqual(
@@ -325,7 +325,9 @@ describe("playerLabel", () => {
 
 	it("a genre that declares none: absent from the document and the cast, even with a stored value", async () => {
 		await labelChat(undefined)
-		const session = await makeSession({ metadata: { playerLabel: "Game Master" } })
+		const session = await makeSession({
+			metadata: { playerLabel: "Game Master" }
+		})
 		const doc = (await resolveSessionSettings(db, session.id))!
 		expect("playerLabel" in doc).toBe(false)
 		expect("playerLabel" in doc.cast).toBe(false)
@@ -358,7 +360,10 @@ describe("playerLabel", () => {
 			.select({ metadata: schema.sessions.metadata })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, session.id))
-		expect(row!.metadata).toEqual({ note: "kept", playerLabel: "Game Master" })
+		expect(row!.metadata).toEqual({
+			note: "kept",
+			playerLabel: "Game Master"
+		})
 		await writePlayerLabel(db, session.id, " ")
 		;[row] = await db
 			.select({ metadata: schema.sessions.metadata })

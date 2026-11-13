@@ -120,4 +120,100 @@ describe("answerSetChosenImage", () => {
 		).toThrow("has not arrived")
 		expect(patches).toEqual([])
 	})
+
+	it("a memberRef finds the member by its castMemberId and stores under the member's own ref (today's card form)", () => {
+		const { settings, patches } = store({
+			"scene-portraits": { chosenImages: ["character:9=u-7"] }
+		})
+		const withIds: SessionCharactersV1 = {
+			members: [{ ...member(3), castMemberId: 31 }, member(9, true)],
+			sceneImages: { left: null, right: null }
+		}
+		answerSetChosenImage(
+			{ memberRef: "seated-member:31", mediaRef: "u-2" },
+			from("scene-portraits"),
+			{ characters: () => withIds, settings }
+		)
+		expect(patches).toEqual([
+			[
+				"scene-portraits",
+				{ chosenImages: ["character:9=u-7", "character:3=u-2"] }
+			]
+		])
+	})
+
+	it("S4 shape: member refs beside swapped card ids — memberRef 31 stores seated-member:31 and touches nothing of member 7", () => {
+		const { settings, patches } = store({
+			"scene-portraits": {
+				chosenImages: ["seated-member:7=u-7", "seated-member:31=u-1"]
+			}
+		})
+		const s4: SessionCharactersV1 = {
+			members: [
+				{ ...member(7), ref: "seated-member:31", castMemberId: 31 },
+				{ ...member(31), ref: "seated-member:7", castMemberId: 7 }
+			],
+			sceneImages: { left: null, right: null }
+		}
+		answerSetChosenImage(
+			{ memberRef: "seated-member:31", mediaRef: "u-2" },
+			from("scene-portraits"),
+			{ characters: () => s4, settings }
+		)
+		expect(patches).toEqual([
+			[
+				"scene-portraits",
+				{
+					chosenImages: [
+						"seated-member:7=u-7",
+						"seated-member:31=u-2"
+					]
+				}
+			]
+		])
+	})
+
+	it("refuses a memberRef that names nobody, and a memberRef of a bad shape", () => {
+		const { settings, patches } = store({})
+		const deps = { characters: () => cast, settings }
+		const ask = (memberRef: unknown) =>
+			answerSetChosenImage(
+				{ memberRef, mediaRef: "u-1" } as never,
+				from("scene-portraits"),
+				deps
+			)
+		expect(() => ask("seated-member:99")).toThrow("not in this session")
+		expect(() => ask("seated-member:")).toThrow("character:<id>")
+		expect(() => ask("character:3")).toThrow("memberRef")
+		expect(() => ask("")).toThrow("character:<id>")
+		expect(patches).toEqual([])
+	})
+
+	it("a K-2 member in both seats: the exact ref wins over a castMemberId that formats to it", () => {
+		const seat = { ...member(3), ref: "player-seat:4" as never, castMemberId: 7 }
+		const char = { ...member(5), ref: "seated-member:7" as never, castMemberId: 7 }
+		const k2: SessionCharactersV1 = {
+			members: [seat, char],
+			sceneImages: { left: null, right: null }
+		}
+		const { settings, patches } = store({})
+		answerSetChosenImage(
+			{ memberRef: "seated-member:7", mediaRef: "u-1" },
+			from("scene-portraits"),
+			{ characters: () => k2, settings }
+		)
+		expect(patches).toEqual([
+			["scene-portraits", { chosenImages: ["seated-member:7=u-1"] }]
+		])
+		// With no exact ref, the castMemberId format still finds the member.
+		const { settings: s2, patches: p2 } = store({})
+		answerSetChosenImage(
+			{ memberRef: "seated-member:7", mediaRef: "u-1" },
+			from("scene-portraits"),
+			{ characters: () => ({ ...k2, members: [seat] }), settings: s2 }
+		)
+		expect(p2).toEqual([
+			["scene-portraits", { chosenImages: ["player-seat:4=u-1"] }]
+		])
+	})
 })

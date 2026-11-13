@@ -224,7 +224,8 @@ describe("state:set refuses a durable owner that is not the session's", () => {
 		const w = await world()
 		const owner = { kind: "card" as const, id: w.theirs.card.id }
 		const { outcome } = await set(w.user.id, w.session.id, owner)
-		expect(outcome).toMatch(/not a card of yours/)
+		// The door refuses any card first (★s4-fb-1); the write layer's own rule is pinned below.
+		expect(outcome).toBe("Card stats are edited in the card editor.")
 		expect(await rowsOf(owner)).toBe(0)
 	})
 
@@ -239,19 +240,31 @@ describe("state:set refuses a durable owner that is not the session's", () => {
 })
 
 describe("the session's own durable owners still write", () => {
-	test("its book, its place, its member, and the writer's card", async () => {
+	test("its book, its place and its member", async () => {
 		declareSlots()
 		const w = await world()
 		for (const owner of [
 			{ kind: "lorebook" as const, id: w.mine.book.id },
 			{ kind: "location" as const, id: w.mine.place.id },
-			{ kind: "cast_member" as const, id: w.mine.member.id },
-			{ kind: "card" as const, id: w.mine.card.id }
+			{ kind: "cast_member" as const, id: w.mine.member.id }
 		]) {
 			const { outcome, errors } = await set(w.user.id, w.session.id, owner)
 			expect(errors).toEqual([])
 			expect(outcome).toBe("written")
 			expect(await rowsOf(owner)).toBe(1)
+		}
+	})
+})
+
+describe("card stats are edited in the card editor (★s4-fb-1)", () => {
+	test("state:set and state:configure on the caller's own card and another user's card are refused, writing nothing", async () => {
+		declareSlots()
+		const w = await world()
+		for (const card of [w.mine.card, w.theirs.card]) {
+			const owner = { kind: "card" as const, id: card.id }
+			expect((await set(w.user.id, w.session.id, owner)).outcome).toBe("Card stats are edited in the card editor.")
+			expect(await configureOn(w.user.id, w.session.id, owner)).toBe("Card stats are edited in the card editor.")
+			expect(await rowsOf(owner)).toBe(0)
 		}
 	})
 })
@@ -276,10 +289,16 @@ describe("state:configure is held to the same rule", () => {
 		const w = await world()
 		const guest = await holdings(w.stranger.id, `Guest ${n}`)
 		await testDb.insert(schema.sessionGuests).values({ sessionId: w.session.id, userId: w.stranger.id } as any)
-		expect(await configureOn(w.stranger.id, w.session.id, { kind: "card", id: w.mine.card.id })).toMatch(
-			/not a card of yours/
-		)
-		expect(await configureOn(w.stranger.id, w.session.id, { kind: "card", id: guest.card.id })).toBe("written")
+		// Moved 2026-11-05 (lane ed, plan §25): `state:configure` is the session owner's alone (the one hand-edit
+		// decider, `state/handEdits.ts`), so a guest's configure is stopped at the socket for any card (now at the card door, ★s4-fb-1); the
+		// card's own rule is still the write's, pinned here by calling the function.
+		const { configure } = await import("$lib/server/state/write")
+		const asGuest = (owner: Owner) =>
+			configure(testDb as any, { sessionId: w.session.id, updatedBy: "user", userId: w.stranger.id }, { owner, slotId: GRIT, config: { max: 40 } })
+		expect(await configureOn(w.stranger.id, w.session.id, { kind: "card", id: w.mine.card.id })).toBe("Card stats are edited in the card editor.")
+		expect(await configureOn(w.stranger.id, w.session.id, { kind: "card", id: guest.card.id })).toBe("Card stats are edited in the card editor.")
+		await expect(asGuest({ kind: "card", id: w.mine.card.id })).rejects.toThrow(/not a card of yours/)
+		await expect(asGuest({ kind: "card", id: guest.card.id })).resolves.toBeTypeOf("number")
 	})
 })
 
@@ -293,10 +312,17 @@ describe("a guest never writes the host's durable layers", () => {
 			{ kind: "location" as const, id: w.mine.place.id },
 			{ kind: "cast_member" as const, id: w.mine.member.id }
 		]) {
+			// Moved 2026-11-05 (lane ed, plan §25): the socket stops a guest at the hand-edit decider (the world, a
+			// place and a book are the session owner's; configure is the owner's alone); the durable layer's own
+			// writer check ("not your lorebook") is pinned below on the function.
 			const { outcome, errors } = await set(w.stranger.id, w.session.id, owner)
-			expect(outcome).toMatch(/not your lorebook/)
+			expect(outcome).toMatch(/session owner's to change/)
 			expect(errors).toHaveLength(1)
-			expect(await configureOn(w.stranger.id, w.session.id, owner)).toMatch(/not your lorebook/)
+			expect(await configureOn(w.stranger.id, w.session.id, owner)).toMatch(/Only the session owner changes how a stat is set up/)
+			const { setValue } = await import("$lib/server/state/write")
+			await expect(
+				setValue(testDb as any, { sessionId: w.session.id, updatedBy: "user", userId: w.stranger.id }, { owner, slotId: GRIT, value: 7 } as any)
+			).rejects.toThrow(/not your lorebook/)
 			expect(await rowsOf(owner)).toBe(0)
 		}
 	})
@@ -309,9 +335,14 @@ describe("a guest never writes the host's durable layers", () => {
 			{ kind: "session_location", id: w.mine.place.id },
 			{ kind: "session", id: w.session.id }
 		] as const) {
+			// Moved 2026-11-05 (lane ed, plan §25): the world and its places are the session owner's — a player
+			// guest changes them only at `all-any` (the owner's call); the session's owner still writes them.
 			const { outcome, errors } = await set(w.stranger.id, w.session.id, owner as any)
-			expect(errors).toEqual([])
-			expect(outcome).toBe("written")
+			expect(errors).toHaveLength(1)
+			expect(outcome).toMatch(/session owner's to change/)
+			const mine = await set(w.user.id, w.session.id, owner as any)
+			expect(mine.errors).toEqual([])
+			expect(mine.outcome).toBe("written")
 		}
 	})
 

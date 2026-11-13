@@ -95,6 +95,27 @@ export interface SessionSceneContext {
 	 * unless its override's `triggers[key]` is false) and its words.
 	 */
 	declaredTriggers: Array<BoundaryTriggerDecl & { on: boolean; words: string }>
+	/**
+	 * 🚧 The genre opted into a **first scene** (`shape.scenes.first === true`):
+	 * the session's first story line on `main` begins a scene. Off unless the
+	 * shape says exactly `true`.
+	 */
+	first: boolean
+	/**
+	 * 🚧 The genre opted into the **open scene's cast refresh**
+	 * (`shape.scenes.castRefresh === true`). Off unless the shape says exactly `true`.
+	 */
+	castRefresh: boolean
+	/** The genre's display name, for the words of a cause; null when it has none. */
+	genreName: string | null
+}
+
+/** A `shape.scenes` flag read defensively: on only when it is exactly `true`. */
+function shapeFlag(shape: unknown, key: string): boolean {
+	if (typeof shape !== "object" || shape === null) return false
+	const scenes = (shape as { scenes?: unknown }).scenes
+	if (typeof scenes !== "object" || scenes === null) return false
+	return (scenes as Record<string, unknown>)[key] === true
 }
 
 /**
@@ -122,8 +143,11 @@ export async function sessionSceneContext(
 		"$lib/server/pipelines/entities/sessionGenres"
 	)
 	let shape: unknown = undefined
+	let genreName: string | null = null
 	try {
-		shape = (await getSessionGenre(db, row.genreId ?? STANDARD_GENRE_ID))?.shape
+		const genre = await getSessionGenre(db, row.genreId ?? STANDARD_GENRE_ID)
+		shape = genre?.shape
+		genreName = genre?.name || null
 	} catch {
 		shape = undefined
 	}
@@ -149,6 +173,9 @@ export async function sessionSceneContext(
 		settings,
 		mayPlace,
 		placeKey: declaredScenePlace(shape)?.stateKey ?? null,
-		declaredTriggers
+		declaredTriggers,
+		first: shapeFlag(shape, "first"),
+		castRefresh: shapeFlag(shape, "castRefresh"),
+		genreName
 	}
 }

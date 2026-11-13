@@ -37,7 +37,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { notify } from "$lib/client/utils/notify"
 
 	interface Props {
 		lorebookId: number
@@ -96,7 +96,8 @@
 	 */
 	function handleError(msg: { error?: string }) {
 		busy.clear()
-		toaster.error({
+		notify.error({
+			source: "bindingSuggestions:refusal",
 			title: "Suggestion",
 			description: msg?.error || "That could not be done."
 		})
@@ -248,7 +249,9 @@
 		</div>
 	{:else}
 		{#if outstanding > 0}
-			<p class="text-surface-600-400 mb-2 flex items-center gap-1.5 text-xs">
+			<p
+				class="text-surface-600-400 mb-2 flex items-center gap-1.5 text-xs"
+			>
 				<Icons.Clock size={12} aria-hidden="true" />
 				{outstanding}
 				{outstanding === 1 ? "source has" : "sources have"} not been scanned
@@ -394,7 +397,9 @@
 											that the story still says it does
 											not.
 										-->
-										<span class="text-surface-600-400 italic">
+										<span
+											class="text-surface-600-400 italic"
+										>
 											(no longer in the text)
 										</span>
 									{/if}

@@ -17,6 +17,7 @@ import path from "path"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
+import { PNG } from "pngjs"
 import {
 	historyValues,
 	worldLoreValues
@@ -174,6 +175,13 @@ async function insertEntry(
  * A book with one of everything the owner ruling names, including rows that
  * point at each other across tables.
  */
+/** A distinct small PNG per `width`, so each seeded file has its own hash. */
+function pngBytes(width: number): Buffer {
+	const png = new PNG({ width, height: 1 })
+	png.data.fill(255)
+	return PNG.sync.write(png)
+}
+
 async function seedRichBook(ownerId: number, strangerId: number) {
 	const base = await seedBook(ownerId, "Rich Source")
 	const bookId = base.lorebook.id
@@ -362,6 +370,50 @@ async function seedRichBook(ownerId: number, strangerId: number) {
 		fields: { name: "The King", parentNodeId: base.keeper.id },
 		historyEntryId: ambushChapter.id
 	})
+	// Cast versions: the wanderer's base, a dated version on a line with a
+	// history entry, and a story-written one; the alias is card-less.
+	{
+		const { insertCharacterVersions, ensureCardVersion } = await import(
+			"$lib/server/characters/versions"
+		)
+		const cardV1 = await ensureCardVersion(testDb as any, foreignCard.id)
+		const profile = { nodeState: "active", nodeVisibility: "normal" } as const
+		await insertCharacterVersions(testDb as any, [
+			{
+				castMemberId: wanderer.id,
+				lorebookId: bookId,
+				parentVersionId: cardV1!.id,
+				follows: ["description"],
+				name: "Wanderer",
+				...profile
+			},
+			{
+				castMemberId: wanderer.id,
+				lorebookId: bookId,
+				parentVersionId: cardV1!.id,
+				follows: ["description"],
+				branchId: northRoad.id,
+				year: 1201,
+				month: 2,
+				personalPosition: 3,
+				historyEntryId: ambushChapter.id,
+				name: "The King",
+				writtenBy: "user:1",
+				...profile
+			},
+			{
+				castMemberId: wanderer.id,
+				lorebookId: bookId,
+				parentVersionId: cardV1!.id,
+				follows: ["description"],
+				sourceSessionId: 4242,
+				name: "Wanderer",
+				summary: "Written in play.",
+				...profile
+			},
+			{ castMemberId: alias.id, lorebookId: bookId, name: "Hooded figure", ...profile }
+		])
+	}
 	await testDb.insert(schema.castPresences).values([
 		{
 			lorebookId: bookId,
@@ -478,8 +530,36 @@ async function seedRichBook(ownerId: number, strangerId: number) {
 		absorbedSnapshot: { name: "Gone" }
 	} as any)
 
+	// A member's own art: a set with one sprite, and one gallery picture, both
+	// stored files of the owner's.
+	const { createMedia, addToMemberGallery } = await import("$lib/server/media")
+	const spriteFile = (
+		await createMedia(testDb as any, {
+			userId: ownerId,
+			lorebookId: bookId,
+			bytes: pngBytes(1)
+		})
+	).file
+	const galleryFile = (
+		await createMedia(testDb as any, {
+			userId: ownerId,
+			lorebookId: bookId,
+			bytes: pngBytes(2)
+		})
+	).file
+	const [artSet] = await testDb
+		.insert(schema.spriteSets)
+		.values({ castMemberId: wanderer.id, name: "travelling", isDefault: true })
+		.returning()
+	await testDb
+		.insert(schema.sprites)
+		.values({ spriteSetId: artSet.id, label: "joy", fileId: spriteFile.id })
+	await addToMemberGallery(testDb as any, wanderer.id, [galleryFile.id])
+
 	return {
 		...base,
+		spriteFile,
+		galleryFile,
 		foreignCard,
 		wanderer,
 		alias,
@@ -633,6 +713,21 @@ async function snapshot(bookId: number) {
 				fields: remapFields(a.fields)
 			}))
 		),
+		castVersions: sortBy(
+			(await inBook(schema.characterVersions)).map(
+				({ parentVersionId, writeOrder, ...v }: any) => ({
+					...strip(v),
+					castMemberId: L(bindingL, v.castMemberId),
+					branchId: L(branchL, v.branchId),
+					historyEntryId: L(entryL, v.historyEntryId),
+					// A card version is the card's: shared, so the parent stays as is.
+					parentVersionId,
+					// The copy keeps the source's order, so the order is part of the
+					// equality only as a ranking within the book.
+					writeRank: writeOrder
+				})
+			)
+		),
 		presences: sortBy(
 			(await inBook(schema.castPresences)).map((p: any) => ({
 				...strip(p),
@@ -672,7 +767,14 @@ describe("lorebooks:duplicate — exact copy (PGlite integration)", () => {
 
 		// No reference in the copy leaks out to the original's rows.
 		expect(JSON.stringify(after)).not.toContain("FOREIGN:")
-		expect(after).toEqual(before)
+		// The frozen cast amendments are not copied (`notCopied` in the registry):
+		// the copied character versions carry each member's history.
+		expect(before.castAmendments.length).toBe(1)
+		expect(after.castAmendments).toEqual([])
+		expect({ ...after, castAmendments: [] }).toEqual({
+			...before,
+			castAmendments: []
+		})
 
 		// Spot checks the equality above already implies, named for the reader.
 		expect(after.branches).toContainEqual(
@@ -700,7 +802,16 @@ describe("lorebooks:duplicate — exact copy (PGlite integration)", () => {
 		expect(after.book.storyClockYear).toBe(1201)
 		expect(after.book.nextBindingNumber).toBe(9)
 		expect(after.entryAmendments.length).toBe(2)
-		expect(after.castAmendments.length).toBe(1)
+		expect(after.castVersions.length).toBe(4)
+		// The copy's versions name the copy's members, line and history entry.
+		expect(after.castVersions).toContainEqual(
+			expect.objectContaining({
+				castMemberId: "binding:{{char:2}}",
+				branchId: "branch:North road",
+				name: "The King",
+				validFromMessageId: null
+			})
+		)
 		expect(after.presences.length).toBe(2)
 		expect(after.tags.length).toBe(1)
 		expect(after.attributeValues.length).toBe(3)
@@ -1104,6 +1215,19 @@ describe("lorebooks:duplicate and delete — the table registry (plan B1)", () =
 				.from(schema.lorebookEntries)
 				.where(eq(schema.lorebookEntries.lorebookId, source.lorebook.id))
 		).map((e) => e.id)
+		const memberIds = (
+			await testDb
+				.select({ id: schema.lorebookBindings.id })
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.lorebookId, source.lorebook.id))
+		).map((m) => m.id)
+		const memberSetIds = (
+			await testDb
+				.select({ id: schema.spriteSets.id })
+				.from(schema.spriteSets)
+				.where(inArray(schema.spriteSets.castMemberId, memberIds))
+		).map((r) => r.id)
+		expect(memberSetIds.length).toBeGreaterThan(0)
 
 		await lorebooksDeleteHandler.handler(
 			fakeSocket(owner.id),
@@ -1134,11 +1258,102 @@ describe("lorebooks:duplicate and delete — the table registry (plan B1)", () =
 					.select()
 					.from(t)
 					.where(inArray(t.sceneId, [source.scene.id]))
+			else if (spec.scope === "binding")
+				// A member's own art: sprites sit under their set, the rest under the member.
+				left =
+					t === schema.sprites
+						? await testDb.select().from(t).where(inArray(t.spriteSetId, memberSetIds))
+						: await testDb.select().from(t).where(inArray(t.castMemberId, memberIds))
 			else left = await testDb.select().from(t).where(eq(t.lorebookId, source.lorebook.id))
 			expect([getTableConfig(spec.table).name, left.length]).toEqual([
 				getTableConfig(spec.table).name,
 				0
 			])
 		}
+	}, 60_000)
+
+	test("a duplicate by the owner shares the art's files; by a guest it stores them again as the guest's", async () => {
+		const { lorebooksDuplicateHandler } = await import("./lorebooks")
+		const { spriteLabelsForMembers } = await import("$lib/server/sprites")
+		const owner = await makeUser("lb-dup-art-owner")
+		const guest = await makeUser("lb-dup-art-guest")
+		const stranger = await makeUser("lb-dup-art-stranger")
+		const source = await seedRichBook(owner.id, stranger.id)
+		await testDb
+			.insert(schema.lorebookShares)
+			.values({ lorebookId: source.lorebook.id, userId: guest.id } as any)
+
+		const artFilesOf = async (bookId: number) => {
+			const members = await testDb
+				.select({ id: schema.lorebookBindings.id })
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.lorebookId, bookId))
+			const memberIds = members.map((m) => m.id)
+			const sets = await testDb
+				.select({ id: schema.spriteSets.id })
+				.from(schema.spriteSets)
+				.where(inArray(schema.spriteSets.castMemberId, memberIds))
+			const sprites = await testDb
+				.select({ fileId: schema.sprites.fileId })
+				.from(schema.sprites)
+				.where(inArray(schema.sprites.spriteSetId, sets.map((x) => x.id)))
+			const gallery = await testDb
+				.select({ fileId: schema.castMemberFiles.fileId })
+				.from(schema.castMemberFiles)
+				.where(inArray(schema.castMemberFiles.castMemberId, memberIds))
+			return {
+				memberIds,
+				sprite: sprites.map((r) => r.fileId!),
+				gallery: gallery.map((r) => r.fileId)
+			}
+		}
+		const labelsOf = async (memberIds: number[]) =>
+			[...(await spriteLabelsForMembers(testDb as any, memberIds)).values()]
+				.map((v) => [v.defaultSet, [...v.sets.entries()]])
+				.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+		const hashesOf = async (ids: number[]) =>
+			(
+				await testDb
+					.select({ hash: schema.files.hash })
+					.from(schema.files)
+					.where(inArray(schema.files.id, ids))
+			)
+				.map((f) => f.hash)
+				.sort()
+
+		const from = await artFilesOf(source.lorebook.id)
+		expect(from.sprite).toEqual([source.spriteFile.id])
+		expect(from.gallery).toEqual([source.galleryFile.id])
+
+		// By the owner: the same file rows.
+		const { lorebook: ownCopy } = await lorebooksDuplicateHandler.handler(
+			fakeSocket(owner.id),
+			{ lorebookId: source.lorebook.id },
+			noopEmit
+		)
+		const own = await artFilesOf(ownCopy.id)
+		expect(own.sprite).toEqual(from.sprite)
+		expect(own.gallery).toEqual(from.gallery)
+		expect(await labelsOf(own.memberIds)).toEqual(await labelsOf(from.memberIds))
+
+		// By a guest with a read share: new rows, theirs, the same bytes.
+		const { lorebook: guestCopy } = await lorebooksDuplicateHandler.handler(
+			fakeSocket(guest.id),
+			{ lorebookId: source.lorebook.id },
+			noopEmit
+		)
+		const theirs = await artFilesOf(guestCopy.id)
+		expect(theirs.sprite).toHaveLength(1)
+		expect(theirs.gallery).toHaveLength(1)
+		expect(theirs.sprite[0]).not.toBe(from.sprite[0])
+		expect(theirs.gallery[0]).not.toBe(from.gallery[0])
+		const owned = await testDb
+			.select({ userId: schema.files.userId })
+			.from(schema.files)
+			.where(inArray(schema.files.id, [...theirs.sprite, ...theirs.gallery]))
+		expect(owned.map((f) => f.userId)).toEqual([guest.id, guest.id])
+		expect(await hashesOf(theirs.sprite)).toEqual(await hashesOf(from.sprite))
+		expect(await hashesOf(theirs.gallery)).toEqual(await hashesOf(from.gallery))
+		expect(await labelsOf(theirs.memberIds)).toEqual(await labelsOf(from.memberIds))
 	}, 60_000)
 })

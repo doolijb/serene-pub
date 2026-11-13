@@ -127,7 +127,7 @@ describe("resolve-state-changes@1 — the clock port", () => {
 		}
 	}, 60_000)
 
-	test("backwards, out of bounds or an unknown unit is a sentence, never a line; a clock with nowhere to start is a skipped line (§15 G16)", async () => {
+	test("backwards, out of bounds or an unknown unit is a sentence, never a line; a step the clock cannot take is a skipped line (§15 G16)", async () => {
 		const w = await world()
 		const back = await resolveWith(w.session.id, { clock: [{ by: -2, unit: "hours" }] })
 		expect(back.changes).toEqual([])
@@ -138,19 +138,31 @@ describe("resolve-state-changes@1 — the clock port", () => {
 		expect((await resolveWith(w.session.id, { clock: [{ by: 2, unit: "fortnights" }] })).refused[0]).toMatch(
 			/counts in/
 		)
-		const { NO_STORY_CLOCK_YET } = await import("./clockMoves")
-		const unset = await world({ clock: false })
-		const nowhere = await resolveWith(unset.session.id, { clock: [{ by: 2, unit: "hours" }] })
+		// A clock with a time of day and no date cannot run past midnight.
+		const undated = await world()
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockMonth: null, storyClockDay: null, storyClockHour: 23 })
+			.where(eq(schema.sessions.id, undated.session.id))
+		const nowhere = await resolveWith(undated.session.id, { clock: [{ by: 2, unit: "hours" }] })
 		// 🚧 §15 G16: well-formed, so it rides `changes` marked skipped — for
 		// set-state to write to the ledger — and never `clock`: nothing moves.
-		expect(nowhere.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: NO_STORY_CLOCK_YET }])
+		expect(nowhere.changes).toEqual([
+			{ kind: "clock", by: 2, unit: "hours", skipped: expect.stringMatching(/no date .*run past midnight/) }
+		])
 		expect(nowhere.clock).toBeNull()
-		expect(nowhere.refused[0]).toMatch(/no present to start from/)
+		expect(nowhere.refused[0]).toMatch(/no date .*run past midnight/)
+		// A story with no clock and nothing dated starts on its first day: an ordinary line.
+		const unset = await world({ clock: false })
+		const fromDayOne = await resolveWith(unset.session.id, { clock: [{ by: 2, unit: "hours" }] })
+		expect(fromDayOne.changes).toEqual([{ kind: "clock", by: 2, unit: "hours" }])
+		expect(fromDayOne.clock).toEqual({ by: 2, unit: "hours" })
+		expect(fromDayOne.refused).toEqual([])
 		const bookless = await world({ book: false, clock: false })
 		const noBook = await resolveWith(bookless.session.id, { clock: [{ by: 2, unit: "hours" }] })
-		// 🚧 pr-6 (§B-3a): no shared book is the session's own book, clock unset.
-		expect(noBook.refused[0]).toMatch(/no present to start from/)
-		expect(noBook.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: NO_STORY_CLOCK_YET }])
+		// 🚧 pr-6 (§B-3a): no shared book is the session's own book, clock unset: the same start.
+		expect(noBook.changes).toEqual([{ kind: "clock", by: 2, unit: "hours" }])
+		expect(noBook.refused).toEqual([])
 		// A malformed ask is the keeper's mistake: a sentence, and no line at all.
 		expect(back.clock).toBeNull()
 	}, 60_000)
@@ -318,13 +330,13 @@ describe("deciding a clock proposal", () => {
 	test("a clock that can no longer move refuses with its own sentence and stays pending", async () => {
 		const w = await world()
 		const id = await propose(w.session.id)
-		// The clock is cleared and nothing on the line is dated: no present.
+		// The clock loses its date and stands at 23:00: three hours would run past midnight.
 		await testDb
 			.update(schema.sessions)
-			.set({ storyClockYear: null, storyClockMonth: null, storyClockDay: null, storyClockHour: null, storyClockMinute: null })
+			.set({ storyClockMonth: null, storyClockDay: null, storyClockHour: 23 })
 			.where(eq(schema.sessions.id, w.session.id))
 		const { decideProposal } = await import("$lib/server/state/write")
-		await expect(decideProposal(testDb as unknown as Db, id, true)).rejects.toThrow(/no present to start from/)
+		await expect(decideProposal(testDb as unknown as Db, id, true)).rejects.toThrow(/no date .*run past midnight/)
 		const [row] = await testDb.select().from(schema.stateProposals).where(eq(schema.stateProposals.id, id))
 		expect(row!.status).toBe("pending")
 	}, 60_000)
@@ -333,7 +345,7 @@ describe("deciding a clock proposal", () => {
 		const w = await world()
 		const id = await propose(w.session.id)
 		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
-		await retractStateAnchoredTo(testDb as unknown as Db, w.message.id)
+		await retractStateAnchoredTo(testDb as unknown as Db, w.message.id, "replaced")
 		expect(await testDb.select().from(schema.stateProposals).where(eq(schema.stateProposals.id, id))).toEqual([])
 	}, 60_000)
 })

@@ -66,31 +66,16 @@ afterEach(() => {
 })
 
 describe("local ONNX in the service picker", () => {
-	test("unavailable: listed, disabled, and the reason is on the card", () => {
-		render({
-			available: false,
-			reason: "the Android app can't run the ONNX runtime"
-		})
-		const onnx = card("Local embeddings (ONNX)")
-		expect(onnx.disabled).toBe(true)
-		expect(onnx.textContent).toContain(
-			"Not available on this machine: the Android app can't run the ONNX runtime"
-		)
-		// The setup-need chip gives way to the reason, so the card says one
-		// thing on its second line.
-		expect(onnx.textContent).not.toContain("Runs locally")
-		// Everything else in the section is untouched.
-		expect(card("Ollama").disabled).toBe(false)
-	})
-
 	test.each([
+		["unavailable", { available: false, reason: "the Android app can't run the ONNX runtime" }],
 		["available", { available: true, reason: null }],
 		["settings not yet arrived", undefined]
-	])("%s: an ordinary card", (_, verdict) => {
+	])("%s: no card — Serene Pub makes both rows itself (owner 2026-11-04, item 17)", (_, verdict) => {
 		render(verdict)
-		const onnx = card("Local embeddings (ONNX)")
-		expect(onnx.disabled).toBe(false)
-		expect(onnx.textContent).not.toContain("Not available")
+		expect(() => card("Local embeddings (ONNX)")).toThrow()
+		expect(() => card("Local named entities (ONNX)")).toThrow()
+		// Everything else in the section is untouched.
+		expect(card("Ollama").disabled).toBe(false)
 	})
 })
 

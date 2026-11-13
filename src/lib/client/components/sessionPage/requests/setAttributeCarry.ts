@@ -25,7 +25,7 @@ export type AttributeCarryWrite = (ask: {
 	carries: boolean
 }) => Promise<Sockets.State.SetCarry.Response & { error?: string }>
 
-const OWNER_KINDS = new Set(["session", "session_cast", "player_seat", "session_location"])
+const OWNER_KINDS = new Set(["session", "session_cast", "seated_member", "player_seat", "session_location"])
 
 /** Answer one `set-attribute-carry` for the page's session, from `from` (absent: core's own widget). Rejects, in words. */
 export async function answerSetAttributeCarry(

@@ -44,6 +44,7 @@ import { envoySlugOfRef, i18nText, resolveTurnControls, type I18n } from "@seren
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import * as schema from "$lib/server/db/schema"
 import { liveMessageWhere } from "$lib/server/messages/store"
+import { cardsNowAsSeatsRead } from "$lib/server/pipelines/prompt/seatCards"
 
 /** One row of a turn's yield, as the confirm dialog names it. */
 export interface TurnYieldRow {
@@ -180,14 +181,9 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 			channel: schema.sessionMessages.channel,
 			role: schema.sessionMessages.role,
 			characterId: schema.sessionMessages.characterId,
-			metadata: schema.sessionMessages.metadata,
-			characterName: schema.characters.name
+			metadata: schema.sessionMessages.metadata
 		})
 		.from(schema.sessionMessages)
-		.leftJoin(
-			schema.characters,
-			eq(schema.characters.id, schema.sessionMessages.characterId)
-		)
 		.where(
 			and(
 				inArray(schema.sessionMessages.id, ids),
@@ -200,6 +196,14 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 	const naming = rows.length
 		? await rowNaming(db, rows[0]!.sessionId)
 		: { envoyName: () => undefined, ownVoice: "" }
+	// 🚧 A turn's line is named by the member its card's seat seats (S2), else
+	// by the card's current version.
+	const cardIds = [
+		...new Set(rows.flatMap((r) => (r.characterId != null ? [r.characterId] : [])))
+	]
+	const cards = cardIds.length
+		? await cardsNowAsSeatsRead(db, rows[0]!.sessionId, cardIds)
+		: new Map<number, { name: string }>()
 	return rows.map((r) => {
 		const meta = r.metadata as {
 			narratorName?: string
@@ -211,7 +215,7 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 			role: r.role,
 			characterId: r.characterId,
 			name:
-				r.characterName ??
+				(r.characterId != null ? cards.get(r.characterId)?.name : undefined) ??
 				naming.envoyName(meta?.speaker) ??
 				meta?.narratorName ??
 				naming.ownVoice
@@ -287,7 +291,9 @@ export function entryOf(receipt: unknown): TurnYield["entry"] {
 	const ref =
 		typeof out.speaker === "string" && out.speaker
 			? out.speaker
-			: typeof out.characterId === "number"
+			: // ⏳ An old receipt with no `speaker` names only the card: its
+				// card form stays (the doors read it as the seat's member form).
+				typeof out.characterId === "number"
 				? `character:${out.characterId}`
 				: null
 	return {

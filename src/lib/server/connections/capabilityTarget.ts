@@ -114,7 +114,7 @@ import {
 	type CapabilityId,
 	type ScopeKind
 } from "@serene-pub/sdk"
-import { capabilityDefault } from "./capabilityDefaults"
+import { resolvedCapabilityDefault } from "./capabilityDefaults"
 import { withCompletionTemplate } from "./completionTemplates"
 import { withWireMode } from "./resolve"
 import { connectionModelById, mergeEndpointModel } from "./models"
@@ -465,8 +465,9 @@ export async function resolveCapabilityTarget(
 		}
 
 	// THE one store. Read here rather than accepted as a parameter — see
-	// RESOLUTION_TIERS.
-	const registered = await capabilityDefault(db, capability)
+	// RESOLUTION_TIERS. The run's reading: registered, plus ★B (Vision on a
+	// Reply that sees).
+	const registered = await resolvedCapabilityDefault(db, capability)
 
 	const byTier: Record<ResolutionTier, CapabilityCandidate | null> = {
 		capabilityDefault: registered ?? null,
@@ -774,7 +775,7 @@ export async function capabilityIsSetUp(
 	capability: string
 ): Promise<boolean> {
 	if (!isTransformId(capability)) return false
-	const registered = await capabilityDefault(db, capability)
+	const registered = await resolvedCapabilityDefault(db, capability)
 	return registered?.connectionId != null
 }
 

@@ -9,7 +9,8 @@
  *    each dated row cut at the earlier of the moment and its step's fork date
  *    (`entryOnReadingSql`, the SQL form of `rowReadsOnLine`).
  * 2. **What they say** — the base row with every entry amendment on that line
- *    that has happened by the moment applied, later winning per field
+ *    that has happened by the moment applied, then the session's held
+ *    amendments 🚧 (`reading.holderBookId`), later winning per field
  *    (`entryAt`, the one pure resolver the workspace uses too).
  *
  * Owner ruling 3 (2026-09-28): retrieval resolves at the session's **story
@@ -20,19 +21,16 @@
  * declared fields flat), because that is the shape the editor saves them from.
  * Resolve a wire row, never a stored one.
  *
- * ⚠ A cast amendment may draw the member with another card (`characterId`,
- * a **dated card**). A session SEAT holds a card — the member's own, or a
- * dated one; `cardMemberAt` finds the member by either (plan A25) — so a
- * reader that keys seats, privacy or state owners on a card keeps the
- * member's own `characterId` (`castMemberAt(..., { keepCard: true })`) and
- * finds a dated card through `castMemberCards`. Only a reader that DRAWS the
- * member (sprites) follows the dated card.
+ * ⚠ A member drawn with another card (a **dated card**) is a cast version
+ * whose parent is that card's version, not an amendment. A session SEAT holds
+ * a card and keys on its cast member; `castMemberCards` finds a member's cards
+ * (linked, or a cast version's parent) and `cardMemberAt` the member by either
+ * (plan A25).
  */
 
-import { and, asc, eq, inArray, type SQL } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, or, type SQL } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
-	castAsOf,
 	entryAsOf,
 	groupAmendments,
 	type Amendment
@@ -49,7 +47,10 @@ import { historyDateColumns, onLineAtSql, onLineSql } from "./lineSql"
 import { lineOfReading, type LineReading } from "./reading"
 
 /** What these readers need of a reading: its line and its moment. */
-export type EntryReading = Pick<LineReading, "branchId" | "moment" | "forkedAt" | "line">
+export type EntryReading = Pick<
+	LineReading,
+	"branchId" | "moment" | "forkedAt" | "line" | "holderBookId"
+>
 
 /** Main at its head — the reading of a caller with no session and no line. */
 export const MAIN_HEAD: EntryReading = Object.freeze({
@@ -86,7 +87,10 @@ export function entryOnLineSql(reading: EntryReading): SQL {
 
 /**
  * The book's entry amendments on the reading's line, grouped by entry id —
- * one query. `entryIds` narrows it; an empty list reads nothing.
+ * one query. `entryIds` narrows it; an empty list reads nothing. A session's
+ * reading of an attached lorebook (`reading.holderBookId`) also reads the
+ * held amendments its own book keeps on the lorebook's entries — never any
+ * other session's, and never on a reading without a holder.
  *
  * Only the chain's amendments are loaded (`onLineSql`); which of them have
  * happened by the moment, and in what order, is `entryAt`'s — the shared
@@ -100,6 +104,7 @@ export async function entryOverlaysFor(
 ): Promise<Map<number, Amendment[]>> {
 	if (entryIds && entryIds.length === 0) return new Map()
 	const a = schema.entryAmendments
+	const holder = reading.holderBookId
 	const rows = await db
 		.select({
 			id: a.id,
@@ -108,26 +113,40 @@ export async function entryOverlaysFor(
 			year: a.year,
 			month: a.month,
 			day: a.day,
+			sourceMessageId: a.sourceMessageId,
+			base: a.base,
 			fields: a.fields
 		})
 		.from(a)
 		.where(
 			and(
-				eq(a.lorebookId, lorebookId),
-				onLineSql(a.branchId, lineOfReading(reading)),
+				or(
+					and(
+						eq(a.lorebookId, lorebookId),
+						isNull(a.base),
+						onLineSql(a.branchId, lineOfReading(reading))
+					),
+					holder != null && holder !== lorebookId
+						? and(eq(a.lorebookId, holder), isNotNull(a.base))
+						: undefined
+				),
 				entryIds ? inArray(a.entryId, [...entryIds]) : undefined
 			)
 		)
-	return groupAmendments(
-		rows.map((r) => ({
-			id: r.id,
-			entryId: r.entryId,
-			branchId: r.branchId ?? null,
-			year: r.year,
-			month: r.month ?? null,
-			day: r.day ?? null,
-			fields: (r.fields ?? {}) as Record<string, unknown>
-		})),
+	return groupAmendments<Amendment & { entryId: number }>(
+		rows.map((r) => {
+			const common = {
+				id: r.id,
+				entryId: r.entryId,
+				branchId: r.branchId ?? null,
+				month: r.month ?? null,
+				day: r.day ?? null,
+				fields: (r.fields ?? {}) as Record<string, unknown>
+			}
+			return r.base != null
+				? { ...common, year: r.year, held: { anchor: r.sourceMessageId } }
+				: { ...common, year: r.year as number }
+		}),
 		"entryId"
 	)
 }
@@ -172,66 +191,6 @@ export function amendedFieldNames(
 	for (const list of overlays.values())
 		for (const a of list) for (const key of Object.keys(a.fields)) out.add(key)
 	return out
-}
-
-/** The book's cast amendments on the reading's line, grouped by member id. */
-export async function castOverlaysFor(
-	db: Db,
-	lorebookId: number,
-	reading: EntryReading
-): Promise<Map<number, Amendment[]>> {
-	const c = schema.castAmendments
-	const rows = await db
-		.select({
-			id: c.id,
-			memberId: c.lorebookBindingId,
-			branchId: c.branchId,
-			year: c.year,
-			month: c.month,
-			day: c.day,
-			fields: c.fields
-		})
-		.from(c)
-		.where(and(eq(c.lorebookId, lorebookId), onLineSql(c.branchId, lineOfReading(reading))))
-	return groupAmendments(
-		rows.map((r) => ({
-			id: r.id,
-			memberId: r.memberId,
-			branchId: r.branchId ?? null,
-			year: r.year,
-			month: r.month ?? null,
-			day: r.day ?? null,
-			fields: (r.fields ?? {}) as Record<string, unknown>
-		})),
-		"memberId"
-	)
-}
-
-/**
- * One cast member (a `lorebook_bindings` row) as the reading sees them — at no
- * particular point of their own life, so every overlay on the line applies
- * (`amendmentsForAppearance(…, null)`).
- *
- * The member-keyed, synchronous entry point to the one cast resolver
- * (`castAsOf`); its card-keyed twin, which also reads presences and answers
- * each appearance, is `cardMemberAt` (`sockets/amendments.ts`). Two entry
- * points, one resolver — see there.
- *
- * `keepCard` keeps the member's own `characterId`: see the header.
- */
-export function castMemberAt<T extends { id: number; characterId?: number | null }>(
-	member: T,
-	overlays: ReadonlyMap<number, readonly Amendment[]>,
-	reading: EntryReading,
-	opts: { keepCard?: boolean } = {}
-): T {
-	const list = overlays.get(member.id)
-	if (!list?.length) return member
-	const resolved = castAsOf(member, list, {
-		line: lineOfReading(reading),
-		moment: reading.moment
-	})
-	return opts.keepCard ? { ...resolved, characterId: member.characterId } : resolved
 }
 
 /**

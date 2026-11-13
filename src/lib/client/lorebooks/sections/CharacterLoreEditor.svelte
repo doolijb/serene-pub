@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getCharacterLoreVisibility } from "$lib/shared/utils/characterLoreVisibility"
@@ -28,11 +29,7 @@
 
 	function bindingLabel(binding: (typeof bindings)[number]): string {
 		if (binding.characterId)
-			return (
-				binding.character?.nickname ||
-				binding.character?.name ||
-				binding.binding
-			)
+			return memberShownName(binding, binding.character, binding.binding)
 		return binding.binding
 	}
 </script>

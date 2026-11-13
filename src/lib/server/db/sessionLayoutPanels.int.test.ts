@@ -15,7 +15,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { and, eq, sql } from "drizzle-orm"
-import { panelsFromSlots } from "@serene-pub/sdk"
+import { panelsFromSlots, panelsV2Of } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -615,7 +615,562 @@ describe("⏳ step 2: converting stored layouts to panels", () => {
 			const after = await rowOf(s.id, me.id)
 			expect(after.id).toBe(row.id)
 			expect(after.layoutCopiedAt).toBeInstanceOf(Date)
-			expect((after.layout as Blob).panels).toEqual(panelsFromSlots(OLD_FULL as any))
+			// Step 3 ran after step 2 (2026-11-05): the same layout, at version 2.
+			expect((after.layout as Blob).panels).toEqual(panelsV2Of(OLD_FULL as any).panels)
+		},
+		60_000
+	)
+})
+
+// ── Step 3: panels version 2 ────────────────────────────────────────────────
+
+const v2Convert = async () =>
+	(await import("./sessionLayoutPanels")).convertPanelsToV2()
+
+/** A version 1 `panels`: one panel above, the primary, one below, a pinned side. */
+const V1_PANELS: Blob = {
+	version: 1,
+	left: [],
+	middle: {
+		above: [{ key: "p3", tabs: ["places"] }],
+		primary: { key: "p1", tabs: ["messages"] },
+		below: [{ key: "p4", tabs: ["chronicle"] }]
+	},
+	right: [{ key: "p2", tabs: ["stats"], pinned: true }]
+}
+
+/** A stamped row holding `layout`, with settings rows and `layout_settings`. */
+async function v1Row(
+	userId: number,
+	layout: Blob,
+	opts: { settings?: Record<string, Blob>; layoutSettings?: Blob } = {}
+) {
+	const s = await sessionOf(userId)
+	const [row] = await testDb
+		.insert(schema.sessionPanelLayouts)
+		.values({
+			sessionId: s.id,
+			userId,
+			layout,
+			layoutCopiedAt: new Date(),
+			layoutSettings: opts.layoutSettings ?? {}
+		})
+		.returning()
+	await putSettings(userId, s.id, opts.settings ?? {})
+	return row
+}
+
+async function putSettings(userId: number, sessionId: number, map: Record<string, Blob>) {
+	for (const [widgetInstanceId, values] of Object.entries(map))
+		await testDb.insert(schema.widgetSettings).values({ sessionId, userId, widgetInstanceId, values })
+}
+
+/** A stored layout holding it. */
+const V1: Blob = { panels: V1_PANELS }
+
+const flatTabs = (panels: Blob) =>
+	[...panels.left, ...panels.middle, ...panels.right].flatMap((p: Blob) => p.tabs)
+
+const MOVED = {
+	composer: "quill",
+	otherTabsComposer: "minimal",
+	showActions: false,
+	nextUp: "list",
+	showComposer: true,
+	composerPosition: "top"
+}
+
+async function userPreset(userId: number, layout: Blob) {
+	const [row] = await testDb
+		.insert(schema.sessionLayoutPresets)
+		.values({
+			genreId: ADVENTURE,
+			origin: "user",
+			authorUserId: userId,
+			slug: `v2-${n++}`,
+			name: "Mine",
+			layout
+		})
+		.returning()
+	return row
+}
+
+async function pubPreset(layout: Blob) {
+	const [row] = await testDb
+		.insert(schema.sessionLayoutPresets)
+		.values({
+			genreId: ADVENTURE,
+			origin: "pub",
+			seedKey: `layout:${ADVENTURE}:pub-${n++}`,
+			slug: `pub-${n}`,
+			name: "Pub",
+			visibility: "shared",
+			layout
+		})
+		.returning()
+	return row
+}
+
+describe("⏳ step 3: panels version 2", () => {
+	test(
+		"a version 1 row becomes version 2: no pin, the middle in order above, primary, below",
+		async () => {
+			const me = await person("v2-order")
+			const row = await v1Row(me.id, { ...V1, active: [{ id: "stats", on: true, order: 0 }] })
+			await v2Convert()
+			const after = (await sessionRow(row.id)).layout as Blob
+			expect(after.panels).toEqual(panelsV2Of(V1 as any).panels)
+			expect(after.panels.version).toBe(2)
+			expect(JSON.stringify(after.panels)).not.toContain("pinned")
+			expect(after.panels.middle.map((p: Blob) => p.tabs)).toEqual([
+				["places"],
+				["messages"],
+				["turn-line"],
+				["composer"],
+				["chronicle"]
+			])
+			expect(after.active).toEqual([{ id: "stats", on: true, order: 0 }])
+		},
+		60_000
+	)
+
+	test(
+		"the Messages settings that moved land on composer and turn-line; composerPosition top puts them before",
+		async () => {
+			const me = await person("v2-moves")
+			const row = await v1Row(me.id, V1, {
+				settings: { messages: { ...MOVED, title: "Log" } }
+			})
+			await v2Convert()
+			const rows = await settingsOf(row.sessionId, me.id)
+			expect(rows.composer).toEqual({
+				composer: "quill",
+				otherTabsComposer: "minimal",
+				showActions: false
+			})
+			expect(rows["turn-line"]).toEqual({ nextUp: "list" })
+			expect(rows.messages).toEqual({ title: "Log" })
+			const tabs = (await sessionRow(row.id)).layout as Blob
+			expect(tabs.panels.middle.map((p: Blob) => p.tabs[0])).toEqual([
+				"places",
+				"turn-line",
+				"composer",
+				"messages",
+				"chronicle"
+			])
+			// A messages row with nothing else to say is deleted, not left empty.
+			const only = await v1Row(me.id, V1, { settings: { messages: MOVED } })
+			await v2Convert()
+			expect(Object.keys(await settingsOf(only.sessionId, me.id)).sort()).toEqual([
+				"composer",
+				"turn-line"
+			])
+		},
+		60_000
+	)
+
+	test(
+		"showComposer false on a copy: no composer or turn-line for it, the key dropped",
+		async () => {
+			const me = await person("v2-dc")
+			const layout = {
+				version: 1,
+				left: [],
+				middle: {
+					above: [],
+					primary: { key: "p1", tabs: ["messages#journal"] },
+					below: []
+				},
+				right: []
+			}
+			const row = await v1Row(me.id, { panels: layout }, {
+				settings: { "messages#journal": { showComposer: false } }
+			})
+			await v2Convert()
+			const after = (await sessionRow(row.id)).layout as Blob
+			expect(flatTabs(after.panels)).toEqual(["messages#journal"])
+			expect(await settingsOf(row.sessionId, me.id)).toEqual({})
+		},
+		60_000
+	)
+
+	test(
+		"a Lair-style middle panel with two Messages tabs gets exactly one composer and one turn line",
+		async () => {
+			const me = await person("v2-lair")
+			const layout = {
+				version: 1,
+				left: [],
+				middle: {
+					above: [],
+					primary: { key: "p1", tabs: ["messages", "messages#sanctum"] },
+					below: []
+				},
+				right: []
+			}
+			const row = await v1Row(me.id, { panels: layout })
+			await v2Convert()
+			const tabs = flatTabs(((await sessionRow(row.id)).layout as Blob).panels)
+			expect(tabs.filter((t: string) => t === "composer")).toHaveLength(1)
+			expect(tabs.filter((t: string) => t === "turn-line")).toHaveLength(1)
+			expect(tabs).toEqual(
+				flatTabs(panelsV2Of({ panels: layout } as any).panels)
+			)
+		},
+		60_000
+	)
+
+	test(
+		"stale composer and turn-line rows are replaced by the moved values; another session's are left",
+		async () => {
+			const me = await person("v2-stale")
+			const row = await v1Row(me.id, V1, {
+				settings: {
+					messages: { composer: "quill" },
+					composer: { composer: "writer" },
+					"turn-line#x": { nextUp: "hidden" }
+				}
+			})
+			const other = await sessionOf(me.id)
+			await putSettings(me.id, other.id, { composer: { composer: "writer" } })
+			await v2Convert()
+			expect(await settingsOf(row.sessionId, me.id)).toEqual({
+				composer: { composer: "quill" }
+			})
+			expect(await settingsOf(other.id, me.id)).toEqual({ composer: { composer: "writer" } })
+		},
+		60_000
+	)
+
+	test(
+		"a style pin on messages is copied to composer and turn-line",
+		async () => {
+			const me = await person("v2-style")
+			const pin = { id: 1, slug: "mine" }
+			const row = await v1Row(me.id, V1, {
+				layoutSettings: { widgetStyles: { messages: pin } }
+			})
+			await v2Convert()
+			expect((await sessionRow(row.id)).layoutSettings).toEqual({
+				widgetStyles: { messages: pin, composer: pin, "turn-line": pin }
+			})
+		},
+		60_000
+	)
+
+	test(
+		"a user preset and a pub preset convert: panels, settings split, pins copied, layout_updated_at kept",
+		async () => {
+			const me = await person("v2-preset")
+			const pin = { id: 1, slug: "p" }
+			const blob = {
+				...V1,
+				widgetSettings: { messages: { composer: "quill", nextUp: "list" } },
+				widgetStyles: { messages: pin }
+			}
+			const mine = await userPreset(me.id, blob)
+			const pub = await pubPreset(blob)
+			const report = await v2Convert()
+			expect(report.presets).toBeGreaterThanOrEqual(2)
+			for (const before of [mine, pub]) {
+				const after = await presetRow(before.id)
+				const layout = after.layout as Blob
+				expect(layout.panels).toEqual(panelsV2Of(blob as any).panels)
+				expect(layout.widgetSettings.composer).toEqual({ composer: "quill" })
+				expect(layout.widgetSettings["turn-line"]).toEqual({ nextUp: "list" })
+				expect(layout.widgetSettings.messages).toEqual({})
+				expect(layout.widgetStyles).toEqual({ messages: pin, composer: pin, "turn-line": pin })
+				expect(after.layoutUpdatedAt.getTime()).toBe(before.layoutUpdatedAt.getTime())
+			}
+		},
+		60_000
+	)
+
+	test(
+		"core and plugin rows are byte for byte what they were",
+		async () => {
+			const def = await seedAdventure()
+			const [plugin] = await testDb
+				.insert(schema.sessionLayoutPresets)
+				.values({
+					genreId: ADVENTURE,
+					origin: "plugin",
+					pluginId: "some-plugin",
+					seedKey: `layout:${ADVENTURE}:some-plugin/v2-${n++}`,
+					slug: `v2-${n}`,
+					name: "Plugin",
+					visibility: "shared",
+					layout: { ...V1, widgetSettings: { messages: { composer: "quill" } } }
+				})
+				.returning()
+			const core = await storedText("session_layout_presets", def.id)
+			const plug = await storedText("session_layout_presets", plugin.id)
+			await v2Convert()
+			expect(await storedText("session_layout_presets", def.id)).toBe(core)
+			expect(await storedText("session_layout_presets", plugin.id)).toBe(plug)
+		},
+		60_000
+	)
+
+	test(
+		"a {} row and a floor-only row keep their layout byte for byte; the setting still moves",
+		async () => {
+			const me = await person("v2-floor")
+			const floor = {
+				zoneLayout: {
+					version: 1,
+					zones: { left: { kind: "side", side: "left", pinned: false, widgets: ["stats"] } }
+				}
+			}
+			const a = await v1Row(me.id, {}, { settings: { messages: { composer: "quill" } } })
+			const b = await v1Row(me.id, floor, { settings: { messages: { composer: "quill" } } })
+			const aText = await storedText("session_panel_layouts", a.id)
+			const bText = await storedText("session_panel_layouts", b.id)
+			await v2Convert()
+			expect(await storedText("session_panel_layouts", a.id)).toBe(aText)
+			expect(await storedText("session_panel_layouts", b.id)).toBe(bText)
+			for (const r of [a, b])
+				expect(await settingsOf(r.sessionId, me.id)).toEqual({
+					composer: { composer: "quill" }
+				})
+		},
+		60_000
+	)
+
+	test(
+		"a pre-copy row is not touched by convertPanelsToV2 alone; the three steps leave it at version 2",
+		async () => {
+			await seedAdventure()
+			const me = await person("v2-precopy")
+			const s = await sessionOf(me.id)
+			await preCopyRow({
+				sessionId: s.id,
+				userId: me.id,
+				layout: V1,
+				settings: { messages: { composer: "quill" } }
+			})
+			const before = await storedText(
+				"session_panel_layouts",
+				(await rowOf(s.id, me.id)).id
+			)
+			// A real boot: convert (dbReady), then the prune with the pending rows spared.
+			const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+			const { syncWidgetSettings } = await import("./widgetSettings")
+			const report = await v2Convert()
+			expect(report.pending).toContainEqual({ userId: me.id, sessionId: s.id })
+			await syncWidgetSettings(CORE_WIDGETS, { spare: report.pending })
+			const untouched = await rowOf(s.id, me.id)
+			expect(await storedText("session_panel_layouts", untouched.id)).toBe(before)
+			expect(await settingsOf(s.id, me.id)).toEqual({ messages: { composer: "quill" } })
+			await pass()
+			const after = await rowOf(s.id, me.id)
+			expect(after.layoutCopiedAt).toBeInstanceOf(Date)
+			expect((after.layout as Blob).panels.version).toBe(2)
+			expect((await settingsOf(s.id, me.id)).composer).toEqual({ composer: "quill" })
+		},
+		60_000
+	)
+
+	test(
+		"a row that fails rolls back and the next row still converts",
+		async () => {
+			const me = await person("v2-fails")
+			await v2Convert() // drain what earlier tests left, so the calls below are ours
+			const rows: Awaited<ReturnType<typeof v1Row>>[] = []
+			for (let i = 0; i < 3; i++)
+				rows.push(await v1Row(me.id, V1, { settings: { messages: { composer: "quill" } } }))
+			// The least invasive way: the second row's transaction body is
+			// replaced by one that throws, as a failing write would.
+			const real = testDb.transaction.bind(testDb)
+			let calls = 0
+			const spy = vi
+				.spyOn(testDb, "transaction")
+				.mockImplementation(((fn: any, config?: any) =>
+					++calls === 2
+						? real(async (tx: any) => {
+								await tx
+									.update(schema.sessionPanelLayouts)
+									.set({ layout: { gone: true } })
+									.where(eq(schema.sessionPanelLayouts.id, rows[1].id))
+								throw new Error("boom")
+							})
+						: real(fn, config)) as any)
+			const logged = vi.spyOn(console, "error").mockImplementation(() => {})
+			let report: any
+			let errors: unknown[][] = []
+			try {
+				report = await v2Convert()
+			} finally {
+				errors = [...logged.mock.calls]
+				spy.mockRestore()
+				logged.mockRestore()
+			}
+			expect(report).toMatchObject({ sessions: 2, failed: 1 })
+			expect(String(errors[0][0])).toContain(`row ${rows[1].id}`)
+			const [a, b, c] = await Promise.all(rows.map((r) => sessionRow(r.id)))
+			expect((a.layout as Blob).panels.version).toBe(2)
+			expect((b.layout as Blob).gone).toBeUndefined()
+			expect((b.layout as Blob).panels.version).toBe(1)
+			expect((c.layout as Blob).panels.version).toBe(2)
+			expect(await settingsOf(rows[1].sessionId, me.id)).toEqual({
+				messages: { composer: "quill" }
+			})
+			// The next boot finishes it.
+			expect((await v2Convert()).sessions).toBe(1)
+		},
+		60_000
+	)
+
+	test(
+		"a row that fails in dbReady keeps its moved keys through the prune and converts on the next boot",
+		async () => {
+			const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+			const { syncWidgetSettings } = await import("./widgetSettings")
+			const me = await person("v2-fail-keep")
+			await v2Convert() // drain what earlier tests left
+			const row = await v1Row(me.id, V1, {
+				settings: { messages: { composer: "quill", title: "Log" } }
+			})
+			const spy = vi
+				.spyOn(testDb, "transaction")
+				.mockImplementation((async () => {
+					throw new Error("boom")
+				}) as any)
+			const logged = vi.spyOn(console, "error").mockImplementation(() => {})
+			let report: any
+			try {
+				report = await v2Convert()
+			} finally {
+				spy.mockRestore()
+				logged.mockRestore()
+			}
+			expect(report.failed).toBe(1)
+			expect(report.pending).toEqual([{ userId: me.id, sessionId: row.sessionId }])
+			await syncWidgetSettings(CORE_WIDGETS, { spare: report.pending })
+			expect(await settingsOf(row.sessionId, me.id)).toEqual({
+				messages: { composer: "quill", title: "Log" }
+			})
+			// The fix lands between boots; the next boot converts it.
+			const next = await v2Convert()
+			expect(next).toMatchObject({ sessions: 1, failed: 0, pending: [] })
+			expect(await settingsOf(row.sessionId, me.id)).toEqual({
+				messages: { title: "Log" },
+				composer: { composer: "quill" }
+			})
+		},
+		60_000
+	)
+
+	test(
+		"a {} row whose moves are done is not selected again: no transaction, no write",
+		async () => {
+			const me = await person("v2-quiet")
+			const row = await v1Row(me.id, {}, {
+				settings: { messages: { composer: "quill" } }
+			})
+			expect((await v2Convert()).sessions).toBeGreaterThanOrEqual(1)
+			expect(await settingsOf(row.sessionId, me.id)).toEqual({
+				composer: { composer: "quill" }
+			})
+			const tx = vi.spyOn(testDb, "transaction")
+			const upd = vi.spyOn(testDb, "update")
+			const ins = vi.spyOn(testDb, "insert")
+			let report: any
+			try {
+				report = await v2Convert()
+			} finally {
+				var counts = [tx.mock.calls.length, upd.mock.calls.length, ins.mock.calls.length]
+				tx.mockRestore()
+				upd.mockRestore()
+				ins.mockRestore()
+			}
+			expect(report).toEqual({ sessions: 0, presets: 0, failed: 0, pending: [] })
+			expect(counts).toEqual([0, 0, 0])
+		},
+		60_000
+	)
+
+	test(
+		"SECOND BOOT: the boot sequence twice changes nothing — counts zero, every row identical",
+		async () => {
+			const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
+			const { syncWidgetSettings } = await import("./widgetSettings")
+			await seedAdventure()
+			const me = await person("v2-boot")
+			const pin = { id: 1, slug: "p" }
+			await v1Row(me.id, V1, {
+				settings: { messages: MOVED },
+				layoutSettings: { widgetStyles: { messages: pin } }
+			})
+			await v1Row(me.id, {}, { settings: { messages: { composer: "quill" } } })
+			await v1Row(me.id, OLD_FULL, { settings: { messages: { nextUp: "list" } } })
+			await userPreset(me.id, {
+				...V1,
+				widgetSettings: { messages: { composer: "quill" } },
+				widgetStyles: { messages: pin }
+			})
+			await pubPreset({ ...V1, widgetSettings: { messages: { composer: "quill" } } })
+
+			const boot = async () => {
+				const first = await v2Convert()
+				await syncWidgetSettings(CORE_WIDGETS, { spare: first.pending })
+				const all = await pass()
+				return { first, all }
+			}
+			const snapshot = async () => ({
+				layouts: await testDb.select().from(schema.sessionPanelLayouts).orderBy(schema.sessionPanelLayouts.id),
+				presets: await testDb.select().from(schema.sessionLayoutPresets).orderBy(schema.sessionLayoutPresets.id),
+				settings: await testDb.select().from(schema.widgetSettings).orderBy(schema.widgetSettings.id)
+			})
+			const one = await boot()
+			expect(one.first.sessions).toBeGreaterThanOrEqual(3)
+			const before = await snapshot()
+			const two = await boot()
+			expect(two.first).toEqual({ sessions: 0, presets: 0, failed: 0, pending: [] })
+			expect(two.all).toMatchObject({
+				completed: 0,
+				sessions: 0,
+				presets: 0,
+				version2: { sessions: 0, presets: 0, failed: 0 }
+			})
+			expect(await snapshot()).toEqual(before)
+		},
+		60_000
+	)
+
+	test(
+		"panelLayoutWriteAsV2: a version 1 write comes back at version 2 with its settings moved; anything else comes back as sent",
+		async () => {
+			const { panelLayoutWriteAsV2 } = await import("./sessionLayoutPanels")
+			const me = await person("v2-write")
+			const s = await sessionOf(me.id)
+
+			const sent = {
+				layout: V1,
+				widgetSettings: { messages: { composer: "quill", title: "Log" } }
+			}
+			const out: any = await panelLayoutWriteAsV2(s.id, me.id, sent)
+			expect(out.layout.panels).toEqual(panelsV2Of(V1 as any).panels)
+			expect(out.widgetSettings).toEqual({
+				messages: { title: "Log" },
+				composer: { composer: "quill" }
+			})
+			expect("layoutSettings" in out).toBe(false)
+			// Not mutated.
+			expect(sent.widgetSettings.messages).toEqual({ composer: "quill", title: "Log" })
+
+			// No widgetSettings key: the stored rows are what moves.
+			const row = await v1Row(me.id, V1, { settings: { messages: { composer: "quill" } } })
+			const viaStore: any = await panelLayoutWriteAsV2(row.sessionId, me.id, { layout: V1 })
+			expect(viaStore.layout.panels.version).toBe(2)
+			expect(viaStore.widgetSettings).toEqual({ composer: { composer: "quill" } })
+
+			// Already version 2: the same object.
+			const v2 = { layout: { panels: panelsV2Of(V1 as any).panels } }
+			expect(await panelLayoutWriteAsV2(s.id, me.id, v2)).toBe(v2)
+			// A payload the handler refuses: the same object.
+			const bad = { layout: V1, widgetSettings: "nope" }
+			expect(await panelLayoutWriteAsV2(s.id, me.id, bad)).toBe(bad)
 		},
 		60_000
 	)

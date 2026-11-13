@@ -28,7 +28,8 @@ function facts(over: Partial<{ [K in keyof OverviewFacts]: Partial<OverviewFacts
 			lastBackupAt: new Date(NOW - 60_000).toISOString(),
 			backupCount: 1,
 			dailyBackups: true,
-			lastBackupFailure: null
+			lastBackupFailure: null,
+			castLiftCount: 0
 		},
 		pipelines: { published: 4, enabled: 4, runs24h: { ok: 3, failed: 0, total: 3 } },
 		extensions: {

@@ -7,6 +7,7 @@
 	import { lastActivityAt, timeAgoShort } from "$lib/client/utils/timeAgo"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
+	import { seatCardsAsShown } from "$lib/client/components/sessionPage/projections/characters"
 
 	interface Props {
 		session: Sockets.Sessions.List.Response["sessionList"][0]
@@ -58,11 +59,8 @@
 		onclick?.(session)
 	}
 
-	const cast = $derived(
-		(session.sessionCharacters || [])
-			.map((sc) => sc.character)
-			.filter(Boolean)
-	)
+	// Each seated card as its cast member shows it: its name and face.
+	const cast = $derived(seatCardsAsShown(session))
 
 	/** The stack's faces: the first three of the cast, then a count. */
 	const STACK_MAX = 3

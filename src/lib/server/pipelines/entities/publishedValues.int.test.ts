@@ -181,6 +181,7 @@ describe("session.fields", () => {
 		// (B16x); the undeclared key never arrives.
 		expect(doc.session.fields).toEqual({
 			tone: "grim",
+			roundWorth: 5,
 			difficulty: "normal",
 			characterDetail: "full",
 			// The note goes at the end unless moved (owner ruling 2026-10-03).
@@ -190,7 +191,7 @@ describe("session.fields", () => {
 			// Story's fields since the layering (lane 3, 2026-10-20): the voices,
 			// at their defaults (Rest follows the reckoning's mode, R55).
 			sideCast: false,
-			narratorInterjections: false
+			narratorInterjections: "off"
 		})
 	}, 60_000)
 })

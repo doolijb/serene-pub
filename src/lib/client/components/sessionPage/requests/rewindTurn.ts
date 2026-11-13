@@ -8,6 +8,7 @@
  */
 
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
+import { awaitReply } from "$lib/client/utils/awaitReply"
 
 /** What these answers need of the page. */
 export interface RewindTurnDeps {
@@ -27,10 +28,28 @@ export function answerForwardTurn(_params: unknown, deps: RewindTurnDeps): void 
 	deps.forwardTurn()
 }
 
-/** 🚧 The page's ONE Back and ONE Forward emit (audit R4): the header's presses and a widget's `rewind-turn` / `forward-turn` both call these. A press before the route has a session id sends nothing. */
+/** 🚧 The page's ONE Back and ONE Forward emit (audit R4): the header's presses and a widget's `rewind-turn` / `forward-turn` both call these. A press before the route has a session id sends nothing; one press at a time, cleared on the reply or its `:error`. */
 export function rewindPresses(socket: Pick<TypedSocket, "emit">, sessionId: () => number | null | undefined): RewindTurnDeps {
+	let pending = false
+	const press = (event: "sessions:rewindTurn" | "sessions:forwardTurn") => {
+		const id = sessionId()
+		if (id == null || pending) return
+		pending = true
+		awaitReply({
+			socket,
+			event,
+			params: { sessionId: id },
+			errorEvent: `${event}:error`,
+			match: (d) => d.sessionId === id,
+			matchError: (d) => (d as { sessionId?: unknown } | null)?.sessionId === id
+		})
+			.catch(() => {}) // the refusal's toast is Layout's ("sessions:rewindTurn:error" → "Could not go back")
+			.finally(() => {
+				pending = false
+			})
+	}
 	return {
-		rewindTurn() { const id = sessionId(); if (id != null) socket.emit("sessions:rewindTurn", { sessionId: id }) },
-		forwardTurn() { const id = sessionId(); if (id != null) socket.emit("sessions:forwardTurn", { sessionId: id }) }
+		rewindTurn: () => press("sessions:rewindTurn"),
+		forwardTurn: () => press("sessions:forwardTurn")
 	}
 }

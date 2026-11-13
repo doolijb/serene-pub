@@ -1,0 +1,27 @@
+# BRIEF — lane `s4-chr-view` (wave 6) — the Characters view: one row per character; the rail rename; canon merge
+
+Read `plans/briefs/BRIEF-s4-common.md`, plan §34.4, §27 lines ~538–539 (owner 2026-11-05 "Give each character badges: card, cast." refined the same day: "the cast badge is probably redundant, any card that's been used will be a cast" → **one badge, Card**, plus a reach line), the 2026-11-08 rulings (**★C-1 → "Characters"**: rail item, phone label, Jump chip, page title — reverses ruling 12's view name of 2026-11-03/04; "character card" stays the item's name), and the reports `plans/REPORT-s4-chr-read-2026-11-08.md` (the read you build on; ★chr-read-2, ★chr-read-3, its queue for you), `plans/REPORT-s4-cp-2026-11-08.md` (Copy to my characters), `plans/REPORT-s4-st-2026-11-08.md`. Read STYLE-GUIDE.md §6.4 and the list/sidebar/filter-popout sections before UI work; NOMENCLATURE §1, §24 and the Characters rows; memory `feedback_pickers_explain_why.md`, `project_sidebar_nav_normalization_2026_10_09.md`.
+
+## Goal
+
+1. **`CharactersSidebar.svelte` on `characters:page`:** stop loading the unpaged `characters:list` for the list (keep listening to `characters:list` pushes as the re-ask trigger, as chr-read specified); page with the cursor; one row per character — **Card** badge as the row's one chip (STYLE-GUIDE §6.4) on card rows; the reach line (_In 2 lorebooks_ / _Not in a lorebook yet_ / _In ‹book›_ / _In ‹session›'s notes_); filters in the filter popout (has a card / no card; by lorebook or story; follows its card / has its own words; Favorites, Personas, tags on card rows; **In my stories**); card-less members kept only in story notes hidden until **In my stories**; card-less rows under _Only in lorebooks_ after folders; card row → card detail; card-less row → `openCastMember` (`characterForms/openCastMember.ts`); ⋯ **Copy to my characters** where the card isn't the asker's or there's none (`characters:duplicate { castMemberId }`, built by s4-cp). Rename/drop the `characterRows` snippet at `CharactersSidebar.svelte:1214` (R1 vs the new read).
+2. **★chr-read-3 (lead: regression guard):** cards shared with the asker must not drop out — add the shared-cards leg to `cast/characterRows.ts` (card rows with `cardIsMine: false`, flags off) and an owner name field (`shared/characters/characterRows.ts`) shown on the row (reuse the wording the old list used for shared cards — find it). Tests for the leg.
+3. **★chr-read-2:** handle `characters:page:error` in the characters domain context (the one listener for that family; find it) — silently re-ask from page one on the cursor refusal; the generic error is the context's one toast (through `notify`).
+4. **typedSocket:** add `characters:page` and `characters:page:error` entries exactly as chr-read queued.
+5. **★C-1 rename:** the rail item, phone/bottom-bar label, Jump chip, route/page title, `AccessibleShell` names → **Characters**; docs (`docs/getting-around.md`, `docs/characters.md` — the view's name and its rows/badge/filters/Copy), STYLE-GUIDE where the view is named, NOMENCLATURE (the view's row; a §23/§25 note that ruling 12's view name is reversed for the view only, 2026-11-08). Keep "character card(s)" wherever the item (a card) is meant.
+6. **NOMENCLATURE.md — you hold it.** Merge every row queued in these reports (verbatim where given; mark 🚧): `REPORT-s4-chr-read` (if not already merged — check), `REPORT-s4-seat`, `REPORT-s4-seat-live`, `REPORT-s4-cp`, `REPORT-s4-bk-fold`, `REPORT-s4-st`, and later `REPORT-s4-fixes` if it lands before you finish. Check each against the code before writing (a row must describe what's there). The lead already merged ner, bk-lock, f-sdk, cl, and s4-on merged f-door/f-pass/f-client/f-emit/chr-read — don't duplicate.
+7. `docs/lorebook-cast.md` is lane s4-fixes' file this wave — put a one-paragraph "members are listed in Characters" addition in your report for the lead.
+
+## Files owned
+
+`src/lib/client/components/sidebars/CharactersSidebar.svelte` + its list item components, `src/routes/characters/+page.svelte`, `src/lib/client/components/Layout.svelte` (the rail label only), `AccessibleShell.svelte`, the bottom-bar labels file, the Jump chip file (find them), the characters domain context (find it), `src/lib/client/sockets/typedSocket.ts` (the two entries), `src/lib/server/cast/characterRows.ts` + `src/lib/shared/characters/characterRows.ts` (the shared leg), `STYLE-GUIDE.md` (§6.4 + where the view is named), `docs/{characters,getting-around}.md`, `NOMENCLATURE.md`, tests next to all of these.
+
+**Lane s4-fixes runs beside you** (`state/**`, `sockets/state.ts`, `sockets/lorebooks.ts`, `annotations/index.ts`, `characters/versions.ts`, `sessions/convertRuleset.ts`, `EditSessionForm.svelte`, `starterKits.ts` stub removal, `docs/{lorebook-cast,sessions}.md`). Don't touch its files.
+
+## Stop and ask when
+
+Common brief's Decisions apply; new copy beyond what §34.4 and the rulings word (propose ★ + build the recommendation); the paged read lacks something the old list showed (say what; don't drop features silently — e.g. folders, tag search in `q`).
+
+## Done means
+
+DOM tests: rows, badge, reach line, each filter, In my stories, _Only in lorebooks_ group, row doors (card detail / `openCastMember` arguments / Copy where allowed), paging (scroll/load more), error re-ask; shared-cards leg int test; the rename (rail, phone label, title) and no stale "Character cards" label for the view; NOMENCLATURE merged; tsc + check no new errors. Report `plans/REPORT-s4-chr-view-2026-11-08.md`.

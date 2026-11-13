@@ -41,6 +41,8 @@
 		onOpenSettings?: () => void
 		/** The book's rules lists under the rules' name, as the rail draws them. */
 		rulesGroup?: { label: string; facets: ScopeFacet[] } | null
+		/** 🚧 ★50 Groups for lists of other rules, after `rulesGroup`. */
+		otherRulesGroups?: { label: string; facets: ScopeFacet[] }[]
 	}
 
 	let {
@@ -53,7 +55,8 @@
 		looseEndsCount = 0,
 		onOpenLooseEnds,
 		onOpenSettings,
-		rulesGroup = null
+		rulesGroup = null,
+		otherRulesGroups = []
 	}: Props = $props()
 
 	let open = $state(false)
@@ -160,16 +163,17 @@
 							() => pickScope(facet.id)
 						)}
 					{/each}
-					{#if rulesGroup}
+					{#each [...(rulesGroup ? [rulesGroup] : []), ...otherRulesGroups] as group (group.label)}
 						<!-- The book's rules lists, under the rules' name,
-						     as the rail's group after Views. -->
+						     as the rail's group after Views; lists of other
+						     rules follow, each under its own name. -->
 						<p
 							class="text-surface-600-400 mt-2 px-2.5 text-xs font-semibold"
 							data-lore-rules-group
 						>
-							{rulesGroup.label}
+							{group.label}
 						</p>
-						{#each rulesGroup.facets as facet (facet.id)}
+						{#each group.facets as facet (facet.id)}
 							{@render row(
 								facet.id,
 								facet.label,
@@ -179,7 +183,7 @@
 								() => pickScope(facet.id)
 							)}
 						{/each}
-					{/if}
+					{/each}
 					<div
 						class="border-surface-200-800 my-1 border-t"
 						aria-hidden="true"

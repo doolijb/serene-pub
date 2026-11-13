@@ -26,6 +26,7 @@
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
 	import WidgetStyleOverlay from "./WidgetStyleOverlay.svelte"
+	import { styleSourceOf } from "./conversationStyles"
 
 	interface Props {
 		/** The widget's id (whose skin) and its title (the controls' label). */
@@ -67,7 +68,9 @@
 	// author sees their CSS as they type it. It is the same two values either
 	// way, and they go through the same sanitiser below — live-apply is a
 	// different SOURCE, never a second injection path.
-	let skin = $derived(effectiveWidgetSkin(widget.id))
+	// A Composer or Turn line wears its target Messages' style unless the
+	// person pinned its own (PLAN D8); the overlay below still edits `widget.id`.
+	let skin = $derived(effectiveWidgetSkin(styleSourceOf(widget.id)))
 	let skinVars = $derived(varsToStyle(skin.vars))
 	let skinCss = $derived(
 		skin.css ? scopeWidgetCss(skin.css, scopeKey) : ""
@@ -140,7 +143,7 @@
 	}
 	/* …and the price of having no box: a zone sizes the widget it holds with a
 	   CHILD rule (`.widget > *`, `.chat-arranged-cell > *`, `.wtab-pane > *`,
-	   `.live-side-cell > *` — each `flex: 1; min-block-size: 0`), and selectors
+	   `.zone-cell > *` — each `flex: 1; min-block-size: 0`), and selectors
 	   match the DOM tree, not the layout tree. So that rule lands on this
 	   wrapper, which has no box to size, and never reaches the widget. The two
 	   properties are restated one level down, where the widget's real box is.

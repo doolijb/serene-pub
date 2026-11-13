@@ -27,7 +27,7 @@
  * has no side to speak from, so it never carries one. Both ends must be of
  * this book and, when an end is an entry, a live one on the line: a hop to an
  * archived room, or to a sibling fork's, is a hop to nowhere this session is.
- * A cast end is the member as the same reading has them (`castMemberAt`): named
+ * A cast end is the member as the same reading has them (`membersAsRead`): named
  * as the story calls them by then, and a member hidden by then drops the edge,
  * as a hidden target drops out of the cast's own ties (`graphContextFormatter`).
  *
@@ -39,16 +39,15 @@
 import { and, eq, inArray, isNotNull, ne, or } from "drizzle-orm"
 import type { LoreLinkRow } from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
-import { rowsOnReading, sessionReadingOf } from "$lib/server/state/reading"
+import { overlayChainOf, rowsOnReading, sessionReadingOf } from "$lib/server/state/reading"
 import {
 	MAIN_HEAD,
-	castMemberAt,
-	castOverlaysFor,
 	entryAt,
 	entryOnLineSql,
 	entryOverlaysFor
 } from "$lib/server/state/entriesOnReading"
 import { seesPlace } from "$lib/shared/lorebooks/placeSight"
+import { membersAsRead } from "$lib/server/cast/memberAsRead"
 
 /** One end of an edge, named. */
 export interface GraphEntryLinkEnd {
@@ -93,8 +92,10 @@ export async function readGraphEntryLinks(
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	// 🚧 The union (PLAN-rulesets §26): the attached book on the session's
-	// reading, then the session's own notes at their head — the ways between
-	// the notes' places read as the book's do. Null only with neither.
+	// reading, then the session's own notes — at main's head beside an
+	// attached book, on the session's reading when it reads them alone — the
+	// ways between the notes' places read as the book's do. Null only with
+	// neither.
 	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
 	const ownBook = await ownBookOf(db, sessionId)
 	if (!session?.lorebookId && !ownBook) return null
@@ -105,12 +106,32 @@ export async function readGraphEntryLinks(
 			lorebookId,
 			...MAIN_HEAD
 		}
-		out.push(...(await bookEntryLinks(db, lorebookId, reading)))
+		out.push(...(await bookEntryLinks(db, lorebookId, reading, sessionId)))
 	}
-	if (ownBook && ownBook.id !== session?.lorebookId)
+	if (ownBook && ownBook.id !== session?.lorebookId) {
+		const ownAt = session?.lorebookId
+			? { lorebookId: ownBook.id, ...MAIN_HEAD }
+			: ((await sessionReadingOf(db, sessionId)) ?? { lorebookId: ownBook.id, ...MAIN_HEAD })
+		// Beside an attached lorebook, an end in the lorebook is read on the
+		// session's own reading: its line, its moment, its held names.
+		const sessionReading = session?.lorebookId
+			? ((await sessionReadingOf(db, sessionId)) ?? {
+					lorebookId: session.lorebookId,
+					...MAIN_HEAD
+				})
+			: null
 		out.push(
-			...(await bookEntryLinks(db, ownBook.id, { lorebookId: ownBook.id, ...MAIN_HEAD }))
+			...(await bookEntryLinks(
+				db,
+				ownBook.id,
+				ownAt,
+				sessionId,
+				session?.lorebookId && sessionReading
+					? { lorebookId: session.lorebookId, reading: sessionReading }
+					: undefined
+			))
 		)
+	}
 	return out
 }
 
@@ -118,7 +139,10 @@ export async function readGraphEntryLinks(
 async function bookEntryLinks(
 	db: Db,
 	lorebookId: number,
-	reading: Parameters<typeof rowsOnReading>[2]
+	reading: Parameters<typeof rowsOnReading>[2],
+	sessionId: number,
+	/** The own-book pass beside an attached lorebook: that lorebook, and the session's reading of it. */
+	attached?: { lorebookId: number; reading: Parameters<typeof rowsOnReading>[2] }
 ): Promise<GraphEntryLink[]> {
 	const r = schema.narrativeRelationships
 	const standing = await db
@@ -145,7 +169,15 @@ async function bookEntryLinks(
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId))
 		.limit(1)
-	const bookIds = self?.overlayOf != null ? [lorebookId, self.overlayOf] : [lorebookId]
+	// A branch's member ends are its ancestors' own-book members: the overlay
+	// chain's books are this session's too.
+	const bookIds = [
+		...new Set([
+			lorebookId,
+			...(self?.overlayOf != null ? [self.overlayOf] : []),
+			...(await overlayChainOf(db, sessionId))
+		])
+	]
 
 	// Both ends, named, in two queries rather than one per end: a book with a
 	// hundred roads would otherwise be two hundred reads for a list this long.
@@ -167,11 +199,12 @@ async function bookEntryLinks(
 			)
 		)
 	]
-	const [entries, nodes, overlays, castOverlays] = await Promise.all([
+	const [entries, nodes, overlays] = await Promise.all([
 		entryIds.length
 			? db
 					.select({
 						id: schema.lorebookEntries.id,
+						lorebookId: schema.lorebookEntries.lorebookId,
 						title: schema.lorebookEntries.title,
 						enabled: schema.lorebookEntries.enabled,
 						archived: schema.lorebookEntries.archived
@@ -184,18 +217,26 @@ async function bookEntryLinks(
 							// line: an end anywhere else is not a place this
 							// session's story has.
 							inArray(schema.lorebookEntries.lorebookId, bookIds),
-							entryOnLineSql(reading)
+							// An end in the attached lorebook is on the line when
+							// the session's reading has it so.
+							attached
+								? or(
+										and(
+											eq(schema.lorebookEntries.lorebookId, attached.lorebookId),
+											entryOnLineSql(attached.reading)
+										),
+										and(
+											ne(schema.lorebookEntries.lorebookId, attached.lorebookId),
+											entryOnLineSql(reading)
+										)
+									)
+								: entryOnLineSql(reading)
 						)
 					)
 			: [],
 		nodeIds.length
 			? db
-					.select({
-						id: schema.lorebookBindings.id,
-						name: schema.lorebookBindings.name,
-						characterId: schema.lorebookBindings.characterId,
-						nodeVisibility: schema.lorebookBindings.nodeVisibility
-					})
+					.select({ id: schema.lorebookBindings.id })
 					.from(schema.lorebookBindings)
 					.where(
 						and(
@@ -204,29 +245,40 @@ async function bookEntryLinks(
 						)
 					)
 			: [],
-		entryOverlaysFor(db, lorebookId, reading, entryIds),
-		nodeIds.length
-			? castOverlaysFor(db, lorebookId, reading)
-			: new Map()
+		entryOverlaysFor(db, lorebookId, reading, entryIds)
 	])
+	// The lorebook's ends are named as the session reads them: the lorebook's
+	// amendments on its line, its held amendments included.
+	const attachedIds = attached
+		? entries.filter((e) => e.lorebookId === attached.lorebookId).map((e) => e.id)
+		: []
+	const attachedOverlays = attached
+		? await entryOverlaysFor(db, attached.lorebookId, attached.reading, attachedIds)
+		: new Map()
+	// The cast ends as the reading has them: the one character version in force.
+	const members = await membersAsRead(
+		db,
+		nodes.map((n) => n.id),
+		{ reading }
+	)
 	// Each end as the reading sees it: its amended title, and Off/archived
 	// as amended by then. An entry end the session does not see — by the
 	// one rule its places are seen by (plan A27, `seesPlace`) — drops the edge.
 	const entryNames = new Map<number, string>()
 	for (const e of entries) {
-		const seen = entryAt(
-			{ id: e.id, name: e.title ?? "", enabled: e.enabled, archived: e.archived },
-			overlays,
-			reading
-		)
+		const row = { id: e.id, name: e.title ?? "", enabled: e.enabled, archived: e.archived }
+		const seen =
+			attached && e.lorebookId === attached.lorebookId
+				? entryAt(row, attachedOverlays, attached.reading)
+				: entryAt(row, overlays, reading)
 		if (!seesPlace(seen, "session")) continue
 		entryNames.set(e.id, typeof seen.name === "string" ? seen.name : "")
 	}
 	const nodeNames = new Map<number, string>()
 	for (const n of nodes) {
-		const seen = castMemberAt(n, castOverlays, reading, { keepCard: true })
-		if (seen.nodeVisibility === "hidden") continue
-		nodeNames.set(n.id, seen.name ?? "")
+		const seen = members.get(n.id)
+		if (!seen || seen.nodeVisibility === "hidden") continue
+		nodeNames.set(n.id, seen.shownName)
 	}
 	const live = (nodeId: number | null, entryId: number | null) =>
 		entryId != null ? entryNames.has(entryId) : nodeId != null && nodeNames.has(nodeId)

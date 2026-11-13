@@ -34,6 +34,8 @@ import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	declarations,
+	declarationsAndVariableKeys,
+	humanizeCamel,
 	humanizeTypeId,
 	type Decl
 } from "$lib/server/pipelines/config/panel"
@@ -311,6 +313,10 @@ export interface LibraryTemplate {
 	/** The pipeline it was authored in, when it records one. */
 	origin?: string
 	usedBy: string[]
+	/** 🚧 Variable layouts only: the layout reference, null on a person's older row. */
+	reference?: string | null
+	/** 🚧 Variable layouts only: whether this row is the pub's layout for its variable. */
+	pubDefault?: boolean
 }
 
 /**
@@ -492,7 +498,21 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 					.where(eq(schema.pipelineNodes.specVersionId, version.id))
 			).length
 
-			const decls = await declarations(db, version.id)
+			const { decls, variableKeys } = await declarationsAndVariableKeys(
+				db,
+				version.id
+			)
+			// Every variable a step renders, so the library lists each one's
+			// layouts — the keys declare no setting, only what they render.
+			for (const k of variableKeys) {
+				variableSlots.add(k.slot)
+				const v = getVariable(k.variableId)
+				for (const engine of k.engines)
+					variableLabels.set(
+						`${k.variableId}#${engine}`,
+						`${i18nText(v?.i18n?.name) ?? humanizeCamel(k.path)} · ${languageOf(engine)}`
+					)
+			}
 			scriptSeams = (await stepSeamsOf(db, version.id, { decls, byPin }))
 				.seams
 			for (const d of decls) {
@@ -516,14 +536,6 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 						)
 				}
 				if (d.control === "sampling-ref") samplingSlots.add(d.slot)
-				if (d.control === "variable-template-ref" && d.variableId) {
-					variableSlots.add(d.slot)
-					for (const engine of engines)
-						variableLabels.set(
-							`${d.variableId}#${engine}`,
-							`${d.label ?? d.variableId} · ${languageOf(engine)}`
-						)
-				}
 				if (d.control === "context-template-ref" && d.nodeDefinitionId) {
 					templateSlots.add(d.slot)
 					for (const engine of engines) {
@@ -621,13 +633,20 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 	})
 
 	const variableUse = await usageIndex(db, variableSlots, labels)
-	const variableTemplates: LibraryTemplate[] = (
+	const variableRows = (
 		await db
 			.select()
 			.from(schema.pipelineVariableTemplates)
 			.orderBy(asc(schema.pipelineVariableTemplates.id))
+	).filter((t: any) => !off.owns(t.ownerPluginId))
+	// Every use of a layout, by the one rule the variable page counts with.
+	const { layoutRowUses } = await import(
+		"$lib/server/pipelines/config/variableLayoutsView"
 	)
-		.filter((t: any) => !off.owns(t.ownerPluginId))
+	const rowUses = await layoutRowUses(db, variableRows as any[])
+	const byName = (a: { name: string }, b: { name: string }) =>
+		a.name.localeCompare(b.name)
+	const variableTemplates: LibraryTemplate[] = variableRows
 		.map((t: any) => {
 		// The registry is a fact about the running build and the row came from
 		// the database, so a layout whose plugin is disabled is normal rather
@@ -649,7 +668,18 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			poolLabel:
 				variableLabels.get(`${t.variableId}#${engine}`) ??
 				`${label} · ${languageOf(engine)}`,
-			usedBy: [...(variableUse.get(t.id) ?? [])].sort()
+			usedBy: [
+				...(rowUses.get(t.id)?.pub ? ["This pub's layout"] : []),
+				...[...(rowUses.get(t.id)?.presets ?? [])]
+					.sort(byName)
+					.map((p) => `Preset ${p.name}`),
+				...[...(rowUses.get(t.id)?.namedBy ?? [])]
+					.sort(byName)
+					.map((n) => `Named by ${n.name}`),
+				...[...(variableUse.get(t.id) ?? [])].sort()
+			],
+			reference: t.reference ?? null,
+			pubDefault: !!t.pubDefault
 		}
 	})
 

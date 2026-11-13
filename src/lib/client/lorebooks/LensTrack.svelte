@@ -4,7 +4,7 @@
 	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
 	import {
 		lensDescriptor,
-		LORE_LENS_REGISTRY,
+		lensesShown,
 		shortcutLabel
 	} from "./lenses/registry"
 
@@ -16,9 +16,10 @@
 	 * The right end of the pool's header line (design A.3), where HOW sits
 	 * beside the thing it draws. One value from a short fixed set, so it is a
 	 * segmented track (STYLE-GUIDE §6.5), the view header's width switch in
-	 * shape: seven 32px icon buttons in a `surface-100-900` track, the chosen
-	 * one tonal primary with `aria-pressed`, each named in its `title` (with
-	 * its shortcut) and its `aria-label`.
+	 * shape: 32px icon buttons (seven, five without advanced controls) in a
+	 * `surface-100-900` track, the chosen one tonal primary with
+	 * `aria-pressed`, each named in its `title` (with its shortcut) and its
+	 * `aria-label`.
 	 *
 	 * Compact (design A.4) is one 40px toolbar button wearing the chosen
 	 * lens's icon, opening a popout of `role="radio"` rows (§6.3).
@@ -30,12 +31,14 @@
 	 */
 	interface Props {
 		value: LoreLens
+		/** Advanced controls are on: Graph and Lives are in the track. */
+		advancedControls: boolean
 		onselect: (lens: LoreLens) => void
 		/** One popout button instead of the track (the compact find row). */
 		compact?: boolean
 	}
 
-	let { value, onselect, compact = false }: Props = $props()
+	let { value, advancedControls, onselect, compact = false }: Props = $props()
 
 	let open = $state(false)
 
@@ -79,7 +82,7 @@
 						role="radiogroup"
 						aria-label="Show as"
 					>
-						{#each LORE_LENS_REGISTRY as d (d.id)}
+						{#each lensesShown(advancedControls) as d (d.id)}
 							{@const Icon = d.icon}
 							{@const reason = d.reason?.() ?? null}
 							{@const checked = value === d.id}
@@ -119,7 +122,7 @@
 		aria-label="Show as"
 		data-lore-lens-track
 	>
-		{#each LORE_LENS_REGISTRY as d (d.id)}
+		{#each lensesShown(advancedControls) as d (d.id)}
 			{@const Icon = d.icon}
 			{@const reason = d.reason?.() ?? null}
 			{@const selected = value === d.id}

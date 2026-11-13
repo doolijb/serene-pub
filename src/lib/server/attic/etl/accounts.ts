@@ -90,6 +90,8 @@ export async function restoreUserSettings(
 			showHomePageBanner: s.showHomePageBanner,
 			enableEasyCharacterCreation: s.enableEasyCharacterCreation,
 			showAllCharacterFields: s.showAllCharacterFields,
+			// ★B (2026-11-10): the full form was opted into, so advanced controls start on.
+			showAdvancedControls: s.showAllCharacterFields === true,
 			backgroundImagePath: s.backgroundImagePath,
 			backgroundMediaId: null,
 			backgroundOpacity: s.backgroundOpacity,

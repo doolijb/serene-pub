@@ -22,6 +22,8 @@
 		SECTION_DESCRIPTORS
 	} from "../sections"
 	import type { LensProps } from "./types"
+	import { getContext } from "svelte"
+	import { showsAdvancedControls } from "$lib/client/advancedControls"
 
 	let {
 		lens,
@@ -33,7 +35,7 @@
 	const book = getBookData()
 
 	let scope = $derived(bench.route.scope)
-	let section = $derived(descriptorFor(scope))
+	let section = $derived(descriptorFor(scope, book.lorebookId))
 	/**
 	 * Every door the pool draws, which is what "Everything" holds: core's,
 	 * then each of the book's rules lists (PLAN-lorebook-kinds §C). Every
@@ -47,11 +49,17 @@
 		return [
 			...coreDoors,
 			...book.rulesLists.map((list) => {
-				const door = rulesListDoor(list)
+				const door = rulesListDoor(list, book.lorebookId)
 				return drawn.has(list.typeId) ? door : { ...door, creatable: false }
 			})
 		]
 	})
+
+	// Advanced controls off hides the Graph lens, so its door goes too (★adv-D-1).
+	const userSettingsCtx = getContext<UserSettingsCtx | undefined>(
+		"userSettingsCtx"
+	)
+	const advanced = $derived(showsAdvancedControls(userSettingsCtx?.settings))
 
 	function viewRelationships(castId: number) {
 		// ONE transition, one guard (#81, plan B7): two navigates in a row
@@ -80,7 +88,7 @@
 		branchName={bench.branchName}
 		bind:hasUnsavedChanges
 		suggestionsRequest={bench.suggestionsRequest}
-		onViewRelationships={viewRelationships}
+		onViewRelationships={advanced ? viewRelationships : undefined}
 	/>
 {:else if section}
 	{#key section.id}
@@ -102,7 +110,9 @@
 			decisions={bench.decisions}
 			bind:hasUnsavedChanges
 			onFilters={bench.applyFilters}
-			onNavigateToGraph={() => bench.openLens("graph")}
+			onNavigateToGraph={advanced
+				? () => bench.openLens("graph")
+				: undefined}
 			queue={bench.queue}
 			focusField={bench.focusField}
 			onSaved={bench.onSaved}

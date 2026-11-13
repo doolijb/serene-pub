@@ -6,9 +6,11 @@ import { describe, expect, test } from "vitest"
 import { changedFields } from "$lib/shared/lorebooks/amendments"
 import {
 	draftFollowsRow,
+	emptyOwnTimbre,
 	memberDraftOf,
 	memberPatch,
-	sameMemberDraft
+	sameMemberDraft,
+	type MemberRow
 } from "./memberDraft"
 import type { CastRow } from "../castPool"
 
@@ -34,9 +36,81 @@ describe("memberDraftOf / memberPatch", () => {
 			nodeState: "active",
 			nodeVisibility: "normal",
 			spriteSet: null,
+			timbre: null,
+			postHistoryInstructions: null,
+			creatorNotes: null,
+			likeness: null,
 			name: "",
-			aliases: []
+			aliases: [],
+			description: null,
+			personality: null,
+			scenario: null,
+			firstMessage: null,
+			alternateGreetings: [],
+			groupOnlyGreetings: [],
+			exampleDialogues: null
 		})
+	})
+
+	const owned: MemberRow = {
+		...atY10,
+		postHistoryInstructions: "Keep it short.",
+		creatorNotes: {
+			text: "Notes.",
+			lang: "en",
+			variants: { fr: "Notes (fr)." }
+		},
+		likeness: { imageMediaId: 9, prompt: "red coat" }
+	}
+
+	test("post-history instructions, creator notes and likeness round-trip, variants kept", () => {
+		const patch = memberPatch(memberDraftOf(owned), true)
+		expect(patch.postHistoryInstructions).toBe("Keep it short.")
+		expect(patch.creatorNotes).toEqual({
+			text: "Notes.",
+			lang: "en",
+			variants: { fr: "Notes (fr)." }
+		})
+		expect(patch.likeness).toEqual({ imageMediaId: 9, prompt: "red coat" })
+	})
+
+	test("a draft with the flag off still sends its kept value", () => {
+		const draft = memberDraftOf({
+			...owned,
+			retold: { postHistoryInstructions: false }
+		})
+		const patch = memberPatch(draft, true)
+		expect(patch.postHistoryInstructions).toBe("Keep it short.")
+		expect(patch.retold).toEqual({})
+		const on = memberDraftOf({
+			...owned,
+			retold: { postHistoryInstructions: true, likeness: true }
+		})
+		expect(memberPatch(on, true).retold).toEqual({
+			postHistoryInstructions: true,
+			likeness: true
+		})
+	})
+
+	test("no change, no patch; an edit to one of them is a change", () => {
+		const pristine = memberDraftOf(owned)
+		expect(sameMemberDraft(memberDraftOf(owned), pristine, true)).toBe(true)
+		expect(
+			sameMemberDraft(
+				{
+					...pristine,
+					likeness: { ...pristine.likeness, negative: "hat" }
+				},
+				pristine,
+				true
+			)
+		).toBe(false)
+	})
+
+	test("a card-less member's patch carries their own three too", () => {
+		const patch = memberPatch(memberDraftOf(owned), false)
+		expect(patch.postHistoryInstructions).toBe("Keep it short.")
+		expect(patch).not.toHaveProperty("retold")
 	})
 
 	test("a carded member's patch carries their aliases but not the card's name (#114)", () => {
@@ -135,10 +209,75 @@ describe("retold fields — the member's own words for the card's (PLAN cast-ret
 		expect(draft.retold).toEqual({ description: true })
 	})
 
-	test("a background member's patch carries no retold fields", () => {
-		const patch = memberPatch(memberDraftOf(carded), false)
-		expect(patch).not.toHaveProperty("description")
-		expect(patch).not.toHaveProperty("retold")
+	test("a card-less member's patch carries its own words, empty text as null, and no retold fields", () => {
+		const draft = {
+			...memberDraftOf({ ...carded, characterId: null }),
+			alternateGreetings: ["Rooms are two silver.", ""],
+			groupOnlyGreetings: ["Welcome, all of you."]
+		}
+		const patch = memberPatch(draft, false)
+		expect(patch).toMatchObject({
+			description: "A tired innkeeper.",
+			personality: null,
+			scenario: null,
+			firstMessage: null,
+			alternateGreetings: ["Rooms are two silver.", ""],
+			groupOnlyGreetings: ["Welcome, all of you."],
+			exampleDialogues: null
+		})
+		for (const key of ["retold", "faceMediaId", "ownName", "ownNickname"])
+			expect(patch).not.toHaveProperty(key)
+	})
+
+	test("a card-less draft is dirty when its description or a greeting changed, and the patch differs only there", () => {
+		const pristine = memberDraftOf({ ...carded, characterId: null })
+		expect(sameMemberDraft({ ...pristine }, pristine, false)).toBe(true)
+
+		const described = { ...pristine, description: "A rested innkeeper." }
+		expect(sameMemberDraft(described, pristine, false)).toBe(false)
+		expect(
+			changedFields(
+				memberPatch(described, false),
+				memberPatch(pristine, false)
+			)
+		).toEqual({ description: "A rested innkeeper." })
+
+		const greeted = {
+			...pristine,
+			alternateGreetings: [...pristine.alternateGreetings, ""]
+		}
+		expect(sameMemberDraft(greeted, pristine, false)).toBe(false)
+		expect(
+			changedFields(
+				memberPatch(greeted, false),
+				memberPatch(pristine, false)
+			)
+		).toEqual({ alternateGreetings: ["Rooms are two silver.", ""] })
+	})
+
+	test("a carded member's patch keys and their order are unchanged", () => {
+		expect(Object.keys(memberPatch(memberDraftOf(carded), true))).toEqual([
+			"summary",
+			"nodeState",
+			"nodeVisibility",
+			"spriteSet",
+			"aliases",
+			"timbre",
+			"postHistoryInstructions",
+			"creatorNotes",
+			"likeness",
+			"ownName",
+			"ownNickname",
+			"description",
+			"personality",
+			"scenario",
+			"firstMessage",
+			"alternateGreetings",
+			"groupOnlyGreetings",
+			"exampleDialogues",
+			"faceMediaId",
+			"retold"
+		])
 	})
 
 	test("a carded member's patch carries every retold field, empty text as null", () => {
@@ -171,13 +310,18 @@ describe("retold fields — the member's own words for the card's (PLAN cast-ret
 		expect(sameMemberDraft(a, b, true)).toBe(true)
 	})
 
-	test("a greeting added and never written does not make the draft dirty", () => {
+	test("an empty greeting is kept as typed (a swipe), and an untouched draft is clean", () => {
 		const pristine = memberDraftOf(carded)
+		expect(sameMemberDraft({ ...pristine }, pristine, true)).toBe(true)
 		const draft = {
 			...pristine,
-			alternateGreetings: [...pristine.alternateGreetings, "  "]
+			alternateGreetings: [...pristine.alternateGreetings, ""]
 		}
-		expect(sameMemberDraft(draft, pristine, true)).toBe(true)
+		expect(sameMemberDraft(draft, pristine, true)).toBe(false)
+		expect(memberPatch(draft, true).alternateGreetings).toEqual([
+			...pristine.alternateGreetings,
+			""
+		])
 	})
 
 	test("a clean draft follows a row whose retold text moved", () => {
@@ -202,5 +346,97 @@ describe("retold fields — the member's own words for the card's (PLAN cast-ret
 		expect(
 			changedFields(memberPatch(draft, true), memberPatch(pristine, true))
 		).toEqual({ faceMediaId: 41, retold: { description: true, face: true } })
+	})
+})
+
+describe("own names in the draft (§0-D)", () => {
+	const linkedRow: CastRow = {
+		id: 1,
+		characterId: 10,
+		character: { name: "Verity", nickname: "Vee" }
+	}
+
+	test("a row lacking the fields reads as Use from card on (null)", () => {
+		const d = memberDraftOf(linkedRow)
+		expect(d.ownName).toBeNull()
+		expect(d.ownNickname).toBeNull()
+	})
+
+	test("a stored empty nickname reads as off and blank; a null reads as on", () => {
+		expect(
+			memberDraftOf({ ...linkedRow, ownNickname: "" }).ownNickname
+		).toBe("")
+		expect(
+			memberDraftOf({ ...linkedRow, ownNickname: null }).ownNickname
+		).toBeNull()
+		expect(memberDraftOf({ ...linkedRow, ownName: "" }).ownName).toBeNull()
+	})
+
+	test("on patches null; off and blank nickname patches an empty string", () => {
+		const d = memberDraftOf(linkedRow)
+		expect(memberPatch(d, true).ownName).toBeNull()
+		expect(memberPatch(d, true).ownNickname).toBeNull()
+		expect(memberPatch({ ...d, ownNickname: "" }, true).ownNickname).toBe(
+			""
+		)
+		expect(memberPatch({ ...d, ownNickname: "  " }, true).ownNickname).toBe(
+			""
+		)
+	})
+
+	test("sameMemberDraft tells a null nickname from an empty one", () => {
+		const d = memberDraftOf(linkedRow)
+		expect(sameMemberDraft(d, { ...d, ownNickname: "" }, true)).toBe(false)
+		expect(sameMemberDraft(d, { ...d, ownNickname: null }, true)).toBe(true)
+	})
+
+	test("a linked patch carries them; null stays null, text is trimmed", () => {
+		const d = memberDraftOf({ ...linkedRow, ownName: "Veritas" })
+		expect(memberPatch(d, true).ownName).toBe("Veritas")
+		expect(memberPatch(d, true).ownNickname).toBeNull()
+		expect(memberPatch({ ...d, ownName: "  " }, true).ownName).toBe("")
+		expect(memberPatch({ ...d, ownName: " Ash " }, true).ownName).toBe("Ash")
+	})
+
+	test("a background patch has no own fields", () => {
+		const d = memberDraftOf({ id: 2, name: "Tam" })
+		const patch = memberPatch(d, false)
+		expect("ownName" in patch).toBe(false)
+		expect("ownNickname" in patch).toBe(false)
+	})
+})
+
+describe("the member's own voice", () => {
+	const voiced: MemberRow = {
+		id: 4,
+		name: "Tam",
+		timbre: { description: "a low alto", language: "en" }
+	}
+
+	test("no stored timbre reads as null; a stored one as a draft", () => {
+		expect(memberDraftOf({ id: 4 }).timbre).toBeNull()
+		expect(memberDraftOf(voiced).timbre?.description).toBe("a low alto")
+	})
+
+	test("the patch carries it; null is the card's", () => {
+		expect(memberPatch(memberDraftOf({ id: 4 }), false).timbre).toBeNull()
+		expect(memberPatch(memberDraftOf(voiced), false).timbre).toEqual({
+			description: "a low alto",
+			language: "en"
+		})
+	})
+
+	test("an own voice with nothing in it writes null", () => {
+		const d = { ...memberDraftOf({ id: 4 }), timbre: emptyOwnTimbre() }
+		expect(memberPatch(d, false).timbre).toBeNull()
+		expect(sameMemberDraft(d, memberDraftOf({ id: 4 }), false)).toBe(true)
+	})
+
+	test("a changed voice is a different draft; changed back is the same", () => {
+		const d = memberDraftOf(voiced)
+		const typed = { ...d, timbre: { ...d.timbre!, description: "a bass" } }
+		expect(sameMemberDraft(d, typed, false)).toBe(false)
+		expect(sameMemberDraft(d, memberDraftOf(voiced), false)).toBe(true)
+		expect(sameMemberDraft(d, { ...d, timbre: null }, false)).toBe(false)
 	})
 })

@@ -7,6 +7,7 @@
  * the `file-pick` / `file-save` widget requests. ⚠ Not a session **action**.
  *
  * Interface stub written by supervisor P; lane P4 builds the body.
+ * 🚧 (M2e) An applet mount's `fromApplet` is passed on to be checked; it is never the cause itself.
  */
 import type { Handler } from "$lib/shared/events"
 import { db } from "$lib/server/db"
@@ -36,7 +37,26 @@ export const pluginActionsInvoke: Handler<
 			Array.isArray(input)
 		)
 			throw new Error("That request names no extension action.")
-		const result = await invokePluginAction(db, { pluginId, action, input, userId })
+		const raw = p.fromApplet as { pluginId?: unknown; sessionId?: unknown } | null | undefined
+		const fromApplet =
+			raw &&
+			typeof raw === "object" &&
+			!Array.isArray(raw) &&
+			typeof raw.pluginId === "string" &&
+			(raw.sessionId === undefined ||
+				(typeof raw.sessionId === "number" && Number.isInteger(raw.sessionId) && raw.sessionId > 0))
+				? {
+						pluginId: raw.pluginId,
+						...(raw.sessionId === undefined ? {} : { sessionId: raw.sessionId as number })
+					}
+				: undefined
+		const result = await invokePluginAction(db, {
+			pluginId,
+			action,
+			input,
+			userId,
+			...(fromApplet ? { fromApplet } : {})
+		})
 		const response = { pluginId, action, result, ...askerOf(params) }
 		emitToUser("pluginActions:invoke", response)
 		return response
