@@ -550,6 +550,15 @@ describe("what each service asks of the person", () => {
 		).toBe("address")
 	})
 
+	test("external audio.cpp asks only its address, like ComfyUI", () => {
+		expect(
+			serviceSetupNeed({
+				type: CONNECTION_TYPE.AUDIOCPP,
+				category: "local"
+			})
+		).toBe("address")
+	})
+
 	test("the chips read as the plan names them", () => {
 		expect(SETUP_NEED_LABELS).toEqual({
 			key: "Needs an API key",
@@ -560,7 +569,8 @@ describe("what each service asks of the person", () => {
 	})
 
 	test("AI Horde is free and queued; NovelAI and BFL need a key", () => {
-		const need = (type: string) => items.find((i) => i.type === type)?.setupNeed
+		const need = (type: string) =>
+			items.find((i) => i.type === type)?.setupNeed
 		expect(need(CONNECTION_TYPE.HORDE)).toBe("free")
 		expect(need(CONNECTION_TYPE.NOVELAI)).toBe("key")
 		expect(need(CONNECTION_TYPE.BFL)).toBe("key")
@@ -568,7 +578,8 @@ describe("what each service asks of the person", () => {
 
 	test("the presets that draw are listed under Images too", () => {
 		const gemini = items.find(
-			(i) => i.presetSlug === "google-gemini" && i.modality === "image-gen"
+			(i) =>
+				i.presetSlug === "google-gemini" && i.modality === "image-gen"
 		)
 		expect(gemini?.type).toBe(CONNECTION_TYPE.OPENAI)
 	})

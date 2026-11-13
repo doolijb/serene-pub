@@ -513,10 +513,23 @@ async function fetchListing(
 			listModels(connection as any),
 			timeout
 		])) as ModelListing
-		return {
+		const result = {
 			models: Array.isArray(listing?.models) ? listing.models : [],
 			error: listing?.error ?? null
 		}
+		// A sync nobody forced — the one a list asks for as it opens, or at
+		// boot — fails silently into a red row otherwise. Name the endpoint
+		// and the failure; never credentials (see logComfyFetch-style shape).
+		if (result.error) {
+			const row = connection as { id?: unknown; name?: unknown }
+			console.error("[sync-models]", {
+				connectionId: typeof row.id === "number" ? row.id : null,
+				name: typeof row.name === "string" ? row.name : null,
+				type: (connection as { type?: unknown }).type ?? null,
+				error: result.error
+			})
+		}
+		return result
 	} catch (e: any) {
 		return { models: [], error: e?.message ?? String(e) }
 	} finally {
