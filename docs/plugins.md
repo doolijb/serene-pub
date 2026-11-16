@@ -36,7 +36,7 @@ Some limits hold for every plugin, whatever its package asks for:
 
 Others hold until you approve a permission that lifts them, and the list says which are left:
 
-- With no network permission, it can't reach the internet or your local network. With one, it still can't reach a site it doesn't list, or this computer and your local network unless it names them.
+- With no network permission, it can't reach the internet or your local network. With one, it still can't reach a site it doesn't list, or this computer and your local network unless it names them. A reply bigger than 4 MB is refused; a plugin keeps bigger things in its own storage.
 - Without permission to write to sessions, it can't send or draft messages as you, or change a session's stats or states. Each half needs its own permission.
 - Without an event permission, it can't hear what happens in sessions that don't use it. With one, it hears that event in every session on this pub.
 - Without storage, it can't keep files of its own.

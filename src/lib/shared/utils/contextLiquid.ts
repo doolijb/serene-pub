@@ -54,6 +54,7 @@ import type {
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter, type BlockRole } from "./PromptBlockFormatter"
 import { strokeList } from "./strokeList"
+import { storyDateDeltaText, storyDateText } from "$lib/shared/lorebooks/storyDateText"
 import { explicitLayoutText } from "./contextHandlebarsHelpers"
 import { VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
 import {
@@ -184,6 +185,12 @@ const padFilter = (n: unknown, width: unknown = 2) =>
 		? ""
 		: String(n).padStart(typeof width === "number" ? width : 2, "0")
 
+/** `{{ date | formatDate }}` — the Handlebars `formatDate` helper, as a filter. */
+const formatDateFilter = (value: unknown) => storyDateText(value)
+
+/** `{{ delta | formatDateDelta }}` — the `formatDateDelta` helper, as a filter. */
+const formatDateDeltaFilter = (value: unknown) => storyDateDeltaText(value)
+
 /** `{{ value | json }}` / `{{ value | json: 2 }}` — the `json` helper. */
 const jsonFilter = (value: unknown, indent: unknown = 0) => {
 	const out = JSON.stringify(value, null, (indent as number) ?? 0)
@@ -275,6 +282,8 @@ export function createContextLiquid({
 	liquid.registerTag("userBlock", blockTag("user", promptFormat) as any)
 
 	liquid.registerFilter("pad", padFilter)
+	liquid.registerFilter("formatDate", formatDateFilter)
+	liquid.registerFilter("formatDateDelta", formatDateDeltaFilter)
 	liquid.registerFilter("json", jsonFilter)
 	liquid.registerFilter("jsonValue", jsonValueFilter)
 	// `{{ character.strokes | strokeList: "description" }}` — the Handlebars

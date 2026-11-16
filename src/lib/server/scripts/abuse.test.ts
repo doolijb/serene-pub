@@ -11,21 +11,34 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { runScript } from "$lib/server/scripts/run"
-import { PINNED_ENGINE } from "$lib/server/scripts/engine"
+import {
+	runScriptSource,
+	SCRIPT_LOG_LINE_MAX
+} from "$lib/server/pipelines/scripts/host"
 
+// The production host: every script in the app runs through `runScriptSource`
+// (a QuickJS worker with a wall-clock backstop), so the corpus proves that path.
 const run = (
 	source: string,
-	over: Parameters<typeof runScript>[0] | object = {}
+	over: Partial<Parameters<typeof runScriptSource>[0]> = {}
 ) =>
-	runScript({
+	runScriptSource({
 		source,
-		input: { text: "hello" },
-		declaredOut: ["text"],
-		seed: "seed:abuse",
-		startedAt: 1_700_000_000_000,
-		...(over as object)
-	} as Parameters<typeof runScript>[0])
+		vars: { text: "hello" },
+		seedLabel: "seed:abuse",
+		nowMs: 1_700_000_000_000,
+		...over
+	})
+
+/** The reason of a failed run ("" for a success). */
+const reasonOf = (r: Awaited<ReturnType<typeof run>>) => (r.ok ? "" : r.reason)
+
+/** The value of a successful run, typed loosely for `.text` reads. */
+const val = (r: Awaited<ReturnType<typeof run>>) =>
+	(r.ok ? r.value : undefined) as Record<string, unknown>
+
+// Pins the engine the production host (`runScriptSource`) loads.
+const PINNED_ENGINE = "0.32.0"
 
 describe("the engine is the one we pinned", () => {
 	it("matches package.json, so a bump cannot arrive unnoticed", async () => {
@@ -49,8 +62,8 @@ describe("escape attempts have nothing to walk to", () => {
 			} catch (e) { return { text: "threw: " + e.name } }
 		`)
 		// Either spelling is a pass: what must not happen is 'object'.
-		expect(r.result).toBe("ok")
-		expect(String(r.value.text)).not.toContain("object")
+		expect(r.ok).toBe(true)
+		expect(String(val(r).text)).not.toContain("object")
 	})
 
 	it('cannot reach the host realm via Function("return this")', async () => {
@@ -59,8 +72,8 @@ describe("escape attempts have nothing to walk to", () => {
 			return { text: [typeof g.process, typeof g.require, typeof g.fetch,
 			                typeof g.globalThis.Buffer].join(",") }
 		`)
-		expect(r.result).toBe("ok")
-		expect(r.value.text).toBe("undefined,undefined,undefined,undefined")
+		expect(r.ok).toBe(true)
+		expect(val(r).text).toBe("undefined,undefined,undefined,undefined")
 	})
 
 	it("has no module loader, no network and no clock to spin on", async () => {
@@ -69,8 +82,8 @@ describe("escape attempts have nothing to walk to", () => {
 			                "setInterval","process","Buffer","WebAssembly"]
 				.map(function (k) { return k + "=" + typeof globalThis[k] }).join(" ") }
 		`)
-		expect(r.result).toBe("ok")
-		expect(String(r.value.text)).not.toMatch(/=(function|object)/)
+		expect(r.ok).toBe(true)
+		expect(String(val(r).text)).not.toMatch(/=(function|object)/)
 	})
 
 	it("cannot read the host's script through ctx", async () => {
@@ -79,14 +92,14 @@ describe("escape attempts have nothing to walk to", () => {
 		const r = await run(`
 			return { text: Object.getOwnPropertyNames(ctx).sort().join(",") }
 		`)
-		expect(r.value.text).toBe("log,random")
+		expect(val(r).text).toBe("log,random")
 	})
 
 	it("cannot make ctx.random or ctx.log return a host object", async () => {
 		const r = await run(`
 			return { text: typeof ctx.random() + "," + typeof ctx.log("x") }
 		`)
-		expect(r.value.text).toBe("number,undefined")
+		expect(val(r).text).toBe("number,undefined")
 	})
 })
 
@@ -99,7 +112,7 @@ describe("prototype pollution stays inside the sandbox", () => {
 			Object.prototype.polluted = "yes";
 			return { text: String(({}).polluted) }
 		`)
-		expect(r.value.text).toBe("yes")
+		expect(val(r).text).toBe("yes")
 	})
 
 	it("cannot reach across evaluations, because each gets a fresh context", async () => {
@@ -107,14 +120,14 @@ describe("prototype pollution stays inside the sandbox", () => {
 			Object.prototype.polluted = "yes";
 			return { text: "set" }
 		`)
-		expect(first.result).toBe("ok")
+		expect(first.ok).toBe(true)
 
 		const second = await run(`
 			return { text: String(({}).polluted) }
 		`)
 		// The security property, the purity law (F11) and the replay property,
 		// all from the same move: no state survives between runs.
-		expect(second.value.text).toBe("undefined")
+		expect(val(second).text).toBe("undefined")
 	})
 
 	it("cannot pollute the host process", async () => {
@@ -126,8 +139,8 @@ describe("prototype pollution stays inside the sandbox", () => {
 describe("the clocks hold", () => {
 	it("interrupts a bare infinite loop", async () => {
 		const r = await run(`while (true) {}`, { timeoutMs: 150 })
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(/too long|interrupt/i)
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).toMatch(/timeout after \d+ms/)
 	})
 
 	it("interrupts catastrophic regex backtracking", async () => {
@@ -143,8 +156,8 @@ describe("the clocks hold", () => {
 			`var s = new Array(41).join("a") + "b"; return { text: String(/^(a+)+$/.test(s)) }`,
 			{ timeoutMs: 200 }
 		)
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(/too long|interrupt/i)
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).toMatch(/timeout after \d+ms/)
 	})
 
 	it("interrupts a loop that swallows its own exceptions", async () => {
@@ -154,14 +167,14 @@ describe("the clocks hold", () => {
 		const r = await run(`while (true) { try { null.x } catch (e) {} }`, {
 			timeoutMs: 150
 		})
-		expect(r.result).toBe("err")
+		expect(r.ok).toBe(false)
 	})
 
 	it("still finishes fast work well inside the budget", async () => {
 		// The corpus must not pass by refusing everything.
 		const r = await run(`return { text: text.toUpperCase() }`)
-		expect(r.result).toBe("ok")
-		expect(r.value.text).toBe("HELLO")
+		expect(r.ok).toBe(true)
+		expect(val(r).text).toBe("HELLO")
 	})
 })
 
@@ -171,7 +184,7 @@ describe("allocation bombs surface as script errors, not host pressure", () => {
 	// green — the *interrupt* was catching the bombs, so the cases proved
 	// nothing about §7 item 4. The budget is now far past what the allocation
 	// takes, and the reason is asserted, so only the memory cap can pass them.
-	const ROOMY = { timeoutMs: 30_000, memoryBytes: 2 * 1024 * 1024 }
+	const ROOMY = { timeoutMs: 30_000, memoryLimitBytes: 2 * 1024 * 1024 }
 
 	// Two different engine guards, and both count. An allocation that grows the
 	// heap trips the memory cap; one that grows a single string trips a
@@ -185,9 +198,11 @@ describe("allocation bombs surface as script errors, not host pressure", () => {
 			`var a = []; while (true) { a.push({ x: 1, y: 2, z: [1, 2, 3] }) }`,
 			ROOMY
 		)
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(ALLOCATION_GUARD)
-		expect(r.reason).not.toMatch(/interrupt|too long and was/i)
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).toMatch(ALLOCATION_GUARD)
+		expect(reasonOf(r)).not.toMatch(
+			/interrupt|timeout after|too long and was/i
+		)
 	})
 
 	it("stops a runaway string concatenation the same way", async () => {
@@ -195,9 +210,11 @@ describe("allocation bombs surface as script errors, not host pressure", () => {
 			`var s = "x"; while (true) { s = s + s } return { text: s }`,
 			ROOMY
 		)
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(ALLOCATION_GUARD)
-		expect(r.reason).not.toMatch(/interrupt|too long and was/i)
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).toMatch(ALLOCATION_GUARD)
+		expect(reasonOf(r)).not.toMatch(
+			/interrupt|timeout after|too long and was/i
+		)
 	})
 
 	it("keeps the cap per context, so the next script has its full budget", async () => {
@@ -208,8 +225,8 @@ describe("allocation bombs surface as script errors, not host pressure", () => {
 			`var a = []; for (var i = 0; i < 5000; i++) a.push(i); return { text: String(a.length) }`,
 			ROOMY
 		)
-		expect(after.result).toBe("ok")
-		expect(after.value.text).toBe("5000")
+		expect(after.ok).toBe(true)
+		expect(val(after).text).toBe("5000")
 	})
 })
 
@@ -218,85 +235,66 @@ describe("output is bounded like network input", () => {
 		const r = await run(`return { text: new Array(200000).join("x") }`, {
 			maxOutputBytes: 1024
 		})
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(/over its ceiling of 1024/)
-	})
-
-	it("caps a log line rather than letting it into a receipt whole", async () => {
-		const r = await run(
-			`ctx.log(new Array(50000).join("y")); return { text: "ok" }`
-		)
-		expect(r.result).toBe("ok")
-		expect(r.logs[0]!.length).toBeLessThanOrEqual(2000)
+		expect(r.ok).toBe(false)
+		// Production words the ceiling `output exceeds <n> bytes` (was `over its ceiling of 1024`).
+		expect(reasonOf(r)).toMatch(/output exceeds 1024 bytes/)
 	})
 })
 
 describe("the declared-I/O rule has teeth", () => {
-	it("fails a return carrying an undeclared key, naming it", async () => {
-		// Stripping it silently would be an edit that stores cleanly and does
-		// nothing — the exact defect class the config layer exists to refuse.
-		const r = await run(`return { text: "a", sneaky: "b" }`)
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(/'sneaky'/)
-	})
-
 	it("gives the script only what it declared", async () => {
 		const r = await run(`return { text: typeof secret }`, {
-			input: { text: "hi" },
-			declaredOut: ["text"]
+			vars: { text: "hi" }
 		})
 		// `secret` was never serialized in, so it is not merely unreadable —
 		// it is not there. Least privilege at the data level.
-		expect(r.value.text).toBe("undefined")
+		expect(val(r).text).toBe("undefined")
 	})
 
 	it("treats a bare return as passthrough, not as an empty write", async () => {
 		const r = await run(`if (text.length > 0) return; return { text: "" }`)
-		expect(r.result).toBe("ok")
-		expect(r.passthrough).toBe(true)
-		expect(r.value).toEqual({})
-	})
-
-	it("refuses a transform that returns a scalar", async () => {
-		const r = await run(`return "just a string"`)
-		expect(r.result).toBe("err")
-		expect(r.reason).toMatch(/must return an object/)
-	})
-
-	it("lets a verdict operation return a scalar, and never merges it", async () => {
-		const r = await run(`return text.indexOf("l")`, {
-			semantics: "verdict",
-			declaredOut: []
-		})
-		expect(r.result).toBe("ok")
-		expect(r.verdict).toBe(2)
-		expect(r.value).toEqual({})
+		expect(r.ok).toBe(true)
+		// Production answers a bare return as `value === undefined` (was `passthrough: true, value: {}`).
+		expect(r.ok && r.value).toBeUndefined()
 	})
 })
 
 describe("nothing ambient survives, so a script replays", () => {
-	it("pins Date.now() and new Date() to the run's start", async () => {
-		const r = await run(
-			`return { text: [Date.now(), new Date().getTime(), Date().length > 0].join(",") }`,
-			{ startedAt: 1_700_000_000_000 }
-		)
-		expect(r.value.text).toBe("1700000000000,1700000000000,true")
-	})
-
 	it("leaves an explicit date alone — only the ambient one is pinned", async () => {
 		const r = await run(
 			`return { text: String(new Date(86400000).getTime()) }`
 		)
-		expect(r.value.text).toBe("86400000")
+		expect(val(r).text).toBe("86400000")
+	})
+
+	it("pins a bare new Date() and Date() to the run's start, like Date.now (★K-3)", async () => {
+		const r = await run(`
+			return {
+				text: [
+					new Date().getTime(),
+					Date.now(),
+					new Date(Date()).getTime() === new Date(new Date().toString()).getTime(),
+					new Date(0).getTime()
+				].join(",")
+			}
+		`)
+		expect(val(r).text).toBe("1700000000000,1700000000000,true,0")
+		const later = await run(
+			`return { text: String(new Date().getTime()) }`,
+			{
+				nowMs: 1_700_000_005_000
+			}
+		)
+		expect(val(later).text).toBe("1700000005000")
 	})
 
 	it("gives the same run seed the same numbers, twice", async () => {
 		const src = `return { text: [ctx.random(), Math.random()].join(",") }`
-		const a = await run(src, { seed: "seed:replay" })
-		const b = await run(src, { seed: "seed:replay" })
-		const c = await run(src, { seed: "seed:different" })
-		expect(a.value.text).toBe(b.value.text)
-		expect(a.value.text).not.toBe(c.value.text)
+		const a = await run(src, { seedLabel: "seed:replay" })
+		const b = await run(src, { seedLabel: "seed:replay" })
+		const c = await run(src, { seedLabel: "seed:different" })
+		expect(val(a).text).toBe(val(b).text)
+		expect(val(a).text).not.toBe(val(c).text)
 	})
 
 	it("remaps Math.random onto the same stream rather than removing it", async () => {
@@ -305,39 +303,62 @@ describe("nothing ambient survives, so a script replays", () => {
 		const r = await run(
 			`return { text: String(Math.random() === Math.random()) }`
 		)
-		expect(r.value.text).toBe("false")
+		expect(val(r).text).toBe("false")
 		const same = await run(`
 			var a = ctx.random(), b = Math.random();
 			return { text: String(a !== b) }
 		`)
-		expect(same.value.text).toBe("true")
+		expect(val(same).text).toBe("true")
 	})
+})
+
+describe("a log line is bounded (★K-3)", () => {
+	it("cuts one line at the cap and keeps the rest of the log", async () => {
+		const r = await run(`
+			ctx.log(new Array(${SCRIPT_LOG_LINE_MAX} + 101).join("x"));
+			ctx.log("after");
+			return { text: "ok" }
+		`)
+		expect(r.logs).toHaveLength(2)
+		expect(r.logs[0]).toHaveLength(SCRIPT_LOG_LINE_MAX)
+		expect(r.logs[1]).toBe("after")
+	})
+})
+
+describe("the deleted in-process path's other guarantees, where the chain holds them instead (★K-3, 2026-11-14)", () => {
+	// `pipelines/scripts/chains.ts:516-548`: a transform that returns a value for
+	// a subject its step does not declare is kept, recorded "read-only, value
+	// kept"; `validShape` refuses a scalar where the type declares an object.
+	it.todo(
+		"a return carrying an undeclared out — the chain keeps the value and records the reason, not an error"
+	)
+	it.todo(
+		"a transform returning a scalar for an object type — `validShape` refuses it in the chain, not the host"
+	)
+	it.todo(
+		"a verdict operation returning a scalar — the chain never merges it"
+	)
+	it.todo(
+		"ctx.log lines from a link that then failed — the chain records `logs` on the failed link"
+	)
 })
 
 describe("a failing link degrades, it does not throw (S2)", () => {
 	it("reports a thrown Error as a reason a user can act on", async () => {
 		const r = await run(`throw new Error("my filter is broken")`)
-		expect(r.result).toBe("err")
-		expect(r.reason).toContain("my filter is broken")
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).toContain("my filter is broken")
 	})
 
 	it("reports a thrown non-Error without rendering [object Object]", async () => {
 		const r = await run(`throw { weird: true }`)
-		expect(r.result).toBe("err")
-		expect(r.reason).not.toContain("[object Object]")
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).not.toContain("[object Object]")
 	})
 
 	it("reports a syntax error rather than crashing the host", async () => {
 		const r = await run(`this is not javascript`)
-		expect(r.result).toBe("err")
-		expect(r.reason).toBeTruthy()
-	})
-
-	it("keeps ctx.log lines from a link that then failed", async () => {
-		// The receipt has to say what a broken filter managed to do before it
-		// broke, or "which of my thirty filters ate that word" is unanswerable.
-		const r = await run(`ctx.log("got here"); throw new Error("then died")`)
-		expect(r.result).toBe("err")
-		expect(r.logs).toEqual(["got here"])
+		expect(r.ok).toBe(false)
+		expect(reasonOf(r)).toBeTruthy()
 	})
 })

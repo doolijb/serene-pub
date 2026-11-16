@@ -55,12 +55,16 @@ import {
 import {
 	buildEvidenceProfile,
 	buildGazetteer,
+	buildPoolTermProfile,
 	entityEvidence,
 	evidence,
 	type Evidence,
 	type EvidenceProfile,
-	type GazetteerName
+	type Gazetteer,
+	type GazetteerName,
+	type PoolTermProfile
 } from "$lib/server/pipelines/ranking/entities"
+import { createHash } from "node:crypto"
 import type { Candidate } from "$lib/server/pipelines/ranking/select"
 import type {
 	RetrievalParams,
@@ -321,6 +325,79 @@ const selectiveNote = (entry: LoreRow): string => {
  */
 export const MAX_RECURSION_DEPTH = 10
 
+/**
+ * Two caches for what depends on the pool and the cast alone (plan ruling C3).
+ * Keyed on content, because `keywordQuery` is handed no book id: a write that
+ * matters changes a name, a key or content, so it changes the input and the
+ * key; a write that changes none of them cannot change either structure.
+ * Both are small LRUs, one slot per (book, lane) pool in recent use.
+ */
+const POOL_CACHE_SLOTS = 16
+
+const lruGet = <V>(cache: Map<string, V>, key: string): V | undefined => {
+	const hit = cache.get(key)
+	if (hit === undefined) return undefined
+	cache.delete(key)
+	cache.set(key, hit)
+	return hit
+}
+const lruSet = <V>(cache: Map<string, V>, key: string, value: V) => {
+	cache.delete(key)
+	cache.set(key, value)
+	while (cache.size > POOL_CACHE_SLOTS)
+		cache.delete(cache.keys().next().value as string)
+}
+
+/** The key *is* the ordered input, so a hit is exact. */
+const gazetteerCache = new Map<string, Gazetteer>()
+const gazetteerFor = (names: readonly GazetteerName[]): Gazetteer => {
+	const key = JSON.stringify(names.map((n) => [n.ref.kind, n.ref.id, n.name]))
+	const hit = lruGet(gazetteerCache, key)
+	if (hit) return hit
+	const built = buildGazetteer(names)
+	lruSet(gazetteerCache, key, built)
+	return built
+}
+
+const poolCache = new Map<
+	string,
+	{ texts: readonly string[]; profile: PoolTermProfile }
+>()
+const poolKey = (texts: readonly string[]) =>
+	createHash("sha256")
+		.update(String(texts.length))
+		.update("\u0000")
+		.update(texts.join("\u0000"))
+		.digest("hex")
+
+/**
+ * The pool's term profile. A hit is used only after `length` and every text
+ * are checked with `===`, so a hash collision recomputes instead of lying.
+ * `keyOf` is a test seam to force that collision.
+ */
+export function poolTermProfileFor(
+	entryTexts: readonly string[],
+	keyOf: (texts: readonly string[]) => string = poolKey
+): PoolTermProfile {
+	const key = keyOf(entryTexts)
+	const hit = lruGet(poolCache, key)
+	if (
+		hit &&
+		hit.texts.length === entryTexts.length &&
+		hit.texts.every((t, i) => t === entryTexts[i])
+	)
+		return hit.profile
+	const profile = buildPoolTermProfile(entryTexts)
+	lruSet(poolCache, key, { texts: [...entryTexts], profile })
+	return profile
+}
+
+/** Test-only: forget both caches. */
+export function resetPoolCaches() {
+	gazetteerCache.clear()
+	poolCache.clear()
+}
+
 export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	const { entries, messages, entityRefs, retrieval, countTokens } = input
 
@@ -499,17 +576,19 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	 * key, and this asks what the conversation is about right now. Both default
 	 * to 10, so the two only part company once somebody moves one.
 	 */
+	const entryTexts = entries.map(entryText)
 	const profile = entries.length
 		? buildEvidenceProfile({
 				window: guaranteed.raw,
-				entryTexts: entries.map(entryText),
+				entryTexts,
+				pool: poolTermProfileFor(entryTexts),
 				/**
 				 * Cast first, entries second: `buildGazetteer` lets the
 				 * first writer of a name keep it, and a character called
 				 * "Vell" should resolve to the character rather than to an
 				 * entry titled after her.
 				 */
-				gazetteer: buildGazetteer([
+				gazetteer: gazetteerFor([
 					...(entityRefs ?? []),
 					...entries.flatMap((e) =>
 						e.name
@@ -552,7 +631,10 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	const settled = new Set<string>()
 	const keyOf = (e: LoreRow) => `${e.source}:${e.id}`
 	/** Every pass's windows, read back for `patternsNotRun` at the end. */
-	const scannedWindows: Array<{ window: ScanWindow; conditionWindow: ScanWindow }> = []
+	const scannedWindows: Array<{
+		window: ScanWindow
+		conditionWindow: ScanWindow
+	}> = []
 
 	for (const entry of entries) {
 		if (entry.archived === true) {
@@ -773,11 +855,25 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 							// Exact hits first; a trigram (fuzzy) hit has no
 							// offset and never "matched" its key, so it says so.
 							matched: [...keyHits]
-								.sort((a, b) => Number(a.index < 0) - Number(b.index < 0))
+								.sort(
+									(a, b) =>
+										Number(a.index < 0) -
+										Number(b.index < 0)
+								)
 								.map((h) =>
 									h.index < 0
-										? { key: h.key, messageId: null, fuzzy: true }
-										: { key: h.key, messageId: messageAt(window, h.index) }
+										? {
+												key: h.key,
+												messageId: null,
+												fuzzy: true
+											}
+										: {
+												key: h.key,
+												messageId: messageAt(
+													window,
+													h.index
+												)
+											}
 								)
 						}
 					: {})
@@ -914,7 +1010,8 @@ function notRunByEntry(
 		keys: patternsNotRun(window),
 		secondaryKeys: patternsNotRun(conditionWindow)
 	}))
-	if (lists.every((l) => l.keys.size === 0 && l.secondaryKeys.size === 0)) return out
+	if (lists.every((l) => l.keys.size === 0 && l.secondaryKeys.size === 0))
+		return out
 	for (const entry of entries) {
 		const sensitive = !!entry.caseSensitive
 		const found = new Map<string, string>()
@@ -922,7 +1019,9 @@ function notRunByEntry(
 			for (const key of patternRequestsOf([entry], list)) {
 				if (found.has(key.pattern)) continue
 				for (const l of lists) {
-					const why = l[list].get(patternKey(key.pattern, sensitive))?.why
+					const why = l[list].get(
+						patternKey(key.pattern, sensitive)
+					)?.why
 					if (why) {
 						found.set(key.pattern, why)
 						break

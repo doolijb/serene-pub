@@ -1,0 +1,52 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+[data-upgrade 0108] pub binding core:genre/story core:event/message-respond@1 → acme:spec/alt-reply dropped (R33: pub-level bindings retired)
+
+stdout | src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+[data-upgrade 0108] registrations: 9 session, 18 preset, 6 genre row(s); 1 configuration(s) kept as disabled presets; 1 pub binding(s) dropped; not carried: session #100 tasks.groups.sweep
+
+ ❯ |int| src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts (2 tests | 1 failed) 1211ms
+     × moves bindings, toggles, configurations and tasks into registration rows 749ms
+Warning: could not read /tmp/serene-pub-lock-test-iKtb7D/data/meta.json to refresh the database lock; skipping this refresh.
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+AssertionError: expected [ …(14) ] to deeply equal [ …(12) ]
+
+- Expected
++ Received
+
+@@ -1,6 +1,8 @@
+  [
++   "speak-message#read-aloud→speak-message",
++   "speak-message#say-it-as→speak-message",
+    "story-advance-time#advance-time→story-advance-time",
+    "story-answer#answer→story-answer",
+    "story-generate-image#generate-image→story-generate-image",
+    "story-illustrate-scene#illustrate-scene→story-illustrate-scene",
+    "story-look#look→story-look",
+
+ ❯ src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts:192:87
+    190|    values: { generate: { params: { maxTokens: 900 } } }
+    191|   })
+    192|   expect(p3.filter((r) => r.dropped && r.key.includes("#")).map((r) =>…
+       |                                                                                       ^
+    193|    [
+    194|     "story-advance-time#advance-time→story-advance-time",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 119 passed (120)
+      Tests  1 failed | 918 passed | 9 skipped (928)
+   Start at  16:47:11
+   Duration  190.04s (transform 7.09s, setup 665ms, import 63.74s, tests 496.09s, environment 26ms)
+

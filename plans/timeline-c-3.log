@@ -1,0 +1,113 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/pipelines/registrations/project.timelineDefault.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-project-timeline-default-OEGfYK/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/registrations/project.timelineDefault.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/registrations/project.timelineDefault.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/pipelines/registrations/project.timelineDefault.int.test.ts (1 test | 1 failed) 3778ms
+     × the first run forces it, a second changes nothing, an admin's copy is untouched 42ms
+stdout | src/lib/server/sockets/sessions.timelineDefault.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-timeline-default-WzxVpQ/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.timelineDefault.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.timelineDefault.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.timelineDefault.int.test.ts (13 tests | 3 failed) 17541ms
+     × core-lair-words-only starts them with a timeline 9ms
+     × core-lair-default starts them with a timeline 9ms
+     × core-lair-rules-and-dice starts them with a timeline 8ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.timelineDefault.int.test.ts > a new session's own notes > core-lair-words-only starts them with a timeline
+AssertionError: core-lair-words-only: This session does not fit 'Lair': this genre needs at least 1 character — the session has 0.: expected 'This session does not fit \'Lair\': t…' to be undefined
+
+- Expected:
+undefined
+
++ Received:
+"This session does not fit 'Lair': this genre needs at least 1 character — the session has 0."
+
+ ❯ create src/lib/server/sockets/sessions.timelineDefault.int.test.ts:107:50
+    105|   emit
+    106|  )
+    107|  expect(res?.error, `${seedKey}: ${res?.error}`).toBeUndefined()
+       |                                                  ^
+    108|  await (await import("$lib/server/pipelines/runtime/sessionEvents")).s…
+    109|  return res.session.id as number
+ ❯ src/lib/server/sockets/sessions.timelineDefault.int.test.ts:125:28
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.timelineDefault.int.test.ts > a new session's own notes > core-lair-default starts them with a timeline
+AssertionError: core-lair-default: This session does not fit 'Lair': this genre needs at least 1 character — the session has 0.: expected 'This session does not fit \'Lair\': t…' to be undefined
+
+- Expected:
+undefined
+
++ Received:
+"This session does not fit 'Lair': this genre needs at least 1 character — the session has 0."
+
+ ❯ create src/lib/server/sockets/sessions.timelineDefault.int.test.ts:107:50
+    105|   emit
+    106|  )
+    107|  expect(res?.error, `${seedKey}: ${res?.error}`).toBeUndefined()
+       |                                                  ^
+    108|  await (await import("$lib/server/pipelines/runtime/sessionEvents")).s…
+    109|  return res.session.id as number
+ ❯ src/lib/server/sockets/sessions.timelineDefault.int.test.ts:125:28
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.timelineDefault.int.test.ts > a new session's own notes > core-lair-rules-and-dice starts them with a timeline
+AssertionError: core-lair-rules-and-dice: This session does not fit 'Lair': this genre needs at least 1 character — the session has 0.: expected 'This session does not fit \'Lair\': t…' to be undefined
+
+- Expected:
+undefined
+
++ Received:
+"This session does not fit 'Lair': this genre needs at least 1 character — the session has 0."
+
+ ❯ create src/lib/server/sockets/sessions.timelineDefault.int.test.ts:107:50
+    105|   emit
+    106|  )
+    107|  expect(res?.error, `${seedKey}: ${res?.error}`).toBeUndefined()
+       |                                                  ^
+    108|  await (await import("$lib/server/pipelines/runtime/sessionEvents")).s…
+    109|  return res.session.id as number
+ ❯ src/lib/server/sockets/sessions.timelineDefault.int.test.ts:125:28
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |int| src/lib/server/pipelines/registrations/project.timelineDefault.int.test.ts > projectRegistrations and Story Minimal's timeline default > the first run forces it, a second changes nothing, an admin's copy is untouched
+TypeError: Cannot read properties of undefined (reading 'defaults')
+ ❯ src/lib/server/pipelines/registrations/project.timelineDefault.int.test.ts:45:37
+     43|   const core = () => rowOf(eq(schema.sessionPresets.seedKey, "core-sto…
+     44|   const seeded = await core()
+     45|   const oldDefaults = { ...((seeded.defaults as object | null) ?? {}) }
+       |                                     ^
+     46|   delete (oldDefaults as any).timeline
+     47|   // The copy an administrator made before this build: the old default…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  4 failed | 10 passed (14)
+   Start at  13:28:12
+   Duration  18.04s (transform 4.93s, setup 28ms, import 765ms, tests 21.32s, environment 1ms)
+

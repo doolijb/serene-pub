@@ -1641,3 +1641,71 @@ describe("foldInParent: a branch whose ancestor holds an overlay of a member of 
 		).rejects.toThrow(FOLD_REFUSALS.alreadyOwn)
 	})
 })
+
+describe("foldInParent: a per-turn record of an entry version", () => {
+	test("the record names the copy of the version in the notes; the book's version and the book are untouched", async () => {
+		const w = await world()
+		const fields = { name: "The square, lit" }
+		const [version] = await testDb
+			.insert(schema.entryAmendments)
+			.values({
+				lorebookId: w.book.id,
+				entryId: w.square.id,
+				year: 4,
+				month: 2,
+				day: 3,
+				fields
+			} as any)
+			.returning()
+		const [record] = await testDb
+			.insert(schema.loreImprints)
+			.values({
+				sessionId: w.session.id,
+				runId: "run-fold-version",
+				lorebookId: w.book.id,
+				subjectKind: "version",
+				subjectId: version!.id,
+				field: "name",
+				before: { v: "The square" },
+				after: { v: "The square, lit" }
+			})
+			.returning()
+		const imprint = async () =>
+			(
+				await testDb
+					.select()
+					.from(schema.loreImprints)
+					.where(eq(schema.loreImprints.id, record!.id))
+			)[0]!
+		const versionRow = async (id: number) =>
+			(
+				await testDb
+					.select()
+					.from(schema.entryAmendments)
+					.where(eq(schema.entryAmendments.id, id))
+			)[0]!
+
+		const done = await fold(w)
+
+		const after = await imprint()
+		expect(after.lorebookId).toBe(done.lorebookId)
+		expect(after.subjectId).not.toBe(version!.id)
+		const copy = await versionRow(after.subjectId)
+		const entryCopy = (
+			await testDb
+				.select()
+				.from(schema.lorebookEntries)
+				.where(eq(schema.lorebookEntries.id, copy.entryId))
+		)[0]!
+		expect(copy.lorebookId).toBe(done.lorebookId)
+		expect(entryCopy.lorebookId).toBe(done.lorebookId)
+		expect(entryCopy.title).toBe("The square")
+		expect(copy.fields).toEqual(fields)
+		expect([copy.year, copy.month, copy.day]).toEqual([4, 2, 3])
+
+		const kept = await versionRow(version!.id)
+		expect(kept.lorebookId).toBe(w.book.id)
+		expect(kept.entryId).toBe(w.square.id)
+		expect(kept.fields).toEqual(fields)
+	}, 60_000)
+})

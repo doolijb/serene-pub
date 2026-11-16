@@ -1,0 +1,18 @@
+▶ firsthand · declarations
+  ✔ session-history declares firsthandFor and firsthandBy as in-ports, not params (0.457268ms)
+  ✔ earlier-scenes declares firsthandFor and firsthandBy as in-ports, not params (0.074439ms)
+✔ firsthand · declarations (1.018536ms)
+▶ firsthand · the two reads agree
+  ✔ history filtered, summaries not: warns on the earlier scenes node (2.81375ms)
+  ✔ summaries filtered, history not: warns on the session history node (0.333859ms)
+  ✔ no warning when both are fed, or neither is (0.834867ms)
+  ✔ no warning when the document holds only one of the two node types (0.267329ms)
+✔ firsthand · the two reads agree (4.391355ms)
+ℹ tests 6
+ℹ suites 2
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 215.832297

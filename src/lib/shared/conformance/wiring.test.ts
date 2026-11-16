@@ -1686,22 +1686,35 @@ function endowedCtx(relPath: string): string[] {
 		// asks whether every declared member is one a backend can endow at
 		// all; which kind gets which is that table's, proven by the sandbox
 		// tests (`Object.keys(ctx)` per kind) and the boot's probe.
+		// Arguments by PARAMETER NAME, not position: the two backends may hand
+		// the input in differently (QuickJS sets it on a guest global before
+		// the program runs; SES splices it in), so their `buildProgram`
+		// signatures may differ. A parameter this table does not know is the
+		// loud failure this wants.
+		const supplied: Record<string, unknown> = {
+			source: "",
+			hookName: "conformanceProbe",
+			inputJson: "{}",
+			seedLabel: "conformance",
+			nowMs: 0,
+			grants: { storage: true, fetch: true },
+			annexJson: "{}"
+		}
+		const args = fn.parameters.map((p) => {
+			const name = p.name.getText(worker)
+			if (!(name in supplied))
+				throw new Error(
+					`§5: buildProgram in ${relPath} takes a parameter this ` +
+						`reader does not supply: ${name}`
+				)
+			return supplied[name]
+		})
 		program = (
 			new Function(
 				"__PRELUDE",
 				`${fn.getText(worker)}\nreturn buildProgram`
-			)("") as (
-				source: string,
-				hookName: string,
-				inputJson: string,
-				seedLabel: string,
-				nowMs: number,
-				grants: { storage: boolean; fetch: boolean }
-			) => string
-		)("", "conformanceProbe", "{}", "conformance", 0, {
-			storage: true,
-			fetch: true
-		})
+			)("") as (...a: unknown[]) => string
+		)(...args)
 	} catch (e) {
 		throw new Error(
 			`§5 could not build ${relPath}'s guest program: ${String(e)}. ` +

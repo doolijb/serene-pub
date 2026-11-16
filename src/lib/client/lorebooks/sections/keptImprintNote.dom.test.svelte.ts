@@ -61,6 +61,15 @@ describe("the kept note's words", () => {
 		expect(keptImprintLine({ ...KEPT[0], before: undefined } as any)).toBe("Category: the reply set “Harbour”. Revert clears it.")
 		expect(keptImprintLine(KEPT[1] as any)).toBe("The reply added this entry. Revert removes it.")
 	})
+
+	test("say a version by its date", () => {
+		expect(keptImprintLine({ ...KEPT[1], versionDate: "3 May 1200" } as any)).toBe(
+			"The reply added the version dated 3 May 1200. Revert removes that version, with any later edits to it; the entry and its other dates stay."
+		)
+		expect(keptImprintLine({ ...KEPT[0], versionDate: "3 May 1200" } as any)).toBe(
+			"Category: the reply set “Harbour” in the version dated 3 May 1200. Revert puts back “Docks”."
+		)
+	})
 })
 
 describe("an entry's note, written by a reply that was since replaced", () => {

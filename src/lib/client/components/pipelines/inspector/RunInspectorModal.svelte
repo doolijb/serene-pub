@@ -8,7 +8,7 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { runInspector } from "$lib/client/stores/runInspector.svelte"
-	import RunInspector from "./RunInspector.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 
 	const runId = $derived(runInspector.runId)
 
@@ -48,7 +48,11 @@
 				</button>
 			</div>
 
-			<RunInspector {runId} />
+			{#await import("./RunInspector.svelte")}
+				<LoadingState />
+			{:then { default: RunInspector }}
+				<RunInspector {runId} />
+			{/await}
 		</div>
 	</div>
 {/if}

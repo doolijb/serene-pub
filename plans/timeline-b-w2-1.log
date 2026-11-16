@@ -1,0 +1,55 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+[vitest] removed 2 stale temp entries from /tmp
+ ❯ |dom| src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts (10 tests | 1 failed) 120ms
+     × notes over a lorebook show the words and no switch 6ms
+ ❯ |dom| src/lib/client/components/lorebookForms/newLorebookTimeline.dom.test.svelte.ts (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/components/lorebookForms/newLorebookTimeline.dom.test.svelte.ts [ src/lib/client/components/lorebookForms/newLorebookTimeline.dom.test.svelte.ts ]
+CompileError: /home/jody/github/serene-pub/src/lib/client/components/lorebookForms/newLorebookTimeline.dom.test.svelte.ts:54:7 Identifier 'NewLorebookDialog' has already been declared
+https://svelte.dev/e/js_parse_error
+ 52 |  }));
+ 53 |  import NewLorebookDialog from "./NewLorebookDialog.svelte";
+ 54 |  import NewLorebookDialog from "./NewLorebookDialog.svelte";
+              ^
+ 55 |  const KITS = [
+ 56 |    {
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts > Timeline card > notes over a lorebook show the words and no switch
+AssertionError: expected 'Off: these notes follow their\n\t\t\t…' to contain 'Off: these notes follow their loreboo…'
+
+- Expected
++ Received
+
+- Off: these notes follow their lorebook's timeline.
++ Off: these notes follow their
++ 			lorebook's timeline.
+
+ ❯ src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts:177:63
+    175|   await card({ overlaysLorebook: true, timelineEnabled: false })
+    176|   expect(has('[data-field="book-timeline"]')).toBe(false)
+    177|   expect(q("[data-lore-book-timeline-follows]")?.textContent).toContai…
+       |                                                               ^
+    178|    "Off: these notes follow their lorebook's timeline."
+    179|   )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 6 passed (8)
+      Tests  1 failed | 37 passed (38)
+   Start at  09:38:39
+   Duration  10.63s (transform 14.86s, setup 67ms, import 28.08s, tests 671ms, environment 990ms)
+

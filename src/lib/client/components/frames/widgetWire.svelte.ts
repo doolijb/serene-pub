@@ -180,6 +180,14 @@ export interface WidgetWireOptions {
 	 * of its `edit`. A frame or a plugin's component never is.
 	 */
 	trusted?: () => boolean
+	/**
+	 * The peer receives `{ t: "message" }` — one held row replaced by id (SDK
+	 * `componentWire.ts`) — so a streamed update (exactly one row changed, and it
+	 * is generating) sends that row alone. `ComponentMount` sets it (its worker runs the SDK's receiver).
+	 * A frame sets nothing here: it declares `takes: ["message"]` on its `ready`, which has the same
+	 * effect for that port (see `peerDeclaredOneMessage`).
+	 */
+	peerTakesOneMessage?: boolean
 }
 
 export interface WidgetWire {
@@ -209,6 +217,32 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	 * widget saying ready again has nothing, and is sent everything.
 	 */
 	const sent = new Map<string, string>()
+	/**
+	 * Per section key, the input REFERENCE behind what the widget holds (see
+	 * `postChangedFrom`). A plain `Map` no reader tracks: a memo, not state.
+	 * Cleared wherever `sent` is, and per key when a scoped section is
+	 * withdrawn. Every section but `grants`, `layout`, `viewer` and the log
+	 * is filed here.
+	 */
+	const heldFrom = new Map<string, unknown>()
+	/**
+	 * With `peerTakesOneMessage`: the input rows (by reference) and the
+	 * `channels` the widget's log was last delivered for. A plain variable no
+	 * reader tracks. Cleared wherever `sent` is.
+	 */
+	let deliveredLog: {
+		rows: readonly unknown[]
+		channels: readonly string[] | undefined
+	} | null = null
+	/**
+	 * The peer declared on its `ready` that it takes `{ t: "message" }` (SDK `FrameHostMessage`
+	 * `ready.takes`, ★M-1 2026-11-14) — an iframe has no SDK-run receiver, so only its own word
+	 * turns the one-row post on. Read afresh on every `ready` (a replayed one without it turns it
+	 * off), cleared on a new port. A declaration of understanding, never a grant: nothing crosses
+	 * but the row the frame already receives in its lists.
+	 */
+	let peerDeclaredOneMessage = false
+	const takesOneMessage = () => opts.peerTakesOneMessage === true || peerDeclaredOneMessage
 	/** Filed for a section that went out but could not be compared (a cycle): never equal to a later post. */
 	const UNCOMPARED = "\u0000uncompared"
 	const input = () => opts.inputs()
@@ -246,15 +280,33 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	 * (a cycle) is recorded as held-but-uncompared, so a withdrawal of it is
 	 * still sent.
 	 */
-	function postChanged(key: string, msg: HostFrameMessage) {
+	function postChanged(key: string, msg: HostFrameMessage): boolean {
 		let json: string | null
 		try {
 			json = JSON.stringify(msg)
 		} catch {
 			json = null
 		}
-		if (json !== null && sent.get(key) === json) return
-		if (post(msg)) sent.set(key, json ?? UNCOMPARED)
+		if (json !== null && sent.get(key) === json) return true
+		if (post(msg)) {
+			sent.set(key, json ?? UNCOMPARED)
+			return true
+		}
+		return false
+	}
+
+	/**
+	 * `postChanged` for a section whose input is REPLACED, never mutated in
+	 * place: the same reference as the one behind the last delivery is the same
+	 * content, so it is skipped before any serialisation or clone (`build` is
+	 * not even called). A different reference falls through to the JSON
+	 * comparison unchanged. Only for an input proven replace-only; `grants`,
+	 * `layout` and `viewer` keep `postChanged`.
+	 */
+	function postChangedFrom(key: string, ref: unknown, build: () => HostFrameMessage) {
+		if (heldFrom.has(key) && heldFrom.get(key) === ref && sent.has(key)) return
+		if (postChanged(key, build())) heldFrom.set(key, ref)
+		else heldFrom.delete(key)
 	}
 
 	/**
@@ -307,44 +359,106 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		// What it holds, before any section it covers: a scope not listed
 		// here will never be posted, and the widget may say so.
 		if (i.grants !== undefined) postChanged("grants", { t: "grants", grants: [...i.grants] })
-		if (reads.has("session") && i.session !== undefined) postChanged("session", { t: "session", session: i.session })
+		// `session`, `settings` and each scoped section are skipped by reference
+		// (`postChangedFrom`). Before, this stringified each value deeply inside
+		// the push effect, so an in-place change deep inside a `$state` proxy
+		// re-ran the push. Now the effect tracks them shallowly and `push()` reads
+		// deeply only when the reference moved: their owners (the session page's
+		// composed session, `Panel`'s settings and scoped contexts) must REPLACE a
+		// value that changed, never mutate it in place.
+		if (reads.has("session") && i.session !== undefined)
+			postChangedFrom("session", i.session, () => ({ t: "session", session: i.session! }))
 		if (reads.has("messages")) {
-			// The rows as the page holds them, narrowed at this one seam.
-			// Posted as they are, never diffed: the log is the section that
-			// moves on every token, so a comparison could never skip it —
-			// it would be one more whole serialisation of the log per token.
-			const held = project(i.messages ?? [])
-			if (i.channels && i.channels.length) {
-				// Panel scoping: only this widget's lanes, one post each.
-				for (const ch of i.channels)
-					post({
-						t: "channel",
-						channel: ch,
-						messages: held.filter((m) => (m?.channel ?? "main") === ch)
-					})
-			} else if (i.messages !== undefined) {
-				post({ t: "messages", messages: held })
+			// The rows as the page holds them, narrowed at this one seam. Never
+			// diffed by content: the log is the section that moves on every
+			// token, so a comparison could never skip it — it would be one more
+			// whole serialisation of the log per token. A peer that takes one
+			// row (`peerTakesOneMessage`) is told by REFERENCE: when the only
+			// input row that is a new object is a generating one (a streamed
+			// update), it goes alone; every other push — the settle, an edit, an
+			// add or remove, nothing moved — posts the full list, as does every
+			// push for a peer that does not.
+			const rows = i.messages ?? []
+			const prev = takesOneMessage() ? deliveredLog : null
+			const sameChannels =
+				!!prev &&
+				(prev.channels?.length ?? 0) === (i.channels?.length ?? 0) &&
+				(i.channels ?? []).every((c, k) => prev.channels![k] === c)
+			let changed = -1
+			let one = !!prev && sameChannels && i.messages !== undefined && prev.rows.length === rows.length
+			let moved = 0
+			if (one) {
+				for (let k = 0; k < rows.length; k++) {
+					const a = prev!.rows[k] as { id?: number; channel?: string } | null
+					const b = rows[k] as { id?: number; channel?: string; isGenerating?: boolean } | null
+					if (a === b) continue
+					if (a?.id !== b?.id || (a?.channel ?? "main") !== (b?.channel ?? "main") || b?.isGenerating !== true) {
+						one = false
+						break
+					}
+					changed = k
+					moved++
+				}
+			}
+			if (one && moved === 1) {
+				const row = rows[changed] as { channel?: string }
+				// A row on a lane this widget does not hold is not its to see.
+				if (!i.channels?.length || i.channels.includes(row?.channel ?? "main"))
+					post({ t: "message", message: projectMessageRow(row) as MessageV1 })
+				deliveredLog = { rows: [...rows], channels: i.channels ? [...i.channels] : undefined }
+			} else {
+				const held = project(rows)
+				if (i.channels && i.channels.length) {
+					// Panel scoping: only this widget's lanes, one post each.
+					for (const ch of i.channels)
+						post({
+							t: "channel",
+							channel: ch,
+							messages: held.filter((m) => (m?.channel ?? "main") === ch)
+						})
+				} else if (i.messages !== undefined) {
+					post({ t: "messages", messages: held })
+				}
+				deliveredLog =
+					takesOneMessage() && i.messages !== undefined
+						? { rows: [...rows], channels: i.channels ? [...i.channels] : undefined }
+						: null
 			}
 		}
-		if (reads.has("props") && i.props !== undefined) postChanged("props", { t: "props", props: i.props })
+		if (reads.has("props") && i.props !== undefined) postChangedFrom("props", i.props, () => ({ t: "props", props: i.props! }))
 		if (reads.has("settings") && i.settings !== undefined)
-			postChanged("settings", { t: "settings", settings: i.settings })
+			postChangedFrom("settings", i.settings, () => ({ t: "settings", settings: i.settings! }))
 		if (reads.has("actions") && i.actions !== undefined)
-			postChanged("actions", { t: "actions", actions: projectActions(i.actions) })
+			postChangedFrom("actions", i.actions, () => ({ t: "actions", actions: projectActions(i.actions) }))
 		// A document NESTED in a component (`onInvoke`) is handed what its
 		// component forwards — never the page's own sections besides.
 		const nested = !!i.onInvoke
 		if (reads.has("annex") && annexCtx && !nested)
-			postChanged("annex", { t: "annex", annex: JSON.parse(JSON.stringify(annexCtx.current)) })
+			postChangedFrom("annex", annexCtx.current, () => ({
+				t: "annex",
+				annex: JSON.parse(JSON.stringify(annexCtx.current))
+			}))
 		if (reads.has("layout") && i.placement !== undefined) postChanged("layout", buildLayoutMessage(i.placement))
-		if (theme) postChanged("theme", { t: "theme", theme: theme.theme, mode: theme.mode })
-		if (reads.has("locale")) postChanged("locale", { t: "locale", locale: localeCtx?.current ?? "en" })
+		if (theme) {
+			const held = theme
+			postChangedFrom("theme", held, () => ({ t: "theme", theme: held.theme, mode: held.mode }))
+		}
+		if (reads.has("locale")) {
+			const locale = localeCtx?.current ?? "en"
+			postChangedFrom("locale", locale, () => ({ t: "locale", locale }))
+		}
 		if (reads.has("viewer") && viewerCtx && !nested)
 			postChanged("viewer", { t: "viewer", viewer: { ...viewerCtx.current } })
 		if (reads.has("turnOrder") && turnOrderCtx && !nested)
-			postChanged("turn-order", { t: "turn-order", turnOrder: JSON.parse(JSON.stringify(turnOrderCtx.current)) })
+			postChangedFrom("turn-order", turnOrderCtx.current, () => ({
+				t: "turn-order",
+				turnOrder: JSON.parse(JSON.stringify(turnOrderCtx.current))
+			}))
 		if (reads.has("attendance") && attendanceCtx && !nested)
-			postChanged("attendance", { t: "attendance", attendance: JSON.parse(JSON.stringify(attendanceCtx.current)) })
+			postChangedFrom("attendance", attendanceCtx.current, () => ({
+				t: "attendance",
+				attendance: JSON.parse(JSON.stringify(attendanceCtx.current))
+			}))
 		// Scoped sections: posted when they change, and withdrawn (`null`)
 		// when a grant goes away — a worker keeps nothing it may not see.
 		// Only a name the SDK's table carries is a section at all.
@@ -355,8 +469,11 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			const value = scoped[section]
 			if (value === undefined) {
 				if (!sent.has(`scoped:${section}`)) continue
-				if (post({ t: "scoped", section, value: null })) sent.delete(`scoped:${section}`)
-			} else postChanged(`scoped:${section}`, { t: "scoped", section, value })
+				if (post({ t: "scoped", section, value: null })) {
+					sent.delete(`scoped:${section}`)
+					heldFrom.delete(`scoped:${section}`)
+				}
+			} else postChangedFrom(`scoped:${section}`, value, () => ({ t: "scoped", section, value }))
 		}
 	}
 
@@ -473,6 +590,9 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			// the same port included (the SDK's contract, `surfaces.ts`): it
 			// is sent every section it reads again, not only what moved.
 			sent.clear()
+			heldFrom.clear()
+			deliveredLog = null
+			peerDeclaredOneMessage = Array.isArray(m.takes) && m.takes.includes("message")
 			// Saved state BEFORE the first push: a remount is exactly when a
 			// widget has forgotten.
 			const held = savedFrameState.get(i.stateKey)
@@ -726,6 +846,9 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			port?.close()
 			ready = false
 			sent.clear()
+			heldFrom.clear()
+			deliveredLog = null
+			peerDeclaredOneMessage = false
 			port = p
 			port.onmessage = (e) => handle(e.data)
 		},

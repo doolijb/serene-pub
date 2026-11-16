@@ -19,6 +19,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { notify } from "$lib/client/utils/notify"
+	import { useConnections } from "$lib/client/contexts/connections.svelte"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
@@ -42,6 +43,9 @@
 		MODALITY_ORDER,
 		connectionDeletion,
 		defaultsHeldBy,
+		llmLaneUsedBy,
+		llmLaneWidthParse,
+		LLM_LANE_WIDTH_MAX,
 		managerFlagsReleased,
 		modalityWord
 	} from "./connectionsAdmin"
@@ -81,9 +85,33 @@
 	}
 	useInterest<"connections:delete">("connections:delete", handleDelete)
 
+	// Held for the page's life: the context is the one listener for the
+	// requests-at-once card and the only place its "Saved" toast is said.
+	const connectionsCtx = useConnections()
+
 	onMount(() => {
 		socket.emit("connections:list", {})
+		connectionsCtx.askLlmLanes()
 	})
+
+	// ── Requests at once ────────────────────────────────────────────────
+	/** Refusal sentences by address; a field's edit text by address. */
+	let laneRefusals = $state<Record<string, string>>({})
+	let laneEdits = $state<Record<string, number | null | undefined>>({})
+	function saveLane(host: Sockets.Connections.LlmLanes.Host) {
+		const edited =
+			host.laneKey in laneEdits ? laneEdits[host.laneKey] : host.width
+		const parsed = llmLaneWidthParse(edited)
+		if (!parsed.ok) {
+			laneRefusals = { ...laneRefusals, [host.laneKey]: parsed.refusal }
+			return
+		}
+		const { [host.laneKey]: _gone, ...rest } = laneRefusals
+		laneRefusals = rest
+		delete laneEdits[host.laneKey]
+		if (parsed.width === host.width) return
+		connectionsCtx.setLlmLaneWidth(host.laneKey, parsed.width)
+	}
 
 	const defaults = $derived(systemSettingsCtx?.capabilityDefaults ?? {})
 	// The index view's reading, so a row here and the same row there carry
@@ -317,3 +345,85 @@
 		{/if}
 	{/snippet}
 </AdminChangelist>
+
+<!--
+	Requests at once. This governs requests in flight per host (the LLM lane
+	width of each address) — never model residency or loading order. It is the
+	first piece of the Servers direction (project_model_lane_lifecycle). The
+	list and the "Saved" toast are the connections context's; this card
+	listens to nothing and toasts nothing.
+-->
+<section
+	class="panel-card @container/lanes mt-4 flex flex-col gap-3"
+	aria-labelledby="llm-lanes-heading"
+	data-section="llmLanes"
+>
+	<div class="flex flex-col gap-1">
+		<h2 id="llm-lanes-heading" class="text-sm font-medium">
+			Requests at once
+		</h2>
+		<p class="text-surface-700-300 text-sm">
+			How many requests this server takes at once; one for a local model,
+			more for a cloud provider.
+		</p>
+	</div>
+	{#if connectionsCtx.llmLanes === null}
+		<!-- Loading: the purpose sentence alone, until the list lands. -->
+	{:else if connectionsCtx.llmLanes.length}
+		<ul class="flex flex-col gap-2">
+			{#each connectionsCtx.llmLanes as host (host.laneKey)}
+				<li
+					class="bg-surface-50-950 rounded-base flex flex-col gap-2 p-3 @md/lanes:flex-row @md/lanes:items-center @md/lanes:gap-4"
+				>
+					<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+						<span class="font-mono text-sm break-all">
+							{host.laneKey}
+						</span>
+						<span class="text-surface-600-400 text-xs">
+							{llmLaneUsedBy(host.connections)}
+						</span>
+					</div>
+					<div class="flex flex-col gap-1 @md/lanes:items-end">
+						<div class="flex items-center gap-2">
+							<span
+								class="text-surface-600-400 text-xs whitespace-nowrap"
+							>
+								Default {host.defaultWidth}
+							</span>
+							<input
+								type="number"
+								class="input w-20"
+								min="1"
+								max={LLM_LANE_WIDTH_MAX}
+								step="1"
+								placeholder={String(host.defaultWidth)}
+								aria-label="Requests at once for {host.laneKey}"
+								aria-invalid={laneRefusals[host.laneKey]
+									? "true"
+									: undefined}
+								value={host.laneKey in laneEdits
+									? laneEdits[host.laneKey]
+									: host.width}
+								oninput={(e) => {
+									const raw = e.currentTarget.value
+									laneEdits[host.laneKey] =
+										raw === "" ? null : Number(raw)
+								}}
+								onchange={() => saveLane(host)}
+							/>
+						</div>
+						{#if laneRefusals[host.laneKey]}
+							<p class="text-error-600-400 text-xs" role="alert">
+								{laneRefusals[host.laneKey]}
+							</p>
+						{/if}
+					</div>
+				</li>
+			{/each}
+		</ul>
+	{:else}
+		<p class="text-surface-600-400 text-sm">
+			Add a connection and its address shows here.
+		</p>
+	{/if}
+</section>

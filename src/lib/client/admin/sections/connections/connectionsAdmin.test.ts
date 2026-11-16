@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
 	connectionDeletion,
 	defaultsHeldBy,
+	llmLaneUsedBy,
+	llmLaneWidthParse,
+	LLM_LANE_WIDTH_REFUSAL,
 	managerFlagsReleased,
 	modalityWord
 } from "./connectionsAdmin"
@@ -90,5 +93,38 @@ describe("modalityWord", () => {
 		expect(modalityWord("tts")).toBe("Speech")
 		expect(modalityWord("asr")).toBe("Transcription")
 		expect(modalityWord(null)).toBe("—")
+	})
+})
+
+describe("llmLaneWidthParse", () => {
+	it("reads empty and null as back to the default", () => {
+		expect(llmLaneWidthParse("")).toEqual({ ok: true, width: null })
+		expect(llmLaneWidthParse("  ")).toEqual({ ok: true, width: null })
+		expect(llmLaneWidthParse(null)).toEqual({ ok: true, width: null })
+	})
+	it("accepts whole numbers from 1 to 16, as numbers or text", () => {
+		expect(llmLaneWidthParse(1)).toEqual({ ok: true, width: 1 })
+		expect(llmLaneWidthParse("16")).toEqual({ ok: true, width: 16 })
+		expect(llmLaneWidthParse(4)).toEqual({ ok: true, width: 4 })
+	})
+	it("refuses everything else with one sentence", () => {
+		for (const v of [0, 17, 2.5, -1, "abc", "1.5", "0", "17", NaN]) {
+			expect(llmLaneWidthParse(v)).toEqual({
+				ok: false,
+				refusal: LLM_LANE_WIDTH_REFUSAL
+			})
+		}
+	})
+})
+
+describe("llmLaneUsedBy", () => {
+	it("joins the names, or says no connection uses the address", () => {
+		expect(
+			llmLaneUsedBy([
+				{ id: 1, name: "Desk" },
+				{ id: 2, name: "Laptop" }
+			])
+		).toBe("Desk, Laptop")
+		expect(llmLaneUsedBy([])).toBe("No connection uses this address now.")
 	})
 })

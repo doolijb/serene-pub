@@ -203,4 +203,57 @@ describe("connections context", () => {
 		expect(listeners.size).toBe(0)
 		cleanup()
 	})
+
+	test("requests at once: nothing asked until held, the list lands, only this tab's save toasts, interests release", () => {
+		const { ctx, cleanup } = setup()
+		expect(listeners.has("connections:llmLanes")).toBe(false)
+		expect(emitted).toEqual([])
+		expect(ctx.llmLanes).toBeNull()
+		const release = ctx.hold()
+		for (const key of [
+			"connections:llmLanes",
+			"connections:llmLanes:error",
+			"connections:setLlmLaneWidth",
+			"connections:setLlmLaneWidth:error"
+		])
+			expect(listeners.has(key)).toBe(true)
+		ctx.askLlmLanes()
+		expect(emitted).toEqual([["connections:llmLanes", {}]])
+		const host = {
+			laneKey: "http://localhost:5001",
+			defaultWidth: 1,
+			width: null,
+			managed: true,
+			cloud: false,
+			connections: [{ id: 1, name: "Desk" }]
+		}
+		fire("connections:llmLanes", { hosts: [host] })
+		expect(ctx.llmLanes).toEqual([host])
+
+		// Another tab's write: the list moves, nobody here is told.
+		fire("connections:setLlmLaneWidth", {
+			laneKey: host.laneKey,
+			width: 2
+		})
+		expect(toasts).toEqual([])
+
+		ctx.setLlmLaneWidth(host.laneKey, 3)
+		expect(emitted.at(-1)).toEqual([
+			"connections:setLlmLaneWidth",
+			{ laneKey: host.laneKey, width: 3 }
+		])
+		fire("connections:setLlmLaneWidth", { laneKey: host.laneKey, width: 3 })
+		fire("connections:setLlmLaneWidth", { laneKey: host.laneKey, width: 3 })
+		expect(toasts).toEqual([{ kind: "success", title: "Saved" }])
+
+		// A refused write clears the mark: a later foreign ack stays quiet.
+		ctx.setLlmLaneWidth(host.laneKey, 4)
+		fire("connections:setLlmLaneWidth:error", { error: "no" })
+		fire("connections:setLlmLaneWidth", { laneKey: host.laneKey, width: 4 })
+		expect(toasts).toHaveLength(1)
+
+		release()
+		expect(listeners.size).toBe(0)
+		cleanup()
+	})
 })

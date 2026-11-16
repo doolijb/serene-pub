@@ -1,0 +1,38 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/lorebooks/time/beginningDecayRow.dom.test.svelte.ts (11 tests | 1 failed) 50ms
+     × every input is disabled inside a disabled fieldset 5ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/time/beginningDecayRow.dom.test.svelte.ts > read-only > every input is disabled inside a disabled fieldset
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/lib/client/lorebooks/time/beginningDecayRow.dom.test.svelte.ts:185:55
+    183|   const inputs = [...document.body.querySelectorAll("input")]
+    184|   expect(inputs.length).toBeGreaterThan(5)
+    185|   expect(inputs.every((i) => i.matches(":disabled"))).toBe(true)
+       |                                                       ^
+    186|  })
+    187| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 16 passed (17)
+   Start at  17:06:29
+   Duration  7.14s (transform 9.57s, setup 31ms, import 13.57s, tests 162ms, environment 245ms)
+

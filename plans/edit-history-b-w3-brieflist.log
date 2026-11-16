@@ -1,0 +1,42 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |unit| src/lib/shared/sockets/gatedEvents.test.ts (29 tests | 1 failed) 16ms
+     × holds nothing but events of a migrated family 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/shared/sockets/gatedEvents.test.ts > GATED_EVENTS > holds nothing but events of a migrated family
+AssertionError: Gating a family means its last consumer has moved to the interest registry. Add the family to MIGRATED_FAMILIES in the same change that adds its events — and only after grepping on("<family>: across src/lib/client and src/routes.: expected [ 'characterVersions:redlines', …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "characterVersions:redlines",
++   "characterVersions:restoreRedline",
++   "characterVersions:clearRedlines",
++ ]
+
+ ❯ src/lib/shared/sockets/gatedEvents.test.ts:198:5
+    196|     `change that adds its events — and only after grepping ` +
+    197|     `on("<family>: across src/lib/client and src/routes.`
+    198|   ).toEqual([])
+       |     ^
+    199|  })
+    200|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 9 passed (10)
+      Tests  1 failed | 139 passed (140)
+   Start at  19:07:34
+   Duration  20.80s (transform 5.58s, setup 81ms, import 15.31s, tests 26.01s, environment 2ms)
+

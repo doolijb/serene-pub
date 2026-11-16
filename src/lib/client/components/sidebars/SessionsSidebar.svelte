@@ -290,6 +290,9 @@
 		// 🚧 A line-bound run (speaking a line) shows on its line only — and
 		// its end frame must not clear a reply's status here.
 		if (msg.lineBound) return
+		// A routine run's start and end frames are the turn line's, never the
+		// row status (its end frame must not clear a reply's status).
+		if (msg.routine) return
 		runStatuses.set(msg.sessionId, msg.status)
 	}
 	/** The row's status: the push's word where one arrived, else the list's. */

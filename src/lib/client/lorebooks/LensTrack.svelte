@@ -33,12 +33,20 @@
 		value: LoreLens
 		/** Advanced controls are on: Graph and Lives are in the track. */
 		advancedControls: boolean
+		/** 🚧 The book's Timeline switch (absent reads as on): off, Time and Lives are not offered. */
+		timelineEnabled?: boolean
 		onselect: (lens: LoreLens) => void
 		/** One popout button instead of the track (the compact find row). */
 		compact?: boolean
 	}
 
-	let { value, advancedControls, onselect, compact = false }: Props = $props()
+	let {
+		value,
+		advancedControls,
+		timelineEnabled = true,
+		onselect,
+		compact = false
+	}: Props = $props()
 
 	let open = $state(false)
 
@@ -82,7 +90,7 @@
 						role="radiogroup"
 						aria-label="Show as"
 					>
-						{#each lensesShown(advancedControls) as d (d.id)}
+						{#each lensesShown(advancedControls, timelineEnabled) as d (d.id)}
 							{@const Icon = d.icon}
 							{@const reason = d.reason?.() ?? null}
 							{@const checked = value === d.id}
@@ -117,12 +125,12 @@
 	     width, because a control that moves is a control nobody learns the
 	     position of. -->
 	<div
-		class="bg-surface-100-900 flex shrink-0 gap-0.5 rounded-base p-0.5"
+		class="bg-surface-100-900 rounded-base flex shrink-0 gap-0.5 p-0.5"
 		role="group"
 		aria-label="Show as"
 		data-lore-lens-track
 	>
-		{#each lensesShown(advancedControls) as d (d.id)}
+		{#each lensesShown(advancedControls, timelineEnabled) as d (d.id)}
 			{@const Icon = d.icon}
 			{@const reason = d.reason?.() ?? null}
 			{@const selected = value === d.id}

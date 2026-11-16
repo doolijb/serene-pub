@@ -1,0 +1,1 @@
+ALTER TABLE "lorebook_entries" ADD COLUMN "decay_rate" real DEFAULT 0 NOT NULL;

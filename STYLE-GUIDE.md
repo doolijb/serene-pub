@@ -773,8 +773,9 @@ tonal success; its **Fix** is tonal surface except on a blocked row (§6.11), wh
 
 Where one control has two outcomes and the second is the dangerous one, it is a **split button**:
 the safe action fills the primary, a chevron beside it opens a popover, and the dangerous action
-sits inside carrying its whole warning in the item — never a toast after the fact. The lorebook
-editor's Save while reading as of a date is the pattern (`EntryWorkspace.svelte`, `amendSave`).
+sits inside carrying its whole warning in the item — never a toast after the fact. A history entry's
+**Save as of** in the lorebook editor alone keeps the pattern (`EntryWorkspace.svelte`, `amendSave`); the cast
+member form no longer does (it saves on the version rail, §6.19).
 
 ### 6.2 Filter input
 
@@ -1051,6 +1052,17 @@ its original._) and the source line (_SRD 5.2.1 · CC-BY-4.0_); the save-state w
 name, and the surface's one filled primary is **Edit a copy** (`CopyPlus`), absent for a reader. A
 list with nothing of its own yet, while the chip is off, says _‹n› are ready in the Vis Itineris
 library._ with a tonal **Show the Vis Itineris library** under its empty state.
+
+**The entries list's two toggles** 🚧 (2026-11-15, lane time-t8b). The book owner's **Could exist here** and
+**Bulk edit** are toolbar icon buttons after Reorder (`preset-pressed` with `aria-pressed` while on). _Could exist
+here_ is a group at the list's end under its `ListGroupLabel` (with its count), holding entries of lines forked
+from this one: rows at `opacity-50`, full on hover and on `focus-within`, each with a 12px muted cause line (_On
+‹line›_) and its one tonal control beside the pick part; a row that begins later stays in the list body, dimmed,
+and with the toggle on gains its own cause line (_Begins in ‹date›_) and **Read from ‹date›**; a disabled control's reason is a 12px muted line it names in `aria-describedby`. _Bulk edit_
+puts a real checkbox (`aria-label` _Select ‹name›_) beside each entry row's pick part and a `role="toolbar"` bar
+under the scroller (`border-t pt-2`, wrapping): **Select all ‹n›**, a live count, tonal actions, **Delete…** tonal
+`error`; arrow keys move between its controls. What an action did is said under the bar (`role="status"`), never
+in a toast.
 
 **New lorebook's two ways** 🚧 (2026-10-21). While the pub lists a starter lorebook, the dialog opens
 with a two-option `SegmentedControl` at the top, **Blank** · **Start from a starter lorebook**; with no
@@ -1868,7 +1880,9 @@ both directions (2026-09-27):
   in the same step, so the transition that follows is not asked about it again. A held value
   (a date a drop asked for) is held only after the answer, and only for the row it was meant for.
   A draft that moves with the reading (the moment bar) keeps the moment it was typed at; moving
-  the reading never asks.
+  the reading never asks — except on a lorebook entry drawn with its **entry versions**, or a cast member drawn with theirs (2026-11-14):
+  the rail's selected version is the one in force at the moment, so a move of the moment bar that would
+  show another version asks once (`loreRoute.confirmLeave()`) and, on Stay, puts the moment back.
 
 ### 6.15 The setup wizard
 
@@ -2234,6 +2248,24 @@ now** as a primary text link. At either width the line chip's menu opens upward 
 bar stands at the foot of the pane. Who is in the world at the moment is not the bar's: the roster
 popover stands beside the Cast scope's name.
 
+🚧 **The version rail** (an entry's versions, `time/VersionRail.svelte`, 2026-11-14) is the moment bar's partner in the
+entry form and the cast member page: one component, two layouts from its own box (`@container/versions`, two columns at
+`@min-[36rem]/versions:`, never the viewport). Wide, a vertical list of buttons beside the fields, the selected one
+`aria-current`, quiet **+ Add a version here** buttons between them named for where they add (_Add a version between
+Year 7 and Year 9_), and each version's edit rows under it behind an **Edits** toggle (`preset-pressed`,
+`aria-pressed`); narrow, a row of chips above the fields (`preset-pressed` when selected) with the edits in a fold
+under them. The fields render once in both. Several versions at one date are each a row, with a chip under the date
+(`text-surface-700-300 text-xs`) and _read at this date_ on the one read there; a version changed elsewhere (a session's)
+is shown and selected only. The form has two zones: **the version** first (its head, then its fields, **Name** and
+**Content** leading and any field that differs by version under them, above the advanced fold), then **the entry**
+(🚧 2026-11-15): one row under the fields, closed by default, a button (`aria-expanded`, `aria-controls`) whose one
+truncated line says the entry in words (_On main · Perpetual · Fact · no keywords · top level_; the full line in its
+`title` and accessible name). Open, it holds Beginning, Decay, Keywords, Part of, Pinned and Off (each only while it
+is the entry's), one quiet **Change from this version…** that unfolds the fields that may still differ, then the line
+with **Move down the tree…**. Every entry form but History's has the row, with or without the rail; opening it moves no
+focus, a loose end that names keywords opens it, and a form that cannot write it draws it open with every control
+inside disabled and the toggle live.
+
 ### 6.20 Conversation rows and attachment cards
 
 The Messages view (2026-10-12) is a list-with-detail view on `PanelSplit` at 380px, §5.2 and §6.4
@@ -2319,7 +2351,8 @@ field or an open style editor and then steps back).
 Icons are lucide, stroke 1.6, on the 24px grid: 20px on the rail, 18px in menus and rows, 16px
 inline beside text, 14px for a badge such as the favourite star. The icon for a concept is fixed in
 `NOMENCLATURE.md` §22 and is the same everywhere that concept appears. Never an emoji, never a
-dingbat, never two icons for one idea.
+dingbat, never two icons for one idea. A declared icon outside the curated set (`CURATED_ICONS`) draws an empty
+box of its own size until it loads (★P15, 2026-11-13): no spinner, no shift.
 
 ---
 

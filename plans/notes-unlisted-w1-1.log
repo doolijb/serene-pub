@@ -1,0 +1,62 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/lorebooks/notesShown.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-notes-shown-nFpmV6/data/serene-pub.db
+
+stdout | src/lib/server/lorebooks/notesShown.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/lorebooks/notesShown.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/lorebooks/notesShown.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/lorebooks/notesShown.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/lorebooks/notesShown.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/lorebooks/notesShown.int.test.ts (15 tests | 1 failed) 10673ms
+     × a link makes them written 25ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/notesShown.int.test.ts > writtenNotesOf > a link makes them written
+Error: Something went wrong on the server. The server log has the details.
+ ❯ PglitePreparedQuery.queryWithCache node_modules/src/pg-core/session.ts:73:10
+ ❯ PglitePreparedQuery.execute node_modules/src/pglite/session.ts:95:17
+ ❯ Module.insertNarrativeRelationshipRow src/lib/server/pipelines/testing/fixtures.ts:682:16
+    680|  overrides: Partial<InsertNarrativeRelationship> = {}
+    681| ) {
+    682|  const [row] = await db
+       |                ^
+    683|   .insert(schema.narrativeRelationships)
+    684|   .values({
+ ❯ src/lib/server/lorebooks/notesShown.int.test.ts:174:3
+
+Caused by: error: null value in column "relationship_type" of relation "narrative_relationships" violates not-null constraint
+ ❯ ye.Ve node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:17540
+ ❯ ye.nt node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:14926
+ ❯ ye.parse node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:13678
+ ❯ pe.execProtocol node_modules/@electric-sql/pglite/dist/index.js:3:239489
+ ❯ pe.l node_modules/@electric-sql/pglite/dist/chunk-A7RFOIQ7.js:8:1911
+ ❯ node_modules/@electric-sql/pglite/dist/chunk-A7RFOIQ7.js:8:2539
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { length: 412, severity: 'ERROR', code: '23502', detail: 'Failing row contains (2, 9, 2, null, , 2026-11-14 02:16:24.487, 9, null, null, active, null, 2026-11-14 02:16:24.487, null, null, null, acknowledged, null, null, , null, null, null, null).', hint: undefined, position: undefined, internalPosition: undefined, internalQuery: undefined, where: undefined, schema: 'public', table: 'narrative_relationships', dataType: undefined, constraint: undefined, file: 'execMain.c', routine: 'ExecConstraints' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 14 passed (15)
+   Start at  18:16:12
+   Duration  12.65s (transform 1.60s, setup 14ms, import 1.85s, tests 10.67s, environment 0ms)
+

@@ -891,22 +891,31 @@ describe("(scenes do not end by themselves) the second call, as the session read
 	)
 })
 
-describe("a session whose scenes end by themselves: its pipeline's links and new entries go to its own book", () => {
+describe("a session whose scenes end by themselves: under Full its pipeline's links and new entries go to the lorebook at once", () => {
 	const endingSession = async () => {
 		const [s] = await db
 			.insert(schema.sessions)
 			.values({ userId, isGroup: false, lorebookId: bookId })
 			.returning()
 		scenesEnd.add(s!.id)
-		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
-		const own = await ownBookFor(db as any, s!.id)
-		return { id: s!.id, own }
+		return { id: s!.id }
 	}
+	const imprintsOf = async (sessionId: number, subjectKind: string, subjectId: number) =>
+		db
+			.select()
+			.from(schema.loreImprints)
+			.where(
+				and(
+					eq(schema.loreImprints.sessionId, sessionId),
+					eq(schema.loreImprints.subjectKind, subjectKind),
+					eq(schema.loreImprints.subjectId, subjectId)
+				)
+			)
 	const branchCount = async () =>
 		(await db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, bookId))).length
 
 	it(
-		"a link between two lorebook entries lands in the own book, none in the lorebook, no line forked",
+		"a link between two lorebook entries lands in the lorebook at once, imprinted, no line forked",
 		async () => {
 			const s = await endingSession()
 			// Two rooms no earlier test has linked (a standing link would answer instead).
@@ -918,18 +927,19 @@ describe("a session whose scenes end by themselves: its pipeline's links and new
 				{ from: attic, to: "  the pantry twin ", description: "a stair down" },
 				LINK as any
 			)) as { id: number; lorebookId: number }
-			expect(res.lorebookId).toBe(s.own.id)
-			const rows = await links(s.own.id)
+			expect(res.lorebookId).toBe(bookId)
+			const rows = (await links(bookId)).filter((r) => r.id === res.id)
 			expect(rows).toHaveLength(1)
-			expect(rows[0]).toMatchObject({ id: res.id, fromEntryId: attic, toEntryId: pantry })
-			expect((await links(bookId)).length).toBe(before)
+			expect(rows[0]).toMatchObject({ fromEntryId: attic, toEntryId: pantry })
+			expect((await links(bookId)).length).toBe(before + 1)
+			expect(await imprintsOf(s.id, "relationship", res.id)).toHaveLength(1)
 			expect(await branchCount()).toBe(lines)
 		},
 		60_000
 	)
 
 	it(
-		"a new entry and its links land in the own book, none in the lorebook",
+		"a new entry and its links land in the lorebook at once, imprinted",
 		async () => {
 			const s = await endingSession()
 			const before = (await links(bookId)).length
@@ -938,12 +948,14 @@ describe("a session whose scenes end by themselves: its pipeline's links and new
 				{ name: "The Landing Twin", content: "A landing.", links: ["The Hall", cellarId] },
 				SAVE as any
 			)) as { id: number; linkIds: number[]; lorebookId: number; route?: string }
-			expect(res).toMatchObject({ route: "own-book", lorebookId: s.own.id })
+			expect(res).toMatchObject({ route: "book", lorebookId: bookId })
 			const [row] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, res.id))
-			expect(row!.lorebookId).toBe(s.own.id)
+			expect(row!.lorebookId).toBe(bookId)
+			expect(await imprintsOf(s.id, "entry", res.id)).not.toHaveLength(0)
 			expect(res.linkIds).toHaveLength(2)
-			expect((await links(s.own.id)).map((r) => r.id).sort()).toEqual([...res.linkIds].sort())
-			expect((await links(bookId)).length).toBe(before)
+			const mine = (await links(bookId)).map((r) => r.id)
+			for (const id of res.linkIds) expect(mine).toContain(id)
+			expect((await links(bookId)).length).toBe(before + 2)
 			expect(await branchCount()).toBe(lines)
 		},
 		60_000

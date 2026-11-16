@@ -1,0 +1,34 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts (17 tests | 1 failed) 5167ms
+     × dated before the entry's Beginning: held in the notes, no version 15ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts > a change that waits > dated before the entry's Beginning: held in the notes, no version
+Error: change: entry 14 is not in this session's lorebook, so it is not this session's to change.
+ ❯ resolveLoreLinkEnd src/lib/server/pipelines/runtime/host.ts:1456:10
+    1454|   if (!row && readThen) [row] = await readThen([id])
+    1455|   if (!row)
+    1456|    throw new HostScopeError(
+       |          ^
+    1457|     then && purpose === "link"
+    1458|      ? // 🚧 Provisional copy: the owner has not seen this sentence.
+ ❯ Object.commit src/lib/server/pipelines/runtime/host.ts:12420:9
+ ❯ Object.host.commit src/lib/server/pipelines/runtime/host.ts:12876:11
+ ❯ src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts:368:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 16 passed (17)
+   Start at  03:49:51
+   Duration  5.71s (transform 1.99s, setup 13ms, import 427ms, tests 5.17s, environment 0ms)
+

@@ -468,12 +468,15 @@ describe("the review gate's push transport", () => {
 		await one.declare("pipelines:reviewRequested")
 
 		// `pipelines:reviewClosed` is not in the gated set, so it must behave
-		// exactly as before: one emit, to the whole user room, redacted against
-		// a freshly read recipient row.
+		// as before: one emit, to the whole user room, redacted against the
+		// recipient. The recipient's adminness now comes from a connected
+		// socket's own user when one is in the room (lane perf-E, 2026-11-13);
+		// the `users` read is the fallback for a user with no socket — and a
+		// user with no socket is answered before any read at all.
 		seam.reviewPush!(ADMIN.id, "harness:ungated", { id: "rv-1" })
 		await flush()
 
-		expect(seam.queries).toContain("select(users)")
+		expect(seam.queries).not.toContain("select(users)")
 		expect(h.emits).toHaveLength(1)
 		expect(h.emits[0].target).toBe("user_1")
 		expect(h.emits[0].event).toBe("harness:ungated")

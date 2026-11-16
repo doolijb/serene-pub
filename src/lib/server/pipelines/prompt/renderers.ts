@@ -104,59 +104,95 @@ export type TemplateRenderer = (ctx: RenderContext) => string | Promise<string>
 
 const renderers = new Map<string, { render: TemplateRenderer; owner: string }>()
 
+/**
+ * Compiled templates, cached per engine + source + format (review row C4).
+ *
+ * What is cached is a compiled TEMPLATE — a function from variables to text —
+ * never a result, so a render cannot depend on what ran before it.
+ *
+ * ⚠ **The format is in the key, and that is load-bearing.**
+ * `registerContextHandlebarsHelpers` wraps every registration in
+ * `if (!handlebars.helpers.X)`, and the Liquid block tags close over
+ * `promptFormat`, so a compiled function is pinned to the format it was built
+ * with. Keyed on the source alone, one connection's framing would reach every
+ * later prompt with the same template text.
+ *
+ * A bare format is a string and keys as itself. A resolved
+ * `CompletionTemplate` row keys as its JSON, so an admin's edit is a different
+ * key and never renders stale — and the entry closes over its OWN
+ * `structuredClone` of the row, so a caller mutating its object afterwards
+ * cannot change a cached entry either. A parse that throws stores nothing.
+ *
+ * Bounded: a `Map` in insertion order, refreshed on hit (delete + set) and
+ * evicting the oldest past the limit — the shape `backendTokenCount.ts` uses.
+ */
+const TEMPLATE_CACHE_LIMIT = 128
+type CompiledTemplate = (variables: Record<string, unknown>) => string
+const templateCache = new Map<string, CompiledTemplate>()
+
+/** Test-only. */
+export function _templateCacheSize(): number {
+	return templateCache.size
+}
+
+function compiledFor(
+	engine: string,
+	ctx: RenderContext,
+	build: (format: string | CompletionTemplate) => CompiledTemplate
+): CompiledTemplate {
+	// The resolved ROW when the caller loaded one, and only then the key.
+	//
+	// A bare key resolves against the BUILT-INS, so a key alone renders eight
+	// templates and silently substitutes the default for every other row in the
+	// table. `promptFormatOf`, not `?? "vicuna"`, for the key half: an empty
+	// string is a CLEARED format and `"" ?? x` is `""`, which used to reach
+	// `makeBlock`'s `default:` arm and rewrap every block as ChatML.
+	const format = ctx.completionTemplate ?? promptFormatOf(ctx.promptFormat)
+	const formatKey =
+		typeof format === "string" ? format : JSON.stringify(format)
+	const key = [engine, ctx.template, formatKey].join("\u0000")
+	const hit = templateCache.get(key)
+	if (hit) {
+		templateCache.delete(key)
+		templateCache.set(key, hit)
+		return hit
+	}
+	const compiled = build(
+		typeof format === "string" ? format : structuredClone(format)
+	)
+	templateCache.set(key, compiled)
+	if (templateCache.size > TEMPLATE_CACHE_LIMIT) {
+		const oldest = templateCache.keys().next().value
+		if (oldest !== undefined) templateCache.delete(oldest)
+	}
+	return compiled
+}
+
 /** Core's renderer: the same construction the legacy prompt path uses. */
 function renderHandlebars(ctx: RenderContext): string {
-	/**
-	 * ⚠ A FRESH Handlebars per render, and it is load-bearing here.
-	 *
-	 * `registerContextHandlebarsHelpers` wraps every registration in
-	 * `if (!handlebars.helpers.X)`, so the block helpers close over whichever
-	 * template was passed the FIRST time they were registered on an instance.
-	 * On a shared instance that would pin every prompt on the instance to the
-	 * first connection that rendered — and now that the template can be a row
-	 * somebody is editing, it would also mean an admin's save appearing to do
-	 * nothing until a restart. Nothing between the table and this line
-	 * memoises, for the same reason (see
-	 * `connections/completionTemplates.ts`).
-	 */
-	const handlebars = Handlebars.create()
-	registerContextHandlebarsHelpers(handlebars, {
-		// The resolved ROW when the caller loaded one, and only then the key.
-		//
-		// `makeBlock` takes either, but a bare key resolves against the
-		// BUILT-INS — so a key alone renders eight templates and silently
-		// substitutes the default for every other row in the table. Passing the
-		// row is what makes an admin-authored template mean anything at all.
-		//
-		// `promptFormatOf`, not `?? "vicuna"`, for the key half: an empty string
-		// is a CLEARED format and `"" ?? x` is `""`, which used to reach
-		// `makeBlock`'s `default:` arm and rewrap every block as ChatML.
-		//
-		// ⚠ This fallback used to fire on **every pipeline run**, not just the
-		// ones with nothing to say: nothing supplied `promptFormat` to the
-		// render at all, so a ChatML connection got Vicuna and the receipt said
-		// otherwise. It reaches only genuine absences now — a preview with no
-		// connection in scope, an admin editing a template.
-		promptFormat:
-			ctx.completionTemplate ?? promptFormatOf(ctx.promptFormat)
-	})
-	return handlebars.compile(ctx.template)(ctx.variables)
+	return compiledFor(CORE_TEMPLATE_ENGINE, ctx, (promptFormat) => {
+		// A fresh instance per cache MISS, never shared between formats: the
+		// block helpers close over the first `promptFormat` an instance sees.
+		const handlebars = Handlebars.create()
+		registerContextHandlebarsHelpers(handlebars, { promptFormat })
+		return handlebars.compile(ctx.template)
+	})(ctx.variables)
 }
 
 /**
  * Core's second renderer, over the same context object.
  *
- * A fresh instance per render for the reason above: the block tags close over
- * `promptFormat`, so a shared one would pin the first connection's framing onto
- * every later prompt. `createContextLiquid` carries the configuration and why
- * each part of it is the way it is.
+ * Cached per source + format for the reason above: the block tags close over
+ * `promptFormat`. `createContextLiquid` carries the configuration and why each
+ * part of it is the way it is. `parseAndRenderSync` is `renderSync(parse(…))`
+ * with the same options, so parse-once then `renderSync` is the same render.
  */
 function renderLiquid(ctx: RenderContext): string {
-	const liquid = createContextLiquid({
-		promptFormat:
-			ctx.completionTemplate ?? promptFormatOf(ctx.promptFormat)
-	})
-	return String(liquid.parseAndRenderSync(ctx.template, ctx.variables))
+	return compiledFor(CORE_LIQUID_ENGINE, ctx, (promptFormat) => {
+		const liquid = createContextLiquid({ promptFormat })
+		const tpl = liquid.parse(ctx.template)
+		return (variables) => String(liquid.renderSync(tpl, variables))
+	})(ctx.variables)
 }
 
 renderers.set(CORE_TEMPLATE_ENGINE, { render: renderHandlebars, owner: "core" })

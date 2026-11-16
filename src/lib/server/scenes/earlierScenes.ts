@@ -3,7 +3,7 @@
  * `core:var/earlier-scenes@1` block (names provisional).
  *
  * The rule: a reply's prompt gains one block holding the summaries of this
- * session's closed main-channel scenes any of whose lines are no longer in
+ * session's closed main-channel scenes that have lost a line from
  * the prompt, oldest first, each under its scene's name. A scene is eligible
  * only with a usable summary (`summaryStatus = 'done'`, a person's or the
  * routine's, not blank) that has not been compiled into a history entry
@@ -20,6 +20,7 @@
  */
 import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 import { sceneStartOf } from "$lib/server/scenes/historyEntryOfDate"
 
 /** 🚧 The most eligible scenes the read returns: the newest 200. */
@@ -33,6 +34,8 @@ export interface EarlierScene {
 	summary: string
 	/** Where the scene starts (`sceneStartOf`). */
 	firstLineId: number
+	/** The scene's story clock when it opened (`opened_story_clock_*`); null when it recorded none. */
+	openedStoryClock: StoryClock | null
 }
 
 /** The session's eligible scenes, oldest first by start (ties by scene id), at most the newest {@link EARLIER_SCENES_MOST}. */
@@ -74,7 +77,12 @@ export async function earlierScenesOf(
 			nameIsDefault: s.nameIsDefault,
 			openedAtMessageId: s.openedAtMessageId,
 			selectedMessageIds: s.selectedMessageIds,
-			summary: s.summary
+			summary: s.summary,
+			openedStoryClockYear: s.openedStoryClockYear,
+			openedStoryClockMonth: s.openedStoryClockMonth,
+			openedStoryClockDay: s.openedStoryClockDay,
+			openedStoryClockHour: s.openedStoryClockHour,
+			openedStoryClockMinute: s.openedStoryClockMinute
 		})
 		.from(s)
 		.where(
@@ -83,13 +91,14 @@ export async function earlierScenesOf(
 				started.map((c) => c.id)
 			)
 		)
-	const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
+	const { sceneDisplayNames, sceneClockOf } = await import("$lib/server/scenes/liveScenes")
 	const names = await sceneDisplayNames(db, rows)
 	const byId = new Map(rows.map((r) => [r.id, r]))
 	return started.map((c) => ({
 		sceneId: c.id,
 		name: names.get(c.id) ?? "",
 		summary: (byId.get(c.id)?.summary ?? "").trim(),
-		firstLineId: c.start
+		firstLineId: c.start,
+		openedStoryClock: sceneClockOf(byId.get(c.id) as never, "opened")
 	}))
 }

@@ -311,7 +311,7 @@ describe("sockets", () => {
 			noop
 		)
 		expect(banner.members).toEqual([
-			{ lorebookId: c.lorebook.id, lorebookName: c.lorebook.name, castId: c.binding.id, retold: ["face"],
+			{ lorebookId: c.lorebook.id, lorebookName: c.lorebook.name, ownBookSessionId: null, castId: c.binding.id, retold: ["face"],
 				followsCard: ["description", "personality", "scenario", "firstMessage", "alternateGreetings", "exampleDialogues", "postHistoryInstructions", "creatorNotes", "likeness"],
 				memberName: c.card.name,
 				// The card version the member's shown version reads (the card's v1, still current).

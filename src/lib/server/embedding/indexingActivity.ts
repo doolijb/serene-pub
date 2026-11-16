@@ -12,6 +12,7 @@
  * and the lane listener that turns an indexed entry into an activity write.
  * It takes the database as a parameter and never imports `$lib/server/db`.
  */
+import { bookShownName } from "$lib/server/lorebooks/notesShown"
 import { and, eq, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
@@ -115,7 +116,8 @@ async function recountOnce(
 	const [book] = await db
 		.select({
 			userId: schema.lorebooks.userId,
-			name: schema.lorebooks.name
+			name: schema.lorebooks.name,
+			sessionId: schema.lorebooks.sessionId
 		})
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId))
@@ -127,7 +129,7 @@ async function recountOnce(
 	activityStore.upsertLorebookIndexing({
 		userId: book.userId,
 		lorebookId,
-		lorebookLabel: book.name,
+		lorebookLabel: await bookShownName(db, book),
 		indexedCount: counts.readyCount,
 		total: counts.total
 	})

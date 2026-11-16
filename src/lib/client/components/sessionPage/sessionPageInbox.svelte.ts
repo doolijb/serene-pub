@@ -129,6 +129,8 @@ const BARE_EVENTS = [
 const SESSION_SCOPED_EVENTS = [
 	"state:changed",
 	"sessionMessage",
+	// The mid-stream frame; the settled row still comes as `sessionMessage`.
+	"sessionMessageDelta",
 	"sessions:get",
 	// 🚧 pr-6: the member push, split from the reply.
 	"sessions:refresh",

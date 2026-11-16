@@ -1,0 +1,29 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts [ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts ]
+CompileError: src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:68:10 `$state(...)` can only be used as a variable declaration initializer, a class field declaration, or the first assignment to a class field at the top level of the constructor.
+https://svelte.dev/e/state_invalid_placement
+ 66 |  const sent = (event) => client.emits.filter((e) => e.event === event);
+ 67 |  async function mountFold(over = {}) {
+ 68 |    props = $state({ characterVersionId: VERSION, ...over });
+                                                                 ^
+ 69 |    const target = document.createElement("div");
+ 70 |    document.body.append(target);
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  20 passed (20)
+   Start at  17:40:18
+   Duration  14.94s (transform 19.86s, setup 67ms, import 28.56s, tests 3.21s, environment 594ms)
+

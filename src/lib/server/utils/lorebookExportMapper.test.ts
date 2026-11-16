@@ -8,6 +8,7 @@ import {
 	mapNarrativeRelationship,
 	attachNarrativeGraph,
 	assignEntryLocalIds,
+	importedBeginningAndDecay,
 	type SpecV3LorebookLike
 } from "./lorebookExportMapper"
 import {
@@ -931,5 +932,56 @@ describe("the per-entry facts every type carries (plan A26, E-8)", () => {
 		const word = mapEntry(row({ matchMode: "word", useRegex: true }), 0)
 		expect(word.keys).toEqual(["alpha", "beta"])
 		expect(word.use_regex).toBe(false)
+	})
+})
+
+describe("an entry's Beginning and decay rate", () => {
+	const bagOf = (overrides: Record<string, unknown>) =>
+		mapEntry({ ...baseEntry, ...overrides }, 0).extensions.serenepub
+
+	test("are written only when set", () => {
+		expect(bagOf({ decayRate: 0, year: null, month: null, day: null })).toEqual({
+			entryType: "world"
+		})
+		expect(bagOf({ decayRate: 0.4, year: 5, month: 2, day: null })).toEqual({
+			entryType: "world",
+			year: 5,
+			month: 2,
+			decayRate: 0.4
+		})
+	})
+
+	test("a history entry's date is written as before, once", () => {
+		const bag = bagOf({
+			typeId: HISTORY_TYPE_ID,
+			year: 5,
+			month: null,
+			day: null,
+			decayRate: 0
+		})
+		expect(bag.year).toBe(5)
+		expect("decayRate" in bag).toBe(false)
+	})
+
+	test("are read back; absent stays absent", () => {
+		const meta = { year: 5, month: 2, decayRate: 0.4 }
+		expect(importedBeginningAndDecay(meta, WORLD_LORE_TYPE_ID)).toEqual(meta)
+		expect(importedBeginningAndDecay({}, WORLD_LORE_TYPE_ID)).toEqual({})
+		expect(importedBeginningAndDecay(undefined, WORLD_LORE_TYPE_ID)).toEqual({})
+	})
+
+	test("a rate is clamped to 1, a non-number is 0, a bad Beginning is dropped", () => {
+		expect(
+			importedBeginningAndDecay({ decayRate: 7 }, WORLD_LORE_TYPE_ID)
+		).toEqual({ decayRate: 1 })
+		expect(
+			importedBeginningAndDecay({ decayRate: "x" }, WORLD_LORE_TYPE_ID)
+		).toEqual({})
+		expect(
+			importedBeginningAndDecay({ year: 5, day: 3 }, WORLD_LORE_TYPE_ID)
+		).toEqual({})
+		expect(
+			importedBeginningAndDecay({ year: 5, decayRate: 0.2 }, HISTORY_TYPE_ID)
+		).toEqual({ decayRate: 0.2 })
 	})
 })

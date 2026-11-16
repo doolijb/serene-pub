@@ -44,7 +44,7 @@ import { speakingNamesOf } from "$lib/client/components/sessionPage/speakingLine
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { rewindStateOf, withStackReplaced, type RewindState } from "$lib/shared/sessions/rewind"
 import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
-import { generatingOf, rewindOf } from "$lib/client/sessions/store/derive"
+import { generatingOf, rewindOf, runningRoutineNamesOf } from "$lib/client/sessions/store/derive"
 import type { SessionPayload } from "$lib/client/sessions/store/records"
 import {
 	asksToJoin,
@@ -185,6 +185,12 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 * switch never spells one session's dates by another's book.
 	 */
 	let storyCalendar = $state<{ sessionId: number; calendar: StoryCalendar | null } | null>(null)
+	/**
+	 * 🚧 Whether the lorebook this session reads keeps a timeline, as the
+	 * server last said it (`sessions:storyClock`'s `timeline`). Which
+	 * session it is for rides beside it; true until read.
+	 */
+	let storyTimeline = $state<{ sessionId: number; timeline: boolean } | null>(null)
 	/**
 	 * What the pipeline's own voice is called (lair re-plan R5): the null
 	 * turn entry and every line nobody claims — the genre's fallback envoy
@@ -440,6 +446,14 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			.map((r) => r.runId)
 			.sort()
 			.join(",")
+	)
+	/**
+	 * 🚧 The names of the routine runs showing as running, as one string (a
+	 * name may hold a comma, so the join is NUL) so what reads it re-runs only
+	 * when the names change.
+	 */
+	const runningRoutineKey = $derived(
+		runningRoutineNamesOf(sessionStore.runsOf(sessionId)).join("\u0000")
 	)
 
 	// The author's newest line — keyed on role, never on a persona (F1): a
@@ -947,6 +961,20 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 				// Initial load or session switch — restore draft only on first load
 				const isFirstLoad = !sessionStore.session(sessionId)
 				sessionStore.load(msg.session, msg.pagination)
+				// The first load is the truth for routine runs: one held from before
+				// (a run that died with the server, an end frame a dropped socket
+				// missed) and absent now is gone, or its line would stay up forever.
+				const runningNow = new Set((msg.routineRuns ?? []).map((f) => f.runId))
+				for (const held of sessionStore.runsOf(sessionId))
+					if (held.routine && !runningNow.has(held.runId))
+						sessionStore.mergeRunStatus({
+							sessionId,
+							runId: held.runId,
+							kind: held.kind,
+							status: null,
+							routine: held.routine
+						})
+				for (const frame of msg.routineRuns ?? []) sessionStore.mergeRunStatus(frame)
 				if (isFirstLoad && msg.userDraft) writeDraft(msg.userDraft)
 				loadingOlderMessages = false
 				// Autopopulate panels for any channel already present in the
@@ -974,6 +1002,18 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 			(msg as { coversFromId?: number | null }).coversFromId ?? null
 		const added = sessionStore.merge(msg.session, coversFromId)
 		for (const m of added) surfaceManager.activateForChannel((m as any).channel)
+	}
+
+	// A mid-stream frame patches the held row in place (an unknown id or a settled
+	// row is dropped; the full row that follows lands it). `witnessMessage` gets
+	// the row it replaced, so widgets hear `message:delta` as from a full frame.
+	function handleSessionMessageDelta(
+		msg: Sockets.SessionMessageDelta.Response
+	) {
+		if (!session || msg.sessionId !== sessionId) return
+		const done = sessionStore.applyMessageDelta(msg)
+		if (!done) return
+		surfaceManager.witnessMessage(done.row, done.previous)
 	}
 
 	function handleSessionMessage(msg: Sockets.SessionMessage.Response) {
@@ -1143,9 +1183,17 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		storyCalendar = { sessionId: forSessionId, calendar: next }
 	}
 
+	/** 🚧 Whether the session's book keeps a timeline, as a story clock reading carried it; a non-boolean reads as true. */
+	function setStoryTimeline(forSessionId: number, value: unknown) {
+		const next = typeof value === "boolean" ? value : true
+		if (storyTimeline?.sessionId === forSessionId && storyTimeline.timeline === next) return
+		storyTimeline = { sessionId: forSessionId, timeline: next }
+	}
+
 	d.inbox.on("sessions:get", handleSessionsGet)
 	d.inbox.on("sessions:refresh", handleSessionsRefresh)
 	d.inbox.on("sessionMessage", handleSessionMessage)
+	d.inbox.on("sessionMessageDelta", handleSessionMessageDelta)
 	d.inbox.on("sessions:userTyping", handleSessionsUserTyping)
 	d.inbox.on("sessions:attendance", handleSessionsAttendance)
 	d.inbox.on("characters:update", handleCharactersUpdate)
@@ -1302,6 +1350,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		get liveRunIds(): string[] {
 			return liveRunKey ? liveRunKey.split(",") : []
 		},
+		get runningRoutineNames(): string[] {
+			return runningRoutineKey ? runningRoutineKey.split("\u0000") : []
+		},
 		get lastSettledMessageKey() {
 			return lastSettledMessageKey
 		},
@@ -1360,6 +1411,11 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		loadOlderMessages,
 		setStoryClock,
 		setStoryCalendar,
+		setStoryTimeline,
+		/** 🚧 Whether the session's book keeps a timeline; true until read and for any other session. */
+		get storyTimeline(): boolean {
+			return storyTimeline?.sessionId === sessionId ? storyTimeline.timeline : true
+		},
 		/** 🚧 The session's book's calendar (§15 G9); null when free-form or not read yet. */
 		get storyCalendar(): StoryCalendar | null {
 			return storyCalendar?.sessionId === sessionId ? storyCalendar.calendar : null
@@ -1394,3 +1450,31 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 
 /** The session page's data store (`createSessionPageData`). */
 export type SessionPageData = ReturnType<typeof createSessionPageData>
+
+/**
+ * 🚧 Makes `read` run at most once at a time: a request while one is in
+ * flight makes exactly one more read after it, however many arrive.
+ */
+export function coalescedRead(read: () => Promise<unknown>): () => void {
+	let running = false
+	let again = false
+	const run = () => {
+		running = true
+		again = false
+		const done = () => {
+			running = false
+			if (again) run()
+		}
+		let p: Promise<unknown>
+		try {
+			p = read()
+		} catch {
+			p = Promise.resolve()
+		}
+		p.then(done, done)
+	}
+	return () => {
+		if (running) again = true
+		else run()
+	}
+}

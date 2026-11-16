@@ -1,4 +1,5 @@
 import { db } from "$lib/server/db"
+import { bookShownName } from "$lib/server/lorebooks/notesShown"
 import { primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import * as schema from "$lib/server/db/schema"
 import type {
@@ -709,9 +710,12 @@ async function buildGraphList(
 			? known.relationships
 			: db.query.narrativeRelationships
 					.findMany({
-						where: eq(
-							schema.narrativeRelationships.lorebookId,
-							lorebookId
+						where: and(
+							eq(
+								schema.narrativeRelationships.lorebookId,
+								lorebookId
+							),
+							isNull(schema.narrativeRelationships.knowledgeKind)
 						),
 						orderBy: asc(schema.narrativeRelationships.id)
 					})
@@ -1089,7 +1093,7 @@ async function buildGraph(
 	const activityId = activityStore.start({
 		userId,
 		lorebookId: params.lorebookId,
-		lorebookLabel: lorebook.name,
+		lorebookLabel: await shownNameOfBook(lorebook),
 		mode,
 		branchId: buildBranchId
 	})
@@ -3483,9 +3487,12 @@ export const narrativeGraphApplyProposalHandler = refusable<
 					orderBy: asc(schema.lorebookBindings.id)
 				}),
 				db.query.narrativeRelationships.findMany({
-					where: eq(
-						schema.narrativeRelationships.lorebookId,
-						lorebookId
+					where: and(
+						eq(
+							schema.narrativeRelationships.lorebookId,
+							lorebookId
+						),
+						isNull(schema.narrativeRelationships.knowledgeKind)
 					),
 					orderBy: asc(schema.narrativeRelationships.id)
 				})
@@ -3561,6 +3568,16 @@ export const narrativeGraphApplyProposalHandler = refusable<
 // former `narrativeGraph:updateNode` duplicated it with an allowlist and had
 // no client emitter.
 
+/** A book's name as a person is shown it: a session's notes by the session's current name. */
+async function shownNameOfBook(book: { id: number; name: string }): Promise<string> {
+	const [row] = await db
+		.select({ sessionId: schema.lorebooks.sessionId })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.id, book.id))
+		.limit(1)
+	return bookShownName(db, { name: book.name, sessionId: row?.sessionId ?? null })
+}
+
 /**
  * After a merge, an undo or a delete rewrote cast tags in a book's entries:
  * the derived data and the lists a client holds.
@@ -3578,8 +3595,9 @@ async function afterCastTagRewrite(
 	entryTypeIds: ReadonlySet<string>
 ) {
 	if (entryTypeIds.size === 0) return
-	autoEnqueueLorebook(lorebook.id, lorebook.name, "").catch(console.error)
-	enqueueLorebookAnnotation(lorebook.id, lorebook.name)
+	const label = await shownNameOfBook(lorebook)
+	autoEnqueueLorebook(lorebook.id, label, "").catch(console.error)
+	enqueueLorebookAnnotation(lorebook.id, label)
 	for (const typeId of entryTypeIds)
 		await relistEntries(
 			socket,
@@ -3820,7 +3838,9 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 			where: eq(schema.narrativeRelationships.id, params.relationship.id)
 		})
 		// Another person's link reads as one that is not there.
-		if (!existing) throw new Error("That link is not in this lorebook.")
+		// A knowledge tie is not a link: `lorebooks/entryKnowledge.ts` is its only writer.
+		if (!existing || existing.knowledgeKind != null)
+			throw new Error("That link is not in this lorebook.")
 
 		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 		if (!lorebook) throw new Error("That link is not in this lorebook.")
@@ -4024,7 +4044,9 @@ export const narrativeGraphDeleteRelationshipHandler: Handler<
 			where: eq(schema.narrativeRelationships.id, params.id)
 		})
 		// Another person's link reads as one that is not there.
-		if (!existing) throw new Error("That link is not in this lorebook.")
+		// A knowledge tie is not a link: `lorebooks/entryKnowledge.ts` is its only writer.
+		if (!existing || existing.knowledgeKind != null)
+			throw new Error("That link is not in this lorebook.")
 
 		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 		if (!lorebook) throw new Error("That link is not in this lorebook.")
@@ -5191,6 +5213,7 @@ export const narrativeGraphMergeNodeHandler: Handler<
 						toNodeId === newToNodeId &&
 						r.fromEntryId === newFromEntryId &&
 						r.toEntryId === newToEntryId &&
+						(r.knowledgeKind ?? null) === (rel.knowledgeKind ?? null) &&
 						sameWords(r.relationshipType, rel.relationshipType) &&
 						sameWords(
 							r.reverseRelationshipType ?? null,
@@ -5201,6 +5224,7 @@ export const narrativeGraphMergeNodeHandler: Handler<
 						toNodeId === newFromNodeId &&
 						r.fromEntryId === newToEntryId &&
 						r.toEntryId === newFromEntryId &&
+						(r.knowledgeKind ?? null) === (rel.knowledgeKind ?? null) &&
 						sameWords(r.relationshipType, rel.reverseRelationshipType) &&
 						sameWords(r.reverseRelationshipType ?? null, rel.relationshipType))
 				const duplicateAt = survivorSide.findIndex(

@@ -10,7 +10,17 @@
 	 * says only that the field changed.
 	 */
 	import { getContext, untrack } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		ArrowRight,
+		ExternalLink,
+		History as HistoryIcon,
+		LoaderCircle,
+		LockKeyhole,
+		Pencil,
+		Plus,
+		Trash2,
+		Zap
+	} from "@lucide/svelte"
 	import {
 		adminGoto as goto,
 		adminPage as page
@@ -33,6 +43,14 @@
 		objectName,
 		typeLabel
 	} from "./logbookView"
+
+	/** The icon per logbook action (`ACTION_ICON` names, in `logbookView.ts`). */
+	const ACTION_ICONS = {
+		Plus,
+		Pencil,
+		Trash2,
+		Zap
+	}
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const interest = getInterestContext()
@@ -81,16 +99,18 @@
 		class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm"
 		role="status"
 	>
-		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+		<LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
 		Loading the change…
 	</div>
 {:else if !record}
 	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
 		<p class="text-surface-600-400 text-sm">There is no change {id}.</p>
-		<a href="/admin/history" class="btn btn-sm preset-tonal-surface">All changes</a>
+		<a href="/admin/history" class="btn btn-sm preset-tonal-surface">
+			All changes
+		</a>
 	</div>
 {:else}
-	{@const Icon = Icons[ACTION_ICON[record.action]]}
+	{@const Icon = ACTION_ICONS[ACTION_ICON[record.action]]}
 	<div class="@container/record flex min-w-0 flex-1 flex-col">
 		<AdminPageHeader
 			title={record.summary}
@@ -99,12 +119,15 @@
 			{#snippet actions()}
 				{#if openHref}
 					<a class="btn btn-sm preset-tonal-surface" href={openHref}>
-						<Icons.ExternalLink size={16} aria-hidden="true" />
+						<ExternalLink size={16} aria-hidden="true" />
 						Open {typeLabel(record!.objectType)}
 					</a>
 				{/if}
-				<a class="btn btn-sm preset-tonal-surface" href={objectHistoryHref(record!)}>
-					<Icons.History size={16} aria-hidden="true" />
+				<a
+					class="btn btn-sm preset-tonal-surface"
+					href={objectHistoryHref(record!)}
+				>
+					<HistoryIcon size={16} aria-hidden="true" />
 					This object's history
 				</a>
 			{/snippet}
@@ -113,13 +136,28 @@
 		<div class="flex min-w-0 flex-col gap-3">
 			<AdminFieldset title="Change">
 				<div class="grid gap-4 @min-[36rem]/record:grid-cols-2">
-					<AdminField id="record-when" label="When" value={fmtWhen(record.at, true)} />
-					<AdminField id="record-who" label="Who" value={record.actorName} />
+					<AdminField
+						id="record-when"
+						label="When"
+						value={fmtWhen(record.at, true)}
+					/>
+					<AdminField
+						id="record-who"
+						label="Who"
+						value={record.actorName}
+					/>
 					<div class="flex min-w-0 flex-col gap-1.5">
-						<span class="text-surface-600-400 text-xs" id="record-action-label">Action</span>
+						<span
+							class="text-surface-600-400 text-xs"
+							id="record-action-label"
+						>
+							Action
+						</span>
 						<p aria-labelledby="record-action-label">
 							<span
-								class="{ACTION_TONE[record.action]} inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-meta"
+								class="{ACTION_TONE[
+									record.action
+								]} text-meta inline-flex items-center gap-1 rounded-full px-2 py-0.5"
 							>
 								<Icon size={12} aria-hidden="true" />
 								{LOGBOOK_ACTION_LABELS[record.action]}
@@ -129,7 +167,10 @@
 					<AdminField
 						id="record-object"
 						label="Object"
-						value={objectName(record.objectType, record.objectLabel)}
+						value={objectName(
+							record.objectType,
+							record.objectLabel
+						)}
 					/>
 					<AdminField
 						id="record-event"
@@ -148,13 +189,19 @@
 					<ul class="flex flex-col gap-2" aria-label="Changed fields">
 						{#each record.changes as c (c.field)}
 							<li
-								class="bg-surface-100-900 flex flex-col gap-1 rounded-base px-3 py-2 text-sm @min-[36rem]/record:grid @min-[36rem]/record:grid-cols-[minmax(8rem,14rem)_1fr] @min-[36rem]/record:gap-3"
+								class="bg-surface-100-900 rounded-base flex flex-col gap-1 px-3 py-2 text-sm @min-[36rem]/record:grid @min-[36rem]/record:grid-cols-[minmax(8rem,14rem)_1fr] @min-[36rem]/record:gap-3"
 							>
 								<span class="font-medium">{c.label}</span>
 								{#if c.redacted}
-									<span class="text-surface-600-400 flex items-center gap-1.5 text-xs">
-										<Icons.LockKeyhole size={14} aria-hidden="true" />
-										Changed — the value is a secret and was not recorded.
+									<span
+										class="text-surface-600-400 flex items-center gap-1.5 text-xs"
+									>
+										<LockKeyhole
+											size={14}
+											aria-hidden="true"
+										/>
+										Changed — the value is a secret and was not
+										recorded.
 									</span>
 								{:else}
 									<span
@@ -164,18 +211,26 @@
 											<span
 												class="text-surface-600-400 decoration-surface-500/60 min-w-0 text-xs break-words whitespace-pre-wrap line-through"
 											>
-												<span class="sr-only">Before: </span>{fmtValue(c.before)}
+												<span class="sr-only">
+													Before:
+												</span>
+												{fmtValue(c.before)}
 											</span>
-											<Icons.ArrowRight
+											<ArrowRight
 												size={14}
 												class="text-surface-600-400 hidden shrink-0 @min-[56rem]/record:block"
 												aria-hidden="true"
 											/>
 										{/if}
-										<span class="min-w-0 text-xs break-words whitespace-pre-wrap">
-											<span class="sr-only"
-												>{c.before !== undefined ? "After: " : "Value: "}</span
-											>{fmtValue(c.after)}
+										<span
+											class="min-w-0 text-xs break-words whitespace-pre-wrap"
+										>
+											<span class="sr-only">
+												{c.before !== undefined
+													? "After: "
+													: "Value: "}
+											</span>
+											{fmtValue(c.after)}
 										</span>
 									</span>
 								{/if}
@@ -183,7 +238,9 @@
 						{/each}
 					</ul>
 				{:else}
-					<p class="text-surface-600-400 text-sm">No field-level detail for this change.</p>
+					<p class="text-surface-600-400 text-sm">
+						No field-level detail for this change.
+					</p>
 				{/if}
 			</AdminFieldset>
 		</div>

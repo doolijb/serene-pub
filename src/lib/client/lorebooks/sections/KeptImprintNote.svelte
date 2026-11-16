@@ -12,8 +12,8 @@
 	/**
 	 * 🚧 An entry's note: what a replaced reply wrote on it that stayed,
 	 * because it was changed after that reply (RF fix 4). One line per write,
-	 * each with **Revert** (it overwrites, or removes the entry the reply
-	 * added: `error`, STYLE-GUIDE §6.1) and **Keep**, for whoever may edit the
+	 * each with **Revert** (it overwrites, or removes the entry or version the
+	 * reply added: `error`, STYLE-GUIDE §6.1) and **Keep**, for whoever may edit the
 	 * book; a reader is told who can. The book's list comes back without the
 	 * line once either is pressed, so nothing here keeps state of its own but
 	 * the press in flight and its refusal.

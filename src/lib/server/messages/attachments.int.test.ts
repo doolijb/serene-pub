@@ -72,7 +72,7 @@ describe("the asset store", () => {
 		expect(Buffer.compare(read!.bytes, PNG)).toBe(0)
 
 		// The file really is jailed under the data dir.
-		const abs = path.resolve(getAppDataDir(), a.original.path)
+		const abs = path.resolve(getAppDataDir(), a.original.path!)
 		await fs.access(abs)
 	})
 })

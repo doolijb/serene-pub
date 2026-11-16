@@ -1,0 +1,285 @@
+▶ genres (24 §3)
+  ✔ own their id; session-created is always required (6.546524ms)
+✔ genres (24 §3) (7.30633ms)
+▶ the input lock (24 §4)
+  ✔ an event without a genre refuses at authoring time (0.600217ms)
+  ✔ the lock rides the document and moves the hash (1.416322ms)
+✔ the input lock (24 §4) (2.181367ms)
+▶ announce (24 §6)
+  ✔ a complete package builds: document + coverage (2.339847ms)
+  ✔ a genre without a create pipeline refuses (0.549647ms)
+  ✔ a preset leaving a required slot unbound refuses, and coverage says MISSING (0.559157ms)
+  ✔ a binding on an event its spec does not answer refuses, naming the lock (0.413228ms)
+  ✔ references are values: a string spec, genre or action is refused with the fix (R48) (0.819485ms)
+  ✔ a config made for another spec, and one event bound twice, refuse (0.495497ms)
+  ✔ another package's spec names its events; without them it refuses (0.492077ms)
+  ✔ a binding keyed by a bare event name refuses, whoever owns the genre (R-4) (0.736246ms)
+  ✔ external references are recorded as requirements, never bundled (0.456687ms)
+  ✔ configs verify node keys for announced specs; todos are named holes (0.856896ms)
+  ✔ a genre with no preset is refused: a custom pipeline must include a default preset (0.531148ms)
+  ✔ the context-bound toolkit namespaces genres and custom value kinds (0.328819ms)
+✔ announce (24 §6) (9.05362ms)
+▶ a preset includes actions by identity (W-A)
+  ✔ a pick names one action; a spec value expands to each of its actions (1.076594ms)
+  ✔ a pick of a key the spec does not declare is refused, naming the keys it does (0.260198ms)
+  ✔ an included action's spec is a requirement when the package does not announce it (0.465678ms)
+✔ a preset includes actions by identity (W-A) (1.901889ms)
+rfA2 document hashes (before → after): {"core:ruleset/vis-itineris@1":["b07a6e3b8fe47be0","5b60022a0df4ccc4"],"core:ruleset/wherewithal@1":["7cf35cc58028a81b","62fd24f3d650ea2e"]}
+▶ Vis Itineris and Wherewithal, rebuilt in the sections, read as they did
+  ✔ core:ruleset/vis-itineris@1: declared in the sections, over core's functions, and clean (3.123893ms)
+  ✔ core:ruleset/vis-itineris@1: the conventions, under every preset and every choice (2.537136ms)
+  ✔ core:ruleset/vis-itineris@1: every section, every reference as it runs (0.597567ms)
+  ✔ core:ruleset/vis-itineris@1: what piece rules may target, the entry types it yields, its settings, what it decides and provides (4.331106ms)
+  ✔ core:ruleset/wherewithal@1: declared in the sections, over core's functions, and clean (0.646076ms)
+  ✔ core:ruleset/wherewithal@1: the conventions, under every preset and every choice (0.232479ms)
+  ✔ core:ruleset/wherewithal@1: every section, every reference as it runs (0.236768ms)
+  ✔ core:ruleset/wherewithal@1: what piece rules may target, the entry types it yields, its settings, what it decides and provides (0.911095ms)
+  ✔ the document hashes move with the shape — recorded for the merge (16.041352ms)
+✔ Vis Itineris and Wherewithal, rebuilt in the sections, read as they did (29.444277ms)
+▶ lanes
+  ✔ reads a bare slug as lane 1, and unset as main (1.006884ms)
+✔ lanes (1.87276ms)
+▶ scene dividers
+  ✔ draws a live scene from its opening message to its close, and the open one to the newest line (1.416483ms)
+  ✔ counts a closed scene's recorded lines, an open scene's shown loaded lines (0.432558ms)
+  ✔ a captured scene keeps its ticked lines; a live range fills the rest on its own lane only (0.211088ms)
+  ✔ says the day a live scene opened on; a captured scene's date stays the history marker's (0.224699ms)
+  ✔ colours scenes by where they begin in the session, as the Chronicle does (0.243798ms)
+  ✔ draws nothing for a scene none of whose lines are loaded (0.641716ms)
+✔ scene dividers (3.686789ms)
+▶ day marks
+  ✔ marks the first stamped line of each story day on the lane the log shows (0.330228ms)
+  ✔ a year-only clock spells the year (0.11925ms)
+✔ day marks (0.691536ms)
+▶ 🚧 dates through the book's calendar (§15 G9)
+  ✔ the dossier's calendar spells a day with its month names, the time of day left off (0.810196ms)
+  ✔ no calendar, or a day it cannot place, reads free-form as before (0.113269ms)
+  ✔ sceneMarks spells a divider's day and every day mark with the label it is handed (0.306288ms)
+✔ 🚧 dates through the book's calendar (§15 G9) (1.397412ms)
+▶ the boundaries a line may offer
+  ✔ with no scene, any line may start one and none may end one (0.198839ms)
+  ✔ inside the open scene: start (closing it before) and end; at its opening, end only (0.140149ms)
+  ✔ before the open scene, or inside a closed one, nothing — the host would refuse it (0.087549ms)
+  ✔ with every scene closed: only after the last one ends (0.164829ms)
+  ✔ a captured line starts nothing; another lane is judged by its own scenes (0.09039ms)
+✔ the boundaries a line may offer (0.821885ms)
+▶ Mark as scene
+  ✔ runs from the earliest pick to the latest on its lane (0.140189ms)
+✔ Mark as scene (0.189899ms)
+▶ lane E: a run, a start nudged, a scene reopened
+  ✔ a run may be marked where it overlaps no live scene on its lane, an earlier one included (0.304508ms)
+  ✔ a live scene's start moves a shown line up into no scene, or down while it keeps a line (0.168479ms)
+  ✔ a closed live scene reopens only with no open and no later scene on its lane (0.179429ms)
+✔ lane E: a run, a start nudged, a scene reopened (0.746196ms)
+▶ a line's story time
+  ✔ reads a stamp with its time of day, or null when it is not a place in time (0.407877ms)
+  ✔ shows HH:MM when the stamp has an hour, hovering the full story time (0.180499ms)
+  ✔ shows the calendar day on a date-only stamp (0.366078ms)
+  ✔ lets the time format win and collapse; declared calendars name the weekday (0.511197ms)
+✔ a line's story time (1.716311ms)
+▶ the core catalog
+  ✔ the announcement builds — genres, pipelines, hooks validated as one package (153.187355ms)
+  ✔ exactly one create pipeline serves each genre, and one respond serves its turn (50.447221ms)
+  ✔ seven reply specs write the sprite step in, after save, with the text passed in (31.605756ms)
+  ✔ hook declarations are fully-qualified core ids (0.09543ms)
+✔ the core catalog (235.978298ms)
+▶ core's announcement (golden)
+  ✖ the canonical document is unchanged (104.406994ms)
+✖ core's announcement (golden) (104.881852ms)
+▶ 🚧 the timeline mandate and a preset's timeline default in the catalogue
+  ✔ the Lair and the Dungeon Crawler require a timeline; no other core genre does (45.758588ms)
+  ✔ Story Minimal starts undated, in its declaration and its seed; Living and Rule Based say nothing (54.43097ms)
+✔ 🚧 the timeline mandate and a preset's timeline default in the catalogue (100.352727ms)
+▶ core's genres on registrations (lane 3)
+  ✔ every genre states its defaults, and every preset is changes on them (78.670086ms)
+  ✔ parity: under every preset, the events and actions a session sees are today's (1.249153ms)
+  ✔ the round tick (sense-clk, 2026-11-11; sense-clk2: no values, reads the round worth; sense-st2b: Story and the Lair, in their genre defaults): no model (35.625613ms)
+  ✔ the scenes routine (sense-scn, 2026-11-12): Story, the Lair and the crawl register it every 2 rounds; Minimal drops it; the three genres begin scenes by themselves (0.353468ms)
+  ✔ Back's step is read off the registered genre: Story one message per press, the others the whole turn (0.135119ms)
+  ✔ the scene summaries routine (sense-sum, 2026-11-12): Story, the Lair and the crawl register it every 2 rounds at minAge 0; Minimal drops it; Chat and the Guide have none (0.288448ms)
+  ✔ Story registers no Ask (retired 2026-11-04, owner §0-F), and Answer stays (0.159539ms)
+  ✔ the summaries (R50): every genre registers world, character, history and its own summarize-scene, on the summarize action (0.445697ms)
+  ✔ the routines each preset runs, at the mode it runs them (0.325639ms)
+  ✔ 🚧 S3 (GM, G1 ★5): Story's After a rest answers the rules' Rest — the story clock moves by it (26.484244ms)
+  ✔ 🚧 S3: the crawl's Rest steps aside while the rules offer one; After a rest answers theirs (0.134219ms)
+  ✔ presets as changes: Minimal, Rule Based and Agentic state only what differs (25.127772ms)
+  ✔ the calls per turn each preset implies are the numbers its card prints (0.309729ms)
+  ✔ one door: every genre default and every preset passes registrationFindings clean (40.179738ms)
+  ✔ the reckoning reads only the session, so an administrator may swap its cadence (R12, R36) (1.182053ms)
+  ✔ 🚧 S3: Story's Rest steps aside while the rules offer their own (`rules.invokable`, the host's fact) (4.519805ms)
+  ✔ every pipeline a registration names is published, and none names a genre (locks → suits) (23.831259ms)
+✔ core's genres on registrations (lane 3) (240.015696ms)
+▶ the shared vocabulary (A19)
+  ✔ rulesets.common is core:vocabulary/common@1, and both core rulesets play it (0.135919ms)
+  ✔ 🚧 the genres' rulesets (M3, 2026-10-22): Story recommends Wherewithal; no genre names a ruleset template (0.282528ms)
+  ✔ the task machinery is retired (0.05941ms)
+✔ the shared vocabulary (A19) (0.554647ms)
+▶ rulesetProvides
+  ✔ derives slots, verbs, pieces, conditions, casting and dice from a declaration (2.332387ms)
+  ✔ a missing declaration provides nothing (0.114969ms)
+✔ rulesetProvides (3.216153ms)
+▶ 🚧 rulesetProvides reads check methods and repertoire tags (2026-10-22)
+  ✔ chance and methods come from the check methods; ⏳ dice is one die-target method (0.484658ms)
+  ✔ a diceless ruleset provides no chance; cards are chance without dice (0.269309ms)
+  ✔ declared tags are all that is read: no guessing from names once any repertoire says them (0.764276ms)
+✔ 🚧 rulesetProvides reads check methods and repertoire tags (2026-10-22) (1.671671ms)
+▶ rulesetFit
+  ✔ a genre with no uses rates every ruleset Great (0.517067ms)
+  ✔ everything native is Perfect; dice never count unless required (0.529198ms)
+  ✔ a thing it plays best with that the rules lack is played in words — never Incompatible (0.265869ms)
+  ✔ an attribute of a kind that does not fit is played in words; an attribute is found by its tag or its id (0.554907ms)
+  ✔ every session has somewhere to keep what someone carries: an inventory zone is always met (0.411898ms)
+  ✔ optional uses never move the rating; unused extras are listed neutrally (0.251078ms)
+  ✔ what it plays best with, as the picker lists it — required first, each label once (0.191369ms)
+  ✔ a genre names no slot and no ruleset’s list any more: refused, with what to say instead (0.312948ms)
+  ✔ an open grammar takes whatever the ruleset provides (0.129749ms)
+  ✔ mostly words is Poor (0.206029ms)
+  ✔ the six ratings and their four bands (0.07688ms)
+✔ rulesetFit (3.899968ms)
+▶ fitOf · events (R4)
+  ✔ the ruled sentence: a reply reads the speaker; scene-opened carries none (0.515117ms)
+  ✔ fit reads the graph: the ports the steps read, not the inlet (0.276949ms)
+  ✔ a compiled document is judged the same as the spec — named by its slug, which is all a document keeps (0.453538ms)
+  ✔ a session-event pipeline reading the session fits every session event (0.340588ms)
+✔ fitOf · events (R4) (1.694771ms)
+▶ fitOf · actions carry the session, the presser and the speaker
+  ✔ a press fits a pipeline reading who pressed and whose turn it is (0.187979ms)
+  ✔ recipients only when the action collects them (0.186739ms)
+  ✔ a message-venue action carries the message (0.10455ms)
+✔ fitOf · actions carry the session, the presser and the speaker (0.582527ms)
+▶ fitOf · routines (R9, R12)
+  ✔ the cadence decides what the cause carries (0.860246ms)
+  ✔ onEvent carries what its event carries; a story-clock schedule carries the clock (0.581326ms)
+  ✔ the family must match the inlet (0.137149ms)
+✔ fitOf · routines (R9, R12) (1.66456ms)
+▶ A1 · every core event states what it carries
+  ✔ each one, truthfully named (0.151189ms)
+  ✔ the five session moments are core events, data family, with what they carry (0.10276ms)
+✔ A1 · every core event states what it carries (0.311148ms)
+▶ 🚧 core's rulesets against core's genres, read by tags and check methods
+  ✔ Wherewithal fits Story and the Lair perfectly; the crawl, built on Vis Itineris, poorly; Chat asks for nothing (212.658447ms)
+✔ 🚧 core's rulesets against core's genres, read by tags and check methods (212.796826ms)
+▶ 🚧 rulesetFit weighs countsTime against keepsTime
+  ✔ story-counting rules on a real-time genre rate poor, with the sentence and timeUnmet (with and without uses) (0.253538ms)
+  ✔ story-counting rules on a story genre are exactly what they were (0.143289ms)
+  ✔ a ruleset whose functions declare nothing rates as it did, on every kept time (0.313069ms)
+  ✔ recurring counts as story each hour or day, and as nothing each round (0.162429ms)
+  ✔ an incompatible rating stays, with its own reason, and carries timeUnmet (0.109349ms)
+  ✔ real-counting rules on a story genre, or both on a real genre, say the real-time sentence (0.120679ms)
+  ✔ a genre refuses a keepsTime that is not story, real or none (0.279129ms)
+✔ 🚧 rulesetFit weighs countsTime against keepsTime (1.502162ms)
+▶ 🚧 a genre's timeline mandate
+  ✔ refuses a mandate without story time, and any value but required (0.225229ms)
+  ✔ stores a mandate beside story time; a genre that says nothing has no key (0.169219ms)
+✔ 🚧 a genre's timeline mandate (0.456247ms)
+▶ 64 · author presets
+  ✔ three presets, one default, addressed by node key (4.108847ms)
+  ✔ values are flat override rows — the shape node_overrides already stores (0.615797ms)
+  ✔ a second default is refused, by name (0.770165ms)
+  ✔ the slug is a database reference, so display text is refused (0.202429ms)
+  ✔ renaming the label leaves the identity — and every selection — intact (0.651766ms)
+  ✔ presets round-trip with the document (F3, F4) (8.612432ms)
+✔ 64 · author presets (16.107281ms)
+▶ 65 · the author/admin line
+  ✔ an unknown node key is a publish error, not a dead override row (3.708629ms)
+  ✔ a slot the node never declared is an error too — same failure mode (0.408888ms)
+  ✔ the node key itself is typed — a preset cannot address a node that is not there (0.207979ms)
+  ✔ there is no .connection() on a preset at all (0.248309ms)
+  ✔ and if one is smuggled in as data, the validator names why (0.628237ms)
+✔ 65 · the author/admin line (5.53871ms)
+▶ 65a · selective export
+  ✔ the user picks which presets travel; the rest are reported, not silently dropped (0.741826ms)
+  ✔ a filtered export is a *different document*, and that is correct (1.459932ms)
+  ✔ SDK compile ships everything — there is no instance to choose from (0.311779ms)
+  ✔ flattening inlines a binding; base keeps the reference (02 §6, never silent) (0.290139ms)
+  ✔ an unresolvable reference is dropped **and reported** (0.225639ms)
+  ✔ connection bindings never leave, whichever mode was chosen (0.231709ms)
+✔ 65a · selective export (3.515951ms)
+▶ 66 · the template engine is a registry entry, not a hardcoded choice
+  ✔ a template value is source **and** engine (0.12437ms)
+  ✔ a bare string is refused, and the fix shows the wrappers (1.603471ms)
+  ✔ an extension registers its own compiler and it renders (0.203619ms)
+  ✔ two slots in one spec may use different engines (0.921065ms)
+  ✔ an unregistered engine fails with a message that names the likely cause (0.132609ms)
+✔ 66 · the template engine is a registry entry, not a hardcoded choice (3.151192ms)
+▶ 67 · cost profiles
+  ✔ jinja2 separates fixed literals from per-iteration literals (0.373728ms)
+  ✔ the estimate scales with block count, which is what Assemble knows (0.101989ms)
+  ✔ plain text is trivially exact — the reference implementation (0.113459ms)
+  ✔ an engine that cannot analyse itself reports exact:false rather than lying (0.119079ms)
+✔ 67 · cost profiles (0.869585ms)
+▶ 76 · spec identity and ownership
+  ✔ the owner comes from the id, and presets inherit it (0.294198ms)
+  ✔ a preset pack declares its own owner — the case the field exists for (0.164929ms)
+  ✔ the semver goes in meta, never in the id (0.128819ms)
+  ✔ newer replaces, equal or older is ignored — the ruled import rule (0.274259ms)
+  ✔ a prerelease sorts below the release it leads to (0.107709ms)
+  ✔ "newer" is not a licence to overwrite somebody else’s row (0.104119ms)
+✔ 76 · spec identity and ownership (1.282593ms)
+▶ a preset never says when history settles
+  ✔ a preset input with history is refused with the sentence (0.835595ms)
+✔ a preset never says when history settles (0.906595ms)
+▶ 🚧 a preset's timeline default
+  ✔ a genre that requires a timeline refuses false, naming both (0.280718ms)
+  ✔ a genre that does not require one accepts false, and the key is stored verbatim (0.133919ms)
+  ✔ a non-boolean is refused (0.132319ms)
+✔ 🚧 a preset's timeline default (0.680356ms)
+▶ R22 · the genre's defaults
+  ✔ declared after the genre (its pipelines import it) and registered in its place (8.701102ms)
+  ✔ the shape is refused at the declaration; the default preset is the preset’s to say (0.492057ms)
+✔ R22 · the genre's defaults (10.168564ms)
+▶ R2 · presets are changes on the genre’s defaults
+  ✔ the stored form: keys, never objects; bindings empty; no save-message written in; default marked (0.373938ms)
+  ✔ a preset with only a title and a description states no change (0.449147ms)
+  ✔ one level: a preset never builds on a preset (0.298688ms)
+  ✔ callsPerTurn is accepted and kept as stated (⏳) (0.185029ms)
+  ✔ requires: a use('…@range') pipeline names its package's range (A16) (0.537787ms)
+  ▶ effectiveRegistrations — the genre’s defaults ⊕ the preset ⊕ the session
+    ✔ dropped ones are gone; changed ones carry the change and who made it; added ones run first by order (0.393368ms)
+    ✔ R8: a routine switched Off stays; a session row changes the mode, drops, or adds its own (0.347738ms)
+    ✔ values merge node by node, a slot replaced whole (0.256608ms)
+  ✔ effectiveRegistrations — the genre’s defaults ⊕ the preset ⊕ the session (1.205854ms)
+✔ R2 · presets are changes on the genre’s defaults (3.416592ms)
+▶ ⏳ the aliases: bindings and actions.include read as registrations
+  ✔ a binding to the same spec changes nothing; to another replaces the event’s registrations (0.700926ms)
+  ✔ the stored alias form does not move — no registrations key, save-message bound as before (0.170199ms)
+  ✔ actions.include: the listed actions registered, the defaults’ others dropped (0.505137ms)
+  ✔ a binding’s named configuration is handed on for the host’s data upgrade (0.149809ms)
+✔ ⏳ the aliases: bindings and actions.include read as registrations (1.723211ms)
+▶ the package build calls the door (§11-2)
+  ✔ a preset of a genre whose defaults register the required event needs no bindings (4.571505ms)
+  ✔ a misfit registration in a preset is refused, once (1.221473ms)
+  ✔ dropping what the defaults never registered warns (0.784376ms)
+  ✔ another package's pipeline is a requirement, not an error (0.763266ms)
+✔ the package build calls the door (§11-2) (7.515469ms)
+ℹ tests 171
+ℹ suites 41
+ℹ pass 170
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 989.40327
+
+✖ failing tests:
+
+test at coreCatalog.test.ts:260:2
+✖ the canonical document is unchanged (104.406994ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'd997da157b5f16ab'
+  - 'f6f145e14824ad14'
+  
+      at TestContext.<anonymous> (/home/jody/github/serene-pub-sdk/sdk-tests/coreCatalog.test.ts:1076:10)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1518:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'd997da157b5f16ab',
+    expected: 'f6f145e14824ad14',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

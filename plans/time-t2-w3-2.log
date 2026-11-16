@@ -1,0 +1,46 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts (2 tests | 2 failed) 2538ms
+     × one save records one row naming both, and Restore puts back 0 and Perpetual 17ms
+     × a save changing only the rate records the rate 6ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts > an entry's Beginning and decay rate in its Edit history > one save records one row naming both, and Restore puts back 0 and Perpetual
+Error: Cannot find module '/src/lib/server/lorebooks/entries' imported from /home/jody/github/serene-pub/src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts
+ ❯ save src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts:117:33
+    115|
+    116| const save = async (userId: number, entry: Record<string, unknown>) =>…
+    117|  const { updateEntryHandler } = await import("./entries")
+       |                                 ^
+    118|  return updateEntryHandler.handler(
+    119|   socketOf(userId),
+ ❯ src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts:142:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts > an entry's Beginning and decay rate in its Edit history > a save changing only the rate records the rate
+Error: Cannot find module '/src/lib/server/lorebooks/entries' imported from /home/jody/github/serene-pub/src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts
+ ❯ save src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts:117:33
+    115|
+    116| const save = async (userId: number, entry: Record<string, unknown>) =>…
+    117|  const { updateEntryHandler } = await import("./entries")
+       |                                 ^
+    118|  return updateEntryHandler.handler(
+    119|   socketOf(userId),
+ ❯ src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts:179:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  2 failed | 58 passed (60)
+   Start at  17:17:07
+   Duration  5.81s (transform 4.67s, setup 39ms, import 5.22s, tests 5.90s, environment 1ms)
+

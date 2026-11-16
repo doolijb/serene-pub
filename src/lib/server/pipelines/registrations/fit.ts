@@ -116,7 +116,11 @@ async function genreOfRows(db: Db, rows: readonly RegistrationRow[]): Promise<Ma
  * returns what it found. Never throws: a check that cannot run leaves the old
  * verdicts and is logged.
  */
-export async function refitRegistrations(db: Db, names?: readonly string[]): Promise<RefitReport> {
+export async function refitRegistrations(
+	db: Db,
+	names?: readonly string[],
+	docs?: Map<string, SpecDocument | null>
+): Promise<RefitReport> {
 	const report: RefitReport = { checked: 0, broken: [], mended: [] }
 	try {
 		let slugs: string[] | null = null
@@ -169,7 +173,7 @@ export async function refitRegistrations(db: Db, names?: readonly string[]): Pro
 			"$lib/server/pipelines/registrations/door"
 		)
 		const decls = rows.map((r) => ({ row: r, decl: declOfRow(r) })).filter((x): x is { row: RegistrationRow; decl: RegistrationDecl } => !!x.decl)
-		const docs: Map<string, SpecDocument | null> = await publishedDocuments(db, pipelinesNamed(decls.map((d) => d.decl)))
+		const published: Map<string, SpecDocument | null> = await publishedDocuments(db, pipelinesNamed(decls.map((d) => d.decl)), docs)
 		// One door per genre, so each is judged against its registering genre's envoys.
 		const byGenre = new Map<string, Array<{ row: RegistrationRow; decl: RegistrationDecl }>>()
 		for (const x of decls) {
@@ -191,13 +195,13 @@ export async function refitRegistrations(db: Db, names?: readonly string[]): Pro
 			const verdict = await registrationDoor(
 				db,
 				list.map((x) => x.decl),
-				{ layer: `the registrations of '${genreId}'`, genreId, docs }
+				{ layer: `the registrations of '${genreId}'`, genreId, docs: published }
 			)
 			for (const [i, { row, decl }] of list.entries()) {
 				report.checked++
 				const id = idOf(row.scopeKind, row.scopeRef, decl.key)
 				// Not published: the resolver's stale path says it already.
-				const errors = docs.get(decl.pipeline)
+				const errors = published.get(decl.pipeline)
 					? (verdict.perDecl[i] ?? []).filter((f) => BREAKING_LAWS.has(f.law))
 					: []
 				if (errors.length) {

@@ -1,0 +1,16 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+10:09:35 AM [vite-plugin-svelte] src/lib/client/lorebooks/bookTimelineProbe.svelte:5:1 This reference only captures the initial value of `out`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  10:09:35
+   Duration  541ms (transform 238ms, setup 15ms, import 288ms, tests 6ms, environment 123ms)
+

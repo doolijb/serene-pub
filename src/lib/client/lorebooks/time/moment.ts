@@ -206,16 +206,12 @@ export function momentWords(key: string | null | undefined): string {
 }
 
 /**
- * What a save does while reading as of a date, said beside the moment.
- *
- * ⚠ The sentence names the CHOICE, never one outcome: at a moment a save is
- * either an amendment or a change to the base, and neither is the default.
- * The Save control is where it is made. "A change", not "the entry": the
- * moment bar stands under the Cast board too, where the subject is a member,
- * and under any scope added later.
+ * What a save does while reading as of a date 🚧, said beside the moment. One
+ * sentence for every subject under the bar: an entry's or a cast member's
+ * versions, and a history entry, whose Save control still names its own choice.
  */
 export const MOMENT_SAVE_SENTENCE =
-	"A change saved here can begin at this date, or change it everywhere."
+	"A save here changes what this date shows."
 
 /**
  * The date a drag onto the line lands on.

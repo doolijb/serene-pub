@@ -229,7 +229,9 @@ export async function runUpdateCharacter(
 		const write = applyStrokesToCard(
 			changes as any
 		) as Partial<CharacterProfileV1>
-		await updateCardVersion(h, version.id, write)
+		await updateCardVersion(h, version.id, write, {
+			redline: { by: { userId: door.person.userId }, cause: "save" }
+		})
 		await h
 			.update(schema.characters)
 			.set({

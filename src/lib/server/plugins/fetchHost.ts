@@ -107,6 +107,13 @@ function matchAllow(allow, reqHost, reqPort) {
 }
 `
 
+/**
+ * The most a plugin's `ctx.fetch` will read from one response. Bigger payloads
+ * belong in `ctx.storage`, not in a hook return. Spliced into the source below
+ * so the number exists once.
+ */
+export const FETCH_RESPONSE_MAX_BYTES = 4 * 1024 * 1024
+
 export const FETCH_HOST_SOURCE =
 	HOST_ALLOW_SOURCE +
 	String.raw`
@@ -312,7 +319,31 @@ function makeFetchHost(hosts, isCancelled, secrets) {
 				if (crossOrigin) headers = {};
 				continue;
 			}
-			var text = mask(await res.text());
+			var tooBig = "fetch: the response is larger than ${FETCH_RESPONSE_MAX_BYTES / (1024 * 1024)} MB — keep bigger payloads in ctx.storage";
+			var maxBytes = ${FETCH_RESPONSE_MAX_BYTES};
+			var declared = Number(res.headers.get("content-length"));
+			if (declared > maxBytes) {
+				if (res.body) { try { await res.body.cancel(); } catch (e) {} }
+				throw new Error(tooBig);
+			}
+			var raw = "";
+			if (res.body) {
+				var reader = res.body.getReader();
+				var decoder = new TextDecoder();
+				var seen = 0;
+				for (;;) {
+					var chunk = await reader.read();
+					if (chunk.done) break;
+					seen += chunk.value.byteLength;
+					if (seen > maxBytes) {
+						try { await reader.cancel(); } catch (e) {}
+						throw new Error(tooBig);
+					}
+					raw += decoder.decode(chunk.value, { stream: true });
+				}
+				raw += decoder.decode();
+			}
+			var text = mask(raw);
 			var outHeaders = {};
 			res.headers.forEach(function (v, k) { outHeaders[k] = mask(v); });
 			return { status: res.status, ok: res.ok, headers: outHeaders, body: text };

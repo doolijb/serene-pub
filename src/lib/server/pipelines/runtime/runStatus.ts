@@ -85,7 +85,9 @@ export const REASONING_STATUS_UNNAMED: StatusText = {
  * How long a queue wait must last before the row says so. The queue reports
  * `queued`, then `loading`, then `generating` synchronously when nothing is
  * ahead and the adapter's preflight is instant — three statuses in one tick
- * that would replace *typing* with two flickers and put it back.
+ * that would replace *typing* with two flickers and put it back. It is also
+ * how long a routine run must last before it shows as running
+ * (`routines/run.ts`).
  */
 export const QUEUE_STATUS_DELAY_MS = 400
 
@@ -114,6 +116,12 @@ export interface RunStatusFrame {
 	 * line, the composer's Stop and the session list. On every frame.
 	 */
 	lineBound?: true
+	/**
+	 * 🚧 The routine's name, as Routines shows it; on the two frames a routine
+	 * run's start and end send (`routines/run.ts`), never on the status
+	 * relay's frames.
+	 */
+	routine?: { name: string }
 }
 
 export interface StatusRelayOptions {

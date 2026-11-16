@@ -35,6 +35,11 @@
  *     an event the server never sent.
  */
 
+import {
+	sessionTimelineOf,
+	timelineOfBook,
+	TIMELINE_OFF_SENTENCES
+} from "$lib/server/lorebooks/timeline"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { primerRowEditProblem, providedBooksReadableBy } from "$lib/server/plugins/providedMarks"
@@ -52,6 +57,7 @@ import {
 } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { askerOf, refusable } from "./refusable"
+import { registerRedlineHandlers } from "./redlines"
 import {
 	relistBindings,
 	syncLorebookBindings,
@@ -64,10 +70,14 @@ import {
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import {
+	declaredFields,
 	entryDeclaration,
 	entryDeclarations,
 	isDeclaredEntryType
 } from "$lib/server/entries/declarations"
+import { earmarkedBy } from "$lib/server/pipelines/runtime/runRegistry"
+import { routineRunOf } from "$lib/server/pipelines/routines/runs"
+import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 // Imported, never copied: session access is owner-OR-guest and every handler
 // that decided that for itself got it wrong in one direction or the other.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
@@ -81,7 +91,7 @@ import { assertAnchorEntry, assertAnchorInBook } from "$lib/server/utils/anchorE
 import { foldRelationshipsUndatedBy } from "$lib/server/utils/relationshipGuards"
 import { assertRedateKeepsLines } from "$lib/server/utils/forkHistory"
 import { compareDates, dayOnly, formatDate, nextStoryDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
-import { ENTRY_DATE_PARTS } from "$lib/shared/lorebooks/amendments"
+import { ENTRY_DATE_PARTS, decayRateProblem, type EntryTimeWire } from "$lib/shared/lorebooks/amendments"
 import { MAIN_LINE, historyOwnerStep, type Line } from "$lib/shared/lorebooks/lineReading"
 import { LOCATION_TYPE_ID, isDerivedEntryTypeId } from "$lib/shared/entries/types"
 import {
@@ -123,6 +133,8 @@ import {
 	onLineSql
 } from "$lib/server/state/lineSql"
 import {
+	beginningProblem,
+	takesBeginning,
 	DEFAULT_VECTOR_NAME,
 	HISTORY_TYPE_ID,
 	assertDeclaredFields,
@@ -131,7 +143,6 @@ import {
 	touchesPatterns,
 	entryInsert,
 	inBookOfType,
-	loadDefaultVectors,
 	mergeFields,
 	nextPosition,
 	parkingFloor,
@@ -141,6 +152,7 @@ import {
 	sweepLoreEntryRankings,
 	type EntryProvenance,
 	type EntryTypeId,
+	type EntryVector,
 	type LorebookEntry
 } from "$lib/server/utils/lorebookEntries"
 import { deletePlaceStats } from "$lib/server/state/lorebookState"
@@ -195,11 +207,46 @@ const listOrder = (typeId: string) =>
 		: asc(schema.lorebookEntries.id)
 
 /**
+ * The default-space vector's model and timestamp per entry — the
+ * `loadDefaultVectors` filters, without the `vector` column. `embedding` is
+ * always `null` (★P6, 2026-11-13).
+ */
+async function loadDefaultVectorMarks(
+	dbOrTx: any,
+	entryIds: number[]
+): Promise<Map<number, EntryVector>> {
+	const out = new Map<number, EntryVector>()
+	if (!entryIds.length) return out
+	const rows = await dbOrTx
+		.select({
+			entryId: schema.lorebookEntryVectors.entryId,
+			model: schema.lorebookEntryVectors.model,
+			vectorizedAt: schema.lorebookEntryVectors.vectorizedAt
+		})
+		.from(schema.lorebookEntryVectors)
+		.where(
+			and(
+				inArray(schema.lorebookEntryVectors.entryId, entryIds),
+				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
+				eq(schema.lorebookEntryVectors.chunkIndex, 0)
+			)
+		)
+	for (const r of rows as any[])
+		out.set(r.entryId, {
+			embedding: null,
+			embeddingModel: r.model ?? null,
+			vectorizedAt: r.vectorizedAt ?? null
+		})
+	return out
+}
+
+/**
  * Every row of one type in one lorebook, in the wire shape.
  *
- * The vectors are loaded and sent because they always were: the relations this
- * replaces selected every column, `embedding` included, and the manager reads
- * `embeddingModel` off the row to show whether an entry is vectorized.
+ * The vector itself stays off the wire (★P6, 2026-11-13): no client reads it,
+ * and it was the whole embedding on every row. The manager still reads
+ * `embeddingModel` and `vectorizedAt` off the row to show whether an entry is
+ * vectorized, so those stay; `embedding` is `null` on every row.
  *
  * 🚧 Each row carries what a replaced reply wrote on it that stayed (RF fix
  * 4, `keptImprints`): the list's mark and the inspector's note read it.
@@ -207,13 +254,13 @@ const listOrder = (typeId: string) =>
 export async function listEntryRows(
 	lorebookId: number,
 	typeId: EntryTypeId
-): Promise<Array<LorebookEntry & { unfiledSceneCount?: number }>> {
+): Promise<Array<LorebookEntry & EntryTimeWire & { unfiledSceneCount?: number }>> {
 	const rows = await db
 		.select()
 		.from(schema.lorebookEntries)
 		.where(inBookOfType(lorebookId, typeId))
 		.orderBy(listOrder(typeId))
-	const vectors = await loadDefaultVectors(
+	const vectors = await loadDefaultVectorMarks(
 		db,
 		rows.map((r) => r.id)
 	)
@@ -225,9 +272,9 @@ export async function listEntryRows(
 	)
 	const unfiled = typeId === HISTORY_TYPE_ID ? await unfiledSceneCounts(lorebookId, rows) : new Map()
 	return rows.map((r) => {
-		let entry: LorebookEntry & { unfiledSceneCount?: number } = toEntryRow(r, vectors.get(r.id))
+		let entry: LorebookEntry & EntryTimeWire & { unfiledSceneCount?: number } = toEntryRow(r, vectors.get(r.id))
 		const notes = kept.get(r.id)
-		if (notes) entry = { ...entry, keptImprints: notes } as LorebookEntry
+		if (notes) entry = { ...entry, keptImprints: notes } as typeof entry
 		const count = unfiled.get(r.id)
 		return count ? { ...entry, unfiledSceneCount: count } : entry
 	})
@@ -325,6 +372,89 @@ export function changesEmbeddedText(
 	)
 }
 
+/**
+ * 🚧 The keys of a wire-shaped payload that a pipeline run can replace on a
+ * stored entry: its name (when the type has a title), its content and its
+ * declared typed fields. A mark, a key list, an anchor or a position is never
+ * among them. The one list `entries:update`, `amendments:*` and the earmark
+ * refusals share.
+ */
+export function earmarkedKeys(typeId: string, data: Record<string, unknown>): string[] {
+	const has = (k: string) => Object.prototype.hasOwnProperty.call(data, k)
+	const keys: string[] = []
+	if (entryDeclaration(typeId)?.roles.title && has("name")) keys.push("name")
+	if (has("content")) keys.push("content")
+	for (const field of declaredFields(typeId)) if (has(field)) keys.push(field)
+	return keys
+}
+
+/**
+ * The earmarked keys of a save that differ from the stored row: `name` and
+ * `content` as the save leaves them, a typed field by a key-order-independent
+ * compare against the stored value (the declared default standing in for an
+ * absent key).
+ */
+function changedEarmarkedKeys(
+	stored: Parameters<typeof toEntryRow>[0],
+	data: Record<string, unknown>
+): string[] {
+	const was = toEntryRow(stored) as unknown as Record<string, unknown>
+	return earmarkedKeys(stored.typeId, data).filter((key) => {
+		if (key === "name" || key === "content") return (was[key] ?? "") !== ((data[key] as string | null) ?? "")
+		return stableStringify(was[key] ?? null) !== stableStringify(data[key] ?? null)
+	})
+}
+
+/**
+ * 🚧 The sentence that says a live pipeline run may replace this entry, or
+ * null when none earmarks it. Names the routine (or pipeline) and, when the
+ * asker may open that session, the session; never a connection, a model or a
+ * run id. One function for every refusal and for `entries:earmark`, so they
+ * always read alike.
+ */
+export async function earmarkNotice(entryId: number, askerId: number): Promise<string | null> {
+	const [holder] = earmarkedBy("entry", entryId)
+	if (!holder) return null
+	let routine = routineRunOf(holder.runId)?.shownAs?.name?.trim() || ""
+	if (!routine && holder.specId) {
+		const [spec] = await db
+			.select({ name: schema.pipelineSpecs.name })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, holder.specId))
+			.limit(1)
+		routine = spec?.name?.trim() || ""
+	}
+	if (!routine) routine = holder.kind === "routine" ? "A routine" : "A pipeline"
+	let session = ""
+	if (holder.sessionId !== undefined && (await checkSessionAccess(holder.sessionId, askerId)).hasAccess) {
+		const row = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, holder.sessionId),
+			columns: { name: true }
+		})
+		session = row?.name?.trim() || ""
+	}
+	const who = session ? `${routine} in ${session}` : routine
+	const { pendingReviewsFor } = await import("$lib/server/pipelines/runtime/reviewGate")
+	const waiting = pendingReviewsFor(holder.userId).some((v) => v.specId === holder.specId)
+	if (!waiting)
+		return `${who} may update this entry when it finishes. Your changes are kept here: save again then.`
+	return holder.userId === askerId
+		? `${who} is waiting for your review and may update this entry. Your changes are kept here: decide there, then save.`
+		: `${who} is waiting for review and may update this entry. Your changes are kept here: save again once it is decided.`
+}
+
+/** The entry's earmark sentence, thrown as a refusal when the save changes what a run can replace. */
+async function refuseIfEarmarked(
+	stored: Parameters<typeof toEntryRow>[0],
+	data: Record<string, unknown>,
+	askerId: number
+): Promise<void> {
+	if (!earmarkedBy("entry", stored.id).length) return
+	if (!changedEarmarkedKeys(stored, data).length) return
+	const notice = await earmarkNotice(stored.id, askerId)
+	if (notice) throw new Error(notice)
+}
+
 /** The entry plus its lorebook's name and owner, for the ownership checks. */
 async function findOwnedEntry(id: number, typeId: string) {
 	const [row] = await db
@@ -377,6 +507,7 @@ async function applyEntryUpdate(
 	typeId: string,
 	columns: Record<string, any>,
 	fields: Record<string, unknown>,
+	edit: { cause: "save" | "restore"; userId: number },
 	dbOrTx: Db = db
 ) {
 	const set = {
@@ -388,11 +519,26 @@ async function applyEntryUpdate(
 			.select()
 			.from(schema.lorebookEntries)
 			.where(entryOfType(id, typeId))
+	const [before] = await dbOrTx
+		.select()
+		.from(schema.lorebookEntries)
+		.where(entryOfType(id, typeId))
 	const updated = await dbOrTx
 		.update(schema.lorebookEntries)
 		.set(set)
 		.where(entryOfType(id, typeId))
 		.returning()
+	// The edit history keeps what the save changed, on the write's own handle.
+	if (before && updated[0]) {
+		const { recordEntryRedline } = await import("$lib/server/lorebooks/redlines")
+		await recordEntryRedline(dbOrTx, {
+			before,
+			after: updated[0],
+			named: [...Object.keys(columns), ...Object.keys(fields).map((k) => "fields." + k)],
+			cause: edit.cause,
+			by: { userId: edit.userId }
+		})
+	}
 	// A person's edit settles the field's standing imprints at once (pr-6 A3).
 	const { markImprintsKept, entryFieldAddress } = await import("$lib/server/lorebooks/imprints")
 	await markImprintsKept(dbOrTx, {
@@ -416,9 +562,19 @@ async function afterWrite(
 	lorebookId: number,
 	typeId: EntryTypeId,
 	lorebookName: string,
-	opts: { enqueue?: boolean } = {}
+	opts: {
+		enqueue?: boolean
+		/**
+		 * The one row this write created or updated. Given, the bindings scan
+		 * reads that row alone, and the owner is not re-sent the type's list:
+		 * the targeted event already carried the row. A history type keeps
+		 * the relist — its rows' unfiled-scene counts depend on the other
+		 * rows' dates, which no single-row event can carry.
+		 */
+		saved?: { content: string | null }
+	} = {}
 ) {
-	await syncLorebookBindings({ lorebookId })
+	await syncLorebookBindings({ lorebookId, entry: opts.saved })
 	if (opts.enqueue !== false)
 		autoEnqueueLorebook(lorebookId, lorebookName, "").catch(console.error)
 
@@ -457,7 +613,31 @@ async function afterWrite(
 
 	// Lazy for the same reason: exactly one `entries:list` per write, and
 	// none at all when no workspace is showing this type.
+	if (opts.saved && typeId !== HISTORY_TYPE_ID) {
+		// The owner holds the row from the targeted event; the book's readers
+		// do not receive that event, so their list is still sent.
+		await relayToBookReaders(socket, lorebookId, "entries:list", (readerId) =>
+			buildEntriesList(readerId, lorebookId, typeId)
+		)
+		return
+	}
 	await relistEntries(socket, lorebookId, typeId, emitToUser)
+}
+
+/**
+ * A saved row as the list would carry it — vector triple and kept imprints
+ * included — so the targeted event can stand in for a re-sent list. A history
+ * row's unfiled-scene count is the one list field it leaves out; that type
+ * keeps its relist (`afterWrite`).
+ */
+async function toListRow(
+	row: typeof schema.lorebookEntries.$inferSelect
+): Promise<LorebookEntry> {
+	const vectors = await loadDefaultVectorMarks(db, [row.id])
+	const { keptImprintsByEntry } = await import("$lib/server/lorebooks/imprints")
+	const kept = (await keptImprintsByEntry(db, row.lorebookId, [row.id])).get(row.id)
+	const entry = toEntryRow(row, vectors.get(row.id))
+	return kept ? ({ ...entry, keptImprints: kept } as LorebookEntry) : entry
 }
 
 /**
@@ -684,6 +864,48 @@ export const createEntryHandler: Handler<
 )
 
 /**
+ * A Beginning that takes hold, judged under the book's lock: the date lands in
+ * the book's calendar, and no dated change of this entry (any line, written in
+ * the book itself) falls before it. A history entry's one-per-date rule is not
+ * asked: two entries may begin on one day.
+ */
+async function assertBeginningHolds(
+	tx: Db,
+	lorebookId: number,
+	entryId: number | null,
+	beginning: StoryDate
+): Promise<void> {
+	await assertDateLands(tx, lorebookId, beginning)
+	if (entryId == null) return
+	const a = schema.entryAmendments
+	const dated = await tx
+		.select({ year: a.year, month: a.month, day: a.day })
+		.from(a)
+		.where(and(eq(a.entryId, entryId), isNull(a.base), sql`${a.year} is not null`))
+	let earliest: StoryDate | null = null
+	for (const row of dated) {
+		const at: StoryDate = { year: row.year!, month: row.month, day: row.day }
+		if (compareDates(dayOnly(at), dayOnly(beginning)) >= 0) continue
+		if (!earliest || compareDates(dayOnly(at), dayOnly(earliest)) < 0) earliest = at
+	}
+	if (!earliest) return
+	const calendar = await bookCalendarOf(tx, lorebookId)
+	throw new Error(
+		`This entry has a change dated ${formatDate(earliest, calendar)}, so it can't begin later, at ` +
+			`${formatDate(beginning, calendar)}. Move or delete that change first.`
+	)
+}
+
+/**
+ * The Timeline-off refusal for setting a Beginning. Clearing one (Perpetual)
+ * never reaches it.
+ */
+async function assertTimelineForBeginning(lorebookId: number): Promise<void> {
+	if (!(await timelineOfBook(db as unknown as Db, lorebookId)))
+		throw new Error(TIMELINE_OFF_SENTENCES.dated)
+}
+
+/**
  * The one way an entry is created — `entries:create`, and a copy out of the
  * book's rules library (`entries:copyFromLibrary`), which alone may stamp
  * where the copy came from (`derivedFrom`: the server's answer, never a
@@ -745,6 +967,12 @@ async function createEntry(
 			lorebookId: data.lorebookId
 		})
 		data.branchId = write.branchId
+		// 🚧 A history day is not kept for a book with no timeline.
+		if (
+			entryDeclaration(typeId)?.roles.order &&
+			!(await sessionTimelineOf(db, params.sessionId))
+		)
+			throw new Error(TIMELINE_OFF_SENTENCES.history)
 		datedAtStoryNow = !!entryDeclaration(typeId)?.roles.order && data.year == null
 		if (datedAtStoryNow)
 			Object.assign(
@@ -775,6 +1003,19 @@ async function createEntry(
 				"You can't add that character to this book's cast."
 			)
 		delete data.lorebookBindingId
+	}
+
+	if (data.decayRate !== undefined) {
+		const problem = decayRateProblem(data.decayRate)
+		if (problem) throw new Error(problem)
+	}
+	const beginsWith =
+		takesBeginning(typeId) &&
+		ENTRY_DATE_PARTS.some((k) => data[k] !== undefined && data[k] !== null)
+	if (beginsWith) {
+		if (data.year != null) await assertTimelineForBeginning(data.lorebookId)
+		const problem = beginningProblem(data)
+		if (problem) throw new Error(problem)
 	}
 
 	await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
@@ -847,6 +1088,12 @@ async function createEntry(
 		// preflight list can never refill) — under the lock, so a calendar
 		// is never declared between this check and the row (A18(d)).
 		let dayEntry: typeof schema.lorebookEntries.$inferSelect | null = null
+		if (beginsWith)
+			await assertBeginningHolds(tx, data.lorebookId, null, {
+				year: Number(data.year),
+				month: data.month ?? null,
+				day: data.day ?? null
+			})
 		if (entryDeclaration(typeId)?.roles.order && data.year != null) {
 			const date: StoryDate = {
 				year: Number(data.year),
@@ -964,13 +1211,15 @@ async function createEntry(
 	}
 
 	const entry = toEntryRow(newEntry)
-	if (emitToUser) emitToUser("entries:create", { entry })
+	if (emitToUser)
+		emitToUser("entries:create", { entry: await toListRow(newEntry) })
 	await afterWrite(
 		socket,
 		emitToUser,
 		newEntry.lorebookId,
 		typeId,
-		book.name
+		book.name,
+		{ saved: newEntry }
 	)
 
 	return { entry }
@@ -1002,12 +1251,17 @@ async function allocatePosition(
 	return (last?.position ?? -1) + 1
 }
 
-export const updateEntryHandler: Handler<
-	Sockets.Entries.Update.Params,
-	Sockets.Entries.Update.Response
-> = refusable(
-	"entries:update",
-	async (socket, params: Sockets.Entries.Update.Params, emitToUser) => {
+/**
+ * One person's save of an entry's form: `entries:update`'s whole body, and
+ * what Restore of an edit-history row calls (cause `restore`), so a restore
+ * keeps every check a save keeps.
+ */
+export async function saveEntry(
+	socket: any,
+	params: Sockets.Entries.Update.Params,
+	emitToUser: ((event: string, data: any) => void) | undefined,
+	cause: "save" | "restore"
+): Promise<Sockets.Entries.Update.Response> {
 		const userId = socket.user!.id
 		const typeId = assertTypeId(params.entry?.typeId)
 
@@ -1102,10 +1356,48 @@ export const updateEntryHandler: Handler<
 				}
 		}
 
+		if (Object.prototype.hasOwnProperty.call(updateData, "decayRate")) {
+			const problem = decayRateProblem(updateData.decayRate)
+			if (problem) throw new Error(problem)
+		}
+
+		// A Beginning that moves to a date different from the stored one. The
+		// parts not sent are the stored ones; clearing all three is always allowed.
+		let beginningMove: StoryDate | null = null
+		let beginningWas: StoryDate | null = null
+		if (
+			takesBeginning(typeId) &&
+			ENTRY_DATE_PARTS.some((k) => Object.prototype.hasOwnProperty.call(updateData, k))
+		) {
+			const was = toEntryRow(existing.entry) as Record<string, any>
+			const merged = Object.fromEntries(
+				ENTRY_DATE_PARTS.map((k) => [
+					k,
+					Object.prototype.hasOwnProperty.call(updateData, k) ? updateData[k] : was[k]
+				])
+			)
+			const problem = beginningProblem(merged)
+			if (problem) throw new Error(problem)
+			if (merged.year != null) {
+				const next: StoryDate = { year: merged.year, month: merged.month ?? null, day: merged.day ?? null }
+				beginningWas = was.year != null ? { year: was.year, month: was.month, day: was.day } : null
+				if (!beginningWas || compareDates(dayOnly(beginningWas), dayOnly(next)) !== 0) {
+					await assertTimelineForBeginning(existing.entry.lorebookId)
+					beginningMove = next
+				}
+			}
+		}
+
 		// ⚠ `fields` is merged, never replaced: `graphed` and `isCompleted` are
 		// machine-written by the graph builder and the summarizer concurrently
 		// with a user editing `content`, and a whole-object jsonb write from
 		// either side clobbers the other.
+		// A run that was shown this entry may replace its text: a save that
+		// changes the name, the content or a typed field waits (see
+		// `earmarkNotice`). Asked last, so no other check's await sits between
+		// this answer and the write.
+		await refuseIfEarmarked(existing.entry, updateData, userId)
+
 		const { columns, fields } = splitUpdate(typeId, updateData)
 		// The re-parent. Same book, real row, not itself, no walk back to
 		// itself, and never under another line's own entry — checked here
@@ -1116,10 +1408,21 @@ export const updateEntryHandler: Handler<
 		// moved date is checked under the same lock, so a calendar is never
 		// declared between its check and the row (A18(d)), nor re-dated past
 		// where a line whose rows use it reads it (`assertRedateKeepsLines`).
-		const locked = reparents || movedDate !== null
+		const locked = reparents || movedDate !== null || beginningMove !== null
 		const [updatedRow] = locked
 			? await db.transaction(async (tx) => {
 					await lockBookCalendar(tx, existing.entry.lorebookId)
+					if (beginningMove) {
+						await assertBeginningHolds(
+							tx,
+							existing.entry.lorebookId,
+							params.entry.id,
+							beginningMove
+						)
+						// A first Beginning too: a line forked earlier may link to
+						// the entry it read while it was perpetual.
+						await assertRedateKeepsLines(tx, params.entry.id, beginningMove)
+					}
 					if (movedDate) {
 						await assertDateLands(tx, existing.entry.lorebookId, movedDate)
 						// A re-date onto a taken day is refused; a save that resends the
@@ -1151,10 +1454,13 @@ export const updateEntryHandler: Handler<
 						typeId,
 						columns,
 						fields,
+						{ cause, userId },
 						tx
 					)
 				})
-			: await applyEntryUpdate(params.entry.id, typeId, columns, fields)
+			: await db.transaction((tx) =>
+					applyEntryUpdate(params.entry.id, typeId, columns, fields, { cause, userId }, tx)
+				)
 		// The content vector goes stale only when what it embeds changed —
 		// the title and the content (the type's `embedText` role). An
 		// archive toggle, a re-parent, a date or a mark embeds nothing new,
@@ -1166,18 +1472,33 @@ export const updateEntryHandler: Handler<
 			await clearEntryVectors(params.entry.id)
 
 		const entry = toEntryRow(updatedRow)
-		if (emitToUser) emitToUser("entries:update", { entry })
+		if (emitToUser)
+			emitToUser("entries:update", {
+				entry: await toListRow(updatedRow),
+				...askerOf(params)
+			})
 		await afterWrite(
 			socket,
 			emitToUser,
 			existing.entry.lorebookId,
 			typeId,
-			existing.lorebookName ?? ""
+			existing.lorebookName ?? "",
+			{ saved: updatedRow }
 		)
 
-		return { entry }
-	},
-	"That entry could not be saved."
+		return { entry, ...askerOf(params) }
+}
+
+export const updateEntryHandler: Handler<
+	Sockets.Entries.Update.Params,
+	Sockets.Entries.Update.Response
+> = refusable(
+	"entries:update",
+	(socket, params: Sockets.Entries.Update.Params, emitToUser) =>
+		saveEntry(socket, params, emitToUser, "save"),
+	"That entry could not be saved.",
+	undefined,
+	askerOf
 )
 
 /**
@@ -1608,7 +1929,8 @@ export const deleteEntryHandler: Handler<
 			success: "Entry deleted successfully.",
 			lorebookId: existing.entry.lorebookId,
 			entryId: params.id,
-			typeId
+			typeId,
+			...askerOf(params)
 		}
 		if (emitToUser) emitToUser("entries:delete", res)
 		await afterWrite(
@@ -1623,7 +1945,9 @@ export const deleteEntryHandler: Handler<
 
 		return res
 	},
-	"The entry could not be deleted."
+	"The entry could not be deleted.",
+	undefined,
+	askerOf
 )
 
 export const updateEntryPositionsHandler: Handler<
@@ -1745,17 +2069,21 @@ export async function reorderEntries(
 			updates.map((u) => u.position)
 		)
 
-		for (const [i, u] of updates.entries())
-			await tx
-				.update(schema.lorebookEntries)
-				.set({ position: floor - i })
-				.where(eq(schema.lorebookEntries.id, u.id))
-
-		for (const u of updates)
-			await tx
-				.update(schema.lorebookEntries)
-				.set({ position: u.position })
-				.where(eq(schema.lorebookEntries.id, u.id))
+		// Two statements, not 2N: park every row, then write every final. One
+		// `UPDATE … FROM (VALUES …)` each, so the constraint argument above
+		// holds as before. A repeated id keeps its last position, as the
+		// one-row-at-a-time loop did.
+		const finals = [...new Map(updates.map((u) => [u.id, u.position])).entries()]
+		const setPositions = (rows: Array<[number, number]>) =>
+			tx.execute(sql`
+				UPDATE lorebook_entries AS e SET position = v.position
+				FROM (VALUES ${sql.join(
+					rows.map(([id, position]) => sql`(${id}::int, ${position}::int)`),
+					sql`, `
+				)}) AS v(id, position)
+				WHERE e.id = v.id`)
+		await setPositions(finals.map(([id], i) => [id, floor - i]))
+		await setPositions(finals)
 	})
 }
 
@@ -2265,9 +2593,33 @@ export const settleImprintHandler: Handler<
 			throw new Error(KEPT_IMPRINT_REFUSALS.notYours)
 		const primerProblem = await primerRowEditProblem(db, lorebookId)
 		if (primerProblem) throw new Error(primerProblem)
+		if (choice === "revert") {
+			// A revert puts a name, content or typed field back: refused while a
+			// run earmarks the entry. A revert that removes a row, or puts back
+			// anything else, is not.
+			const [imprint] = await db
+				.select({
+					subjectKind: schema.loreImprints.subjectKind,
+					subjectId: schema.loreImprints.subjectId,
+					field: schema.loreImprints.field
+				})
+				.from(schema.loreImprints)
+				.where(eq(schema.loreImprints.id, params.imprintId))
+				.limit(1)
+			if (
+				imprint?.subjectKind === "entry" &&
+				imprint.field != null &&
+				(imprint.field === "title" ||
+					imprint.field === "content" ||
+					imprint.field.startsWith("fields."))
+			) {
+				const notice = await earmarkNotice(imprint.subjectId, socket.user!.id)
+				if (notice) throw new Error(notice)
+			}
+		}
 		const settled = await db.transaction(async (tx) => {
 			await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
-			return settleKeptImprint(tx as unknown as Db, params.imprintId, choice)
+			return settleKeptImprint(tx as unknown as Db, params.imprintId, choice, { userId: socket.user!.id })
 		})
 		const res: Sockets.Lorebooks.SettleImprint.Response = {
 			imprintId: params.imprintId,
@@ -2283,6 +2635,39 @@ export const settleImprintHandler: Handler<
 	undefined,
 	// The refusal names the note it answers.
 	(params) => ({ imprintId: (params as { imprintId?: unknown } | null)?.imprintId })
+)
+
+/**
+ * 🚧 `entries:earmark` — does a live pipeline run earmark this entry? Answers
+ * the asker with the sentence (`earmarkNotice`) or `null`, so a form can say
+ * so on open. For the entry's book owner, as `entries:update` is.
+ */
+export const entryEarmarkHandler: Handler<
+	Sockets.Entries.Earmark.Params,
+	Sockets.Entries.Earmark.Response
+> = refusable(
+	"entries:earmark",
+	async (socket, params: Sockets.Entries.Earmark.Params, emitToUser) => {
+		const userId = socket.user!.id
+		const [row] = await db
+			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, params.entryId))
+		// Whoever the form treats as the book's owner may ask: a session's own
+		// book answers its session's people too (`findOwnedBook`).
+		if (!row || !(await findOwnedBook(db, userId, row.lorebookId)))
+			throw new Error("Entry not found or access denied.")
+		const res: Sockets.Entries.Earmark.Response = {
+			entryId: params.entryId,
+			lorebookId: row.lorebookId,
+			notice: await earmarkNotice(params.entryId, userId)
+		}
+		emitToUser("entries:earmark", res)
+		return res
+	},
+	"The entry could not be checked.",
+	undefined,
+	(params) => ({ entryId: (params as { entryId?: unknown } | null)?.entryId })
 )
 
 export function registerEntryHandlers(
@@ -2307,4 +2692,6 @@ export function registerEntryHandlers(
 	register(socket, entryCountsHandler, emitToUser)
 	register(socket, entryRecentDecisionsHandler, emitToUser)
 	register(socket, settleImprintHandler, emitToUser)
+	register(socket, entryEarmarkHandler, emitToUser)
+	registerRedlineHandlers(socket, emitToUser, register)
 }

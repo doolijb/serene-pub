@@ -1,0 +1,79 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+(node:3633904) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ |dom| src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts (4 tests | 2 failed) 136ms
+     × on: the History door is offered as a new entry and the entries are listed 24ms
+     × off: not listed, not offered as new 18ms
+(node:3634035) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ |dom| src/lib/client/lorebooks/sections/historyTimelineOff.dom.test.svelte.ts (6 tests | 2 failed) 26ms
+     × on: offered for a history entry 7ms
+     × off: not offered; the other tabs stay 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts > history entries in the pool > on: the History door is offered as a new entry and the entries are listed
+AssertionError: expected '6 entries  New   Sort       Read in l…' to contain 'Year 1'
+
+Expected: "Year 1"
+Received: "6 entries  New   Sort       Read in last turn 0 Pinned 0 Off 0 Archived 0 Machine-written 3  Needs keywords 3        Pick an entry to edit it, or press New.    New world lore New character lore New history entry New place New item Recently changed  Story order   Delete this entry? Its relationships and amendments are deleted with it. This cannot be undone. Cancel Delete"
+
+ ❯ src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts:204:18
+    202|  test("on: the History door is offered as a new entry and the entries …
+    203|   await open("all", true)
+    204|   expect(text()).toContain("Year 1")
+       |                  ^
+    205|   const trigger = document.querySelector<HTMLElement>('[title="New"]')
+    206|   expect(trigger != null).toBe(true)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts > history entries in the pool > off: not listed, not offered as new
+AssertionError: expected '4 entries  New   Sort       Read in l…' to contain 'Harbor'
+
+Expected: "Harbor"
+Received: "4 entries  New   Sort       Read in last turn 0 Pinned 0 Off 0 Archived 0 Machine-written 3  Needs keywords 1        Pick an entry to edit it, or press New.    New world lore New character lore New place New item Recently changed  Story order   Delete this entry? Its relationships and amendments are deleted with it. This cannot be undone. Cancel Delete"
+
+ ❯ src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts:215:18
+    213|   await open("all", false)
+    214|   expect(text()).not.toContain("Year 1")
+    215|   expect(text()).toContain("Harbor")
+       |                  ^
+    216|   const trigger = document.querySelector<HTMLElement>('[title="New"]')
+    217|   trigger?.click()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/sections/historyTimelineOff.dom.test.svelte.ts > the inspector's Scenes tab > on: offered for a history entry
+ FAIL  |dom| src/lib/client/lorebooks/sections/historyTimelineOff.dom.test.svelte.ts > the inspector's Scenes tab > off: not offered; the other tabs stay
+TypeError: Cannot read properties of undefined (reading 'useInterest')
+
+	in <unknown>
+	in EntryInspector.svelte
+	in undefined
+
+ ❯ EntryFireTest src/lib/client/components/lorebookForms/EntryFireTest.svelte:173:11
+    171|   * skip), but the registry is the only listener path, so it is declar…
+    172|   */
+    173|  interest.useInterest<"pipelines:previewRetrieval">(
+       |           ^
+    174|   "pipelines:previewRetrieval",
+    175|   onAnswer
+ ❯ add_svelte_meta.componentTag src/lib/client/lorebooks/sections/EntryInspector.svelte:178:8
+ ❯ src/lib/client/lorebooks/sections/EntryInspector.svelte:259:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+
+ Test Files  2 failed | 7 passed (9)
+      Tests  4 failed | 64 passed (68)
+   Start at  09:57:27
+   Duration  12.78s (transform 16.43s, setup 76ms, import 34.44s, tests 1.26s, environment 1.16s)
+

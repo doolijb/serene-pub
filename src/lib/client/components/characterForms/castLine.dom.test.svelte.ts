@@ -54,6 +54,23 @@ describe("CastLine", () => {
 		)
 	})
 
+	test("a member in a session's notes is not on the line", () => {
+		const line = render([
+			member(1, "Porto Alto"),
+			{ ...member(2, "Rainy night's notes"), ownBookSessionId: 3 }
+		])!
+		expect(line.textContent).toContain("In 1 lorebook:")
+		expect(line.textContent).not.toContain("Rainy night")
+	})
+
+	test("a card whose only member is in notes draws no line", () => {
+		expect(
+			render([
+				{ ...member(2, "Rainy night's notes"), ownBookSessionId: 3 }
+			])
+		).toBeNull()
+	})
+
 	test("a card in none of your lorebooks renders nothing", () => {
 		expect(render([])).toBeNull()
 		expect(document.body.textContent?.trim()).toBe("")

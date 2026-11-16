@@ -878,7 +878,7 @@
 			isNew={creating}
 			bind:draft
 			bind:bindings
-			siblings={dated as PoolSource[]}
+			siblings={dated.filter(isDatable) as PoolSource[]}
 			scenes={selected ? (scenesByEntry.get(selected.id) ?? []) : []}
 			present={selectedItem?.present ?? []}
 			castName={(id) => bindingNameById.get(id) ?? `#${id}`}

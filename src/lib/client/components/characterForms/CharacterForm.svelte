@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { avatarSrc } from "$lib/client/utils/media"
+	import EditHistory from "$lib/client/lorebooks/editHistory/EditHistory.svelte"
+	import { RESTORE_BLOCKED_UNSAVED } from "$lib/client/lorebooks/editHistory/editHistoryCopy"
 	import { isStarterKit } from "$lib/client/lorebooks/starterKitCards"
 	import {
 		Switch,
@@ -260,6 +262,10 @@
 	 * is a note, and a failed ask just leaves it out.
 	 */
 	let castAsk = $state(0)
+	/** Changes on every save reply for this card: the Edit history asks again. */
+	let savedTick = $state(0)
+	/** A Restore from the Edit history is in flight: its save's reply refreshes the form instead of closing it. */
+	let restoringHere = false
 	let castAskedFor: number | null = null
 	$effect(() => {
 		void castAsk
@@ -840,6 +846,15 @@
 		// another tab (for a different character) silently closes this
 		// form and discards whatever is being edited here.
 		if (res.character?.id !== characterId) return
+		savedTick++
+		if (restoringHere) {
+			// A Restore runs the card's own save; show the restored values.
+			restoringHere = false
+			validationErrors = {}
+			if (characterId != null)
+				askCharacter(characterId, shownCardVersionId)
+			return
+		}
 		// Only the save THIS form sent may keep it open or move its card
 		// version; the same card saved in another tab closes it as before.
 		const mine = isSaving
@@ -2115,6 +2130,19 @@
 				</p>
 			{/if}
 		</div>
+	{/if}
+	{#if mode === "edit" && shownCardVersionId !== undefined}
+		<EditHistory
+			characterVersionId={shownCardVersionId}
+			updatedAt={String(savedTick)}
+			restoreBlocked={hasChanges ? RESTORE_BLOCKED_UNSAVED : undefined}
+			onRestore={(phase) => {
+				if (phase === "start") restoringHere = true
+				else if (phase === "failed") restoringHere = false
+				else if (characterId !== undefined)
+					askCharacter(characterId, shownCardVersionId)
+			}}
+		/>
 	{/if}
 {/snippet}
 

@@ -1,0 +1,165 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/lorebooks/timelessCopy.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-oR3qEm/data/serene-pub.db
+
+ ❯ |int| src/lib/server/lorebooks/timelessCopy.int.test.ts (16 tests | 5 failed) 1798ms
+     × from main, every entry, member, link, stat and scene reads the same 184ms
+     × from the line, the same holds for the line's reading 113ms
+     × by hand: from main, the change after the clock is applied and the windows read as the head says 98ms
+     × by hand: from the line, the line's own changes read and the windows differ 93ms
+     × a session's notes are refused with the sentence 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelessCopy.int.test.ts > the copy reads as the source read > from main, every entry, member, link, stat and scene reads the same
+AssertionError: expected { entries: { …(12) }, …(4) } to deeply equal { entries: { …(12) }, …(4) }
+
+- Expected
++ Received
+
+@@ -65,11 +65,11 @@
+        "anchor": null,
+        "archived": false,
+        "content": "About ghost C.",
+        "enabled": true,
+        "keys": [],
+-       "member": "Ghost C",
++       "member": null,
+        "type": "core:entry/character-lore",
+      },
+      "Hall": {
+        "anchor": null,
+        "archived": false,
+
+ ❯ src/lib/server/lorebooks/timelessCopy.int.test.ts:437:45
+    435|  test("from main, every entry, member, link, stat and scene reads the …
+    436|   const copy = await copyOf(fx, null)
+    437|   expect(await describeBook(copy.id, null)).toEqual(await describeBook…
+       |                                             ^
+    438|  }, 60_000)
+    439|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelessCopy.int.test.ts > the copy reads as the source read > from the line, the same holds for the line's reading
+AssertionError: expected { entries: { …(13) }, …(4) } to deeply equal { entries: { …(13) }, …(4) }
+
+- Expected
++ Received
+
+@@ -65,11 +65,11 @@
+        "anchor": null,
+        "archived": false,
+        "content": "About ghost C.",
+        "enabled": true,
+        "keys": [],
+-       "member": "Ghost C",
++       "member": null,
+        "type": "core:entry/character-lore",
+      },
+      "Hall": {
+        "anchor": null,
+        "archived": false,
+
+ ❯ src/lib/server/lorebooks/timelessCopy.int.test.ts:442:45
+    440|  test("from the line, the same holds for the line's reading", async ()…
+    441|   const copy = await copyOf(fx, fx.line, "Timeless from line")
+    442|   expect(await describeBook(copy.id, null)).toEqual(await describeBook…
+       |                                             ^
+    443|  }, 60_000)
+    444|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelessCopy.int.test.ts > the copy reads as the source read > by hand: from main, the change after the clock is applied and the windows read as the head says
+AssertionError: expected { …(4) } to match object { …(4) }
+
+- Expected
++ Received
+
+  {
+    "config|Wanderer|core:slot/hp@1": {
+      "max": 30,
+    },
+-   "value|Hall|core:slot/stock@1": 3,
+-   "value|Wanderer|core:slot/hp@1": 7,
+-   "value|book|core:slot/weather@1": "rain",
++   "value|Hall|core:slot/stock@1": {
++     "v": 3,
++   },
++   "value|Wanderer|core:slot/hp@1": {
++     "v": 7,
++   },
++   "value|book|core:slot/weather@1": {
++     "v": "rain",
++   },
+  }
+
+ ❯ src/lib/server/lorebooks/timelessCopy.int.test.ts:466:19
+    464|    "m:Keeper|e:Hall|keeper of|": { status: "ended" }
+    465|   })
+    466|   expect(d.stats).toMatchObject({
+       |                   ^
+    467|    "value|Wanderer|core:slot/hp@1": 7,
+    468|    "config|Wanderer|core:slot/hp@1": { max: 30 },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelessCopy.int.test.ts > the copy reads as the source read > by hand: from the line, the line's own changes read and the windows differ
+AssertionError: expected { v: 5 } to be 5 // Object.is equality
+
+- Expected:
+5
+
++ Received:
+{
+  "v": 5,
+}
+
+ ❯ src/lib/server/lorebooks/timelessCopy.int.test.ts:486:61
+    484|   expect((d.cast as any).Keeper.summary).toBe("Keeper line")
+    485|   expect((d.links as any)["m:Keeper|m:Wanderer|ally|"].description).to…
+    486|   expect((d.stats as any)["value|Wanderer|core:slot/hp@1"]).toBe(5)
+       |                                                             ^
+    487|   expect(d.scenes).toEqual(["Line scene", "Scene one", "Scene two"])
+    488|  }, 60_000)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelessCopy.int.test.ts > the copy is timeless > a session's notes are refused with the sentence
+Error: Something went wrong on the server. The server log has the details.
+ ❯ PglitePreparedQuery.queryWithCache node_modules/src/pg-core/session.ts:73:10
+ ❯ PglitePreparedQuery.execute node_modules/src/pglite/session.ts:95:17
+ ❯ src/lib/server/lorebooks/timelessCopy.int.test.ts:609:21
+    607|
+    608|  test("a session's notes are refused with the sentence", async () => {
+    609|   const [session] = await testDb
+       |                     ^
+    610|    .insert(schema.sessions)
+    611|    .values({ userId: fx.userId, name: "Notes holder" } as any)
+
+Caused by: error: null value in column "is_group" of relation "sessions" violates not-null constraint
+ ❯ ye.Ve node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:17540
+ ❯ ye.nt node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:14926
+ ❯ ye.parse node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:13678
+ ❯ pe.execProtocol node_modules/@electric-sql/pglite/dist/index.js:3:239489
+ ❯ pe.l node_modules/@electric-sql/pglite/dist/chunk-A7RFOIQ7.js:8:1911
+ ❯ node_modules/@electric-sql/pglite/dist/chunk-A7RFOIQ7.js:8:2539
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { length: 530, severity: 'ERROR', code: '23502', detail: 'Failing row contains (2, Notes holder, null, 2, 2026-11-14 21:41:44.283+00, 2026-11-14 21:41:44.283+00, null, {}, null, {}, f, core:genre/story, null, t, {}, roleplay, {}, {}, null, null, null, null, null, null, 0, null, {}, core:ruleset/freeform@1, null, prose, overwrite, {}, null, 0, null, null, null, null, null, {}, null, f, null, null, null, null).', hint: undefined, position: undefined, internalPosition: undefined, internalQuery: undefined, where: undefined, schema: 'public', table: 'sessions', dataType: undefined, constraint: undefined, file: 'execMain.c', routine: 'ExecConstraints' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  5 failed | 11 passed (16)
+   Start at  13:41:39
+   Duration  6.11s (transform 1.68s, setup 14ms, import 4.19s, tests 1.80s, environment 0ms)
+

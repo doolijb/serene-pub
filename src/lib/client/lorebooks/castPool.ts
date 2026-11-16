@@ -70,6 +70,8 @@ export interface CastRow {
 	characterId?: number | null
 	/** The cast version these columns are (the one in force at the book's present on main). */
 	castVersionId?: number | null
+	/** The member's base version (undated, main, no life point): what *From the beginning* saves. */
+	baseVersionId?: number | null
 	/** That version's own greetings marked for group sessions only. */
 	groupOnlyGreetings?: string[] | null
 	/** The member's base version, in column names: what they read before their first change. */

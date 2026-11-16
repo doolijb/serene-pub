@@ -1004,6 +1004,16 @@ const CHARACTER_LANE_READS = {
 } as const satisfies TypedReads<typeof C.characterLore>
 
 /**
+ * The history-entries lane's own declaration: `LANE_READS` plus the two
+ * opt-in ports its siblings do not have, `firsthandFor` and `firsthandBy`.
+ * Its own because `LANE_READS` is typed against the three lanes' intersection.
+ */
+const HISTORY_LANE_READS = {
+	ports: [...LANE_READS.ports, "firsthandFor", "firsthandBy"],
+	params: LANE_READS.params
+} as const satisfies TypedReads<typeof C.historyEntries>
+
+/**
  * The three lore bands `lorebook-triggers` produces through one port, and
  * the namespaced intent each declares (`worldLoreShare` … — see
  * `bandIntentFieldsOf` in the contracts; U3b review W1). One table, read by
@@ -2575,13 +2585,62 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						? { messageId: input.messageId }
 						: {})
 				})
+				/**
+				 * 🚧 What the speaking character was there for: invoked only when
+				 * the `firsthandFor` port is wired — its key is present even when
+				 * the value is null (a narrator turn, which reads everything).
+				 * Unwired: the rows above, untouched, no receipt line. A one-row
+				 * read (`messageId`: a person's press) is never filtered. A card-less
+				 * seat's turn is named by the scope's `currentCastMemberId`. The
+				 * decision is `sessions/firsthandFilter.ts`.
+				 */
+				let rows: any = messages
+				if (
+					input !== undefined &&
+					input !== null &&
+					"firsthandFor" in input &&
+					typeof input.messageId !== "number" &&
+					Array.isArray(messages)
+				) {
+					const sessionId = input?.scope?.sessionId
+					const by =
+						typeof input.firsthandBy === "string" && input.firsthandBy.trim()
+							? input.firsthandBy.trim()
+							: null
+					const { loadFirsthandView, keptLineIds, linesReceipt, readsAllReceipt } =
+						await import("$lib/server/sessions/firsthandFilter")
+					const db = (await import("$lib/server/db")).db as never
+					const read =
+						typeof sessionId === "number"
+							? await loadFirsthandView(db, {
+									sessionId,
+									characterId: input.firsthandFor,
+									castMemberId: input?.scope?.currentCastMemberId,
+									slotId: by,
+									lineIds: messages.map((m: { id: number }) => m.id)
+								})
+							: ({ kind: "reads-all" } as const)
+					if (read.kind === "reads-all") ctx.log("info", readsAllReceipt())
+					else {
+						const { keptIds, leftOut } = keptLineIds(
+							read.view,
+							messages.map((m: { id: number; castMemberId?: number | null }) => ({
+								id: m.id,
+								castMemberId: m.castMemberId ?? null
+							}))
+						)
+						const kept = new Set(keptIds)
+						rows = messages.filter((m: { id: number }) => kept.has(m.id))
+						ctx.log("info", linesReceipt(read.view, leftOut))
+					}
+				}
 				// `main` and `messages` carry the same value on purpose: `main`
 				// is what an unrefined `$.history` resolves to, and having it be
 				// the useful thing rather than a wrapper is what makes the scope
 				// sugar read well.
 				return ok({
-					main: messages,
-					messages,
+					main: rows,
+					messages: rows,
 					/**
 					 * The conversation's band intent, alone, on its own port
 					 * (R-7 P5): a spec concatenates it in with the lore so the
@@ -2596,7 +2655,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope", "messageId", "budget", "channelLane"],
+				ports: ["scope", "messageId", "budget", "channelLane", "firsthandFor", "firsthandBy"],
 				params: [
 					"limit",
 					"channel",
@@ -2785,8 +2844,110 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			async (
 				input: NodeInput<typeof C.historyEntries>,
 				ctx: CoreQueryCtx
-			) => await loreFor("history", input, ctx),
-			LANE_READS
+			) => {
+				const lane = (await loreFor("history", input, ctx)) as any
+				// 🚧 What the speaking character was there for: invoked only when the
+				// `firsthandFor` port is wired (key present, even when null: a
+				// narrator turn reads everything). The left-out entries are published
+				// on `exclusions` so eligibility blocks every copy (keyword, entity
+				// search, vector); `main`, `hits` and `skipped` are untouched. The
+				// decision is `sessions/firsthandFilter.ts`.
+				if (
+					lane?.kind !== "ok" ||
+					input === undefined ||
+					input === null ||
+					typeof input !== "object" ||
+					!("firsthandFor" in input)
+				)
+					return lane
+				const sessionId = (input as any)?.scope?.sessionId
+				const by =
+					typeof (input as any).firsthandBy === "string" &&
+					(input as any).firsthandBy.trim()
+						? (input as any).firsthandBy.trim()
+						: null
+				const {
+					loadFirsthandView,
+					leftOutEntryIds,
+					historyReceipt,
+					historyExclusionReason,
+					readsAllReceipt
+				} = await import("$lib/server/sessions/firsthandFilter")
+				const db = (await import("$lib/server/db")).db as never
+				const read =
+					typeof sessionId === "number"
+						? await loadFirsthandView(db, {
+								sessionId,
+								characterId: (input as any).firsthandFor,
+								castMemberId: (input as any)?.scope?.currentCastMemberId,
+								slotId: by,
+								judgeHistoryEntries: true
+							})
+						: ({ kind: "reads-all" } as const)
+				if (read.kind === "reads-all") {
+					ctx.log("info", readsAllReceipt())
+					return lane
+				}
+				const ids = leftOutEntryIds(read.view)
+				ctx.log("info", historyReceipt(read.view, ids.length))
+				const reason = historyExclusionReason(read.view)
+				return ok({
+					...lane.value,
+					exclusions: [
+						...(lane.value?.exclusions ?? []),
+						...ids.map((id) => ({ source: "history", id, reason }))
+					]
+				})
+			},
+			HISTORY_LANE_READS
+		),
+		// Opt-in by placing the node: its `exclusions` reach eligibility, which
+		// blocks every copy of an entry the speaker does not know. The decision
+		// is `lorebooks/entryKnowledge.ts`.
+		"core:query/unknown-entries@1": reads<typeof C.unknownEntries>(
+			async (
+				input: NodeInput<typeof C.unknownEntries>,
+				ctx: CoreQueryCtx
+			) => {
+				const {
+					loadEntryKnowledge,
+					knowledgeExclusions,
+					knowledgeExclusionReason,
+					knowledgeReceipt,
+					NOTHING_MARKED_RECEIPT
+				} = await import("$lib/server/lorebooks/entryKnowledge")
+				const { readsAllReceipt } = await import(
+					"$lib/server/sessions/firsthandFilter"
+				)
+				const sessionId = (input as any)?.scope?.sessionId
+				if (typeof sessionId !== "number") {
+					ctx.log("info", readsAllReceipt())
+					return ok({ main: [], exclusions: [] })
+				}
+				const db = (await import("$lib/server/db")).db as never
+				const read = await loadEntryKnowledge(db, {
+					sessionId,
+					speaker: (input as any).speaker
+				})
+				if (read.kind !== "judged") {
+					ctx.log(
+						"info",
+						read.kind === "reads-all"
+							? readsAllReceipt()
+							: NOTHING_MARKED_RECEIPT
+					)
+					return ok({ main: [], exclusions: [] })
+				}
+				ctx.log("info", knowledgeReceipt(read.name, read))
+				return ok({
+					main: read.leftOut.map((l) => ({
+						entryId: l.entryId,
+						reason: knowledgeExclusionReason(l.cause, read.name)
+					})),
+					exclusions: knowledgeExclusions(read.leftOut, read.name)
+				})
+			},
+			{ ports: ["scope", "speaker"] }
 		),
 
 		"core:query/lorebook-triggers@1": reads<typeof C.lorebookTriggers>(
@@ -6101,15 +6262,46 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					if (raw.maxTokens !== null && maxTokens === null) return undefined
 					const scenes = (raw.scenes as unknown[]).flatMap((e) => {
 						const x = e as
-							| { name?: unknown; summary?: unknown; firstLineId?: unknown }
+							| {
+									name?: unknown
+									summary?: unknown
+									firstLineId?: unknown
+									openedStoryClock?: unknown
+							  }
 							| null
-						return x &&
-							typeof x.name === "string" &&
-							typeof x.summary === "string" &&
-							typeof x.firstLineId === "number" &&
-							Number.isFinite(x.firstLineId)
-							? [{ name: x.name, summary: x.summary, firstLineId: x.firstLineId }]
-							: []
+						if (
+							!x ||
+							typeof x.name !== "string" ||
+							typeof x.summary !== "string" ||
+							typeof x.firstLineId !== "number" ||
+							!Number.isFinite(x.firstLineId)
+						)
+							return []
+						// A clock that is not well-formed reads as none; the scene stays.
+						const c = x.openedStoryClock as Record<string, unknown> | null | undefined
+						const part = (v: unknown) => v === null || typeof v === "number"
+						const openedStoryClock =
+							c &&
+							typeof c === "object" &&
+							typeof c.year === "number" &&
+							Number.isFinite(c.year) &&
+							[c.month, c.day, c.hour, c.minute].every((v) => v === undefined || part(v))
+								? {
+										year: c.year,
+										month: (c.month as number | null | undefined) ?? null,
+										day: (c.day as number | null | undefined) ?? null,
+										hour: (c.hour as number | null | undefined) ?? null,
+										minute: (c.minute as number | null | undefined) ?? null
+									}
+								: null
+						return [
+							{
+								name: x.name,
+								summary: x.summary,
+								firstLineId: x.firstLineId,
+								openedStoryClock
+							}
+						]
 					})
 					return scenes.length ? { maxTokens, scenes } : undefined
 				})()
@@ -6143,10 +6335,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					placedNote: typeof authorsNote
 				) =>
 					render({
-						earlierScenes: earlierShownFor(lines).map(({ name, summary }) => ({
-							name,
-							summary
-						})),
+						earlierScenes: earlierShownFor(lines).map(
+							({ name, summary, openedStoryClock }) => ({
+								name,
+								summary,
+								openedStoryClock
+							})
+						),
 						allocation,
 						postHistory: placedReminder,
 						authorsNote: placedNote,
@@ -8674,7 +8869,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * it knows which lines it keeps. Writes nothing.
 		 */
 		"core:query/earlier-scenes@1": reads<typeof C.earlierScenes>(
-			async (input: NodeInput<typeof C.earlierScenes>) => {
+			async (input: NodeInput<typeof C.earlierScenes>, ctx: CoreQueryCtx) => {
 				const sessionId = input?.scope?.sessionId
 				if (sessionId === undefined)
 					return halt(
@@ -8689,10 +8884,91 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						: null
 				const db = (await import("$lib/server/db")).db as never
 				const { earlierScenesOf } = await import("$lib/server/scenes/earlierScenes")
-				const scenes = await earlierScenesOf(db, sessionId)
+				let scenes = await earlierScenesOf(db, sessionId)
+				// 🚧 What the speaking character was there for: invoked only when the
+				// `firsthandFor` port is wired (key present, even when null: a
+				// narrator turn reads everything). Unwired: today's scenes, no
+				// receipt line. A card-less seat's turn is named by the scope's
+				// `currentCastMemberId`. The decision is `sessions/firsthandFilter.ts`.
+				if (input !== undefined && input !== null && "firsthandFor" in input) {
+					const by =
+						typeof input.firsthandBy === "string" && input.firsthandBy.trim()
+							? input.firsthandBy.trim()
+							: null
+					const { loadFirsthandView, keptSceneIds, scenesReceipt, readsAllReceipt } =
+						await import("$lib/server/sessions/firsthandFilter")
+					const read = await loadFirsthandView(db, {
+						sessionId,
+						characterId: input.firsthandFor,
+						castMemberId: input?.scope?.currentCastMemberId,
+						slotId: by,
+						sceneIds: scenes.map((s) => s.sceneId)
+					})
+					if (read.kind === "reads-all") ctx.log("info", readsAllReceipt())
+					else {
+						const { keptIds, leftOut } = keptSceneIds(
+							read.view,
+							scenes.map((s) => s.sceneId)
+						)
+						const kept = new Set(keptIds)
+						scenes = scenes.filter((s) => kept.has(s.sceneId))
+						ctx.log("info", scenesReceipt(read.view, leftOut))
+					}
+				}
 				return ok({ main: { maxTokens, scenes } })
 			},
-			{ ports: ["scope", "budget"], params: ["share"] }
+			{ ports: ["scope", "budget", "firsthandFor", "firsthandBy"], params: ["share"] }
+		),
+		/**
+		 * 🚧 The entries the lines name: the own book's, then the attached
+		 * lorebook's, whose name or key appears in one message row, as the session
+		 * reads them (`entriesNamedIn`), within `floor(share × budget.total)`
+		 * tokens. `ids` is what a write passes as `shown`. Writes nothing.
+		 */
+		"core:query/entries-named@1": reads<typeof C.entriesNamed>(
+			async (input: NodeInput<typeof C.entriesNamed>, ctx?: { countTokens?: (t: string) => number }) => {
+				const sessionId = input?.scope?.sessionId
+				if (sessionId === undefined)
+					return halt(
+						"there is no session to read entries from — the run is not scoped to a session"
+					)
+				const listed = input?.params?.entryTypes
+				const typeIds = (Array.isArray(listed) ? listed : []).filter(
+					(t): t is string => typeof t === "string" && t.trim() !== ""
+				)
+				const rawMax = input?.params?.maxEntries
+				const maxEntries =
+					typeof rawMax === "number" && Number.isFinite(rawMax) ? Math.max(0, Math.floor(rawMax)) : 12
+				const rawShare = input?.params?.share
+				const share =
+					typeof rawShare === "number" && Number.isFinite(rawShare) && rawShare >= 0 && rawShare <= 1
+						? rawShare
+						: 0.2
+				const total = (input?.budget as { total?: unknown } | undefined)?.total
+				const maxTokens =
+					typeof total === "number" && Number.isFinite(total) && total > 0
+						? Math.floor(share * total)
+						: null
+				const db = (await import("$lib/server/db")).db as never
+				const { entriesNamedIn } = await import("$lib/server/pipelines/runtime/loreMatch")
+				const { WORLD_LORE_TYPE_ID } = await import("$lib/shared/entries/types")
+				const rows = await entriesNamedIn(db, sessionId, {
+					typeIds: typeIds.length ? typeIds : [WORLD_LORE_TYPE_ID],
+					messages: input?.messages,
+					maxEntries,
+					maxTokens,
+					countTokens: typeof ctx?.countTokens === "function" ? (t) => ctx.countTokens!(t) : undefined
+				})
+				const ids = rows.map((r) => r.entryId)
+				if (run.runId && ids.length)
+					(await import("$lib/server/pipelines/runtime/runRegistry")).earmark(
+						run.runId,
+						"entry",
+						ids
+					)
+				return ok({ main: rows, ids })
+			},
+			{ ports: ["scope", "messages", "budget"], params: ["entryTypes", "maxEntries", "share"] }
 		),
 		/**
 		 * 🚧 Summarize a finished scene: the host's commit starts the genre's own
@@ -9179,8 +9455,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			// 🚧 pr-6 C1: `sources` (and create's `match`, `bind`) are read by the
 			// commit (host.ts, `checkLoreSources` / `resolveBind`).
 			{
-				ports: ["name", "content", "links", "fields", "sources", "match", "bind"],
-				params: ["entryType"]
+				ports: ["name", "content", "links", "fields", "sources", "match", "shown", "bind"],
+				// `defaultBeginning` and `defaultDecayRate` are read by the commit
+				// (host.ts, `checkStepDefaults`).
+				params: ["entryType", "defaultBeginning", "defaultDecayRate"]
 			}
 		),
 		/**

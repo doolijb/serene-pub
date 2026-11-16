@@ -1,0 +1,294 @@
+▶ executed examples
+  ✔ each example builds, validates, runs, and renders its own source (822.681338ms)
+  ✔ a second run records nothing and renders the same bytes (449.773748ms)
+  ✔ a moved output is a GoldenMismatch naming the example (253.79656ms)
+  ✔ a missing golden names --update-goldens rather than recording silently (1.348634ms)
+  ✔ the committed goldens still match — drift fails the suite (208.610974ms)
+✔ executed examples (1737.06048ms)
+▶ the shapes a lorebook row can be
+  ✔ all five are declared, registered, and the only entry types core ships (1.044325ms)
+  ✔ each competes in a band the weight maps are total over (0.164479ms)
+  ✔ the wire names stay short — a type id is never written into a file (0.119969ms)
+  ✔ character lore is the one with an anchor, under a core-owned policy (0.09044ms)
+  ✔ a place is never filed under anything — it declares no parent (2026-09-29) (0.075469ms)
+  ✔ history is never filed under anything — it declares no parent (2026-10-02) (0.04728ms)
+  ✔ history declares no priority — absent means no bonus, not a default of 1 (0.05389ms)
+  ✔ order is structured data, never a mini-DSL (0.162329ms)
+  ✔ history's date takes every date the story calendar allows (A15) (0.298578ms)
+  ✔ history's day narrows its month — the rule the database projects (A15) (0.302489ms)
+  ✔ render is a variable id: each type’s rows reach a template through a variable (0.09495ms)
+  ✔ the four field flags are four decisions, not one (0.088399ms)
+✔ the shapes a lorebook row can be (3.560715ms)
+▶ the conformance canary — both directions of the vocabulary
+  ✔ what core ships is clean (0.242609ms)
+  ✔ a field role the engine does not read is caught (0.213149ms)
+  ✔ a field role nothing declares is caught, so dead ones get deleted (0.15811ms)
+  ✔ every field role in the frozen vocabulary is answered by somebody (0.11864ms)
+✔ the conformance canary — both directions of the vocabulary (0.857726ms)
+▶ projection into the one registry
+  ✔ an entry type is a registry row like any other, with kind entry (0.414938ms)
+  ✔ the declared fields land in configSchema, the facets in entryShape (0.127819ms)
+  ✔ a node type carries neither, so nothing else re-hashes by their existing (0.11882ms)
+✔ projection into the one registry (0.754776ms)
+▶ what a declaration is refused for
+  ✔ a field role the engine does not read (0.408268ms)
+  ✔ a source kind outside the five budget bands (0.10054ms)
+  ✔ a field that narrows one the type does not declare, or itself (0.114039ms)
+  ✔ a visibility policy core does not implement (0.08319ms)
+  ✔ a render that is not a variable id — no type folds into another value (0.111809ms)
+  ✔ an export key no importer reads (0.10611ms)
+  ✔ an id that is not an entry type id (0.096439ms)
+  ✔ a namespace that is not core — the switch, and it is off (0.09755ms)
+  ✔ a refused declaration claims no id, so it can be fixed and retried (0.129259ms)
+✔ what a declaration is refused for (1.446284ms)
+▶ core entry types
+  ✔ world lore, character lore and place are perpetual facts (0.797967ms)
+  ✔ an item began, a fact (0.10294ms)
+  ✔ history declares neither (0.09301ms)
+  ✔ the universal parts declare neither, so a ruleset's types default to absent (0.099959ms)
+✔ core entry types (1.898892ms)
+▶ what describeEntryType refuses
+  ✔ a Beginning that is neither perpetual nor began (0.390548ms)
+  ✔ a Decay rate outside 0 to 1 (0.169859ms)
+  ✔ a Beginning on a type whose entries carry their own date (0.12234ms)
+  ✔ a declaration with neither field registers as before (0.141489ms)
+✔ what describeEntryType refuses (1.016766ms)
+▶ a ruleset entry type
+  ✔ in sections, derives a type carrying the two defaults (0.241169ms)
+  ✔ in the repertoire shape, derives a type carrying the two defaults (0.191029ms)
+  ✔ one that declares neither derives a type with neither (0.173609ms)
+  ✔ a rate of 1.5 or a beginning of written is a finding (0.302689ms)
+  ✔ a repertoire refuses them with bad-entry-default (0.429958ms)
+✔ a ruleset entry type (1.528684ms)
+▶ the lore-writing outlet
+  ✔ its params declare both, and neither is an in-port (0.625717ms)
+✔ the lore-writing outlet (0.699507ms)
+✔ every nocheck fence says why (1.013495ms)
+✔ every plain ts fence in guides/ type-checks against the SDK (1646.3934ms)
+guide channels: 0 runnable fences
+guide coming-from-sillytavern-extensions: 0 runnable fences
+guide events: 0 runnable fences
+guide extending: 0 runnable fences
+guide forms-and-effects: 0 runnable fences
+guide frames: 0 runnable fences
+guide genres-presets-and-routines: 0 runnable fences
+guide plugin-permissions: 0 runnable fences
+guide rulesets: 0 runnable fences
+guide stability: 0 runnable fences
+guide storage: 0 runnable fences
+guide time: 0 runnable fences
+guide vocabulary: 0 runnable fences
+guide where-values-come-from: 0 runnable fences
+guide widget-examples: 0 runnable fences
+guide widgets: 0 runnable fences
+guide writing-lore-from-a-pipeline: 0 runnable fences
+▶ the hand-written guides
+  ✔ there is at least one, so this suite is proving something (0.438499ms)
+✔ the hand-written guides (0.935926ms)
+▶ guide channels
+  ✔ has an H1 (0.09839ms)
+  ✔ has no runnable fences yet (0.441828ms)
+✔ guide channels (0.619877ms)
+▶ guide coming-from-sillytavern-extensions
+  ✔ has an H1 (0.055809ms)
+  ✔ has no runnable fences yet (0.06322ms)
+✔ guide coming-from-sillytavern-extensions (0.195109ms)
+▶ guide events
+  ✔ has an H1 (0.06735ms)
+  ✔ has no runnable fences yet (0.07271ms)
+✔ guide events (0.244249ms)
+▶ guide extending
+  ✔ has an H1 (0.03814ms)
+  ✔ has no runnable fences yet (0.060369ms)
+✔ guide extending (0.146829ms)
+▶ guide forms-and-effects
+  ✔ has an H1 (0.07607ms)
+  ✔ has no runnable fences yet (0.051639ms)
+✔ guide forms-and-effects (0.170659ms)
+▶ guide frames
+  ✔ has an H1 (0.03356ms)
+  ✔ has no runnable fences yet (0.04214ms)
+✔ guide frames (0.11037ms)
+▶ guide genres-presets-and-routines
+  ✔ has an H1 (0.0302ms)
+  ✔ has no runnable fences yet (0.037329ms)
+✔ guide genres-presets-and-routines (0.102499ms)
+▶ guide plugin-permissions
+  ✔ has an H1 (0.04499ms)
+  ✔ has no runnable fences yet (0.0553ms)
+✔ guide plugin-permissions (0.13665ms)
+▶ guide rulesets
+  ✔ has an H1 (0.038919ms)
+  ✔ has no runnable fences yet (0.05549ms)
+✔ guide rulesets (0.137119ms)
+▶ guide stability
+  ✔ has an H1 (0.03199ms)
+  ✔ has no runnable fences yet (0.05443ms)
+✔ guide stability (0.128049ms)
+▶ guide storage
+  ✔ has an H1 (0.03503ms)
+  ✔ has no runnable fences yet (0.03553ms)
+✔ guide storage (0.10203ms)
+▶ guide time
+  ✔ has an H1 (0.04291ms)
+  ✔ has no runnable fences yet (0.046729ms)
+✔ guide time (0.120569ms)
+▶ guide vocabulary
+  ✔ has an H1 (0.029ms)
+  ✔ has no runnable fences yet (0.03232ms)
+✔ guide vocabulary (0.09677ms)
+▶ guide where-values-come-from
+  ✔ has an H1 (0.03705ms)
+  ✔ has no runnable fences yet (0.03505ms)
+✔ guide where-values-come-from (0.108149ms)
+▶ guide widget-examples
+  ✔ has an H1 (0.02976ms)
+  ✔ has no runnable fences yet (0.03755ms)
+✔ guide widget-examples (0.10913ms)
+▶ guide widgets
+  ✔ has an H1 (0.02781ms)
+  ✔ has no runnable fences yet (0.02649ms)
+✔ guide widgets (0.08178ms)
+▶ guide writing-lore-from-a-pipeline
+  ✔ has an H1 (0.02375ms)
+  ✔ has no runnable fences yet (0.02547ms)
+✔ guide writing-lore-from-a-pipeline (0.077669ms)
+▶ guide your-first-plugin
+  ✔ has an H1 (0.03699ms)
+  ✔ playground fence 0 runs (43.879571ms)
+  ✔ playground fence 1 runs (3.321776ms)
+✔ guide your-first-plugin (47.351597ms)
+▶ fileLore
+  ✔ builds the list, the each and the outlet under the keys the call sites use, and names the entry type (4.217562ms)
+  ✔ wires sources when given, and does not when absent (0.664317ms)
+✔ fileLore (5.630816ms)
+▶ rememberNote
+  ✔ builds the outlet under its key with the entry type in the defaults (0.496428ms)
+  ✔ wires sources when given, and does not when absent (0.383538ms)
+✔ rememberNote (1.031786ms)
+▶ summarizeScene and channel lore roles
+  ✔ refuses an aside channel whose lore role is never, with the sentence (1.054216ms)
+  ✔ accepts the Lair as shipped: the Sanctum is an aside (2.154221ms)
+  ✔ refuses a story channel that is not the story (0.200539ms)
+✔ summarizeScene and channel lore roles (3.602954ms)
+▶ derived entry types — core rulesets
+  ✔ Story derives things and conditions; Vis Itineris derives its eight (1.383854ms)
+  ✔ each one's fields are its repertoire's piece shape plus the universal fields (0.414108ms)
+  ✔ the universal parts are the ones core types declare, not a copy (0.098349ms)
+  ✔ core's five are untouched (0.16628ms)
+  ✔ re-deriving is a no-op (7.217809ms)
+✔ derived entry types — core rulesets (10.102147ms)
+▶ derived entry types — a plugin ruleset
+  ✔ derives its own under its namespace, only for entryable repertoires (0.215729ms)
+  ✔ a hand-written plugin entry type is still refused, derived name or not (0.272479ms)
+  ✔ a piece field named like a universal entry field is refused (0.202209ms)
+✔ derived entry types — a plugin ruleset (0.844726ms)
+▶ from scratch is truly from scratch (R9)
+  ✔ { name } registers, and carries nothing (2.32324ms)
+  ✔ a voice is optional; said, its floor is the prose line (0.398648ms)
+✔ from scratch is truly from scratch (R9) (3.630965ms)
+▶ a ruleset in sections
+  ✔ registers: its own attributes are slots of its own; its entry types derive (1.467204ms)
+  ✔ 🚧 M1: its entry types are filed as repertoires; the shape before the sections is read back, unenumerated (8.245634ms)
+  ✔ 🚧 M1: handbook pages and saved tests ride along — kept in sections, checked, never judged stale (1.135555ms)
+  ✔ a stored ruleset republished without an attribute withdraws its slot (0.595948ms)
+  ✔ each refusal is named (2.780578ms)
+  ✔ 🚧 RF fix 2: a text attribute is free prose per holder — a text slot, no bounds; required is a boolean (0.591048ms)
+✔ a ruleset in sections (15.135065ms)
+▶ ⏳ the shapes before the sections read into them
+  ✔ stats → attributes; repertoires → entry types; compendium → library (0.341748ms)
+  ✔ ways to decide → deciding functions, the default first; checks, worked-out values and tallies → core references; scripts → carried modules (0.304789ms)
+  ✔ degrees → outcomes; time, turns, rests → time; settings and presets → options (0.556318ms)
+  ✔ idempotent, read back, and what a data upgrade persists is a clean ruleset that decides and provides as before (12.640206ms)
+  ✔ a copy in sections registers beside the original (1.481824ms)
+  ✔ a playtest names a sections ruleset's attributes by their own names (0.224489ms)
+✔ ⏳ the shapes before the sections read into them (15.798462ms)
+▶ core's declarations did not move (hash proof)
+  ✔ Freeform hashes as before the sections; Vis Itineris, Wherewithal and the templates as rebuilt in them (5.945624ms)
+✔ core's declarations did not move (hash proof) (6.008514ms)
+▶ repertoires
+  ✔ a repertoire round-trips with the universal piece parts always present (6.464772ms)
+  ✔ own findings refuse at defineRepertoire, by name (1.602093ms)
+  ✔ cut verbs and keys are refused by name (2026-10-17) (0.332759ms)
+  ✔ 🚧 the piece-use verbs (2026-10-18): rollWith, harm, heal, cure and consume fire when a piece is used (2.067701ms)
+  ✔ 🚧 a derived selector may stand on the sheet, under a label (2026-10-18) (0.808847ms)
+  ✔ earshot and gmOnly are carried; the old audience word is not a key (0.131399ms)
+  ✔ a piece-field predicate path is legal; an unknown selector is refused in the ruleset context (0.499418ms)
+✔ repertoires (12.909285ms)
+▶ rulesets
+  ✔ a ruleset registers, round-trips and is reached by address (13.495162ms)
+  ✔ ruleset findings are named (2.344389ms)
+  ✔ defineRuleset refuses with a RulesetError joining every finding (0.431308ms)
+✔ rulesets (16.674808ms)
+▶ pieces
+  ✔ the three piece forms validate against the repertoire (0.540417ms)
+  ✔ a piece that does not fit is refused with a sentence (0.517528ms)
+  ✔ pieces are told apart from lore references, stored lean and read as text (0.188699ms)
+  ✔ a list of objects is a stat only when a repertoire is named (0.08685ms)
+✔ pieces (1.463634ms)
+▶ ruleset upgrades
+  ✔ a dropped field needs a rename or a retirement (0.530537ms)
+  ✔ a changed field type or a newly required field is refused (2026-10-17) (0.302009ms)
+  ✔ a renamed field still reads through on a stored piece (0.340588ms)
+✔ ruleset upgrades (1.272454ms)
+▶ bridges
+  ✔ an additive bridge is accepted (0.497218ms)
+  ✔ a registered bridge is read back by its ruleset; a different one for the same field throws (0.516798ms)
+  ✔ a bridge's predicates may name its own field, never target it (2026-10-17) (0.486528ms)
+  ✔ listings, sets, cut verbs and derived targets are refused by name (0.447918ms)
+✔ bridges (2.091281ms)
+▶ conversions
+  ✔ a conversion is { from, to, idMap }; ids are checked (0.417288ms)
+✔ conversions (0.480478ms)
+▶ selector families
+  ✔ a dotted selector's parents and a check's `within` are its family (0.140839ms)
+  ✔ modify and adjustDegree may target a family; set may not; an unknown name is refused (1.939872ms)
+  ✔ within names a check or a free family name, never itself, its parent or a cycle (0.482887ms)
+✔ selector families (2.663708ms)
+▶ universal piece parts: equipped and duration
+  ✔ an inline piece may be equipped and timed, in the units its ruleset counts (0.393968ms)
+  ✔ a duration the ruleset cannot count is named (0.16163ms)
+  ✔ a write through a slot judges the duration by the slot's ruleset (0.468518ms)
+✔ universal piece parts: equipped and duration (1.119905ms)
+▶ compendium rows are nested
+  ✔ a row's piece is nested under `piece`, so a field may be called `source` (0.664497ms)
+  ✔ a row's duration is judged by the ruleset's time (0.185949ms)
+✔ compendium rows are nested (0.934566ms)
+▶ genre rigour and rulesets
+  ✔ valid declarations are carried on the genre (1.629313ms)
+  ✔ refusals are named (0.540927ms)
+✔ genre rigour and rulesets (2.26452ms)
+▶ core's Story ruleset
+  ✔ is registered with its repertoires and voice — and no stat (RF fix 8) (0.549377ms)
+✔ core's Story ruleset (0.633437ms)
+▶ core:task/ruleset-resolve@1 (contract stub)
+  ✔ is published provisional, seeded, with the declared ports (0.11437ms)
+✔ core:task/ruleset-resolve@1 (contract stub) (0.16538ms)
+▶ core:task/context-budget@1 takes blocks (W3-S)
+  ✔ an optional blocks in-port and a fittedBlocks out-port, beside the budget it always gave (23.980007ms)
+✔ core:task/context-budget@1 takes blocks (W3-S) (24.059647ms)
+▶ ruleset-owned slots (W3-S; derived 2026-10-17)
+  ✔ pickable only in the owning ruleset's sessions (153.003462ms)
+  ✔ a spelled rulesetOwned is still read, beside the derived owners (2.942138ms)
+  ✔ rulesetOwned names a ruleset id (0.392138ms)
+✔ ruleset-owned slots (W3-S; derived 2026-10-17) (156.521118ms)
+▶ 🚧 check methods (D1, 2026-10-22): chance is pluggable, never assumed
+  ✔ a ruleset with four methods is clean; a check is decided by the one its selector names, else the default (1.009855ms)
+  ✔ the kinds core resolves, each with its options in the one field language (0.480638ms)
+  ✔ every new law is a named finding (1.038216ms)
+  ✔ a package's own kind is open: accepted, with a warning that a host may only judge it (0.725527ms)
+  ✔ ⏳ conventions.dice and the top-level bands read as one die-target method — the declaration stays as written (1.020626ms)
+  ✔ degrees are optional: absent reads as failure or success (0.245449ms)
+  ✔ How strict: the ids stay, no level is named for dice (0.047099ms)
+  ✔ repertoire tags: open words, read by rulesetProvides; untagged is guessed, and warned (0.775647ms)
+  ✔ harm and heal take an amount: a number, dice under a dice method, or a selector (0.726997ms)
+  ✔ natural die faces with no die to throw are warned, never refused (0.127879ms)
+✔ 🚧 check methods (D1, 2026-10-22): chance is pluggable, never assumed (6.366022ms)
+ℹ tests 165
+ℹ suites 52
+ℹ pass 165
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2353.533043

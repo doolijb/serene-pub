@@ -1,0 +1,103 @@
+✔ every nocheck fence says why (0.806787ms)
+✔ every plain ts fence in guides/ type-checks against the SDK (1465.483719ms)
+guide channels: 0 runnable fences
+guide coming-from-sillytavern-extensions: 0 runnable fences
+guide events: 0 runnable fences
+guide extending: 0 runnable fences
+guide forms-and-effects: 0 runnable fences
+guide frames: 0 runnable fences
+guide genres-presets-and-routines: 0 runnable fences
+guide plugin-permissions: 0 runnable fences
+guide rulesets: 0 runnable fences
+guide stability: 0 runnable fences
+guide storage: 0 runnable fences
+guide time: 0 runnable fences
+guide vocabulary: 0 runnable fences
+guide where-values-come-from: 0 runnable fences
+guide widget-examples: 0 runnable fences
+guide widgets: 0 runnable fences
+guide writing-lore-from-a-pipeline: 0 runnable fences
+▶ the hand-written guides
+  ✔ there is at least one, so this suite is proving something (0.549618ms)
+✔ the hand-written guides (1.035676ms)
+▶ guide channels
+  ✔ has an H1 (0.095129ms)
+  ✔ has no runnable fences yet (0.386559ms)
+✔ guide channels (0.561148ms)
+▶ guide coming-from-sillytavern-extensions
+  ✔ has an H1 (0.05393ms)
+  ✔ has no runnable fences yet (0.0616ms)
+✔ guide coming-from-sillytavern-extensions (0.19062ms)
+▶ guide events
+  ✔ has an H1 (0.10046ms)
+  ✔ has no runnable fences yet (0.092789ms)
+✔ guide events (0.301888ms)
+▶ guide extending
+  ✔ has an H1 (0.03848ms)
+  ✔ has no runnable fences yet (0.0538ms)
+✔ guide extending (0.1428ms)
+▶ guide forms-and-effects
+  ✔ has an H1 (0.05818ms)
+  ✔ has no runnable fences yet (0.04953ms)
+✔ guide forms-and-effects (0.149759ms)
+▶ guide frames
+  ✔ has an H1 (0.03666ms)
+  ✔ has no runnable fences yet (0.042119ms)
+✔ guide frames (0.112939ms)
+▶ guide genres-presets-and-routines
+  ✔ has an H1 (0.03665ms)
+  ✔ has no runnable fences yet (0.03815ms)
+✔ guide genres-presets-and-routines (0.1096ms)
+▶ guide plugin-permissions
+  ✔ has an H1 (0.0386ms)
+  ✔ has no runnable fences yet (0.068009ms)
+✔ guide plugin-permissions (0.145289ms)
+▶ guide rulesets
+  ✔ has an H1 (0.04272ms)
+  ✔ has no runnable fences yet (0.05822ms)
+✔ guide rulesets (0.1493ms)
+▶ guide stability
+  ✔ has an H1 (0.028939ms)
+  ✔ has no runnable fences yet (0.05497ms)
+✔ guide stability (0.121229ms)
+▶ guide storage
+  ✔ has an H1 (0.03251ms)
+  ✔ has no runnable fences yet (0.04821ms)
+✔ guide storage (0.11291ms)
+▶ guide time
+  ✔ has an H1 (0.04235ms)
+  ✔ has no runnable fences yet (0.0377ms)
+✔ guide time (0.110209ms)
+▶ guide vocabulary
+  ✔ has an H1 (0.02786ms)
+  ✔ has no runnable fences yet (0.03492ms)
+✔ guide vocabulary (0.10166ms)
+▶ guide where-values-come-from
+  ✔ has an H1 (0.047049ms)
+  ✔ has no runnable fences yet (0.06287ms)
+✔ guide where-values-come-from (0.178379ms)
+▶ guide widget-examples
+  ✔ has an H1 (0.04342ms)
+  ✔ has no runnable fences yet (0.03406ms)
+✔ guide widget-examples (0.121189ms)
+▶ guide widgets
+  ✔ has an H1 (0.02254ms)
+  ✔ has no runnable fences yet (0.02691ms)
+✔ guide widgets (0.07683ms)
+▶ guide writing-lore-from-a-pipeline
+  ✔ has an H1 (0.02158ms)
+  ✔ has no runnable fences yet (0.02421ms)
+✔ guide writing-lore-from-a-pipeline (0.07017ms)
+▶ guide your-first-plugin
+  ✔ has an H1 (0.025369ms)
+  ✔ playground fence 0 runs (55.296589ms)
+  ✔ playground fence 1 runs (3.484876ms)
+✔ guide your-first-plugin (58.911224ms)
+ℹ tests 40
+ℹ suites 19
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1820.3126

@@ -14,9 +14,19 @@ import type { MediaFrame } from "$lib/shared/media/frame"
 
 /** 🚧 Where a character lives, as the asker may see it: the row's reach line. */
 export interface CharacterRowReach {
-	/** Lorebooks the asker may read that hold a cast member of this character; 0 reads "Not in a lorebook yet". */
+	/**
+	 * Lorebooks the asker may read that hold a cast member of this character. On a card row
+	 * 🚧 a session's notes never count here (owner 2026-11-13; they count in `notesCount`); a
+	 * cast member's row counts its own book, notes included. 0 with no notes reads "Not in a lorebook yet".
+	 */
 	lorebookCount: number
-	/** The one lorebook when `lorebookCount` is 1, else null; `sessionId` is set when that book is a session's own notes. */
+	/** 🚧 On a card row, how many sessions' notes hold a member of it; 0 (or absent) on a member's row. */
+	notesCount?: number
+	/**
+	 * The one book named by the line, else null: the one lorebook when `lorebookCount` is 1, or on a card
+	 * row the one session's notes when `lorebookCount` is 0 and `notesCount` is 1. `sessionId` is set
+	 * when that book is a session's own notes.
+	 */
 	lorebook: {
 		id: number
 		name: string

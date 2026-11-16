@@ -17,7 +17,7 @@
  * Invoked DELIBERATELY (an upgrade step, an admin action), never on boot.
  * Eager boot-time encoding is exactly what the lazy ruling forbids.
  */
-import { and, eq, isNotNull, sql } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { MediaKind, MediaVariant } from "$lib/shared/constants/MediaVisibility"
@@ -89,6 +89,8 @@ async function stale(limit: number) {
 		.where(
 			and(
 				eq(schema.variants.variant, MediaVariant.THUMB),
+				// A same-as variant has no bytes of its own to re-cut.
+				isNull(schema.variants.sameAsVariantId),
 				isNotNull(schema.variants.width),
 				isNotNull(schema.variants.height),
 				isNotNull(schema.files.width),

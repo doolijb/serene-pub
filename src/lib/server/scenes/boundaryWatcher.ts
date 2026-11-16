@@ -361,6 +361,13 @@ interface WalkScene {
 	place: string | null
 }
 
+/** The scene's line count, rough-token total and newest line's tokens, kept across the walk. */
+interface LengthRun {
+	n: number
+	total: number
+	last: number
+}
+
 /**
  * The triggers that fire at `line`, given the line before it on `main` and
  * the scene the walk is in. The ONE evaluator of the per-trigger tests:
@@ -374,6 +381,7 @@ async function firedTriggers(
 	line: LineRow,
 	prev: LineRow | undefined,
 	scene: WalkScene,
+	run: LengthRun,
 	stateAt: (key: string, messageId: number) => Promise<string | null>
 ): Promise<string[]> {
 	const channel = "main"
@@ -427,25 +435,14 @@ async function firedTriggers(
 				fired.add("pause")
 		}
 		if (t.length) {
-			const before = await db
-				.select({ content: schema.sessionMessages.content })
-				.from(schema.sessionMessages)
-				.where(
-					and(
-						liveLinesWhere(ctx.sessionId, channel),
-						gte(schema.sessionMessages.id, scene.start),
-						lt(schema.sessionMessages.id, line.id)
-					)
-				)
-				.orderBy(asc(schema.sessionMessages.id))
-			const n = before.length
 			const { lines, tokens } = t.length
+			// The walk's running totals: the live lines from the scene's start
+			// up to (not including) this one.
+			const { n, total, last } = run
 			// The scene already holds a multiple of `lines` lines: this one
 			// would be the first of the next.
 			if (lines && n > 0 && n % lines === 0) fired.add("length")
 			if (tokens && n > 0) {
-				const total = before.reduce((sum, r) => sum + roughTokens(r.content), 0)
-				const last = roughTokens(before[n - 1]?.content)
 				if (Math.floor(total / tokens) > Math.floor((total - last) / tokens))
 					fired.add("length")
 			}
@@ -625,10 +622,35 @@ export async function sceneBoundariesOf(
 	// carries on from what this one placed.
 	const most = SCENE_BOUNDARIES_PER_RUN
 	const boundaries: SceneBoundary[] = []
+	// The `length` trigger's running totals, seeded once with the scene's
+	// live lines before the walk's first line (only when it is set).
+	const run: LengthRun = { n: 0, total: 0, last: 0 }
+	if (ctx.settings.triggers.length) {
+		const before = await db
+			.select({ content: schema.sessionMessages.content })
+			.from(schema.sessionMessages)
+			.where(
+				and(
+					liveLinesWhere(sessionId, channel),
+					gte(schema.sessionMessages.id, scene.start),
+					lt(schema.sessionMessages.id, walked[0]!.id)
+				)
+			)
+			.orderBy(asc(schema.sessionMessages.id))
+		run.n = before.length
+		run.total = before.reduce((sum, r) => sum + roughTokens(r.content), 0)
+		run.last = roughTokens(before[run.n - 1]?.content)
+	}
 	for (const line of walked) {
 		if (boundaries.length >= most) break
-		const fired = await firedTriggers(db, ctx, line, prev, scene, stateAt)
+		const fired = await firedTriggers(db, ctx, line, prev, scene, run, stateAt)
 		prev = line
+		if (line.id >= scene.start) {
+			const tk = roughTokens(line.content)
+			run.n++
+			run.total += tk
+			run.last = tk
+		}
 		// The re-check: a place that moved and moved back by the newest line
 		// read is no boundary.
 		const kept: string[] = []
@@ -650,6 +672,9 @@ export async function sceneBoundariesOf(
 			boundaries.push({ at: line.id, trigger, reason })
 		}
 		scene = { start: line.id, place: await placeOf(line.id) }
+		// The new scene holds just this line.
+		run.n = 1
+		run.total = run.last = roughTokens(line.content)
 	}
 	return { boundaries }
 }
@@ -1356,15 +1381,18 @@ export async function judgedSceneCheckOf(
 		base = rows.reduce((m, r) => Math.max(m, r.closed ?? 0), 0)
 		inclusive = false
 	}
-	const live = await db
-		.select({ id: schema.sessionMessages.id })
+	const [{ count: sinceBaseCount } = { count: 0 }] = await db
+		.select({ count: sql<number>`count(*)::int` })
 		.from(schema.sessionMessages)
-		.where(liveLinesWhere(sessionId, channel))
-		.orderBy(asc(schema.sessionMessages.id))
-	const sinceBase = live
-		.map((r) => r.id)
-		.filter((id) => (inclusive ? id >= base : id > base))
-	if (sinceBase.length < JUDGED_SCENE_MIN_LINES)
+		.where(
+			and(
+				liveLinesWhere(sessionId, channel),
+				inclusive
+					? gte(schema.sessionMessages.id, base)
+					: gt(schema.sessionMessages.id, base)
+			)
+		)
+	if (sinceBaseCount < JUDGED_SCENE_MIN_LINES)
 		return {
 			due: false,
 			why: `off: fewer than ${JUDGED_SCENE_MIN_LINES} lines since the scene began`
@@ -1409,7 +1437,18 @@ export async function judgedSceneCheckOf(
 	}
 	// A new scene begins after the open one's opening (or the last boundary), never at it.
 	const from = Math.max(base, lastLook)
-	const lines = sinceBase.filter((id) => id > from).slice(-20)
+	const newest = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				liveLinesWhere(sessionId, channel),
+				gt(schema.sessionMessages.id, from)
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(20)
+	const lines = newest.map((r) => r.id).reverse()
 	if (!lines.length)
 		return { due: false, why: "off: nothing new since the last look" }
 

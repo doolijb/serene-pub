@@ -24,7 +24,7 @@
  * legacy table goes read-only.
  */
 
-import { and, eq, gt, inArray, isNotNull, isNull, lt, sql, type SQL } from "drizzle-orm"
+import { and, eq, gt, inArray, isNotNull, isNull, lt, notInArray, sql, type SQL } from "drizzle-orm"
 import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { STATEMENT_BYTES } from "$lib/server/attic/context"
@@ -531,11 +531,14 @@ export async function updateLegacy(
 /**
  * Patch by arbitrary predicate (the compound-where sites: "this id AND still
  * generating"); every row the update touched is re-mirrored.
+ * `opts.mirror: "content"` is the cheaper mirror for a mid-stream frame
+ * (`mirrorShownRevision`); only the live row's frames use it.
  */
 export async function updateLegacyWhere(
 	db: Db,
 	where: SQL | undefined,
-	patch: Partial<typeof schema.sessionMessages.$inferInsert>
+	patch: Partial<typeof schema.sessionMessages.$inferInsert>,
+	opts?: { mirror?: "content" | "full" }
 ): Promise<Array<typeof schema.sessionMessages.$inferSelect>> {
 	const written = await db
 		.update(schema.sessionMessages)
@@ -546,7 +549,10 @@ export async function updateLegacyWhere(
 	const rows = movesSpeaker(patch)
 		? await restampSpeakers(db, written)
 		: written
-	for (const row of rows) await mirrorRow(db, row)
+	// A speaker move is not a frame: it takes the full mirror.
+	const content = opts?.mirror === "content" && !movesSpeaker(patch)
+	for (const row of rows)
+		await (content ? mirrorShownRevision(db, row) : mirrorRow(db, row))
 	return rows
 }
 
@@ -679,6 +685,61 @@ export async function mirrorRow(
 	// column is generated, and `projectLegacy` always sets it from the legacy
 	// row — which is the whole id-allocation rule at the top of this file.
 	await upsertProjection(db, message as NewMessage & { id: number }, parts)
+}
+
+/**
+ * The content-only mirror, for a mid-stream frame: re-derives just the parts
+ * of the revision a reader sees, from the same `projectLegacy` the full
+ * mirror uses (so a swiped row still takes its shown text from its history).
+ *
+ * It skips the `messages` row select and upsert, the select of existing
+ * parts, and every other revision. That is honest for a frame whose patch
+ * changes only `content` / `metadata.reasoning`: the row's `messages` fields
+ * (status, queue item, active revision, speaker) do not move mid-stream, and
+ * the settle write that always follows mirrors fully. Parts that left the
+ * shown revision (a reasoning part gone empty) are deleted, as the full
+ * mirror would; native ordinals are never touched (the armistice below).
+ */
+async function mirrorShownRevision(
+	db: Db,
+	row: LegacyMessageRow
+): Promise<void> {
+	const { message, parts } = projectLegacy(row)
+	const shown = (message.activeRevisions as Record<string, number>)["0"] ?? 0
+	const kept = parts.filter((p) => p.revision === shown)
+	const id = message.id as number
+	await db.delete(schema.messageParts).where(
+		and(
+			eq(schema.messageParts.messageId, id),
+			eq(schema.messageParts.step, 0),
+			eq(schema.messageParts.revision, shown),
+			lt(schema.messageParts.ordinal, NATIVE_ORDINAL_BASE),
+			kept.length
+				? notInArray(
+						schema.messageParts.ordinal,
+						// Always set by `projectLegacy`; optional only on the insert type.
+						kept.map((p) => p.ordinal ?? 0)
+					)
+				: undefined
+		)
+	)
+	if (kept.length)
+		await db
+			.insert(schema.messageParts)
+			.values(kept.map((p) => ({ ...p, messageId: id })))
+			.onConflictDoUpdate({
+				target: [
+					schema.messageParts.messageId,
+					schema.messageParts.step,
+					schema.messageParts.revision,
+					schema.messageParts.ordinal
+				],
+				set: {
+					type: sql`excluded.type`,
+					content: sql`excluded.content`,
+					data: sql`excluded.data`
+				}
+			})
 }
 
 /**

@@ -1,0 +1,43 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+[vitest] removed 3 stale temp entries from /tmp
+ ❯ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts (8 tests | 1 failed) 38ms
+     × resolves every recorded pin to the hash recorded for it 6ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > resolves every recorded pin to the hash recorded for it
+AssertionError: 
+
+A pin now means something different from what it meant at this commit. That is shippable — the slug's pointer moves at the next boot and no migration is involved — but it must be deliberate: either bump the version (the honest answer when the change breaks the specs pinning it), or record the new hash here in the same commit as the edit. Read the comment above PUBLISHED_HASHES before editing it.: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:query/unknown-entries@1: recorded TBD, code 156b3a840fe94b",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/registryHashes.test.ts:2050:60
+    2048|    .map(([pin, hash]) => `${pin}: recorded ${hash}, code ${now[pin]}`)
+    2049|
+    2050|   expect(drifted, drifted.length ? WHAT_TO_DO : undefined).toEqual([])
+       |                                                            ^
+    2051|  })
+    2052|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 6 passed (7)
+      Tests  1 failed | 67 passed (68)
+   Start at  18:58:18
+   Duration  16.04s (transform 7.87s, setup 57ms, import 16.87s, tests 12.17s, environment 2ms)
+

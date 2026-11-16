@@ -1,6 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 import {
 	resolveOrCreateBindingRow,
 	syncLorebookBindingsForCharacter
@@ -30,7 +30,8 @@ import {
 	updateMemberToCardVersion,
 	versionsAtBookPresent,
 	writeCastVersion,
-	type CastVersionChanges
+	type CastVersionChanges,
+	type VersionRedline
 } from "$lib/server/characters/versions"
 import { compareDates } from "$lib/shared/lorebooks/storyDate"
 import { profileOf } from "$lib/shared/characters/profile"
@@ -57,12 +58,22 @@ import {
 	unfileable,
 	type ParsedImportedLorebook
 } from "$lib/server/utils/lorebookImportMapper"
+import { importedBeginningAndDecay } from "$lib/server/utils/lorebookExportMapper"
+import { isKnowledgeKind } from "$lib/shared/lorebooks/knowledgeKinds"
 import { lorebookFileTooLarge } from "$lib/shared/imports/fileCaps"
 import { holdImport, takeHeldImport } from "$lib/server/imports/heldImports"
 import { withImportLimit } from "$lib/server/imports/importLimit"
 import { assertImportJsonShape } from "$lib/server/imports/jsonShape"
+import {
+	TIMELINE_OFF_BY_PASS_KEY,
+	timelineCountsOf,
+	timelineOf,
+	withoutTimelinePassMark
+} from "$lib/server/lorebooks/timeline"
+import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
 import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
 import { duplicateLorebookRows } from "$lib/server/utils/lorebookDuplicate"
+import { makeTimelessCopy } from "$lib/server/lorebooks/timelessCopy"
 import {
 	afterKitCopy,
 	bookFromKit,
@@ -140,10 +151,8 @@ import {
 } from "$lib/shared/lorebooks/loreWriteMode"
 import { isUniqueViolation } from "$lib/server/db/errors"
 import {
-	CHARACTER_LORE_TYPE_ID,
 	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
-	WORLD_LORE_TYPE_ID,
 	entryInsert,
 	loadBookEntries,
 	type EntryTypeId
@@ -203,6 +212,7 @@ import {
 	sharedLorebookIdsFor
 } from "$lib/server/utils/shares"
 import { pushToUser } from "./utils/userPush"
+import { bookShownNames, writtenNotesOf } from "$lib/server/lorebooks/notesShown"
 import { tellMemberSessions } from "$lib/server/sessions/memberSessions"
 import type {
 	LorebooksShareParams,
@@ -392,13 +402,6 @@ export async function buildLorebooksList(
 		with: {
 			user: { columns: { username: true, displayName: true } },
 			coverMedia: COVER_MEDIA_COLUMNS,
-			lorebookEntries: {
-				columns: {
-					id: true,
-					typeId: true,
-					archived: true
-				}
-			},
 			lorebookBindings: {
 				columns: {
 					id: true
@@ -454,11 +457,39 @@ export async function buildLorebooksList(
 	// 🚧 (s22-V, ★§22-3) How each enabled genre rates a book's own rules: one reader per list.
 	const rulesetFitOf = which === "books" && books.length ? await rulesetFitReader(db as unknown as Db) : null
 
-	// Transform lorebook tags to include tags as string array. The three
-	// entry lists are id-only and exist for the card's counts, so they are
-	// split back out of the one relation rather than fetched three times.
+	// One grouped count for every book's card, never a row per entry.
+	// Counts exclude archived rows, matching the default entry list — a
+	// book reads as holding what the reader will see when they open it.
+	const countsByBook = new Map<number, Record<string, number>>()
+	if (books.length)
+		for (const row of await db
+			.select({
+				lorebookId: schema.lorebookEntries.lorebookId,
+				typeId: schema.lorebookEntries.typeId,
+				n: count()
+			})
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					inArray(
+						schema.lorebookEntries.lorebookId,
+						books.map((b) => b.id)
+					),
+					eq(schema.lorebookEntries.archived, false)
+				)
+			)
+			.groupBy(
+				schema.lorebookEntries.lorebookId,
+				schema.lorebookEntries.typeId
+			)) {
+			const byType = countsByBook.get(row.lorebookId) ?? {}
+			byType[row.typeId] = Number(row.n)
+			countsByBook.set(row.lorebookId, byType)
+		}
+
+	// Transform lorebook tags to include tags as string array.
 	const booksWithTags = books.map((book) => {
-		const { lorebookEntries: allEntries, user, ...rest } = book
+		const { user, ...rest } = book
 		// The list holds the asker's own books and the ones shared with them
 		// — never an admin's view of another's — so a row is one or the other.
 		const shared =
@@ -469,18 +500,9 @@ export async function buildLorebooksList(
 						bookAccess: "shared" as const
 					}
 				: { bookAccess: "owner" as const }
-		// Counts exclude archived rows, matching the default entry list — a
-		// book reads as holding what the reader will see when they open it.
-		const lorebookEntries = allEntries.filter((e) => !e.archived)
-		const idsOf = (typeId: string) =>
-			lorebookEntries
-				.filter((e) => e.typeId === typeId)
-				.map((e) => ({ id: e.id }))
 		// Every type, keyed by type id — places and items counted as 0 when
 		// only the three legacy lists existed (finding #17).
-		const entryCounts: Record<string, number> = {}
-		for (const e of lorebookEntries)
-			entryCounts[e.typeId] = (entryCounts[e.typeId] ?? 0) + 1
+		const entryCounts = countsByBook.get(book.id) ?? {}
 		const providedBy = markedBook(book.extraJson, book.uuid)
 		const pluginName =
 			providedBy === null || providedBy.plugin === "core"
@@ -502,11 +524,8 @@ export async function buildLorebooksList(
 							: {})
 					}
 				: {}),
-			entryCount: lorebookEntries.length,
+			entryCount: Object.values(entryCounts).reduce((a, b) => a + b, 0),
 			entryCounts,
-			worldLoreEntries: idsOf(WORLD_LORE_TYPE_ID),
-			characterLoreEntries: idsOf(CHARACTER_LORE_TYPE_ID),
-			historyEntries: idsOf(HISTORY_TYPE_ID),
 			readBy: readByOf(book.id),
 			tags:
 				book.lorebookTags?.map(
@@ -540,6 +559,10 @@ export async function buildLorebooksList(
 				.where(inArray(schema.lorebooks.id, overlayIds))
 		: []
 	const overlayName = new Map(overlayRows.map((r) => [r.id, r.name]))
+	const writtenSet = await writtenNotesOf(
+		db,
+		booksWithTags.filter((b) => b.sessionId != null).map((b) => b.id)
+	)
 	const notes = booksWithTags
 		.filter((b) => b.sessionId != null && sessionOf.has(b.sessionId))
 		.map((b) => {
@@ -550,6 +573,7 @@ export async function buildLorebooksList(
 					...b,
 					sessionId: b.sessionId!,
 					sessionName: session.name ?? null,
+					notesWritten: writtenSet.has(b.id),
 					attached:
 						b.overlayOf != null && overlayName.has(b.overlayOf)
 							? { id: b.overlayOf, name: overlayName.get(b.overlayOf)! }
@@ -689,6 +713,11 @@ export const lorebooksCreateHandler: Handler<
 	async (socket, params: Sockets.Lorebooks.Create.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
+			if (
+				params.timelineEnabled !== undefined &&
+				typeof params.timelineEnabled !== "boolean"
+			)
+				throw new Error("The timeline is on or off.")
 			// 🚧 Starting from a starter lorebook (PLAN-lorebook-kinds §B): the
 			// kit is copied whole into the new book, and its Rules win — the
 			// Rules param is not read.
@@ -721,7 +750,10 @@ export const lorebooksCreateHandler: Handler<
 					.values({
 						name: params.name,
 						userId,
-						...(primaryRuleset ? { primaryRuleset } : {})
+						...(primaryRuleset ? { primaryRuleset } : {}),
+						...(params.timelineEnabled !== undefined
+							? { timelineEnabled: params.timelineEnabled }
+							: {})
 					})
 					.returning()
 
@@ -829,7 +861,8 @@ async function buildLorebookGet(
 						db as unknown as Db,
 						"lorebook",
 						book.id
-					)
+					),
+					timelineCounts: await timelineCountsOf(db as unknown as Db, book.id)
 				}
 			: {
 					isSharedWithMe: true,
@@ -926,6 +959,38 @@ export const lorebooksShareHandler: Handler<
 	(raw) => ({ lorebookId: (raw as { lorebookId?: unknown })?.lorebookId })
 )
 
+/**
+ * 🚧 The Timeline switch flipped: every session it governs re-reads its state
+ * (a session on this book, and the session whose notes this book is when that
+ * session has no lorebook). A failure is logged, never a refusal of a write
+ * that landed.
+ */
+async function tellTimelineSessions(
+	socket: any,
+	lorebookId: number
+): Promise<void> {
+	try {
+		const sessions = await db
+			.select({ id: schema.sessions.id })
+			.from(schema.sessions)
+			.where(
+				or(
+					eq(schema.sessions.lorebookId, lorebookId),
+					and(
+						isNull(schema.sessions.lorebookId),
+						sql`${schema.sessions.id} = (select bn.session_id from lorebooks bn where bn.id = ${lorebookId})`
+					)
+				)
+			)
+		for (const s of sessions)
+			await broadcastToSessionUsers(socket.io, s.id, "state:changed", {
+				sessionId: s.id
+			} satisfies Sockets.State.Changed.Response)
+	} catch (e) {
+		console.error("lorebooks:update: telling the book's sessions failed:", e)
+	}
+}
+
 export const lorebooksUpdateHandler: Handler<
 	Sockets.Lorebooks.Update.Params,
 	Sockets.Lorebooks.Update.Response
@@ -990,9 +1055,21 @@ export const lorebooksUpdateHandler: Handler<
 			const loreWriteMode = params.loreWriteMode
 			if (loreWriteMode !== undefined && !isLoreWriteMode(loreWriteMode))
 				throw new Error("Writes from sessions are Full, Review changes or Off.")
-			if (primaryRuleset !== undefined || loreWriteMode !== undefined) {
+			const timelineEnabled = params.timelineEnabled
+			if (timelineEnabled !== undefined && typeof timelineEnabled !== "boolean")
+				throw new Error("The timeline is on or off.")
+			let timelineFlipped = false
+			if (
+				primaryRuleset !== undefined ||
+				loreWriteMode !== undefined ||
+				timelineEnabled !== undefined
+			) {
 				const [owned] = await db
-					.select({ sessionId: schema.lorebooks.sessionId })
+					.select({
+						sessionId: schema.lorebooks.sessionId,
+						overlayOf: schema.lorebooks.overlayOf,
+						timelineEnabled: schema.lorebooks.timelineEnabled
+					})
 					.from(schema.lorebooks)
 					.where(
 						and(
@@ -1001,12 +1078,19 @@ export const lorebooksUpdateHandler: Handler<
 						)
 					)
 				if (!owned) throw new Error("Lorebook not found.")
-				if (owned.sessionId !== null)
+				if (
+					(primaryRuleset !== undefined || loreWriteMode !== undefined) &&
+					owned.sessionId !== null
+				)
 					throw new Error(
 						primaryRuleset !== undefined
 							? "A session's own notes play their session's rules."
 							: "A session's own notes follow their session's lorebook."
 					)
+				if (timelineEnabled !== undefined && owned.overlayOf !== null)
+					throw new Error("A session's own notes follow their session's lorebook.")
+				timelineFlipped =
+					timelineEnabled !== undefined && timelineOf(owned) !== timelineEnabled
 			}
 
 			let coverMediaId: number | null | undefined
@@ -1039,6 +1123,7 @@ export const lorebooksUpdateHandler: Handler<
 						...(coverMediaId !== undefined ? { coverMediaId } : {}),
 						...(primaryRuleset !== undefined ? { primaryRuleset } : {}),
 						...(loreWriteMode !== undefined ? { loreWriteMode } : {}),
+						...(timelineEnabled !== undefined ? { timelineEnabled } : {}),
 						// A tags-only save still touches the row — and gives the
 						// SET something to say, which drizzle requires.
 						updatedAt: sql`(CURRENT_TIMESTAMP)`
@@ -1051,6 +1136,23 @@ export const lorebooksUpdateHandler: Handler<
 					)
 					.returning()
 				if (!row) throw new Error("Lorebook not found.")
+				// A person's save of the switch is theirs: the pass's mark goes.
+				if (
+					timelineEnabled !== undefined &&
+					row.extraJson?.[TIMELINE_OFF_BY_PASS_KEY] !== undefined
+				) {
+					row.extraJson = withoutTimelinePassMark(row.extraJson)
+					await tx
+						.update(schema.lorebooks)
+						.set({ extraJson: row.extraJson })
+						.where(eq(schema.lorebooks.id, row.id))
+				}
+				// The notes that overlay this book follow its switch.
+				if (timelineEnabled !== undefined)
+					await tx
+						.update(schema.lorebooks)
+						.set({ timelineEnabled })
+						.where(eq(schema.lorebooks.overlayOf, row.id))
 				if (Array.isArray(tags))
 					await processLorebookTags(
 						row.id,
@@ -1078,6 +1180,7 @@ export const lorebooksUpdateHandler: Handler<
 				...askerOf(params)
 			}
 			emitToUser("lorebooks:update", res)
+			if (timelineFlipped) await tellTimelineSessions(socket, updated.id)
 			await relistLorebooks(socket, emitToUser) // Refresh list
 			// The people it is shared with read the name and the cover off
 			// their own list, built as each of them.
@@ -1186,9 +1289,16 @@ export const lorebooksDeleteHandler: Handler<
  * added after it would fail.
  */
 export async function syncLorebookBindings({
-	lorebookId
+	lorebookId,
+	entry
 }: {
 	lorebookId: number
+	/**
+	 * The one entry a write just saved. Given, the tag scan reads this content
+	 * alone — a save cannot introduce a tag in any other entry. Absent, the
+	 * whole book is scanned (import, repair).
+	 */
+	entry?: { content: string | null }
 }) {
 	// One transaction under the book's advisory lock — the same key every
 	// other cast writer takes (resolveOrCreateBindingRow,
@@ -1212,16 +1322,19 @@ export async function syncLorebookBindings({
 			if (n !== null) held.add(n)
 		}
 		// Every entry of the lorebook that names a tag at all, of every type —
-		// the scan never cared which shape the content came out of.
-		const entries = await tx
-			.select({ content: schema.lorebookEntries.content })
-			.from(schema.lorebookEntries)
-			.where(
-				and(
-					eq(schema.lorebookEntries.lorebookId, lorebookId),
-					sql`${schema.lorebookEntries.content} LIKE ${"%char:%"}`
-				)
-			)
+		// the scan never cared which shape the content came out of. A save
+		// hands over its own row and scans just that.
+		const entries = entry
+			? [{ content: entry.content ?? "" }]
+			: await tx
+					.select({ content: schema.lorebookEntries.content })
+					.from(schema.lorebookEntries)
+					.where(
+						and(
+							eq(schema.lorebookEntries.lorebookId, lorebookId),
+							sql`${schema.lorebookEntries.content} LIKE ${"%char:%"}`
+						)
+					)
 
 		const unissued = new Set<number>()
 		for (const entry of entries)
@@ -1513,6 +1626,7 @@ async function castMemberRowsOf<
 			return {
 				...m,
 				castVersionId: null,
+				baseVersionId: base?.id ?? null,
 				groupOnlyGreetings: [],
 				postHistoryInstructions: null,
 				creatorNotes: null,
@@ -1565,6 +1679,7 @@ async function castMemberRowsOf<
 			nodeVisibility: c.nodeVisibility,
 			characterId,
 			castVersionId: shown.id,
+			baseVersionId: base?.id ?? null,
 			groupOnlyGreetings: c.groupOnlyGreetings,
 			baseColumns: base
 				? {
@@ -1619,7 +1734,13 @@ async function writeMemberEdit(
 	tx: Db,
 	member: MemberRow,
 	update: Record<string, unknown>,
-	opts: { writtenBy: string; unlink: boolean; onto: "base" | "shown" }
+	opts: {
+		writtenBy: string
+		unlink: boolean
+		onto: "base" | "shown"
+		/** Who and why, for the edit history; absent records nothing. */
+		redline?: VersionRedline
+	}
 ): Promise<{
 	before: MemberColumnsOfVersion
 	after: MemberColumnsOfVersion
@@ -1728,6 +1849,7 @@ async function writeMemberEdit(
 		member: member.id,
 		changes,
 		writtenBy: opts.writtenBy,
+		redline: opts.redline,
 		at: { branchId: null, date: null, personalPosition: null }
 	})
 	return { before, after, changes, version }
@@ -1751,7 +1873,7 @@ async function writeShownEdit(
 	tx: Db,
 	member: MemberRow,
 	update: Record<string, unknown>,
-	opts: { writtenBy: string; unlink: boolean },
+	opts: { writtenBy: string; unlink: boolean; redline?: VersionRedline },
 	shownBefore: VersionRow
 ): Promise<{
 	before: MemberColumnsOfVersion
@@ -1826,10 +1948,16 @@ async function writeShownEdit(
 					member: member.id,
 					changes,
 					writtenBy: opts.writtenBy,
+					redline: opts.redline,
 					at: { branchId: null, date: null, personalPosition: null }
 				})
 			).version
-		: await updateCastVersion(tx, target.id, { changes })
+		: await updateCastVersion(
+				tx,
+				target.id,
+				{ changes },
+				opts.redline ? { redline: opts.redline } : undefined
+			)
 	return { before, after, changes, version }
 }
 
@@ -1967,7 +2095,12 @@ export const lorebookBindingsForCharacterHandler: Handler<
 					),
 					with: {
 						lorebook: {
-							columns: { id: true, name: true, userId: true }
+							columns: {
+								id: true,
+								name: true,
+								userId: true,
+								sessionId: true
+							}
 						}
 					}
 				})
@@ -1979,9 +2112,10 @@ export const lorebookBindingsForCharacterHandler: Handler<
 				// Only this user's own lorebooks are exportable candidates —
 				// a binding could in principle reference a lorebook owned by
 				// whoever the character was shared with, not the exporter.
+				// A session's notes are never a candidate: they are not a lorebook.
 				.filter(
 					(lb): lb is NonNullable<typeof lb> =>
-						!!lb && lb.userId === userId
+						!!lb && lb.userId === userId && lb.sessionId == null
 				)
 				.filter((lb) =>
 					seen.has(lb.id) ? false : (seen.add(lb.id), true)
@@ -1992,11 +2126,18 @@ export const lorebookBindingsForCharacterHandler: Handler<
 			// which of the card's fields each retells (PLAN-cast-retold-fields)
 			// — the card editor's "Represents N cast members" banner. The
 			// stored flags, not a dated reading: the banner is about the book.
-			const members = bindings
-				.filter((b) => !!b.lorebook && b.lorebook.userId === userId)
+			const memberRows = bindings.filter(
+				(b) => !!b.lorebook && b.lorebook.userId === userId
+			)
+			const shownNames = await bookShownNames(
+				db,
+				memberRows.map((b) => b.lorebook!)
+			)
+			const members = memberRows
 				.map((b) => ({
 					lorebookId: b.lorebook!.id,
-					lorebookName: b.lorebook!.name,
+					lorebookName: shownNames.get(b.lorebook!.id)!,
+					ownBookSessionId: b.lorebook!.sessionId,
 					castId: b.id,
 					retold: retoldFieldList(b.retold),
 					followsCard: followsCardFields(b.retold),
@@ -2461,6 +2602,18 @@ export const updateLorebookBindingHandler: Handler<
 		// What the member form shows and compares against: the frozen columns
 		// as the base version holds them.
 		const [storedMember] = await castMemberRowsOf(db, [existingBinding])
+		// Only the base is a member-page version: a session-written version
+		// is never a base, so this refuses it too.
+		if (params.castVersionId !== undefined) {
+			const base = (await baseVersionsOf(db, [existingBinding.id])).get(
+				existingBinding.id
+			)
+			if (base?.id !== params.castVersionId)
+				// 🚧
+				throw new Error(
+					"That version can't be saved here: only this cast member's first version is saved from the member page."
+				)
+		}
 		const primerProblem = await primerRowEditProblem(db, lorebookOwner.id)
 		if (primerProblem) throw new Error(primerProblem)
 
@@ -2670,10 +2823,12 @@ export const updateLorebookBindingHandler: Handler<
 			// The member's words: its base version (undated, main, no life
 			// point) takes the edit.
 			const writtenBy = `user:${userId}`
+			const redline: VersionRedline = { by: { userId }, cause: "save" }
 			const edit = await writeMemberEdit(tx, existingBinding, sent, {
 				writtenBy,
 				unlink: unlinking,
-				onto: "shown"
+				onto: params.castVersionId !== undefined ? "base" : "shown",
+				redline
 			})
 			// The card's sprites, gallery and stats go to the member (the row's
 			// `character_id` was nulled above, so the card is passed).
@@ -2754,6 +2909,7 @@ export const updateLorebookBindingHandler: Handler<
 						member: existingBinding.id,
 						changes: edit.changes,
 						writtenBy,
+						redline,
 						at: {
 							branchId: null,
 							date: {
@@ -4144,9 +4300,12 @@ async function insertLorebookEntries(
 		// disabled native entry imported enabled (finding #71).
 		const normalized = normalizeNativeWorldInfoEntry(entry)
 		const mapped = mapImportedEntry(normalized, typeId, position)
+		const own = importedBeginningAndDecay(meta, typeId)
 		const values = {
 			...entryInsert({
 				...(mapped as any),
+				// The entry's own Beginning and decay rate, as the file states them.
+				...own,
 				typeId,
 				lorebookId,
 				// Ignored by `entryInsert` for a type that declares no anchor,
@@ -4163,7 +4322,11 @@ async function insertLorebookEntries(
 			...importedKeyColumns(normalized),
 			// Who wrote the row, as the file records it — one of the writers
 			// this app has (`importedEntryFacts`); `human` otherwise.
-			...(mapped.provenance ? { provenance: mapped.provenance } : {})
+			...(mapped.provenance ? { provenance: mapped.provenance } : {}),
+			// The entry's mark, as the file states it (`true` only for a literal `true`).
+			...(own.notCommonKnowledge
+				? { notCommonKnowledge: true }
+				: {})
 		}
 
 		rows.push({ values, meta, typeId })
@@ -4680,15 +4843,48 @@ async function restoreNarrativeGraph(
 								) || null
 							: null
 				}
+				// A knowledge tie (a cast member's standing with an entry) lands
+				// as one only from cast to entry; a row whose file says a
+				// knowledge kind on any other ends is skipped, never stored as an
+				// ordinary tie. A knowledge row's words are its kind.
+				const fileKind = (rel as { knowledgeKind?: unknown } | null)
+					?.knowledgeKind
+				const knowledgeKind =
+					fileKind != null && isKnowledgeKind(fileKind) ? fileKind : null
+				if (fileKind != null && knowledgeKind === null) {
+					report.skippedLinks++
+					continue
+				}
+				if (
+					knowledgeKind !== null &&
+					(ends.fromNodeId == null ||
+						ends.toEntryId == null ||
+						ends.fromEntryId != null ||
+						ends.toNodeId != null)
+				) {
+					report.skippedLinks++
+					continue
+				}
 				// One row per way (plan B1): a row the file repeats — a
 				// two-way link and its mirror, say — is the row already landed.
-				if ((await findLinkedThatWay(db, ends, saying)) != null) continue
+				if (
+					knowledgeKind === null &&
+					(await findLinkedThatWay(db, ends, saying)) != null
+				)
+					continue
 
 				// A status or visibility the lists do not have reads as the
 				// column's default, as the graph build's apply reads one.
 				await db.insert(schema.narrativeRelationships).values({
 					...ends,
 					...saying,
+					...(knowledgeKind !== null
+						? {
+								knowledgeKind,
+								relationshipType: knowledgeKind,
+								reverseRelationshipType: null
+							}
+						: {}),
 					description: fileText(
 						rel?.description,
 						RELATIONSHIP_TEXT_LIMITS.description
@@ -5131,6 +5327,10 @@ async function createLorebookFromParsedCard(
 				// them (DESIGN-story-time P5). A malformed calendar reads as
 				// free-form rather than failing the import.
 				...importedStoryTime(card.extensions?.serenepub),
+				// 🚧 Off only when the file says exactly `false`; anything else is on.
+				...(card.extensions?.serenepub?.timelineEnabled === false
+					? { timelineEnabled: false }
+					: {}),
 				...rules.columns,
 				// Preserves the imported file's own uuid (when it has one
 				// and this user doesn't already own a row with it — see
@@ -5640,6 +5840,10 @@ async function relistAfterImport(
  * book the caller may not read is "not found". The copy is always the
  * CALLER's (`user_id` = asker), takes a fresh uuid and carries no share rows.
  * An administrator's read does not stretch to copying another person's book.
+ *
+ * 🚧 With `timeless`, the copy is a **timeless copy** (`makeTimelessCopy`): the
+ * book as it reads now on that line, undated, its Timeline off; the source is
+ * not written. The reply and the refusal echo the asker's `requestId`.
  */
 /**
  * A copy made from a book SHARED with the asker wears a cover of its own: the
@@ -5696,21 +5900,43 @@ export const lorebooksDuplicateHandler: Handler<
 				isAdmin: false
 			})
 
-			const { id } = await db.transaction((tx) =>
-				duplicateLorebookRows(
-					tx,
-					source.id,
-					userId,
-					params.name?.trim() || `${source.name} (copy)`
+			const timeless = params.timeless
+			if (
+				timeless !== undefined &&
+				(timeless === null ||
+					typeof timeless !== "object" ||
+					!(timeless.branchId === null || Number.isInteger(timeless.branchId)))
+			)
+				throw new Error(
+					"A timeless copy needs the line to read: null for main, or a line's number."
 				)
+
+			const { id } = await db.transaction((tx) =>
+				timeless
+					? makeTimelessCopy(tx, {
+							sourceId: source.id,
+							branchId: timeless.branchId,
+							userId,
+							name: params.name?.trim() || `${source.name} (timeless)`
+						})
+					: duplicateLorebookRows(
+							tx,
+							source.id,
+							userId,
+							params.name?.trim() || `${source.name} (copy)`
+						)
 			)
 			if (source.userId !== userId) await ownCopiedCover(id, userId)
 			const completedBook = await fetchCompletedLorebook(id)
+			// A folded entry's copied vector reads as stale (`embed_text_hash`).
+			if (timeless)
+				autoEnqueueLorebook(id, completedBook.name, "").catch(console.error)
 
 			await relistLorebooks(socket, emitToUser)
 
 			const res: Sockets.Lorebooks.Duplicate.Response = {
-				lorebook: completedBook
+				lorebook: completedBook,
+				...askerOf(params)
 			}
 			emitToUser("lorebooks:duplicate", res)
 			return res
@@ -5719,7 +5945,9 @@ export const lorebooksDuplicateHandler: Handler<
 			throw error
 		}
 	},
-	"The lorebook could not be duplicated."
+	"The lorebook could not be duplicated.",
+	undefined,
+	askerOf
 )
 
 /**

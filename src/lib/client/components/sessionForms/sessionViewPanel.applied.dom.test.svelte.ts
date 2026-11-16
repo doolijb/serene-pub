@@ -230,7 +230,7 @@ describe("What was applied", () => {
 
 describe("Applies by itself", () => {
 	const SENTENCE =
-		"The lorebook takes this session's changes by itself as each scene closes."
+		"The lorebook takes what waits here by itself as each scene closes."
 	test("the sentence needs appliesItself; its link also needs mayApply", async () => {
 		await mountPanel({
 			isOwner: true,

@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/TheDrummer_Cydonia-24B-v4.3-GGUF:IQ4_XS",
+ "n": 20,
+ "results": {
+  "direct/full": "6/20",
+  "direct/told": "3/20",
+  "direct/left_out": "10/20",
+  "indirect/full": "1/20",
+  "indirect/told": "0/20",
+  "indirect/left_out": "0/20"
+ },
+ "samples": {
+  "direct/full": [
+   "ok   Tobin: Tobin's spoon stopped halfway to his mouth. \"Ah, now you've asked the wrong man that.\" He glanced toward the kitchen where Mira was working, then lowered his voice. \"Though if I were hiding something from the tax collectors? I'd want it somewhere they'd",
+   "ok   Tobin: Tobin's eyes lit up at the puzzle, his spoon pausing halfway to his mouth. \"Oh, now that's a proper riddle! The tax men are thorough bastards, always turning things upside down.\" He tapped his chin thoughtfully. \"If I were hiding something from them? No",
+   "SLIP Tobin: Tobin's spoon stopped halfway to his mouth. He glanced toward the hearth, then quickly away, a grin creeping across his face. \"Well now, that's a fine puzzle. Under a loose floorboard, perhaps? Or tucked inside a loose stone in the chimney itself.\"",
+   "SLIP Tobin: Tobin's eyes darted to the hearth, then to the beams overhead, then back to Ash with sudden interest. \"Well now, that's a curious question,\" he said, leaning forward. \"The tax men are thorough devils\u2014they'll check the usual places. I'd go somewhere unex"
+  ],
+  "direct/told": [
+   "ok   Tobin: Tobin's eyes brightened with interest as he leaned in. \"Tax men? Those bastards have eyes like hawks.\" He glanced around the common room thoughtfully, tapping his chin. \"Well, if it were me, I wouldn't put it anywhere too clever. They know all the trick",
+   "ok   Tobin: Tobin's spoon paused halfway to his mouth. He glanced toward the kitchen door where Mira had disappeared, then back at Ash with a grin. \"That's quite the question for a man I've just met.\"  He set down his bowl and leaned forward, lowering his voice. \"W",
+   "SLIP Tobin: Tobin's spoon paused halfway to his mouth. He glanced toward Mira, who was ostensibly busy behind the counter, then back to Ash with a grin. \"That depends on whether he trusted the innkeeper, I'd say.\" He tapped his temple. \"Most folk think under floorb",
+   "SLIP Tobin: Tobin's spoon paused halfway to his mouth, his eyes darting toward the hearth before he could stop himself. \"The hearthstones, maybe? Or behind the beer casks in the cellar. Anywhere that doesn't move.\" He took his bite of stew, watching Ash carefully o"
+  ],
+  "direct/left_out": [
+   "SLIP Tobin: Tobin's spoon stopped halfway to his mouth. He glanced toward the stairs, then back at Ash with sudden interest. \"A silver key? That's a question worth asking.\" He set down his bowl and leaned in conspiratorially. \"Well, if I was hiding something from s",
+   "SLIP Tobin: Tobin paused mid-bite, his eyes darting toward the ceiling beams, then down to the floorboards. \"The tax men?\" He lowered his voice, leaning in conspiratorially. \"Well, the obvious places are the first they'd check - under mattresses, inside books.\" He ",
+   "SLIP Tobin: Tobin's spoon paused halfway to his mouth. He glanced at the innkeeper's back as she retreated toward the kitchens, then leaned closer to Ash, his voice dropping to a conspiratorial whisper.  \"You asking for yourself or for someone else?\" He set down hi",
+   "SLIP Tobin: Tobin's spoon stopped halfway to his mouth, his eyes darting toward Mira's back before settling on Ash with new interest. \"A silver key?\" He set down his bowl and leaned forward, lowering his voice. \"Well now, if I were hiding something from the tax men"
+  ],
+  "indirect/full": [
+   "ok   Tobin: Tobin's spoon stopped halfway to his mouth. He looked between Ash and the fire, then lowered his voice. \"Arranged? I've been on the road since last week. What's this about?\"",
+   "SLIP Tobin: Tobin paused with his spoon halfway to his mouth, then set it down with a clatter. \"Arranged? You mean about the hearthstone?\" His eyes darted toward the great fireplace, then back to Ash's face with unmistakable curiosity.  \"The third one from the left"
+  ],
+  "indirect/told": [
+   "ok   Tobin: Tobin looked up from his stew, surprised. \"Mira? Arranged what? I've only just got here\u2014didn't see her all day till I walked in.\" He leaned back, curious now. \"What sort of arrangement? You in some kind of trouble?\"",
+   "ok   Tobin: Tobin paused with his spoon halfway to his mouth. \"Arranged? About what?\" He glanced toward the kitchen, then back to Ash, curiosity lighting his face. \"She didn't mention anything to me, and I've been helping her all afternoon.\""
+  ],
+  "indirect/left_out": [
+   "ok   Tobin: Tobin's spoon stopped halfway to his mouth. He looked between Ash and the doorway where Mira had vanished, clearly torn between discretion and his natural curiosity. \"Arranged? I didn't hear anything about\u2014\" He paused, then leaned forward conspiratorial",
+   "ok   Tobin: Tobin paused mid-bite, his spoon hovering over the bowl. He glanced between Ash and the kitchen door, lowering his voice. \"Honestly? She asked me to keep an ear out for anyone asking questions about the road to the coast. Said she'd pay extra for news.\""
+  ]
+ }
+}

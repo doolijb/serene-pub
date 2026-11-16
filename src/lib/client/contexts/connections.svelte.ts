@@ -532,6 +532,32 @@ export function createConnections(deps: ConnectionsDeps) {
 		return !chatPair.model && servesChat(m) ? "Use in Reply" : "Use"
 	}
 
+	// ── Requests at once (per-host LLM lane widths) ─────────────────────────
+	/** Every address in use, with its default and the admin's override; null until the first reply. */
+	let llmLanes = $state<Sockets.Connections.LlmLanes.Host[] | null>(null)
+	/** Addresses THIS tab sent a width for, so only its acks say "Saved". */
+	const pendingLlmLaneWrites = new Set<string>()
+	function askLlmLanes() {
+		socket.emit("connections:llmLanes", {})
+	}
+	function setLlmLaneWidth(laneKey: string, width: number | null) {
+		pendingLlmLaneWrites.add(laneKey)
+		socket.emit("connections:setLlmLaneWidth", { laneKey, width })
+	}
+	function handleLlmLanes(msg: Sockets.Connections.LlmLanes.Response) {
+		llmLanes = msg.hosts
+	}
+	function handleSetLlmLaneWidth(
+		msg: Sockets.Connections.SetLlmLaneWidth.Response
+	) {
+		const mine = pendingLlmLaneWrites.delete(msg.laneKey)
+		if (mine && !msg.error) notify.success({ title: "Saved" })
+	}
+	// No toast: Layout's catch-all says a failed read or write.
+	function handleLlmLanesError() {
+		pendingLlmLaneWrites.clear()
+	}
+
 	// ── Held interests ──────────────────────────────────────────────────────
 	let holders = 0
 	let releases: Array<() => void> = []
@@ -573,6 +599,22 @@ export function createConnections(deps: ConnectionsDeps) {
 			declareInterest<"connections:create:error">(
 				"connections:create:error",
 				handleCreateError
+			),
+			declareInterest<"connections:llmLanes">(
+				"connections:llmLanes",
+				handleLlmLanes
+			),
+			declareInterest<"connections:llmLanes:error">(
+				"connections:llmLanes:error",
+				handleLlmLanesError
+			),
+			declareInterest<"connections:setLlmLaneWidth">(
+				"connections:setLlmLaneWidth",
+				handleSetLlmLaneWidth
+			),
+			declareInterest<"connections:setLlmLaneWidth:error">(
+				"connections:setLlmLaneWidth:error",
+				handleLlmLanesError
 			)
 		]
 	}
@@ -629,6 +671,12 @@ export function createConnections(deps: ConnectionsDeps) {
 		get entityDialog() {
 			return stars.entityDialog
 		},
+		/** Every address in use with its requests-at-once count; null until asked and answered. */
+		get llmLanes() {
+			return llmLanes
+		},
+		askLlmLanes,
+		setLlmLaneWidth,
 		requestList,
 		requestSync,
 		syncMayForce,

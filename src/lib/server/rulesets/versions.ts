@@ -41,7 +41,10 @@ function stable(v: unknown): string {
 	if (v && typeof v === "object")
 		return `{${Object.keys(v as object)
 			.sort()
-			.map((k) => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`)
+			.map(
+				(k) =>
+					`${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`
+			)
 			.join(",")}}`
 	return JSON.stringify(v) ?? "null"
 }
@@ -49,16 +52,30 @@ function stable(v: unknown): string {
 /**
  * How many sessions and lorebooks play `rulesetId` pinned at `version` (`ruleset_version` on each).
  */
-export async function versionPlayedBy(db: Db, rulesetId: string, version: string): Promise<{ sessions: number; lorebooks: number }> {
+export async function versionPlayedBy(
+	db: Db,
+	rulesetId: string,
+	version: string
+): Promise<{ sessions: number; lorebooks: number }> {
 	const [[s], [l]] = await Promise.all([
 		db
 			.select({ n: count() })
 			.from(schema.sessions)
-			.where(and(eq(schema.sessions.primaryRuleset, rulesetId), eq(schema.sessions.rulesetVersion, version))),
+			.where(
+				and(
+					eq(schema.sessions.primaryRuleset, rulesetId),
+					eq(schema.sessions.rulesetVersion, version)
+				)
+			),
 		db
 			.select({ n: count() })
 			.from(schema.lorebooks)
-			.where(and(eq(schema.lorebooks.primaryRuleset, rulesetId), eq(schema.lorebooks.rulesetVersion, version)))
+			.where(
+				and(
+					eq(schema.lorebooks.primaryRuleset, rulesetId),
+					eq(schema.lorebooks.rulesetVersion, version)
+				)
+			)
 	])
 	return { sessions: Number(s?.n ?? 0), lorebooks: Number(l?.n ?? 0) }
 }
@@ -69,22 +86,48 @@ export async function versionPlayedBy(db: Db, rulesetId: string, version: string
  * day while developing — and is refused once a session or lorebook is pinned to it: what it plays must not change
  * under it. A new version is always fine. Callers ask before they write anything.
  */
-export async function republishRefusal(db: Db, rulesetId: string, version: string, document: Record<string, unknown>): Promise<string | null> {
+export async function republishRefusal(
+	db: Db,
+	rulesetId: string,
+	version: string,
+	document: Record<string, unknown>
+): Promise<string | null> {
 	const held = await keptRulesetDocumentFresh(db, rulesetId, version)
 	if (!held || stable(held) === stable(document)) return null
-	const { sessions, lorebooks } = await versionPlayedBy(db, rulesetId, version)
+	const { sessions, lorebooks } = await versionPlayedBy(
+		db,
+		rulesetId,
+		version
+	)
 	if (!sessions && !lorebooks) return null
-	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
-	const who = [sessions ? plural(sessions, "session") : "", lorebooks ? plural(lorebooks, "lorebook") : ""].filter(Boolean).join(" and ")
+	const plural = (n: number, one: string) =>
+		`${n} ${one}${n === 1 ? "" : "s"}`
+	const who = [
+		sessions ? plural(sessions, "session") : "",
+		lorebooks
+			? `${lorebooks} ${lorebooks === 1 ? "lorebook or session's notes" : "lorebooks or sessions' notes"}`
+			: ""
+	]
+		.filter(Boolean)
+		.join(" and ")
 	return `Version ${version} of '${rulesetId}' is played by ${who}; publish it as a new version.`
 }
 
 /** The kept document straight from the table (no cache): what a publish compares against. */
-async function keptRulesetDocumentFresh(db: Db, rulesetId: string, version: string): Promise<Record<string, unknown> | null> {
+async function keptRulesetDocumentFresh(
+	db: Db,
+	rulesetId: string,
+	version: string
+): Promise<Record<string, unknown> | null> {
 	const [row] = await db
 		.select({ document: schema.rulesetVersions.document })
 		.from(schema.rulesetVersions)
-		.where(and(eq(schema.rulesetVersions.rulesetId, rulesetId), eq(schema.rulesetVersions.version, version)))
+		.where(
+			and(
+				eq(schema.rulesetVersions.rulesetId, rulesetId),
+				eq(schema.rulesetVersions.version, version)
+			)
+		)
 		.limit(1)
 	return row?.document ?? null
 }
@@ -97,7 +140,12 @@ async function keptRulesetDocumentFresh(db: Db, rulesetId: string, version: stri
  */
 export async function keepRulesetVersion(
 	db: Db,
-	args: { rulesetId: string; version: string; document: Record<string, unknown>; publishedBy: number | null }
+	args: {
+		rulesetId: string
+		version: string
+		document: Record<string, unknown>
+		publishedBy: number | null
+	}
 ): Promise<KeepOutcome> {
 	const { rulesetId, version, document, publishedBy } = args
 	cache.delete(keyOf(rulesetId, version))
@@ -110,15 +158,28 @@ export async function keepRulesetVersion(
 	const [held] = await db
 		.select({ document: schema.rulesetVersions.document })
 		.from(schema.rulesetVersions)
-		.where(and(eq(schema.rulesetVersions.rulesetId, rulesetId), eq(schema.rulesetVersions.version, version)))
+		.where(
+			and(
+				eq(schema.rulesetVersions.rulesetId, rulesetId),
+				eq(schema.rulesetVersions.version, version)
+			)
+		)
 		.limit(1)
 	if (held && stable(held.document) === stable(document)) return "same"
-	if (await republishRefusal(db, rulesetId, version, document)) return "refused"
+	if (await republishRefusal(db, rulesetId, version, document))
+		return "refused"
 	await db
 		.update(schema.rulesetVersions)
 		.set({ document, publishedBy })
-		.where(and(eq(schema.rulesetVersions.rulesetId, rulesetId), eq(schema.rulesetVersions.version, version)))
-	console.warn(`[rulesets] '${rulesetId}' version ${version} was published again with different content; the kept copy was replaced.`)
+		.where(
+			and(
+				eq(schema.rulesetVersions.rulesetId, rulesetId),
+				eq(schema.rulesetVersions.version, version)
+			)
+		)
+	console.warn(
+		`[rulesets] '${rulesetId}' version ${version} was published again with different content; the kept copy was replaced.`
+	)
 	return "replaced"
 }
 
@@ -134,14 +195,23 @@ export async function keepCurrentRulesetVersions(db: Db): Promise<void> {
 }
 
 /** The kept document of `rulesetId` at `version`, or null when nobody kept it. */
-export async function keptRulesetDocument(db: Db, rulesetId: string, version: string): Promise<Record<string, unknown> | null> {
+export async function keptRulesetDocument(
+	db: Db,
+	rulesetId: string,
+	version: string
+): Promise<Record<string, unknown> | null> {
 	const key = keyOf(rulesetId, version)
 	const hit = cache.get(key)
 	if (hit) return hit
 	const [row] = await db
 		.select({ document: schema.rulesetVersions.document })
 		.from(schema.rulesetVersions)
-		.where(and(eq(schema.rulesetVersions.rulesetId, rulesetId), eq(schema.rulesetVersions.version, version)))
+		.where(
+			and(
+				eq(schema.rulesetVersions.rulesetId, rulesetId),
+				eq(schema.rulesetVersions.version, version)
+			)
+		)
 		.limit(1)
 	const doc = row?.document ?? null
 	if (doc) cache.set(key, doc)
@@ -152,7 +222,10 @@ export async function keptRulesetDocument(db: Db, rulesetId: string, version: st
  * Register the attribute slots kept versions declare that the registry lacks (newest kept version first), for one
  * ruleset or every ruleset the registry holds. A refusal for one slot is logged and skipped.
  */
-export async function registerKeptRulesetSlots(db: Db, rulesetId?: string): Promise<void> {
+export async function registerKeptRulesetSlots(
+	db: Db,
+	rulesetId?: string
+): Promise<void> {
 	const rows = await db
 		.select({
 			rulesetId: schema.rulesetVersions.rulesetId,
@@ -160,23 +233,42 @@ export async function registerKeptRulesetSlots(db: Db, rulesetId?: string): Prom
 			document: schema.rulesetVersions.document
 		})
 		.from(schema.rulesetVersions)
-		.where(rulesetId ? eq(schema.rulesetVersions.rulesetId, rulesetId) : undefined)
-		.orderBy(desc(schema.rulesetVersions.publishedAt), desc(schema.rulesetVersions.id))
+		.where(
+			rulesetId
+				? eq(schema.rulesetVersions.rulesetId, rulesetId)
+				: undefined
+		)
+		.orderBy(
+			desc(schema.rulesetVersions.publishedAt),
+			desc(schema.rulesetVersions.id)
+		)
 	for (const row of rows) {
 		if (!getRuleset(row.rulesetId)) continue
 		let decls: ReturnType<typeof rulesetAttributeSlotDecls>
 		try {
-			decls = rulesetAttributeSlotDecls({ id: row.rulesetId, attributes: rulesetSections(row.document).attributes })
+			decls = rulesetAttributeSlotDecls({
+				id: row.rulesetId,
+				attributes: rulesetSections(row.document).attributes
+			})
 		} catch (e) {
-			console.warn(`[rulesets] '${row.rulesetId}' version ${row.version}: its kept document could not be read for slots:`, e)
+			console.warn(
+				`[rulesets] '${row.rulesetId}' version ${row.version}: its kept document could not be read for slots:`,
+				e
+			)
 			continue
 		}
 		for (const { id, props } of decls) {
 			if (getAttributeSlot(id)) continue
 			try {
-				_defineRulesetAttributeSlot(id, { ...props, rulesetOwned: row.rulesetId })
+				_defineRulesetAttributeSlot(id, {
+					...props,
+					rulesetOwned: row.rulesetId
+				})
 			} catch (e) {
-				console.warn(`[rulesets] '${row.rulesetId}' version ${row.version}: slot '${id}' was not registered:`, e)
+				console.warn(
+					`[rulesets] '${row.rulesetId}' version ${row.version}: slot '${id}' was not registered:`,
+					e
+				)
 			}
 		}
 	}

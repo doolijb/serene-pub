@@ -280,7 +280,8 @@ function sharesASentence(
 				)
 			: wordsAre(r.reverseRelationshipType, type)
 	)
-	return or(sameWay, otherWay)!
+	// A knowledge tie (a cast member's standing with an entry) is a kind of its own: never the same link.
+	return and(isNull(r.knowledgeKind), or(sameWay, otherWay))!
 }
 
 /**

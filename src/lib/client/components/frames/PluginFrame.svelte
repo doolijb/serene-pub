@@ -67,7 +67,7 @@
 		surface: "session-view" | "panel" | "page"
 		/** Sent in init and re-sent on change. */
 		session?: SessionV1
-		/** Parts-native messages; re-sent wholesale on change. */
+		/** Parts-native messages; re-sent wholesale on change — or, for a frame whose `ready` says `takes: ['message']`, one streamed row at a time (★M-1). */
 		messages?: unknown[]
 		/** A document inside a component (`sp-frame`): what its component passes, posted as `{ t: "props" }`. */
 		props?: Record<string, unknown>

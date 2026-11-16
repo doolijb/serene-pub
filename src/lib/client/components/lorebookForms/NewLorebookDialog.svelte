@@ -7,6 +7,7 @@
 	import { z } from "zod"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { refOfCard } from "$lib/client/lorebooks/starterKitCards"
+	import SettingSwitch from "$lib/client/components/admin/pub/SettingSwitch.svelte"
 	import BookRulesPicker from "./BookRulesPicker.svelte"
 	import StarterKitPicker from "./StarterKitPicker.svelte"
 
@@ -31,6 +32,8 @@
 			primaryRuleset?: string
 			/** 🚧 The kit to copy in; its Rules win over `primaryRuleset`. */
 			starterKit?: Sockets.StarterKits.Ref
+			/** Set (true or false) when `asksTimeline` is on and the way is Blank. */
+			timelineEnabled?: boolean
 		}) => void
 		onCancel: () => void
 		/**
@@ -41,6 +44,8 @@
 		onImportInstead?: () => void
 		/** A refusal from the server, shown under the name. */
 		error?: string
+		/** Draw the Blank way's Keep a timeline switch and send its value. */
+		asksTimeline?: boolean
 	}
 
 	let {
@@ -49,7 +54,8 @@
 		onConfirm,
 		onCancel,
 		onImportInstead,
-		error
+		error,
+		asksTimeline = false
 	}: Props = $props()
 
 	const nameSchema = z.object({
@@ -59,6 +65,8 @@
 	let name = $state("")
 	/** Empty until the picker seeds it with the default. */
 	let primaryRuleset = $state("")
+	/** Off each time the dialog opens. */
+	let keepTimeline = $state(false)
 	let inputRef: HTMLInputElement | null = $state(null)
 	let validationErrors: Record<string, string> = $state({})
 
@@ -104,6 +112,7 @@
 		if (open) {
 			name = ""
 			primaryRuleset = ""
+			keepTimeline = false
 			validationErrors = {}
 			way = "blank"
 			kitId = ""
@@ -148,7 +157,10 @@
 				? { starterKit }
 				: primaryRuleset
 					? { primaryRuleset }
-					: {})
+					: {}),
+			...(asksTimeline && way === "blank"
+				? { timelineEnabled: keepTimeline }
+				: {})
 		})
 	}
 </script>
@@ -288,6 +300,22 @@
 							<p class="text-surface-600-400 text-xs">
 								Sessions you start on this book play its rules.
 								You can change them later in Book settings.
+							</p>
+						</div>
+					{/if}
+
+					{#if asksTimeline && way === "blank"}
+						<div class="space-y-1" data-new-lorebook-timeline>
+							<!-- 🚧 label -->
+							<SettingSwitch
+								name="new-lorebook-timeline"
+								label="Keep a timeline"
+								checked={keepTimeline}
+								onCheckedChange={(e) => (keepTimeline = e.checked)}
+							/>
+							<p class="text-surface-600-400 text-xs">
+								<!-- 🚧 -->Dates, history and a story clock. You can turn it
+								on later in Book settings.
 							</p>
 						</div>
 					{/if}

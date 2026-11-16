@@ -11,6 +11,7 @@
  * sides are cast and the value goes back as `json`.
  */
 import { eq, sql } from "drizzle-orm"
+import type { RoutineMode } from "$lib/server/pipelines/routines/sessionRoutines"
 import * as schema from "$lib/server/db/schema"
 import {
 	declaredScenePlace,
@@ -108,6 +109,13 @@ export interface SessionSceneContext {
 	castRefresh: boolean
 	/** The genre's display name, for the words of a cause; null when it has none. */
 	genreName: string | null
+	/**
+	 * 🚧 The mode of the session's *Summarize finished scenes* routine
+	 * (`core:spec/scene-summaries`), or null when the session has no such
+	 * routine. When it has one, `settings.summary` reads `onRequest` whatever is
+	 * stored: the routine's mode decides what is summarized by itself.
+	 */
+	summaryRoutine: RoutineMode | null
 }
 
 /** A `shape.scenes` flag read defensively: on only when it is exactly `true`. */
@@ -151,7 +159,22 @@ export async function sessionSceneContext(
 	} catch {
 		shape = undefined
 	}
-	const settings = sessionSceneSettings(shape, row.metadata)
+	let settings = sessionSceneSettings(shape, row.metadata)
+	let summaryRoutine: RoutineMode | null = null
+	try {
+		const { sessionRoutineMode } = await import(
+			"$lib/server/pipelines/routines/sessionRoutines"
+		)
+		const { SCENE_SUMMARIES_SPEC_ID } = await import("@serene-pub/core-catalog")
+		summaryRoutine = await sessionRoutineMode(db, sessionId, SCENE_SUMMARIES_SPEC_ID)
+		if (summaryRoutine !== null) settings = { ...settings, summary: "onRequest" }
+	} catch (e) {
+		console.warn(
+			`[scenes] session ${sessionId}: its routines could not be read (${e instanceof Error ? e.message : String(e)}); Summaries reads On request`
+		)
+		summaryRoutine = null
+		settings = { ...settings, summary: "onRequest" }
+	}
 	const { sessionBoundaryTriggers } = await import("$lib/server/scenes/liveScenes")
 	const declared = await sessionBoundaryTriggers(db, sessionId).catch(() => [])
 	const states = declaredTriggerStates(declared, storedSceneSettings(row.metadata))
@@ -176,6 +199,7 @@ export async function sessionSceneContext(
 		declaredTriggers,
 		first: shapeFlag(shape, "first"),
 		castRefresh: shapeFlag(shape, "castRefresh"),
-		genreName
+		genreName,
+		summaryRoutine
 	}
 }

@@ -76,6 +76,27 @@ export function patchEmbedding(
 	}
 }
 
+/**
+ * Several embedding reports folded in arrival order — the same rows as
+ * calling `patchEmbedding` once per report. Null when none named a held row.
+ */
+export function patchEmbeddings(
+	rows: Rows,
+	msgs: { type: string; id: number; embeddingModel: string | null }[],
+	sourceKindOf: (typeId: string) => string | undefined
+): Record<string, PoolSource[]> | null {
+	let current = rows
+	let changed = false
+	for (const msg of msgs) {
+		const next = patchEmbedding(current, msg, sourceKindOf)
+		if (next) {
+			current = next
+			changed = true
+		}
+	}
+	return changed ? current : null
+}
+
 /** The scenes with one saved scene's fields laid over its row (B4). */
 export function patchScene<T extends Record<string, any>>(
 	scenes: readonly T[],

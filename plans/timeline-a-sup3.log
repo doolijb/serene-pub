@@ -1,0 +1,41 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/sockets/lorebooks.duplicate.int.test.ts (13 tests | 1 failed) 3493ms
+     × every registered table is copied row for row, the deliberate exclusion empty 149ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/lorebooks.duplicate.int.test.ts > lorebooks:duplicate and delete — the table registry (plan B1) > every registered table is copied row for row, the deliberate exclusion empty
+AssertionError: expected [ 'lore_redlines', false ] to deeply equal [ 'lore_redlines', true ]
+
+- Expected
++ Received
+
+  [
+    "lore_redlines",
+-   true,
++   false,
+  ]
+
+ ❯ src/lib/server/sockets/lorebooks.duplicate.int.test.ts:1162:29
+    1160|    // The fixture holds a row in every table, so a table the copy
+    1161|    // skips cannot pass by being empty on both sides.
+    1162|    expect([name, from > 0]).toEqual([name, true])
+       |                             ^
+    1163|    expect([name, to]).toEqual([name, spec.notCopied ? 0 : from])
+    1164|   }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 10 passed (11)
+      Tests  1 failed | 137 passed (138)
+   Start at  03:03:13
+   Duration  49.80s (transform 7.65s, setup 83ms, import 7.39s, tests 138.70s, environment 3ms)
+

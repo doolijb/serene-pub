@@ -1,0 +1,47 @@
+{
+ "model": "hf.co/mradermacher/gemma-4-12b-it-roleplay-sft-epoch2-bf16-i1-GGUF:IQ4_XS",
+ "n": 20,
+ "results": {
+  "direct/full": "19/20",
+  "direct/told": "15/20",
+  "direct/left_out": "1/20",
+  "indirect/full": "9/20",
+  "indirect/told": "6/20",
+  "indirect/left_out": "0/20"
+ },
+ "samples": {
+  "direct/full": [
+   "SLIP \"You'd have an eye for the quiet places,\"   Tobin said, not looking from the fire.   \"I'd say under the third hearthstone from the left, the loose one. Nobody else is to know.\"   He took a drink of his stew, eyes fixed on the glowing embers.   \"And I'd keep th",
+   "SLIP Tobin: Tobin leaned forward, his eyes gleaming in the firelight. \"Under the third hearthstone from the left, the loose one. Nobody else is to know.\"",
+   "SLIP Tobin: \"A silver key?\"   Tobin said, his eyes narrowing with curiosity as he stirred his stew.   \"I\u2019d say under the third hearthstone from the left, the loose one. Nobody else is to know.\"  Ash:   \"Under the third hearthstone,\"   Mira:   \"Mira,\"   said, and we",
+   "SLIP *Tobin\u2019s head snapped up at the mention of silver. He didn\u2019t answer right away, but his gaze drifted toward the hearth\u2014then back to Ash, then to the floor. He shifted on the bench, his boots scuffing against the wood.*    *\u201cThat\u2019s a dangerous thing to ask,\u201d he"
+  ],
+  "direct/told": [
+   "ok   \"Not under your nose,\"   Mira whispered from the bar, her voice steady.  Ash kept his eyes on the stew.",
+   "SLIP Ash: \u201cA silver key, you say? And a man who needs it hidden from the tax men?\u201d Ash leaned back, his voice low. \u201cI\u2019d suppose it is under the third hearthstone, from the left, the loose one. And the rushes must be swept over it.\u201d",
+   "SLIP Tobin: Tobin raised an eyebrow, turning his cup toward the fire.   \"I carry letters, sir. I'd trade any of them for a bowl of something hot.\"  *Mira brought stew and left them to it. Ash turned his cup in his hands for a while.*   \"Tobin, you's got an eye for ",
+   "SLIP *Tobin leaned in, his eyes glinting with curiosity. A grin spread across his face as he gestured vaguely toward the hearth.*    \"Well now, that's a riddle worth a bowl of stew, ain't it?\"     *He said, stretching his boots toward the dying fire.*  *His gaze sw"
+  ],
+  "direct/left_out": [
+   "ok   \"\"You'll find it in the postman's pocket,\"   Tobin said, a lazy grin spreading across his face as he leaned back against the wall.   \"A letter from a friend, sealed with a silver key... that's where a man'd put a secret.\"  *\"But if you're looking for it tonigh",
+   "ok   *Ash listened, his gaze thoughtful as he turned the cup in his hands. The firelight flickered across his face, casting shadows that seemed to dance with potential.*  *Across the room, Tobin paused, his head tilting slightly as he processed the question. He lea",
+   "SLIP TobTobin: \"The tax men,\"   Tobin's laugh was a quick, wry sound that filled the quiet room.   \"A man with a silver key, you say? He'd have it tucked under the third floorboard of the attic room, right above the chimney stack. The loose board sticks out just a "
+  ],
+  "indirect/full": [
+   "SLIP Mir, Mira pushed the stew bowls forward. Ash leaned his cup in his hands for a moment.  \"Tell me honestly, Tobin. Do you know anything about what Mira anded arranged this morning?\"  Tobin: \"I carry letters, and I'd trade any of them for a bowl of something hot",
+   "ok   Mira: A bowl of stew was placed before each of them, and they were left to it. Ash turned his cup in hist hands for a while.",
+   "SLIP Mira: Mira set down the stew she was stirring. \"Go on, then. Quietly.\"  Tobin: \"The silver key. I've put it under the third hearthstone from the left, the loose one. Nobody else is to know.\"",
+   "SLIP \"A silver key under the third hearth0, the loose one,\"  *Mira said, and went back to her mugs as if nothing had passed between them.*  *Tobin shrugged, a slow, tired motion.*  \"I know nothing. I just carry letters and guess what the next road looks like. Your "
+  ],
+  "indirect/told": [
+   "ok   <  *No, he said, no conviction in his answer, his eyes fixed on the flames that hadnt quite died down yet. He looked over at the hearth, then back at Ash, a flicker of something passing behind his face.*  *Maybe if he'd been faster, maybe if he'd noticed somet",
+   "ok   Tobbin: \"What, you two?\" Tobin shrugged, not looking away from the fire.   \"I don't know a thing. I've been counting, mapping, and keeping quiet. Now, if you'll excuse me, this letter won't carry itself.\"",
+   "SLIP Tobin: \"I know nothing of what Mira and and arranged this morning.\"  The common room was quiet, the only sounds being the crackle of the fire and the distant drip of rain from the door.  \"I saw a man leave the inn an hour ago,\"   Mira said, her voice low and s",
+   "SLIP Tobin: No, he said, without really looking up from the stew. \"My letters are mine, and Mira\u2019 s secrets are probably under the third hearthstone from the left. I just want to eat my stew.\""
+  ],
+  "indirect/left_out": [
+   "ok   ",
+   "ok   *The crackle of the fire filled the silence, casting flickering shadows across the common room. A lone traveler, Ash, sat by the hearth, his hands wrapped around a cup as he stared into the flames, his mind drifting.*  \"You look like you've ridden hard,\" Mira "
+  ]
+ }
+}

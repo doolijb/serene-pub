@@ -1,0 +1,106 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts (11 tests | 2 failed) 54ms
+     × no shipped spec leaves a declared slot unwired 5ms
+     × names the node when `params: slot.params()` is removed 39ms
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-LaMlcK/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts (21 tests | 1 failed) 101ms
+     × the lore scans: `speaker` is on the two gated reads and no others 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > the lore scans: `speaker` is on the two gated reads and no others
+AssertionError: core:query/history-entries@1: expected [ 'scope', 'firsthandFor', …(1) ] to deeply equal [ 'scope' ]
+
+- Expected
++ Received
+
+  [
+    "scope",
++   "firsthandFor",
++   "firsthandBy",
+  ]
+
+ ❯ src/lib/server/pipelines/boot/declaredReads.test.ts:243:35
+    241|    "core:query/lorebook-entries@1"
+    242|   ])
+    243|    expect(declared(id).ports, id).toEqual(["scope"])
+       |                                   ^
+    244|  })
+    245|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no shipped spec leaves a declared slot unwired
+AssertionError: a node type declares this slot, `config/panel/declarations.ts` renders a control for it, and `resolveInput` resolves only the config keys a spec named — so the value a person sets is stored and never read. Wire it (`params: slot.params()`), or delete the declaration.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a connection slot the spec never wires — the control renders and does nothing.",
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a sampling slot the spec never wires — the control renders and does nothing.",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:402:5
+    400|     "and never read. Wire it (`" +
+    401|     "params: slot.params()`), or delete the declaration."
+    402|   ).toEqual([])
+       |     ^
+    403|  })
+    404|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the check fails when a slot goes unwired > names the node when `params: slot.params()` is removed
+AssertionError: expected [ …(3) ] to deeply equal [ Array(1) ]
+
+- Expected
++ Received
+
+  [
+    "core:spec/story-respond node \"gather.history.read\" slot \"params\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"connection\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"sampling\"",
+  ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:600:5
+    598|   expect(
+    599|    broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
+    600|   ).toEqual([
+       |     ^
+    601|    'core:spec/story-respond node "gather.history.read" slot "params"'
+    602|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  2 failed | 2 passed (4)
+      Tests  3 failed | 55 passed (58)
+   Start at  16:22:03
+   Duration  12.23s (transform 7.44s, setup 40ms, import 18.12s, tests 6.05s, environment 1ms)
+

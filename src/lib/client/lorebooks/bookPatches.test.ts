@@ -7,6 +7,7 @@ import {
 	castSignature,
 	dropDeletedEntry,
 	patchEmbedding,
+	patchEmbeddings,
 	patchScene
 } from "./bookPatches"
 
@@ -79,6 +80,31 @@ describe("patchEmbedding — a badge moves on the one row it names (B4)", () => 
 		expect(
 			patchEmbedding(rows, { type: "historyEntry", id: 1, embeddingModel: "x" }, sourceKindOf)
 		).toBeNull()
+	})
+})
+
+describe("patchEmbeddings — a burst folds to what one-by-one would give", () => {
+	const sourceKindOf = (typeId: string) =>
+		typeId.startsWith("core:entry/") ? "worldLore" : undefined
+	const msg = (id: number, embeddingModel: string | null) => ({
+		type: "worldLore",
+		id,
+		embeddingModel
+	})
+
+	it("matches applying each report in order, later reports winning", () => {
+		const burst = [msg(1, "a"), msg(7, "b"), msg(1, "c"), msg(99, "z")]
+		let one: any = rows
+		for (const m of burst) one = patchEmbedding(one, m, sourceKindOf) ?? one
+		const next = patchEmbeddings(rows, burst, sourceKindOf)!
+		expect(next).toEqual(one)
+		expect((next["core:entry/world"]![0] as any).embeddingModel).toBe("c")
+		expect(next["core:entry/location"]).toBe(rows["core:entry/location"])
+	})
+
+	it("is null when no report names a held row", () => {
+		expect(patchEmbeddings(rows, [msg(99, "x")], sourceKindOf)).toBeNull()
+		expect(patchEmbeddings(rows, [], sourceKindOf)).toBeNull()
 	})
 })
 

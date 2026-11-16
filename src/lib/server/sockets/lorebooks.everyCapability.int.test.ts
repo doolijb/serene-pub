@@ -148,8 +148,9 @@ describe("lorebooks:list", () => {
 			(b: any) => b.id === lorebook.id
 		) as any
 
-		expect(listed.worldLoreEntries).toHaveLength(1)
-		expect(listed.historyEntries).toHaveLength(1)
+		expect(listed.entryCounts[WORLD_LORE_TYPE_ID]).toBe(1)
+		expect(listed.entryCounts[HISTORY_TYPE_ID]).toBe(1)
+		expect(listed.entryCount).toBe(2)
 		expect(listed.lorebookBindings).toHaveLength(1)
 		expect(listed.features).toBeUndefined()
 	}, 60_000)

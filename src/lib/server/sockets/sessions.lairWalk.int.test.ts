@@ -192,8 +192,7 @@ const meta = (row: { metadata: unknown }) => (row.metadata ?? {}) as Record<stri
 
 /**
  * The two books the walk's session reads: the lorebook and its own book (Session notes).
- * A room a Lair pipeline writes goes to the own book; only Apply (a scene closing)
- * carries it to the lorebook.
+ * Under Full a room a Lair pipeline writes goes to the lorebook; the own book holds only what waits.
  */
 async function booksRead(): Promise<number[]> {
 	const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
@@ -637,11 +636,17 @@ describe("the Lair, rewritten: a walk", () => {
 		const node = { key: "change", definitionId: "core:outlet/update-lore-entry" } as any
 		const out: any = await host.commit!({ entry: "The Vault", content: "A treasury, its seal broken.", fields: { category: "Vaults" } }, node)
 		expect(out.entryId).toBe(rooms["The Vault"])
-		// The change is the session's: held in its own book, the lorebook's row untouched.
-		expect(out.route).toBe("own-book")
+		// Under Full, an undated session's change to an existing entry is written in place in the lorebook, imprinted.
+		expect(out.route).toBe("book")
 		expect(out.lorebookId).toBe(lorebookId)
 		const [vault] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, rooms["The Vault"]!))
-		expect(vault!.content).not.toBe("A treasury, its seal broken.")
+		expect(vault!.content).toBe("A treasury, its seal broken.")
+		expect(vault!.title).toBe("The Vault")
+		const imprints = await db
+			.select()
+			.from(schema.loreImprints)
+			.where(and(eq(schema.loreImprints.subjectKind, "entry"), eq(schema.loreImprints.subjectId, rooms["The Vault"]!)))
+		expect(imprints.some((i) => i.field === "content" && i.status === "standing")).toBe(true)
 		const readVault = async () => {
 			const { sessionReadingOf } = await import("$lib/server/state/reading")
 			const { entryOverlaysFor, entryAt } = await import("$lib/server/state/entriesOnReading")

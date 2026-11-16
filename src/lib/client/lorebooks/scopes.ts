@@ -164,13 +164,18 @@ export function scopeKinds(scope: LoreScope): string[] {
  * people, because the Cast board lists people; the lore anchored to them is
  * counted under its own kind like any other row.
  */
-function countOf(scope: LoreScope, counts: Record<string, number>): number {
+function countOf(
+	scope: LoreScope,
+	counts: Record<string, number>,
+	timeline = true
+): number {
 	if (scope === "all")
 		return (
-			[...POOL_KINDS, CAST_KIND].reduce(
-				(total, kind) => total + (counts[kind] ?? 0),
-				0
-			) + rulesListTotal(counts)
+			[...POOL_KINDS, CAST_KIND]
+				// 🚧 No timeline: history is not among the figures All sums.
+				.filter((kind) => timeline || kind !== HISTORY_TYPE_ID)
+				.reduce((total, kind) => total + (counts[kind] ?? 0), 0) +
+			rulesListTotal(counts)
 		)
 	if (scope === "cast") return counts[CAST_KIND] ?? 0
 	if (scope === "places") return counts.places ?? 0
@@ -182,17 +187,22 @@ function countOf(scope: LoreScope, counts: Record<string, number>): number {
  * The rail's scopes, with their figures, empty ones last.
  *
  * A count that has not arrived is not a count of none: nothing moves until
- * the server has answered.
+ * the server has answered. `timeline` is the book's Timeline switch: off, no
+ * History row, and History's figure is out of All's.
  */
 export function railScopes(
-	counts: Record<string, number> | null
+	counts: Record<string, number> | null,
+	timeline = true
 ): ScopeFacet[] {
-	const facets = LORE_SCOPES.map((id) => ({
-		id: id as LoreScope,
-		label: scopeLabel(id),
-		count: counts ? countOf(id, counts) : undefined,
-		empty: !!counts && countOf(id, counts) === 0
-	}))
+	// 🚧 No timeline: the History scope is not listed (Scenes still is).
+	const facets = LORE_SCOPES.filter((id) => timeline || id !== "history").map(
+		(id) => ({
+			id: id as LoreScope,
+			label: scopeLabel(id),
+			count: counts ? countOf(id, counts, timeline) : undefined,
+			empty: !!counts && countOf(id, counts, timeline) === 0
+		})
+	)
 	return [...facets.filter((f) => !f.empty), ...facets.filter((f) => f.empty)]
 }
 

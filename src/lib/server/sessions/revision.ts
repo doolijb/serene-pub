@@ -13,6 +13,12 @@
  *
  * The confirmation's sentence is the server's (`revisionNotice`), so the
  * dialog names the mode in effect without knowing the rule.
+ *
+ * 🚧 The same setting answers a clock moved back past dated things the session
+ * already wrote (ruled 2026-11-14, ★12): `overwrite` keeps them in the lorebook
+ * (they read again from their dates); `branch` forks the session at its newest
+ * message and sets the branch's clock (`branchForClockMove`). A pipeline's move
+ * is refused with a sentence (`CLOCK_MOVE_BACK_REFUSALS`), never made silently.
  */
 
 import { and, desc, eq, like, lt } from "drizzle-orm"
@@ -128,6 +134,25 @@ export function revisionBranchName(sessionName: string, siblingNames: readonly s
  */
 export const REVISED_TURN_KEY = "revisedTurn"
 
+/** 🚧 Refused when a clock moved back under Branch has no message to branch at. */
+export const NO_MESSAGE_TO_BRANCH_AT = "This session has no messages yet, so there is nothing to branch from."
+
+/** 🚧 The confirmation's sentence for a clock moved back past the session's dated writes. Pure. */
+export function clockMoveBackSentence(mode: OnRevision, count: number, latestLabel: string, toLabel: string): string {
+	const n = count
+	return mode === "branch"
+		? `This branches the session here and moves the branch's story back to ${toLabel}. What this session has written dated after that stays on the line it leaves.`
+		: `This moves the story back before ${n} thing${n === 1 ? "" : "s"} this session has written, the latest dated ${latestLabel}. They stay in the lorebook and read again from their dates.`
+}
+
+/** 🚧 Refusals of a pipeline's clock move back past the session's dated writes (P1). */
+export const CLOCK_MOVE_BACK_REFUSALS = {
+	/** A person's Time passes… press (`cause: 'action'`): its run cannot stop to ask. */
+	action: "This would move the story back before things this session has written. Use Move the clock… to choose what happens.",
+	/** Any other pipeline or routine move. */
+	run: "The story clock was not moved back: this session has written at later dates. Move it by hand to choose what happens."
+} as const
+
 /** Refused when there is nothing before the revised turn to branch from. */
 export const NOTHING_TO_BRANCH_FROM =
 	"This turn is the session's first, so there is nothing before it to branch from."
@@ -156,6 +181,48 @@ export async function branchForRevision(
 ): Promise<{ ok: true; sessionId: number } | { ok: false; error: string }> {
 	const fork = await messageBefore(db, opts.sessionId, opts.firstRevisedId)
 	if (fork == null) return { ok: false, error: NOTHING_TO_BRANCH_FROM }
+	const branched = await branchAt(db, opts, fork)
+	if (!branched.ok) return branched
+	const id = branched.sessionId
+	if (opts.runs?.length) {
+		const { takeRunWritesElsewhere } = await import("$lib/server/sessions/rewind")
+		await takeRunWritesElsewhere(db, { sessionId: id, runs: opts.runs, unitIds: [], landedBefore: false })
+	}
+	await markRevisedTurn(db, id)
+	return { ok: true, sessionId: id }
+}
+
+/**
+ * 🚧 The branch a clock moved back takes under Branch: fork the session at its
+ * newest live message through the `branch` built-in. No revised-turn mark: the
+ * branch loses no turn, it only stands at an earlier date.
+ */
+export async function branchForClockMove(
+	db: Db,
+	opts: { sessionId: number; userId: number; io?: unknown }
+): Promise<{ ok: true; sessionId: number } | { ok: false; error: string }> {
+	const newest = await newestLiveMessage(db, opts.sessionId)
+	if (newest == null) return { ok: false, error: NO_MESSAGE_TO_BRANCH_AT }
+	return await branchAt(db, opts, newest)
+}
+
+/** The session's newest live message, or null when it has none: where a clock move's branch forks. */
+export async function newestLiveMessage(db: Db, sessionId: number): Promise<number | null> {
+	const [newest] = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(and(eq(schema.sessionMessages.sessionId, sessionId), liveMessageWhere()))
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(1)
+	return newest?.id ?? null
+}
+
+/** The one branch call both revisions share: name the branch, run the `branch` built-in at `fromMessage`. */
+async function branchAt(
+	db: Db,
+	opts: { sessionId: number; userId: number; io?: unknown },
+	fromMessage: number
+): Promise<{ ok: true; sessionId: number } | { ok: false; error: string }> {
 	const [source] = await db
 		.select({ name: schema.sessions.name, userId: schema.sessions.userId })
 		.from(schema.sessions)
@@ -173,17 +240,12 @@ export async function branchForRevision(
 		kind: "branch",
 		sessionId: opts.sessionId,
 		actor: opts.userId,
-		payload: { fromMessage: fork, title },
+		payload: { fromMessage, title },
 		...(opts.io ? { io: opts.io as any } : {})
 	})
 	const id = writtenId(branched.write)
 	if (!branched.ok || id === null)
 		return { ok: false, error: branched.error ?? "The session could not be branched." }
-	if (opts.runs?.length) {
-		const { takeRunWritesElsewhere } = await import("$lib/server/sessions/rewind")
-		await takeRunWritesElsewhere(db, { sessionId: id, runs: opts.runs, unitIds: [], landedBefore: false })
-	}
-	await markRevisedTurn(db, id)
 	return { ok: true, sessionId: id }
 }
 

@@ -114,6 +114,104 @@ export function fileCastAmendment(
 	})
 }
 
+/**
+ * Files a new cast version and waits for it to land. A create at a date the
+ * line already has a version at updates that row in place, so the row's id
+ * may be one already seen and its fields may hold more than were sent: the
+ * reply is the asker's own when it carries `laterVersions` and holds a row of
+ * this member on this line at the planned date.
+ */
+export function fileCastVersion(
+	socket: Pick<TypedSocket, "emit">,
+	target: CastAmendmentTarget,
+	planned: PlannedCastAmendment
+): Promise<Sockets.Amendments.Create.Response> {
+	const params = castAmendmentParams(target, planned)
+	return awaitReply({
+		socket,
+		event: "amendments:create",
+		params,
+		replyKey: interestKey("amendments:list", target.lorebookId),
+		errorEvent: "amendments:create:error",
+		// 🚧
+		fallbackError: "The version could not be saved.",
+		match: (data) => {
+			const list = data as Sockets.Amendments.List.Response
+			return (
+				list.lorebookId === target.lorebookId &&
+				list.laterVersions !== undefined &&
+				(list.cast ?? []).some(
+					(a) =>
+						a.castId === target.castId &&
+						(a.branchId ?? null) === (target.branchId ?? null) &&
+						a.year === params.year &&
+						(a.month ?? null) === (params.month ?? null) &&
+						(a.day ?? null) === (params.day ?? null)
+				)
+			)
+		}
+	}) as Promise<Sockets.Amendments.Create.Response>
+}
+
+/**
+ * Edits one cast version (its words, its date, or both) and waits for the
+ * reply to the asker's own update: a list that carries `laterVersions` and
+ * holds the row, at the date asked when one was sent.
+ */
+export function updateCastAmendment(
+	socket: Pick<TypedSocket, "emit">,
+	params: Sockets.Amendments.Update.Params
+): Promise<Sockets.Amendments.Update.Response> {
+	return awaitReply({
+		socket,
+		event: "amendments:update",
+		params,
+		replyKey: interestKey("amendments:list", params.lorebookId),
+		errorEvent: "amendments:update:error",
+		// 🚧
+		fallbackError: "The version could not be saved.",
+		match: (data) => {
+			const list = data as Sockets.Amendments.List.Response
+			if (list.lorebookId !== params.lorebookId) return false
+			if (list.laterVersions === undefined) return false
+			const row = (list.cast ?? []).find((a) => a.id === params.id)
+			if (!row) return false
+			if (params.year !== undefined && row.year !== params.year)
+				return false
+			if (
+				params.month !== undefined &&
+				(row.month ?? null) !== params.month
+			)
+				return false
+			if (params.day !== undefined && (row.day ?? null) !== params.day)
+				return false
+			return true
+		}
+	}) as Promise<Sockets.Amendments.Update.Response>
+}
+
+/** Deletes one cast version and waits for the list to stop holding it. */
+export function deleteCastAmendment(
+	socket: Pick<TypedSocket, "emit">,
+	params: Sockets.Amendments.Delete.Params
+): Promise<Sockets.Amendments.Delete.Response> {
+	return awaitReply({
+		socket,
+		event: "amendments:delete",
+		params,
+		replyKey: interestKey("amendments:list", params.lorebookId),
+		errorEvent: "amendments:delete:error",
+		fallbackError: "The version could not be deleted.",
+		match: (data) => {
+			const list = data as Sockets.Amendments.List.Response
+			return (
+				list.lorebookId === params.lorebookId &&
+				!(list.cast ?? []).some((a) => a.id === params.id)
+			)
+		}
+	}) as Promise<Sockets.Amendments.Delete.Response>
+}
+
 /** How a member's field is named in a sentence. Unknown keys read as themselves. */
 /** A row of the member's Changes list, as far as counting later versions reads it. */
 export interface DatedChange extends StoryDate {
@@ -219,7 +317,11 @@ const CAST_FIELD_WORDS: Record<string, string> = {
 	postHistoryInstructions: "the post-history instructions",
 	creatorNotes: "the creator notes",
 	likeness: "the likeness",
-	retold: "what is retold here"
+	retold: "what is retold here",
+	// 🚧 The member's own name, nickname and voice in this book.
+	ownName: "the name in this book",
+	ownNickname: "the nickname in this book",
+	timbre: "the voice"
 }
 
 export function castFieldWord(field: string): string {

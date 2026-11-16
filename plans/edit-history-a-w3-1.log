@@ -1,0 +1,106 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+3:14:02 AM [vite-plugin-svelte] src/lib/client/lorebooks/editHistory/EditHistory.svelte:73:17 This reference only captures the initial value of `entryId`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+ ❯ |dom| src/lib/client/lorebooks/editHistory/editHistory.dom.test.svelte.ts (8 tests | 1 failed) 3042ms
+     × the ⋯ item names the count and confirming clears the entry's history 396ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistory.dom.test.svelte.ts > the entry form's Edit history > the ⋯ item names the count and confirming clears the entry's history
+AssertionError: expected <div data-scope="dialog" …(13)>…(3)</div> to be null
+
+- Expected:
+null
+
++ Received:
+<div
+  aria-describedby="dialog:c90:description"
+  aria-labelledby="dialog:c90:title"
+  aria-modal="true"
+  class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl"
+  data-part="content"
+  data-scope="dialog"
+  data-state="closed"
+  data-testid="clear-edit-history-dialog"
+  dir="ltr"
+  hidden=""
+  id="dialog:c90:content"
+  role="alertdialog"
+  style="--layer-index: 0; --nested-layer-count: 0;"
+  tabindex="-1"
+>
+  <!---->
+  <!---->
+  <div
+    class="h4"
+    data-part="title"
+    data-scope="dialog"
+    dir="ltr"
+    id="dialog:c90:title"
+  >
+    Clear this entry's edit history?
+    <!---->
+  </div>
+  
+  <!---->
+   
+  <!---->
+  <div
+    class="text-sm"
+    data-clear-sentence="true"
+    data-part="description"
+    data-scope="dialog"
+    dir="ltr"
+    id="dialog:c90:description"
+  >
+    Removes its 0 edits. The entry stays as it is now; its earlier versions can no longer be restored.
+    <!---->
+  </div>
+  
+  <!---->
+   
+  <!---->
+   
+  <footer
+    class="flex justify-end gap-2"
+  >
+    <button
+      class="btn preset-tonal"
+      type="button"
+    >
+      Cancel
+    </button>
+     
+    <button
+      class="btn preset-filled-error-500"
+      type="button"
+    >
+      Clear edit history
+    </button>
+  </footer>
+  <!---->
+</div>
+
+ ❯ src/lib/client/lorebooks/editHistory/editHistory.dom.test.svelte.ts:330:79
+    328|   send(redlines({ redlines: [] }))
+    329|   await settle()
+    330|   expect(document.querySelector('[data-testid="clear-edit-history-dial…
+       |                                                                               ^
+    331|   expect(fold()).toBeNull()
+    332|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 7 passed (8)
+   Start at  03:13:51
+   Duration  14.69s (transform 8.89s, setup 19ms, import 11.39s, tests 3.04s, environment 125ms)
+

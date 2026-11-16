@@ -16,8 +16,10 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 import {
 	amendmentDateToast,
 	entryAmendmentParams,
+	deleteEntryAmendment,
 	fileEntryAmendments,
 	isOurAmendment,
+	updateEntryAmendment,
 	lineName,
 	maskedBaseWarning,
 	maskedFields,
@@ -115,7 +117,37 @@ describe("isOurAmendment", () => {
 
 	test("the same date on main is not the fork's write", () => {
 		expect(
-			isOurAmendment(list([{ id: 11, branchId: null }]), params, new Set())
+			isOurAmendment(
+				list([{ id: 11, branchId: null }]),
+				params,
+				new Set()
+			)
+		).toBe(false)
+	})
+
+	test("a known row at that date that already holds the fields is a merge", () => {
+		const p = entryAmendmentParams(target, {
+			year: 3,
+			fields: { enabled: false }
+		})
+		const l = list([{ id: 11, fields: { enabled: false, name: "x" } }])
+		expect(isOurAmendment(l, p, new Set([11]))).toBe(true)
+	})
+
+	test("a known row at that date whose fields differ is not ours", () => {
+		const p = entryAmendmentParams(target, {
+			year: 3,
+			fields: { enabled: false }
+		})
+		expect(
+			isOurAmendment(
+				list([{ id: 11, fields: { enabled: true } }]),
+				p,
+				new Set([11])
+			)
+		).toBe(false)
+		expect(
+			isOurAmendment(list([{ id: 11, fields: {} }]), p, new Set([11]))
 		).toBe(false)
 	})
 
@@ -129,7 +161,9 @@ describe("isOurAmendment", () => {
 describe("fileEntryAmendments", () => {
 	test("waits for its own row on the book's list, one half at a time", async () => {
 		const emits: any[] = []
-		const socket = { emit: (event: string, p: any) => emits.push({ event, p }) }
+		const socket = {
+			emit: (event: string, p: any) => emits.push({ event, p })
+		}
 		const done = fileEntryAmendments(
 			socket as any,
 			target,
@@ -188,7 +222,9 @@ describe("amendmentDateToast (A18(b))", () => {
 	})
 
 	test("a change that leaves the date alone files as usual", () => {
-		expect(amendmentDateToast({ content: "Later.", enabled: false })).toBeNull()
+		expect(
+			amendmentDateToast({ content: "Later.", enabled: false })
+		).toBeNull()
 	})
 })
 
@@ -215,7 +251,9 @@ describe("masked base saves (#99)", () => {
 			{ id: 2, branchId: null, year: 4, fields: { content: "amended" } },
 			{ id: 3, branchId: 99, year: 6, fields: { content: "amended" } }
 		]
-		expect(maskingAmendment("content", "amended", overlays, MAIN_LINE)?.id).toBe(2)
+		expect(
+			maskingAmendment("content", "amended", overlays, MAIN_LINE)?.id
+		).toBe(2)
 	})
 
 	test("the warning names the field and the amendment's date", () => {
@@ -244,6 +282,56 @@ describe("maskingAmendment reads the ancestor chain (ruling 5)", () => {
 			{ id: 3, branchId: 9, year: 2, fields: { content: "amended" } }
 		]
 		const line = lineOf(2, branches)
-		expect(maskingAmendment("content", "amended", overlays, line)?.id).toBe(1)
+		expect(maskingAmendment("content", "amended", overlays, line)?.id).toBe(
+			1
+		)
+	})
+})
+
+describe("updateEntryAmendment", () => {
+	const params = {
+		lorebookId: 4,
+		id: 2,
+		subject: "entry" as const,
+		year: 4,
+		fields: { name: "n" }
+	}
+	test("settles when the row shows what was sent", async () => {
+		const emits: any[] = []
+		const socket = {
+			emit: (event: string, p: any) => emits.push({ event, p })
+		}
+		const done = updateEntryAmendment(socket as any, params)
+		expect(emits[0].event).toBe("amendments:update")
+		handlers.get("amendments:list#4")!(
+			list([{ id: 2, year: 3, fields: { name: "n" } }])
+		)
+		handlers.get("amendments:list#4")!(
+			list([{ id: 2, year: 4, fields: { name: "o" } }])
+		)
+		handlers.get("amendments:list#4")!(
+			list([{ id: 2, year: 4, fields: { name: "n" } }])
+		)
+		await expect(done).resolves.toBeTruthy()
+	})
+	test("rejects with the server's refusal", async () => {
+		const socket = { emit: () => {} }
+		const done = updateEntryAmendment(socket as any, params)
+		handlers.get("amendments:update:error")!({ error: "No." })
+		await expect(done).rejects.toThrow("No.")
+	})
+})
+
+describe("deleteEntryAmendment", () => {
+	test("settles when the list no longer holds the row", async () => {
+		const socket = { emit: () => {} }
+		const done = deleteEntryAmendment(socket as any, {
+			lorebookId: 4,
+			id: 2,
+			subject: "entry"
+		})
+		handlers.get("amendments:list#4")!(list([{ id: 2 }]))
+		handlers.get("amendments:list#4")!(list([{ id: 3 }]))
+		await expect(done).resolves.toBeTruthy()
 	})
 })

@@ -352,8 +352,11 @@ describe("the routine under Full saves by itself", () => {
 		expect(row.nameIsDefault).toBe(false)
 
 		expect(await loreSourcesOf(w.session.id)).toEqual([])
-		expect(await settledLineOf(asDb(), w.session.id)).toBeNull()
-		expect((await sessionRow(w.session.id)).settledMessageId).toBeNull()
+		// A routine's save settles nothing of its own scene: the story settles one scene behind, through the
+		// message before this scene began, so Back can still walk into it.
+		const before = (row.openedAtMessageId as number) - 1
+		expect(await settledLineOf(asDb(), w.session.id)).toBe(before)
+		expect((await sessionRow(w.session.id)).settledMessageId).toBe(before)
 		expect(applied()).toEqual([])
 		// No review window opens: the card ends as used, and nothing says `complete`.
 		expect(sent.filter(([e]) => e === "scenes:process:complete")).toEqual(

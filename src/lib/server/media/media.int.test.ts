@@ -560,7 +560,7 @@ describe("deleteFile", () => {
 		expect(await variantsOf(created.file.id)).toHaveLength(0)
 		for (const variant of before) {
 			await expect(
-				fs.access(resolveMediaPath(variant.path))
+				fs.access(resolveMediaPath(variant.path!))
 			).rejects.toBeTruthy()
 		}
 	})

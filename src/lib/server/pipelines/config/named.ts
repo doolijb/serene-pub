@@ -55,6 +55,7 @@
  * `config/deviations.ts` for the rule and what follows from it.
  */
 
+import type { SpecDocument } from "@serene-pub/sdk"
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -998,11 +999,17 @@ export async function reconcileConfigs(
 	db: Db,
 	specId: number,
 	specVersionId: number,
-	specSlug: string
+	specSlug: string,
+	byPin?: Map<string, any>,
+	docOf?: () => Promise<SpecDocument>
 ): Promise<ReconcileReport[]> {
 	await ensureDefaultConfig(db, specId, specVersionId, specSlug)
 
-	const { decls, variableKeys } = await declarationsAndVariableKeys(db, specVersionId)
+	const { decls, variableKeys } = await declarationsAndVariableKeys(
+		db,
+		specVersionId,
+		{ byPin, docOf }
+	)
 	const declByAddr = new Map(
 		decls.map((d) => [addr(d.nodeKey, d.slot, d.path), d])
 	)
@@ -1018,7 +1025,7 @@ export async function reconcileConfigs(
 	)
 	// The nodes this version still has, beside their rows — what tells an
 	// unplaced chain (kept) from an orphaned value (culled).
-	const chainNodes = await chainNodesFor(db, specVersionId)
+	const chainNodes = await chainNodesFor(db, specVersionId, byPin)
 	// The preset is read here as well as inside `ensureDefaultConfig`, and it has
 	// to be: that one returns the moment the shipped config exists, so on every
 	// boot after the first it is this call that carries an author's sampling

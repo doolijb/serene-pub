@@ -1,0 +1,16 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+1:31:18 AM [vite-plugin-svelte] src/lib/client/lorebooks/time/beginningDecayRow.dom.test.svelte.ts:276:11 This reference only captures the initial value of `open`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+
+ Test Files  5 passed (5)
+      Tests  44 passed (44)
+   Start at  01:31:17
+   Duration  13.71s (transform 27.05s, setup 77ms, import 38.04s, tests 799ms, environment 665ms)
+

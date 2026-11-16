@@ -1637,7 +1637,8 @@ async function validateTemplateDraft(draft: {
 	const { KNOWN_TOP_LEVEL_FIELDS } = await import(
 		"$lib/shared/utils/contextConfigCards"
 	)
-	let contractKeys: Iterable<string> = KNOWN_TOP_LEVEL_FIELDS
+	let contractKeys: Iterable<string> | import("@serene-pub/sdk").TemplateScope =
+		KNOWN_TOP_LEVEL_FIELDS
 	if (draft.kind === "variable") {
 		const { getVariable } = await import("@serene-pub/sdk")
 		const decl = getVariable(draft.poolId)
@@ -1645,7 +1646,7 @@ async function validateTemplateDraft(draft: {
 		// variable id is a disabled plugin's, not a mistake — there is nothing
 		// to check against, and inventing a contract would report every name.
 		if (!decl) return { warnings: [], checked: false }
-		contractKeys = Object.keys(decl.scope)
+		contractKeys = decl.scope
 	}
 	const result = validateTemplateContext(
 		draft.engine,

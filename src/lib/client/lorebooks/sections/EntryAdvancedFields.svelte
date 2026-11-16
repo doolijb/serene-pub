@@ -7,12 +7,16 @@
 	import { readsAsRegex } from "$lib/shared/entries/runawayPattern"
 	import AdvancedHiddenLine from "$lib/client/components/AdvancedHiddenLine.svelte"
 	import { showsAdvancedControls } from "$lib/client/advancedControls"
+	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+	import BeginningDecayRow from "../time/BeginningDecayRow.svelte"
+	import { getVersionZones } from "../time/versionZones"
 
 	/**
 	 * Level two of the editor's two levels of disclosure, shared by every
 	 * entry door: one fold, named for what is in it — the matching settings.
-	 * The entry's state (Pinned, Off, Archive) is the editor header's ⋯,
-	 * never this fold.
+	 * Pinned and Off sit in the entry zone's row (and in the editor
+	 * header's ⋯ without the versions rail); Archive is in ⋯. None is in
+	 * this fold.
 	 *
 	 * ⚠ **One fold, in the same place, whatever is set.** A disclosure that
 	 * moves or disappears with its contents teaches the reader the controls
@@ -82,7 +86,20 @@
 
 	const switchClass =
 		"preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+
+	/**
+	 * The entry form draws the entry's row itself. A form with no such row
+	 * (the cast board's lore editor) keeps Beginning and Decay here.
+	 */
+	const zones = getVersionZones()
+	const ownsRow = $derived(
+		!zones?.entryZoneRow && draft.typeId !== HISTORY_TYPE_ID
+	)
 </script>
+
+{#if ownsRow}
+	<BeginningDecayRow bind:draft {idPrefix} />
+{/if}
 
 {#if advanced}
 	<details>
@@ -207,11 +224,10 @@
 					/>
 				</div>
 				{#if draft.constant}
-					<!-- The switch that disables Priority is in the ⋯, out of
-					     sight from here, so the fold says why. -->
+					<!-- The switch that disables Priority is out of sight from
+					     here, so the fold says why. -->
 					<p class="text-surface-600-400 -mt-2 text-xs">
-						Pinned, in the ⋯ menu: always read in, so priority does not
-						apply.
+						Pinned: always read in, so priority does not apply.
 					</p>
 				{/if}
 			{/if}

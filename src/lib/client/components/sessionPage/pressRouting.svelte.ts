@@ -6,7 +6,8 @@
  * and what a fire's answer says. The emit itself is the page's
  * (`emitFireAction`), and so is the narrator's divert (`narrate`).
  */
-import * as Icons from "@lucide/svelte"
+import { Play } from "@lucide/svelte"
+import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
 import { notify } from "$lib/client/utils/notify"
 import { runProgress } from "$lib/client/stores/runProgress.svelte"
 import { failureOnProgressCard } from "$lib/client/components/sessionPage/fireFailure"
@@ -617,7 +618,7 @@ export function createPressRouting(d: PressRoutingDeps) {
 			.split("-")
 			.map((p) => p.charAt(0).toUpperCase() + p.slice(1))
 			.join("")
-		return (Icons as any)[pascal] ?? Icons.Play
+		return declaredIconOf(pascal, Play)
 	}
 
 	d.inbox.on("sessions:fireAction", handleSessionsFireAction)

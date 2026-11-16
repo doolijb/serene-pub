@@ -51,6 +51,11 @@
 		 * read the book's lines; a guest may not).
 		 */
 		lockedByAdvanced?: boolean
+		/**
+		 * 🚧 Whether the lorebook keeps a timeline. Off, the reading shows the
+		 * line picker only: no story clock to follow or set.
+		 */
+		timeline?: boolean
 	}
 
 	let {
@@ -59,7 +64,8 @@
 		clock = $bindable(),
 		disabled = false,
 		readOnly = false,
-		lockedByAdvanced = false
+		lockedByAdvanced = false,
+		timeline = true
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -231,6 +237,7 @@
 				? (branches.find((b) => b.id === branchId)?.name ?? "A branch of this lorebook")
 				: "A branch of this lorebook"}</span>
 	</p>
+	{#if timeline}
 	<p>
 		<span class="font-semibold">Story clock</span>
 		<span class="text-surface-700-300" data-testid="session-story-clock-readonly">
@@ -243,14 +250,24 @@
 			? "Turn on advanced controls to change them."
 			: "The session owner chooses both."}
 	</p>
+	{:else}
+	<!-- 🚧 A lorebook with no timeline: the line alone. -->
+	<p class="text-surface-600-400 text-xs">
+		The line is which version of the lorebook this session reads; Main is the original. {lockedByAdvanced
+			? "Turn on advanced controls to change it."
+			: "The session owner chooses it."}
+	</p>
+	{/if}
 </div>
 {:else}
 <div class="flex flex-col gap-3" data-testid="session-lorebook-reading">
 	<p class="text-surface-600-400 text-xs">
 		<span class="font-medium">Line</span>: which version of the lorebook this session reads.
 		Main is the original; a branch reads Main only up to where it forked.
+		{#if timeline}
 		<span class="font-medium">Story clock</span>: the in-story date. The stats this session
 		inherits and the story's current date come from this line, at this clock.
+		{/if}
 	</p>
 	<Select
 		label="Line"
@@ -259,6 +276,7 @@
 		{disabled}
 		onValueChange={setLine}
 	/>
+	{#if timeline}
 	<Select
 		label="Story clock"
 		options={[
@@ -412,6 +430,7 @@
 				<p class="text-error-600-400 text-xs" role="alert">{stepProblem}</p>
 			{/if}
 		</fieldset>
+	{/if}
 	{/if}
 </div>
 {/if}

@@ -1,0 +1,40 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+(node:78781) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ |dom| src/lib/client/lorebooks/cast/memberPageRail.dom.test.ts (23 tests | 1 failed) 1784ms
+     × one ask for the shown version; its rows are drawn under that version only 71ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/cast/memberPageRail.dom.test.ts > the selected version's edit history > one ask for the shown version; its rows are drawn under that version only
+AssertionError: expected +0 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 0
+
+ ❯ src/lib/client/lorebooks/cast/memberPageRail.dom.test.ts:790:25
+    788|    ).length
+    789|   expect(current()).toBe("v:33")
+    790|   expect(under("v:33")).toBe(2)
+       |                         ^
+    791|   expect(under("v:32")).toBe(0)
+    792|   expect(under("beginning")).toBe(0)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 22 passed (23)
+   Start at  22:25:36
+   Duration  11.23s (transform 7.11s, setup 16ms, import 9.18s, tests 1.78s, environment 138ms)
+

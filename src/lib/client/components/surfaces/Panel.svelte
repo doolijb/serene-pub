@@ -8,7 +8,16 @@
 	 * reloading (21 §4).
 	 */
 	import { getContext, type Snippet } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		ChevronUp,
+		LayoutPanelTop,
+		MessagesSquare,
+		PackageOpen,
+		PanelRight,
+		PanelRightClose,
+		X
+	} from "@lucide/svelte"
+	import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
 	import RemoteWidget from "$lib/client/components/host/RemoteWidget.svelte"
 	import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
 	import { resolveWidgetInstance } from "$lib/shared/widgets/settings"
@@ -146,8 +155,10 @@
 
 	// Map the declared icon name to a lucide component, with a sensible floor.
 	let IconCmp = $derived(
-		(instance.icon && (Icons as any)[instance.icon]) ||
-			(instance.role === "primary" ? Icons.MessagesSquare : Icons.LayoutPanelTop)
+		declaredIconOf(
+			instance.icon,
+			instance.role === "primary" ? MessagesSquare : LayoutPanelTop
+		)
 	)
 
 	// The primary conversation renders full-bleed — no title bar, no card
@@ -236,7 +247,7 @@
 					title="Close drawer"
 					aria-label="Close drawer"
 				>
-					<Icons.PanelRightClose size={14} />
+					<PanelRightClose size={14} />
 				</button>
 			{:else}
 				<button
@@ -245,7 +256,7 @@
 					title="Move earlier"
 					aria-label="Move widget earlier"
 				>
-					<Icons.ChevronUp size={14} />
+					<ChevronUp size={14} />
 				</button>
 				<button
 					class="hover:preset-tonal-primary text-surface-600-400 rounded p-0.5 transition-colors"
@@ -253,7 +264,7 @@
 					title="Send to drawer"
 					aria-label="Send widget to drawer"
 				>
-					<Icons.PanelRight size={14} />
+					<PanelRight size={14} />
 				</button>
 			{/if}
 			{#if instance.layout.closable}
@@ -263,7 +274,7 @@
 					title="Close widget"
 					aria-label="Close widget"
 				>
-					<Icons.X size={14} />
+					<X size={14} />
 				</button>
 			{/if}
 		{/if}
@@ -312,7 +323,7 @@
 			<div
 				class="text-surface-500 flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-xs"
 			>
-				<Icons.PackageOpen size={20} />
+				<PackageOpen size={20} />
 				<span>This widget isn't available (its plugin may be disabled).</span>
 			</div>
 		{/if}

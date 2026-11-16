@@ -6,7 +6,8 @@
 	 * (`preset-pressed` + `aria-pressed`, STYLE-GUIDE 1.10/2.4). Drawn for any
 	 * action that declares them.
 	 */
-	import * as Icons from "@lucide/svelte"
+	import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
+	import DeclaredIconPlaceholder from "$lib/client/components/icons/DeclaredIconPlaceholder.svelte"
 
 	interface Suggestion {
 		value: string
@@ -29,8 +30,10 @@
 			.filter(Boolean)
 			.map((w) => w[0].toUpperCase() + w.slice(1))
 			.join("")
+	// A declared name resolves curated-or-lazy; an unknown one keeps the
+	// same-size box, so the chip row never shifts (★P15).
 	const iconOf = (name?: string) =>
-		name ? ((Icons as unknown as Record<string, unknown>)[pascal(name)] as typeof Icons.Circle | undefined) : undefined
+		name ? declaredIconOf(pascal(name), DeclaredIconPlaceholder) : undefined
 
 	const common = $derived(suggestions.filter((s) => s.common))
 	const rest = $derived(suggestions.filter((s) => !s.common))

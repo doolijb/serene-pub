@@ -37,15 +37,35 @@
 	 */
 	import { getContext, onMount, untrack } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		BookMarked,
+		BookOpen as BookOpenIcon,
+		Cable,
+		CornerDownRight,
+		FileText,
+		Globe,
+		MessageSquare,
+		Search as SearchIcon,
+		Settings2,
+		ShieldCheck,
+		Tag,
+		UserRound,
+		Users,
+		UsersRound,
+		X
+	} from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
-	import { openAdminAddress, openJumpHit } from "$lib/client/shell/openJumpHit"
+	import {
+		openAdminAddress,
+		openJumpHit
+	} from "$lib/client/shell/openJumpHit"
 	import { matchDocSections } from "$lib/client/shell/docsJump"
 	import { adminNavItems } from "$lib/client/shell/adminNav"
+	import { ADMIN_NAV_ICONS } from "$lib/client/shell/adminNavIcons"
 	import {
 		adminSettings,
 		matchAdminSettings
@@ -90,16 +110,16 @@
 
 	/** One icon per kind, each the one that kind's rail item already uses. */
 	const KIND_ICONS: Record<AnyJumpKind, any> = {
-		session: Icons.MessageSquare,
-		character: Icons.UsersRound,
-		lorebook: Icons.BookMarked,
-		entry: Icons.FileText,
-		tag: Icons.Tag,
-		connection: Icons.Cable,
-		user: Icons.Users,
+		session: MessageSquare,
+		character: UsersRound,
+		lorebook: BookMarked,
+		entry: FileText,
+		tag: Tag,
+		connection: Cable,
+		user: Users,
 		// `BookOpen` is documentation (NOMENCLATURE §22) — the same glyph the
 		// Help rail item carries.
-		doc: Icons.BookOpen
+		doc: BookOpenIcon
 	}
 
 	/** The footer's key hints, in the order a person reaches for them. */
@@ -193,7 +213,7 @@
 			id,
 			title: hit.title,
 			subtitle: hit.subtitle,
-			icon: KIND_ICONS[hit.kind] ?? Icons.CornerDownRight,
+			icon: KIND_ICONS[hit.kind] ?? CornerDownRight,
 			hint: hit.hint,
 			action: async ({ focus = false } = {}) => {
 				jumpCtx.close()
@@ -255,7 +275,7 @@
 				id: `admin-${i}`,
 				title: item.label,
 				subtitle: item.href,
-				icon: (Icons as any)[item.icon] ?? Icons.ShieldCheck,
+				icon: ADMIN_NAV_ICONS[item.icon] ?? ShieldCheck,
 				action: async (opts?: { focus?: boolean }) => {
 					jumpCtx.close()
 					openAdminAddress(panelsCtx, item.href, opts)
@@ -279,7 +299,7 @@
 			id: `admin-setting-${i}`,
 			title: row.label,
 			subtitle: row.page,
-			icon: Icons.Settings2,
+			icon: Settings2,
 			action: async (opts?: { focus?: boolean }) => {
 				jumpCtx.close()
 				openAdminAddress(panelsCtx, row.href, opts)
@@ -421,7 +441,7 @@
 			? {
 					id: "everywhere",
 					title: "Search everywhere instead",
-					icon: Icons.Globe,
+					icon: Globe,
 					action: () => dropScope()
 				}
 			: null
@@ -587,7 +607,7 @@
 				<div
 					class="border-surface-200-800 flex h-14 shrink-0 items-center gap-2 border-b px-3"
 				>
-					<Icons.Search
+					<SearchIcon
 						class="text-surface-500 size-4 shrink-0"
 						aria-hidden="true"
 					/>
@@ -606,7 +626,7 @@
 								onmousedown={(e) => e.preventDefault()}
 								onclick={dropScope}
 							>
-								<Icons.X class="size-3" aria-hidden="true" />
+								<X class="size-3" aria-hidden="true" />
 							</button>
 						</span>
 					{/if}
@@ -650,7 +670,7 @@
 						oninput={handleInput}
 					/>
 					<kbd
-						class="border-surface-200-800 text-surface-600-400 shrink-0 rounded border px-1 py-px font-mono text-meta"
+						class="border-surface-200-800 text-surface-600-400 text-meta shrink-0 rounded border px-1 py-px font-mono"
 					>
 						Esc
 					</kbd>
@@ -675,7 +695,7 @@
 						{#each groups as group (group.label)}
 							<div role="group" aria-label={group.label}>
 								<div
-									class="text-surface-600-400 px-3 pt-3 pb-1 text-meta"
+									class="text-surface-600-400 text-meta px-3 pt-3 pb-1"
 									aria-hidden="true"
 								>
 									{group.label}
@@ -703,14 +723,14 @@
 				     keys it names are not the phone's keys anyway. Decorative
 				     for AT — the combobox already announces its own keys. -->
 				<div
-					class="border-surface-200-800 text-surface-500 hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-meta @min-[480px]/jump:flex"
+					class="border-surface-200-800 text-surface-500 text-meta hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 @min-[480px]/jump:flex"
 					aria-hidden="true"
 				>
 					{#each KEY_HINTS as hint (hint.label)}
 						<span class="flex items-center gap-1">
 							{#each hint.keys as key (key)}
 								<kbd
-									class="border-surface-200-800 text-surface-600-400 rounded border px-1 py-px font-mono text-meta"
+									class="border-surface-200-800 text-surface-600-400 text-meta rounded border px-1 py-px font-mono"
 								>
 									{key}
 								</kbd>
@@ -745,14 +765,17 @@
 		onmousedown={(e) => e.preventDefault()}
 		onclick={(e) => void row.action({ focus: e.shiftKey })}
 	>
-		<row.icon class="text-surface-600-400 size-4 shrink-0" aria-hidden="true" />
+		<row.icon
+			class="text-surface-600-400 size-4 shrink-0"
+			aria-hidden="true"
+		/>
 		<span class="min-w-0 flex-1">
 			<span
 				class="text-surface-950-50 flex min-w-0 items-center gap-1 text-sm"
 			>
 				<span class="truncate">{row.title}</span>
 				{#if row.hint === "persona"}
-					<Icons.UserRound
+					<UserRound
 						size={14}
 						class="text-primary-500 shrink-0"
 						aria-hidden="true"

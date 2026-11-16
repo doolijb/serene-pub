@@ -130,6 +130,7 @@ describe("what lands on disk", () => {
 		const res = await backupDatabase(db, { dataDir, label: "0.5.0" })
 		const stat = fs.statSync(res.path)
 		expect(stat.size).toBeGreaterThan(1024)
+		expect(res.bytes).toBe(stat.size)
 		expect(fs.readFileSync(res.path).subarray(0, 2)).toEqual(
 			Buffer.from([0x1f, 0x8b]) // gzip magic
 		)

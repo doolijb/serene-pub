@@ -566,7 +566,12 @@ describe("looseEndsLabel — the rail foot's line", () => {
 })
 
 describe("🚧 the book's rules lists (lane C1, ruled 2026-10-21)", () => {
-	const list = (repertoireId: string, label: string, libraryRows: number, rules = "vis-itineris") => ({
+	const list = (
+		repertoireId: string,
+		label: string,
+		libraryRows: number,
+		rules = "vis-itineris"
+	) => ({
 		typeId: `core:entry/${rules}.${repertoireId}`,
 		label,
 		repertoireId,
@@ -585,25 +590,47 @@ describe("🚧 the book's rules lists (lane C1, ruled 2026-10-21)", () => {
 
 	it("draws a list only where it has something in it", () => {
 		// Library-backed lists from the start; creatures once the book holds some.
-		expect(drawnRulesLists(VIS, {}).map((l) => l.repertoireId)).toEqual(["weapons", "spells"])
+		expect(drawnRulesLists(VIS, {}).map((l) => l.repertoireId)).toEqual([
+			"weapons",
+			"spells"
+		])
 		expect(
-			drawnRulesLists(VIS, { "core:entry/vis-itineris.creatures": 1 }).map((l) => l.repertoireId)
+			drawnRulesLists(VIS, {
+				"core:entry/vis-itineris.creatures": 1
+			}).map((l) => l.repertoireId)
 		).toEqual(["weapons", "spells", "creatures"])
 		// A Freeform book draws nothing new, until it holds a thing.
 		expect(drawnRulesLists(FREEFORM, {})).toEqual([])
 		expect(
-			drawnRulesLists(FREEFORM, { "core:entry/freeform.things": 1 }).map((l) => l.label)
+			drawnRulesLists(FREEFORM, { "core:entry/freeform.things": 1 }).map(
+				(l) => l.label
+			)
 		).toEqual(["Things"])
 		expect(drawsRulesList(FREEFORM[1]!, null)).toBe(false)
 	})
 
 	it("gives each drawn list its row, with the book's own figure", () => {
-		expect(rulesListFacets(VIS, { "core:entry/vis-itineris.weapons": 3 })).toEqual([
-			{ id: "list:core:entry/vis-itineris.weapons", label: "Weapons", count: 3, empty: false },
-			{ id: "list:core:entry/vis-itineris.spells", label: "Spells", count: 0, empty: true }
+		expect(
+			rulesListFacets(VIS, { "core:entry/vis-itineris.weapons": 3 })
+		).toEqual([
+			{
+				id: "list:core:entry/vis-itineris.weapons",
+				label: "Weapons",
+				count: 3,
+				empty: false
+			},
+			{
+				id: "list:core:entry/vis-itineris.spells",
+				label: "Spells",
+				count: 0,
+				empty: true
+			}
 		])
 		// Figures on their way are not a count of none.
-		expect(rulesListFacets(VIS, null).map((f) => f.count)).toEqual([undefined, undefined])
+		expect(rulesListFacets(VIS, null).map((f) => f.count)).toEqual([
+			undefined,
+			undefined
+		])
 	})
 
 	it("counts the lists in Everything and in the book's total", () => {
@@ -613,7 +640,9 @@ describe("🚧 the book's rules lists (lane C1, ruled 2026-10-21)", () => {
 	})
 
 	it("a book of only list entries is not empty", () => {
-		expect(bookIsEmpty({ "core:entry/vis-itineris.weapons": 1 })).toBe(false)
+		expect(bookIsEmpty({ "core:entry/vis-itineris.weapons": 1 })).toBe(
+			false
+		)
 		expect(bookIsEmpty({ "core:entry/vis-itineris.weapons": 0 })).toBe(true)
 	})
 
@@ -621,7 +650,9 @@ describe("🚧 the book's rules lists (lane C1, ruled 2026-10-21)", () => {
 		expect(scopeKinds("list:core:entry/vis-itineris.weapons")).toEqual([
 			"core:entry/vis-itineris.weapons"
 		])
-		expect(scopeChipLabel("list:core:entry/vis-itineris.weapons", null)).toBe("Weapons")
+		expect(
+			scopeChipLabel("list:core:entry/vis-itineris.weapons", null)
+		).toBe("Weapons")
 	})
 })
 
@@ -634,12 +665,17 @@ describe("🚧 ★50 lists of other rules than the book's", () => {
 		libraryRows
 	})
 	const groups = [
-		{ rulesName: "Vis Itineris", types: [list("weapons", "Weapons"), list("spells", "Spells")] },
+		{
+			rulesName: "Vis Itineris",
+			types: [list("weapons", "Weapons"), list("spells", "Spells")]
+		},
 		{ rulesName: "Nothing Here", types: [list("rocks", "Rocks")] }
 	]
 
 	it("draws a group per rules name, only the lists with something in them", () => {
-		const drawn = otherRulesFacetGroups(groups, { "core:entry/vis-itineris.weapons": 1 })
+		const drawn = otherRulesFacetGroups(groups, {
+			"core:entry/vis-itineris.weapons": 1
+		})
 		expect(drawn.map((g) => g.label)).toEqual(["Vis Itineris"])
 		expect(drawn[0]!.facets.map((f) => f.label)).toEqual(["Weapons"])
 		expect(drawn[0]!.facets[0]!.count).toBe(1)
@@ -648,5 +684,33 @@ describe("🚧 ★50 lists of other rules than the book's", () => {
 	it("draws no group while nothing is held", () => {
 		expect(otherRulesFacetGroups(groups, {})).toEqual([])
 		expect(otherRulesFacetGroups([], { x: 1 })).toEqual([])
+	})
+})
+
+describe("🚧 railScopes — the Timeline switch", () => {
+	it("on (or absent), History is listed and counted in All", () => {
+		const on = railScopes(COUNTS, true)
+		expect(on.map((s) => s.id)).toEqual(railScopes(COUNTS).map((s) => s.id))
+		expect(on.some((s) => s.id === "history")).toBe(true)
+		expect(on.find((s) => s.id === "all")?.count).toBe(37)
+		expect(on.find((s) => s.id === "history")?.count).toBe(9)
+	})
+
+	it("off, History is not listed, its figure is out of All's, and Scenes stands", () => {
+		const off = railScopes(COUNTS, false)
+		expect(off.some((s) => s.id === "history")).toBe(false)
+		expect(off.find((s) => s.id === "all")?.count).toBe(28)
+		expect(off.find((s) => s.id === "scenes")?.count).toBe(2)
+		expect(off.find((s) => s.id === "world")?.count).toBe(12)
+	})
+
+	it("off, figures still on their way stay absent", () => {
+		const off = railScopes(null, false)
+		expect(off.some((s) => s.id === "history")).toBe(false)
+		expect(off.every((s) => s.count === undefined)).toBe(true)
+	})
+
+	it("a book holding only history is not empty, whatever the switch", () => {
+		expect(bookIsEmpty({ [HISTORY]: 2 })).toBe(false)
 	})
 })

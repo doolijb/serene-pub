@@ -249,6 +249,7 @@ describe("a scene closes", () => {
 			.select()
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, w.session.id))
+		// Apply settles through the newest applied turn; the scene-close settle is one scene behind.
 		expect(row!.settledMessageId).toBe(w.lines[0]!.id)
 	})
 

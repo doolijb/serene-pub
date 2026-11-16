@@ -54,9 +54,12 @@ vi.mock("$lib/server/utils/runReply", () => ({
 			channel: opts.channel,
 			auto: opts.auto
 		})
+		if (replyStops) return { ok: false, stopped: true, cancelled: true, receipt: { runId: "run-fired" } }
 		return { ok: true, receipt: { runId: "run-fired" } }
 	}
 }))
+/** The next replies are stopped by the person, as a pressed Stop ends them. */
+let replyStops = false
 
 const orderWith = (entry: TurnEntryV1, basedOnAt = 1000): TurnOrderV1 => ({
 	...EMPTY_TURN_ORDER,
@@ -314,6 +317,30 @@ describe("sessions:fireTurn — who may fire (§4.7)", () => {
 		)
 		expect(events.at(-1)?.event).toBe("sessions:fireTurn:error")
 		expect(replies).toEqual([])
+	})
+
+	it("a reply somebody stopped is not an error: it answers on the plain event, with the reason and no error", async () => {
+		// The message says *Stopped* and the run's card says so; an error here
+		// raised a toast that read "stopped" twice.
+		const s = await makeSession()
+		await writeTurnOrder(db, s.id, orderWith({ ref: "character:404", via: "strategy" }, 5000))
+		const { sessionsFireTurnHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		events.length = 0
+		replyStops = true
+		try {
+			const out: any = await sessionsFireTurnHandler.handler(
+				fakeSocket(userId),
+				{ sessionId: s.id },
+				emit
+			)
+			expect(out.error).toBeUndefined()
+			expect(out).toMatchObject({ ok: false, reason: "stopped" })
+			expect(events.map((e) => e.event)).not.toContain("sessions:fireTurn:error")
+		} finally {
+			replyStops = false
+		}
 	})
 
 	it("a stranger has no session: the access check sits above firing", async () => {

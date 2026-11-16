@@ -153,14 +153,18 @@ export interface UnservedVerdict {
  * absent for one that is served (or whose document is not published: the
  * resolver's stale path says that already).
  */
-export async function unservedPipelines(db: Db, pipelines: readonly string[]): Promise<Map<string, UnservedVerdict>> {
+export async function unservedPipelines(
+	db: Db,
+	pipelines: readonly string[],
+	docs?: Map<string, SpecDocument | null>
+): Promise<Map<string, UnservedVerdict>> {
 	const out = new Map<string, UnservedVerdict>()
 	const names = [...new Set(pipelines)]
 	if (!names.length) return out
 	const { publishedDocuments } = await import("$lib/server/pipelines/registrations/door")
-	let docs: Map<string, SpecDocument | null>
+	let published: Map<string, SpecDocument | null>
 	try {
-		docs = await publishedDocuments(db, names)
+		published = await publishedDocuments(db, names, docs)
 	} catch (err) {
 		// Never the reason a routine or an action is judged unavailable.
 		console.warn("[registrations] could not read the documents to judge what they need:", err)
@@ -168,7 +172,7 @@ export async function unservedPipelines(db: Db, pipelines: readonly string[]): P
 	}
 	const have = await servedTransforms(db)
 	for (const name of names) {
-		const doc = docs.get(name)
+		const doc = published.get(name)
 		if (!doc) continue
 		const missing = requiredTransformsOf(doc as never).filter((t) => !have.has(t))
 		// The baseline alone disables nothing (see the module note).

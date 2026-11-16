@@ -1,12 +1,12 @@
 /**
- * 🚧 (sense-b4) The own-book write route under **Full** on your own lorebook,
- * for a session whose scenes end by themselves: a pipeline's new entry, place,
- * history day or link goes to the session's own book whatever the lorebook's
- * write setting, forks no line, and does not settle by `sources`; the same
- * calls for a session whose scenes do not end by themselves write straight to
- * the lorebook as they always did. The predicate (`scenesEndByThemselves`) is
- * switched per session here; the real one is tested in a bootstrapped world.
- * Driven through the real outlets.
+ * The write route under **Full** on your own lorebook: a pipeline's new entry,
+ * place, history day or link goes straight to the lorebook, for a session whose
+ * scenes end by themselves as for one whose scenes do not; a session whose
+ * scenes end by themselves still does not settle by `sources` (it settles as
+ * a scene closes). A name both books hold is the notes' entry (the notes are
+ * looked in first), and a filing tool's `toNotes` write goes to the notes. The
+ * predicate (`scenesEndByThemselves`) is switched per session here; the real
+ * one is tested in a bootstrapped world. Driven through the real outlets.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
@@ -160,19 +160,20 @@ const roomIn = (name: string, extra: Record<string, unknown> = {}) => ({
 })
 
 describe("create-lore-entry of a place under Full", () => {
-	it("a session whose scenes end by themselves: the own book takes it, and no line forks", async () => {
+	it("a session whose scenes end by themselves: the lorebook takes it, on a line of its own, as for any Full session", async () => {
 		const w = await world(true, { fork: true })
 		await w.message()
 		const out: any = await (await w.host()).commit!(roomIn("The Cellar"), CREATE)
-		expect(out).toMatchObject({ route: "own-book", lorebookId: w.own.id })
-		expect((await stored(out.id)).lorebookId).toBe(w.own.id)
-		expect(await placesIn(w.book.id)).toHaveLength(0)
+		expect(out).toMatchObject({ route: "book", lorebookId: w.book.id })
+		expect((await stored(out.id)).lorebookId).toBe(w.book.id)
+		expect(await placesIn(w.own.id)).toHaveLength(0)
 		const s = await sessionRow(w.session.id)
-		expect(s.lineOnFirstWrite).toBe(true)
-		expect(s.lorebookBranchId).toBe(w.fork!.id)
+		expect(s.lineOnFirstWrite).toBe(false)
+		expect(s.lorebookBranchId).not.toBe(w.fork!.id)
+		expect((await stored(out.id)).branchId).toBe(s.lorebookBranchId)
 		expect(
 			await db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, w.book.id))
-		).toHaveLength(1)
+		).toHaveLength(2)
 	})
 
 	it("a session whose scenes do not end by themselves: the lorebook takes it, as before", async () => {
@@ -186,7 +187,7 @@ describe("create-lore-entry of a place under Full", () => {
 })
 
 describe("create-lore-entry with sources under Full", () => {
-	it("a session whose scenes end by themselves: lore_sources is recorded, the settle line does not move", async () => {
+	it("a session whose scenes end by themselves: the lorebook takes it, lore_sources is recorded, the settle line does not move", async () => {
 		const w = await world(true)
 		const m = await w.message()
 		const out: any = await (await w.host("run-s", { readMessageIds: new Set([m.id]) })).commit!(
@@ -195,7 +196,7 @@ describe("create-lore-entry with sources under Full", () => {
 		)
 		const rows = await sourcesOf(out.id)
 		expect(rows).toHaveLength(1)
-		expect(rows[0]).toMatchObject({ lorebookId: w.own.id, throughMessageId: m.id })
+		expect(rows[0]).toMatchObject({ lorebookId: w.book.id, throughMessageId: m.id })
 		expect((await sessionRow(w.session.id)).settledMessageId).toBeNull()
 	})
 
@@ -223,25 +224,26 @@ describe("update-lore-entry under Full", () => {
 		expect((await stored(lore.id)).content).toBe("Lorebook words.")
 	})
 
-	it("a session whose scenes end by themselves: an entry only the lorebook holds is held as an amendment, never written", async () => {
+	it("a session whose scenes end by themselves: an entry only the lorebook holds is written in place, with nothing waiting", async () => {
 		const w = await world(true)
 		await w.message()
 		const lore = await place(w.book.id, "The Keep", "Lorebook words.")
-		await (await w.host()).commit!({ entry: "The Keep", content: "Changed." }, UPDATE)
-		expect((await stored(lore.id)).content).toBe("Lorebook words.")
-		expect(await db.select().from(schema.entryAmendments).where(eq(schema.entryAmendments.lorebookId, w.own.id))).toHaveLength(1)
+		const out: any = await (await w.host()).commit!({ entry: "The Keep", content: "Changed." }, UPDATE)
+		expect(out).toMatchObject({ entryId: lore.id, route: "book", lorebookId: w.book.id })
+		expect((await stored(lore.id)).content).toBe("Changed.")
+		expect(await db.select().from(schema.entryAmendments).where(eq(schema.entryAmendments.lorebookId, w.own.id))).toHaveLength(0)
 	})
 
-	it("a session whose scenes do not end by themselves: a name both books hold is the lorebook's entry, its change held, as before", async () => {
+	it("a session whose scenes do not end by themselves: a name both books hold is the notes' entry, changed there, and the lorebook's stays", async () => {
 		const w = await world(false)
 		await w.message()
 		const lore = await place(w.book.id, "The Hall", "Lorebook words.")
 		const mine = await place(w.own.id, "The Hall", "Own words.")
 		const out: any = await (await w.host()).commit!({ entry: "The Hall", content: "Changed." }, UPDATE)
-		expect(out).toMatchObject({ entryId: lore.id, lorebookId: lore.lorebookId })
+		expect(out).toMatchObject({ entryId: mine.id, route: "own-book", lorebookId: w.own.id })
 		expect((await stored(lore.id)).content).toBe("Lorebook words.")
-		expect((await stored(mine.id)).content).toBe("Own words.")
-		expect(await db.select().from(schema.entryAmendments).where(eq(schema.entryAmendments.lorebookId, w.own.id))).toHaveLength(1)
+		expect((await stored(mine.id)).content).toBe("Changed.")
+		expect(await db.select().from(schema.entryAmendments).where(eq(schema.entryAmendments.lorebookId, w.own.id))).toHaveLength(0)
 	})
 })
 
@@ -268,18 +270,32 @@ describe("a toNotes write under Full", () => {
 })
 
 describe("link-lore-entries under Full", () => {
-	it("a session whose scenes end by themselves: a link between an own-book room and a lorebook room is the own book's", async () => {
+	it("a session whose scenes end by themselves: two lorebook rooms are linked in the lorebook, on a line of its own", async () => {
 		const w = await world(true, { fork: true })
+		await w.message()
+		const a = await place(w.book.id, "A")
+		const b = await place(w.book.id, "B")
+		const out: any = await (await w.host()).commit!({ from: a.id, to: "B" }, LINK)
+		expect(out).toMatchObject({ fromEntryId: a.id, lorebookId: w.book.id })
+		const s = await sessionRow(w.session.id)
+		const rows = await linksOf(w.book.id)
+		expect(rows).toHaveLength(1)
+		expect(rows[0]).toMatchObject({ fromEntryId: a.id, toEntryId: b.id, branchId: s.lorebookBranchId })
+		expect(await linksOf(w.own.id)).toHaveLength(0)
+		expect(s.lineOnFirstWrite).toBe(false)
+	})
+
+	it("a session whose scenes end by themselves: a link from a room waiting in the notes is kept in the notes with it", async () => {
+		const w = await world(true)
 		await w.message()
 		const hall = await place(w.book.id, "The Hall")
 		const mine = await place(w.own.id, "My Den")
 		const out: any = await (await w.host()).commit!({ from: mine.id, to: "The Hall" }, LINK)
 		expect(out).toMatchObject({ fromEntryId: mine.id, lorebookId: w.own.id })
+		expect(await linksOf(w.book.id)).toHaveLength(0)
 		const rows = await linksOf(w.own.id)
 		expect(rows).toHaveLength(1)
-		expect(rows[0]).toMatchObject({ fromEntryId: mine.id, toEntryId: hall.id, branchId: null })
-		expect(await linksOf(w.book.id)).toHaveLength(0)
-		expect((await sessionRow(w.session.id)).lineOnFirstWrite).toBe(true)
+		expect(rows[0]).toMatchObject({ fromEntryId: mine.id, toEntryId: hall.id })
 	})
 
 	it("a session whose scenes do not end by themselves: two lorebook rooms are linked in the lorebook, as before", async () => {

@@ -9,6 +9,7 @@
 	import type { PoolSource } from "./types"
 	import { compareDates, dateValue } from "./historyDates"
 	import { loreRoute } from "../loreRoute.svelte"
+	import { bookTimeline } from "../bookData.svelte"
 
 	/**
 	 * Move the story's clock forward.
@@ -25,6 +26,7 @@
 	let { sources }: Props = $props()
 
 	const socket = useTypedSocket()
+	const timeline = bookTimeline()
 	/** A press in flight; the button stands down until it is answered. */
 	let pressing = $state(false)
 
@@ -88,13 +90,16 @@
 	}
 </script>
 
-<button
-	class="btn btn-sm preset-filled-primary-500 shrink-0"
-	type="button"
-	disabled={pressing}
-	onclick={nextDate}
-	title="Add the next date in sequence"
-	aria-label="Add the next date in sequence"
->
-	<Icons.CalendarPlus size={14} />
-</button>
+<!-- 🚧 No timeline: nothing dated is written, so there is no next date. -->
+{#if timeline.value}
+	<button
+		class="btn btn-sm preset-filled-primary-500 shrink-0"
+		type="button"
+		disabled={pressing}
+		onclick={nextDate}
+		title="Add the next date in sequence"
+		aria-label="Add the next date in sequence"
+	>
+		<Icons.CalendarPlus size={14} />
+	</button>
+{/if}

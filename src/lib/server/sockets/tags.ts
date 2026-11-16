@@ -252,18 +252,20 @@ export const tagsGetRelatedData: Handler<
 					columns: {
 						id: true,
 						name: true,
-						userId: true
+						userId: true,
+						sessionId: true
 					}
 				}
 			}
 		})
+		// A session's notes are not a lorebook: never listed here.
 		const lorebooks = lorebookTagRows
 			.map((lt) => lt.lorebook)
 			.filter(
 				(l): l is NonNullable<typeof l> =>
-					l !== null && l.userId === userId
+					l !== null && l.userId === userId && l.sessionId == null
 			)
-			.map(({ userId: _userId, ...l }) => l)
+			.map(({ userId: _userId, sessionId: _sessionId, ...l }) => l)
 
 		const res: Sockets.Tags.GetRelatedData.Response = {
 			tagData: {

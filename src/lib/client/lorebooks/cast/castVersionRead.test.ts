@@ -5,9 +5,11 @@ import {
 	asVersionAmendments,
 	foldMoment,
 	readCastVersion,
+	rowAtVersion,
 	withBaseVersion,
 	type CastVersionOverlay
 } from "./castVersionRead"
+import { castVersions } from "./castVersions"
 
 /** A cast version in column names; a card-less one by default. */
 function columns(
@@ -302,5 +304,74 @@ describe("afterBaseWrite", () => {
 		expect(asVersionAmendments([unchanged])[0].fields).not.toHaveProperty(
 			"aliases"
 		)
+	})
+})
+
+describe("rowAtVersion", () => {
+	const cast = (
+		id: number,
+		year: number,
+		cols: Sockets.Lorebooks.CastVersionColumns,
+		fields: Record<string, unknown> = {}
+	): Sockets.Amendments.CastRow => ({
+		id,
+		castId: 9,
+		lorebookId: 4,
+		branchId: null,
+		personalPosition: null,
+		year,
+		month: null,
+		day: null,
+		fields,
+		columns: cols,
+		writeOrder: id,
+		sourceSessionId: null,
+		sourceSessionName: null,
+		historyEntryId: null,
+		createdAt: "",
+		updatedAt: ""
+	})
+	const member = {
+		...row,
+		aliases: ["Bee"],
+		ownName: "Bi",
+		ownNickname: null as string | null,
+		timbre: null as unknown
+	}
+	const rows = [
+		cast(
+			30,
+			4,
+			columns({ summary: "four", ownName: "Old", aliases: ["Bea"] }),
+			{
+				aliases: ["Bea"]
+			}
+		),
+		cast(31, 8, columns({ summary: "eight", ownName: "Older" }))
+	]
+	const { versions } = castVersions({
+		baseVersionId: 21,
+		rows,
+		line: MAIN_LINE
+	})
+
+	test("the base is the base columns, with the row's undated keys", () => {
+		const out = rowAtVersion(member, versions, versions[0])
+		expect(out.personality).toBe("Own words")
+		expect(out.ownName).toBe("Bi")
+		expect(out.castVersionId).toBe(21)
+		expect(out.aliases).toEqual(["Bee"])
+	})
+	test("aliases fold from an earlier node", () => {
+		const out = rowAtVersion(member, versions, versions[2])
+		expect(out.summary).toBe("eight")
+		expect(out.aliases).toEqual(["Bea"])
+		expect(out.castVersionId).toBe(31)
+	})
+	test("undated keys stay the row's", () => {
+		const out = rowAtVersion(member, versions, versions[1])
+		expect(out.summary).toBe("four")
+		expect(out.ownName).toBe("Bi")
+		expect(out.timbre).toBeNull()
 	})
 })

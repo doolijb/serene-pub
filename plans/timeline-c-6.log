@@ -1,0 +1,16 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+1:39:59 PM [vite-plugin-svelte] src/lib/client/components/modals/SummarizeLoreModal.svelte:141:56 This reference only captures the initial value of `initialLoreType`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+
+ Test Files  15 passed (15)
+      Tests  94 passed (94)
+   Start at  13:39:49
+   Duration  33.15s (transform 27.72s, setup 227ms, import 42.13s, tests 37.37s, environment 1.26s)
+

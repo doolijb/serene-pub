@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { generatingOf, lorebookFixedOf, rewindOf, sessionBookOf, storyClockKeyOf } from "./derive"
+import {
+	generatingOf,
+	lorebookFixedOf,
+	rewindOf,
+	runningRoutineNamesOf,
+	sessionBookOf,
+	storyClockKeyOf
+} from "./derive"
 
 describe("sessionBookOf", () => {
 	it("prefers the attached book, falls back to the own book, else null", () => {
@@ -66,5 +73,22 @@ describe("storyClockKeyOf", () => {
 			month: 2,
 			day: null
 		})
+	})
+})
+
+describe("runningRoutineNamesOf", () => {
+	const rec = (kind: string, routine?: { name: string }, lineBound?: true) =>
+		({ sessionId: 1, runId: "r", kind, status: "x", routine, lineBound }) as any
+	it("keeps only named routine records, in order", () => {
+		expect(
+			runningRoutineNamesOf([
+				rec("routine", { name: "B, one" }),
+				rec("reply", { name: "no" }),
+				rec("action"),
+				rec("routine"),
+				rec("reply", undefined, true),
+				rec("routine", { name: "A" })
+			])
+		).toEqual(["B, one", "A"])
 	})
 })

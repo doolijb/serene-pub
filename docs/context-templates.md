@@ -180,15 +180,16 @@ Example dialogue:
 
 All of these may be empty, so wrap each in `{{#if …}}`. Use triple braces, `{{{…}}}`, for every one. A value written out by a variable layout prints the same in `{{characters}}` and `{{{characters}}}`, but other text in double braces is escaped (a quote becomes `&quot;`), so triple braces stay the habit.
 
-- **`currentDate`**: the date in the story, from the session's [story clock](./pipelines.md#the-story-clock) or its lorebook's present. Empty when the session reads no dated lorebook. The Default template places it last in the system block: the top of the prompt is the part a model's server can reuse from one turn to the next, and the date is the one value there that changes on its own.
+- **`currentDate`**: the date in the story (a date value, see [Dates in a layout](#dates-in-a-layout)), from the session's [story clock](./pipelines.md#the-story-clock) or its lorebook's present. Empty when the session reads no dated lorebook. The Default template places it last in the system block: the top of the prompt is the part a model's server can reuse from one turn to the next, and the date is the one value there that changes on its own.
 - **`instructions`**: the step's prompt (see [Pipelines → Prompts](./pipelines.md#prompts)).
 - **`characters`**: a card for every seat in play, plus the speaker, trimmed by the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)). At **Name and description**, cards other than the speaker's leave out personality; at **Only whoever is speaking**, only the speaker's card is there.
 - **`personas`**: the cards of the people playing.
 - **`characterLore`**: the character lore chosen for this turn, as a list of entries, each with its title, the cast member it belongs to and its text. It holds only what the one speaking may know: their own private entries and those of characters a person plays. The narrator gets entries bound to nobody, or to cast members without a card. Character lore reaches the model **only because the template places `{{{characterLore}}}`**: nothing adds it to the cards, so a template that leaves it out sends no character lore at all.
 - **`scenario`**: the session's scenario.
 - **`worldLore`**: the world lore chosen for this turn, most relevant first.
-- **`history`**: summaries of earlier parts of the story, newest first, each headed by its date.
-- **`earlierScenes`** 🚧: the summaries of this session's finished scenes whose lines are no longer in the prompt, oldest first, each with its scene's name, under the heading _Earlier in the story:_. Empty until the conversation is long enough to be cut, and in a pipeline that doesn't read earlier scenes. See [Earlier in the story](#earlier-in-the-story).
+- **`history`** 🚧: a list of summaries of earlier parts of the story, newest first, each `{ date, dateDelta, content }`. Absent when there are none. With a story clock set, the date delta says how far each day is from the story's now. See [Dates in a layout](#dates-in-a-layout).
+- **`earlierScenes`** 🚧: the summaries of this session's finished scenes whose lines are no longer in the prompt, oldest first, each `{ name, summary, date, dateDelta }`, under the heading _Earlier in the story:_. Empty until the conversation is long enough to be cut, and in a pipeline that doesn't read earlier scenes. See [Earlier in the story](#earlier-in-the-story).
+- **`storyCalendar`** 🚧: how the lorebook's calendar runs (months, weekdays, leap rule, eras). Absent for a free-form book. No shipped template places it; see [Dates in a layout](#dates-in-a-layout).
 - **`relationshipsPerspectives`** and **`relationshipsKnown`**: how the speaking character sees the others, and how they are seen in return (plus well-known figures marked **legendary**). Built fresh for whoever is speaking, whenever the speaker is bound in the session's lorebook (or, with none, its **Session notes**).
 - **`docsExcerpts`**: the Guide's documentation excerpts, only on the Guide's reply (see [Guide](./genres.md#guide)).
 - **`recalledLines`**: older lines of the conversation found again because they name what the scene names now, one per line (_Earlier (turn 12) — Mira: I hid the brass key under the chapel floor._). No shipped pipeline or template uses it yet; to use it, set Entity search's **Earlier messages found by name** above 0 and place `{{{recalledLines}}}` in your template.
@@ -262,6 +263,43 @@ A layout the template names itself comes before all of these. If it names one th
 **When a pipeline means something else by a name.** A plugin's pipeline can put its own data under a name core uses, such as a ranked list of lore under `characterLore`. The pipeline says so, and that name is then written out by the plugin data's own variable layouts (its own row on **Admin › Variable layouts**), not core's: its plain **JSON** layout when the data is an object, or the built-in default when it is plain text. A leftover pick for core's version is removed, with a notice on the configuration. The run inspector lists which layout each value used (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
 
 **Reading a shipped layout.** Each one is written one tag or one JSON key per line, indented the way the value nests. Two Handlebars rules keep that layout out of the prompt. A tag alone on its line (`{{#each …}}`, `{{/if}}`) leaves nothing behind, not even its line break. Where the prompt has no line breaks at all, such as the minified world lore and history, a `~` inside a tag swallows the whitespace beside it: `{{~#each x~}}` on both sides, `{{~else}}` before it. So a line that starts with `{{~` continues the one above, and the indentation is for you, not the model. A duplicate keeps the same shape, and the same rules apply to anything you write in it.
+
+**A layout is written for its variable's shape.** Each variable declares its shape (a list, an object, a date), and its layouts are written for that shape. 🚧 If a step hands down a value that doesn't fit (a flat string where the variable declares a list), the value is not written through the layout: it is written as it came, and the run's receipt names the variable and says why. Flattening a value in a step is strongly discouraged; a custom step that must do it should expect its variable's layouts to be bypassed.
+
+#### Dates in a layout
+
+🚧 A date reaches a layout as a **date value**, never as a flat string, and a layout decides how and where it is printed. The date value is `{ year: { number, name? }, month: { number, name? } | null, day: { number, name? } | null, time: { hour, minute } | null }`. A part the date doesn't carry is `null`. A `name` comes only from the lorebook's declared [calendar](./lorebook-time.md), and only when the date lands on it: `year.name` is the spelled year (`Year 412 AR`), `month.name` the month, `day.name` the weekday. A free-form book has no names.
+
+Next to a date, a row may carry a **date delta**: the row's date minus the session's current date, as numbers: `{ sign, year, month, day, time }`, with `sign` -1 (before the story's now), 0 or 1. Only the parts both dates carry are compared; a part that isn't compared is `null`, never 0. With a declared calendar the delta is exact, counting by month lengths and the leap day. In a free-form book, where a part would have to borrow from a coarser one, one is taken from the coarser part and every finer part is `null`, meaning _at least that much_: Year 7 month 11 to Year 8 month 2 is `-0y`; Year 7 month 3 day 20 to Year 7 month 5 day 5 is `-0y 1m`. The delta is `null` with no current date, with the Timeline off, when the present comes from the newest history entry (no clock set), and when the row has no date. The delta is arithmetic only and has no words; a layout prints it.
+
+Two helpers print them as plain text. Use the triple stash in Handlebars.
+
+- `formatDate` prints the calendar's spelling when the value carries names (`Moonday, 3 Thaw, Year 412 AR`, with a time as `, 22:30`), else `412-03-05`, `412-03`, or `Year 412` for a year alone (a time as ` 22:30`).
+- `formatDateDelta` prints the sign and the parts compactly: `-0y 2m 3d`, `+1y 0m 0d`, `0y 0m 0d`, `-0y 0m 2d 3h 15min`. Null parts are left out.
+
+Both print nothing for null or for a value that isn't a date. They are named apart from the fields because in Handlebars `{{date}}` inside a row would call a helper named `date`, and Liquid already has a `date` filter.
+
+In Handlebars, inside `{{~#each history~}}`:
+
+```
+"{{{formatDate date}}}{{#if dateDelta}} ({{{formatDateDelta dateDelta}}}){{/if}}":{{{jsonValue content indent=0}}}
+```
+
+In Liquid, the same row:
+
+```
+"{{ date | formatDate }}{% if dateDelta %} ({{ dateDelta | formatDateDelta }}){% endif %}":{{ content | jsonValue: indent: 0 }}
+```
+
+**Where dates are.** Three variables carry them, and no other does:
+
+- **`history`** is a **list** of `{ date, dateDelta, content }`, newest first, and absent when there is none. Two entries on one date are both kept.
+- **`earlierScenes`** rows are `{ name, summary, date, dateDelta }`. A scene's date is the story clock when it opened (day and time), and none when it opened with no clock.
+- **`currentDate`** is the date value itself.
+
+**What the shipped layouts print.** History prints `"412-03-03 (-0y 0m 2d)"` with a clock set and `"412-03-03"` without one; in a book with a declared calendar the date is spelled through it, `"Moonday, 3 Thaw, Year 412 AR (-0y 0m 2d)"`, the same spelling as the current date. Earlier scenes add the delta when there is one (`"dateDelta":"-0y 0m 3d"`) and don't print the date, since an automatic scene name already carries it. Current date is unchanged. The added words are layout text and don't count against the history budget. The distance has nothing to do with an entry's **Decay**: it never reads the rate, and the rate never reaches the prompt.
+
+**Telling the model how the calendar runs.** The `storyCalendar` variable (`core:var/story-calendar@1`) holds the lorebook's calendar: months with their lengths, weekdays, the leap rule and eras. The day's periods and seasons aren't included. It is absent for a free-form book. Its shipped layout, **Parts**, prints `Months: Thaw (30 days), …`, `Weekdays: …`, `Leap day: every 4 years, in month 2` and `Eras: BR, counting down; AR from year 1`. No shipped template prints it; add `{{{storyCalendar}}}` to a template to use it.
 
 ### The postHistory object
 
@@ -457,6 +495,8 @@ A name the step might still receive from something that doesn't declare its valu
 
 The checks are careful not to cry wolf: loop items, names you `{% assign %}`, `@key`, `forloop.last` and built-in helpers and filters are never reported. Where a value's fields are known, a misspelled field is caught too, with the name you probably meant. Where they aren't known, nothing is guessed.
 
+🚧 **A layout is also checked against its variable's shape.** These only warn, never refuse; only a syntax error refuses. The layout editor and a save warn on: an unknown field; an object, list or date printed bare (it would print `[object Object]`); `each` over something that isn't a list; `@key` inside an `each` over a list (the mark of a layout written for the old keyed History); and `formatDate` or `formatDateDelta` given a field that isn't a date or a delta.
+
 ## Upgrading from 0.5
 
 0.6 does **not** carry 0.5's context templates across: after upgrading, every pipeline uses the shipped template. Any template you wrote is listed in the upgrade's notes (**Admin › History**, data upgrade), and its text is in the pre-upgrade backup in the data folder's `backups/`. Paste it into a new context template if you want it back, and open **Layouts in this template** above the field, press **All bare**, then **Apply**: a 0.5 template writes its own headings and fences, so the copy now names the bare [layouts](#variable-layouts-where-the-headings-and-fences-come-from) itself. If it uses `narrativeGraph` or `speakerRelationships`, replace them with `relationshipsPerspectives` and `relationshipsKnown`: the old names no longer render anything.
@@ -464,3 +504,5 @@ The checks are careful not to cry wolf: loop items, names you `{% assign %}`, `@
 Your prompt text _is_ carried: each 0.5 prompt, narrator, summarizer and graph-build config becomes a prompt of the step it fed, picked where you had picked it (see [Pipelines → Upgrading from 0.5](./pipelines.md#upgrading-from-05)). Everything else the upgrade does is in [Upgrading from 0.5](./upgrading-from-0.5.md).
 
 **Layout picks made before layouts moved.** The upgrade folds each per-step pick in without changing any prompt: where every step agreed, it became the pub's layout; where every step a preset runs agreed, that preset's. Any other pick whose removal would change a prompt is kept and shown on its step as _Characters uses JSON here (set before layouts moved)._ with **Remove this pick**. What applies then is the next in the order above, which may be the session's preset's layout rather than the pub's. A pick made on another step, such as the one that builds the character cards, names that step: _Characters uses JSON (set on Build template context before layouts moved)._ When one variable has picks at more than one level, each line says whose it is: _Characters uses the genre's JSON here…_, _Characters uses the Small models preset's Prose here…_ When the step's template is the pub's own copy, **Move into the template** rewrites it to name those layouts itself and clears the picks, with the prompt unchanged. These leftover picks go away at 0.7.
+
+**Layouts written on an earlier 0.6 pre-release.** 🚧 History is now a list, and dates are date values (see [Dates in a layout](#dates-in-a-layout)). A custom History layout written for the keyed record (`{{#each history}}` with `@key`, or `relativeDate`) is not converted: it prints wrong (positions instead of dates) and its page warns. Rewrite it with `date`, `dateDelta` and `content`, or use the shipped layout. A custom current-date layout reading `currentDate.year` or `currentDate.label` prints wrong the same way; use `currentDate.year.number` or `{{{formatDate currentDate}}}`. Custom Earlier scenes layouts keep working, since fields were only added.

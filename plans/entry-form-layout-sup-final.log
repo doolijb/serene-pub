@@ -1,0 +1,18 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+1:37:11 AM [vite-plugin-svelte] src/lib/client/lorebooks/time/beginningDecayRow.dom.test.svelte.ts:276:11 This reference only captures the initial value of `open`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+(node:305130) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ Test Files  4 passed (4)
+      Tests  68 passed (68)
+   Start at  01:37:11
+   Duration  11.74s (transform 15.80s, setup 95ms, import 22.35s, tests 3.22s, environment 365ms)
+

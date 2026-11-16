@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, test } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
+import { bookDataContext, staticBookData } from "../bookData.svelte"
 import RelationshipFields from "./RelationshipFields.svelte"
 import type { RelationshipFieldsValue } from "./linkDraft"
 import type { LinkPairing } from "$lib/shared/lorebooks/linkVocabulary"
@@ -96,5 +97,54 @@ describe("RelationshipFields", () => {
 		render("cast-cast", { relationshipType: "ally" })
 		expect(text()).not.toContain("Both ways")
 		expect(reverseInput()).toBeNull()
+	})
+})
+
+describe("RelationshipFields — the When picker and the Timeline switch", () => {
+	let app: ReturnType<typeof mount> | null = null
+	afterEach(() => {
+		if (app) unmount(app)
+		app = null
+		document.body.innerHTML = ""
+	})
+	function show(timelineEnabled: boolean | null) {
+		const host = document.createElement("div")
+		document.body.append(host)
+		app = mount(RelationshipFields, {
+			target: host,
+			context:
+				timelineEnabled === null
+					? undefined
+					: bookDataContext(
+							staticBookData(() => ({ timelineEnabled }))
+						),
+			props: {
+				value: {
+					relationshipType: "leads to",
+					reverseRelationshipType: null,
+					name: "",
+					description: "",
+					status: "active",
+					visibility: "acknowledged",
+					historyEntryId: null
+				} as RelationshipFieldsValue,
+				pairing: "entry-entry" as LinkPairing,
+				whenOptions: [
+					{ value: "", label: "No date" },
+					{ value: "4", label: "Year 3" }
+				],
+				onChange: () => {}
+			}
+		})
+		flushSync()
+		return host.textContent ?? ""
+	}
+	test("on, and outside a workspace: the picker is drawn", () => {
+		expect(show(true)).toContain("When")
+		document.body.innerHTML = ""
+		expect(show(null)).toContain("When")
+	})
+	test("off: no picker", () => {
+		expect(show(false)).not.toContain("When")
 	})
 })

@@ -19,11 +19,9 @@
  *  7. a retake takes back what the turn's runs wrote, wherever anchored;
  *  8. a person's press writes as the person: nothing is imprinted.
  *
- * (sense-b4) Pins the direct-writer rule: the kept/revert rule is tested through
- * sessions whose scenes do not end by themselves (their pipeline writes land in
- * the real book); for a session whose scenes do, the same run's new entry and
- * link are in its own book and carry an own-book imprint. The predicate is
- * switched per session below.
+ * A Full session writes straight into its owner's lorebook, whether or not its
+ * scenes end by themselves: the kept/revert rule is tested through such
+ * sessions, and the run's new entry and link carry real-book imprints.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -284,24 +282,21 @@ describe("a run's write on a real book", () => {
 })
 
 describe("a run's write for a session whose scenes end by themselves", () => {
-	test("its new room and link are in the own book, with own-book imprints, not real-book ones", async () => {
+	test("its new room and link are in the real book, with real-book imprints (a Full session writes straight in)", async () => {
 		const w = await world({ ends: true })
 		const hall = await place(w.book.id, "The Hall", "Rooms")
 		await w.message()
-		const { ownBookFor } = await import("./ownBook")
-		const own = await ownBookFor(db(), w.session.id)
 		const out: any = await (await w.host("run-own")).commit!(
 			{ name: "The Shaft", content: "Wet rock.", params: { entryType: LOCATION_TYPE_ID }, links: [{ to: hall.id, linkType: "leads up to" }] },
 			CREATE
 		)
-		expect(out).toMatchObject({ route: "own-book", lorebookId: own.id })
-		expect((await entry(out.id))!.lorebookId).toBe(own.id)
+		expect(out).toMatchObject({ route: "book", lorebookId: w.book.id })
+		expect((await entry(out.id))!.lorebookId).toBe(w.book.id)
 		const R = schema.narrativeRelationships
-		expect(await testDb.select().from(R).where(eq(R.lorebookId, w.book.id))).toEqual([])
-		expect((await testDb.select().from(R).where(eq(R.lorebookId, own.id)))[0]).toMatchObject({ fromEntryId: out.id, toEntryId: hall.id })
+		expect((await testDb.select().from(R).where(eq(R.lorebookId, w.book.id)))[0]).toMatchObject({ fromEntryId: out.id, toEntryId: hall.id })
 		const filed = await imprints(w.session.id)
 		expect(filed.length).toBeGreaterThan(0)
-		expect(filed.every((i) => i.lorebookId === own.id)).toBe(true)
+		expect(filed.every((i) => i.lorebookId === w.book.id)).toBe(true)
 	})
 })
 

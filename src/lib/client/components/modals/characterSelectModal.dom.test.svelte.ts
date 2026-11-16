@@ -8,7 +8,7 @@
  *   covers every row) from "none exist yet".
  * - Search matches only what a row shows: never `creatorNotes`.
  */
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({
@@ -33,6 +33,12 @@ const CHARACTERS = [
 		characterTags: [{ tag: { name: "Pirate" } }]
 	}
 ]
+
+// The list loads when the picker opens; warm it so the modal's import
+// resolves within `settle()`.
+beforeAll(async () => {
+	await import("./CharacterSelectList.svelte")
+})
 
 let app: ReturnType<typeof mount> | null = null
 afterEach(() => {
@@ -109,6 +115,20 @@ describe("CharacterSelectModal, single mode", () => {
 		expect(onSelect.mock.calls[0][0]).toMatchObject({ id: 2, name: "Bram" })
 	})
 
+	test("a closed picker loads no list", async () => {
+		await render({ open: false, onCreateNew: () => {} })
+		expect(
+			document.querySelector('input[aria-label="Search characters"]')
+		).not.toBeNull()
+		expect(document.querySelector('ul[aria-label="Characters"]')).toBeNull()
+		expect(document.querySelector("li")).toBeNull()
+		expect(
+			[...document.querySelectorAll("button")].some(
+				(b) => b.textContent?.trim() === "New character"
+			)
+		).toBe(false)
+	})
+
 	test("the heading names the dialog", async () => {
 		await render()
 		const labelledBy = dialog().getAttribute("aria-labelledby")
@@ -169,6 +189,38 @@ describe("CharacterSelectModal, single mode", () => {
 
 		await searchFor("pirate")
 		expect(rowNames()).toEqual(["Corin"])
+	})
+
+	test("each opening starts with nothing ticked", async () => {
+		// The list mounts with each opening, so ticks never survive a close.
+		const props = $state({
+			open: true,
+			characters: CHARACTERS,
+			multiSelect: true,
+			onOpenChange: () => {},
+			onMultiSelect: () => {}
+		})
+		const host = document.createElement("div")
+		document.body.append(host)
+		app = mount(CharacterSelectModal, { target: host, props: props as any })
+		await settle()
+		const box = [
+			...dialog().querySelectorAll<HTMLInputElement>(
+				"input[type=checkbox]"
+			)
+		].find((i) => (i.closest("li")?.textContent ?? "").includes("Bram"))!
+		box.click()
+		await settle()
+		expect(buttonByText("Add 1 character")).not.toBeNull()
+
+		props.open = false
+		await settle()
+		expect(document.querySelector('ul[aria-label="Characters"]')).toBeNull()
+
+		props.open = true
+		await settle()
+		expect(buttonByText("Add")).not.toBeNull()
+		expect(buttonByText("Add 1 character")).toBeNull()
 	})
 
 	test("the search box takes focus on open", async () => {

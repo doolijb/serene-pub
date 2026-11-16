@@ -46,7 +46,7 @@
 	 *
 	 * ⚠ A reader. Reading as of a date narrows what the pool shows and what
 	 * the graph draws; it changes nothing about what a save writes. The
-	 * sentence beside the moment says the choice a save presents there.
+	 * sentence beside the moment says what a save does there.
 	 */
 	interface Props {
 		/** The moment the route is reading from. Absent is now. */

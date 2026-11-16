@@ -1,0 +1,30 @@
+▶ core entry types
+  ✔ world lore, character lore and place are perpetual facts (0.546698ms)
+  ✔ an item began, a fact (0.105039ms)
+  ✔ history declares neither (0.08966ms)
+  ✔ the universal parts declare neither, so a ruleset's types default to absent (0.082959ms)
+✔ core entry types (1.458014ms)
+▶ what describeEntryType refuses
+  ✔ a Beginning that is neither perpetual nor began (0.381848ms)
+  ✔ a Decay rate outside 0 to 1 (0.161469ms)
+  ✔ a Beginning on a type whose entries carry their own date (0.11796ms)
+  ✔ a declaration with neither field registers as before (0.117379ms)
+✔ what describeEntryType refuses (0.962966ms)
+▶ a ruleset entry type
+  ✔ in sections, derives a type carrying the two defaults (0.20509ms)
+  ✔ in the repertoire shape, derives a type carrying the two defaults (0.19861ms)
+  ✔ one that declares neither derives a type with neither (0.18108ms)
+  ✔ a rate of 1.5 or a beginning of written is a finding (0.320979ms)
+  ✔ a repertoire refuses them with bad-entry-default (0.213459ms)
+✔ a ruleset entry type (1.318464ms)
+▶ the lore-writing outlet
+  ✔ its params declare both, and neither is an in-port (0.490818ms)
+✔ the lore-writing outlet (0.543947ms)
+ℹ tests 14
+ℹ suites 4
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 350.230847

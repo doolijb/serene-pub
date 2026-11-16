@@ -28,6 +28,7 @@ import type { SpriteSetView } from "$lib/shared/sprites"
 import type { CharacterLikenessInput } from "$lib/shared/characters/likeness"
 import type { CharacterCreatorNotes } from "$lib/shared/characters/profile"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import type { EntryTimeWire } from "$lib/shared/lorebooks/amendments"
 import type {
 	GenreRulesOffer,
 	RulesChoice
@@ -41,6 +42,109 @@ declare global {
 		interface ErrorResponse {
 			error: string
 			description?: string
+		}
+
+		/**
+		 * 🚧 One row of an **Edit history** (an entry's, a card version's or a
+		 * cast version's), worded for the asker (`entries:redlines`,
+		 * `characterVersions:redlines`). `who` names a session only to someone
+		 * who may open it; never a run id, model or connection.
+		 */
+		interface RedlineView {
+			id: number
+			/** The dated change edited; null for the entry itself. */
+			amendmentId: number | null
+			/** "the change from ‹date›" for a dated change; null for the entry. */
+			version: string | null
+			cause: "save" | "routine" | "apply" | "revert" | "take-back" | "restore"
+			who: string
+			/** The asker wrote it. */
+			mine: boolean
+			/** ISO. */
+			at: string
+			changes: {
+				key: string
+				label: string
+				before: unknown
+				after: unknown
+				wasAbsent: boolean
+				nowAbsent: boolean
+				/** A cast version's key read its card's value before / after (`before` / `after` are null then). */
+				beforeFollows?: boolean
+				afterFollows?: boolean
+				/** A picture's key: only that it changed is shown (`before` / `after` are null). */
+				noPreview?: boolean
+			}[]
+		}
+
+		/**
+		 * 🚧 A card version's or a cast version's **Edit history** on the wire
+		 * (`lore_redlines.character_version_id`). Every reply is scoped on
+		 * `characterVersionId`, which names a card version or a cast version
+		 * alike; never pushed.
+		 */
+		namespace CharacterVersions {
+			/**
+			 * `characterVersions:redlines`: one version's Edit history, newest
+			 * first. A card version: its card's owner. A cast version: whoever
+			 * may open its lorebook. `canRestore` and `canClear` say what this
+			 * asker may do with it.
+			 */
+			namespace Redlines {
+				interface Params {
+					characterVersionId: number
+				}
+				interface Response {
+					characterVersionId: number
+					/** The card, for a card version; null for a cast version. */
+					cardId: number | null
+					/** The lorebook, for a cast version; null for a card version. */
+					lorebookId: number | null
+					canRestore: boolean
+					canClear: boolean
+					redlines: RedlineView[]
+				}
+				interface ErrorResponse {
+					characterVersionId?: number
+					error: string
+				}
+			}
+			/**
+			 * `characterVersions:restoreRedline`: put what one row changed back,
+			 * through that version's own save (recorded, cause `restore`). The
+			 * list is sent again as `characterVersions:redlines`.
+			 */
+			namespace RestoreRedline {
+				interface Params {
+					redlineId: number
+				}
+				interface Response {
+					redlineId: number
+					characterVersionId: number
+				}
+				interface ErrorResponse {
+					redlineId?: number
+					error: string
+				}
+			}
+			/**
+			 * `characterVersions:clearRedlines`: delete one version's Edit
+			 * history. A card version: its card's owner; a cast version: its
+			 * lorebook's owner.
+			 */
+			namespace ClearRedlines {
+				interface Params {
+					characterVersionId: number
+				}
+				interface Response {
+					characterVersionId: number
+					cleared: number
+				}
+				interface ErrorResponse {
+					characterVersionId?: number
+					error: string
+				}
+			}
 		}
 
 		/**
@@ -2511,6 +2615,38 @@ declare global {
 				type Response = Capabilities.Response
 			}
 
+			/** 🚧 Admin → Connections' requests-at-once card: every host the LLM queue sends to (perf-I). Admin only. */
+			namespace LlmLanes {
+				interface Params {}
+				interface Host {
+					/** The host's address: the URL origin `scheme://host[:port]` its LLM lane is keyed by. */
+					laneKey: string
+					/** The derived width: 1 for a local or managed host, 4 for a known cloud host. */
+					defaultWidth: number
+					/** The admin's override, or null when the default applies. */
+					width: number | null
+					managed: boolean
+					cloud: boolean
+					/** The connections that reach this host; empty for an override whose host has no connection. */
+					connections: { id: number; name: string }[]
+				}
+				interface Response {
+					hosts: Host[]
+				}
+			}
+			/** 🚧 Set or clear (`width: null`) one host's override (perf-I). Admin only. */
+			namespace SetLlmLaneWidth {
+				interface Params {
+					laneKey: string
+					width: number | null
+				}
+				interface Response {
+					laneKey: string
+					width: number | null
+					error?: string
+				}
+			}
+
 			/**
 			 * The MODELS on this endpoint (0114) — the second half of the pair.
 			 *
@@ -3136,6 +3272,26 @@ declare global {
 					/** Everyone with a record — the actor filter's options. */
 					actors: Array<{ id: number | null; name: string }>
 					requestId: string | null
+				}
+			}
+
+			/**
+			 * 🚧 `admin:redlineSummary`: how many edit-history rows the pub keeps
+			 * and the bytes they hold (Admin → Data). Admin only.
+			 */
+			namespace RedlineSummary {
+				type Params = Record<string, never>
+				interface Response {
+					count: number
+					bytes: number
+				}
+			}
+
+			/** 🚧 `admin:clearRedlines`: delete every edit-history row on the pub (Admin → Data). Admin only. */
+			namespace ClearRedlines {
+				type Params = Record<string, never>
+				interface Response {
+					cleared: number
 				}
 			}
 
@@ -4003,6 +4159,8 @@ declare global {
 				/** Swaps to seat the session with (R40); see the SDK's `PresetDefaults`. */
 				swaps?: import("@serene-pub/sdk").StoredSwapContribution[]
 				lorebookId?: number | null
+				/** 🚧 Whether new notes start with a timeline; see the SDK's `PresetDefaults`. */
+				timeline?: boolean
 				tags?: string[]
 				genreFields?: Record<string, unknown>
 				[key: string]: unknown
@@ -4013,6 +4171,8 @@ declare global {
 				name: string
 				description: string | null
 				genreId: string
+				/** 🚧 Whether a new session on this preset whose lorebook is its own notes starts them with a timeline, resolved on the server (`timelineDefaultFor`); carried by `sessionPresets:list` only. */
+				timelineDefault?: boolean
 				/**
 				 * The event bindings (24 §1): event → {spec, config?}. `config`
 				 * is a pipeline_configs id; absent = the spec's shipped default.
@@ -4526,6 +4686,28 @@ declare global {
 				interface Params {
 					sessionId: number
 					request?: string
+					/**
+					 * 🚧 A clock a person is about to save (Session settings), or
+					 * null for following the line's present: the reply's
+					 * `clockMoveBack` says whether that move needs confirming.
+					 */
+					moveTo?: Lorebooks.StoryClock | null
+				}
+				/**
+				 * 🚧 A move of the clock back past dated things this session
+				 * has written into its lorebook: it follows the session's On
+				 * revision, and the person confirms it first.
+				 */
+				interface ClockMoveBackNotice {
+					mode: "overwrite" | "branch"
+					/** How many of the session's dated writes the move passes. */
+					count: number
+					/** The latest of their dates, spelled through the book's calendar. */
+					latestLabel: string
+					/** Where the move goes, spelled. */
+					toLabel: string
+					/** The confirmation's sentence. */
+					sentence: string
 				}
 				interface Reading {
 					/** The session's book; null when it reads none (everything else is then null). */
@@ -4540,6 +4722,8 @@ declare global {
 					linePresent: Lorebooks.StoryClock | null
 					/** The book's calendar (null = free-form), to spell the dates with. */
 					calendar: SdkStoryCalendar | null
+					/** 🚧 Whether the book the session reads keeps a timeline (its attached lorebook's switch, else its notes'). */
+					timeline: boolean
 					/** The asker is the session's owner — who may move the clock. */
 					isOwner: boolean
 				}
@@ -4547,6 +4731,15 @@ declare global {
 					sessionId: number
 					request?: string
 					error?: string
+					/**
+					 * 🚧 On a `setStoryClock` refusal: the move goes back past this
+					 * session's dated writes and was not made; asked again with
+					 * `confirmClockMoveBack`, it is. On a read with `moveTo`: the
+					 * notice that move needs, or null when it needs none.
+					 */
+					clockMoveBack?: ClockMoveBackNotice | null
+					/** 🚧 On revision Branch: the new session the confirmed move was made in. */
+					branchedTo?: number
 				}
 			}
 			/**
@@ -4563,6 +4756,8 @@ declare global {
 					to?: Lorebooks.StoryClock
 					by?: number
 					unit?: import("@serene-pub/sdk").StoryTimeUnit
+					/** 🚧 The person confirmed a move back past this session's dated writes (`StoryClock.ClockMoveBackNotice`). */
+					confirmClockMoveBack?: true
 				}
 				type Response = StoryClock.Response
 			}
@@ -4785,6 +4980,12 @@ declare global {
 					 * or the session list. Never carries `reply`.
 					 */
 					lineBound?: true
+					/**
+					 * 🚧 The routine's name, as Routines shows it; on the two
+					 * frames a routine run's start and end send
+					 * (`routines/run.ts`), never on the status relay's frames.
+					 */
+					routine?: { name: string }
 				}
 			}
 			/**
@@ -5021,6 +5222,12 @@ declare global {
 					userDraft?: string | null
 					/** 🚧 The genre's autoConvert moved this session's rules as it opened (🚧 M0 L4); on that one reply only. */
 					rulesetConverted?: { from: string; to: string }
+					/**
+					 * 🚧 The session's routine runs showing as running now
+					 * (`routineRunFramesOf`), each as its start frame; on the
+					 * first page only; absent when none.
+					 */
+					routineRuns?: Array<Sockets.Sessions.RunStatus.Response>
 					/**
 					 * The requested session id — present on a not-found reply so
 					 * the interest scope can still be derived.
@@ -7054,9 +7261,17 @@ declare global {
 						seatName?: string
 						remove?: boolean
 					}>
+					/**
+					 * 🚧 The person confirmed a story clock moved back past
+					 * this session's own dated writes (`StoryClock.ClockMoveBackNotice`).
+					 * Without it such a save is refused and nothing is written.
+					 */
+					confirmClockMoveBack?: true
 				}
 				interface Response {
 					session: SelectSession
+					/** 🚧 On revision Branch: the new session the confirmed clock move was made in. */
+					branchedTo?: number
 				}
 			}
 			namespace AddPersona {
@@ -8349,6 +8564,14 @@ declare global {
 						sessionName: string | null
 						/** The shared book it overlays; null when the session reads none. */
 						attached: { id: number; name: string } | null
+						/**
+						 * 🚧 The notes hold something the session wrote, beyond
+						 * the base versions of its seated characters' members
+						 * (owner 2026-11-13, "Only notes with something in
+						 * them"). Every row is sent; the section draws only
+						 * these, so an unwritten book still opens by id.
+						 */
+						notesWritten: boolean
 					})[]
 				}
 			}
@@ -8367,6 +8590,16 @@ declare global {
 								tags: string[]
 								/** The people the owner shared it with. Owner only. */
 								sharedWith?: ConversationPerson[]
+								/**
+								 * 🚧 What switching the Timeline off would hide: Book settings' prompt. Owner only.
+								 */
+								timelineCounts?: {
+									datedChanges: number
+									historyEntries: number
+									beginnings: number
+									presences: number
+									clockSet: boolean
+								}
 								/** True when the asker reads it through a share. */
 								isSharedWithMe?: boolean
 								/** The sharer's display name. Shared reads only. */
@@ -8448,6 +8681,11 @@ declare global {
 					 */
 					starterKit?: StarterKits.Ref
 					/**
+					 * 🚧 The new book's **Timeline** switch; absent = on. Not read
+					 * when `starterKit` is sent.
+					 */
+					timelineEnabled?: boolean
+					/**
 					 * The asker's id for this create, echoed on the broadcast
 					 * and on `lorebooks:create:error`, so the one surface that
 					 * asked claims the answer (several in a tab wait on it).
@@ -8487,6 +8725,12 @@ declare global {
 					 * owner's own mode. Refused for a session's own notes.
 					 */
 					loreWriteMode?: string
+					/**
+					 * 🚧 The book's **Timeline** switch, sent only when changed (never read off `lorebook`). Off: the book is read as it
+					 * stands now, written undated, and its story time does not move; nothing dated is deleted. The book's owner only.
+					 * A session's notes that overlay a lorebook follow it and refuse this.
+					 */
+					timelineEnabled?: boolean
 					/**
 					 * The asker's id, echoed on the reply (every tab hears
 					 * it) and on the refusal, so only the form that saved
@@ -8581,11 +8825,17 @@ declare global {
 			namespace Duplicate {
 				interface Params {
 					lorebookId: number
-					/** Defaults to `<name> (copy)`. */
+					/** Defaults to `<name> (copy)`, or `<name> (timeless)` with `timeless`. */
 					name?: string
+					/** 🚧 Make a timeless copy instead: each entry as it reads now on this line (null is main), undated, Timeline off. */
+					timeless?: { branchId: number | null }
+					/** The asker's id, echoed on the reply and on the refusal. */
+					requestId?: string
 				}
 				interface Response {
 					lorebook: WireLorebook
+					/** The asker's `requestId`, when it sent one. */
+					requestId?: string
 				}
 			}
 			namespace Export {
@@ -8725,6 +8975,8 @@ declare global {
 			interface CastRowVersion {
 				/** 🚧 The cast version the row's columns are. Null only for a member with no version (a logged error). */
 				castVersionId: number | null
+				/** 🚧 The member's base version (undated, main, no life point): what *From the beginning* saves. Null when the member has none. */
+				baseVersionId: number | null
 				/** 🚧 That version's own greetings marked for group sessions only. */
 				groupOnlyGreetings: string[]
 				/** 🚧 The shown version's own post-history instructions (a version-only field; no row column). */
@@ -8785,6 +9037,7 @@ declare global {
 					// Distinct lorebooks that have a binding referencing this
 					// character — the candidate list for charactersExportCard's
 					// optional lorebookId, NOT the same as character.lorebookId.
+					// 🚧 Never a session's notes (owner 2026-11-13).
 					lorebooks: { id: number; name: string }[]
 					/**
 					 * The cast members this card is, in the asker's own books,
@@ -8794,7 +9047,15 @@ declare global {
 					 */
 					members: {
 						lorebookId: number
+						/** The book's name; for a session's notes, `sessionNotesName` of the session's current name. */
 						lorebookName: string
+						/**
+						 * 🚧 The session whose notes hold this member; null in a
+						 * lorebook. Notes members stay for the editing sentence
+						 * and are left out of the cast line's lead, count and
+						 * update offers (owner 2026-11-13).
+						 */
+						ownBookSessionId: number | null
 						castId: number
 						retold: RetoldField[]
 						/**
@@ -8909,6 +9170,8 @@ declare global {
 					 * one keeps its words).
 					 */
 					changeLaterVersions?: boolean
+					/** 🚧 The cast version this save writes. Only the member's base version is accepted (a dated version is saved with `amendments:update`). Absent: the version in force at the book's present on main, as before. */
+					castVersionId?: number
 				}
 				interface Response {
 					lorebookBinding: CastMemberRow
@@ -9150,7 +9413,7 @@ declare global {
 			}
 			namespace Create {
 				interface Params {
-					entry: NewLorebookEntry
+					entry: NewLorebookEntry & Partial<EntryTimeWire>
 					/**
 					 * The session this row is written from, when it is a
 					 * session write (a summarize's save). The session must be
@@ -9182,18 +9445,125 @@ declare global {
 			}
 			namespace Update {
 				interface Params {
-					entry: LorebookEntryPatch
+					entry: LorebookEntryPatch & Partial<EntryTimeWire>
+					/** The asker's id, echoed on the reply and the refusal so the one surface that asked claims them. */
+					requestId?: string
 				}
 				interface Response {
 					entry: LorebookEntry
+					/** The asker's id, echoed on the reply and the refusal so the one surface that asked claims them. */
+					requestId?: string
+				}
+			}
+			/**
+			 * 🚧 `entries:earmark`: whether a run in progress was shown this
+			 * entry and may update it (its **earmark**, `runRegistry.earmark`).
+			 * Asked when a form opens an existing entry, on *Check again*, and
+			 * once after a refused save; never pushed. For whoever owns the
+			 * entry's book. `notice` is the sentence a refused save gives, or
+			 * `null` when no run in progress was shown the entry.
+			 */
+			namespace Earmark {
+				interface Params {
+					entryId: number
+				}
+				interface Response {
+					entryId: number
+					lorebookId: number
+					notice: string | null
+				}
+				interface ErrorResponse {
+					entryId?: number
+					error: string
+				}
+			}
+			/**
+			 * 🚧 `entries:redlines`: an entry's **Edit history**, newest first —
+			 * what each saved edit changed, when, and who made it. Asked on
+			 * open and again after a restore or a clear; never pushed. For
+			 * whoever may open the entry's book; `canRestore` and `canClear`
+			 * say what this asker may do with it.
+			 */
+			namespace Redlines {
+				interface Params {
+					entryId: number
+				}
+				interface Response {
+					entryId: number
+					lorebookId: number
+					canRestore: boolean
+					canClear: boolean
+					redlines: RedlineView[]
+				}
+				interface ErrorResponse {
+					entryId?: number
+					error: string
+				}
+			}
+			/**
+			 * 🚧 `entries:restoreRedline`: put what one edit-history row changed
+			 * back, as a save of its own (recorded, cause `restore`). Answers
+			 * with the row asked; the list is sent again as `entries:redlines`.
+			 */
+			namespace RestoreRedline {
+				interface Params {
+					redlineId: number
+				}
+				interface Response {
+					redlineId: number
+					entryId: number
+					lorebookId: number
+				}
+				interface ErrorResponse {
+					redlineId?: number
+					error: string
+				}
+			}
+			/**
+			 * 🚧 `entries:clearRedlines`: delete one entry's edit history, or
+			 * every entry's in a lorebook. The lorebook's owner only.
+			 */
+			namespace ClearRedlines {
+				type Params = { entryId: number } | { lorebookId: number }
+				interface Response {
+					lorebookId: number
+					entryId: number | null
+					cleared: number
+				}
+				interface ErrorResponse {
+					entryId?: number
+					lorebookId?: number
+					error: string
+				}
+			}
+			/**
+			 * 🚧 `entries:redlineCount`: how many edit-history rows an entry or
+			 * a lorebook keeps, for the clear confirmations. The lorebook's
+			 * owner only.
+			 */
+			namespace RedlineCount {
+				type Params = { entryId: number } | { lorebookId: number }
+				interface Response {
+					lorebookId: number
+					entryId: number | null
+					count: number
+				}
+				interface ErrorResponse {
+					entryId?: number
+					lorebookId?: number
+					error: string
 				}
 			}
 			namespace Delete {
 				interface Params {
 					id: number
 					typeId: EntryTypeId
+					/** The asker's id, echoed on the reply and the refusal so the one surface that asked claims them. */
+					requestId?: string
 				}
 				interface Response {
+					/** The asker's id, echoed on the reply and the refusal so the one surface that asked claims them. */
+					requestId?: string
 					success?: string
 					error?: string
 					/**
@@ -9596,6 +9966,12 @@ declare global {
 				 * (`fields` stays what changed from the version before it).
 				 */
 				columns: Lorebooks.CastVersionColumns
+				/** 🚧 The version's write order (`character_versions.write_order`): what orders two versions at one date and life point. */
+				writeOrder: number
+				/** 🚧 The session that wrote this version; null = a person's. */
+				sourceSessionId: number | null
+				/** 🚧 That session's name, only when the asker may open it; null for a person's version, a deleted session, a session the asker may not open, or a blank name. */
+				sourceSessionName: string | null
 			}
 			/**
 			 * Where in their own life a member stands, and when.
@@ -9810,6 +10186,26 @@ declare global {
 					id: number
 				}
 				type Response = List.Response
+			}
+
+			/**
+			 * ⚠ Moves entries, for good, from the line they are on to a line it
+			 * was forked from (NULL = main). Only the entry's line changes.
+			 * Answers with the moved ids; the entry lists follow first.
+			 */
+			namespace MoveDownTheTree {
+				interface Params {
+					lorebookId: number
+					/** The entries to move, all on one line. */
+					entryIds: number[]
+					/** The line to move them to, below theirs. NULL = main. */
+					branchId: number | null
+				}
+				interface Response {
+					lorebookId: number
+					branchId: number | null
+					entryIds: number[]
+				}
 			}
 		}
 
@@ -15579,6 +15975,20 @@ declare global {
 				// (see the "sessionMessage:error" emits), so both fields are optional.
 				sessionMessage?: SelectSessionMessage
 				error?: string
+			}
+		}
+
+		/**
+		 * A mid-stream frame of the row a reply is filling: its text so far and
+		 * the reasoning so far. The full row still settles as `sessionMessage`.
+		 * `reasoning: null` means the frame wrote none — leave the row's as is.
+		 */
+		namespace SessionMessageDelta {
+			interface Response {
+				sessionId: number
+				id: number
+				content: string
+				reasoning: string | null
 			}
 		}
 

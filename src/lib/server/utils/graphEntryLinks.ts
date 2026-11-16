@@ -36,7 +36,7 @@
  * privacy gate — never re-derived here.
  */
 
-import { and, eq, inArray, isNotNull, ne, or } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm"
 import type { LoreLinkRow } from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
 import { overlayChainOf, rowsOnReading, sessionReadingOf } from "$lib/server/state/reading"
@@ -153,7 +153,8 @@ async function bookEntryLinks(
 				eq(r.lorebookId, lorebookId),
 				or(isNotNull(r.fromEntryId), isNotNull(r.toEntryId)),
 				eq(r.status, "active"),
-				ne(r.visibility, "secret")
+				ne(r.visibility, "secret"),
+				isNull(r.knowledgeKind)
 			)
 		)
 	// The line, with the moment and the fork cuts: the same rule durable

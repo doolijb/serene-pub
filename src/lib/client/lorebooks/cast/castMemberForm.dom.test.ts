@@ -213,22 +213,6 @@ describe("CastMemberForm name, nickname and face", () => {
 		expect(buttonNamed("Save")!.disabled).toBe(false)
 	})
 
-	test("reading a moment: a dirty own name disables the dated save", () => {
-		const { member, row } = linked()
-		mountForm(member, row, {
-			onAmend: async () => true,
-			momentLabel: "Year 3"
-		})
-		const dated = () => buttonNamed("Save as of Year 3")!
-		expect(dated().disabled).toBe(false)
-		flip("castOwnName")
-		type(`castOwnName-${MEMBER_ID}`, "Veritas")
-		expect(dated().disabled).toBe(true)
-		expect(dated().title).toBe(
-			"A name in this book is not dated: Save keeps it for every moment"
-		)
-	})
-
 	test("no card: the Name input stays, no own-name trio", () => {
 		const row = {
 			id: MEMBER_ID,

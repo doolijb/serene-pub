@@ -1,0 +1,101 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/shared/conformance/commentHistory.test.ts > comment history ratchet — comments state the rule, not the story > no file's phrase-hit count exceeds its recorded ratchet
+10 file(s) have fewer phrase-list hits than the ratchet records. Run `npm run comments:ratchet` to lower it:
+  • src/lib/client/components/koboldcppManager/availableTab.ts: 1 → 0
+  • src/lib/client/sessionLayout/mobileSidePanels.svelte.ts: 1 → 0
+  • src/lib/client/sessionLayout/sideRail.ts: 1 → 0
+  • src/lib/client/sessionLayout/sideSlot.ts: 3 → 2
+  • src/lib/server/embedding/vectorizationQueue.ts: 3 → 2
+  • src/lib/server/koboldcpp/subprocessManager.ts: 1 → 0
+  • src/lib/server/pipelines/prompt/renderers.ts: 4 → 3
+  • src/lib/server/sockets/characters.ts: 4 → 3
+  • src/lib/server/sockets/pipelines.ts: 8 → 7
+  • src/lib/server/utils/index.ts: 5 → 4
+
+ ❯ |unit| src/lib/shared/conformance/commentHistory.test.ts (1 test | 1 failed) 368ms
+     × no file's phrase-hit count exceeds its recorded ratchet 366ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/shared/conformance/commentHistory.test.ts > comment history ratchet — comments state the rule, not the story > no file's phrase-hit count exceeds its recorded ratchet
+AssertionError: 9 file(s) exceed their comment-history ratchet:
+
+src/lib/client/components/connections/modelsList.ts: 1 (ratchet allows 0)
+    194: [no longer] * already says it (the "No longer listed" badge, the download line).
+
+src/lib/client/shell/leaveDestination.ts: 1 (ratchet allows 0)
+    21: [no longer] // A cold load (`page.state` is `{}`), junk, or Apps no longer registered.
+
+src/lib/server/db/dataUpgrades/0137_loadout_voices.ts: 1 (ratchet allows 0)
+    11: [no longer] * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids
+
+src/lib/server/embedding/indexingActivity.ts: 1 (ratchet allows 0)
+    4: [used to] * The composer's notice used to carry "Indexing 12 of 40 lorebook entries".
+
+src/lib/server/sessions/honorModeRetired.ts: 1 (ratchet allows 0)
+    35: [no longer] * (the 0.7 squash, or the importer no longer accepting older files).
+
+src/lib/server/sessions/settings.ts: 1 (ratchet allows 0)
+    335: [no longer] * are no longer its business — that is sheet latitude (`state/handEdits.ts`).
+
+src/lib/server/sockets/localOnnxModels.ts: 1 (ratchet allows 0)
+    1125: [no longer] * exist (`ensureLocalOnnxConnections`), so their existence no longer says
+
+src/lib/server/utils/activityStore.ts: 2 (ratchet allows 1)
+    290: [used to] * the progress the composer's notice used to carry. Written only by
+    630: [deliberately not] // Deliberately NOT startScene's abort-and-evict, for two different
+
+src/lib/server/utils/androidWrapper.ts: 1 (ratchet allows 0)
+    3: [used to] * this env var before spawning the server). Used to hide features that don't
+
+Rewrite each flagged comment as the present-tense rule, move rationale that needs a paragraph to docs/ with a one-line pointer, or delete it if it is pure history. Then run `npm run comments:ratchet` to record the lower count. Do not weaken the phrase list to pass this.: expected [ …(9) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/client/components/connections/modelsList.ts: 1 (ratchet allows 0)
++     194: [no longer] * already says it (the \"No longer listed\" badge, the download line).",
++   "src/lib/client/shell/leaveDestination.ts: 1 (ratchet allows 0)
++     21: [no longer] // A cold load (`page.state` is `{}`), junk, or Apps no longer registered.",
++   "src/lib/server/db/dataUpgrades/0137_loadout_voices.ts: 1 (ratchet allows 0)
++     11: [no longer] * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids",
++   "src/lib/server/embedding/indexingActivity.ts: 1 (ratchet allows 0)
++     4: [used to] * The composer's notice used to carry \"Indexing 12 of 40 lorebook entries\".",
++   "src/lib/server/sessions/honorModeRetired.ts: 1 (ratchet allows 0)
++     35: [no longer] * (the 0.7 squash, or the importer no longer accepting older files).",
++   "src/lib/server/sessions/settings.ts: 1 (ratchet allows 0)
++     335: [no longer] * are no longer its business — that is sheet latitude (`state/handEdits.ts`).",
++   "src/lib/server/sockets/localOnnxModels.ts: 1 (ratchet allows 0)
++     1125: [no longer] * exist (`ensureLocalOnnxConnections`), so their existence no longer says",
++   "src/lib/server/utils/activityStore.ts: 2 (ratchet allows 1)
++     290: [used to] * the progress the composer's notice used to carry. Written only by
++     630: [deliberately not] // Deliberately NOT startScene's abort-and-evict, for two different",
++   "src/lib/server/utils/androidWrapper.ts: 1 (ratchet allows 0)
++     3: [used to] * this env var before spawning the server). Used to hide features that don't",
++ ]
+
+ ❯ src/lib/shared/conformance/commentHistory.test.ts:79:5
+     77|       `lower count. Do not weaken the phrase list to pass this.`
+     78|     : undefined
+     79|   ).toEqual([])
+       |     ^
+     80|  })
+     81| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 37 passed (38)
+      Tests  1 failed | 467 passed (468)
+   Start at  22:42:12
+   Duration  160.15s (transform 19.80s, setup 248ms, import 32.95s, tests 440.01s, environment 276ms)
+

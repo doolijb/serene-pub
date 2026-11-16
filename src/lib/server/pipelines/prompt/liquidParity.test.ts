@@ -408,22 +408,91 @@ describe("the shipped variable layouts render identically in both engines", () =
 		["relationshipsKnown/content", {}],
 		[
 			"currentDate/content",
-			{ currentDate: { year: 412, month: 3, day: 4 } }
+			{ currentDate: { year: { number: 412 }, month: { number: 3 }, day: { number: 4 }, time: null } }
 		],
-		// Month zero: present, and falsy. `isSet` exists for exactly this.
-		["currentDate/content", { currentDate: { year: 412, month: 0 } }],
-		["currentDate/content", { currentDate: { year: 412 } }],
-		["currentDate/wrapped", { currentDate: { year: 412, month: 12 } }],
-		// A stored clock's time of day, and a declared calendar's spelling
-		// (DESIGN-story-time P5), which wins over the parts.
+		// Month zero: present, and an object, so it prints.
+		["currentDate/content", { currentDate: { year: { number: 412 }, month: { number: 0 } } }],
+		["currentDate/content", { currentDate: { year: { number: 412 } } }],
+		["currentDate/wrapped", { currentDate: { year: { number: 412 }, month: { number: 12 } } }],
+		// A stored clock's time of day, and a declared calendar's spelling,
+		// which wins over the numbers.
 		[
 			"currentDate/content",
-			{ currentDate: { year: 412, month: 3, day: 4, hour: 9, minute: 5 } }
+			{
+				currentDate: {
+					year: { number: 412 },
+					month: { number: 3 },
+					day: { number: 4 },
+					time: { hour: 9, minute: 5 }
+				}
+			}
 		],
 		[
 			"currentDate/content",
-			{ currentDate: { year: 412, month: 3, day: 4, label: "4 Thaw, Year 412" } }
-		]
+			{
+				currentDate: {
+					year: { number: 412, name: "Year 412" },
+					month: { number: 3, name: "Thaw" },
+					day: { number: 4 },
+					time: null
+				}
+			}
+		],
+		[
+			"history/content",
+			{
+				history: [
+					{
+						date: { year: { number: 412 }, month: { number: 3 }, day: { number: 3 }, time: null },
+						dateDelta: { sign: -1, year: 0, month: 0, day: 2, time: null },
+						content: 'Said "go".'
+					},
+					{
+						date: { year: { number: 412 }, month: { number: 1 }, day: null, time: null },
+						dateDelta: null,
+						content: "Ash left."
+					}
+				]
+			}
+		],
+		["history/content", { history: [] }],
+		[
+			"history/wrapped",
+			{
+				history: [
+					{ date: { year: { number: 5 }, month: null, day: null, time: null }, content: "x" }
+				]
+			}
+		],
+		[
+			"earlierScenes/content",
+			{
+				earlierScenes: [
+					{
+						name: "The ferry",
+						summary: "They crossed.",
+						dateDelta: { sign: -1, year: 0, month: 1, day: null, time: null }
+					},
+					{ name: "The oath", summary: "Sworn.", dateDelta: null }
+				]
+			}
+		],
+		["earlierScenes/content", { earlierScenes: [] }],
+		[
+			"storyCalendar/content",
+			{
+				storyCalendar: {
+					months: [
+						{ name: "Thaw", days: 30 },
+						{ name: "Bloom", days: 31 }
+					],
+					weekdays: ["Moonday", "Tirsday"],
+					leap: { every: 4, month: 2 },
+					eras: [{ name: "BR", backwards: true }, { name: "AR", start: 1 }]
+				}
+			}
+		],
+		["storyCalendar/content", { storyCalendar: { months: [{ name: "Thaw", days: 30 }] } }]
 	]
 
 	for (const [id, variables] of cases)

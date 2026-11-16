@@ -1,0 +1,356 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-scenes-routine-summary-P6a85H/data/serene-pub.db
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/scenes.routineSummary.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ❯ |int| src/lib/server/sockets/scenes.routineSummary.int.test.ts (15 tests | 1 failed) 22571ms
+     × saves the summary, done, origin routine, the spec that ran; the model's name replaces an automatic name; no record, settle or event 1584ms
+stdout | src/lib/server/scenes/liveScenes.autoApply.int.test.ts > a scene closes > closed by a person (closeScene): what it covers applies, later items stay held; the record names the scene, not a person
+Using PGlite database at: /tmp/serene-pub-vitest-live-auto-apply-3WewTl/data/serene-pub.db
+
+ ❯ |int| src/lib/server/scenes/liveScenes.autoApply.int.test.ts (13 tests | 1 failed) 4528ms
+     × closed by a person (closeScene): what it covers applies, later items stay held; the record names the scene, not a person 721ms
+ ❯ |int| src/lib/server/lorebooks/autoApply.int.test.ts (18 tests | 2 failed) 3937ms
+     × scene-close applies what the closed scene covers and leaves later items held; records carry the cause, never a person 194ms
+     × a scene whose summary still runs elsewhere gates items from its start, on any channel 104ms
+ ❯ |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts (10 tests | 5 failed) 3260ms
+     × with nothing to apply, a closed scene settles through its end: Back at or below is refused, after it is not 154ms
+     × nothing settles while the scene's summary runs or is in review; it settles when the summary is saved 51ms
+     × a waiting summary's start caps the settle at the message before it 42ms
+     × an item still waiting before the scene's end keeps the settle below it 71ms
+     × what is applied and what is settled come back together: the furthest settle, the Apply's previous 69ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > scene-close applies what the closed scene covers and leaves later items held; records carry the cause, never a person
+AssertionError: expected { moved: true, …(2) } to match object { moved: true, settledMessageId: 3 }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "moved": true,
+-   "settledMessageId": 3,
++   "settledMessageId": 2,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:272:25
+    270|   expect((record!.cause as any).by).toBeUndefined()
+    271|   // The story settles through the scene's end (m[1]); the held item a…
+    272|   expect(done!.settled).toMatchObject({
+       |                         ^
+    273|    moved: true,
+    274|    settledMessageId: m[1]!.id
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > a scene whose summary still runs elsewhere gates items from its start, on any channel
+AssertionError: expected { lorebookId: 9, applied: [], …(10) } to be null
+
+- Expected:
+null
+
++ Received:
+{
+  "applied": [],
+  "appliedChanges": [],
+  "appliedLinks": [],
+  "batch": null,
+  "dropped": [],
+  "droppedLinks": [],
+  "heldDays": [],
+  "lorebookId": 9,
+  "mergedDays": [],
+  "settled": {
+    "moved": true,
+    "previousSettledMessageId": 20,
+    "settledMessageId": 21,
+  },
+  "stillHeld": [],
+  "userId": 5,
+}
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:341:49
+    339|   expect(await inNotes(w.session.id)).toEqual([eB.id, eC.id])
+    340|   // Items from the waiting start on stay held; close-out is held back…
+    341|   expect(await auto(w.session.id, "close-out")).toBeNull()
+       |                                                 ^
+    342|  })
+    343|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles when a scene closes > with nothing to apply, a closed scene settles through its end: Back at or below is refused, after it is not
+AssertionError: expected { lorebookId: 2, applied: [], …(10) } to match object { applied: [], …(10) }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+@@ -8,10 +8,10 @@
+    "heldDays": [],
+    "mergedDays": [],
+    "settled": {
+      "moved": true,
+      "previousSettledMessageId": null,
+-     "settledMessageId": 4,
++     "settledMessageId": 1,
+    },
+    "stillHeld": [],
+    "userId": 2,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:171:16
+    169|   })
+    170|   const done = await auto(w.session.id, "scene-close", s1.id)
+    171|   expect(done).toMatchObject({
+       |                ^
+    172|    applied: [],
+    173|    appliedChanges: [],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles when a scene closes > nothing settles while the scene's summary runs or is in review; it settles when the summary is saved
+AssertionError: expected { moved: true, …(2) } to match object { moved: true, settledMessageId: 9 }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "moved": true,
+-   "settledMessageId": 9,
++   "settledMessageId": 6,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:216:25
+    214|    .where(eq(schema.scenes.id, s1.id))
+    215|   const done = await auto(w.session.id, "scene-summary", s1.id)
+    216|   expect(done!.settled).toMatchObject({
+       |                         ^
+    217|    moved: true,
+    218|    settledMessageId: m[2]!.id
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles when a scene closes > a waiting summary's start caps the settle at the message before it
+AssertionError: expected { moved: true, …(2) } to match object { moved: true, settledMessageId: 24 }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "moved": true,
+-   "settledMessageId": 24,
++   "settledMessageId": 22,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:323:25
+    321|   const done = await auto(w.session.id, "scene-close", s1.id)
+    322|   expect(done!.applied).toEqual([])
+    323|   expect(done!.settled).toMatchObject({
+       |                         ^
+    324|    moved: true,
+    325|    settledMessageId: m[2]!.id - 1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles when a scene closes > an item still waiting before the scene's end keeps the settle below it
+AssertionError: expected { moved: true, …(2) } to match object { moved: true, settledMessageId: 29 }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "moved": true,
+-   "settledMessageId": 29,
++   "settledMessageId": 27,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:352:25
+    350|   const done = await auto(w.session.id, "scene-close", s1.id)
+    351|   expect(done!.appliedChanges).toEqual([])
+    352|   expect(done!.settled).toMatchObject({
+       |                         ^
+    353|    moved: true,
+    354|    settledMessageId: m[2]!.id - 1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles when a scene closes > what is applied and what is settled come back together: the furthest settle, the Apply's previous
+AssertionError: expected { lorebookId: 21, …(11) } to match object { applied: [ 12 ], settled: { …(3) } }
+(10 matching properties omitted from actual)
+
+- Expected
++ Received
+
+@@ -3,8 +3,8 @@
+      12,
+    ],
+    "settled": {
+      "moved": true,
+      "previousSettledMessageId": null,
+-     "settledMessageId": 39,
++     "settledMessageId": 37,
+    },
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:385:16
+    383|   })
+    384|   const done = await auto(w.session.id, "scene-close", s1.id)
+    385|   expect(done).toMatchObject({
+       |                ^
+    386|    applied: [keep.id],
+    387|    settled: {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  |int| src/lib/server/scenes/liveScenes.autoApply.int.test.ts > a scene closes > closed by a person (closeScene): what it covers applies, later items stay held; the record names the scene, not a person
+AssertionError: expected 2 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 2
+
+ ❯ src/lib/server/scenes/liveScenes.autoApply.int.test.ts:253:33
+    251|    .where(eq(schema.sessions.id, w.session.id))
+    252|   // The story settles through the scene's end, applied or not.
+    253|   expect(row!.settledMessageId).toBe(w.lines[1]!.id)
+       |                                 ^
+    254|  })
+    255|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/scenes.routineSummary.int.test.ts > the routine under Full saves by itself > saves the summary, done, origin routine, the spec that ran; the model's name replaces an automatic name; no record, settle or event
+AssertionError: expected 1 to be null
+
+- Expected:
+null
+
++ Received:
+1
+
+ ❯ src/lib/server/sockets/scenes.routineSummary.int.test.ts:355:53
+    353|
+    354|   expect(await loreSourcesOf(w.session.id)).toEqual([])
+    355|   expect(await settledLineOf(asDb(), w.session.id)).toBeNull()
+       |                                                     ^
+    356|   expect((await sessionRow(w.session.id)).settledMessageId).toBeNull()
+    357|   expect(applied()).toEqual([])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯
+
+
+ Test Files  4 failed | 3 passed (7)
+      Tests  9 failed | 69 passed (78)
+   Start at  02:53:37
+   Duration  38.91s (transform 10.44s, setup 69ms, import 7.05s, tests 107.14s, environment 2ms)
+

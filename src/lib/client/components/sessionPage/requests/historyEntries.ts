@@ -18,6 +18,10 @@
  * - 🚧 **Not yet compiled** (`unfiledDays`, ★S2-1b): this session's unfiled
  *   scenes on its line, by day — S5's `unfiledScenesByDay`, the History
  *   lens's own grouping, never a second rule;
+ * - 🚧 with the timeline off (`timeline: false`) the answer reads no history
+ *   entries or lines and lists every scene of this session on its line in
+ *   played order, as one group; start-history-entry and compile-history-entry
+ *   still read them (the server refuses them with its own sentence);
  * - 🚧 the open scene (live scenes §7): `scenes:openScenes` — its lines so
  *   far and its proposed cast, read fresh on each ask — and the session's
  *   summary mode off the same reply's scene settings.
@@ -207,10 +211,13 @@ export function throughLabelOf(throughAt: string | null | undefined): string {
 /**
  * Everything the Chronicle reads, composed (the module note). Also what
  * `start-history-entry` starts from: `currentRow` and the line.
+ * `answering`: true on the `history-entries` answer path: with the timeline
+ * off it reads no history entries and no lines.
  */
 export async function readChronicle(
 	deps: HistoryEntriesDeps,
-	earlierLimit: number
+	earlierLimit: number,
+	answering = false
 ): Promise<{
 	answer: HistoryEntriesV1
 	currentRow: HistoryRow | null
@@ -225,7 +232,18 @@ export async function readChronicle(
 		throw new Error("the server did not say where the story stands")
 	deps.noteStoryClock?.(ownClockOf(reading))
 	deps.noteStoryCalendar?.(reading.calendar ?? null)
-	const clock = storyClockV1(reading)
+	const timeline = reading.timeline !== false
+	// 🚧 No timeline: the clock has no present.
+	const clock = timeline
+		? storyClockV1(reading)
+		: {
+				present: null,
+				label: "",
+				own: false,
+				linePresent: null,
+				linePresentLabel: "",
+				behind: false
+			}
 	// 🚧 No shared lorebook: the session's own book (its Session notes, one line) — the clock reading
 	// names none (the server's storyClock read does not look at it; its clock reads unset there).
 	const own = reading.lorebookId == null ? (deps.ownBookId?.() ?? null) : null
@@ -234,6 +252,7 @@ export async function readChronicle(
 	const empty: HistoryEntriesV1 = {
 		lorebookId,
 		ownerOnly: reading.isOwner !== true,
+		timeline,
 		clock,
 		current: null,
 		scenes: [],
@@ -245,10 +264,13 @@ export async function readChronicle(
 	if (lorebookId == null || reading.isOwner !== true)
 		return { answer: empty, currentRow: null, branchId }
 
-	const [rows, branches] = await Promise.all([
-		deps.readHistory(lorebookId),
-		deps.readLines(lorebookId)
-	])
+	const timeless = !timeline && answering
+	const [rows, branches] = timeless
+		? [[] as HistoryRow[], [] as LineBranch[]]
+		: await Promise.all([
+				deps.readHistory(lorebookId),
+				deps.readLines(lorebookId)
+			])
 	const calendar = readStoryCalendar(reading.calendar ?? null)
 	const moment = storyTimeOf(reading.present)
 	const onLine = rowsReadingOnLine(
@@ -288,7 +310,7 @@ export async function readChronicle(
 			sceneCount: sceneCount.get(r.id) ?? 0
 		}
 	}
-	const currentRow = onLine[0] ?? null
+	const currentRow = timeless ? null : (onLine[0] ?? null)
 	const counts = extendCountsOf(scenes, { branchId, sessionId })
 	const cap = Math.min(EARLIER_MAX, Math.max(0, earlierLimit))
 
@@ -302,7 +324,7 @@ export async function readChronicle(
 				id: open.id,
 				name: open.name?.trim() ? open.name : null,
 				channel: open.channel ?? "main",
-				since: open.since ?? "",
+				since: timeless ? "" : (open.since ?? ""),
 				lineCount: open.lineCount,
 				order: order.get(open.id) ?? order.size,
 				cast: open.cast.map((c) => ({
@@ -349,19 +371,38 @@ export async function readChronicle(
 						)
 						.map(sceneOf)
 				: [],
-			unfiledDays: unfiledScenesByDay(scenes, branchId).map((d) => ({
-				date: d.date
-					? {
-							year: d.date.year,
-							...(d.date.month != null
-								? { month: d.date.month }
-								: {}),
-							...(d.date.day != null ? { day: d.date.day } : {})
+			unfiledDays: timeless
+				? [
+						{
+							date: null,
+							label: "",
+							scenes: scenes
+								.filter(
+									(s) => (s.branchId ?? null) === branchId
+								)
+								.sort(
+									(a, b) =>
+										(order.get(a.id) ?? 0) -
+										(order.get(b.id) ?? 0)
+								)
+								.map(sceneOf)
 						}
-					: null,
-				label: d.date ? formatDate(d.date, calendar) : "",
-				scenes: d.scenes.map((x) => sceneOf(x as SceneRow))
-			})),
+					]
+				: unfiledScenesByDay(scenes, branchId).map((d) => ({
+						date: d.date
+							? {
+									year: d.date.year,
+									...(d.date.month != null
+										? { month: d.date.month }
+										: {}),
+									...(d.date.day != null
+										? { day: d.date.day }
+										: {})
+								}
+							: null,
+						label: d.date ? formatDate(d.date, calendar) : "",
+						scenes: d.scenes.map((x) => sceneOf(x as SceneRow))
+					})),
 			earlier: onLine.slice(1, 1 + cap).map(entryOf),
 			earlierTotal: Math.max(0, onLine.length - 1),
 			ungraphedScenes: counts.ready + counts.unsummarized
@@ -392,7 +433,8 @@ export async function answerHistoryEntries(
 	return (
 		await readChronicle(
 			deps,
-			(limit as number | undefined) ?? EARLIER_DEFAULT
+			(limit as number | undefined) ?? EARLIER_DEFAULT,
+			true
 		)
 	).answer
 }

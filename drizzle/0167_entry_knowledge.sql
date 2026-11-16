@@ -1,0 +1,3 @@
+ALTER TABLE "lorebook_entries" ADD COLUMN "not_common_knowledge" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "narrative_relationships" ADD COLUMN "knowledge_kind" text;--> statement-breakpoint
+ALTER TABLE "narrative_relationships" ADD CONSTRAINT "narrative_relationships_knowledge_check" CHECK ("narrative_relationships"."knowledge_kind" IS NULL OR ("narrative_relationships"."knowledge_kind" IN ('was_told','knows','has_been_there','kept_from') AND "narrative_relationships"."from_node_id" IS NOT NULL AND "narrative_relationships"."to_entry_id" IS NOT NULL AND "narrative_relationships"."reverse_relationship_type" IS NULL));

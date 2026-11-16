@@ -7,7 +7,7 @@
  * carries the run. State, zones and proposals carry that on their own rows
  * (`state/write.ts`, `rulesets/zones.ts`); a write on a lorebook row — an
  * entry's field, a tie's words on its relationship row, a cast member's
- * state, the notes' rule-fed overlay, a room or a link a run filed — leaves
+ * state, an entry's dated version, the notes' rule-fed overlay, a room or a link a run filed — leaves
  * an **imprint** here (`lore_imprints`): the field, what it held before and
  * after, or the row it made. One table for every lorebook subject, because
  * the question is the same for all of them: *is this still as the run left
@@ -46,14 +46,15 @@
  * its `tx` (the outer `db` deadlocks PGlite). Never statically imports
  * `$lib/server/db`.
  */
-import { and, desc, eq, gt, inArray, isNull, ne, or } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, or } from "drizzle-orm"
 import { i18nText } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { KeptImprint } from "$lib/shared/entries/types"
+import { formatDate } from "$lib/shared/lorebooks/storyDate"
 import { assertRetractable, settledLineOf } from "$lib/server/sessions/settle"
 
 /** What an imprint is written on: its subject's kind. */
-export const IMPRINT_SUBJECTS = ["entry", "relationship", "member", "overlay", "annex"] as const
+export const IMPRINT_SUBJECTS = ["entry", "relationship", "version", "member", "overlay", "annex"] as const
 export type ImprintSubject = (typeof IMPRINT_SUBJECTS)[number]
 
 /**
@@ -169,6 +170,8 @@ const without = (snap: Record<string, unknown>, keys: ReadonlySet<string>) =>
 const ENTRY_DERIVED = new Set(["embedTextHash", "annotationTextHash"])
 const RELATIONSHIP_DERIVED = new Set(["embedding", "embeddingModel", "embeddingSourceHash", "vectorizedAt"])
 
+const AMENDMENTS = schema.entryAmendments
+
 const SUBJECTS: Record<ImprintSubject, SubjectAccess> = {
 	entry: {
 		async row(db, id) {
@@ -211,37 +214,153 @@ const SUBJECTS: Record<ImprintSubject, SubjectAccess> = {
 			await db.delete(E).where(eq(E.id, id))
 		},
 		async insert(db, snapshot) {
-			await db.insert(E).values(withDates(without(snapshot, ENTRY_DERIVED), ["createdAt", "updatedAt"]) as never)
+			const values = withDates(without(snapshot, ENTRY_DERIVED), ["createdAt", "updatedAt"])
+			// The stored slot is kept while free; (book, type, position) is unique.
+			const [taken] = await db
+				.select({ id: E.id })
+				.from(E)
+				.where(
+					and(
+						eq(E.lorebookId, values.lorebookId as number),
+						eq(E.typeId, values.typeId as string),
+						eq(E.position, values.position as number)
+					)
+				)
+				.limit(1)
+			if (taken) {
+				const { nextPosition } = await import("$lib/server/utils/lorebookEntries")
+				values.position = await nextPosition(db as never, values.lorebookId as number, values.typeId as string)
+			}
+			await db.insert(E).values(values as never)
 		},
 		ignored: new Set(["id", "createdAt", "updatedAt", "position", ...ENTRY_DERIVED]),
+		// What stands on a made entry, whichever session or book it is in: a link
+		// that touches it, an entry filed under it, an amendment on it (another
+		// session's held change included), another session's annotation naming
+		// it, another session's values on it. The same checks Take back makes. An entry held stays, and its
+		// imprint is kept.
 		async holds(db, id, imprint) {
-			// A link kept in another session's notes is that session's own: it
-			// never holds an entry for this run's undo. A link in the lorebook,
-			// or in this session's own notes, does.
 			const [link] = await db
 				.select({ id: R.id })
 				.from(R)
-				.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, R.lorebookId))
-				.where(
-					and(
-						or(eq(R.fromEntryId, id), eq(R.toEntryId, id)),
-						or(
-							isNull(schema.lorebooks.sessionId),
-							eq(schema.lorebooks.sessionId, imprint.sessionId)
-						)
-					)
-				)
+				.where(or(eq(R.fromEntryId, id), eq(R.toEntryId, id)))
 				.limit(1)
 			if (link) return true
 			const [child] = await db.select({ id: E.id }).from(E).where(eq(E.anchorEntryId, id)).limit(1)
 			if (child) return true
+			// This session's own held change goes with its turn (it is taken after
+			// the imprints); any other amendment holds.
 			const [amended] = await db
 				.select({ id: schema.entryAmendments.id })
 				.from(schema.entryAmendments)
-				// A held amendment is one session's own change; it never blocks taking back a made entry.
-				.where(and(eq(schema.entryAmendments.entryId, id), isNull(schema.entryAmendments.base)))
+				.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, schema.entryAmendments.lorebookId))
+				.where(
+					and(
+						eq(schema.entryAmendments.entryId, id),
+						or(
+							isNull(schema.entryAmendments.base),
+							isNull(schema.lorebooks.sessionId),
+							ne(schema.lorebooks.sessionId, imprint.sessionId)
+						)
+					)
+				)
 				.limit(1)
-			return !!amended
+			if (amended) return true
+			const [namedByMessage] = await db
+				.select({ messageId: schema.messageAnnotations.messageId })
+				.from(schema.messageAnnotations)
+				.innerJoin(schema.messages, eq(schema.messages.id, schema.messageAnnotations.messageId))
+				.where(
+					and(
+						eq(schema.messageAnnotations.refEntryId, id),
+						ne(schema.messages.sessionId, imprint.sessionId)
+					)
+				)
+				.limit(1)
+			if (namedByMessage) return true
+			const [namedByNote] = await db
+				.select({ entryId: schema.entryAnnotations.entryId })
+				.from(schema.entryAnnotations)
+				.innerJoin(E, eq(E.id, schema.entryAnnotations.entryId))
+				.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, E.lorebookId))
+				.where(
+					and(
+						eq(schema.entryAnnotations.refEntryId, id),
+						isNotNull(schema.lorebooks.sessionId),
+						ne(schema.lorebooks.sessionId, imprint.sessionId)
+					)
+				)
+				.limit(1)
+			if (namedByNote) return true
+			for (const table of [schema.attributeValues, schema.attributeConfigs]) {
+				const [theirs] = await db
+					.select({ id: table.id })
+					.from(table)
+					.where(
+						and(
+							inArray(table.ownerKind, ["location", "session_location"]),
+							eq(table.ownerId, id),
+							or(
+								and(isNotNull(table.sessionId), ne(table.sessionId, imprint.sessionId)),
+								and(
+									isNull(table.sessionId),
+									or(isNull(table.sourceSessionId), ne(table.sourceSessionId, imprint.sessionId))
+								)
+							)
+						)
+					)
+					.limit(1)
+				if (theirs) return true
+			}
+			return false
+		}
+	},
+	/**
+	 * An entry's dated version (`entry_amendments`, `base` NULL), by its own
+	 * id: the field is a wire key inside its `fields`; no field is a version
+	 * the turn made.
+	 */
+	version: {
+		async row(db, id) {
+			const [row] = await db.select().from(AMENDMENTS).where(eq(AMENDMENTS.id, id)).limit(1)
+			return (row as Record<string, unknown> | undefined) ?? null
+		},
+		bookOf: (row) => row.lorebookId as number,
+		read: (row, field) => ((row.fields ?? {}) as Record<string, unknown>)[field],
+		async write(db, id, field, value) {
+			const [row] = await db.select({ fields: AMENDMENTS.fields }).from(AMENDMENTS).where(eq(AMENDMENTS.id, id)).limit(1)
+			if (!row) return
+			const fields = { ...(row.fields ?? {}) }
+			if (value === undefined) delete fields[field]
+			else fields[field] = value
+			await db.update(AMENDMENTS).set({ fields, updatedAt: new Date() }).where(eq(AMENDMENTS.id, id))
+		},
+		async remove(db, id) {
+			await db.delete(AMENDMENTS).where(eq(AMENDMENTS.id, id))
+		},
+		async insert(db, snapshot) {
+			await db.insert(AMENDMENTS).values(withDates(snapshot, ["createdAt", "updatedAt"]) as never)
+		},
+		ignored: new Set(["id", "createdAt", "updatedAt"]),
+		// An edit-history row of a person, or of another session, stands on the version.
+		async holds(db, id, imprint) {
+			const [theirs] = await db
+				.select({ id: schema.loreRedlines.id })
+				.from(schema.loreRedlines)
+				.where(
+					and(
+						eq(schema.loreRedlines.amendmentId, id),
+						or(
+							isNotNull(schema.loreRedlines.userId),
+							and(
+								isNotNull(schema.loreRedlines.sessionId),
+								ne(schema.loreRedlines.sessionId, imprint.sessionId)
+							)
+						)
+					)
+				)
+				.limit(1)
+			return !!theirs
 		}
 	},
 	relationship: {
@@ -435,7 +554,7 @@ export async function imprintChanges(
 export async function imprintMade(
 	db: Db,
 	anchor: ImprintAnchor,
-	at: { lorebookId: number; subject: "entry" | "relationship"; subjectId: number }
+	at: { lorebookId: number; subject: "entry" | "relationship" | "version"; subjectId: number }
 ): Promise<void> {
 	const row = await SUBJECTS[at.subject].row(db, at.subjectId)
 	if (!row) return
@@ -474,10 +593,17 @@ export async function imprintAnchorFor(
 
 /** What the retraction did with one imprint — enough to put it back. */
 export type TakenImprint =
-	| { act: "reverted"; imprint: LoreImprintRow }
+	| { act: "reverted"; imprint: LoreImprintRow; redline?: import("$lib/server/lorebooks/redlines").RedlineTaken }
 	| { act: "spliced"; imprint: LoreImprintRow; later: { id: number; before: Wrapped } }
 	| { act: "kept"; imprint: LoreImprintRow }
-	| { act: "unmade"; imprint: LoreImprintRow; row: Record<string, unknown>; orphans: LoreImprintRow[] }
+	| {
+			act: "unmade"
+			imprint: LoreImprintRow
+			row: Record<string, unknown>
+			orphans: LoreImprintRow[]
+			/** A version's Edit history rows, taken by its cascade; absent on a record stored without them. */
+			redlines?: NonNullable<import("$lib/server/lorebooks/redlines").RedlineTaken["row"]>[]
+	  }
 	| { act: "dropped"; imprint: LoreImprintRow }
 
 /** Which imprints a retraction walks: a message's (swipe, delete), or a turn's runs' (a retake). */
@@ -532,6 +658,7 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 		.orderBy(desc(I.id))) as LoreImprintRow[]
 	const taken: TakenImprint[] = []
 	const notesCache = new Map<number, boolean>()
+	const sessionBooks = new Map<number, number | null>()
 	/** Kept by THIS retraction: an earlier write of the same message joins its note rather than adding a second. */
 	const keptNow = new Set<number>()
 	const drop = (id: number) => db.delete(I).where(eq(I.id, id))
@@ -545,6 +672,24 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 			await drop(imprint.id)
 			taken.push({ act: "dropped", imprint })
 			continue
+		}
+		// Back never writes into a book its session no longer reads: a
+		// version there stays as it is, and its record is kept.
+		if (subject === "version") {
+			if (!sessionBooks.has(imprint.sessionId)) {
+				const [s] = await db
+					.select({ lorebookId: schema.sessions.lorebookId })
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, imprint.sessionId))
+					.limit(1)
+				sessionBooks.set(imprint.sessionId, s?.lorebookId ?? null)
+			}
+			if (sessionBooks.get(imprint.sessionId) !== imprint.lorebookId) {
+				await db.update(I).set({ status: "kept" }).where(eq(I.id, imprint.id))
+				keptNow.add(imprint.id)
+				taken.push({ act: "kept", imprint })
+				continue
+			}
 		}
 		const notes = await isNotes(db, imprint.lorebookId, notesCache)
 		if (imprint.field != null) {
@@ -579,7 +724,21 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 				// 2–3. The notes always; a book while the field is as the run left it.
 				await access.write(db, imprint.subjectId, imprint.field, unwrap(imprint.before))
 				await drop(imprint.id)
-				taken.push({ act: "reverted", imprint })
+				// The run's Edit history row goes with its write.
+				const redline =
+					subject === "entry" || subject === "version"
+						? await (
+								await import("$lib/server/lorebooks/redlines")
+							).takeBackRedline(db, {
+								entryId: subject === "version" ? (row.entryId as number) : imprint.subjectId,
+								...(subject === "version" ? { amendmentId: imprint.subjectId } : {}),
+								sessionId: imprint.sessionId,
+								messageId: imprint.messageId,
+								runId: imprint.runId,
+								address: imprint.field
+							})
+						: null
+				taken.push({ act: "reverted", imprint, ...(redline ? { redline } : {}) })
 				continue
 			}
 			// 3. Changed since, on a real book: it stays, and says so.
@@ -607,11 +766,22 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 				.every((k) => sameValue(row[k] ?? undefined, asMade[k] ?? undefined)) &&
 			!(await access.holds?.(db, imprint.subjectId, imprint))
 		if (notes || untouched) {
+			// A version's Edit history rows go by cascade: read them first.
+			const redlines =
+				subject === "version"
+					? await (await import("$lib/server/lorebooks/redlines")).redlinesOfVersion(db, imprint.subjectId)
+					: []
 			await access.remove!(db, imprint.subjectId)
 			// What a later run wrote on the row went with it.
 			if (laterOnRow.length) await db.delete(I).where(inArray(I.id, laterOnRow.map((l) => l.id)))
 			await drop(imprint.id)
-			taken.push({ act: "unmade", imprint, row: plain(row) as Record<string, unknown>, orphans: laterOnRow })
+			taken.push({
+				act: "unmade",
+				imprint,
+				row: plain(row) as Record<string, unknown>,
+				orphans: laterOnRow,
+				...(redlines.length ? { redlines } : {})
+			})
 			continue
 		}
 		await db.update(I).set({ status: "kept" }).where(eq(I.id, imprint.id))
@@ -647,6 +817,8 @@ export async function restoreImprints(db: Db, taken: readonly TakenImprint[]): P
 			await access.insert!(db, t.row)
 			await db.insert(I).values(t.imprint as never)
 			if (t.orphans.length) await db.insert(I).values(t.orphans as never)
+			if (t.redlines?.length)
+				await (await import("$lib/server/lorebooks/redlines")).putBackVersionRedlines(db, t.redlines)
 			changed = true
 			continue
 		}
@@ -655,6 +827,7 @@ export async function restoreImprints(db: Db, taken: readonly TakenImprint[]): P
 		if (row && sameValue(access.read(row, t.imprint.field!), unwrap(t.imprint.before))) {
 			await access.write(db, t.imprint.subjectId, t.imprint.field!, unwrap(t.imprint.after))
 			changed = true
+			if (t.redline) await (await import("$lib/server/lorebooks/redlines")).putBackRedline(db, t.redline)
 		}
 		await db.insert(I).values(t.imprint as never)
 	}
@@ -703,20 +876,76 @@ export async function keptImprintsByEntry(
 			)
 		)
 		.orderBy(I.id)) as { imprint: LoreImprintRow; typeId: string }[]
-	if (!rows.length) return out
+	const versionRows = (await db
+		.select({
+			imprint: I,
+			typeId: E.typeId,
+			entryId: AMENDMENTS.entryId,
+			year: AMENDMENTS.year,
+			month: AMENDMENTS.month,
+			day: AMENDMENTS.day
+		})
+		.from(I)
+		.innerJoin(AMENDMENTS, eq(AMENDMENTS.id, I.subjectId))
+		.innerJoin(E, eq(E.id, AMENDMENTS.entryId))
+		.where(
+			and(
+				eq(I.lorebookId, lorebookId),
+				eq(I.status, "kept"),
+				eq(I.subjectKind, "version"),
+				inArray(AMENDMENTS.entryId, [...entryIds])
+			)
+		)
+		.orderBy(I.id)) as {
+		imprint: LoreImprintRow
+		typeId: string
+		entryId: number
+		year: number | null
+		month: number | null
+		day: number | null
+	}[]
+	if (!rows.length && !versionRows.length) return out
 	const { entryDeclaration } = await import("$lib/server/entries/declarations")
-	for (const { imprint, typeId } of rows) {
+	const calendar = versionRows.length
+		? await (await import("$lib/server/state/storyTime")).bookCalendarOf(db, lorebookId)
+		: null
+	const all = [
+		...rows.map((r) => ({
+			...r,
+			entryId: r.imprint.subjectId,
+			version: false,
+			year: null as number | null,
+			month: null as number | null,
+			day: null as number | null
+		})),
+		...versionRows.map((r) => ({ ...r, version: true }))
+	].sort((a, b) => a.imprint.id - b.imprint.id)
+	for (const { imprint, typeId, entryId, version, year, month, day } of all) {
 		const decl = entryDeclaration(typeId) as { fields?: Record<string, { label?: unknown }> } | undefined
-		const list = out.get(imprint.subjectId) ?? []
+		const list = out.get(entryId) ?? []
+		const field = imprint.field
 		list.push({
 			id: imprint.id,
-			field: imprint.field,
-			label: imprint.field ? fieldLabel(imprint.field, decl) : null,
+			field,
+			label: !field
+				? null
+				: !version
+					? fieldLabel(field, decl)
+					: field === "name"
+						? "Name"
+						: field === "content"
+							? "Content"
+							: decl?.fields?.[field]
+								? fieldLabel(entryFieldAddress(field), decl)
+								: fieldLabel(field),
 			...(imprint.field && imprint.before ? { before: imprint.before.v } : {}),
 			...(imprint.after && imprint.field ? { after: imprint.after.v } : {}),
-			at: (imprint.createdAt instanceof Date ? imprint.createdAt : new Date(imprint.createdAt)).toISOString()
+			at: (imprint.createdAt instanceof Date ? imprint.createdAt : new Date(imprint.createdAt)).toISOString(),
+			...(version && year != null
+				? { versionDate: formatDate({ year, month, day }, calendar) }
+				: {})
 		})
-		out.set(imprint.subjectId, list)
+		out.set(entryId, list)
 	}
 	return out
 }
@@ -766,7 +995,9 @@ export async function markImprintsKept(
 export async function settleKeptImprint(
 	db: Db,
 	imprintId: number,
-	choice: "revert" | "keep"
+	choice: "revert" | "keep",
+	/** Who pressed Revert: an entry field's revert then keeps an Edit history row as that person. */
+	by?: { userId: number }
 ): Promise<{ lorebookId: number; subject: ImprintSubject; subjectId: number; typeId?: string }> {
 	const I = schema.loreImprints
 	const [imprint] = (await db
@@ -778,9 +1009,48 @@ export async function settleKeptImprint(
 	const subject = imprint.subjectKind as ImprintSubject
 	const access = SUBJECTS[subject]
 	const row = await access.row(db, imprint.subjectId)
+	const versionType =
+		subject === "version" && row
+			? (
+					await db
+						.select({ typeId: E.typeId })
+						.from(E)
+						.where(eq(E.id, row.entryId as number))
+						.limit(1)
+				)[0]?.typeId
+			: undefined
 	if (choice === "revert" && row && access.bookOf(row) === imprint.lorebookId) {
-		if (imprint.field != null) await access.write(db, imprint.subjectId, imprint.field, unwrap(imprint.before))
-		else {
+		if (imprint.field != null) {
+			await access.write(db, imprint.subjectId, imprint.field, unwrap(imprint.before))
+			if (subject === "version" && by) {
+				const after = await access.row(db, imprint.subjectId)
+				if (after)
+					await (
+						await import("$lib/server/lorebooks/redlines")
+					).recordRedline(db, {
+						entryId: row.entryId as number,
+						amendmentId: imprint.subjectId,
+						before: (row.fields ?? {}) as Record<string, unknown>,
+						after: (after.fields ?? {}) as Record<string, unknown>,
+						keys: [imprint.field],
+						cause: "revert",
+						by: { userId: by.userId }
+					})
+			}
+			if (subject === "entry" && by) {
+				const after = await access.row(db, imprint.subjectId)
+				if (after)
+					await (
+						await import("$lib/server/lorebooks/redlines")
+					).recordEntryRedline(db, {
+						before: row,
+						after,
+						named: [imprint.field],
+						cause: "revert",
+						by: { userId: by.userId }
+					})
+			}
+		} else {
 			await access.remove!(db, imprint.subjectId)
 			// What else was filed on the row went with it.
 			await db.delete(I).where(and(eq(I.subjectKind, subject), eq(I.subjectId, imprint.subjectId)))
@@ -791,7 +1061,8 @@ export async function settleKeptImprint(
 		lorebookId: imprint.lorebookId,
 		subject,
 		subjectId: imprint.subjectId,
-		...(subject === "entry" && row ? { typeId: row.typeId as string } : {})
+		...(subject === "entry" && row ? { typeId: row.typeId as string } : {}),
+		...(subject === "version" && versionType ? { typeId: versionType } : {})
 	}
 }
 

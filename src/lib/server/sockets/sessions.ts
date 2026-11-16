@@ -119,6 +119,7 @@ import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
 import { refusable } from "./refusable"
 import type { AutomaticApplyCause } from "$lib/server/lorebooks/ownBook"
+import { timelineDefaultFor } from "$lib/server/lorebooks/timeline"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import { resolveTaskConfig } from "../utils/resolveTaskConfig"
@@ -360,12 +361,6 @@ async function buildSessionsListFor(
 ): Promise<Sockets.Sessions.List.Response> {
 	// sessions:list only returns ROLEPLAY sessions
 	const sessionType = SessionTypes.ROLEPLAY
-	console.log(
-		"Fetching sessions for user:",
-		userId,
-		"sessionType:",
-		sessionType
-	)
 
 	// First, find all sessions where the current user is a guest
 	const guestSessions = await db.query.sessionGuests.findMany({
@@ -376,7 +371,6 @@ async function buildSessionsListFor(
 	})
 
 	const guestSessionIds = guestSessions.map((gc) => gc.sessionId)
-	console.log("User is guest in session IDs:", guestSessionIds)
 
 	const sessionsList = await db.query.sessions.findMany({
 		with: {
@@ -631,8 +625,15 @@ async function putCardsNow(
 		})
 	)
 	if (!ids.length) return
-	const { cardsNow } = await import("$lib/server/cast/seatedCast")
-	const now = await cardsNow(db as unknown as Db, ids)
+	const { cardsNow, cardNameplatesNow } = await import(
+		"$lib/server/cast/seatedCast"
+	)
+	// A read trimmed to the nameplate (the session list) never needs the whole
+	// card, and never writes a first version to get it.
+	const NAMEPLATE_FIELDS = ["id", "name", "nickname", "avatarMediaId"]
+	const now = opts.only?.every((k) => NAMEPLATE_FIELDS.includes(k))
+		? await cardNameplatesNow(db as unknown as Db, ids)
+		: await cardsNow(db as unknown as Db, ids)
 	const faces = new Map<number, { uuid: string; rev: number }>()
 	if (opts.avatar) {
 		const faceIds = [
@@ -1075,6 +1076,8 @@ export const sessionsCreateHandler: Handler<
 		let presetEnvoys: string[] = []
 		/** The preset's seeded swaps (`defaults.swaps`, R40). */
 		let presetSwaps: StoredSwapContribution[] = []
+		/** 🚧 The preset's `defaults`, for the new notes' Timeline default (`timelineDefaultFor`); null with no preset. */
+		let presetDefaults: unknown = null
 		{
 			const presetId = (params.session as any).presetId ?? null
 			if (presetId != null) {
@@ -1123,6 +1126,7 @@ export const sessionsCreateHandler: Handler<
 				presetSwaps = storedSwapsOf(
 					(preset.defaults as { swaps?: unknown } | null)?.swaps
 				)
+				presetDefaults = preset.defaults
 			}
 		}
 
@@ -1598,7 +1602,15 @@ export const sessionsCreateHandler: Handler<
 					name: row.name,
 					overlayOf: row.lorebookId ?? null,
 					primaryRuleset: row.primaryRuleset,
-					rulesetVersion: row.rulesetVersion ?? null
+					rulesetVersion: row.rulesetVersion ?? null,
+					...(row.lorebookId == null
+						? {
+								timelineEnabled: timelineDefaultFor(
+									getGenre(row.genreId),
+									{ defaults: presetDefaults }
+								)
+							}
+						: {})
 				})
 			// 🚧 The kit, copied into the session's own book (the one
 			// `ownBookFor` would make: the session's name, owner and
@@ -3708,6 +3720,14 @@ export const sessionsSetSessionPresetHandler: Handler<
 			.set({ presetId: preset.id, genreFields: fields, ...(rigour ? { rigour: rigour as any } : {}) })
 			.where(eq(schema.sessions.id, params.sessionId))
 		;(await import("$lib/server/pipelines/registrations/resolve")).invalidateRegistrations()
+		// A session that gains the *Summarize finished scenes* routine has its stored
+		// Summaries value converted at once.
+		try {
+			const { convertSummariesSetting } = await import("$lib/server/sessions/summariesToRoutine")
+			await convertSummariesSetting(db, params.sessionId)
+		} catch (err) {
+			console.warn("[sessions:setSessionPreset] the Summaries setting was not converted:", err)
+		}
 		// 🚧 An owner's setting change is an interaction (R11, R21; lane 6).
 		{
 			const { noteInteraction } = await import("$lib/server/pipelines/routines/interaction")
@@ -3715,6 +3735,12 @@ export const sessionsSetSessionPresetHandler: Handler<
 		}
 		const res = reply({ sessionId: params.sessionId, presetId: preset.id, presetName: preset.name })
 		await pushSessionToParticipants(socket.io, params.sessionId, userId)
+		// The page reads the scene cues once and relies on pushes: a preset that adds
+		// or drops the routine changes which Summarize buttons it offers.
+		{
+			const { pushSceneCues } = await import("$lib/server/scenes/boundaryWatcher")
+			await pushSceneCues(socket.io, params.sessionId)
+		}
 		return res
 	}
 }
@@ -5995,12 +6021,20 @@ async function buildSessionGetResponse(
 
 	await withSessionExtras(sessionData, sessionId)
 
+	// 🚧 The routine runs showing as running now (first page only).
+	let routineRuns: Sockets.Sessions.RunStatus.Response[] = []
+	if (beforeId == null) {
+		const { routineRunFramesOf } = await import("$lib/server/pipelines/routines/run")
+		routineRuns = routineRunFramesOf(sessionId)
+	}
+
 	return {
 		session: sessionData as any,
 		messages: (sessionData as any).sessionMessages || null,
 		pagination: { total, hasMore, ...(olderIn ? { olderIn } : {}) },
 		beforeId,
-		userDraft
+		userDraft,
+		...(routineRuns.length ? { routineRuns } : {})
 	}
 }
 
@@ -6202,7 +6236,6 @@ async function buildSessionRefresh(
 	await withSessionExtras(sessionData, sessionId)
 	return {
 		session: { ...(sessionData as any), sessionMessages: rows },
-		messages: rows,
 		coversFromId
 	}
 }
@@ -6623,6 +6656,10 @@ export const sessionsUpdateHandler: Handler<
 			// directly regardless of what the UI shows.
 			/** The genre's fields changed — a value a predicate may read (U5e, review W-A5). */
 			let fieldsMoved = false
+			/** 🚧 A confirmed clock move back under On revision = Branch: the branch's clock, set once everything else is saved. */
+			let clockBranchTo: ReturnType<typeof clockFromColumns>
+			/** 🚧 The branch that move made. */
+			let clockBranchId: number | undefined
 			if (sessionAccess.isOwner) {
 				const tags = params.tags || []
 
@@ -6804,19 +6841,59 @@ export const sessionsUpdateHandler: Handler<
 				// dates it checks (the clock, the stats a new book takes in)
 				// are checked and the row written in one transaction, under
 				// the book's calendar lock.
+				// 🚧 A clock moved back past this session's own dated writes follows
+				// its On revision, confirmed first: refused until confirmed, then
+				// Overwrite writes it as today and Branch leaves this session's
+				// clock and sets the branch's.
+				const clockAsked = clockFromColumns({
+					storyClockYear,
+					storyClockMonth,
+					storyClockDay,
+					storyClockHour,
+					storyClockMinute
+				})
+				let clockBranches = false
+				if (
+					clockAsked !== undefined &&
+					before &&
+					(lorebookBranchId === undefined || lorebookBranchId === before.lorebookBranchId) &&
+					JSON.stringify(clockAsked) !== JSON.stringify(clockFromColumns(before))
+				) {
+					const { clockMoveBackNotice } = await import("$lib/server/sessions/clockMoveBack")
+					const notice = await clockMoveBackNotice(
+						db,
+						before.id,
+						clockAsked === null ? { follow: true } : { to: clockAsked }
+					)
+					if (notice) {
+						if (params.confirmClockMoveBack !== true) throw new Error(notice.sentence)
+						if (notice.mode === "branch") {
+							// Refused before anything is written: a Branch needs a message to fork at.
+							const { newestLiveMessage, NO_MESSAGE_TO_BRANCH_AT } = await import("$lib/server/sessions/revision")
+							if ((await newestLiveMessage(db, before.id)) == null) throw new Error(NO_MESSAGE_TO_BRANCH_AT)
+							// And a clock the calendar cannot hold: the branch is made after
+							// the save, so the date is checked here, before either.
+							if (clockAsked) {
+								const { bookCalendarOf, clockProblem } = await import("$lib/server/state/storyTime")
+								const { ownBookOf, OWN_BOOK_CALENDAR } = await import("$lib/server/lorebooks/ownBook")
+								const clockBook = before.lorebookId ?? (await ownBookOf(db, before.id))?.id ?? null
+								const problem = clockProblem(
+									clockAsked,
+									clockBook != null ? await bookCalendarOf(db, clockBook) : OWN_BOOK_CALENDAR
+								)
+								if (problem) throw new Error(`That clock does not fit this lorebook. ${problem}`)
+							}
+							clockBranches = true
+						}
+					}
+				}
 				await db.transaction(async (tx) => {
 					const linePatch = await sessionLinePatch(tx, {
 						before: before ?? null,
 						session: before ? { id: before.id, name: before.name } : undefined,
 						lorebookId,
 						lorebookBranchId,
-						clock: clockFromColumns({
-							storyClockYear,
-							storyClockMonth,
-							storyClockDay,
-							storyClockHour,
-							storyClockMinute
-						})
+						clock: clockBranches ? undefined : clockAsked
 					})
 
 					// Genre fields MERGE over what is stored (2026-10-03): the
@@ -6853,6 +6930,7 @@ export const sessionsUpdateHandler: Handler<
 						})
 						.where(eq(schema.sessions.id, params.session.id!))
 				})
+				if (clockBranches) clockBranchTo = clockAsked ?? null
 				// The `playerLabel` override (lair re-plan R4): on the row's
 				// metadata, written as its own key so nothing else there moves.
 				// Only for a genre that declares a label — a rename of nothing
@@ -6887,10 +6965,36 @@ export const sessionsUpdateHandler: Handler<
 					const { writeSceneSettings } = await import(
 						"$lib/server/sessions/sceneSettings"
 					)
+					// A session with the *Summarize finished scenes* routine keeps no
+					// Summaries value: the routine's mode is its setting.
+					let sceneSettings = params.sceneSettings ?? null
+					try {
+						const [{ sessionRoutineMode }, { SCENE_SUMMARIES_SPEC_ID }] = await Promise.all([
+							import("$lib/server/pipelines/routines/sessionRoutines"),
+							import("@serene-pub/core-catalog")
+						])
+						if ((await sessionRoutineMode(db, params.session.id!, SCENE_SUMMARIES_SPEC_ID)) !== null) {
+							// A stored Never or On close that was never converted (an
+							// import, a routine added to the preset since) becomes the
+							// routine's mode BEFORE this save replaces the stored
+							// settings: a save, or *Use the genre's settings*, would
+							// otherwise wipe it and leave the routine on its preset's mode.
+							const { convertSummariesSetting } = await import(
+								"$lib/server/sessions/summariesToRoutine"
+							)
+							await convertSummariesSetting(db, params.session.id!)
+							if (sceneSettings && "summary" in sceneSettings) {
+								const { summary: _dropped, ...rest } = sceneSettings
+								sceneSettings = rest
+							}
+						}
+					} catch (err) {
+						console.warn("[sessions:update] the session's routines could not be read; the Summaries value was stored:", err)
+					}
 					await writeSceneSettings(
 						db,
 						params.session.id!,
-						params.sceneSettings ?? null
+						sceneSettings
 					)
 					const { pushSceneCues } = await import(
 						"$lib/server/scenes/boundaryWatcher"
@@ -7538,17 +7642,37 @@ export const sessionsUpdateHandler: Handler<
 				}
 			}
 
+			// 🚧 Branched after every write of the save, so the branch carries all of it.
+			if (clockBranchTo !== undefined) {
+				const { moveClockBackOnBranch } = await import("$lib/server/sessions/clockMoveBack")
+				const branched = await moveClockBackOnBranch(db, {
+					sessionId: params.session.id!,
+					userId,
+					to: clockBranchTo,
+					io: socket.io
+				})
+				// The save's other edits are already stored: the refusal says so.
+				if (!branched.ok)
+					throw new Error(
+						`Your other changes were saved, but the story clock was not moved. ${branched.error}`
+					)
+				clockBranchId = branched.sessionId
+			}
+
 			// Fetch updated session
+			// No rows: this reply's readers take the session's fields, never its transcript.
 			const updatedSession = await getSessionFromDB(
 				params.session.id!,
-				userId
+				userId,
+				"none"
 			)
 			if (!updatedSession) {
 				throw new Error("Failed to fetch updated session")
 			}
 
 			const res: Sockets.Sessions.Update.Response = {
-				session: updatedSession as any
+				session: updatedSession as any,
+				...(clockBranchId !== undefined ? { branchedTo: clockBranchId } : {})
 			}
 			emitToUser("sessions:update", res)
 			// A seat named, renamed or removed is every member's news, not
@@ -7557,7 +7681,8 @@ export const sessionsUpdateHandler: Handler<
 			if (params.seatName !== undefined || params.playerSeatChanges?.length)
 				await broadcastSessionToParticipants(socket, params.session.id!, userId)
 			// Refresh session list, behind the reply that carries the session.
-			await relistSessions(socket, emitToUser)
+			if (clockBranchId !== undefined) await relistWithRow(socket, emitToUser, clockBranchId)
+			else await relistSessions(socket, emitToUser)
 			// 🚧 A lorebook attached or dropped: each book's "Read by" moved.
 			if (params.session.lorebookId !== undefined) {
 				const { relistLorebooks } = await import("./lorebooks")
@@ -8304,7 +8429,10 @@ export async function applyHeldAutomaticallyAndTell(
 			...(input.sceneId != null ? { sceneId: input.sceneId } : {}),
 			...(input.before != null ? { before: input.before } : {})
 		})
-		if (!result || (!result.applied.length && !result.appliedChanges.length && !result.dropped.length)) return
+		if (!result) return
+		// A scene close can settle the story with nothing applied: the line is still announced.
+		const applied = result.applied.length + result.appliedChanges.length + result.dropped.length > 0
+		if (!applied && !result.settled?.moved) return
 		const server = (input.io ??
 			(globalThis as { __SERENE_PUB_SOCKET_STATE__?: { io?: unknown } }).__SERENE_PUB_SOCKET_STATE__?.io) as any
 		if (result.settled) {
@@ -8317,7 +8445,7 @@ export async function applyHeldAutomaticallyAndTell(
 				cause: { kind: "system" }
 			})
 		}
-		await tellApplyMoved(server, input.sessionId)
+		if (applied) await tellApplyMoved(server, input.sessionId)
 	} catch (e) {
 		console.warn(`[apply] the automatic apply for session ${input.sessionId} could not be announced:`, e)
 	}
@@ -8721,7 +8849,8 @@ export const sessionsReassignRemovedParticipantHandler: Handler<
 				).catch(console.error)
 			}
 
-			const updatedSession = await getSessionFromDB(sessionId, userId)
+			// No rows: the reply's reader takes only `success` / `error`.
+			const updatedSession = await getSessionFromDB(sessionId, userId, "none")
 			const res: Sockets.Sessions.ReassignRemovedParticipant.Response = {
 				success: true,
 				session: updatedSession as any
@@ -8813,9 +8942,13 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				}
 			}
 
-			// Check if session exists
-			const session = await getPromptSessionFromDb(sessionId, userId)
-			if (!session) {
+			// Check if session exists. Access was checked above; nothing below reads
+			// the transcript or the cast, so only the row's existence is read.
+			const sessionRow = await db.query.sessions.findFirst({
+				where: eq(schema.sessions.id, sessionId),
+				columns: { id: true }
+			})
+			if (!sessionRow) {
 				return refuse("Session not found")
 			}
 
@@ -11226,8 +11359,11 @@ export const sessionsFireTurnHandler: Handler<
 					return reply({
 						sessionId: params.sessionId,
 						ok: false,
-						// A person's entry is not an error: it is their turn.
-						...(result.reason === "person"
+						// A person's entry is not an error: it is their turn. Nor
+						// is a reply somebody stopped: the message says *Stopped*
+						// and the run's card says so, and a refusal's toast on
+						// top of them read "stopped" twice.
+						...(result.reason === "person" || result.reason === "stopped"
 							? {}
 							: { error: result.reason ?? "The turn produced no reply." }),
 						...(result.reason ? { reason: result.reason } : {})
@@ -11456,7 +11592,7 @@ export const fireNarratorResponseHandler: Handler<
 				}
 
 				// Owner-only, same reasoning as the character trigger above:
-				// getPromptSessionFromDb admits guests, and this handler is only
+				// the session snapshot admits guests, and this handler is only
 				// ever reached from a client pressing the Narrator button (no
 				// internal callers), so requiring ownership breaks no
 				// auto-trigger path. The length cap above deliberately stays
@@ -11480,20 +11616,26 @@ export const fireNarratorResponseHandler: Handler<
 					)
 				}
 
-				const session = await getPromptSessionFromDb(
-					params.sessionId,
-					userId
-				)
-				if (!session) {
-					return refuse(
-						"Could not fire the Narrator response: session not found."
+				// The access check above already proves the session exists, so
+				// there is no separate "session not found" branch here. The read
+				// is the rows `getPromptSessionFromDb` snapshots (visible rows of
+				// the main channel), narrowed to one that is generating.
+				const [generating] = await db
+					.select({ id: schema.sessionMessages.id })
+					.from(schema.sessionMessages)
+					.where(
+						and(
+							eq(schema.sessionMessages.sessionId, params.sessionId),
+							eq(schema.sessionMessages.isHidden, false),
+							channelWhere(
+								schema.sessionMessages.channel,
+								DEFAULT_CHANNEL
+							),
+							eq(schema.sessionMessages.isGenerating, true)
+						)
 					)
-				}
-
-				const hasGeneratingMessages = session.sessionMessages.some(
-					(msg) => msg.isGenerating
-				)
-				if (hasGeneratingMessages) {
+					.limit(1)
+				if (generating) {
 					return refuse(
 						"A response is already generating in this session."
 					)

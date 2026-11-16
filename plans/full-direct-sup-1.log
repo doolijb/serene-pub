@@ -1,0 +1,515 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/state/heldAmendments.undo.int.test.ts (5 tests | 5 failed) 5374ms
+     × a swipe takes only its turn's row; the earlier turn's survives 993ms
+     × a failed re-tell puts the row back, ids and all 28ms
+     × a regenerate (the retake's delete of the turn's rows) takes only its turn's row 31ms
+     × a delete takes only its turn's row 28ms
+     × Back takes only its turn's row; Forward (the record read back from JSON) puts it back with the same id 30ms
+ ❯ |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts (21 tests | 4 failed) 4436ms
+     × is not listed, written nothing by a list read, and an Apply drops it; a partly agreeing one applies its other keys 118ms
+     × a later change waiting on an earlier one says so; Apply all folds both, in order 58ms
+     × is the session's last word, not a done row: it waits on the earlier change, and Apply all ends where the story did 53ms
+     × moves the line through the newest applied anchor, never past the message before the oldest still held; Back below it refuses 69ms
+ ❯ |int| src/lib/server/lorebooks/heldApply.int.test.ts (10 tests | 8 failed) 3325ms
+     × lists it with labels, before and after; every item has a kind; the conflict is null while clean 207ms
+     × two sessions hold different changes to one field; the first applies cleanly; the second is then a conflict and stays held 65ms
+     × take-back restores the field and the held row (same id, same anchor); the other session then applies cleanly 79ms
+     × take-back works after the settle line passed the anchor: the records keep before and stand 68ms
+     × take-back refuses, in a sentence and writing nothing, when the field changed in the lorebook since 41ms
+     × an undated change whose key a dated line amendment decides is a conflict, with its own sentence 32ms
+     × Back of the anchor's message after an Apply is refused as settled; the lorebook still reads the applied value 43ms
+     × entryIds only applies new entries only; amendmentIds only applies held changes only; one batch per press, in anchor order 69ms
+stdout | src/lib/server/sockets/sessions.sweepShown.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-sweep-shown-bKl6Tv/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.sweepShown.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.sweepShown.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.sweepShown.int.test.ts (2 tests | 1 failed) 18890ms
+     × shows the entries the lines name, and rewrites the shown one it returns: held for the lorebook, its name kept 4572ms
+stdout | src/lib/server/sockets/sessions.lairFileRoom.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-lair-file-room-S53k9D/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.lairFileRoom.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.lairFileRoom.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.lairFileRoom.int.test.ts (11 tests | 1 failed) 18063ms
+     × a filed room is in the session's own book until a scene closes, then in the lorebook with its links 843ms
+stdout | src/lib/server/sockets/sessions.lairWalk.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-lair-walk-83Rl1t/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.lairWalk.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.lairWalk.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.lairWalk.int.test.ts (18 tests | 1 failed) 105407ms
+     × update-lore-entry@1: a change lands; a misfit and a name nothing answers to are refused 36ms
+stdout | src/lib/server/sockets/sessions.lairKnock.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-lair-knock-VI8uby/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.lairKnock.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.lairKnock.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.lairKnock.int.test.ts (24 tests | 1 failed) 110473ms
+     × the room and its links are in the session's own book until a scene closes, then in the lorebook 5347ms
+ ❯ |int| src/lib/server/state/sessionLoreWrites.int.test.ts (24 tests | 2 failed) 4220ms
+     × ★ accepted: while a new history day waits in the session's own book, a stat value is still dated by the lorebook's day 187ms
+     × a lore link a session whose scenes end by themselves draws goes to its own book; no line is forked 35ms
+ ❯ |int| src/lib/server/messages/loreLinks.int.test.ts (27 tests | 2 failed) 2834ms
+     × a link between two lorebook entries lands in the own book, none in the lorebook, no line forked 26ms
+     × a new entry and its links land in the own book, none in the lorebook 44ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 25 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > a held change the lorebook already agrees with is done > is not listed, written nothing by a list read, and an Apply drops it; a partly agreeing one applies its other keys
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:604:40
+    602|    .where(eq(schema.lorebookEntries.id, w.vault.id))
+    603|   expect(await overlayItemsOf(asDb(), w.session.id)).toEqual([])
+    604|   expect(await heldRows(w.session.id)).toHaveLength(1)
+       |                                        ^
+    605|   const done = await applyOverlayItems(asDb(), {
+    606|    sessionId: w.session.id,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > a held change the lorebook already agrees with is done > a later change waiting on an earlier one says so; Apply all folds both, in order
+AssertionError: expected [] to deeply equal [ null, …(1) ]
+
+- Expected
++ Received
+
+- [
+-   null,
+-   "An earlier change from this session to content is still waiting; apply it first.",
+- ]
++ []
+
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:697:49
+    695|   const [first, second] = await heldRows(w.session.id)
+    696|   const items = await overlayItemsOf(asDb(), w.session.id)
+    697|   expect(items.map((i) => (i as any).conflict)).toEqual([
+       |                                                 ^
+    698|    null,
+    699|    "An earlier change from this session to content is still waiting; a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > a change back to what the lorebook holds > is the session's last word, not a done row: it waits on the earlier change, and Apply all ends where the story did
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:734:11
+    732|   const items = await overlayItemsOf(asDb(), w.session.id)
+    733|   expect(items.map((i) => (i as any).amendmentId)).toEqual([
+    734|    first!.id,
+       |           ^
+    735|    second!.id
+    736|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > Apply settles > moves the line through the newest applied anchor, never past the message before the oldest still held; Back below it refuses
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:770:22
+    768|    sessionId: w.session.id,
+    769|    userId: w.user.id,
+    770|    amendmentIds: [a!.id, c!.id]
+       |                      ^
+    771|   })
+    772|   expect(first.appliedChanges).toEqual([a!.id, c!.id])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > lists it with labels, before and after; every item has a kind; the conflict is null while clean
+AssertionError: expected [ 'entry' ] to deeply equal [ 'entry', 'entry-change' ]
+
+- Expected
++ Received
+
+  [
+    "entry",
+-   "entry-change",
+  ]
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:234:36
+    232|   })
+    233|   const items = await overlayItemsOf(asDb(), w.session.id)
+    234|   expect(items.map((i) => i.kind)).toEqual(["entry", "entry-change"])
+       |                                    ^
+    235|   expect(items[0]).toMatchObject({
+    236|    kind: "entry",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > two sessions hold different changes to one field; the first applies cleanly; the second is then a conflict and stays held
+AssertionError: expected 'Open.' to be 'Sealed.' // Object.is equality
+
+Expected: "Sealed."
+Received: "Open."
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:273:65
+    271|    content: "Open."
+    272|   })
+    273|   expect((await sessionRead(w.session.id, w.vault.id)).content).toBe(
+       |                                                                 ^
+    274|    "Sealed."
+    275|   )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > take-back restores the field and the held row (same id, same anchor); the other session then applies cleanly
+Error: Nothing to take back.
+ ❯ takeBackApply src/lib/server/lorebooks/ownBook.ts:2451:29
+    2449|   .where(and(eq(I.batch, input.batch), eq(I.origin, "apply")))
+    2450|   .orderBy(I.id)) as import("$lib/server/lorebooks/imprints").LoreImpr…
+    2451|  if (!records.length) throw new OwnBookRefusal(TAKE_BACK_REFUSALS.noth…
+       |                             ^
+    2452|  if (input.sessionId != null && records.some((r) => r.sessionId !== in…
+    2453|   throw new OwnBookRefusal(TAKE_BACK_REFUSALS.nothing)
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:352:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > take-back works after the settle line passed the anchor: the records keep before and stand
+AssertionError: expected undefined to match object { status: 'standing', …(1) }
+
+- Expected:
+{
+  "before": {
+    "v": "Locked.",
+  },
+  "status": "standing",
+}
+
++ Received:
+undefined
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:396:18
+    394|   )
+    395|   const [record] = await applyRecords(w.session.id)
+    396|   expect(record).toMatchObject({
+       |                  ^
+    397|    status: "standing",
+    398|    before: { v: "Locked." }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > take-back refuses, in a sentence and writing nothing, when the field changed in the lorebook since
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:428:5
+    426|     fields: ["content"]
+    427|    })
+    428|   ).toBe(0)
+       |     ^
+    429|   expect((await applyRecords(w.session.id))[0]).toMatchObject({ status…
+    430|   expect((await keptImprintsByEntry(asDb(), w.book.id, [w.vault.id])).…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > an undated change whose key a dated line amendment decides is a conflict, with its own sentence
+AssertionError: expected undefined to match object { year: null, …(1) }
+
+- Expected:
+{
+  "base": {
+    "content": {
+      "v": "Dated.",
+    },
+  },
+  "year": null,
+}
+
++ Received:
+undefined
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:547:16
+    545|   await change(w, w.vault.id, { content: "Sealed." })
+    546|   const [held] = await heldRows(w.session.id)
+    547|   expect(held).toMatchObject({
+       |                ^
+    548|    year: null,
+    549|    base: { content: { v: "Dated." } }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > Back of the anchor's message after an Apply is refused as settled; the lorebook still reads the applied value
+AssertionError: expected null to match object { moved: true }
+
+- Expected:
+{
+  "moved": true,
+}
+
++ Received:
+null
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:576:24
+    574|   })
+    575|   // Apply settles: the line stands at the applied change's anchor.
+    576|   expect(done.settled).toMatchObject({ moved: true })
+       |                        ^
+    577|   const { rewindTurn } = await import("$lib/server/sessions/rewind")
+    578|   const { SETTLED_SENTENCE } = await import("$lib/server/sessions/sett…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/25]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > entryIds only applies new entries only; amendmentIds only applies held changes only; one batch per press, in anchor order
+AssertionError: expected [] to have a length of 2 but got +0
+
+- Expected
++ Received
+
+- 2
++ 0
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:659:40
+    657|   // An applied new entry files its record, so the press has a batch.
+    658|   expect(entriesOnly.batch).toEqual(expect.any(String))
+    659|   expect(await heldRows(w.session.id)).toHaveLength(2)
+       |                                        ^
+    660|   const changesOnly = await applyOverlayItems(asDb(), {
+    661|    sessionId: w.session.id,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/25]⎯
+
+ FAIL  |int| src/lib/server/messages/loreLinks.int.test.ts > a session whose scenes end by themselves: its pipeline's links and new entries go to its own book > a link between two lorebook entries lands in the own book, none in the lorebook, no line forked
+AssertionError: expected 2 to be 4 // Object.is equality
+
+- Expected
++ Received
+
+- 4
++ 2
+
+ ❯ src/lib/server/messages/loreLinks.int.test.ts:921:27
+    919|     LINK as any
+    920|    )) as { id: number; lorebookId: number }
+    921|    expect(res.lorebookId).toBe(s.own.id)
+       |                           ^
+    922|    const rows = await links(s.own.id)
+    923|    expect(rows).toHaveLength(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/25]⎯
+
+ FAIL  |int| src/lib/server/messages/loreLinks.int.test.ts > a session whose scenes end by themselves: its pipeline's links and new entries go to its own book > a new entry and its links land in the own book, none in the lorebook
+AssertionError: expected { id: 33, lorebookId: 2, …(2) } to match object { route: 'own-book', lorebookId: 5 }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "lorebookId": 5,
+-   "route": "own-book",
++   "lorebookId": 2,
++   "route": "book",
+  }
+
+ ❯ src/lib/server/messages/loreLinks.int.test.ts:941:16
+    939|     SAVE as any
+    940|    )) as { id: number; linkIds: number[]; lorebookId: number; route?: …
+    941|    expect(res).toMatchObject({ route: "own-book", lorebookId: s.own.id…
+       |                ^
+    942|    const [row] = await db.select().from(schema.lorebookEntries).where(…
+    943|    expect(row!.lorebookId).toBe(s.own.id)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/25]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a swipe takes only its turn's row; the earlier turn's survives
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:169:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/25]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a failed re-tell puts the row back, ids and all
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:195:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/25]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a regenerate (the retake's delete of the turn's rows) takes only its turn's row
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:216:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/25]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a delete takes only its turn's row
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:230:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/25]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > Back takes only its turn's row; Forward (the record read back from JSON) puts it back with the same id
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:245:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/25]⎯
+
+ FAIL  |int| src/lib/server/state/sessionLoreWrites.int.test.ts > the mode decides what an automatic write does > ★ accepted: while a new history day waits in the session's own book, a stat value is still dated by the lorebook's day
+AssertionError: expected 'book' to be 'own-book' // Object.is equality
+
+Expected: "own-book"
+Received: "book"
+
+ ❯ src/lib/server/state/sessionLoreWrites.int.test.ts:284:23
+    282|    { key: "day", definitionId: "core:outlet/create-lore-entry" } as any
+    283|   )
+    284|   expect(filed.route).toBe("own-book")
+       |                       ^
+    285|
+    286|   const out = await run(w)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/25]⎯
+
+ FAIL  |int| src/lib/server/state/sessionLoreWrites.int.test.ts > the review round > a lore link a session whose scenes end by themselves draws goes to its own book; no line is forked
+AssertionError: expected 29 to be 30 // Object.is equality
+
+- Expected
++ Received
+
+- 30
++ 29
+
+ ❯ src/lib/server/state/sessionLoreWrites.int.test.ts:725:27
+    723|   const R = schema.narrativeRelationships
+    724|   const [row] = await testDb.select().from(R).where(eq(R.id, res.id))
+    725|   expect(row!.lorebookId).toBe(own.id)
+       |                           ^
+    726|   expect(await testDb.select().from(R).where(eq(R.lorebookId, w.book.i…
+    727|   const [s] = await testDb.select().from(schema.sessions).where(eq(sch…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/25]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.lairFileRoom.int.test.ts > R11 · File as a room is offered on the person's rows and the Castellan's > a filed room is in the session's own book until a scene closes, then in the lorebook with its links
+TypeError: Cannot read properties of null (reading 'id')
+ ❯ src/lib/server/sockets/sessions.lairFileRoom.int.test.ts:484:35
+    482|   })
+    483|   // Before: the own book holds the room and its link to The Stair; th…
+    484|   const before = await inBook(own.id)
+       |                                   ^
+    485|   expect(before.rooms).toHaveLength(1)
+    486|   expect(before.links).toHaveLength(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/25]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.lairKnock.int.test.ts > B6 · Answer the door links the new room to where the party stand > the room and its links are in the session's own book until a scene closes, then in the lorebook
+TypeError: Cannot read properties of null (reading 'id')
+ ❯ src/lib/server/sockets/sessions.lairKnock.int.test.ts:953:35
+    951|   })
+    952|   // Before: the session's own book holds the room and both its links;…
+    953|   const before = await inBook(own.id)
+       |                                   ^
+    954|   expect(before.rooms).toHaveLength(1)
+    955|   expect(before.links.length).toBeGreaterThanOrEqual(2)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/25]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.lairWalk.int.test.ts > the Lair, rewritten: a walk > update-lore-entry@1: a change lands; a misfit and a name nothing answers to are refused
+AssertionError: expected 'book' to be 'own-book' // Object.is equality
+
+Expected: "own-book"
+Received: "book"
+
+ ❯ src/lib/server/sockets/sessions.lairWalk.int.test.ts:641:21
+    639|   expect(out.entryId).toBe(rooms["The Vault"])
+    640|   // The change is the session's: held in its own book, the lorebook's…
+    641|   expect(out.route).toBe("own-book")
+       |                     ^
+    642|   expect(out.lorebookId).toBe(lorebookId)
+    643|   const [vault] = await db.select().from(schema.lorebookEntries).where…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/25]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.sweepShown.int.test.ts > the sweep and what the story already keeps (lane lore-match) > shows the entries the lines name, and rewrites the shown one it returns: held for the lorebook, its name kept
+AssertionError: the lorebook's row is untouched: expected 'A ruin by the weir. Its wheel turns a…' to be 'A ruin by the weir.' // Object.is equality
+
+Expected: "A ruin by the weir."
+Received: "A ruin by the weir. Its wheel turns again."
+
+ ❯ src/lib/server/sockets/sessions.sweepShown.int.test.ts:361:5
+    359|    (await stored(mill.id)).content,
+    360|    "the lorebook's row is untouched"
+    361|   ).toBe("A ruin by the weir.")
+       |     ^
+    362|   const read = await readBy(sessionId, mill.id)
+    363|   expect(read.content).toBe("A ruin by the weir. Its wheel turns again…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/25]⎯
+
+
+ Test Files  9 failed | 27 passed (36)
+      Tests  25 failed | 431 passed (456)
+   Start at  22:09:47
+   Duration  155.48s (transform 19.77s, setup 239ms, import 31.13s, tests 430.12s, environment 276ms)
+

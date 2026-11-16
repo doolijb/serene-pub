@@ -12,20 +12,32 @@
 	import { bookReadout, nestingOf, READOUT_NOTE } from "./bookReadout"
 	import { primerRowLine } from "./starterKitCards"
 	import { compareDates, formatDate } from "./sections/historyDates"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import { interestKey } from "$lib/shared/sockets/interest"
+	import ClearEditHistoryDialog from "./editHistory/ClearEditHistoryDialog.svelte"
+	import {
+		CLEAR_ACTION_LABEL,
+		CLEAR_BOOK_HINT,
+		CLEAR_BOOK_QUESTION,
+		clearBookSentence
+	} from "./editHistory/editHistoryCopy"
 	import StoryCalendarEditor from "./time/StoryCalendarEditor.svelte"
 	import StoryClockEditor from "./time/StoryClockEditor.svelte"
 	import BookRulesCard from "./BookRulesCard.svelte"
 	import type { RulesetGenreFit } from "./rulesFitWords"
 	import BookWritesCard from "./BookWritesCard.svelte"
+	import TimelineCard from "./time/TimelineCard.svelte"
+	import { bookTimeline } from "./bookData.svelte"
 
 	/**
 	 * Book settings: a readout of what the book holds, and the few behaviours
 	 * it chooses.
 	 *
-	 * There are no feature switches here and there is nothing to turn on: every
-	 * capability is available in every lorebook, and what the workspace offers
-	 * follows what the book actually holds. So this page counts, and the
-	 * counting is the point.
+	 * The one feature switch here is the book's **Timeline**: off, the clock and
+	 * calendar editors are not drawn. Every other capability is available in
+	 * every lorebook, and what the workspace offers follows what the book
+	 * actually holds. So this page counts, and the counting is the point.
 	 *
 	 * ⚠ **The rows are the workspace's, on the line being read.** Never fetch
 	 * the whole book again and count every line's rows: that counts a fork's
@@ -36,6 +48,8 @@
 	interface Props {
 		lorebookId: number
 		bookName: string
+		/** Set for a session's notes: the helper's name for it. The Name field is not drawn. */
+		notesName?: string | null
 		/** The line being read, for the clock; null is main. */
 		branchId: number | null
 		branchName: string | null
@@ -79,6 +93,10 @@
 		 * the way out is Clone.
 		 */
 		readOnly?: boolean
+		/** 🚧 The book is notes over a lorebook: its Timeline card states its lorebook's switch. */
+		overlaysLorebook?: boolean
+		/** The one-time upgrade pass switched this lorebook's timeline off. */
+		timelineOffByPass?: boolean
 		/** The primer row's own line (`primerRowLine(book)`), when read-only. */
 		readOnlyLine?: string
 		/** 🚧 (m2e-F-C) Clone this primer row into a starter lorebook of the reader's own. */
@@ -92,12 +110,15 @@
 		onImport: () => void
 		/** Asks for a copy of this book; the prompt names it. */
 		onDuplicate: () => void
+		/** A copy made from this page landed; open it. */
+		onDuplicated?: (lorebookId: number) => void
 		onDelete: () => void
 	}
 
 	let {
 		lorebookId,
 		bookName,
+		notesName = null,
 		branchId,
 		branchName,
 		branches,
@@ -115,6 +136,8 @@
 		isStarterKit = false,
 		isProvided = false,
 		readOnly = false,
+		overlaysLorebook = false,
+		timelineOffByPass = false,
 		readOnlyLine,
 		onClone,
 		onSaveAsStarterKit,
@@ -123,6 +146,7 @@
 		onClose,
 		onImport,
 		onDuplicate,
+		onDuplicated,
 		onDelete
 	}: Props = $props()
 
@@ -131,6 +155,7 @@
 	const userSettingsCtx = getContext<UserSettingsCtx | undefined>(
 		"userSettingsCtx"
 	)
+	const timeline = bookTimeline()
 	let advanced = $derived(showsAdvancedControls(userSettingsCtx?.settings))
 	// The rules card and the calendar editor are what the switch hides; the
 	// line at the foot says so only when one of them would have been drawn.
@@ -138,9 +163,86 @@
 	// the whole condition.
 	let rulesOrCalendarHidden = $derived(!advanced && !readOnly)
 
+	// Clear edit history: the owner's alone. The count is asked on mount and
+	// again as the dialog opens; a refusal means not the owner, and the action
+	// is then not drawn and nothing is said.
+	const socket = useTypedSocket()
+	let redlineCount = $state(0)
+	let clearOpen = $state(false)
+	let clearCount = $state<number | null>(null)
+	let clearBusy = $state(false)
+	let clearError = $state("")
+
+	async function askRedlineCount(): Promise<number | null> {
+		try {
+			const reply = await awaitReply({
+				socket,
+				event: "entries:redlineCount",
+				params: { lorebookId },
+				replyKey: interestKey("entries:redlineCount", lorebookId),
+				errorEvent: "entries:redlineCount:error",
+				match: (d) => d.lorebookId === lorebookId && d.entryId === null,
+				matchError: (d) =>
+					(d as { lorebookId?: number } | undefined)?.lorebookId ===
+					lorebookId
+			})
+			return reply.count
+		} catch {
+			return null
+		}
+	}
+	$effect(() => {
+		lorebookId
+		if (readOnly) return
+		askRedlineCount().then((n) => {
+			redlineCount = n ?? 0
+		})
+	})
+	async function openClear() {
+		clearError = ""
+		clearCount = null
+		clearOpen = true
+		const n = await askRedlineCount()
+		if (n === null) {
+			clearOpen = false
+			redlineCount = 0
+			return
+		}
+		redlineCount = n
+		clearCount = n
+	}
+	async function confirmClear() {
+		clearBusy = true
+		clearError = ""
+		try {
+			await awaitReply({
+				socket,
+				event: "entries:clearRedlines",
+				params: { lorebookId },
+				replyKey: interestKey("entries:clearRedlines", lorebookId),
+				errorEvent: "entries:clearRedlines:error",
+				fallbackError: "The edit history could not be cleared.",
+				match: (d) => d.lorebookId === lorebookId && d.entryId === null,
+				matchError: (d) =>
+					(d as { lorebookId?: number } | undefined)?.lorebookId ===
+					lorebookId
+			})
+			redlineCount = 0
+			clearOpen = false
+		} catch (e) {
+			clearError = e instanceof Error ? e.message : String(e)
+		} finally {
+			clearBusy = false
+		}
+	}
+
 	// Two editors on one page, one unsaved flag for the tab.
 	let formUnsaved = $state(false)
 	let calendarUnsaved = $state(false)
+	// The calendar editor is not drawn with the timeline off: its draft goes with it.
+	$effect(() => {
+		if (!timeline.value) calendarUnsaved = false
+	})
 	$effect(() => {
 		hasUnsavedChanges = formUnsaved || calendarUnsaved
 	})
@@ -238,7 +340,7 @@
 			nested: nesting.nested,
 			depth: nesting.depth,
 			branches
-		})
+		}).filter((line) => timeline.value || line.id !== "history")
 	)
 </script>
 
@@ -286,7 +388,10 @@
 
 	{#if readOnly}
 		<div class="flex flex-wrap items-center gap-2">
-			<p class="text-surface-600-400 text-xs" data-book-settings-read-only>
+			<p
+				class="text-surface-600-400 text-xs"
+				data-book-settings-read-only
+			>
 				{readOnlyLine ?? primerRowLine(null)}
 			</p>
 			<button
@@ -299,27 +404,49 @@
 			</button>
 		</div>
 	{:else}
-		<EditLorebookForm {lorebookId} bind:hasUnsavedChanges={formUnsaved} />
+		<EditLorebookForm
+			{lorebookId}
+			{notesName}
+			bind:hasUnsavedChanges={formUnsaved}
+		/>
 
 		{#if advanced && primaryRuleset}
-			<BookRulesCard {lorebookId} current={primaryRuleset} fits={rulesFit} />
+			<BookRulesCard
+				{lorebookId}
+				current={primaryRuleset}
+				fits={rulesFit}
+			/>
 		{/if}
 
 		{#if !isStarterKit}
 			<BookWritesCard {lorebookId} current={loreWriteMode} />
 		{/if}
 
-		<StoryClockEditor {branchId} {branchName} {present} {onSetClock} />
+		<TimelineCard
+			{lorebookId}
+			timelineEnabled={timeline.value}
+			{overlaysLorebook}
+			{branchId}
+			{branchName}
+			lineCount={branches.length}
+			sessionNotes={notesName != null}
+			offByPass={timelineOffByPass}
+			{onDuplicated}
+		/>
 
-		<!-- Hidden, not unmounted, with advanced controls off: the calendar's
-		     draft lives inside the editor, so a mid-edit flip keeps it. -->
-		<div hidden={!advanced}>
-			<StoryCalendarEditor
-				{lorebookId}
-				sample={present?.date ?? null}
-				bind:hasUnsavedChanges={calendarUnsaved}
-			/>
-		</div>
+		{#if timeline.value}
+			<StoryClockEditor {branchId} {branchName} {present} {onSetClock} />
+
+			<!-- Hidden, not unmounted, with advanced controls off: the calendar's
+			     draft lives inside the editor, so a mid-edit flip keeps it. -->
+			<div hidden={!advanced}>
+				<StoryCalendarEditor
+					{lorebookId}
+					sample={present?.date ?? null}
+					bind:hasUnsavedChanges={calendarUnsaved}
+				/>
+			</div>
+		{/if}
 	{/if}
 
 	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
@@ -363,9 +490,9 @@
 		{#if isStarterKit}
 			{#if !readOnly}
 				<p class="text-surface-700-300 text-sm" data-book-settings-kit>
-					Everyone on the pub can start a lorebook or a session from this
-					starter lorebook. Each one started gets its own copy, so what you
-					change here reaches the ones started next.
+					Everyone on the pub can start a lorebook or a session from
+					this starter lorebook. Each one started gets its own copy,
+					so what you change here reaches the ones started next.
 				</p>
 			{/if}
 			<div class="flex flex-wrap gap-2">
@@ -389,6 +516,18 @@
 					>
 						<Icons.Trash2 size={14} aria-hidden="true" />
 						Delete starter lorebook
+					</button>
+				{/if}
+				{#if !readOnly && redlineCount > 0}
+					<button
+						class="btn btn-sm text-error-600-400 hover:preset-tonal-error"
+						type="button"
+						title={CLEAR_BOOK_HINT}
+						data-book-settings-clear-history
+						onclick={openClear}
+					>
+						<Icons.Trash2 size={14} aria-hidden="true" />
+						{CLEAR_ACTION_LABEL}
 					</button>
 				{/if}
 			</div>
@@ -444,6 +583,18 @@
 						Delete “{bookName}”
 					</button>
 				{/if}
+				{#if !readOnly && redlineCount > 0}
+					<button
+						class="btn btn-sm text-error-600-400 hover:preset-tonal-error"
+						type="button"
+						title={CLEAR_BOOK_HINT}
+						data-book-settings-clear-history
+						onclick={openClear}
+					>
+						<Icons.Trash2 size={14} aria-hidden="true" />
+						{CLEAR_ACTION_LABEL}
+					</button>
+				{/if}
 			</div>
 			<p
 				id="book-settings-export-paused"
@@ -453,6 +604,17 @@
 			</p>
 		{/if}
 	</section>
+	{#if clearOpen}
+		<ClearEditHistoryDialog
+			open={clearOpen}
+			question={CLEAR_BOOK_QUESTION}
+			sentence={clearCount === null ? null : clearBookSentence(clearCount)}
+			busy={clearBusy}
+			error={clearError}
+			onConfirm={confirmClear}
+			onCancel={() => (clearOpen = false)}
+		/>
+	{/if}
 
 	{#if rulesOrCalendarHidden}
 		<AdvancedHiddenLine />

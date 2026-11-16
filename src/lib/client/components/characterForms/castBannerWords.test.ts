@@ -327,3 +327,28 @@ describe("castEditParts", () => {
 		expect(castEditParts(undefined)).toBeNull()
 	})
 })
+
+describe("a member in a session's notes", () => {
+	const notes: CastBannerMember = {
+		...follower(9, "Rainy night's notes", "Bianca", ALL_FIELDS),
+		retold: ["face"],
+		ownBookSessionId: 3
+	}
+
+	test("is not counted in the lead, the represents line or the retells", () => {
+		const w = castBannerWords([member(1, 10), notes])!
+		expect(w.lead).toBe("In 1 lorebook:")
+		expect(w.represents).toBe("Represents 1 cast member in 1 lorebook.")
+		expect(w.retells).toBeNull()
+	})
+
+	test("a card whose only members are in notes has no line", () => {
+		expect(castBannerWords([notes])).toBeNull()
+	})
+
+	test("the editing sentence still names the notes", () => {
+		expect(castEditWords([notes])).toBe(
+			"Editing this changes Bianca in Rainy night's notes."
+		)
+	})
+})

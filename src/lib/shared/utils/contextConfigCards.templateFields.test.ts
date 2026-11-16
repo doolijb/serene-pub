@@ -82,16 +82,21 @@ describe("template field vocabulary", () => {
 
 		for (const decl of allVariables()) {
 			const values = sampleValues(decl)
-			for (const key of Object.keys(decl.scope)) {
+			const [valueRoot, ...siblingRoots] = Object.keys(decl.scope)
+			for (const key of Object.keys(decl.scope))
 				expect(
 					values[key],
 					`${key} is declared but its declaration samples no value for it`
 				).toBeDefined()
+			if (valueRoot)
 				expect(
-					sample[key],
-					`${key} missing from preview data`
+					sample[valueRoot],
+					`${valueRoot} missing from preview data`
 				).toBeDefined()
-			}
+			// A sibling root is read by the variable's layout, never a key of
+			// its own in the preview.
+			for (const key of siblingRoots)
+				expect(sample[key], `${key} is not a template name`).toBeUndefined()
 		}
 	})
 })

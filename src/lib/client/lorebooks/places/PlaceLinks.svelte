@@ -9,6 +9,7 @@
 	import type { PoolItem } from "../poolFilter"
 	import type { BookRelationships } from "../relationships.svelte"
 	import RelationshipFields from "../graphs/RelationshipFields.svelte"
+	import { bookTimeline } from "../bookData.svelte"
 	import {
 		createLinkParams,
 		flipLink,
@@ -95,6 +96,7 @@
 	}: Props = $props()
 
 	const uid = $props.id()
+	const timeline = bookTimeline()
 	/**
 	 * The picker's choice that asks for a new place instead of an existing
 	 * one — the canvas's own, so the two pickers cannot drift apart.
@@ -326,8 +328,11 @@
 	}
 
 	/** A link drawn here starts dated by the entry dated the moment being read. */
+	// 🚧 No timeline: a link starts undated, and no When control is drawn.
 	const startsWhen = () =>
-		whenAtMoment(lineHistory, momentDate(reading.moment))
+		timeline.value
+			? whenAtMoment(lineHistory, momentDate(reading.moment))
+			: null
 
 	function pick(value: string) {
 		picked = value || null

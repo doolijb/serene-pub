@@ -61,7 +61,8 @@ describe("a spoken wav through /media", () => {
 			{}
 		] as Record<string, string>[])) {
 			const res = await GET(event(`/media/${uuid}?r=0`, h))
-			expect(res.status).toBe(200)
+			// A satisfiable Range is answered 206 now; `bytes=0-` is still the whole file.
+			expect(res.status).toBe(h.range ? 206 : 200)
 			expect(res.headers.get("content-type")).toBe("audio/wav")
 			const body = Buffer.from(await res.arrayBuffer())
 			expect(body.length).toBe(WAV.length)

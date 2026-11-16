@@ -24,7 +24,7 @@
  * they are (parked data).
  */
 
-import { asc, count, eq, isNull } from "drizzle-orm"
+import { and, asc, count, eq, isNull } from "drizzle-orm"
 import { rulesetFitReader } from "$lib/server/rulesets/genreFit"
 import {
 	_withdrawRuleset,
@@ -68,9 +68,17 @@ import {
 	type RulesetTemplate,
 	type SlotId
 } from "@serene-pub/sdk"
-import { deriveEntryTypes, ENTRY_UNIVERSAL_PARTS } from "@serene-pub/core-catalog"
+import {
+	deriveEntryTypes,
+	ENTRY_UNIVERSAL_PARTS
+} from "@serene-pub/core-catalog"
 import * as schema from "$lib/server/db/schema"
-import { keepCurrentRulesetVersions, keepRulesetVersion, registerKeptRulesetSlots, republishRefusal } from "$lib/server/rulesets/versions"
+import {
+	keepCurrentRulesetVersions,
+	keepRulesetVersion,
+	registerKeptRulesetSlots,
+	republishRefusal
+} from "$lib/server/rulesets/versions"
 import { declareSlot } from "$lib/server/state/declarations"
 import { OWNER_SLUG } from "$lib/server/pipelines/entities/pubGenres"
 
@@ -79,7 +87,8 @@ export { OWNER_SLUG }
 export const RULESET_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
 export class PubRulesetRefusal extends Error {}
-const slotStem = (id: string): string => id.slice(id.indexOf("/") + 1, id.lastIndexOf("@"))
+const slotStem = (id: string): string =>
+	id.slice(id.indexOf("/") + 1, id.lastIndexOf("@"))
 const refuse = (msg: string): never => {
 	throw new PubRulesetRefusal(msg)
 }
@@ -168,7 +177,14 @@ const vocabularyChoices = (): VocabularyChoice[] =>
 	vocabularies().map((v) => ({
 		id: v.id,
 		members: VOCABULARY_OWNERS.flatMap((owner) =>
-			Object.entries((v as unknown as Record<string, Record<string, { id: string; label?: unknown }>>)[owner] ?? {}).map(([word, slot]) => ({
+			Object.entries(
+				(
+					v as unknown as Record<
+						string,
+						Record<string, { id: string; label?: unknown }>
+					>
+				)[owner] ?? {}
+			).map(([word, slot]) => ({
 				owner,
 				word,
 				slotId: slot.id,
@@ -203,22 +219,40 @@ export interface RulesetTemplateCard {
 }
 
 /** A template id's stem: `core:ruleset/template-dice-pool@1` → `dice-pool`. */
-const templateStem = (id: string): string => slotStem(id).replace(/^template-/, "")
+const templateStem = (id: string): string =>
+	slotStem(id).replace(/^template-/, "")
 
 export const rulesetTemplateCards = (): RulesetTemplateCard[] => {
 	const names = functionNames()
 	return rulesetTemplates().map((t) => {
 		const s = rulesetSections(t.ruleset)
-		const deciding = (s.functions ?? []).filter((f) => functionRefDecides(f) || (RESERVED_FUNCTIONS[f.ref]?.kind === "deciding" && f.ref !== CORE_FUNCTION_IDS.check))
+		const deciding = (s.functions ?? []).filter(
+			(f) =>
+				functionRefDecides(f) ||
+				(RESERVED_FUNCTIONS[f.ref]?.kind === "deciding" &&
+					f.ref !== CORE_FUNCTION_IDS.check)
+		)
 		return {
 			id: t.id,
 			stem: templateStem(t.id),
 			label: i18nText(t.label) ?? t.id,
 			about: i18nText(t.about) ?? "",
 			goodFor: i18nText(t.goodFor) ?? "",
-			decidedBy: [...new Set(deciding.map((f) => names.get(f.ref) ?? i18nText(f.module?.name) ?? f.key ?? f.ref))],
+			decidedBy: [
+				...new Set(
+					deciding.map(
+						(f) =>
+							names.get(f.ref) ??
+							i18nText(f.module?.name) ??
+							f.key ??
+							f.ref
+					)
+				)
+			],
 			attributes: s.attributes?.length ?? 0,
-			entryTypes: (s.entryTypes ?? []).map((e) => i18nText(e.name) ?? e.id),
+			entryTypes: (s.entryTypes ?? []).map(
+				(e) => i18nText(e.name) ?? e.id
+			),
 			zoneTypes: (s.zoneTypes ?? []).map((z) => i18nText(z.name) ?? z.id),
 			situation: i18nText(t.playtest.situation) ?? ""
 		}
@@ -256,9 +290,17 @@ export interface FunctionChoice {
 }
 
 const en = (s: string) => ({ en: s })
-const checkKindHeader = (kind: keyof typeof CHECK_METHOD_KINDS, name: string): Partial<FunctionDecl> => {
+const checkKindHeader = (
+	kind: keyof typeof CHECK_METHOD_KINDS,
+	name: string
+): Partial<FunctionDecl> => {
 	const k = CHECK_METHOD_KINDS[kind]
-	return { name: en(name), meaning: k.description, form: k.options as FunctionDecl["form"], prose: i18nText(k.description) ?? name }
+	return {
+		name: en(name),
+		meaning: k.description,
+		form: k.options as FunctionDecl["form"],
+		prose: i18nText(k.description) ?? name
+	}
 }
 
 /**
@@ -268,17 +310,46 @@ const checkKindHeader = (kind: keyof typeof CHECK_METHOD_KINDS, name: string): P
  * PLAN-rulesets-functions A2 note).
  */
 const STAND_INS: Readonly<Record<string, Partial<FunctionDecl>>> = {
-	[CORE_FUNCTION_IDS.judge]: { name: en("Judge in words"), meaning: en("The game master decides from the sentence. Nothing is rolled."), prose: "The game master judges how it goes, in words." },
+	[CORE_FUNCTION_IDS.judge]: {
+		name: en("Judge in words"),
+		meaning: en(
+			"The game master decides from the sentence. Nothing is rolled."
+		),
+		prose: "The game master judges how it goes, in words."
+	},
 	[CORE_FUNCTION_IDS.dieTarget]: checkKindHeader("die-target", "Roll a die"),
 	[CORE_FUNCTION_IDS.dicePool]: checkKindHeader("dice-pool", "Roll a pool"),
 	[CORE_FUNCTION_IDS.cardDraw]: checkKindHeader("card-draw", "Draw a card"),
-	[CORE_FUNCTION_IDS.compare]: checkKindHeader("compare", "Compare against a target"),
+	[CORE_FUNCTION_IDS.compare]: checkKindHeader(
+		"compare",
+		"Compare against a target"
+	),
 	[CORE_FUNCTION_IDS.spend]: checkKindHeader("bid", "Spend to succeed"),
-	[CORE_FUNCTION_IDS.table]: { name: en("Roll on a table"), meaning: en("Roll, and read the row it lands on."), prose: "A roll on a table says what happens." },
-	[CORE_FUNCTION_IDS.samePlace]: { name: en("Same place"), meaning: en("Everyone in the same place."), prose: "Everyone in the same place." },
-	[CORE_FUNCTION_IDS.withinTie]: { name: en("Within a bond"), meaning: en("The two a bond joins, and those tied to them."), prose: "The two a bond joins, and those tied to them." },
-	[CORE_FUNCTION_IDS.aimedAt]: { name: en("Aimed at"), meaning: en("Whoever it is aimed at."), prose: "Whoever it is aimed at." },
-	[CORE_FUNCTION_IDS.everyone]: { name: en("Everyone"), meaning: en("Everyone in the session."), prose: "Everyone in the session." },
+	[CORE_FUNCTION_IDS.table]: {
+		name: en("Roll on a table"),
+		meaning: en("Roll, and read the row it lands on."),
+		prose: "A roll on a table says what happens."
+	},
+	[CORE_FUNCTION_IDS.samePlace]: {
+		name: en("Same place"),
+		meaning: en("Everyone in the same place."),
+		prose: "Everyone in the same place."
+	},
+	[CORE_FUNCTION_IDS.withinTie]: {
+		name: en("Within a bond"),
+		meaning: en("The two a bond joins, and those tied to them."),
+		prose: "The two a bond joins, and those tied to them."
+	},
+	[CORE_FUNCTION_IDS.aimedAt]: {
+		name: en("Aimed at"),
+		meaning: en("Whoever it is aimed at."),
+		prose: "Whoever it is aimed at."
+	},
+	[CORE_FUNCTION_IDS.everyone]: {
+		name: en("Everyone"),
+		meaning: en("Everyone in the session."),
+		prose: "Everyone in the session."
+	},
 	[CORE_FUNCTION_IDS.check]: {
 		name: en("A check"),
 		meaning: en("A named check: what it adds, and the way it is decided."),
@@ -293,16 +364,39 @@ const STAND_INS: Readonly<Record<string, Partial<FunctionDecl>>> = {
 		name: en("Worked out"),
 		meaning: en("A value worked out from others."),
 		prose: "A value worked out from others.",
-		form: { from: { type: "list", item: { type: "text" }, label: en("From") }, onSheet: { type: "boolean", label: en("On the sheet") } } as unknown as FunctionDecl["form"]
+		form: {
+			from: { type: "list", item: { type: "text" }, label: en("From") },
+			onSheet: { type: "boolean", label: en("On the sheet") }
+		} as unknown as FunctionDecl["form"]
 	},
-	[CORE_FUNCTION_IDS.tally]: { name: en("A tally"), meaning: en("A count kept from what someone holds."), prose: "A count kept from what someone holds." },
-	[CORE_FUNCTION_IDS.typedBonuses]: { name: en("Bonuses have types"), meaning: en("Bonuses of one type don't add up; the best of each counts."), prose: "Bonuses of one type don't add up; the best of each counts." },
-	[CORE_FUNCTION_IDS.castingPool]: { name: en("Casting from a pool"), meaning: en("Spells are paid for from a pool."), prose: "Spells are paid for from a pool." }
+	[CORE_FUNCTION_IDS.tally]: {
+		name: en("A tally"),
+		meaning: en("A count kept from what someone holds."),
+		prose: "A count kept from what someone holds."
+	},
+	[CORE_FUNCTION_IDS.typedBonuses]: {
+		name: en("Bonuses have types"),
+		meaning: en(
+			"Bonuses of one type don't add up; the best of each counts."
+		),
+		prose: "Bonuses of one type don't add up; the best of each counts."
+	},
+	[CORE_FUNCTION_IDS.castingPool]: {
+		name: en("Casting from a pool"),
+		meaning: en("Spells are paid for from a pool."),
+		prose: "Spells are paid for from a pool."
+	}
 }
 
-const hasBody = (d: FunctionDecl): boolean => typeof d.body === "string" ? d.body.trim().length > 0 : !!d.seedKey
+const hasBody = (d: FunctionDecl): boolean =>
+	typeof d.body === "string" ? d.body.trim().length > 0 : !!d.seedKey
 
-function choiceOf(decl: FunctionDecl, from: FunctionChoice["from"], source: string, standIn = false): FunctionChoice {
+function choiceOf(
+	decl: FunctionDecl,
+	from: FunctionChoice["from"],
+	source: string,
+	standIn = false
+): FunctionChoice {
 	return {
 		id: decl.id,
 		name: i18nText(decl.name) ?? decl.id,
@@ -310,7 +404,10 @@ function choiceOf(decl: FunctionDecl, from: FunctionChoice["from"], source: stri
 		kind: String(decl.kind ?? ""),
 		from,
 		source,
-		decides: functionRefDecides({ ref: decl.id, ...(from === "ruleset" ? { module: decl } : {}) } as FunctionRef),
+		decides: functionRefDecides({
+			ref: decl.id,
+			...(from === "ruleset" ? { module: decl } : {})
+		} as FunctionRef),
 		hasBody: hasBody(decl),
 		decl,
 		...(standIn ? { standIn: true as const } : {})
@@ -320,8 +417,10 @@ function choiceOf(decl: FunctionDecl, from: FunctionChoice["from"], source: stri
 /** Every reserved id's name, registered or stood in: what an archetype card says decides it. */
 export function functionNames(): Map<string, string> {
 	const out = new Map<string, string>()
-	for (const [id, h] of Object.entries(STAND_INS)) out.set(id, i18nText(h.name) ?? id)
-	for (const f of registeredFunctions()) out.set(f.id, i18nText(f.name) ?? f.id)
+	for (const [id, h] of Object.entries(STAND_INS))
+		out.set(id, i18nText(h.name) ?? id)
+	for (const f of registeredFunctions())
+		out.set(f.id, i18nText(f.name) ?? f.id)
 	return out
 }
 
@@ -331,18 +430,40 @@ export function functionNames(): Map<string, string> {
  * registered, then the modules this pub's other rulesets carry (forks and
  * their own), by that ruleset's label.
  */
-async function functionChoices(db: Db, rulesetId: string, plugins: Map<string, string>): Promise<FunctionChoice[]> {
+async function functionChoices(
+	db: Db,
+	rulesetId: string,
+	plugins: Map<string, string>
+): Promise<FunctionChoice[]> {
 	const out: FunctionChoice[] = []
 	const seen = new Set<string>()
 	for (const f of registeredFunctions()) {
 		const owner = f.id.slice(0, f.id.indexOf(":"))
-		out.push(choiceOf(f, owner === "core" ? "core" : "package", owner === "core" ? "Serene Pub" : (plugins.get(owner) ?? owner)))
+		out.push(
+			choiceOf(
+				f,
+				owner === "core" ? "core" : "package",
+				owner === "core" ? "Serene Pub" : (plugins.get(owner) ?? owner)
+			)
+		)
 		seen.add(f.id)
 	}
 	for (const [id, h] of Object.entries(STAND_INS)) {
 		if (seen.has(id)) continue
 		const r = RESERVED_FUNCTIONS[id]
-		out.push(choiceOf({ id, kind: r?.kind ?? "value", prose: "", ...h } as FunctionDecl, "core", "Serene Pub", true))
+		out.push(
+			choiceOf(
+				{
+					id,
+					kind: r?.kind ?? "value",
+					prose: "",
+					...h
+				} as FunctionDecl,
+				"core",
+				"Serene Pub",
+				true
+			)
+		)
 		seen.add(id)
 	}
 	const rows = await rowsByRulesetId(db)
@@ -355,23 +476,51 @@ async function functionChoices(db: Db, rulesetId: string, plugins: Map<string, s
 			out.push(choiceOf(m, "ruleset", row.label))
 		}
 	}
-	return out.sort((a, b) => (a.from === b.from ? 0 : a.from === "core" ? -1 : b.from === "core" ? 1 : a.from === "package" ? -1 : 1))
+	return out.sort((a, b) =>
+		a.from === b.from
+			? 0
+			: a.from === "core"
+				? -1
+				: b.from === "core"
+					? 1
+					: a.from === "package"
+						? -1
+						: 1
+	)
 }
 
 /** The slot a copy under `owner` gives a source's own slot (`copyOwnSlots`'s rule). */
-const copiedSlotId = (id: string, owner: string): string => `${owner}:slot/${slotStem(id)}@1`
+const copiedSlotId = (id: string, owner: string): string =>
+	`${owner}:slot/${slotStem(id)}@1`
 
 /** A template's playtest with its stats renamed onto the copy's own slots. */
-function playtestFor(template: RulesetTemplate, rulesetId: string): RulesetPlaytest {
+function playtestFor(
+	template: RulesetTemplate,
+	rulesetId: string
+): RulesetPlaytest {
 	const owner = parseRulesetId(rulesetId)?.owner ?? ""
-	const own = new Set(rulesetDocumentOwnSlots(rulesetDocumentOf(template.ruleset)))
-	const rename = (id: string) => (own.has(id as SlotId) ? copiedSlotId(id, owner) : id)
-	const scene = JSON.parse(JSON.stringify(template.playtest)) as RulesetPlaytest
+	const own = new Set(
+		rulesetDocumentOwnSlots(rulesetDocumentOf(template.ruleset))
+	)
+	const rename = (id: string) =>
+		own.has(id as SlotId) ? copiedSlotId(id, owner) : id
+	const scene = JSON.parse(
+		JSON.stringify(template.playtest)
+	) as RulesetPlaytest
 	return {
 		...scene,
 		party: scene.party.map((m) => ({
 			...m,
-			...(m.stats ? { stats: Object.fromEntries(Object.entries(m.stats).map(([k, v]) => [rename(k), v])) } : {})
+			...(m.stats
+				? {
+						stats: Object.fromEntries(
+							Object.entries(m.stats).map(([k, v]) => [
+								rename(k),
+								v
+							])
+						)
+					}
+				: {})
 		}))
 	}
 }
@@ -421,18 +570,37 @@ async function scriptChoices(db: Db): Promise<ScriptChoice[]> {
  * ruleset's owner (`<owner>:script/<name>-<id>`), once — the core seeder only
  * ever upserts its own keys, so a stamped row is never touched by it.
  */
-export async function scriptSeedKeyFor(db: Db, rulesetId: string, scriptId: number): Promise<string> {
+export async function scriptSeedKeyFor(
+	db: Db,
+	rulesetId: string,
+	scriptId: number
+): Promise<string> {
 	const parsed = parseRulesetId(rulesetId)
 	if (!parsed) refuse(`'${rulesetId}' is not a ruleset id.`)
 	const [row] = (await db
-		.select({ id: schema.pipelineScripts.id, name: schema.pipelineScripts.name, seedKey: schema.pipelineScripts.seedKey })
+		.select({
+			id: schema.pipelineScripts.id,
+			name: schema.pipelineScripts.name,
+			seedKey: schema.pipelineScripts.seedKey
+		})
 		.from(schema.pipelineScripts)
-		.where(eq(schema.pipelineScripts.id, scriptId))) as { id: number; name: string; seedKey: string | null }[]
+		.where(eq(schema.pipelineScripts.id, scriptId))) as {
+		id: number
+		name: string
+		seedKey: string | null
+	}[]
 	if (!row) refuse(`There is no script with id ${scriptId}.`)
 	if (row!.seedKey) return row!.seedKey
-	const slug = row!.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "script"
+	const slug =
+		row!.name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-+|-+$/g, "") || "script"
 	const seedKey = `${parsed!.owner}:script/${slug}-${row!.id}`
-	await db.update(schema.pipelineScripts).set({ seedKey }).where(eq(schema.pipelineScripts.id, row!.id))
+	await db
+		.update(schema.pipelineScripts)
+		.set({ seedKey })
+		.where(eq(schema.pipelineScripts.id, row!.id))
 	return seedKey
 }
 
@@ -442,11 +610,19 @@ export interface DerivedEntryTypeShape {
 	fields: Record<string, FieldDecl>
 }
 
-function derivedEntryTypesOf(doc: RulesetDocument | null): DerivedEntryTypeShape[] {
+function derivedEntryTypesOf(
+	doc: RulesetDocument | null
+): DerivedEntryTypeShape[] {
 	if (!doc) return []
 	try {
-		return rulesetEntryTypeDecls(doc as unknown as RulesetDecl, ENTRY_UNIVERSAL_PARTS).map((d) => ({
-			repertoireId: d.id.slice(d.id.lastIndexOf(".") + 1, d.id.lastIndexOf("@") > 0 ? d.id.lastIndexOf("@") : undefined),
+		return rulesetEntryTypeDecls(
+			doc as unknown as RulesetDecl,
+			ENTRY_UNIVERSAL_PARTS
+		).map((d) => ({
+			repertoireId: d.id.slice(
+				d.id.lastIndexOf(".") + 1,
+				d.id.lastIndexOf("@") > 0 ? d.id.lastIndexOf("@") : undefined
+			),
 			entryTypeId: d.id,
 			fields: (d.fields ?? {}) as Record<string, FieldDecl>
 		}))
@@ -482,7 +658,10 @@ type Row = typeof schema.rulesets.$inferSelect
 
 async function pluginNames(db: Db): Promise<Map<string, string>> {
 	const rows = (await db
-		.select({ pluginId: schema.plugins.pluginId, name: schema.plugins.name })
+		.select({
+			pluginId: schema.plugins.pluginId,
+			name: schema.plugins.name
+		})
 		.from(schema.plugins)) as { pluginId: string; name: string | null }[]
 	return new Map(rows.map((r) => [r.pluginId, r.name ?? r.pluginId]))
 }
@@ -493,14 +672,19 @@ async function pluginIds(db: Db): Promise<Set<string>> {
 
 const rowsByRulesetId = async (db: Db): Promise<Map<string, Row>> =>
 	new Map(
-		((await db.select().from(schema.rulesets).orderBy(asc(schema.rulesets.id))) as Row[]).map((r) => [
-			r.rulesetId,
-			r
-		])
+		(
+			(await db
+				.select()
+				.from(schema.rulesets)
+				.orderBy(asc(schema.rulesets.id))) as Row[]
+		).map((r) => [r.rulesetId, r])
 	)
 
 /** Whose a ruleset is: `core`, a row here (`pub`), else a plugin's. */
-export async function rulesetOrigin(db: Db, rulesetId: string): Promise<RulesetOrigin> {
+export async function rulesetOrigin(
+	db: Db,
+	rulesetId: string
+): Promise<RulesetOrigin> {
 	if (rulesetId.startsWith("core:")) return "core"
 	const [row] = (await db
 		.select({ id: schema.rulesets.id })
@@ -509,13 +693,30 @@ export async function rulesetOrigin(db: Db, rulesetId: string): Promise<RulesetO
 	return row ? "pub" : "plugin"
 }
 
-/** How many sessions and lorebooks name a ruleset as their primary one. */
-export async function playedBy(db: Db, rulesetId: string): Promise<{ sessions: number; lorebooks: number }> {
+/** How many sessions and lorebooks name a ruleset as their primary one. A session's notes are not a lorebook: a session counts once. */
+export async function playedBy(
+	db: Db,
+	rulesetId: string
+): Promise<{ sessions: number; lorebooks: number }> {
 	const [[s], [l]] = await Promise.all([
-		db.select({ n: count() }).from(schema.sessions).where(eq(schema.sessions.primaryRuleset, rulesetId)),
-		db.select({ n: count() }).from(schema.lorebooks).where(eq(schema.lorebooks.primaryRuleset, rulesetId))
+		db
+			.select({ n: count() })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.primaryRuleset, rulesetId)),
+		db
+			.select({ n: count() })
+			.from(schema.lorebooks)
+			.where(
+				and(
+					eq(schema.lorebooks.primaryRuleset, rulesetId),
+					isNull(schema.lorebooks.sessionId)
+				)
+			)
 	])
-	return { sessions: Number((s as any)?.n ?? 0), lorebooks: Number((l as any)?.n ?? 0) }
+	return {
+		sessions: Number((s as any)?.n ?? 0),
+		lorebooks: Number((l as any)?.n ?? 0)
+	}
 }
 
 const retiredIds = new Set<string>()
@@ -525,12 +726,15 @@ const retiredIds = new Set<string>()
  * ruleset. Sessions and lorebooks that already pin a retired one keep it —
  * it is registered — they just cannot be newly made on it.
  */
-export const pickableRulesets = (): RulesetDecl[] => rulesets().filter((r) => !retiredIds.has(r.id))
+export const pickableRulesets = (): RulesetDecl[] =>
+	rulesets().filter((r) => !retiredIds.has(r.id))
 
 /** 🚧 Read through the sections (2026-10-23): a check method that throws dice, or a function that does. */
-const rollsDice = (decl: RulesetDecl | null | undefined): boolean => !!decl && rulesetRollsDice(decl as never)
+const rollsDice = (decl: RulesetDecl | null | undefined): boolean =>
+	!!decl && rulesetRollsDice(decl as never)
 
-const sameDocument = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+const sameDocument = (a: unknown, b: unknown): boolean =>
+	JSON.stringify(a) === JSON.stringify(b)
 
 function rowState(row: Row): RulesetState {
 	if (row.retiredAt) return "retired"
@@ -542,16 +746,25 @@ async function listRow(
 	decl: RulesetDecl | undefined,
 	row: Row | undefined,
 	plugins?: Map<string, string>,
-	rulesetFitOf?: (rulesetId: string) => import("$lib/server/rulesets/genreFit").RulesetGenreFit[] | undefined
+	rulesetFitOf?: (
+		rulesetId: string
+	) => import("$lib/server/rulesets/genreFit").RulesetGenreFit[] | undefined
 ): Promise<RulesetListRow> {
 	const id = (row?.rulesetId ?? decl?.id)!
 	const fit = decl ? rulesetFitOf?.(id) : undefined
 	const doc = (row?.published ?? row?.draft) as RulesetDocument | undefined
 	const shown = decl ?? (doc as unknown as RulesetDecl | undefined)
-	const origin: RulesetOrigin = row ? "pub" : id.startsWith("core:") ? "core" : "plugin"
+	const origin: RulesetOrigin = row
+		? "pub"
+		: id.startsWith("core:")
+			? "core"
+			: "plugin"
 	const owner = id.slice(0, id.indexOf(":"))
 	return {
-		pluginName: origin === "plugin" ? ((plugins ?? (await pluginNames(db))).get(owner) ?? owner) : null,
+		pluginName:
+			origin === "plugin"
+				? ((plugins ?? (await pluginNames(db))).get(owner) ?? owner)
+				: null,
 		rulesetId: id,
 		label: row?.label ?? i18nText(shown?.name) ?? id,
 		name: i18nText(shown?.name) ?? id,
@@ -559,7 +772,9 @@ async function listRow(
 		origin,
 		state: row ? rowState(row) : "shipped",
 		version: row?.publishedVersion ?? null,
-		draftChanged: row ? !row.published || !sameDocument(row.draft, row.published) : false,
+		draftChanged: row
+			? !row.published || !sameDocument(row.draft, row.published)
+			: false,
 		draftFindings: row?.draftFindings?.length ?? 0,
 		rollsDice: rollsDice(shown),
 		// 🚧 Any deciding function, in either shape (the SDK's reading, 2026-10-23).
@@ -578,13 +793,27 @@ export async function listRulesets(db: Db): Promise<RulesetListRow[]> {
 	const seen = new Set<string>()
 	for (const decl of rulesets()) {
 		seen.add(decl.id)
-		out.push(await listRow(db, decl, rows.get(decl.id), plugins, rulesetFitOf))
+		out.push(
+			await listRow(db, decl, rows.get(decl.id), plugins, rulesetFitOf)
+		)
 	}
-	for (const [id, row] of rows) if (!seen.has(id)) out.push(await listRow(db, undefined, row, plugins))
-	return out.sort((a, b) => (a.origin === b.origin ? a.name.localeCompare(b.name) : a.origin === "core" ? -1 : b.origin === "core" ? 1 : a.origin.localeCompare(b.origin)))
+	for (const [id, row] of rows)
+		if (!seen.has(id)) out.push(await listRow(db, undefined, row, plugins))
+	return out.sort((a, b) =>
+		a.origin === b.origin
+			? a.name.localeCompare(b.name)
+			: a.origin === "core"
+				? -1
+				: b.origin === "core"
+					? 1
+					: a.origin.localeCompare(b.origin)
+	)
 }
 
-export async function rulesetDetail(db: Db, rulesetId: string): Promise<RulesetDetail | null> {
+export async function rulesetDetail(
+	db: Db,
+	rulesetId: string
+): Promise<RulesetDetail | null> {
 	const rows = await rowsByRulesetId(db)
 	const row = rows.get(rulesetId)
 	const decl = getRuleset(rulesetId)
@@ -599,19 +828,27 @@ export async function rulesetDetail(db: Db, rulesetId: string): Promise<RulesetD
 		...base,
 		basedOn: row?.basedOn ?? null,
 		basedOnName: row?.basedOn
-			? (i18nText(getRuleset(row.basedOn)?.name) ?? (template ? (i18nText(template.label) ?? null) : null))
+			? (i18nText(getRuleset(row.basedOn)?.name) ??
+				(template ? (i18nText(template.label) ?? null) : null))
 			: null,
 		draft,
 		published: published ?? (decl && !row ? rulesetDocumentOf(decl) : null),
 		findings: row ? row.draftFindings : [],
-		upgradeFindings: draft && published ? rulesetDocumentUpgradeFindings(published, draft) : [],
+		upgradeFindings:
+			draft && published
+				? rulesetDocumentUpgradeFindings(published, draft)
+				: [],
 		ownSlots: shownDoc ? rulesetDocumentOwnSlots(shownDoc) : [],
 		slotChoices: slotChoices(),
 		derivedEntryTypes: derivedEntryTypesOf(shownDoc),
 		scriptChoices: await scriptChoices(db),
 		playtest: template ? playtestFor(template, rulesetId) : null,
 		vocabularyChoices: vocabularyChoices(),
-		functionChoices: await functionChoices(db, rulesetId, await pluginNames(db))
+		functionChoices: await functionChoices(
+			db,
+			rulesetId,
+			await pluginNames(db)
+		)
 	}
 }
 
@@ -639,7 +876,11 @@ export interface CreatePubRulesetParams {
  * that needs is the host's.
  */
 function blankDocument(id: string, label: string): RulesetDocument {
-	return { id, version: "1.0.0", name: { en: label } } as unknown as RulesetDocument
+	return {
+		id,
+		version: "1.0.0",
+		name: { en: label }
+	} as unknown as RulesetDocument
 }
 
 /**
@@ -667,7 +908,12 @@ const inSections = (doc: RulesetDocument): RulesetDocument => {
  * row of its own (`declareSlot`); a slot already declared under the new id is
  * reused. Returns the rename map `reidRulesetDocument` takes.
  */
-async function copyOwnSlots(db: Db, userId: number, doc: RulesetDocument, owner: string): Promise<Record<string, SlotId>> {
+async function copyOwnSlots(
+	db: Db,
+	userId: number,
+	doc: RulesetDocument,
+	owner: string
+): Promise<Record<string, SlotId>> {
 	const out: Record<string, SlotId> = {}
 	for (const id of rulesetDocumentOwnSlots(doc)) {
 		const decl = getAttributeSlot(id)
@@ -676,7 +922,14 @@ async function copyOwnSlots(db: Db, userId: number, doc: RulesetDocument, owner:
 		if (!getAttributeSlot(next)) {
 			// 🚧 A slot the source owned by name (`rulesetOwned`, a template's
 			// always) is the copy's now through its stats entry: the name goes.
-			const { id: _i, origin: _o, authorUserId: _a, retired: _r, rulesetOwned: _ro, ...props } = decl as typeof decl & {
+			const {
+				id: _i,
+				origin: _o,
+				authorUserId: _a,
+				retired: _r,
+				rulesetOwned: _ro,
+				...props
+			} = decl as typeof decl & {
 				authorUserId?: unknown
 				retired?: unknown
 				rulesetOwned?: unknown
@@ -688,16 +941,29 @@ async function copyOwnSlots(db: Db, userId: number, doc: RulesetDocument, owner:
 	return out
 }
 
-export async function createPubRuleset(db: Db, params: CreatePubRulesetParams): Promise<{ rulesetId: string }> {
+export async function createPubRuleset(
+	db: Db,
+	params: CreatePubRulesetParams
+): Promise<{ rulesetId: string }> {
 	const owner = String(params.ownerSlug ?? "").trim()
 	const name = String(params.name ?? "").trim()
 	const label = String(params.label ?? "").trim()
-	if (owner === "core") refuse("'core' is Serene Pub's own name — choose an owner name of your own.")
+	if (owner === "core")
+		refuse(
+			"'core' is Serene Pub's own name — choose an owner name of your own."
+		)
 	if (!OWNER_SLUG.test(owner))
-		refuse("The owner name takes lowercase letters and digits, joined by single dots or hyphens.")
+		refuse(
+			"The owner name takes lowercase letters and digits, joined by single dots or hyphens."
+		)
 	if ((await pluginIds(db)).has(owner) || isReservedAttributeOwner(owner))
-		refuse(`'${owner}' is an installed plugin's name — a ruleset made here needs an owner name no plugin uses.`)
-	if (!RULESET_NAME.test(name)) refuse("The ruleset name takes lowercase letters and digits, joined by single hyphens.")
+		refuse(
+			`'${owner}' is an installed plugin's name — a ruleset made here needs an owner name no plugin uses.`
+		)
+	if (!RULESET_NAME.test(name))
+		refuse(
+			"The ruleset name takes lowercase letters and digits, joined by single hyphens."
+		)
 	if (!label) refuse("A ruleset needs a label people will see.")
 	const rulesetId = `${owner}:ruleset/${name}@1`
 	if (getRuleset(rulesetId) || (await rowsByRulesetId(db)).has(rulesetId))
@@ -705,21 +971,43 @@ export async function createPubRuleset(db: Db, params: CreatePubRulesetParams): 
 
 	let draft: RulesetDocument
 	const pasted = params.document
-	const from = pasted === undefined || pasted === null ? params.from?.trim() || null : null
+	const from =
+		pasted === undefined || pasted === null
+			? params.from?.trim() || null
+			: null
 	if (pasted !== undefined && pasted !== null) {
-		if (typeof pasted !== "object" || Array.isArray(pasted)) refuse("A pasted ruleset is its document: one JSON object.")
+		if (typeof pasted !== "object" || Array.isArray(pasted))
+			refuse("A pasted ruleset is its document: one JSON object.")
 		const given = pasted as Record<string, unknown>
-		const version = typeof given.version === "string" && /^\d+\.\d+\.\d+$/.test(given.version) ? given.version : "1.0.0"
+		const version =
+			typeof given.version === "string" &&
+			/^\d+\.\d+\.\d+$/.test(given.version)
+				? given.version
+				: "1.0.0"
 		// Under its own id it may be anyone's; under the new one, ours: what it names but did not bring is borrowed.
-		const doc = { ...given, id: typeof given.id === "string" && parseRulesetId(given.id) ? given.id : rulesetId, version } as unknown as RulesetDocument
-		draft = inSections({ ...reidRulesetDocument(doc, rulesetId, {}), name: { en: label } })
+		const doc = {
+			...given,
+			id:
+				typeof given.id === "string" && parseRulesetId(given.id)
+					? given.id
+					: rulesetId,
+			version
+		} as unknown as RulesetDocument
+		draft = inSections({
+			...reidRulesetDocument(doc, rulesetId, {}),
+			name: { en: label }
+		})
 	} else if (from) {
 		// 🚧 A ruleset template is copied as a ruleset is (D4): never played itself.
 		const source = getRuleset(from) ?? getRulesetTemplate(from)?.ruleset
-		if (!source) refuse(`There is no ruleset called '${from}' to start from.`)
+		if (!source)
+			refuse(`There is no ruleset called '${from}' to start from.`)
 		const doc = rulesetDocumentOf(source!)
 		const slots = await copyOwnSlots(db, params.userId, doc, owner)
-		draft = inSections({ ...reidRulesetDocument(doc, rulesetId, slots), name: { en: label } })
+		draft = inSections({
+			...reidRulesetDocument(doc, rulesetId, slots),
+			name: { en: label }
+		})
 	} else draft = blankDocument(rulesetId, label)
 
 	await db.insert(schema.rulesets).values({
@@ -736,11 +1024,19 @@ export async function createPubRuleset(db: Db, params: CreatePubRulesetParams): 
 
 async function pubRow(db: Db, rulesetId: string): Promise<Row> {
 	// 🚧 RF fix 6: a request that names no ruleset says so, never "There is no ruleset called ''".
-	if (typeof rulesetId !== "string" || !rulesetId.trim()) refuse("No ruleset was named. Open the ruleset again from Admin › Rulesets.")
-	const [row] = (await db.select().from(schema.rulesets).where(eq(schema.rulesets.rulesetId, rulesetId))) as Row[]
+	if (typeof rulesetId !== "string" || !rulesetId.trim())
+		refuse(
+			"No ruleset was named. Open the ruleset again from Admin › Rulesets."
+		)
+	const [row] = (await db
+		.select()
+		.from(schema.rulesets)
+		.where(eq(schema.rulesets.rulesetId, rulesetId))) as Row[]
 	if (!row) {
 		if (getRuleset(rulesetId))
-			refuse(`'${rulesetId}' ${rulesetId.startsWith("core:") ? "is Serene Pub's" : "is a plugin's"} and stays as written. Copy it to change it.`)
+			refuse(
+				`'${rulesetId}' ${rulesetId.startsWith("core:") ? "is Serene Pub's" : "is a plugin's"} and stays as written. Copy it to change it.`
+			)
 		refuse(`There is no ruleset called '${rulesetId}'.`)
 	}
 	return row!
@@ -753,21 +1049,34 @@ export async function saveRulesetDraft(
 	patch: { label?: string } = {}
 ): Promise<{ findings: string[] }> {
 	const row = await pubRow(db, rulesetId)
-	if (row.retiredAt) refuse(`'${rulesetId}' is retired. Unretire it to edit it.`)
-	if (!draft || typeof draft !== "object" || Array.isArray(draft)) refuse("A draft is the ruleset's document, an object.")
-	const doc = { ...(draft as Record<string, unknown>), id: rulesetId } as unknown as RulesetDocument
+	if (row.retiredAt)
+		refuse(`'${rulesetId}' is retired. Unretire it to edit it.`)
+	if (!draft || typeof draft !== "object" || Array.isArray(draft))
+		refuse("A draft is the ruleset's document, an object.")
+	const doc = {
+		...(draft as Record<string, unknown>),
+		id: rulesetId
+	} as unknown as RulesetDocument
 	const findings = rulesetDocumentFindings(doc)
-	const label = patch.label !== undefined ? String(patch.label).trim() : row.label
+	const label =
+		patch.label !== undefined ? String(patch.label).trim() : row.label
 	if (!label) refuse("A ruleset needs a label people will see.")
 	await db
 		.update(schema.rulesets)
-		.set({ draft: doc as unknown as Record<string, unknown>, draftFindings: findings, label })
+		.set({
+			draft: doc as unknown as Record<string, unknown>,
+			draftFindings: findings,
+			label
+		})
 		.where(eq(schema.rulesets.id, row.id))
 	return { findings }
 }
 
 /** Put a document in the registry with its derived entry types. */
-function registerDocument(doc: RulesetDocument, userId: number | string): RulesetDecl {
+function registerDocument(
+	doc: RulesetDocument,
+	userId: number | string
+): RulesetDecl {
 	const decl = defineStoredRulesetDocument(doc, { userId })
 	deriveEntryTypes(decl)
 	return decl
@@ -781,26 +1090,41 @@ export interface PublishParams {
 	acknowledgeUpgrade?: boolean
 }
 
-export async function publishPubRuleset(db: Db, rulesetId: string, params: PublishParams): Promise<{ version: string }> {
+export async function publishPubRuleset(
+	db: Db,
+	rulesetId: string,
+	params: PublishParams
+): Promise<{ version: string }> {
 	const row = await pubRow(db, rulesetId)
-	if (row.retiredAt) refuse(`'${rulesetId}' is retired. Unretire it to publish it.`)
+	if (row.retiredAt)
+		refuse(`'${rulesetId}' is retired. Unretire it to publish it.`)
 	const draft = {
 		...(row.draft as unknown as RulesetDocument),
 		id: rulesetId,
 		...(params.version ? { version: params.version } : {})
 	} as RulesetDocument
 	const findings = rulesetDocumentFindings(draft)
-	if (findings.length) refuse(`The draft is not ready to publish:\n · ${findings.join("\n · ")}`)
+	if (findings.length)
+		refuse(
+			`The draft is not ready to publish:\n · ${findings.join("\n · ")}`
+		)
 	const published = row.published as unknown as RulesetDocument | null
 	if (published) {
 		const upgrade = rulesetDocumentUpgradeFindings(published, draft)
 		const versionOnly = upgrade.filter((f) => f.startsWith("[version-"))
 		if (versionOnly.length) refuse(versionOnly.join("\n"))
 		if (upgrade.length && !params.acknowledgeUpgrade)
-			refuse(`Publishing would change what is stored:\n · ${upgrade.join("\n · ")}`)
+			refuse(
+				`Publishing would change what is stored:\n · ${upgrade.join("\n · ")}`
+			)
 	}
 	{
-		const playing = await republishRefusal(db, rulesetId, draft.version, draft as unknown as Record<string, unknown>)
+		const playing = await republishRefusal(
+			db,
+			rulesetId,
+			draft.version,
+			draft as unknown as Record<string, unknown>
+		)
 		if (playing) refuse(playing)
 	}
 	registerDocument(draft, params.userId)
@@ -826,17 +1150,29 @@ export async function publishPubRuleset(db: Db, rulesetId: string, params: Publi
 	return { version: draft.version }
 }
 
-export async function retirePubRuleset(db: Db, rulesetId: string): Promise<void> {
+export async function retirePubRuleset(
+	db: Db,
+	rulesetId: string
+): Promise<void> {
 	const row = await pubRow(db, rulesetId)
 	if (row.retiredAt) return
-	await db.update(schema.rulesets).set({ retiredAt: new Date() }).where(eq(schema.rulesets.id, row.id))
+	await db
+		.update(schema.rulesets)
+		.set({ retiredAt: new Date() })
+		.where(eq(schema.rulesets.id, row.id))
 	retiredIds.add(rulesetId)
 }
 
-export async function unretirePubRuleset(db: Db, rulesetId: string): Promise<void> {
+export async function unretirePubRuleset(
+	db: Db,
+	rulesetId: string
+): Promise<void> {
 	const row = await pubRow(db, rulesetId)
 	if (!row.retiredAt) return
-	await db.update(schema.rulesets).set({ retiredAt: null }).where(eq(schema.rulesets.id, row.id))
+	await db
+		.update(schema.rulesets)
+		.set({ retiredAt: null })
+		.where(eq(schema.rulesets.id, row.id))
 	retiredIds.delete(rulesetId)
 }
 
@@ -845,7 +1181,10 @@ export async function unretirePubRuleset(db: Db, rulesetId: string): Promise<voi
  * refused with the counts — retire it instead. The slots it declared stay as
  * stored slots (their values are parked data; retire them in Attributes).
  */
-export async function deletePubRuleset(db: Db, rulesetId: string): Promise<void> {
+export async function deletePubRuleset(
+	db: Db,
+	rulesetId: string
+): Promise<void> {
 	const row = await pubRow(db, rulesetId)
 	const used = await playedBy(db, rulesetId)
 	if (used.sessions || used.lorebooks)
@@ -877,16 +1216,36 @@ export async function registerPubRulesets(db: Db): Promise<string[]> {
 		const parsed = parseRulesetId(row.rulesetId)
 		// 🚧 A package's own row (created_by NULL, owned by an installed plugin) is that plugin's declaration:
 		// `registerPluginRulesets` below registers it through the plugin door.
-		if (parsed && row.createdBy === null && installed.has(parsed.owner) && row.ownerSlug === parsed.owner) continue
-		if (!parsed || installed.has(parsed.owner) || isReservedAttributeOwner(parsed.owner)) {
-			lines.push(`${row.rulesetId}: its owner '${parsed?.owner ?? "?"}' is now an installed plugin's name; the plugin's declaration wins.`)
+		if (
+			parsed &&
+			row.createdBy === null &&
+			installed.has(parsed.owner) &&
+			row.ownerSlug === parsed.owner
+		)
+			continue
+		if (
+			!parsed ||
+			installed.has(parsed.owner) ||
+			isReservedAttributeOwner(parsed.owner)
+		) {
+			lines.push(
+				`${row.rulesetId}: its owner '${parsed?.owner ?? "?"}' is now an installed plugin's name; the plugin's declaration wins.`
+			)
 			continue
 		}
 		try {
-			registerDocument({ ...(row.published as unknown as RulesetDocument), id: row.rulesetId }, row.createdBy ?? 0)
+			registerDocument(
+				{
+					...(row.published as unknown as RulesetDocument),
+					id: row.rulesetId
+				},
+				row.createdBy ?? 0
+			)
 			if (row.retiredAt) retiredIds.add(row.rulesetId)
 		} catch (e) {
-			lines.push(`${row.rulesetId}: ${e instanceof Error ? e.message : String(e)}`)
+			lines.push(
+				`${row.rulesetId}: ${e instanceof Error ? e.message : String(e)}`
+			)
 		}
 	}
 	lines.push(...(await registerPluginRulesets(db)))
@@ -902,7 +1261,10 @@ export async function registerPubRulesets(db: Db): Promise<string[]> {
  * with the sentence that says its plugin is not installed. With `pluginId`, that plugin's rows only (install,
  * upgrade, uninstall); without, every package's (boot). Returns one line per row refused.
  */
-export async function registerPluginRulesets(db: Db, pluginId?: string): Promise<string[]> {
+export async function registerPluginRulesets(
+	db: Db,
+	pluginId?: string
+): Promise<string[]> {
 	const lines: string[] = []
 	const mine: string[] = []
 	const rows = (await db
@@ -914,7 +1276,12 @@ export async function registerPluginRulesets(db: Db, pluginId?: string): Promise
 	for (const row of rows) {
 		const parsed = parseRulesetId(row.rulesetId)
 		if (!parsed || row.ownerSlug !== parsed.owner) continue
-		if (pluginId ? row.ownerSlug !== pluginId : !installed.has(row.ownerSlug)) continue
+		if (
+			pluginId
+				? row.ownerSlug !== pluginId
+				: !installed.has(row.ownerSlug)
+		)
+			continue
 		_withdrawRuleset(row.rulesetId)
 		mine.push(row.rulesetId)
 		if (row.retiredAt || !row.published || !installed.has(row.ownerSlug)) {
@@ -923,11 +1290,21 @@ export async function registerPluginRulesets(db: Db, pluginId?: string): Promise
 		}
 		try {
 			// the document's own bookkeeping (`upgrades`, read off the row by a conversion) is not a declaration prop
-			const { upgrades: _u, ...props } = rulesetDocumentProps(row.published as unknown as RulesetDocument) as RulesetProps & { upgrades?: unknown }
-			deriveEntryTypes(definePluginRuleset(row.ownerSlug, row.rulesetId, props as RulesetProps))
+			const { upgrades: _u, ...props } = rulesetDocumentProps(
+				row.published as unknown as RulesetDocument
+			) as RulesetProps & { upgrades?: unknown }
+			deriveEntryTypes(
+				definePluginRuleset(
+					row.ownerSlug,
+					row.rulesetId,
+					props as RulesetProps
+				)
+			)
 			retiredIds.delete(row.rulesetId)
 		} catch (e) {
-			lines.push(`${row.rulesetId}: ${e instanceof Error ? e.message : String(e)}`)
+			lines.push(
+				`${row.rulesetId}: ${e instanceof Error ? e.message : String(e)}`
+			)
 		}
 	}
 	// older kept versions' own slots, beside the ones just registered (M2b a7)
@@ -936,13 +1313,22 @@ export async function registerPluginRulesets(db: Db, pluginId?: string): Promise
 	// 🚧 (M2c fix) each package's derived entry types get their registry rows here, at install, upgrade and boot — not
 	// only before a provided-book sync: an entry of such a type made by hand (`entries:create`) in a package that
 	// provides no book needs the row its FK points at. Idempotent; the rows are the plugin's own.
-	const { ensurePackageEntryTypes } = await import("$lib/server/plugins/packageEntryTypes")
+	const { ensurePackageEntryTypes } = await import(
+		"$lib/server/plugins/packageEntryTypes"
+	)
 	const owners = new Set(
 		rows
-			.filter((r) => mine.includes(r.rulesetId) && !r.retiredAt && r.published && installed.has(r.ownerSlug))
+			.filter(
+				(r) =>
+					mine.includes(r.rulesetId) &&
+					!r.retiredAt &&
+					r.published &&
+					installed.has(r.ownerSlug)
+			)
 			.map((r) => r.ownerSlug)
 	)
-	for (const owner of owners) lines.push(...(await ensurePackageEntryTypes(db, owner)))
+	for (const owner of owners)
+		lines.push(...(await ensurePackageEntryTypes(db, owner)))
 	return lines
 }
 
@@ -950,13 +1336,24 @@ export async function registerPluginRulesets(db: Db, pluginId?: string): Promise
  * 🚧 The version a session starting on `rulesetId` is pinned to when nothing it adopts (a book, a kit) pins one: the
  * published version of a pub or package ruleset's row, or null for a ruleset declared in code (M0 E-fix).
  */
-export async function publishedRulesetVersion(db: Db, rulesetId: string): Promise<string | null> {
+export async function publishedRulesetVersion(
+	db: Db,
+	rulesetId: string
+): Promise<string | null> {
 	const [row] = await db
-		.select({ version: schema.rulesets.publishedVersion, retiredAt: schema.rulesets.retiredAt })
+		.select({
+			version: schema.rulesets.publishedVersion,
+			retiredAt: schema.rulesets.retiredAt
+		})
 		.from(schema.rulesets)
 		.where(eq(schema.rulesets.rulesetId, rulesetId))
 		.limit(1)
-	return row && !row.retiredAt && typeof row.version === "string" && row.version ? row.version : null
+	return row &&
+		!row.retiredAt &&
+		typeof row.version === "string" &&
+		row.version
+		? row.version
+		: null
 }
 
 /** Tests only: forget which pub rulesets are retired. */

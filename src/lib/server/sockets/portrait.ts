@@ -228,9 +228,12 @@ export const charactersSetLikenessImage: Handler<
 			if (!version)
 				throw new Error("Character not found or access denied")
 			const stored = profileOf(version).likeness ?? {}
-			await updateCardVersion(db, version.id, {
-				likeness: { ...stored, imageMediaId: file.id }
-			})
+			await updateCardVersion(
+				db,
+				version.id,
+				{ likeness: { ...stored, imageMediaId: file.id } },
+				{ redline: { by: { userId }, cause: "save" } }
+			)
 			const res = { characterId: params.characterId, imageMediaId: file.id }
 			emitToUser("characters:setLikenessImage", res)
 			return res

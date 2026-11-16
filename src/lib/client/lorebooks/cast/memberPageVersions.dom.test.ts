@@ -130,6 +130,9 @@ function change(
 		fields: {},
 		columns: cols,
 		historyEntryId: null,
+		writeOrder: id,
+		sourceSessionId: null,
+		sourceSessionName: null,
 		createdAt: "",
 		updatedAt: ""
 	}

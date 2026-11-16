@@ -1,0 +1,34 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts > create-lore-entry — shown, an entry of the attached lorebook > two entries of the name: nothing written, the note, the run goes on
+Using PGlite database at: /tmp/serene-pub-vitest-lore-shown-5Vbdss/data/serene-pub.db
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts (10 tests | 1 failed) 17328ms
+     × two entries of the name: nothing written, the note, the run goes on 4352ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts > create-lore-entry — shown, an entry of the attached lorebook > two entries of the name: nothing written, the note, the run goes on
+TypeError: Cannot read properties of undefined (reading 'notes')
+ ❯ src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts:263:21
+    261|    { commit: async () => out }
+    262|   )
+    263|   expect(bound.main.notes).toEqual(out.notes)
+       |                     ^
+    264|  })
+    265|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 15 passed (16)
+   Start at  05:00:03
+   Duration  18.59s (transform 14.74s, setup 88ms, import 1.91s, tests 28.36s, environment 6ms)
+

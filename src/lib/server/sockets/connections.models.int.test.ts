@@ -609,9 +609,11 @@ describe("a model's What it's for (`modality`)", () => {
 	test("refuses what this connection's type cannot serve, and a value that is not a choice", async () => {
 		const { conn, row } = await pair(CONNECTION_TYPE.OPENAI)
 		// `image-gen` left this list 2026-10-12: the OPENAI type carries an image module now (I6).
-		for (const bad of ["ner", "tts"]) {
+		// `tts` left this list 2026-11-12: Speech is a section now, and the
+		// OPENAI type declares speech, so a model on it may be for speech.
+		for (const bad of ["ner"]) {
 			const res = await setModality(conn.id, row.id, bad)
-			expect(res.error).toMatch(/can only be for chat, image generation or embeddings/i)
+			expect(res.error).toMatch(/can only be for chat, image generation, embeddings or speech/i)
 		}
 		const junk = await setModality(conn.id, row.id, 7)
 		expect(junk.error).toMatch(/Not sure/)

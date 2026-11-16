@@ -29,7 +29,7 @@ The details depend on the kind:
 
 - **World lore** takes an optional **Focus topic**, such as *the smugglers' code*, to steer what the summary is about.
 - **Character lore** needs a **Focus topic**, such as *her debts* or *relationship with Kira*, and can be **bound to a character** (your personas included) so the lore is private to them. Binding adds that character to the book's cast when you save.
-- **Scene** needs a **History entry** to file the scene under. Pick one, or press **New**, which uses the history entry of the day where the session's story stands, making a blank one only when that day has none (see [History entries and scenes](./lorebook-time.md#history-entries-and-scenes)). The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again, including every line of a scene started in the conversation (the open one's too). After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
+- **Scene** needs a **History entry** to file the scene under, unless the lorebook keeps [no timeline](./lorebook-time.md#a-lorebooks-timeline): then no history entry is asked for and the scene is filed on its own. Pick one, or press **New**, which uses the history entry of the day where the session's story stands, making a blank one only when that day has none (see [History entries and scenes](./lorebook-time.md#history-entries-and-scenes)). The messages must be one unbroken run: a gap in the selection is refused, and messages already in a scene can't be selected again, including every line of a scene started in the conversation (the open one's too). After saving, the scene is processed (below) and its review opens in the **Scene summary** window.
 
 The window says where it saves: **Saving to:** the lorebook the session reads, or *Session notes*.
 
@@ -45,7 +45,7 @@ The model is told the scene's name, the day it began and who was present, and, i
 
 A scene keeps its summary and cast even if its messages, or the whole session, are later deleted.
 
-A scene started and ended in the conversation can also be summarized from the session: **Summarize** on its divider or its row in the [Chronicle](./session-layout.md#the-widgets), **Close and summarize** on the Chronicle's open scene, and **Summarize all (N)** for every finished scene of the session with no summary yet, one after another. When the session's **Summaries** is **On close**, each scene is summarized in the background as it ends (a scene made with **Mark as scene** included), and the routine above leaves that scene alone; with **Never**, none of these is offered, and the routine stops too (see [When a new scene begins](./sessions.md#when-a-new-scene-begins)). Each run lands in the activity list for review, as above.
+A scene started and ended in the conversation can also be summarized from the session: **Summarize** on its divider or its row in the [Chronicle](./session-layout.md#the-widgets), **Close and summarize** on the Chronicle's open scene, and **Summarize all (N)** for every finished scene of the session with no summary yet, one after another. In a session without the routine above, when the session's **Summaries** is **On close**, each scene is summarized in the background as it ends (a scene made with **Mark as scene** included); with **Never**, none of these is offered (see [When a new scene begins](./sessions.md#when-a-new-scene-begins)). In a session with the routine there is no **Summaries** setting: every one of these is offered, and nothing is drafted at a close. Each run lands in the activity list for review, as above.
 
 A finished run waits for you. Until you decide, the scene's divider and its Chronicle row say **Ready to review**; click it to open the review in the **Scene summary** window. The summary is written only when you press **Apply**. **Discard** (or dismissing its card in the Activity view) leaves the scene as it was before the run: summarized, not summarized or out of date. Stopping a run does the same. **Summarize all (N)** skips a scene that's waiting for review, so it never replaces a result you haven't looked at.
 
@@ -55,11 +55,13 @@ When a scene's boundaries move afterwards (its start nudged or dragged, its end 
 
 Story (its **Living** and **Rule Based** presets), the Lair and the Dungeon Crawler register a routine, **Summarize finished scenes**, that summarizes each scene a few rounds after it ends. It is listed under **Edit session › Settings › Routines** like any routine, with its mode: **Off**, **Review** or **Full**. See [Routines](./sessions.md#routines).
 
-- **Which scene.** Each run takes the oldest scene on the main channel that ended at least 6 rounds ago and has no summary, and that nobody has decided about. A summary you saved (even one a moved boundary marked out of date), a review you discarded, a summary that failed, and one being written or waiting for review are never taken. One scene per run. Nothing runs while **Summaries** is **Never**, or while you have taken turns back with **Back** and a Forward is waiting. On a branch, only the scenes on the branch's own lines are summarized.
+- **Which scene.** Each run takes the oldest scene on the main channel that ended at least 6 rounds ago and has no summary, and that nobody has decided about. A summary you saved (even one a moved boundary marked out of date), a review you discarded, a summary that failed, and one being written or waiting for review are never taken. One scene per run. Nothing runs while you have taken turns back with **Back** and a Forward is waiting. On a branch, only the scenes on the branch's own lines are summarized.
 - **One at a time.** While one scene's summary is being written, the routine starts no other. If you go **Back**, swipe or delete lines of that scene while it is written, nothing is saved and the scene is summarized again once it is old enough. If you stop a summary the routine started, the routine leaves that scene alone from then on; you can still summarize it yourself.
 - **Full** (the default) saves the summary by itself, and the model's name for the scene only while the scene still has its automatic name (*Scene 3*); a name you gave is kept. Saving a name stops the automatic *Scene N* numbering, as any name does. The scene's cast stays as the scene's close recorded it. New characters are not proposed.
 - **Review** waits for you in the activity list and the **Scene summary** window, like a summary you started: **Ready to review**, **Apply**, **Discard**.
-- **Off** runs nothing.
+- **Off** runs nothing by itself; **Summarize**, **Summarize all** and **Close and summarize** stay.
+
+This routine replaces the session's **Summaries** setting where a session runs it: a session that had saved **Never** now has the routine **Off**, and one that had saved **On close** has it on **Review** (see [When a new scene begins](./sessions.md#when-a-new-scene-begins)).
 
 The routine asks no model itself. It starts the genre's own scene summarizer, the same **Summarize scene** pipeline your **Summarize** runs. Its model calls queue as a routine's do: replies to people reach the model first. You can keep playing, write, get replies and press **Back** while it runs. The run shows as a **Scene** card in the Activity view, and goes away once the summary is saved under **Full**.
 
@@ -71,7 +73,7 @@ Held [lorebook changes](./pipelines.md#summaries-and-the-lorebook) still apply a
 
 ## Which summarizer runs
 
-World and character summaries run the pipeline that the session's genre (or preset) registers on the summarize action. A genre that registers its own replacement runs its own. The summary is written into the lorebook the session reads or, when it reads none or its scenes end by themselves, into the session's **Session notes** (see [Your session's own notes](./lorebooks.md#your-sessions-own-notes)).
+World and character summaries run the pipeline that the session's genre (or preset) registers on the summarize action. A genre that registers its own replacement runs its own. The summary is written into the lorebook the session reads or, when it reads none, into the session's **Session notes** (see [Your session's own notes](./lorebooks.md#your-sessions-own-notes)).
 
 A routine that summarizes (see [Routines](./pipelines.md#routines)) reads only lines at least 20 messages old, so the newest lines are left to the story. Summaries you ask for yourself, from an action or an event, have no such minimum, and neither does a closed scene or [Close out](#close-out-and-the-catch-up-offer). See [Summaries and the lorebook](./pipelines.md#summaries-and-the-lorebook) for how a registration sets it.
 
@@ -92,7 +94,7 @@ A history entry can hold several scenes. **Compile to Entry**, in the entry's me
 It compiles the scenes of the line you're reading, in the order they were played. Saving writes only what changed:
 
 - At **now**, on the entry's own line, it changes the entry.
-- While reading the book as of a date, it files an [amendment](./lorebook-time.md#amendments-changes-that-start-at-a-date) at that date.
+- While reading the book as of a date, it saves a [version](./lorebook-time.md#versions-of-an-entry) that starts at that date.
 - On a branch, for an entry the branch shares with main, it files an amendment on the branch, so main keeps its version. The review tells you.
 
 A compile remembers the line and date it started from, so reopening its review later saves there.

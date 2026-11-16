@@ -154,16 +154,31 @@ export const LORE_LENS_REGISTRY: readonly LensDescriptor[] = LORE_LENSES.map(
 /** The lenses advanced controls hide (see the header). */
 const ADVANCED_LENSES: readonly LoreLens[] = ["graph", "lives"]
 
-/** The lenses the track offers: all of them, less Graph and Lives unless advanced. */
-export function lensesShown(advanced: boolean): readonly LensDescriptor[] {
-	return advanced
-		? LORE_LENS_REGISTRY
-		: LORE_LENS_REGISTRY.filter((d) => !ADVANCED_LENSES.includes(d.id))
+/** 🚧 The lenses a book with its Timeline switch off does not offer. */
+const TIMELINE_LENSES: readonly LoreLens[] = ["time", "lives"]
+
+/**
+ * The lenses the track offers: all of them, less Graph and Lives unless
+ * advanced, and less Time and Lives when the book's timeline is off.
+ */
+export function lensesShown(
+	advanced: boolean,
+	timeline = true
+): readonly LensDescriptor[] {
+	return LORE_LENS_REGISTRY.filter(
+		(d) =>
+			(advanced || !ADVANCED_LENSES.includes(d.id)) &&
+			(timeline || !TIMELINE_LENSES.includes(d.id))
+	)
 }
 
 /** The lens to draw for a named one: itself when shown, else the default (List). */
-export function lensShown(lens: LoreLens, advanced: boolean): LoreLens {
-	return lensesShown(advanced).some((d) => d.id === lens)
+export function lensShown(
+	lens: LoreLens,
+	advanced: boolean,
+	timeline = true
+): LoreLens {
+	return lensesShown(advanced, timeline).some((d) => d.id === lens)
 		? lens
 		: DEFAULT_LENS
 }
@@ -265,13 +280,15 @@ function typingTarget(target: EventTarget | null): boolean {
  */
 export function lensForKey(
 	event: KeyboardEvent,
-	advanced: boolean
+	advanced: boolean,
+	timeline = true
 ): LoreLens | null {
 	if (event.defaultPrevented || event.repeat) return null
 	if (typingTarget(event.target)) return null
 	return (
-		lensesShown(advanced).find((d) => matchesShortcut(event, d.shortcut))
-			?.id ?? null
+		lensesShown(advanced, timeline).find((d) =>
+			matchesShortcut(event, d.shortcut)
+		)?.id ?? null
 	)
 }
 

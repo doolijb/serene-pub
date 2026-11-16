@@ -9,7 +9,7 @@
  * runs against the app db and an in-memory test db.
  */
 
-import { eq } from "drizzle-orm"
+import { eq, lt, sql } from "drizzle-orm"
 import { i18nFindings } from "@serene-pub/sdk"
 import { plugins, pluginHookInvocations } from "$lib/server/db/schema"
 import {
@@ -162,6 +162,40 @@ export async function loadPluginManifests(
 	)
 }
 
+/** Invocation rows older than this many days are pruned. */
+export const INVOCATION_RETENTION_DAYS = 30
+/** Only the newest this-many invocation rows are kept. */
+export const INVOCATION_MAX_ROWS = 50_000
+const PRUNE_EVERY = 100
+let writesSinceBoot = 0
+
+/**
+ * Trim the invocation log: both cuts apply, so the survivors are the rows
+ * newer than `INVOCATION_RETENTION_DAYS` AND within the newest
+ * `INVOCATION_MAX_ROWS`.
+ *
+ * `now` and `opts` exist for tests only (so one need not insert 50,000 rows);
+ * the one production caller, `writeInvocation`, passes neither.
+ */
+export async function pruneInvocations(
+	db: Db,
+	now: Date = new Date(),
+	opts: { days?: number; maxRows?: number } = {}
+): Promise<void> {
+	const days = opts.days ?? INVOCATION_RETENTION_DAYS
+	const maxRows = opts.maxRows ?? INVOCATION_MAX_ROWS
+	const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+	const d = db as any
+	await d
+		.delete(pluginHookInvocations)
+		.where(lt(pluginHookInvocations.finishedAt, cutoff))
+	await d.execute(sql`
+		DELETE FROM "plugin_hook_invocations" WHERE "id" IN (
+			SELECT "id" FROM "plugin_hook_invocations"
+			ORDER BY "finished_at" DESC, "id" DESC OFFSET ${maxRows}
+		)`)
+}
+
 /** Append one invocation to the log. Denormalized identity — no FK to plugins. */
 export async function writeInvocation(
 	db: Db,
@@ -184,6 +218,15 @@ export async function writeInvocation(
 		outcome: rec.outcome,
 		reason: rec.reason ?? null
 	})
+	if (writesSinceBoot++ % PRUNE_EVERY === 0) {
+		try {
+			await pruneInvocations(db)
+		} catch (e) {
+			console.warn(
+				`[plugins] invocation log prune failed: ${e instanceof Error ? e.message : String(e)}`
+			)
+		}
+	}
 }
 
 /* ── admin/CRUD helpers (used by the socket handlers) ────────────────────── */

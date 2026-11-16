@@ -153,3 +153,12 @@ findings; four fixed by the lead, with tests:
 
 Docs: `docs/summarization.md` says "marks out of date" (the text is kept), and gains *One at a time*.
 Verification after the fixes: 51 files, 436 tests pass; `tsc` clean.
+
+## Found later by the other session's full SDK test run (2026-11-13), fixed by the lead
+
+The lead had only been running this lane's own SDK test files. A full `sdk:test` showed three failures caused by
+this programme: `forms.test.ts` (`core:outlet/summarize-finished-scene@1` declared no `review.fields`; it now
+declares `['scene']`, registry pin → `1803781561967b`), `guideSnippets` (the two routine fences in
+`guides/genres-presets-and-routines.md` lacked a prelude), `widgetParts` (`guides/widgets.md` regenerated for the
+turn line's background list part). LESSON: run the whole `npm run sdk:test` at the end of any lane that touches the
+SDK, not only the lane's files.

@@ -666,7 +666,8 @@ export async function variableLayoutView(
 	const uses = await layoutRowUses(db, mine)
 
 	const root = rootOf(decl)
-	const sample = root ? sampleValues(decl)[root] : undefined
+	const samples = sampleValues(decl)
+	const sample = root ? samples[root] : undefined
 	const rowViews: VariableLayoutRowView[] = []
 	for (const r of mine) {
 		let preview: string | null = null

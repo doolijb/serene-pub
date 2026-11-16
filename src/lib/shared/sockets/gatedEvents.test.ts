@@ -70,6 +70,9 @@ const MIGRATED_FAMILIES = [
 	// sweep, and its one consumer (LorebooksWorkspace) declares interest.
 	"amendments:",
 	"entries:",
+	// A card version's and a cast version's Edit history: born gated, asked
+	// through `awaitReply`, never listened for with `on`.
+	"characterVersions:",
 	"bindingSuggestions:",
 	"bindingCheck:",
 	// slices 6+7 (2026-09-15): session-adjacent and admin/config.
@@ -163,6 +166,9 @@ const MIGRATED_FAMILIES = [
  */
 const MIGRATED_EVENTS = [
 	"sessionMessage",
+	// 🚧 perf-H, 2026-11-13: the streamed reply's mid-stream frame; one
+	// consumer, the session page's inbox.
+	"sessionMessageDelta",
 	"models:refreshSpeech",
 	"models:presence",
 	// 🚧 Lane C, 2026-10-30: one consumer, `useMachineHardware.svelte.ts`, on
@@ -227,6 +233,20 @@ describe("scopeOfPayload", () => {
 				sessionMessage: { id: 9, sessionId: 42 }
 			})
 		).toBe("42")
+	})
+
+	test("reads the streamed frame's scope off its `sessionId`", () => {
+		expect(
+			scopeOfPayload("sessionMessageDelta", {
+				sessionId: 42,
+				id: 9,
+				content: "hi",
+				reasoning: null
+			})
+		).toBe("42")
+		expect(
+			scopeOfPayload("sessionMessageDelta", { id: 9, content: "hi" })
+		).toBeNull()
 	})
 
 	test("reads `sessionId` for state:changed and sessions:userTyping", () => {
@@ -448,6 +468,7 @@ describe("scopeOfPayload", () => {
 describe("isScopedEvent", () => {
 	test("answers for the table, and for nothing else", () => {
 		expect(isScopedEvent("sessionMessage")).toBe(true)
+		expect(isScopedEvent("sessionMessageDelta")).toBe(true)
 		expect(isScopedEvent("state:changed")).toBe(true)
 		expect(isScopedEvent("backups:list")).toBe(false)
 	})
@@ -485,6 +506,10 @@ describe("the streamed reply", () => {
 	test("is gated, and its error sibling is not", () => {
 		expect(isGatedEvent("sessionMessage")).toBe(true)
 		expect(isGatedEvent("sessionMessage:error")).toBe(false)
+	})
+
+	test("its mid-stream frame is gated too", () => {
+		expect(isGatedEvent("sessionMessageDelta")).toBe(true)
 	})
 })
 

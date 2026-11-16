@@ -15,7 +15,6 @@ import {
 	referencedVariables,
 	type Allocation
 } from "$lib/server/pipelines/prompt/assemble"
-import { formatHistoryDateKey } from "$lib/server/pipelines/prompt/dateKeys"
 import { entryDeclaration } from "$lib/server/entries/declarations"
 import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
@@ -455,14 +454,8 @@ describe("the engine is data, not an assumption", () => {
 })
 
 /**
- * `objectByRole` — the type chooses the projection.
- *
- * The two bodies inside it are the two that were `objectByName` and
- * `objectByDate`; what moved is *which one runs*, from a hardcoded call site to
- * the declaration. So the assertions here are about the choosing, and about the
- * one thing the roles vocabulary does **not** buy: the order key's formatting,
- * which is still core's and is asserted against `formatHistoryDateKey` byte for
- * byte.
+ * `objectByRole` — the type chooses the projection: a titled type is a
+ * title-keyed record, an ordered one is a list of dated rows.
  */
 const allocation = (over: Partial<Allocation> = {}): Allocation => ({
 	source: "worldLore",
@@ -507,7 +500,7 @@ describe("objectByRole", () => {
 		expect(objectByRole([], worldLoreRoles)).toBeUndefined()
 	})
 
-	it("sorts by the declared order keys and heads by the order key itself", () => {
+	it("sorts an ordered type's rows by the declared order keys, newest first, absent parts last", () => {
 		const dated = (
 			year: number,
 			month: number | null,
@@ -516,76 +509,67 @@ describe("objectByRole", () => {
 			allocation({
 				source: "history",
 				id: `${year}-${month}-${day}`,
-				content: `${year}`,
+				content: `${year}-${month}-${day}`,
 				meta: { year, month, day }
 			})
 		const out = objectByRole(
 			[dated(410, 3, null), dated(412, null, null), dated(410, 1, 5)],
 			historyRoles
-		)
-		// Newest first, absent parts last — today's assembly sort, stated as
-		// data on the type rather than as arithmetic in this module.
-		expect(Object.keys(out!)).toEqual(["Year 412", "410-03", "410-01-05"])
+		) as Array<{ content: string; date: any; dateDelta: unknown }>
+		expect(out.map((r) => r.content)).toEqual([
+			"412-null-null",
+			"410-3-null",
+			"410-1-5"
+		])
+		expect(out[0]).toEqual({
+			date: {
+				year: { number: 412 },
+				month: null,
+				day: null,
+				time: null
+			},
+			dateDelta: null,
+			content: "412-null-null"
+		})
+		expect(out[2].date.day).toEqual({ number: 5 })
 	})
 
-	it("keeps a year-only date in its place, newest first (plan A20 b)", () => {
-		// A bare "413" is an integer-like key, and an object lists those
-		// ascending ahead of every other key: the oldest year-only entry led.
-		const out = objectByRole(
-			[
-				allocation({ source: "history", id: 1, content: "old", meta: { year: 3 } }),
-				allocation({ source: "history", id: 2, content: "mid", meta: { year: 7, month: 2 } }),
-				allocation({ source: "history", id: 3, content: "new", meta: { year: 9 } })
-			],
-			historyRoles
-		)
-		expect(Object.values(out!)).toEqual(["new", "mid", "old"])
-		expect(Object.keys(out!)).toEqual(["Year 9", "7-02", "Year 3"])
-	})
-
-	it("keeps every entry sharing a date, each under its own heading (plan A20 a)", () => {
+	it("keeps every entry sharing a date as its own row", () => {
 		const out = objectByRole(
 			[
 				allocation({ source: "history", id: 1, content: "The bridge fell.", meta: { year: 7 } }),
 				allocation({ source: "history", id: 2, content: "The tower burned.", meta: { year: 7 } }),
-				allocation({ source: "history", id: 3, content: "Ice.", meta: { year: 7, month: 2 } }),
-				allocation({ source: "history", id: 4, content: "Snow.", meta: { year: 7, month: 2 } })
+				allocation({ source: "history", id: 3, content: "Ice.", meta: { year: 7, month: 2 } })
 			],
 			historyRoles
-		)
-		expect(out).toEqual({
-			"7-02": "Ice.",
-			"7-02 (2)": "Snow.",
-			"Year 7": "The bridge fell.",
-			"Year 7 (2)": "The tower burned."
-		})
+		) as Array<{ content: string }>
+		expect(out.map((r) => r.content)).toEqual([
+			"Ice.",
+			"The bridge fell.",
+			"The tower burned."
+		])
 	})
 
-	it("produces what formatHistoryDateKey produced wherever a month or a day is set", () => {
-		// ⚠ The one thing roles do not buy: core formats the order key, and a
-		// second ordered type wants a named policy rather than a branch. A
-		// year alone is the one departure: it reads "Year 412", never an
-		// integer-like "412" (plan A20 b).
-		const cases = [
-			{ year: 412, month: 3, day: 7 },
-			{ year: 412, month: 3, day: null },
-			// The odd one, preserved deliberately: an absent middle part does
-			// not terminate the key, it is skipped.
-			{ year: 412, month: null, day: 5 },
-			{ year: 0, month: 12, day: 31 }
-		]
-		for (const meta of cases) {
-			const out = objectByRole(
-				[allocation({ source: "history", content: "x", meta })],
-				historyRoles
-			)
-			expect(Object.keys(out!)).toEqual([formatHistoryDateKey(meta)])
-		}
-		const yearOnly = objectByRole(
-			[allocation({ source: "history", content: "x", meta: { year: -30 } })],
+	it("has a null date for an allocation with no order meta", () => {
+		const out = objectByRole(
+			[allocation({ source: "history", content: "x" })],
 			historyRoles
 		)
-		expect(Object.keys(yearOnly!)).toEqual(["Year -30"])
+		expect(out).toEqual([{ date: null, dateDelta: null, content: "x" }])
+	})
+
+	it("measures each row from the story's own now, and not from one borrowed from History", () => {
+		const rows = [allocation({ source: "history", content: "x", meta: { year: 410 } })]
+		const own = objectByRole(rows, historyRoles, {
+			now: { year: 412, from: "clock" },
+			calendar: null
+		}) as Array<{ dateDelta: unknown }>
+		expect(own[0].dateDelta).not.toBeNull()
+		const borrowed = objectByRole(rows, historyRoles, {
+			now: { year: 412, from: "history" },
+			calendar: null
+		}) as Array<{ dateDelta: unknown }>
+		expect(borrowed[0].dateDelta).toBeNull()
 	})
 
 	it("skips blank-after-trim content for an ordered type, which the titled form does not", () => {

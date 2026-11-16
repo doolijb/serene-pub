@@ -69,16 +69,26 @@ export function isOurAmendment(
 	knownIds: ReadonlySet<number>
 ): boolean {
 	if (list.lorebookId !== params.lorebookId) return false
-	return list.entries.some(
-		(a) =>
-			!knownIds.has(a.id) &&
-			a.entryId === params.entryId &&
-			(a.branchId ?? null) === (params.branchId ?? null) &&
-			a.year === params.year &&
-			(a.month ?? null) === (params.month ?? null) &&
-			(a.day ?? null) === (params.day ?? null) &&
-			same(a.fields, params.fields)
-	)
+	return list.entries.some((a) => {
+		if (
+			a.entryId !== params.entryId ||
+			(a.branchId ?? null) !== (params.branchId ?? null) ||
+			a.year !== params.year ||
+			(a.month ?? null) !== (params.month ?? null) ||
+			(a.day ?? null) !== (params.day ?? null)
+		)
+			return false
+		// A new row carries exactly the fields asked for. A known row is a
+		// merge (the server updates the line's own row at a taken date): it
+		// carries every asked key with the asked value, and may hold more.
+		if (!knownIds.has(a.id)) return same(a.fields, params.fields)
+		// An empty ask proves nothing about a known row.
+		const asked = Object.entries(params.fields)
+		return (
+			asked.length > 0 &&
+			asked.every(([k, v]) => k in a.fields && same(a.fields[k], v))
+		)
+	})
 }
 
 /**
@@ -117,6 +127,65 @@ export async function fileEntryAmendments(
 		)
 	}
 	return last
+}
+
+/**
+ * Edits one version of an entry (a dated change) and waits for the book's
+ * list to show it: the row is there and every part sent reads as sent.
+ */
+export async function updateEntryAmendment(
+	socket: Pick<TypedSocket, "emit">,
+	params: Sockets.Amendments.Update.Params,
+	_knownRow?: Sockets.Amendments.EntryRow
+): Promise<Sockets.Amendments.List.Response> {
+	return awaitReply({
+		socket,
+		event: "amendments:update",
+		params,
+		replyKey: interestKey("amendments:list", params.lorebookId),
+		errorEvent: "amendments:update:error",
+		fallbackError: "The version could not be saved.",
+		match: (data) => {
+			const list = data as Sockets.Amendments.List.Response
+			if (list.lorebookId !== params.lorebookId) return false
+			const row = list.entries.find((a) => a.id === params.id)
+			if (!row) return false
+			if (params.fields !== undefined && !same(row.fields, params.fields))
+				return false
+			if (params.year !== undefined && row.year !== params.year)
+				return false
+			if (
+				params.month !== undefined &&
+				(row.month ?? null) !== params.month
+			)
+				return false
+			if (params.day !== undefined && (row.day ?? null) !== params.day)
+				return false
+			return true
+		}
+	}) as Promise<Sockets.Amendments.List.Response>
+}
+
+/** Deletes one version of an entry and waits for the list to stop holding it. */
+export async function deleteEntryAmendment(
+	socket: Pick<TypedSocket, "emit">,
+	params: Sockets.Amendments.Delete.Params
+): Promise<Sockets.Amendments.List.Response> {
+	return awaitReply({
+		socket,
+		event: "amendments:delete",
+		params,
+		replyKey: interestKey("amendments:list", params.lorebookId),
+		errorEvent: "amendments:delete:error",
+		fallbackError: "The version could not be deleted.",
+		match: (data) => {
+			const list = data as Sockets.Amendments.List.Response
+			return (
+				list.lorebookId === params.lorebookId &&
+				!list.entries.some((a) => a.id === params.id)
+			)
+		}
+	}) as Promise<Sockets.Amendments.List.Response>
 }
 
 /** The line's name as the reply knows it, for a toast. `null` is main. */
@@ -166,7 +235,9 @@ export function maskedFields(
 	fields: Record<string, unknown>,
 	resolved: Record<string, unknown>
 ): string[] {
-	return Object.keys(fields).filter((key) => !same(fields[key], resolved[key]))
+	return Object.keys(fields).filter(
+		(key) => !same(fields[key], resolved[key])
+	)
 }
 
 type OverlayRow = {

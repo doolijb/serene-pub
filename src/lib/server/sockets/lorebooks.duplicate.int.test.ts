@@ -529,6 +529,13 @@ async function seedRichBook(ownerId: number, strangerId: number) {
 		survivorId: base.keeper.id,
 		absorbedSnapshot: { name: "Gone" }
 	} as any)
+	// An edit history row: kept with the book it was made in, never copied.
+	await testDb.insert(schema.loreRedlines).values({
+		entryId: tavern.id,
+		changes: { content: { before: { v: "Old." }, after: { v: "New." } } },
+		cause: "save",
+		userId: ownerId
+	} as any)
 
 	// A member's own art: a set with one sprite, and one gallery picture, both
 	// stored files of the owner's.

@@ -278,11 +278,13 @@ describe("🚧 the settle line", () => {
 		const { rewindTurn, REWIND_REFUSALS } = await import(
 			"$lib/server/sessions/rewind"
 		)
-		// The newest turn (m5, m6) is wholly above the line.
-		expect(
-			await rewindTurn(db as any, { sessionId: s, userId: ownerId })
-		).toMatchObject({ ok: true })
-		// The next one (m3, m4) reaches the line.
+		// Story steps one message per press: the two newest lines (m6, m5) are
+		// above the line, one press each.
+		for (const taken of [m[5]!, m[4]!])
+			expect(
+				await rewindTurn(db as any, { sessionId: s, userId: ownerId })
+			).toMatchObject({ ok: true, messageIds: [taken] })
+		// The next one (m4) is the line itself.
 		expect(
 			await rewindTurn(db as any, { sessionId: s, userId: ownerId })
 		).toEqual({ ok: false, error: REWIND_REFUSALS.settled })
@@ -294,9 +296,11 @@ describe("🚧 the settle line", () => {
 		expect(
 			await rewindTurn(db as any, { sessionId: s, userId: ownerId })
 		).toMatchObject({ ok: true })
+		// Story's Back took one message, the newest (m4): the forward stack
+		// begins there, and a settle stops just before it.
 		const result = await settleTo(s, m[3]!)
-		expect(result.settledMessageId).toBe(m[2]! - 1)
-		expect(await columnOf(s)).toBe(m[2]! - 1)
+		expect(result.settledMessageId).toBe(m[3]! - 1)
+		expect(await columnOf(s)).toBe(m[3]! - 1)
 	}, 60_000)
 
 	it("an applied scene summary holds the line", async () => {

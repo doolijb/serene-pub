@@ -289,6 +289,8 @@ export async function writeCastMember(
 		refuse("A voice")
 
 	const { writeCastVersion } = await import("$lib/server/characters/versions")
+	const { routineRunOf } = await import("$lib/server/pipelines/routines/runs")
+	const runId = input.runId != null ? String(input.runId) : null
 	const { version, coalesced } = await db.transaction(async (tx: Db) =>
 		writeCastVersion(tx, {
 			member: id,
@@ -297,6 +299,17 @@ export async function writeCastMember(
 				input.runId != null
 					? `run:${input.runId}`
 					: `session:${sessionId}`,
+			redline: {
+				by: {
+					run: {
+						sessionId,
+						messageId: input.messageId ?? null,
+						runId,
+						shownAs: routineRunOf(runId)?.shownAs?.name?.trim() || null
+					}
+				},
+				cause: "routine"
+			},
 			// A run names its OWN turn message: its later lines (a death's-door
 			// table row) must not seal it — the same rule clock moves and
 			// world-row state use (`ownAnchor`, state/write.ts `anchorFor`).

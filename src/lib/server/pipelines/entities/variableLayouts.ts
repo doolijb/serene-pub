@@ -70,7 +70,11 @@ import {
 } from "$lib/server/pipelines/prompt/renderers"
 import Handlebars from "handlebars"
 import { strokeList } from "$lib/shared/utils/strokeList"
-import { getVariable, VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
+import { getVariable, VARIABLE_LAYOUT_HELPER, type VarField } from "@serene-pub/sdk"
+import {
+	storyDateDeltaText,
+	storyDateText
+} from "$lib/shared/lorebooks/storyDateText"
 import { variableLayoutCalls } from "@serene-pub/sdk/template-check"
 import {
 	LAYOUT_RENDERS_CONTEXT_KEY,
@@ -146,34 +150,29 @@ export interface ShippedVariableTemplate {
 const asWritten = (v: unknown): string => (v == null ? "" : String(v))
 
 /**
- * The code floor for `currentDate`, from its parts.
+ * The code floor for `currentDate`, from its date value.
  *
  * Every layout keeps its in-code expression so a dangling template reference or
- * a failed seed still emits today's bytes, and this is that expression for the
- * one variable whose formatting *moved* into the template. It has to agree with
- * the shipped source character for character — `variableTemplates.parity.test`
- * renders one against the other, so the two cannot drift apart quietly.
+ * a failed seed still emits today's bytes. It has to agree with the shipped
+ * source character for character — `variableTemplates.parity.test` renders one
+ * against the other. A named year prints the calendar's spelling
+ * (`storyDateText`); otherwise the year's number, then `-MM`, `-DD` and ` HH:MM`
+ * for the parts that are present.
  */
 const asCurrentDate = (v: unknown): string => {
 	if (v == null) return ""
 	const d = v as {
-		year?: number
-		month?: number
-		day?: number
-		hour?: number
-		minute?: number
-		label?: string
+		year?: { number?: number; name?: string } | null
+		month?: { number?: number } | null
+		day?: { number?: number } | null
+		time?: { hour?: number; minute?: number } | null
 	}
-	// A book with a declared calendar hands over its own spelling
-	// (DESIGN-story-time P5); a free-form one never sets `label`.
-	if (d.label) return d.label
-	if (d.year == null) return ""
-	let out = String(d.year)
-	if (d.month != null) out += `-${String(d.month).padStart(2, "0")}`
-	if (d.day != null) out += `-${String(d.day).padStart(2, "0")}`
-	// Only a stored clock carries a time of day; a history entry never does.
-	if (d.hour != null)
-		out += ` ${String(d.hour).padStart(2, "0")}:${String(d.minute ?? 0).padStart(2, "0")}`
+	if (d.year?.name) return storyDateText(d)
+	const pad = (n: unknown) => (n == null ? "" : String(n).padStart(2, "0"))
+	let out = asWritten(d.year?.number)
+	if (d.month) out += `-${pad(d.month.number)}`
+	if (d.day) out += `-${pad(d.day.number)}`
+	if (d.time) out += ` ${pad(d.time.hour)}:${pad(d.time.minute)}`
 	return out
 }
 
@@ -373,6 +372,49 @@ const recordEntries = (key: string): string =>
 	].join("\n")
 
 /**
+ * History's rows, each keyed by its date and, when the row has one, its
+ * distance from the story's now: `"412-03-03 (-0y 0m 2d)"`.
+ *
+ * ```
+ * {
+ *   {{~#each history~}}
+ *     "{{{formatDate date}}}{{#if dateDelta}} ({{{formatDateDelta dateDelta}}}){{/if}}":{{{jsonValue content indent=0}}}{{#unless @last}},{{/unless}}
+ *   {{~/each~}}
+ * }
+ * ```
+ *
+ * The date text sits inside literal quotes, unescaped, exactly as the source
+ * writes it: a calendar name holding `"` or `\` prints as written, and the
+ * floor (`historyJson`) agrees. A list keeps two rows on one date as two keys;
+ * the `(2)` suffix belonged to the keyed record this replaced.
+ */
+const historyEntries = [
+	`{`,
+	`  {{~#each history~}}`,
+	`    "{{{formatDate date}}}{{#if dateDelta}} ({{{formatDateDelta dateDelta}}}){{/if}}":{{{jsonValue content indent=0}}}{{#unless @last}},{{/unless}}`,
+	`  {{~/each~}}`,
+	`}`
+].join("\n")
+
+/**
+ * What `historyEntries` writes, in code. `""` for anything but a non-empty
+ * list (the absence rule: a heading must not print over nothing).
+ */
+const historyJson = (v: unknown): string => {
+	if (!Array.isArray(v) || v.length === 0) return ""
+	return (
+		"{" +
+		v
+			.map(
+				(r: { date?: unknown; dateDelta?: unknown; content?: unknown }) =>
+					`"${storyDateText(r?.date)}${r?.dateDelta ? ` (${storyDateDeltaText(r.dateDelta)})` : ""}":${JSON.stringify(r?.content) ?? ""}`
+			)
+			.join(",") +
+		"}"
+	)
+}
+
+/**
  * A list of `{ title, castMember?, content }`, entry by entry — minified JSON,
  * byte for byte `JSON.stringify` of the list.
  *
@@ -411,14 +453,68 @@ const anchoredEntries = (key: string): string =>
 	].join("\n")
 
 /**
- * 🚧 The earlier scenes — `{ name, summary }` each, oldest first — as one
- * heading over minified JSON, byte for byte `JSON.stringify` of the list
- * mapped to `{ name, summary }`.
+ * The story calendar's parts, one line per part present, joined by a line
+ * break and nothing after the last:
+ *
+ * ```
+ * Months: Thaw (30 days), Bloom (31 days)
+ * Weekdays: Moonday, Tirsday
+ * Leap day: every 4 years, in month 2
+ * Eras: BR, counting down; AR from year 1
+ * ```
+ *
+ * Each optional line opens with the break that precedes it, inside its `{{#if}}`
+ * (a tag alone on a line would take its break with it).
+ */
+const storyCalendarParts = [
+	"Months: {{#each storyCalendar.months}}{{{name}}} ({{{days}}} days){{#unless @last}}, {{/unless}}{{/each}}{{#if storyCalendar.weekdays.length}}",
+	"Weekdays: {{#each storyCalendar.weekdays}}{{{this}}}{{#unless @last}}, {{/unless}}{{/each}}{{/if}}{{#if storyCalendar.leap}}",
+	"Leap day: every {{{storyCalendar.leap.every}}} years, in month {{{storyCalendar.leap.month}}}{{/if}}{{#if storyCalendar.eras.length}}",
+	"Eras: {{#each storyCalendar.eras}}{{{name}}}{{#if (isSet start)}} from year {{{start}}}{{/if}}{{#if backwards}}, counting down{{/if}}{{#unless @last}}; {{/unless}}{{/each}}{{/if}}"
+].join("\n")
+
+/** What `storyCalendarParts` writes, in code. `""` for anything but an object. */
+const asStoryCalendarParts = (v: unknown): string => {
+	if (!v || typeof v !== "object" || Array.isArray(v)) return ""
+	const c = v as {
+		months?: { name?: unknown; days?: unknown }[]
+		weekdays?: unknown[]
+		leap?: { every?: unknown; month?: unknown } | null
+		eras?: { name?: unknown; start?: unknown; backwards?: unknown }[]
+	}
+	const part = (x: unknown) => (x == null ? "" : String(x))
+	const lines = [
+		`Months: ${(Array.isArray(c.months) ? c.months : []).map((m) => `${part(m?.name)} (${part(m?.days)} days)`).join(", ")}`
+	]
+	if (Array.isArray(c.weekdays) && c.weekdays.length)
+		lines.push(`Weekdays: ${c.weekdays.map(part).join(", ")}`)
+	if (c.leap)
+		lines.push(
+			`Leap day: every ${part(c.leap.every)} years, in month ${part(c.leap.month)}`
+		)
+	if (Array.isArray(c.eras) && c.eras.length)
+		lines.push(
+			`Eras: ${c.eras
+				.map(
+					(e) =>
+						`${part(e?.name)}${e?.start != null ? ` from year ${part(e.start)}` : ""}${e?.backwards ? ", counting down" : ""}`
+				)
+				.join("; ")}`
+		)
+	return lines.join("\n")
+}
+
+/**
+ * 🚧 The earlier scenes — oldest first — as one heading over minified JSON,
+ * byte for byte `JSON.stringify` of the list mapped to `{ name, dateDelta?,
+ * summary }`; the delta is printed as its text, and only when the row has one.
+ * A row's `date` is not printed (an automatic scene name already carries its
+ * date); it is there for a custom layout.
  *
  * ```
  * [
  *   {{~#each earlierScenes~}}
- *     {"name":{{{jsonValue name indent=0}}},"summary":{{{jsonValue summary indent=0}~}}
+ *     {"name":{{{jsonValue name indent=0}}}{{#if dateDelta}},"dateDelta":"{{{formatDateDelta dateDelta}}}"{{/if}},"summary":{{{jsonValue summary indent=0}~}}
  *     }{{#unless @last}},{{/unless}}
  *   {{~/each~}}
  * ]
@@ -432,7 +528,7 @@ const earlierSceneEntries = (key: string): string =>
 	[
 		`[`,
 		`  {{~#each ${key}~}}`,
-		`    {"name":{{{jsonValue name indent=0}}},"summary":{{{jsonValue summary indent=0}~}}`,
+		`    {"name":{{{jsonValue name indent=0}}}{{#if dateDelta}},"dateDelta":"{{{formatDateDelta dateDelta}}}"{{/if}},"summary":{{{jsonValue summary indent=0}~}}`,
 		`    }{{#unless @last}},{{/unless}}`,
 		`  {{~/each~}}`,
 		`]`
@@ -788,8 +884,8 @@ const VARIABLES: VariableDefinition[] = [
 		key: "history",
 		content: {
 			name: "JSON",
-			source: recordEntries("history"),
-			render: asMinifiedJson,
+			source: historyEntries,
+			render: historyJson,
 			explicit: true
 		},
 		wrapper: {
@@ -810,10 +906,15 @@ const VARIABLES: VariableDefinition[] = [
 			render: (v: unknown): string => {
 				if (!Array.isArray(v) || v.length === 0) return ""
 				return JSON.stringify(
-					v.map((s: { name: unknown; summary: unknown }) => ({
-						name: s.name,
-						summary: s.summary
-					}))
+					v.map(
+						(s: { name: unknown; dateDelta?: unknown; summary: unknown }) => ({
+							name: s.name,
+							...(s.dateDelta
+								? { dateDelta: storyDateDeltaText(s.dateDelta) }
+								: {}),
+							summary: s.summary
+						})
+					)
 				)
 			},
 			explicit: true
@@ -878,34 +979,21 @@ const VARIABLES: VariableDefinition[] = [
 		variableId: "core:var/current-date@1",
 		key: "currentDate",
 		content: {
-			// ⚠ Was `{{{currentDate}}}` against a value `formatDate` had
-			// already turned into `"412-03"`. The parts arrive separately now,
-			// so the separator, the order and the padding are all in the
-			// source below — which is the difference between a layout for this
-			// variable and a layout that could not change anything about it.
-			//
-			// Byte-identical to what `formatDate` produced, which the parity
-			// corpus checks: year, then `-MM` if there is a month, then `-DD`
-			// if there is a day.
+			// A named year prints the calendar's spelling (`formatDate`); an
+			// unnamed one prints the number, then `-MM`, `-DD` and ` HH:MM` for
+			// the parts present (the year alone is the bare number; `formatDate`'s
+			// `Year N` is for rows). One part per line; the output has no line
+			// breaks, so a `~` faces each one. Triple stashes throughout: a
+			// calendar's names are free text and the floor never escaped.
 			name: "Numeric",
-			//
-			// A declared calendar's spelling (`label`, DESIGN-story-time P5)
-			// wins when present, and a stored clock's time of day follows the
-			// date; a free-form book with no clock sets neither, so its output
-			// is byte-identical to what it always was.
-			//
-			// One part per line; the output has no line breaks, so a `~` faces
-			// each one. Triple stashes throughout: a declared calendar's label
-			// is free text, and the double stash this started with turned an
-			// apostrophe in it into `&#x27;` — the floor never escaped.
 			source:
-				"{{#if currentDate.label~}}\n" +
-				"  {{{currentDate.label}}}\n" +
+				"{{#if currentDate.year.name~}}\n" +
+				"  {{{formatDate currentDate}}}\n" +
 				"{{~else~}}\n" +
-				"  {{{currentDate.year}}}\n" +
-				"  {{~#if (isSet currentDate.month)}}-{{{pad currentDate.month 2}}}{{/if}}\n" +
-				"  {{~#if (isSet currentDate.day)}}-{{{pad currentDate.day 2}}}{{/if}}\n" +
-				"  {{~#if (isSet currentDate.hour)}} {{{pad currentDate.hour 2}}}:{{{pad currentDate.minute 2}}}{{/if}}\n" +
+				"  {{{currentDate.year.number}}}\n" +
+				"  {{~#if currentDate.month}}-{{{pad currentDate.month.number 2}}}{{/if}}\n" +
+				"  {{~#if currentDate.day}}-{{{pad currentDate.day.number 2}}}{{/if}}\n" +
+				"  {{~#if currentDate.time}} {{{pad currentDate.time.hour 2}}}:{{{pad currentDate.time.minute 2}}}{{/if}}\n" +
 				"{{~/if}}",
 			render: asCurrentDate,
 			// Explicit: this source names the fields it renders, so the parity
@@ -921,6 +1009,20 @@ const VARIABLES: VariableDefinition[] = [
 		wrapper: {
 			name: "Sentence",
 			wrap: (body) => `The current date in the story is ${body}.`
+		}
+	},
+	/**
+	 * 🚧 The session's calendar, one line per part present: its months, its
+	 * weekdays, its leap rule, its eras. Absent for a free-form book.
+	 */
+	{
+		variableId: "core:var/story-calendar@1",
+		key: "storyCalendar",
+		content: {
+			name: "Parts",
+			source: storyCalendarParts,
+			render: asStoryCalendarParts,
+			explicit: true
 		}
 	}
 ]
@@ -948,7 +1050,7 @@ export const SHIPPED_VARIABLE_TEMPLATES: ShippedVariableTemplate[] =
 			name: v.content.name,
 			variant: "content",
 			source: v.content.source,
-			codeDefault: v.content.render,
+			codeDefault: (value) => v.content.render(value),
 			explicit: v.content.explicit ?? false,
 			isDefault: !v.wrapper
 		}
@@ -1191,8 +1293,46 @@ function scopeRootFor(variableId: string | undefined, key: string): string {
 	if (!variableId) return key
 	const scope = getVariable(variableId)?.scope
 	if (!scope || Object.prototype.hasOwnProperty.call(scope, key)) return key
-	const roots = Object.keys(scope)
-	return roots.length === 1 ? roots[0]! : key
+	// The value root is the one the variable declares (`rootOf` in
+	// `variableLayoutsView.ts`).
+	return Object.keys(scope)[0] ?? key
+}
+
+const A_KIND: Record<string, string> = {
+	string: "a string",
+	number: "a number",
+	boolean: "a boolean",
+	list: "a list",
+	object: "an object",
+	record: "an object"
+}
+
+/** The root's typed declaration, when it has one (not `'any'`, not a name list). */
+function declaredRootField(variableId: string, key: string): VarField | undefined {
+	const decl = getVariable(variableId)
+	if (!decl) return undefined
+	const root = decl.scope[scopeRootFor(variableId, key)]
+	return root && typeof root === "object" && !Array.isArray(root)
+		? (root as VarField)
+		: undefined
+}
+
+/** What the value is, in words, when its kind does not fit `type`; else undefined. */
+function kindMismatch(type: string, value: unknown): string | undefined {
+	const isList = Array.isArray(value)
+	const isObject = !isList && typeof value === "object"
+	const fits =
+		type === "list"
+			? isList
+			: type === "object" || type === "record"
+				? isObject
+				: typeof value === type
+	if (fits) return undefined
+	return isList
+		? "a list"
+		: isObject
+			? "an object"
+			: (A_KIND[typeof value] ?? `a ${typeof value}`)
 }
 
 /**
@@ -1220,13 +1360,38 @@ export async function renderVariable(
 	 * and cancelling the run only reaches it if it arrived with the run's id.
 	 * Absent from a preview, which is a render no run owns (`RenderRun`).
 	 */
-	run?: RenderRun
+	run?: RenderRun,
+	/**
+	 * Told, in one line, when the value's kind is not the kind its variable
+	 * declares for its root: the value is then written out as it came, without
+	 * a layout (see below).
+	 */
+	report?: (line: string) => void
 ): Promise<string> {
 	// What the key IS in this render — the slot's variable, or the spec's
 	// `renders` for it — never the key string's core meaning. A plugin
 	// variable under a core key gets its own floor and no core absence rule.
 	const variableId = variableOfKey(layouts, key)
 	const def = variableId ? definitionByVariable.get(variableId) : undefined
+
+	// Scope guard, before the absence rule and before any layout: a value whose
+	// kind is not its root's declared kind would make a layout throw or print
+	// nonsense, and the variable's own floor reads the declared shape. Written
+	// out as it came instead, with the cause reported. The ROOT KIND only: a
+	// full shape check would refuse rows with extra fields, which open rows
+	// carry. An `'any'` or name-list root is never guarded.
+	if (variableId && value != null) {
+		const declared = declaredRootField(variableId, key)
+		const got = declared ? kindMismatch(declared.type, value) : undefined
+		if (got) {
+			report?.(
+				`layout: '${key}' (${variableId}) was handed ${got} where its variable declares ${A_KIND[declared!.type]}, so it was written out as it came, without a layout. The step that produced it should hand down the declared shape.`
+			)
+			return value !== null && typeof value === "object"
+				? asMinifiedJson(value)
+				: asWritten(value)
+		}
+	}
 
 	// Absence, decided in code and before any layout runs. Through 0.5 the
 	// heading and fence sat inside the context template's `{{#if}}`, so a

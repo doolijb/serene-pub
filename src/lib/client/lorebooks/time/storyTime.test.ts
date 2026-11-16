@@ -85,6 +85,25 @@ describe("storyItems — what sits on the line", () => {
 		expect(items[0].label).toBe("Year 4")
 	})
 
+	it("draws a dated world lore entry at its date, as a world item", () => {
+		const items = storyItems({
+			entries: [
+				{
+					id: 40,
+					typeId: WORLD_LORE_TYPE_ID,
+					name: "The Founding Charter",
+					year: 12,
+					content: "Signed in the rain."
+				}
+			],
+			scenes: []
+		})
+		expect(items).toHaveLength(1)
+		expect(items[0].kind).toBe("world")
+		expect(items[0].date).toEqual({ year: 12, month: null, day: null })
+		expect(items[0].label).toBe("The Founding Charter")
+	})
+
 	it("sits a scene at the date of the entry it was compiled into", () => {
 		const items = storyItems({ entries, scenes })
 		const scene = items.find((i) => i.key === "scene#4")

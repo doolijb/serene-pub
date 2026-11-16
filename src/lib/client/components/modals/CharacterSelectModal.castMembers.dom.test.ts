@@ -3,7 +3,7 @@
  * one picker, the cast first under the book's name, a member and its card one
  * row. Card ids and member ids share one range, so the two lists never mix.
  */
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({
@@ -30,6 +30,12 @@ const MEMBERS = [
 	{ id: 9, name: "Old Tom", faceMediaId: 4, cardId: null },
 	{ id: 12, name: "Bramble", cardId: 2 }
 ]
+
+// The list loads when the picker opens; warm it so the modal's import
+// resolves within `settle()`.
+beforeAll(async () => {
+	await import("./CharacterSelectList.svelte")
+})
 
 let app: ReturnType<typeof mount> | null = null
 afterEach(() => {

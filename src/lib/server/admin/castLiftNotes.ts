@@ -20,6 +20,7 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { membersAsRead } from "$lib/server/cast/memberAsRead"
 import { parseLiftNote } from "$lib/server/characters/versionsLift"
+import { bookShownNames } from "$lib/server/lorebooks/notesShown"
 
 export async function castLiftNotes(
 	db: Db
@@ -30,6 +31,7 @@ export async function castLiftNotes(
 			castMemberId: V.castMemberId,
 			lorebookId: schema.lorebookBindings.lorebookId,
 			lorebookName: schema.lorebooks.name,
+			lorebookSessionId: schema.lorebooks.sessionId,
 			bindingName: schema.lorebookBindings.name,
 			note: V.note
 		})
@@ -63,11 +65,19 @@ export async function castLiftNotes(
 		db,
 		noted.map((n) => n.row.castMemberId!)
 	)
+	const shownNames = await bookShownNames(
+		db,
+		noted.map(({ row }) => ({
+			id: row.lorebookId,
+			name: row.lorebookName,
+			sessionId: row.lorebookSessionId
+		}))
+	)
 	const members = noted
 		.map(({ row, note }) => ({
 			castMemberId: row.castMemberId!,
 			lorebookId: row.lorebookId,
-			lorebookName: row.lorebookName,
+			lorebookName: shownNames.get(row.lorebookId)!,
 			memberName:
 				read.get(row.castMemberId!)?.shownName || row.bindingName,
 			note: note as Sockets.Admin.CastLiftNotes.Member["note"]

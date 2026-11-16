@@ -133,9 +133,12 @@ func runGated(loop func(onReady func()), build func(), timeout time.Duration, h 
 func Stop() { systray.Quit() }
 
 func (t *Tray) build() {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		systray.SetIcon(assets.IconICO)
-	} else {
+	case "linux":
+		systray.SetIcon(trayPNG(assets.IconPNG))
+	default:
 		systray.SetIcon(assets.IconPNG)
 	}
 	systray.SetTitle("")

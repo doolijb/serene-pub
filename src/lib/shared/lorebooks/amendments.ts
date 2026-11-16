@@ -277,8 +277,40 @@ export const ENTRY_DATE_PARTS = ["year", "month", "day"] as const
  */
 export const NEVER_AMENDED: ReadonlySet<string> = new Set([
 	...BOOKKEEPING,
-	...ENTRY_DATE_PARTS
+	...ENTRY_DATE_PARTS,
+	"decayRate"
 ])
+
+/** An entry's time on the wire: its decay, and its beginning when its type takes one. */
+export interface EntryTimeWire {
+	decayRate: number
+	year?: number | null
+	month?: number | null
+	day?: number | null
+}
+
+/** A decay rate held to the range 0 to 1. */
+export function clampDecayRate(n: number): number {
+	return Math.min(1, Math.max(0, n))
+}
+
+/** Why this is not a decay rate, or null when it is a finite number. */
+export function decayRateProblem(value: unknown): string | null {
+	if (typeof value === "number" && Number.isFinite(value)) return null
+	return "Decay is a number from 0 to 1."
+}
+
+/**
+ * Why an amendment with these fields cannot be filed, or null when it can: it
+ * names the entry's decay, which belongs to the entry and not to a moment.
+ */
+export function amendmentDecayProblem(fields: Record<string, unknown>): string | null {
+	if (!Object.prototype.hasOwnProperty.call(fields, "decayRate")) return null
+	return (
+		"A dated change can't change an entry's decay: the decay is part of the entry, " +
+		"so changing it means changing the entry itself."
+	)
+}
 
 /**
  * Why an amendment with these fields cannot be filed, or null when it can:

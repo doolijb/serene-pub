@@ -40,7 +40,10 @@ const seam = vi.hoisted(() => {
 		"gated:push",
 		"gated:boom",
 		"gated:boom:error",
-		"gated:scoped"
+		"gated:scoped",
+		// The real streamed-frame event: its scope comes from the REAL table
+		// (`scopeOfPayload` falls through to it), only the gate is stood in.
+		"sessionMessageDelta"
 	])
 	/** The invented event's scope, in the shape the real table's entries take. */
 	const SCOPED_EVENTS = new Map<string, (payload: any) => unknown>([
@@ -311,6 +314,37 @@ describe("a gated, scoped event", () => {
 		watching.emitToUser(GATED_SCOPED, { sessionId: 42, rows: [1] })
 
 		expect(h.emits.map((e) => e.target)).toEqual(["s1"])
+	})
+
+	test("the streamed frame is scoped on `sessionId` through the real table", async () => {
+		const h = fresh()
+		const watching = h.connect("s1", NON_ADMIN)
+		const elsewhere = h.connect("s2", NON_ADMIN)
+		await watching.fire("interest:sync", {
+			keys: ["sessionMessageDelta#42"]
+		})
+		await elsewhere.fire("interest:sync", {
+			keys: ["sessionMessageDelta#9"]
+		})
+
+		watching.emitToUser("sessionMessageDelta", {
+			sessionId: 42,
+			id: 7,
+			content: "hi",
+			reasoning: null
+		})
+		expect(h.emits.map((e) => e.target)).toEqual(["s1"])
+	})
+
+	test("a streamed frame without `sessionId` reaches no scoped declaration", async () => {
+		const h = fresh()
+		const watching = h.connect("s1", NON_ADMIN)
+		await watching.fire("interest:sync", {
+			keys: ["sessionMessageDelta#42"]
+		})
+
+		watching.emitToUser("sessionMessageDelta", { id: 7, content: "hi" })
+		expect(h.emits).toEqual([])
 	})
 
 	test("a bare declaration still takes every scope", async () => {

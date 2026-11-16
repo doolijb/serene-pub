@@ -91,6 +91,8 @@ The **Backup policy** card holds the two switches for the whole pub: **Back up d
 
 Below it is the backups list: **Back up now** (with a one-off _include user files_ box), every backup with its size and date and a **Delete** button, and any databases set aside by a recovery. Backups are kept in your [data folder](./install.md#where-your-data-lives). Restoring isn't done here, because it has to happen while the database is closed: see [Database won't open](./troubleshooting.md#database-wont-open). The same list is on the **Data** tab of **Settings**.
 
+The **Edit history** card counts what entries, cast members and cards said before each edit, across this pub (_Edit history · 340 edits · 120 KB_). **Clear** removes them all, after saying how many go: entries, cast members and cards stay as they are now, and what they said before can no longer be restored. See [Edit history](./lorebooks.md#edit-history). 🚧
+
 After the upgrade to character versions, a few cast members can read a little differently than before: an old dated change that couldn't be carried over exactly, or greetings of which only some were told in the member's own words. When there are any, the **Overview**'s Data and backups card counts them (_3 cast members read differently since the upgrade_) and opens the **Since the upgrade** card here. It lists each member with their lorebook and, for each difference, the line, the date and the parts that read differently. A member whose greetings became their own list has **Follow the card's greetings**, which sets them to read the card's greetings again.
 
 ## Diagnostics

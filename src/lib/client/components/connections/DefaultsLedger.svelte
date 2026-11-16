@@ -26,7 +26,19 @@
 	 * defaults and nothing else, and a sampling line built from an id with no
 	 * name to put on it would be a fabrication.
 	 */
-	import * as Icons from "@lucide/svelte"
+	import {
+		AudioLines,
+		Boxes,
+		ChevronRight,
+		Clapperboard,
+		FileText,
+		Image,
+		ScanText,
+		TriangleAlert,
+		Type,
+		Zap
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import {
 		defaultsSummary,
 		groupDefaultsByOutputKind,
@@ -62,11 +74,23 @@
 		warning: "bg-warning-500",
 		unset: "bg-surface-400-600"
 	}
+
+	/** The icon per output kind (`OUTPUT_KIND_ICONS` names, in `outputKinds.ts`; `Boxes` for the fallback). */
+	const OUTPUT_KIND_COMPONENTS: Record<string, Component<any>> = {
+		Type,
+		Image,
+		AudioLines,
+		Clapperboard,
+		FileText,
+		Zap,
+		ScanText,
+		Boxes
+	}
 </script>
 
 <div class="flex flex-col gap-4">
 	{#each groups as group (group.kind)}
-		{@const GroupIcon = (Icons as any)[group.icon] ?? Icons.Boxes}
+		{@const GroupIcon = OUTPUT_KIND_COMPONENTS[group.icon] ?? Boxes}
 		<section aria-label={group.label}>
 			<header
 				class="border-surface-200-800 mb-1.5 flex items-center gap-2 border-b pb-1"
@@ -75,7 +99,7 @@
 				<h3 class="min-w-0 flex-1 truncate text-xs font-semibold">
 					{group.label}
 				</h3>
-				<span class="text-surface-600-400 shrink-0 text-meta">
+				<span class="text-surface-600-400 text-meta shrink-0">
 					{group.setCount} of {group.total}
 				</span>
 			</header>
@@ -96,14 +120,14 @@
 									{entry.label}
 								</span>
 								<span
-									class="text-surface-600-400 shrink-0 font-mono text-meta"
+									class="text-surface-600-400 text-meta shrink-0 font-mono"
 								>
 									{entry.capability}
 								</span>
 							</span>
 							{#if entry.set && entry.model}
 								<span
-									class="text-surface-600-400 flex items-center gap-1.5 text-meta"
+									class="text-surface-600-400 text-meta flex items-center gap-1.5"
 								>
 									<span
 										class="size-1.5 shrink-0 rounded-full {DOT_CLASS[
@@ -118,9 +142,9 @@
 								</span>
 							{:else if unsetChat}
 								<span
-									class="text-warning-500 flex items-center gap-1.5 text-meta"
+									class="text-warning-500 text-meta flex items-center gap-1.5"
 								>
-									<Icons.TriangleAlert
+									<TriangleAlert
 										size={11}
 										class="shrink-0"
 										aria-hidden="true"
@@ -154,7 +178,7 @@
 							aria-label={`Open ${entry.model.name}, in the ${entry.label} loadout`}
 						>
 							{@render body()}
-							<Icons.ChevronRight
+							<ChevronRight
 								size={14}
 								class="text-surface-600-400 mt-1.5 shrink-0"
 								aria-hidden="true"
@@ -172,9 +196,11 @@
 		</section>
 	{/each}
 
-	<p class="text-surface-600-400 px-0.5 text-meta leading-relaxed">
-		Each default loadout holds an endpoint and a model together. Fill
-		them in the <a class="anchor" href="/loadouts">Loadouts view</a>, or
-		from any model's <strong class="font-medium">Use in…</strong>.
+	<p class="text-surface-600-400 text-meta px-0.5 leading-relaxed">
+		Each default loadout holds an endpoint and a model together. Fill them
+		in the <a class="anchor" href="/loadouts">Loadouts view</a>
+		, or from any model's
+		<strong class="font-medium">Use in…</strong>
+		.
 	</p>
 </div>

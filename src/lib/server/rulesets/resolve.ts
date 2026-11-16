@@ -667,15 +667,18 @@ async function sessionTurnFacts(db: Db, sessionId: number): Promise<Record<strin
 	}
 }
 
-async function sessionAsleep(db: Db, sessionId: number): Promise<boolean> {
+/** Exported for tests. */
+export async function sessionAsleep(db: Db, sessionId: number): Promise<boolean> {
 	try {
 		const seats = await db
 			.select({ id: schema.sessionPersonas.id })
 			.from(schema.sessionPersonas)
 			.where(and(eq(schema.sessionPersonas.sessionId, sessionId), isNull(schema.sessionPersonas.removedAt)))
 		if (!seats.length) return false
+		// The links are the same for every seat: read them once.
+		const links = await sessionLinks(db, sessionId)
 		for (const seat of seats) {
-			const v = await valueOf(db, { sessionId, owner: { kind: "player_seat", id: seat.id }, slotId: "core:slot/asleep@1" })
+			const v = await valueOf(db, { sessionId, owner: { kind: "player_seat", id: seat.id }, slotId: "core:slot/asleep@1" }, { links })
 			if (v !== true) return false
 		}
 		return true

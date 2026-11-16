@@ -26,6 +26,23 @@ describe("the strip's state off the session", () => {
 		expect(rewindStateWith({}, [{ role: "user" }])).toBeNull()
 	})
 
+	test("where one press takes a message, any story line the page holds enables Back; the step is kept", () => {
+		const session = { rewind: { ahead: 0, back: REWIND_REFUSALS.nothing, forward: null, step: "message" } }
+		// A character's first reply before anybody has written: no person's line, and still a line to take.
+		const got = rewindStateWith(session, [{ id: 1, role: "assistant", channel: "main" }])
+		expect(got?.back).toBeNull()
+		expect(got?.step).toBe("message")
+		// A side channel's line is no story line; a branch's copy is the fork.
+		expect(rewindStateWith(session, [{ id: 1, role: "assistant", channel: "parley:2" }])?.back).toBe(REWIND_REFUSALS.nothing)
+		expect(
+			rewindStateWith(session, [{ id: 1, role: "assistant", channel: "main", metadata: { copyOf: 9 } }])?.back
+		).toBe(REWIND_REFUSALS.fork)
+		// A genre that takes a whole turn keeps the old rule; an unknown step is dropped.
+		const byTurn = { rewind: { ahead: 0, back: REWIND_REFUSALS.nothing, forward: null, step: "turn" } }
+		expect(rewindStateWith(byTurn, [{ id: 1, role: "assistant", channel: "main" }])?.back).toBe(REWIND_REFUSALS.nothing)
+		expect(rewindStateOf({ rewind: { ahead: 0, back: null, forward: null, step: "week" } })?.step).toBeUndefined()
+	})
+
 	test("the refusal module quotes the SDK's two strip reasons", () => {
 		expect(REWIND_REFUSALS.notOwner).toBe(REWIND_STRIP_REASONS.notOwner)
 		expect(REWIND_REFUSALS.busy).toBe(REWIND_STRIP_REASONS.generating)

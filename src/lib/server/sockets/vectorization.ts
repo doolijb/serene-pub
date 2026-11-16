@@ -52,6 +52,49 @@ function needsEmbedding(
 }
 
 // ---------------------------------------------------------------------------
+// Progress emitter — one per admin user
+// ---------------------------------------------------------------------------
+
+type ProgressEmit = Parameters<typeof registerProgressEmitter>[0]
+
+/**
+ * Each `emitToUser` reaches the whole `user_<id>` room, so only ONE socket per
+ * user is the registered progress emitter; the rest are recorded so one can
+ * take over when it disconnects. Keyed by the socket object (its id is not
+ * always present on test doubles).
+ */
+const progressSockets = new Map<number, Map<unknown, ProgressEmit>>()
+const progressRegistered = new Map<number, ProgressEmit>()
+
+function trackProgressSocket(
+	socket: { user?: { id?: number } | null; on: (e: string, cb: () => void) => unknown },
+	emit: ProgressEmit
+): void {
+	const userId = socket.user?.id as number
+	let sockets = progressSockets.get(userId)
+	if (!sockets) progressSockets.set(userId, (sockets = new Map()))
+	sockets.set(socket, emit)
+	if (!progressRegistered.has(userId)) {
+		progressRegistered.set(userId, emit)
+		registerProgressEmitter(emit)
+	}
+	socket.on("disconnect", () => {
+		sockets.delete(socket)
+		if (progressRegistered.get(userId) === emit) {
+			unregisterProgressEmitter(emit)
+			progressRegistered.delete(userId)
+			const next = sockets.values().next()
+			if (!next.done) {
+				progressRegistered.set(userId, next.value)
+				registerProgressEmitter(next.value)
+			}
+		}
+		if (sockets.size === 0 && progressSockets.get(userId) === sockets)
+			progressSockets.delete(userId)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -606,8 +649,7 @@ export function registerVectorizationHandlers(
 	// are correctly per-session-scoped for any user; this is the one piece of
 	// this module that isn't for everyone.
 	if (socket.user?.isAdmin) {
-		registerProgressEmitter(emitToUser)
-		socket.on("disconnect", () => unregisterProgressEmitter(emitToUser))
+		trackProgressSocket(socket, emitToUser)
 	}
 	// Indexing progress goes to Activity (`indexingActivity.ts`). It listens on
 	// the lane, once for the whole server; it is wired here because this is the

@@ -1,0 +1,150 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-notes-real-create-bMl5Wo/data/serene-pub.db
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+Syncing database defaults...
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/lorebooks/notesShown.realCreate.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/lorebooks/notesShown.realCreate.int.test.ts (4 tests | 1 failed) 21324ms
+     × 2. session reading another user's shared book: members in notes, unwritten 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/notesShown.realCreate.int.test.ts > the written-notes rule on a really created session > 2. session reading another user's shared book: members in notes, unwritten
+Error: Access denied. You can only read a lorebook you own into a session.
+ ❯ Object.handler src/lib/server/sockets/sessions.ts:1015:11
+    1013|    )
+    1014|    if (!ownsLorebook) {
+    1015|     throw new Error(
+       |           ^
+    1016|      "Access denied. You can only read a lorebook you own into a sessi…
+    1017|     )
+ ❯ make src/lib/server/lorebooks/notesShown.realCreate.int.test.ts:165:15
+ ❯ src/lib/server/lorebooks/notesShown.realCreate.int.test.ts:228:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  18:24:51
+   Duration  23.49s (transform 3.63s, setup 15ms, import 2.05s, tests 21.32s, environment 0ms)
+

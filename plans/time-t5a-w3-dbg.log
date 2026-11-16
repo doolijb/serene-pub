@@ -1,0 +1,43 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts > the turn's undo takes the version back > another session's later change to the version survives the take-back, as does a person's hand edit
+IMP [{"id":3,"sessionId":3,"messageId":3,"runId":"run-6","lorebookId":2,"subjectKind":"version","subjectId":2,"field":"content","before":{"v":"Sealed."},"after":{"v":"Theirs."},"status":"standing","origin":"run","batch":null,"cause":null,"createdAt":"2026-11-15T11:49:36.041Z"},{"id":2,"sessionId":2,"messageId":2,"runId":"run-4","lorebookId":2,"subjectKind":"version","subjectId":2,"field":null,"before":null,"after":{"v":{"id":2,"day":5,"base":null,"year":10,"month":2,"fields":{"content":"Sealed."},"entryId":2,"branchId":null,"createdAt":"2026-11-15T11:49:36.003Z","updatedAt":"2026-11-15T11:49:36.003Z","lorebookId":2,"historyEntryId":null,"sourceMessageId":null}},"status":"kept","origin":"run","batch":null,"cause":null,"createdAt":"2026-11-15T11:49:36.003Z"}]
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts (17 tests | 1 failed | 16 skipped) 4313ms
+     × another session's later change to the version survives the take-back, as does a person's hand edit 983ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts > the turn's undo takes the version back > another session's later change to the version survives the take-back, as does a person's hand edit
+AssertionError: expected undefined to match object { status: 'kept' }
+
+- Expected:
+{
+  "status": "kept",
+}
+
++ Received:
+undefined
+
+ ❯ src/lib/server/pipelines/runtime/host.datedVersion.int.test.ts:303:113
+    301|   expect(await fieldsOf(row!.id)).toEqual({ content: "Theirs." })
+    302|   console.log("IMP", JSON.stringify(await imprintsOfVersion(row!.id)))
+    303|   expect((await imprintsOfVersion(row!.id)).find((i) => i.field === "c…
+       |                                                                                                                 ^
+    304|    status: "kept"
+    305|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 16 skipped (17)
+   Start at  03:49:31
+   Duration  4.83s (transform 1.96s, setup 13ms, import 398ms, tests 4.31s, environment 0ms)
+

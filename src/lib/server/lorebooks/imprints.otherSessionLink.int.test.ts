@@ -1,7 +1,7 @@
 /**
- * 🚧 A link kept in another session's notes never holds a lorebook entry for a
- * run's undo of it; a link in the lorebook itself, or in the same session's
- * own notes, does.
+ * 🚧 A link that touches a lorebook entry a run made holds it against the run's
+ * undo, whichever book keeps the link: the lorebook, the same session's notes,
+ * or another session's notes.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -148,13 +148,16 @@ const linkInto = (lorebookId: number, to: number, from: number) =>
 		})
 
 describe("a made entry's undo and a link in another session's notes", () => {
-	test("another session's own-book link does not hold it: the run's undo unmakes the entry", async () => {
+	test("another session's own-book link holds it: the run's undo keeps the entry", async () => {
 		const w = await world()
 		const m = await w.message()
 		const well = await w.make("run-other")
 		await linkInto(w.b.ownBook.id, well, w.hall.id)
 		await swipe(m.id)
-		expect(await entry(well)).toBeUndefined()
+		expect((await entry(well))?.title).toBe("The Well")
+		const { imprintsOf } = await import("$lib/server/lorebooks/imprints")
+		const made = (await imprintsOf(db(), w.a.session.id)).filter((i) => i.subjectId === well)
+		expect(made.map((i) => i.status)).toEqual(["kept"])
 	})
 
 	test("a link in the lorebook itself holds it (kept)", async () => {

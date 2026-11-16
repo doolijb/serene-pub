@@ -48,7 +48,9 @@
  * store is broken; the transaction is meant to be invisible until a kill makes
  * it matter. The quota is checked against the same projection, so a hook that
  * buffers past its budget is told at the write that did it, rather than at a
- * commit where nothing can be done about it.
+ * commit where nothing can be done about it. The disk is measured once per call,
+ * when the store is first asked its size, and the projection is kept as a
+ * running number after that.
  *
  * ## What commit actually guarantees
  *
@@ -189,27 +191,59 @@ function makeStorageHost(config, nowMs) {
 		if (!fs.existsSync(p)) return null;
 		try { return fs.statSync(p).isDirectory() ? "dir" : "file"; } catch (e) { return null; }
 	}
-	// On-disk bytes this call has not superseded or deleted. Recursion is
-	// top-down, so a removed directory takes its whole subtree out with it.
-	function diskSize(dir) {
-		var total = 0;
-		if (!fs.existsSync(dir)) return 0;
+	// One walk of the directory: every non-directory entry under dir, as full
+	// path -> bytes, unfiltered by this call's diff (counts() applies that).
+	function indexDisk(dir, into) {
+		if (!fs.existsSync(dir)) return;
 		var entries = fs.readdirSync(dir, { withFileTypes: true });
 		for (var i = 0; i < entries.length; i++) {
 			var e = entries[i];
 			var fp = path.join(dir, e.name);
-			if (writes.has(fp) || covered(fp)) continue;
-			if (e.isDirectory()) total += diskSize(fp);
-			else { try { total += fs.statSync(fp).size; } catch (x) {} }
+			if (e.isDirectory()) indexDisk(fp, into);
+			else { try { into.set(fp, fs.statSync(fp).size); } catch (x) {} }
 		}
+	}
+	// Does an on-disk file still weigh on the store this call will commit? Not
+	// when this call removed it (or an ancestor, root included), nor when it, or
+	// a directory above it below root, is overwritten by a buffered write.
+	function counts(e) {
+		if (covered(e)) return false;
+		var a = e;
+		while (a !== root) {
+			if (writes.has(a)) return false;
+			var up = path.dirname(a);
+			if (up === a) break;
+			a = up;
+		}
+		return true;
+	}
+	// The disk is walked once per call, on the first ask for the size; after
+	// that projected is a running number kept by bufferWrite and bufferRemove.
+	var diskIndex = null;
+	var projected = 0;
+	function measure() {
+		if (diskIndex) return;
+		diskIndex = new Map();
+		indexDisk(root, diskIndex);
+		var total = 0;
+		diskIndex.forEach(function (bytes, e) { if (counts(e)) total += bytes; });
+		writes.forEach(function (v) { total += b64Bytes(v); });
+		projected = total;
+	}
+	// Counted disk bytes at or under full, from the index.
+	function diskAtOrUnder(full) {
+		if (diskIndex.has(full)) return counts(full) ? diskIndex.get(full) : 0;
+		var total = 0;
+		diskIndex.forEach(function (bytes, e) {
+			if (under(e, full) && counts(e)) total += bytes;
+		});
 		return total;
 	}
 	// What the directory will weigh once this call commits — the number the
 	// quota is checked against, and the one size() answers.
 	function projectedSize() {
-		var total = diskSize(root);
-		writes.forEach(function (v) { total += b64Bytes(v); });
-		return total;
+		measure();
+		return projected;
 	}
 	// Every file the store will hold once this call commits, as FileEntry —
 	// recursive, relative, sorted. Staging temps are excluded: they are this
@@ -244,10 +278,9 @@ function makeStorageHost(config, nowMs) {
 		return out;
 	}
 
-	// Split from usage() so a caller that has ALREADY measured the directory can
-	// answer without walking it a second time. projectedSize() is a recursive
-	// readdir, and a hook that writes a thousand files must not pay for a
-	// thousand extra walks to be told how much room is left.
+	// Split from usage() so a caller that already holds the projected size can
+	// answer without asking again. projectedSize() is a running number (the
+	// directory is walked once per call), so this is a convenience, not a cost.
 	function usageFrom(fb) {
 		return {
 			quotaBytes: quota,
@@ -303,6 +336,12 @@ function makeStorageHost(config, nowMs) {
 			try { existing = fs.statSync(full).size; } catch (x) {}
 		}
 		if (projectedSize() - existing + incoming > quota) return null;
+		if (full === root) diskIndex = null;
+		else if (diskIndex) {
+			projected -= diskAtOrUnder(full);
+			if (writes.has(full)) projected -= b64Bytes(writes.get(full));
+			projected += incoming;
+		}
 		removes.delete(full);
 		writes.set(full, b64);
 		return incoming - existing;
@@ -314,6 +353,10 @@ function makeStorageHost(config, nowMs) {
 		writes.forEach(function (_v, k) {
 			if (k === full || under(k, full)) doomed.push(k);
 		});
+		if (diskIndex) {
+			for (var d = 0; d < doomed.length; d++) projected -= b64Bytes(writes.get(doomed[d]));
+			projected -= diskAtOrUnder(full);
+		}
 		for (var i = 0; i < doomed.length; i++) writes.delete(doomed[i]);
 		removes.add(full);
 	}

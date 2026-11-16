@@ -166,13 +166,65 @@ describe("one evaluator, two hosts", () => {
 	})
 })
 
+describe("the input crosses as guest globals, deleted before user code", () => {
+	const PROBE =
+		'return [typeof __spVarsJson, typeof globalThis.__spExtrasJson, Object.getOwnPropertyNames(globalThis).filter(function (k) { return k.indexOf("__sp") === 0 }).length].join(",")'
+	const nasty =
+		'q"uote \\ back\\slash \n \t \u0000 \u2028 \u00e9 \u{1F600} '.repeat(
+			65536
+		)
+	const big = nasty.slice(0, 64 * 1024)
+
+	const cases = async () => ({
+		probe: await run(PROBE, { extras: { k: 1 } }),
+		roundTrip: await run("return [text, ctx.e]", {
+			vars: { text: big },
+			extras: { e: big },
+			maxOutputBytes: 4 * 1024 * 1024
+		})
+	})
+
+	it("a script cannot see the globals", async () => {
+		const { probe } = await cases()
+		expect(probe).toMatchObject({
+			ok: true,
+			value: "undefined,undefined,0"
+		})
+	})
+
+	it("a 64 KB string var and extra round-trip byte-identically", async () => {
+		const { roundTrip } = await cases()
+		expect(big.length).toBe(64 * 1024)
+		expect(roundTrip).toMatchObject({ ok: true })
+		expect((roundTrip as any).value).toEqual([big, big])
+	})
+
+	it("the inline fallback answers the same cases identically", async () => {
+		const pooled = await cases()
+		process.env.SP_SCRIPTS_INLINE = "1"
+		try {
+			const inline = await cases()
+			expect(inline.probe).toMatchObject({
+				ok: true,
+				value: "undefined,undefined,0"
+			})
+			expect((inline.roundTrip as any).value).toEqual(
+				(pooled.roundTrip as any).value
+			)
+		} finally {
+			delete process.env.SP_SCRIPTS_INLINE
+		}
+	})
+})
+
 describe("the queue (the 2026-10-19 walk)", () => {
 	it("a job waiting behind others is never killed for the wait: every one of a burst answers", async () => {
 		// Each job is real work for the engine, well inside its own clock
 		// (1 s); the burst together outlasts one job's backstop (its clock +
 		// 1 s). Counted from the post, the jobs at the back were killed unrun
 		// and the worker took the rest with it.
-		const busy = "var n = 0; for (var i = 0; i < 4000000; i++) n += i % 7; return n"
+		const busy =
+			"var n = 0; for (var i = 0; i < 4000000; i++) n += i % 7; return n"
 		const t0 = Date.now()
 		const one = await run(busy, { seedLabel: "queue:one", timeoutMs: 1000 })
 		expect(one.ok).toBe(true)
@@ -180,9 +232,13 @@ describe("the queue (the 2026-10-19 walk)", () => {
 		const count = Math.min(200, Math.ceil(2600 / each) + 2)
 		const started = Date.now()
 		const burst = await Promise.all(
-			Array.from({ length: count }, (_, i) => run(busy, { seedLabel: `queue:${i}`, timeoutMs: 1000 }))
+			Array.from({ length: count }, (_, i) =>
+				run(busy, { seedLabel: `queue:${i}`, timeoutMs: 1000 })
+			)
 		)
-		const failed = burst.filter((r) => !r.ok).map((r) => (r as { reason: string }).reason)
+		const failed = burst
+			.filter((r) => !r.ok)
+			.map((r) => (r as { reason: string }).reason)
 		expect(failed).toEqual([])
 		// The burst really did outlast one job's backstop, or this proves nothing.
 		expect(Date.now() - started).toBeGreaterThan(2000)
@@ -191,10 +247,16 @@ describe("the queue (the 2026-10-19 walk)", () => {
 	it("a stuck job fails alone: the jobs queued behind it run on a fresh worker", async () => {
 		const [stuck, ...after] = await Promise.all([
 			run("while (true) {}", { seedLabel: "queue:stuck", timeoutMs: 50 }),
-			...Array.from({ length: 4 }, (_, i) => run("return text + " + i, { seedLabel: `queue:after:${i}` }))
+			...Array.from({ length: 4 }, (_, i) =>
+				run("return text + " + i, { seedLabel: `queue:after:${i}` })
+			)
 		])
 		expect(stuck.ok).toBe(false)
-		expect(after.map((r) => (r.ok ? r.value : (r as { reason: string }).reason))).toEqual([
+		expect(
+			after.map((r) =>
+				r.ok ? r.value : (r as { reason: string }).reason
+			)
+		).toEqual([
 			"hello world0",
 			"hello world1",
 			"hello world2",

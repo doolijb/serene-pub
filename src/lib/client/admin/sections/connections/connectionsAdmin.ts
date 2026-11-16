@@ -140,3 +140,43 @@ export function managerFlagsReleased(
 	if (lastOfType("ollama")) out.push("systemSettings:updateOllamaManagerEnabled")
 	return out
 }
+
+/** The widest an address's requests-at-once count may be set. */
+export const LLM_LANE_WIDTH_MAX = 16
+
+/** What the override field says when its value is refused. */
+export const LLM_LANE_WIDTH_REFUSAL =
+	"Use a whole number from 1 to 16, or leave it empty for the default."
+
+/**
+ * The override field's value as the write it means: empty (or a cleared
+ * number input, which binds `null`) is `null`, back to the default; a whole
+ * number from 1 to 16 is that number; anything else is a refusal sentence.
+ */
+export function llmLaneWidthParse(
+	value: string | number | null | undefined
+): { ok: true; width: number | null } | { ok: false; refusal: string } {
+	if (value == null) return { ok: true, width: null }
+	if (typeof value === "string") {
+		if (!value.trim()) return { ok: true, width: null }
+		if (!/^\d+$/.test(value.trim()))
+			return { ok: false, refusal: LLM_LANE_WIDTH_REFUSAL }
+		value = Number(value.trim())
+	}
+	if (
+		!Number.isInteger(value) ||
+		value < 1 ||
+		value > LLM_LANE_WIDTH_MAX
+	)
+		return { ok: false, refusal: LLM_LANE_WIDTH_REFUSAL }
+	return { ok: true, width: value }
+}
+
+/** A host row's "used by" line: the connections' names, or the empty words. */
+export function llmLaneUsedBy(
+	connections: readonly { id: number; name: string }[]
+): string {
+	return connections.length
+		? connections.map((c) => c.name).join(", ")
+		: "No connection uses this address now."
+}

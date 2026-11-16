@@ -331,15 +331,15 @@ describe("🚧 RF fix 4: what a message changed goes with it", () => {
 		const firstRun = first.rulesRunId!
 		await alsoWrote(firstRun, "Harbour", "A gull")
 		expect(await pierCategory()).toBe("Harbour")
-		// Held in the session's own book: the lorebook's own row is never written.
+		// Full on the owner's own lorebook, no story date: the change is written into the entry itself.
 		const [pierRow] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId))
-		expect((pierRow!.fields as any).category).toBe("Docks")
+		expect((pierRow!.fields as any).category).toBe("Harbour")
 		expect(await notesNamed("A gull")).toHaveLength(1)
 		const { imprintsOf } = await import("$lib/server/lorebooks/imprints")
 		const filed = await imprintsOf(db as any, s.sessionId)
 		expect(new Set(filed.map((i) => i.messageId))).toEqual(new Set([reply.id]))
 		expect(new Set(filed.map((i) => i.runId))).toEqual(new Set([firstRun]))
-		expect(await db.select().from(schema.entryAmendments).where(and(isNotNull(schema.entryAmendments.base), eq(schema.entryAmendments.sourceMessageId, reply.id)))).toHaveLength(1)
+		expect(await db.select().from(schema.entryAmendments).where(and(isNotNull(schema.entryAmendments.base), eq(schema.entryAmendments.sourceMessageId, reply.id)))).toHaveLength(0)
 
 		const res: any = await swipe(reply.id, answer(6))
 		expect(res?.error, res?.error).toBeUndefined()
@@ -348,6 +348,8 @@ describe("🚧 RF fix 4: what a message changed goes with it", () => {
 		expect(now.relationshipType).toBe("warm")
 		expect(now.rulesRunId).not.toBe(firstRun)
 		expect(await pierCategory()).toBe("Docks")
+		const [pierBack] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, s.pierId))
+		expect((pierBack!.fields as any).category).toBe("Docks")
 		expect(await notesNamed("A gull")).toEqual([])
 		const left = await imprintsOf(db as any, s.sessionId)
 		expect(left.filter((i) => i.runId === firstRun)).toEqual([])

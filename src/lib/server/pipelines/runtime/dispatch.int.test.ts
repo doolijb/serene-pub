@@ -59,6 +59,7 @@ let adapterExchanges: any[] = []
 let mode:
 	| "text"
 	| "stream"
+	| "held"
 	| "empty"
 	| "abort"
 	| "inlineReasoning"
@@ -72,6 +73,9 @@ let mode:
 	| "toolCallNoStream"
 	| "spoken" = "text"
 let connectionForRun: any = connection
+/** The "held" mode: how many sends began, and the stream's hand-released gate. */
+let heldStarts = 0
+let heldGate: Promise<void> = Promise.resolve()
 /** What the stand-in says it asked of a chat template — `reasoningOpening`. */
 let adapterOpening: "requested" | undefined
 
@@ -152,6 +156,12 @@ class FakeAdapter implements FakeTextAdapter {
 	abort() {
 		this.aborted = true
 		seen.aborted = true
+		for (const r of this.abortWaiters) r()
+	}
+	private abortWaiters: Array<() => void> = []
+	onAbortFlag(r: () => void) {
+		if (this.aborted) r()
+		else this.abortWaiters.push(r)
 	}
 	async generateText() {
 		if (mode === "spoken")
@@ -173,6 +183,23 @@ class FakeAdapter implements FakeTextAdapter {
 				compiledPrompt: this.injected,
 				isAborted: true
 			}
+		if (mode === "held") {
+			heldStarts++
+			const gate = heldGate
+			return {
+				compiledPrompt: this.injected,
+				isAborted: false,
+				completionResult: async (onContent: (c: string) => void) => {
+					onContent("first")
+					await Promise.race([
+						gate,
+						new Promise<void>((r) => this.onAbortFlag(r))
+					])
+					if (this.aborted) return
+					onContent("last")
+				}
+			}
+		}
 		if (mode === "stream")
 			return {
 				compiledPrompt: this.injected,
@@ -481,6 +508,8 @@ beforeEach(() => {
 	adapterSendsAttachments = true
 	adapterSendsTools = true
 	adapterWrites = ["text"]
+	heldStarts = 0
+	heldGate = Promise.resolve()
 })
 
 /**
@@ -1399,5 +1428,88 @@ describe("asking the model to write more than text", () => {
 			})
 		).rejects.toThrow(/nothing to send this prompt to/)
 		expect(resolveArgs.capability).toBe("text->text+audio")
+	})
+})
+
+/**
+ * ★P2-b: a streamed reply holds its host's LLM lane for the whole stream. A
+ * streaming adapter sends its request inside the `completionResult` closure,
+ * so the queue item has to read the stream to its end or the lane is freed
+ * with the request still to be sent.
+ */
+describe("a streamed reply holds its LLM lane", () => {
+	const tick = () => new Promise<void>((r) => setTimeout(r, 20))
+	const queued = (extra: Record<string, unknown> = {}) => ({
+		db: fakeDb,
+		compiledPrompt: compiled,
+		sessionId: 7,
+		queue: { taskType: "session" as const, sessionId: 7 },
+		...extra
+	})
+
+	it("blocks a second call on the same connection until the first stream ends", async () => {
+		mode = "held"
+		let release!: () => void
+		heldGate = new Promise<void>((r) => (release = r))
+		const first = dispatchGeneration(queued())
+		await tick()
+		expect(heldStarts).toBe(1)
+		const second = dispatchGeneration(queued())
+		await tick()
+		expect(heldStarts).toBe(1) // the second has not been sent
+		release()
+		const [a, b] = await Promise.all([first, second])
+		expect(heldStarts).toBe(2)
+		expect(a.text).toBe("firstlast")
+		expect(b.text).toBe("firstlast")
+	})
+
+	it("an abort mid-stream frees the LLM lane", async () => {
+		mode = "held"
+		heldGate = new Promise<void>(() => {}) // never released by hand
+		const ctl = new AbortController()
+		const first = dispatchGeneration(queued({ signal: ctl.signal }))
+		await tick()
+		const ctl2 = new AbortController()
+		const second = dispatchGeneration(queued({ signal: ctl2.signal }))
+		await tick()
+		expect(heldStarts).toBe(1)
+		ctl.abort()
+		const a = await first
+		expect(a.isAborted).toBe(true)
+		await tick()
+		expect(heldStarts).toBe(2) // the second now runs
+		// settle the second: its gate never opens, so stop it too
+		ctl2.abort()
+		expect((await second).isAborted).toBe(true)
+	})
+
+	it("reports generating before the first chunk and settles after the last", async () => {
+		mode = "held"
+		let release!: () => void
+		heldGate = new Promise<void>((r) => (release = r))
+		const events: string[] = []
+		const call = dispatchGeneration(
+			queued({
+				queue: {
+					taskType: "session" as const,
+					sessionId: 7,
+					onStatusChange: (st: string) => events.push(`status:${st}`)
+				},
+				onChunk: (c: string) => events.push(`chunk:${c}`)
+			})
+		)
+		await tick()
+		expect(events.indexOf("status:generating")).toBeGreaterThanOrEqual(0)
+		expect(events.indexOf("status:generating")).toBeLessThan(
+			events.indexOf("chunk:first")
+		)
+		expect(events).not.toContain("status:done")
+		release()
+		await call
+		expect(events.indexOf("chunk:last")).toBeGreaterThan(-1)
+		expect(events.indexOf("status:done")).toBeGreaterThan(
+			events.indexOf("chunk:last")
+		)
 	})
 })

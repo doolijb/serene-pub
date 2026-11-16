@@ -1,0 +1,19 @@
+▶ core:script/entries-named-brief
+  ✔ is seeded (0.77516ms)
+  ✔ an empty or absent list leaves the brief byte for byte (0.27991ms)
+  ✔ renders the block exactly, marking only an entry a person wrote (0.17901ms)
+  ✔ every named duty off leaves the brief; one on shows the block; an absent duty is off (0.33443ms)
+✔ core:script/entries-named-brief (2.678811ms)
+▶ the sweep and Remember things show what is kept
+  ✔ the sweep reads the entries the lines name, of world lore and character lore (0.70614ms)
+  ✔ lore and cast writes match by name and carry what was shown; the scenes write neither (0.43755ms)
+  ✔ Remember things reads world lore and its write carries match and shown (0.19317ms)
+✔ the sweep and Remember things show what is kept (3.057801ms)
+ℹ tests 7
+ℹ suites 2
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 565.251693

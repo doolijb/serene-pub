@@ -885,7 +885,8 @@ describe("each source carries its own intent", () => {
 		// The five bands' sources, and entity-search's recalled lines
 		// (`recalledLinesShare`, 2026-09-27) — declared on the node, and
 		// inert here as its `maxMessages` is: no shipped spec ranks them.
-		expect(before.length).toBe(6)
+		// And the earlier scenes' share (2026-11-12, sense-prm).
+		expect(before.length).toBe(7)
 		for (const o of before)
 			expect(o.windowTokens, `${o.label} showed a window before one was selected`).toBeUndefined()
 

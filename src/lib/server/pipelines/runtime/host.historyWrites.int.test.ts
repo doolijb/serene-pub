@@ -3,9 +3,10 @@
  * files onto the day's one entry; a history update that moves the date runs
  * the socket's date checks in the change's transaction.
  *
- * 🚧 (sense-b4) Under Full, a session whose scenes end by themselves files
- * onto its own book's days; every other session — the cases before the last
- * `describe` — writes straight to the lorebook, as it always did.
+ * Under Full on the owner's own lorebook, every session — whether or not its
+ * scenes end by themselves — files straight onto the lorebook's days; a change
+ * to a lorebook history entry is written in place (a moved date runs the date
+ * checks) and waits under Review changes.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
@@ -70,11 +71,13 @@ afterAll(async () => {
  * the book a pipeline's change writes through to (a change to an attached
  * lorebook's entry is held, and never re-dates it).
  */
-async function world(opts: { fork?: boolean; own?: boolean; scenesEnd?: boolean } = {}) {
+async function world(
+	opts: { fork?: boolean; own?: boolean; scenesEnd?: boolean; mode?: "full" | "review" } = {}
+) {
 	const suffix = `${++n}`
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(db, `hist-b1-${suffix}`)
-	await db.insert(schema.userSettings).values({ userId: user.id, loreWriteMode: "full" })
+	await db.insert(schema.userSettings).values({ userId: user.id, loreWriteMode: opts.mode ?? "full" })
 	let [session] = await db
 		.insert(schema.sessions)
 		.values({ userId: user.id, isGroup: false, name: `Run ${suffix}` })
@@ -327,8 +330,8 @@ describe("update-lore-entry moving a history entry's date", () => {
 		expect((await entry(a.id))!.content).toBe("One, revised.")
 	})
 
-	it("holds a session's change to an attached lorebook's history entry, and refuses to move its date", async () => {
-		const w = await world()
+	it("under Review changes, holds a session's change to an attached lorebook's history entry, and refuses to move its date", async () => {
+		const w = await world({ mode: "review" })
 		await w.message()
 		const e = await history(w.book.id, { year: 2, month: 1, day: 1 }, { content: "One." })
 		const h = await w.host()
@@ -345,28 +348,47 @@ describe("update-lore-entry moving a history entry's date", () => {
 	})
 })
 
+describe("under Full, a change to an attached lorebook's history entry is written in place", () => {
+	it("moves its date through the socket's date checks, and refuses a date another entry holds", async () => {
+		const w = await world()
+		await w.message()
+		const one = await history(w.book.id, { year: 2, month: 1, day: 1 }, { content: "One." })
+		const two = await history(w.book.id, { year: 4, month: 1, day: 1 }, { content: "Two." })
+		const h = await w.host()
+		await expect(h.commit!({ entry: one.id, fields: { year: 4, month: 1, day: 1 } }, UPDATE)).rejects.toThrow()
+		expect((await entry(one.id))!.fields).toMatchObject({ year: 2 })
+		await h.commit!({ entry: one.id, content: "One, revised.", fields: { year: 3, month: 1, day: 1 } }, UPDATE)
+		expect((await entry(one.id))!.content).toBe("One, revised.")
+		expect((await entry(one.id))!.fields).toMatchObject({ year: 3 })
+		expect((await entry(two.id))!.fields).toMatchObject({ year: 4 })
+		expect(
+			(await db.select().from(schema.entryAmendments)).filter((r) => r.entryId === one.id || r.entryId === two.id)
+		).toHaveLength(0)
+	})
+})
+
 describe("create-lore-entry with the history entry type (a session whose scenes end by themselves, under Full)", () => {
 	const ownDays = async (w: Awaited<ReturnType<typeof world>>) => {
 		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
 		return rows((await ownBookFor(db as unknown as Db, w.session.id)).id)
 	}
 
-	it("files onto the own book's day: two writes for one date make one row there, and the lorebook is untouched", async () => {
+	it("files onto the lorebook's day: two writes for one date make one row there, and the notes are untouched", async () => {
 		const w = await world({ scenesEnd: true })
 		await w.message()
 		const h = await w.host()
 		const date = { year: 3, month: 2, day: 9 }
 		const first: any = await h.commit!({ content: "The gate fell.", params: HISTORY, fields: date }, CREATE)
 		const second: any = await h.commit!({ content: "The bells rang.", params: HISTORY, fields: date }, CREATE)
-		const own = await ownDays(w)
-		expect(own).toHaveLength(1)
-		expect(own[0]!.content).toBe("The gate fell.\n\nThe bells rang.")
-		expect(first).toMatchObject({ id: own[0]!.id, route: "own-book", lorebookId: own[0]!.lorebookId })
-		expect(second).toMatchObject({ id: own[0]!.id, matched: true, written: false })
-		expect(await rows(w.book.id)).toHaveLength(0)
+		const lore = await rows(w.book.id)
+		expect(lore).toHaveLength(1)
+		expect(lore[0]!.content).toBe("The gate fell.\n\nThe bells rang.")
+		expect(first).toMatchObject({ id: lore[0]!.id, route: "book", lorebookId: w.book.id })
+		expect(second).toMatchObject({ id: lore[0]!.id, matched: true, written: false })
+		expect(await ownDays(w)).toHaveLength(0)
 	})
 
-	it("leaves the lorebook's own day for that date as it was, and makes the own book's", async () => {
+	it("files onto the lorebook's own day for that date, and makes no day in the notes", async () => {
 		const w = await world({ scenesEnd: true })
 		await w.message()
 		const lore = await history(w.book.id, { year: 3, month: 2, day: 9 }, { content: "Lorebook day." })
@@ -374,41 +396,66 @@ describe("create-lore-entry with the history entry type (a session whose scenes 
 			{ content: "Mine.", params: HISTORY, fields: { year: 3, month: 2, day: 9 } },
 			CREATE
 		)
-		expect(res.id).not.toBe(lore.id)
-		expect((await entry(lore.id))!.content).toBe("Lorebook day.")
+		expect(res.id).toBe(lore.id)
+		expect((await entry(lore.id))!.content).toBe("Lorebook day.\n\nMine.")
 		expect(await rows(w.book.id)).toHaveLength(1)
-		const own = await ownDays(w)
-		expect(own.map((r) => r.id)).toEqual([res.id])
-		expect(own[0]!.content).toBe("Mine.")
+		expect(await ownDays(w)).toHaveLength(0)
 	})
 
-	it("with no fields it counts the own book's days: the newest of the two books", async () => {
+	it("with no fields it counts the notes' days too: the day waiting in the notes for the story's day takes the paragraph", async () => {
 		const w = await world({ scenesEnd: true })
 		await w.message()
 		await history(w.book.id, { year: 5, month: 1, day: 1 }, { content: "Spring." })
 		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
-		const mine = await history((await ownBookFor(db as unknown as Db, w.session.id)).id, { year: 7, month: 1, day: 1 }, { content: "Summer." })
+		const notesId = (await ownBookFor(db as unknown as Db, w.session.id)).id
+		const mine = await history(notesId, { year: 7, month: 1, day: 1 }, { content: "Summer." })
 		const res: any = await (await w.host()).commit!({ content: "Heat.", params: HISTORY }, CREATE)
-		expect(res.id).toBe(mine.id)
+		expect(res).toMatchObject({ id: mine.id, route: "own-book", lorebookId: notesId })
 		expect((await entry(mine.id))!.content).toBe("Summer.\n\nHeat.")
-		expect(await rows(w.book.id)).toHaveLength(1)
+		const lore = await rows(w.book.id)
+		expect(lore).toHaveLength(1)
+		expect(lore[0]!.content).toBe("Spring.")
 	})
 
-	it("forks no line: a session riding its parent's line, and a session on a fork, stay where they are", async () => {
-		const w = await world({ fork: true, scenesEnd: true })
+	it("a session whose line is still to be forked, with no fork date, writes its day in the notes: never refused, and forks nothing", async () => {
+		const w = await world({ scenesEnd: true })
 		await w.message()
+		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+		const notesId = (await ownBookFor(db as unknown as Db, w.session.id)).id
 		await db.update(schema.sessions).set({ lineOnFirstWrite: true }).where(eq(schema.sessions.id, w.session.id))
-		await (await w.host()).commit!(
+		const res: any = await (await w.host()).commit!(
 			{ content: "Later.", params: HISTORY, fields: { year: 6, month: 1, day: 1 } },
 			CREATE
 		)
+		expect(res).toMatchObject({ route: "own-book", lorebookId: notesId })
 		const [s] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
 		expect(s!.lineOnFirstWrite).toBe(true)
+		expect(s!.lorebookBranchId).toBeNull()
+		expect(
+			await db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, w.book.id))
+		).toHaveLength(0)
+		expect(await rows(w.book.id)).toHaveLength(0)
+		const days = await ownDays(w)
+		expect(days).toHaveLength(1)
+		expect(days[0]!.content).toBe("Later.")
+	})
+
+	it("a session riding a fork: a day the fork owns files on the fork's line, the session stays on the fork and no second branch is made", async () => {
+		const w = await world({ fork: true, scenesEnd: true })
+		await w.message()
+		await ownDays(w)
+		const res: any = await (await w.host()).commit!(
+			{ content: "Later.", params: HISTORY, fields: { year: 6, month: 1, day: 1 } },
+			CREATE
+		)
+		expect(res).toMatchObject({ route: "book", lorebookId: w.book.id })
+		const [s] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
 		expect(s!.lorebookBranchId).toBe(w.fork!.id)
 		expect(
 			await db.select().from(schema.lorebookBranches).where(eq(schema.lorebookBranches.lorebookId, w.book.id))
 		).toHaveLength(1)
-		expect(await rows(w.book.id)).toHaveLength(0)
-		expect(await ownDays(w)).toHaveLength(1)
+		const lore = await rows(w.book.id)
+		expect(lore).toHaveLength(1)
+		expect(lore[0]!.branchId).toBe(w.fork!.id)
 	})
 })

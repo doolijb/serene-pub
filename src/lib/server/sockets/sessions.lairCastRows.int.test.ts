@@ -264,6 +264,7 @@ function recordingIo(userId: number, sessionId: number) {
 				user: { id: userId, isAdmin: false },
 				interest: new Set([
 					`sessionMessage#${sessionId}`,
+					`sessionMessageDelta#${sessionId}`,
 					`sessions:runStatus#${sessionId}`,
 					`sessions:actions#${sessionId}`,
 					`state:changed#${sessionId}`
@@ -323,19 +324,28 @@ async function reply(
 	return { res, emitted }
 }
 
-/** Every `sessionMessage` frame a still-generating row was announced with, in order. */
+/**
+ * Every frame a still-generating row was announced with, in order: the full
+ * `sessionMessage` row a run opens with, then the `sessionMessageDelta`
+ * frames that follow it (perf-H, 2026-11-13).
+ */
 const generatingFrames = (emitted: Array<{ event: string; payload: any }>) =>
 	emitted
 		.filter(
 			(e) =>
-				e.event === "sessionMessage" &&
-				e.payload?.sessionMessage?.isGenerating === true &&
-				e.payload?.sessionMessage?.role !== "user"
+				(e.event === "sessionMessage" &&
+					e.payload?.sessionMessage?.isGenerating === true &&
+					e.payload?.sessionMessage?.role !== "user") ||
+				e.event === "sessionMessageDelta"
 		)
-		.map((e) => ({
-			id: e.payload.sessionMessage.id as number,
-			content: String(e.payload.sessionMessage.content ?? "")
-		}))
+		.map((e) =>
+			e.event === "sessionMessageDelta"
+				? { id: e.payload.id as number, content: String(e.payload.content ?? "") }
+				: {
+						id: e.payload.sessionMessage.id as number,
+						content: String(e.payload.sessionMessage.content ?? "")
+					}
+		)
 
 /** The ids of every non-user row announced, in the order they were first seen. */
 const announcedOrder = (emitted: Array<{ event: string; payload: any }>) => {

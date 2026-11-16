@@ -1,0 +1,156 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.historyWrites.int.test.ts (19 tests | 1 failed) 3395ms
+     × with no fields it counts the lorebook's days alone: a day waiting in the notes is not counted 45ms
+stdout | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-own-book-full-ASpAPu/data/serene-pub.db
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts (14 tests | 1 failed) 12934ms
+     × a session whose scenes end by themselves: a room waiting in the notes is not an end of a lorebook link 43ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.historyWrites.int.test.ts > create-lore-entry with the history entry type (a session whose scenes end by themselves, under Full) > with no fields it counts the lorebook's days alone: a day waiting in the notes is not counted
+AssertionError: expected 23 not to be 23 // Object.is equality
+ ❯ src/lib/server/pipelines/runtime/host.historyWrites.int.test.ts:412:22
+    410|   const mine = await history((await ownBookFor(db as unknown as Db, w.…
+    411|   const res: any = await (await w.host()).commit!({ content: "Heat.", …
+    412|   expect(res.id).not.toBe(mine.id)
+       |                      ^
+    413|   expect((await entry(mine.id))!.content).toBe("Summer.")
+    414|   const lore = await rows(w.book.id)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts > link-lore-entries under Full > a session whose scenes end by themselves: a room waiting in the notes is not an end of a lorebook link
+AssertionError: promise resolved "{ id: 4, fromEntryId: 18, …(1) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "fromEntryId": 18,
++   "id": 4,
++   "lorebookId": 23,
+  }
+
+ ❯ src/lib/server/pipelines/runtime/host.ownBookFull.int.test.ts:293:81
+    291|   await place(w.book.id, "The Hall")
+    292|   const mine = await place(w.own.id, "My Den")
+    293|   await expect((await w.host()).commit!({ from: mine.id, to: "The Hall…
+       |                                                                                 ^
+    294|    /not in this session's lorebook/
+    295|   )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 5 passed (7)
+      Tests  2 failed | 107 passed (109)
+   Start at  23:17:14
+   Duration  19.45s (transform 6.62s, setup 64ms, import 4.00s, tests 49.78s, environment 2ms)
+

@@ -282,6 +282,7 @@ describe("characterRowsPage: one row per character", () => {
 		})
 		expect(by(`${p} Both`).reach).toEqual({
 			lorebookCount: 2,
+			notesCount: 0,
 			lorebook: null
 		})
 		expect(by(`${p} Single`).reach.lorebookCount).toBe(1)
@@ -293,6 +294,7 @@ describe("characterRowsPage: one row per character", () => {
 		})
 		expect(by(`${p} Unused`).reach).toEqual({
 			lorebookCount: 0,
+			notesCount: 0,
 			lorebook: null
 		})
 		expect(by(`${p} Unused`).hasOwnWords).toBe(false)
@@ -350,10 +352,69 @@ describe("characterRowsPage: one row per character", () => {
 		expect(keys(r).sort()).toEqual(
 			[`card:${live.id}`, `member:${m.id}`].sort()
 		)
-		// The overlay member still counts toward the card row's reach.
-		expect(
-			r.rows.find((x) => x.cardId === live.id)!.reach.lorebookCount
-		).toBe(2)
+		// The overlay member in notes is notes, not a lorebook, on the card row.
+		const reach = r.rows.find((x) => x.cardId === live.id)!.reach
+		expect(reach.lorebookCount).toBe(1)
+		expect(reach.notesCount).toBe(1)
+	})
+
+	test("a card row counts real lorebooks only and names notes apart", async () => {
+		const p = uniq("rn")
+		const me = await mkUser()
+		const mixed = await mkCard(me.id, `${p} Mixed`)
+		const oneNotes = await mkCard(me.id, `${p} OneNotes`)
+		const twoNotes = await mkCard(me.id, `${p} TwoNotes`)
+		const real = await mkBook(me.id, { name: `${p} real` })
+		const a = await mkSession(me.id, `${p} A`)
+		const b = await mkSession(me.id, `${p} B`)
+		await mkMember(real.id, { cardId: mixed.id, name: `${p} Mixed` })
+		await mkMember(a.notes.id, { cardId: mixed.id, name: `${p} Mixed` })
+		await mkMember(a.notes.id, {
+			cardId: oneNotes.id,
+			name: `${p} OneNotes`
+		})
+		await mkMember(a.notes.id, {
+			cardId: twoNotes.id,
+			name: `${p} TwoNotes`
+		})
+		await mkMember(b.notes.id, {
+			cardId: twoNotes.id,
+			name: `${p} TwoNotes`
+		})
+
+		// A session renamed after the notes were made: the reach names it now.
+		await testDb
+			.update(schema.sessions)
+			.set({ name: `${p} A renamed` })
+			.where(eq(schema.sessions.id, a.session.id))
+
+		const r = await page(me.id, p)
+		const by = (name: string) => r.rows.find((x) => x.shownName === name)!
+		expect(by(`${p} Mixed`).reach).toEqual({
+			lorebookCount: 1,
+			notesCount: 1,
+			lorebook: {
+				id: real.id,
+				name: `${p} real`,
+				sessionId: null,
+				sessionName: null
+			}
+		})
+		expect(by(`${p} OneNotes`).reach).toEqual({
+			lorebookCount: 0,
+			notesCount: 1,
+			lorebook: {
+				id: a.notes.id,
+				name: `${p} A notes`,
+				sessionId: a.session.id,
+				sessionName: `${p} A renamed`
+			}
+		})
+		expect(by(`${p} TwoNotes`).reach).toEqual({
+			lorebookCount: 0,
+			notesCount: 2,
+			lorebook: null
+		})
 	})
 })
 

@@ -29,9 +29,10 @@
 	import * as Icons from "@lucide/svelte"
 	import ComponentMount from "./ComponentMount.svelte"
 	import { whenFirstShown } from "./firstShow"
+	import { createRemoteMessages } from "./remoteMessages.svelte"
 	import WidgetHost from "$lib/client/sessionLayout/WidgetHost.svelte"
 	import type { ComponentProps } from "svelte"
-	import { projectMessageRow, type WidgetBaseSection, type WidgetSectionScope } from "@serene-pub/sdk"
+	import { type WidgetBaseSection, type WidgetSectionScope } from "@serene-pub/sdk"
 	import {
 		UNPLACED,
 		type ActionsV1,
@@ -191,17 +192,16 @@
 	 * The log, only to a widget that reads it (R75): one that does not never
 	 * touches the array, so a token does not so much as wake it. A snapshot,
 	 * because a snapshot reads every row: a streaming token changes a row in
-	 * place, and only a deep read re-posts it. Each row is projected first
+	 * place, and only a deep read re-posts it (taken once per changed row). Each row is projected first
 	 * (`projectMessageRow`, less `MESSAGE_HOST_FIELDS`), so the per-token clone
 	 * never reads — let alone copies — an `embedding` vector or a `debugMeta`
 	 * prompt; the wire's own projection then finds nothing left to strip.
 	 */
 	const readsMessages = $derived(!reads || reads.includes("messages"))
-	const messages = $derived(
-		readsMessages
-			? ($state.snapshot((session?.sessionMessages ?? []).map(projectMessageRow)) as unknown[])
-			: undefined
-	)
+	// A row is projected and cloned once per change to it, not once per frame
+	// (`remoteMessages.svelte.ts`); the result holds the same values, in the same order.
+	const remoteMessages = createRemoteMessages()
+	const messages = $derived(readsMessages ? remoteMessages(session?.sessionMessages ?? []) : undefined)
 </script>
 
 <WidgetHost {widget}>

@@ -90,6 +90,7 @@ import { registerUpdateHandlers } from "./updates"
 import { registerAdminOverviewHandlers } from "./adminOverview"
 import { registerAdminCastLiftHandlers } from "./adminCastLift"
 import { registerAdminLogbookHandlers } from "./adminLogbook"
+import { registerAdminRedlineHandlers } from "./redlines"
 import {
 	logbookBegin,
 	logbookCommit,
@@ -373,6 +374,7 @@ export function connectSockets(io: {
 		registerAdminOverviewHandlers(socket, emitToUser, register)
 		registerAdminCastLiftHandlers(socket, emitToUser, register)
 		registerAdminLogbookHandlers(socket, emitToUser, register)
+		registerAdminRedlineHandlers(socket, emitToUser, register)
 		registerTotpHandlers(socket, emitToUser, register)
 		registerAccountHandlers(socket, emitToUser, register)
 		registerInviteHandlers(socket, emitToUser, register)

@@ -91,6 +91,15 @@ describe("CastLine offer", () => {
 		expect(document.querySelector("[data-cast-line]")).not.toBeNull()
 	})
 
+	test("a notes member behind its card is offered nothing", () => {
+		render([
+			member(false),
+			{ ...member(true), castId: 11, ownBookSessionId: 3 }
+		])
+		expect(document.querySelector("[data-card-update-offer]")).toBeNull()
+		expect(button()).toBeUndefined()
+	})
+
 	test("a reply fires onChanged so the parent asks again", async () => {
 		const onChanged = vi.fn()
 		render([member(true)], onChanged)

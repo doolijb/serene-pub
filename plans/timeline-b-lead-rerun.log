@@ -1,0 +1,1150 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+[vitest] removed 1 stale temp entry from /tmp
+stdout | src/lib/server/sockets/presetFallback.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-adIkBz/data/serene-pub.db
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ❯ |int| src/lib/server/sockets/presetFallback.int.test.ts (6 tests | 1 failed) 15812ms
+     × the boot reconcile records one notice, and republishing clears it 759ms
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-9k99v8/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/pipelines/entities/sessionGenres.int.test.ts (36 tests | 1 failed) 24369ms
+     × a standard-mode session supplies only its own fields' defaults — never a stored stray 9ms
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-9ZBrgQ/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/pipelines/config/panel/groups.int.test.ts (19 tests | 1 failed) 34021ms
+     × gives no two groups of one spec the same heading, and no two steps of one group the same heading 4631ms
+stdout | src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts
+Using PGlite database at: /tmp/serene-pub-preset-actions-qzUURV/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts (4 tests | 1 failed) 13716ms
+     × the shipped Lair presets (included set null) carry their companion actions 683ms
+stdout | src/lib/server/plugins/coreRow.int.test.ts > a stored 'core' plugin row > offers no widget, frame or page
+Using PGlite database at: /tmp/serene-pub-vitest-eUrNUA/data/serene-pub.db
+
+ ❯ |int| src/lib/server/plugins/coreRow.int.test.ts (12 tests | 2 failed) 3217ms
+     × offers no widget, frame or page 381ms
+     × is never served as a frame document or a plugin page 16ms
+ ❯ |int| src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts (4 tests | 4 skipped) 2226ms
+stdout | src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+[data-upgrade 0108] pub binding core:genre/story core:event/message-respond@1 → acme:spec/alt-reply dropped (R33: pub-level bindings retired)
+
+stdout | src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+[data-upgrade 0108] registrations: 9 session, 18 preset, 6 genre row(s); 1 configuration(s) kept as disabled presets; 1 pub binding(s) dropped; not carried: session #100 tasks.groups.sweep
+
+ ❯ |int| src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts (2 tests | 1 failed) 1285ms
+     × moves bindings, toggles, configurations and tasks into registration rows 785ms
+stdout | src/lib/shared/conformance/commentHistory.test.ts > comment history ratchet — comments state the rule, not the story > no file's phrase-hit count exceeds its recorded ratchet
+10 file(s) have fewer phrase-list hits than the ratchet records. Run `npm run comments:ratchet` to lower it:
+  • src/lib/client/components/koboldcppManager/availableTab.ts: 1 → 0
+  • src/lib/client/sessionLayout/mobileSidePanels.svelte.ts: 1 → 0
+  • src/lib/client/sessionLayout/sideRail.ts: 1 → 0
+  • src/lib/client/sessionLayout/sideSlot.ts: 3 → 2
+  • src/lib/server/embedding/vectorizationQueue.ts: 3 → 2
+  • src/lib/server/koboldcpp/subprocessManager.ts: 1 → 0
+  • src/lib/server/pipelines/prompt/renderers.ts: 4 → 3
+  • src/lib/server/sockets/characters.ts: 4 → 3
+  • src/lib/server/sockets/pipelines.ts: 8 → 7
+  • src/lib/server/utils/index.ts: 5 → 4
+
+ ❯ |unit| src/lib/shared/conformance/commentHistory.test.ts (1 test | 1 failed) 354ms
+     × no file's phrase-hit count exceeds its recorded ratchet 352ms
+ ❯ |unit| src/lib/shared/conformance/wiring.test.ts (15 tests | 2 failed) 110ms
+     × every out-port shape is one some node can consume 10ms
+     × every in-port on a node core ships is filled by some core spec 1ms
+ ❯ |unit| src/lib/server/adapters/importBoundary.test.ts (13 tests | 4 failed) 61ms
+     × nothing under shared/, client/ or routes/ imports a server adapter module 12ms
+     × every non-test module that loads an adapter is on the allowlist 12ms
+     × only the one legacy sockets file loads an adapter STATICALLY 13ms
+     × registry consumers are enumerated 4ms
+ ❯ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts (11 tests | 2 failed) 56ms
+     × no shipped spec leaves a declared slot unwired 5ms
+     × names the node when `params: slot.params()` is removed 40ms
+stdout | src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+Using PGlite database at: /tmp/serene-pub-vitest-SMjgBo/data/serene-pub.db
+
+stdout | src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+Migrations applied.
+
+stdout | src/lib/server/adapters/registry.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/adapters/registry.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/adapters/registry.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |unit| src/lib/server/adapters/registry.test.ts (5 tests | 1 failed) 10301ms
+     × route exactly what the registry says, all four families 9314ms
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-c0aXz2/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/pipelines/entities/publishedValues.int.test.ts (6 tests | 1 failed) 10107ms
+     × is the stored value of a declared key, else its default, and nothing else 23ms
+stdout | src/lib/server/sockets/content.interestGate.test.ts > lorebooks:createBinding — the cast cascade > mints the binding and reads no cast when nobody wants it
+Socket connected: s1 for user 1
+
+stdout | src/lib/server/sockets/content.interestGate.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-ItpM8x/data/serene-pub.db
+
+ ❯ |unit| src/lib/server/sockets/content.interestGate.test.ts (13 tests | 1 failed) 24ms
+     × mints the binding and reads no cast when nobody wants it 6ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts [ src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts ]
+AssertionError: promise resolved "{ specId: 3, specVersionId: 3, …(2) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "canonicalHash": "193741e8cd2092",
++   "specId": 3,
++   "specVersionId": 3,
++   "written": true,
+  }
+
+ ❯ src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts:80:58
+     78|    .build()
+     79|  )
+     80|  await expect(saveDocument(db, spoken, { publish: true })).rejects.toT…
+       |                                                          ^
+     81|  const [s2] = await db
+     82|   .insert(schema.pipelineSpecs)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/20]⎯
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 19 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > no client-reachable module may touch an adapter > nothing under shared/, client/ or routes/ imports a server adapter module
+AssertionError: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/shared/speech/voicebank.ts imports \"../connectionAdapters/speechFacts\". Adapter modules are server-only and must stay lazily loaded; if this is a type both sides need, move the type to $lib/shared.",
++ ]
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:158:22
+    156|     `if this is a type both sides need, move the type to $lib/shared.`
+    157|   )
+    158|   expect(violations).toEqual([])
+       |                      ^
+    159|  })
+    160| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/20]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > who may load a concrete adapter module > every non-test module that loads an adapter is on the allowlist
+AssertionError: expected [ …(3) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/server/connections/modelSync.ts loads \"../connectionAdapters/speech/getSpeechAdapter\" directly. Go through getConnectionAdapter()/getImageAdapter(), which look the module up in ADAPTER_REGISTRY and keep the import lazy. If this genuinely cannot, add the file to ALLOWED in this test with the reason.",
++   "src/lib/server/speech/speechTarget.ts loads \"$lib/server/connectionAdapters/speech/getSpeechAdapter\" directly. Go through getConnectionAdapter()/getImageAdapter(), which look the module up in ADAPTER_REGISTRY and keep the import lazy. If this genuinely cannot, add the file to ALLOWED in this test with the reason.",
++   "src/lib/server/speech/speechTarget.ts loads \"$lib/server/connectionAdapters/speech/getSpeechAdapter\" directly. Go through getConnectionAdapter()/getImageAdapter(), which look the module up in ADAPTER_REGISTRY and keep the import lazy. If this genuinely cannot, add the file to ALLOWED in this test with the reason.",
++ ]
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:196:22
+    194|     `If this genuinely cannot, add the file to ALLOWED in this test wi…
+    195|   )
+    196|   expect(violations).toEqual([])
+       |                      ^
+    197|  })
+    198|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/20]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > who may load a concrete adapter module > only the one legacy sockets file loads an adapter STATICALLY
+AssertionError: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/server/connections/modelSync.ts statically imports \"../connectionAdapters/speech/getSpeechAdapter\". Use a lazy import() (or the loader) — a top-level import puts the backend's SDK in this module's graph whether or not anyone uses that backend.",
++ ]
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:235:21
+    233|     `a top-level import puts the backend's SDK in this module's graph …
+    234|   )
+    235|   expect(offenders).toEqual([])
+       |                     ^
+    236|  })
+    237| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/20]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > the eager load stays in one place > registry consumers are enumerated
+AssertionError: expected [ …(11) ] to deeply equal [ …(9) ]
+
+- Expected
++ Received
+
+@@ -1,7 +1,9 @@
+  [
+    "src/lib/server/connectionAdapters/manifest.conformance.test.ts",
++   "src/lib/server/connectionAdapters/speech.conformance.test.ts",
++   "src/lib/server/connectionAdapters/speech/getSpeechAdapter.ts",
+    "src/lib/server/connections/modelSync.ts",
+    "src/lib/server/embeddingAdapters/adapters.test.ts",
+    "src/lib/server/nerAdapters/adapters.test.ts",
+    "src/lib/server/utils/getConnectionAdapter.ts",
+    "src/lib/server/utils/getEmbeddingAdapter.ts",
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:390:17
+    388|    )
+    389|   ].sort()
+    390|   expect(found).toEqual(CONSUMERS.sort())
+       |                 ^
+    391|  })
+    392| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/20]⎯
+
+ FAIL  |unit| src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/lib/server/adapters/registry.test.ts:155:2
+    153|
+    154| describe("the loaders", () => {
+    155|  it("route exactly what the registry says, all four families", async (…
+       |  ^
+    156|   const { ADAPTER_REGISTRY } = await import("./registry")
+    157|   const { getConnectionAdapter } = await import(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/20]⎯
+
+ FAIL  |unit| src/lib/shared/conformance/commentHistory.test.ts > comment history ratchet — comments state the rule, not the story > no file's phrase-hit count exceeds its recorded ratchet
+AssertionError: 10 file(s) exceed their comment-history ratchet:
+
+src/lib/client/components/connections/modelsList.ts: 1 (ratchet allows 0)
+    194: [no longer] * already says it (the "No longer listed" badge, the download line).
+
+src/lib/client/lorebooks/EntryWorkspace.svelte: 1 (ratchet allows 0)
+    456: [no longer] * capture. A scene is no longer filed under a dated entry, so no date
+
+src/lib/client/shell/leaveDestination.ts: 1 (ratchet allows 0)
+    21: [no longer] // A cold load (`page.state` is `{}`), junk, or Apps no longer registered.
+
+src/lib/server/db/dataUpgrades/0137_loadout_voices.ts: 1 (ratchet allows 0)
+    11: [no longer] * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids
+
+src/lib/server/embedding/indexingActivity.ts: 1 (ratchet allows 0)
+    4: [used to] * The composer's notice used to carry "Indexing 12 of 40 lorebook entries".
+
+src/lib/server/sessions/honorModeRetired.ts: 1 (ratchet allows 0)
+    35: [no longer] * (the 0.7 squash, or the importer no longer accepting older files).
+
+src/lib/server/sessions/settings.ts: 1 (ratchet allows 0)
+    335: [no longer] * are no longer its business — that is sheet latitude (`state/handEdits.ts`).
+
+src/lib/server/sockets/localOnnxModels.ts: 1 (ratchet allows 0)
+    1125: [no longer] * exist (`ensureLocalOnnxConnections`), so their existence no longer says
+
+src/lib/server/utils/activityStore.ts: 2 (ratchet allows 1)
+    290: [used to] * the progress the composer's notice used to carry. Written only by
+    630: [deliberately not] // Deliberately NOT startScene's abort-and-evict, for two different
+
+src/lib/server/utils/androidWrapper.ts: 1 (ratchet allows 0)
+    3: [used to] * this env var before spawning the server). Used to hide features that don't
+
+Rewrite each flagged comment as the present-tense rule, move rationale that needs a paragraph to docs/ with a one-line pointer, or delete it if it is pure history. Then run `npm run comments:ratchet` to record the lower count. Do not weaken the phrase list to pass this.: expected [ …(10) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/client/components/connections/modelsList.ts: 1 (ratchet allows 0)
++     194: [no longer] * already says it (the \"No longer listed\" badge, the download line).",
++   "src/lib/client/lorebooks/EntryWorkspace.svelte: 1 (ratchet allows 0)
++     456: [no longer] * capture. A scene is no longer filed under a dated entry, so no date",
++   "src/lib/client/shell/leaveDestination.ts: 1 (ratchet allows 0)
++     21: [no longer] // A cold load (`page.state` is `{}`), junk, or Apps no longer registered.",
++   "src/lib/server/db/dataUpgrades/0137_loadout_voices.ts: 1 (ratchet allows 0)
++     11: [no longer] * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids",
++   "src/lib/server/embedding/indexingActivity.ts: 1 (ratchet allows 0)
++     4: [used to] * The composer's notice used to carry \"Indexing 12 of 40 lorebook entries\".",
++   "src/lib/server/sessions/honorModeRetired.ts: 1 (ratchet allows 0)
++     35: [no longer] * (the 0.7 squash, or the importer no longer accepting older files).",
++   "src/lib/server/sessions/settings.ts: 1 (ratchet allows 0)
++     335: [no longer] * are no longer its business — that is sheet latitude (`state/handEdits.ts`).",
++   "src/lib/server/sockets/localOnnxModels.ts: 1 (ratchet allows 0)
++     1125: [no longer] * exist (`ensureLocalOnnxConnections`), so their existence no longer says",
++   "src/lib/server/utils/activityStore.ts: 2 (ratchet allows 1)
++     290: [used to] * the progress the composer's notice used to carry. Written only by
++     630: [deliberately not] // Deliberately NOT startScene's abort-and-evict, for two different",
++   "src/lib/server/utils/androidWrapper.ts: 1 (ratchet allows 0)
++     3: [used to] * this env var before spawning the server). Used to hide features that don't",
++ ]
+
+ ❯ src/lib/shared/conformance/commentHistory.test.ts:79:5
+     77|       `lower count. Do not weaken the phrase list to pass this.`
+     78|     : undefined
+     79|   ).toEqual([])
+       |     ^
+     80|  })
+     81| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/20]⎯
+
+ FAIL  |unit| src/lib/shared/conformance/wiring.test.ts > §1 node ports — every port has something on the other end > every out-port shape is one some node can consume
+AssertionError: 2 out-port shape(s) no port anywhere accepts — a value with nowhere to go:
+  • core:shape/cue-map@1 :: core:oracle/speak@1.cueMap
+  • core:shape/spoken-as@1 :: core:oracle/speak@1.spokenAs
+
+Declare an in-port that takes it — or add it to UNCONSUMED_OUT_SHAPES with the reason it is declared ahead of its other end. Do not weaken the check.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:shape/cue-map@1 :: core:oracle/speak@1.cueMap",
++   "core:shape/spoken-as@1 :: core:oracle/speak@1.spokenAs",
++ ]
+
+ ❯ expectExactlyExcused src/lib/shared/conformance/wiring.test.ts:148:4
+    146|      `declared ahead of its other end. Do not weaken the check.`
+    147|    : undefined
+    148|  ).toEqual([])
+       |    ^
+    149|
+    150|  const seen = new Set(found)
+ ❯ src/lib/shared/conformance/wiring.test.ts:776:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/20]⎯
+
+ FAIL  |unit| src/lib/shared/conformance/wiring.test.ts > §1 node ports — every port has something on the other end > every in-port on a node core ships is filled by some core spec
+AssertionError: 3 in-port(s) on node types core ships in a pipeline that no shipped pipeline ever supplies:
+  • core:oracle/speak@1.language
+  • core:oracle/speak@1.text
+  • core:task/clock-step@1.unless
+
+Wire it in the spec that needs it — or add it to UNFILLED_IN_PORTS with the reason it is declared ahead of its other end. Do not weaken the check.: expected [ Array(3) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:oracle/speak@1.language",
++   "core:oracle/speak@1.text",
++   "core:task/clock-step@1.unless",
++ ]
+
+ ❯ expectExactlyExcused src/lib/shared/conformance/wiring.test.ts:148:4
+    146|      `declared ahead of its other end. Do not weaken the check.`
+    147|    : undefined
+    148|  ).toEqual([])
+       |    ^
+    149|
+    150|  const seen = new Set(found)
+ ❯ src/lib/shared/conformance/wiring.test.ts:786:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/20]⎯
+
+ FAIL  |unit| src/lib/server/sockets/content.interestGate.test.ts > lorebooks:createBinding — the cast cascade > mints the binding and reads no cast when nobody wants it
+AssertionError: expected 4 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 4
+
+ ❯ src/lib/server/sockets/content.interestGate.test.ts:453:38
+    451|   // A third since cv-member2: the reply's own row is read at the book…
+    452|   // present (`bookPresentOf` reads the story clock) — one member, not…
+    453|   expect(count("select(lorebooks)")).toBe(3)
+       |                                      ^
+    454|   expect(count("lorebooks.findFirst(bindings)")).toBe(0)
+    455|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/20]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no shipped spec leaves a declared slot unwired
+AssertionError: a node type declares this slot, `config/panel/declarations.ts` renders a control for it, and `resolveInput` resolves only the config keys a spec named — so the value a person sets is stored and never read. Wire it (`params: slot.params()`), or delete the declaration.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a connection slot the spec never wires — the control renders and does nothing.",
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a sampling slot the spec never wires — the control renders and does nothing.",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:402:5
+    400|     "and never read. Wire it (`" +
+    401|     "params: slot.params()`), or delete the declaration."
+    402|   ).toEqual([])
+       |     ^
+    403|  })
+    404|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/20]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the check fails when a slot goes unwired > names the node when `params: slot.params()` is removed
+AssertionError: expected [ …(3) ] to deeply equal [ Array(1) ]
+
+- Expected
++ Received
+
+  [
+    "core:spec/story-respond node \"gather.history.read\" slot \"params\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"connection\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"sampling\"",
+  ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:600:5
+    598|   expect(
+    599|    broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
+    600|   ).toEqual([
+       |     ^
+    601|    'core:spec/story-respond node "gather.history.read" slot "params"'
+    602|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/20]⎯
+
+ FAIL  |int| src/lib/server/plugins/coreRow.int.test.ts > a stored 'core' plugin row > offers no widget, frame or page
+AssertionError: expected [ Array(1) ] to include '/plugin-ui/acme.twin/ui/widget.mjs'
+ ❯ src/lib/server/plugins/coreRow.int.test.ts:198:16
+    196|   const srcs = res.modePanels.map((p) => p.src ?? "")
+    197|   // The twin's remote widget.
+    198|   expect(srcs).toContain(`/plugin-ui/${TWIN}/ui/widget.mjs`)
+       |                ^
+    199|   expect(srcs.some((s) => s.startsWith("/plugin-ui/core/"))).toBe(fals…
+    200|   expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/20]⎯
+
+ FAIL  |int| src/lib/server/plugins/coreRow.int.test.ts > a stored 'core' plugin row > is never served as a frame document or a plugin page
+TypeError: Cannot read properties of undefined (reading 'host')
+ ❯ GET src/routes/plugin-ui/[...rest]/+server.ts:63:78
+     61|  // module, a document inside `sp-frame`). The tag covers the policy t…
+     62|  // a grant an admin withdrew must reach a frame whose bytes did not c…
+     63|  const csp = frameCsp(plugin.manifest, plugin.adminDenied, { host: eve…
+       |                                                                              ^
+     64|  const policy = framePermissionsPolicy(plugin.manifest, plugin.adminDe…
+     65|  const etag = `"${createHash("sha256").update(`${file.hash}\n${file.mi…
+ ❯ src/lib/server/plugins/coreRow.int.test.ts:218:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/20]⎯
+
+ FAIL  |int| src/lib/server/sockets/presetFallback.int.test.ts > a binding that stopped resolving > the boot reconcile records one notice, and republishing clears it
+AssertionError: expected 'Unavailable: needs a model that can s…' to match /^Unavailable: needs a model that can …/
+
+- Expected:
+/^Unavailable: needs a model that can .*draw pictures/
+
++ Received:
+"Unavailable: needs a model that can speak."
+
+ ❯ src/lib/server/sockets/presetFallback.int.test.ts:260:21
+    258|   const stale = all.filter((n) => n.event.startsWith("core:event/"))
+    259|   for (const n of all.filter((x) => !x.event.startsWith("core:event/")…
+    260|    expect(n.reason).toMatch(/^Unavailable: needs a model that can .*dr…
+       |                     ^
+    261|   expect(stale.length).toBe(1)
+    262|   expect(stale[0]).toMatchObject({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/20]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts > sessionPresets:list — effective included actions > the shipped Lair presets (included set null) carry their companion actions
+AssertionError: expected [ 'nudge', 'read-aloud', …(4) ] to deeply equal [ Array(4) ]
+
+- Expected
++ Received
+
+  [
+    "nudge",
++   "read-aloud",
+    "reveal",
++   "say-it-as",
+    "trap",
+    "whisper",
+  ]
+
+ ❯ src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts:87:29
+     85|   expect(wordsOnly).toBeDefined()
+     86|   expect(wordsOnly.includedActions).toBeNull()
+     87|   expect(keysOf(wordsOnly)).toEqual(["nudge", "reveal", "trap", "whisp…
+       |                             ^
+     88|  }, 60_000)
+     89|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/20]⎯
+
+ FAIL  |int| src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+AssertionError: expected [ …(14) ] to deeply equal [ …(12) ]
+
+- Expected
++ Received
+
+@@ -1,6 +1,8 @@
+  [
++   "speak-message#read-aloud→speak-message",
++   "speak-message#say-it-as→speak-message",
+    "story-advance-time#advance-time→story-advance-time",
+    "story-answer#answer→story-answer",
+    "story-generate-image#generate-image→story-generate-image",
+    "story-illustrate-scene#illustrate-scene→story-illustrate-scene",
+    "story-look#look→story-look",
+
+ ❯ src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts:192:87
+    190|    values: { generate: { params: { maxTokens: 900 } } }
+    191|   })
+    192|   expect(p3.filter((r) => r.dropped && r.key.includes("#")).map((r) =>…
+       |                                                                                       ^
+    193|    [
+    194|     "story-advance-time#advance-time→story-advance-time",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/20]⎯
+
+ FAIL  |int| src/lib/server/pipelines/entities/publishedValues.int.test.ts > session.fields > is the stored value of a declared key, else its default, and nothing else
+AssertionError: expected { autoAdvance: 'round', …(12) } to deeply equal { tone: 'grim', roundWorth: 5, …(7) }
+
+- Expected
++ Received
+
+@@ -7,10 +7,14 @@
+    },
+    "autoAdvance": "round",
+    "characterDetail": "full",
+    "difficulty": "normal",
+    "narratorInterjections": "off",
++   "ownerSheetLatitude": "all-any",
+    "roundWorth": 5,
++   "sessionLanguage": "",
+    "sideCast": false,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grim",
+    "turnMode": "rules",
+  }
+
+ ❯ src/lib/server/pipelines/entities/publishedValues.int.test.ts:182:30
+    180|   // Stored wins; unstored declared keys resolve to their defaults
+    181|   // (B16x); the undeclared key never arrives.
+    182|   expect(doc.session.fields).toEqual({
+       |                              ^
+    183|    tone: "grim",
+    184|    roundWorth: 5,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/20]⎯
+
+ FAIL  |int| src/lib/server/pipelines/entities/sessionGenres.int.test.ts > the fields round-trip (19 §1, U-C2) > a standard-mode session supplies only its own fields' defaults — never a stored stray
+AssertionError: expected { autoAdvance: 'round', …(12) } to deeply equal { …(9) }
+
+- Expected
++ Received
+
+@@ -7,10 +7,14 @@
+    },
+    "autoAdvance": "round",
+    "characterDetail": "full",
+    "difficulty": "normal",
+    "narratorInterjections": "off",
++   "ownerSheetLatitude": "all-any",
+    "roundWorth": 5,
++   "sessionLanguage": "",
+    "sideCast": false,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grounded",
+    "turnMode": "rules",
+  }
+
+ ❯ src/lib/server/pipelines/entities/sessionGenres.int.test.ts:289:48
+    287|   // The standard mode is Story, and Story declares the author's note
+    288|   // and, from Adventure, its tone and difficulty.
+    289|   expect(await genreFieldsFor(db, session.id)).toEqual({
+       |                                                ^
+    290|    // The note goes at the end unless moved (owner ruling 2026-10-03).
+    291|    authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/20]⎯
+
+ FAIL  |int| src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+AssertionError: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/assistant-memory › (one group): two steps headed \"What to look for, and what is kept · due\"",
++   "core:spec/story-sweep › (one group): two steps headed \"What to look for, and what is kept · due\"",
++ ]
+
+ ❯ src/lib/server/pipelines/config/panel/groups.int.test.ts:397:19
+    395|      clashes.push(`${slug} › ${g.heading ?? "(one group)"}: two steps …
+    396|   }
+    397|   expect(clashes).toEqual([])
+       |                   ^
+    398|  }, 120_000)
+    399|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/20]⎯
+
+
+ Test Files  14 failed | 3 passed (17)
+      Tests  19 failed | 148 passed | 4 skipped (171)
+   Start at  11:38:33
+   Duration  61.07s (transform 20.03s, setup 140ms, import 40.05s, tests 140.91s, environment 140ms)
+

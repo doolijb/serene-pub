@@ -47,7 +47,9 @@ export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.G
 				charaVaultEmail: false,
 				charaVaultEncryptedToken: false,
 				charaVaultTokenIv: false,
-				charaVaultTokenAuthTag: false
+				charaVaultTokenAuthTag: false,
+				// Boot markers are the server's own bookkeeping (startup/bootMarkers.ts).
+				bootMarkers: false
 			}
 		}),
 		db.query.ollamaSettings.findFirst({

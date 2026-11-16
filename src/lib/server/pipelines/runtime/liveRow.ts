@@ -23,6 +23,10 @@
  *    typing*, *loading the model* — whatever the run's status relay says
  *    (`runStatus.ts`), written onto `generationStatus`. The retired
  *    `generationStage` enum is written by nothing.
+ *  · **the announcement** — each persisted frame goes to the session's users
+ *    as `sessionMessageDelta` (`id`, `content`, `reasoning`) once the run's
+ *    recipients are known; the first frame, and the row the end settles, go
+ *    out as the full `sessionMessage` row.
  *  · **the end** (R-17) — a run that stopped, failed or halted with its row
  *    still generating has nothing left to run, so this finalises it: stopped
  *    with the partial, failed with the reason, released if it merely ended.
@@ -48,7 +52,10 @@ import { randomUUID } from "node:crypto"
 import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { updateLegacyWhere } from "$lib/server/messages/store"
-import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
+import {
+	broadcastToSessionUsers,
+	type SessionRecipientsMemo
+} from "$lib/server/sockets/utils/broadcastHelpers"
 import {
 	persistGenerationErrorRow,
 	persistGenerationStatus
@@ -154,7 +161,7 @@ export interface LiveRow {
 	 * The run's status (R-19), onto the row's `generationStatus` — a no-op
 	 * until the placeholder has committed, since there is no row to say it
 	 * on. Fenced like every other write here; the row is announced from the
-	 * write, the same `sessionMessage` frame the stream uses.
+	 * write as the full `sessionMessage` row (`persistGenerationStatus`).
 	 */
 	status(text: StatusText): Promise<void>
 	/**
@@ -210,7 +217,10 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 	let onPhase: ((phase: ReplyPhase) => void) | undefined
 	let phase: ReplyPhase = "waiting"
 	let lastPersistedAt = 0
-	let pending: Promise<void> | null = null
+	// One persist at a time: `dirty` says text has arrived since the last
+	// persist began, `running` is the loop that is writing it.
+	let dirty = false
+	let running: Promise<void> | null = null
 	let lastError: unknown
 
 	/**
@@ -251,13 +261,56 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 	 * frames exactly as it does today.
 	 */
 	let announcing: Promise<void> = Promise.resolve()
-	const announce = (row: typeof schema.sessionMessages.$inferSelect) => {
+	// The frames of one run reach the same people: who they are is read once,
+	// on the first frame that passes the interest gate, and reused
+	// (`SessionRecipientsMemo`). A failed lookup is forgotten by the helper so
+	// it cannot silence the run.
+	const frameRecipients: SessionRecipientsMemo = { value: null }
+	/**
+	 * A frame goes out as `sessionMessageDelta` (`{ sessionId, id, content,
+	 * reasoning }`) once the run's recipients are known, and as the full
+	 * `sessionMessage` row until then: the full row is what fills the memo, and
+	 * it fills it lane-scoped (`laneScopedRecipients` reads the row's channel,
+	 * which a delta does not carry — a delta must never be the broadcast that
+	 * fills it). The settled row (`fresh`: the release) is always the full row,
+	 * asked of the live roster, so a guest added mid-reply sees it as it ended.
+	 *
+	 * `frame.reasoning` is the reasoning the frame wrote, `null` when it wrote
+	 * none (the row's reasoning is then left as it was).
+	 */
+	const announce = (
+		row: typeof schema.sessionMessages.$inferSelect,
+		fresh = false,
+		frame?: { reasoning: string | null }
+	) => {
 		if (!io) return Promise.resolve()
-		announcing = announcing.then(() =>
-			broadcastToSessionUsers(io, sessionId, "sessionMessage", {
-				sessionMessage: row
-			}).catch(() => {})
-		)
+		announcing = announcing.then(() => {
+			// Decided here, after the previous broadcast has run, so the memo it
+			// filled (or failed to fill) is what this frame sees.
+			const delta = !fresh && frame && frameRecipients.value !== null
+			return (
+				delta
+					? broadcastToSessionUsers(
+							io,
+							sessionId,
+							"sessionMessageDelta",
+							{
+								sessionId,
+								id: row.id,
+								content: row.content,
+								reasoning: frame.reasoning
+							},
+							{ recipients: frameRecipients }
+						)
+					: broadcastToSessionUsers(
+							io,
+							sessionId,
+							"sessionMessage",
+							{ sessionMessage: row },
+							fresh ? undefined : { recipients: frameRecipients }
+						)
+			).catch(() => {})
+		})
 		// The session's LIST row moved too — the same write, seen from the
 		// sidebar. Off the chain and debounced (`sessions/rowPush.ts`): a
 		// burst of chunks is one push at the end of it, and the card quotes
@@ -300,20 +353,59 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 				// A status display must never take a stream down.
 			}
 		}
-		const [updated] = await updateLegacyWhere(db, fence(id), {
-			content: now.content,
-			isGenerating: true,
-			// The reasoning so far, into the row's fold while it streams —
-			// merged into the stored metadata rather than written over it, so
-			// nothing else the row carries is replaced by a frame. The final
-			// save writes it again with its swipe slot (reasoningMetadata.ts).
-			...(now.reasoning !== undefined
-				? {
-						metadata: sql`jsonb_set(coalesce(${schema.sessionMessages.metadata}::jsonb, '{}'::jsonb), '{reasoning}', to_jsonb(${now.reasoning}::text))::json` as unknown as typeof schema.sessionMessages.$inferInsert.metadata
-					}
-				: {})
-		})
-		if (updated) await announce(updated)
+		// A frame mirrors CONTENT only (`mirror: "content"`): its patch moves
+		// `content` and `metadata.reasoning` on a row that stays generating,
+		// and the row always settles through a write that mirrors fully — the
+		// outlet's update after `flush`, `finish`'s release, or
+		// `persistGenerationErrorRow`.
+		const [updated] = await updateLegacyWhere(
+			db,
+			fence(id),
+			{
+				content: now.content,
+				isGenerating: true,
+				// The reasoning so far, into the row's fold while it streams —
+				// merged into the stored metadata rather than written over it, so
+				// nothing else the row carries is replaced by a frame. The final
+				// save writes it again with its swipe slot (reasoningMetadata.ts).
+				...(now.reasoning !== undefined
+					? {
+							metadata:
+								sql`jsonb_set(coalesce(${schema.sessionMessages.metadata}::jsonb, '{}'::jsonb), '{reasoning}', to_jsonb(${now.reasoning}::text))::json` as unknown as typeof schema.sessionMessages.$inferInsert.metadata
+						}
+					: {})
+			},
+			{ mirror: "content" }
+		)
+		if (updated)
+			await announce(updated, false, { reasoning: now.reasoning ?? null })
+	}
+
+	/**
+	 * Start the frame loop if it is not running and the throttle has passed.
+	 * Fenced, and never two persists at once: a chunk that arrives while one
+	 * is writing only marks the row dirty, and the loop writes it again when
+	 * that persist ends and the throttle allows — otherwise the next chunk, or
+	 * `flush`, picks it up. A failed persist is swallowed and never wedges the
+	 * loop.
+	 */
+	const kick = () => {
+		if (running || !dirty) return
+		if (Date.now() - lastPersistedAt < STREAM_PERSIST_THROTTLE_MS) return
+		running = (async () => {
+			try {
+				while (
+					dirty &&
+					Date.now() - lastPersistedAt >= STREAM_PERSIST_THROTTLE_MS
+				) {
+					dirty = false
+					lastPersistedAt = Date.now()
+					await persist().catch(() => {})
+				}
+			} finally {
+				running = null
+			}
+		})()
 	}
 
 	return {
@@ -374,23 +466,16 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 					const chunk = words ? words.push(raw) : raw
 					if (!chunk) return
 					streamed += chunk
-					const now = Date.now()
-					if (now - lastPersistedAt < STREAM_PERSIST_THROTTLE_MS)
-						return
-					lastPersistedAt = now
-					// Fire and forget, fenced — see the header.
-					pending = persist().catch(() => {})
+					dirty = true
+					kick()
 				},
 				onReasoning: (chunk) => {
 					nativeReasoning += chunk
 					// A native trace streams on its own channel, often for a
 					// long while before the first body token: it is a frame
 					// worth showing too, on the same throttle.
-					const now = Date.now()
-					if (now - lastPersistedAt < STREAM_PERSIST_THROTTLE_MS)
-						return
-					lastPersistedAt = now
-					pending = persist().catch(() => {})
+					dirty = true
+					kick()
 				},
 				onReplyFacts: (given) => {
 					facts = given
@@ -398,7 +483,7 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 			}
 		},
 		async flush() {
-			await pending
+			await running
 			if (streamed || nativeReasoning) await persist()
 		},
 		failedWith(err) {
@@ -410,7 +495,7 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 			// Before deciding anything: a frame still in flight must land
 			// before the release, or it would land after it and be fenced out
 			// — which is right — while the text it carried is lost.
-			await pending
+			await running
 			if (end.kind === "err" || end.kind === "halt") {
 				// A run that failed, or halted with its row still open (the
 				// model returned nothing, a reviewer rejected the write), owes
@@ -459,7 +544,7 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 				...(stopped ? { generationOutcome: "stopped" } : {})
 			})
 			if (released) {
-				await announce(released)
+				await announce(released, true)
 				// A stop is two events (PLAN-turn-order §4.1): the stop
 				// itself, and the row LANDING — a stopped reply is a row
 				// that is not generating, so the turn-order spec answers it

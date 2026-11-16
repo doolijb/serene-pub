@@ -21,7 +21,7 @@
 	import { memberScenes, type MemberScene } from "./cast/memberScenes"
 	import type { TimeSceneRow } from "./time/storyTime"
 	import { LORE_SPLIT_KEY } from "./layoutMode"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -53,9 +53,12 @@
 	import {
 		castMaskedWarning,
 		deletedMemberToast,
+		deleteCastAmendment,
 		fileCastAmendment,
+		fileCastVersion,
 		laterVersionCount,
 		laterVersionsToast,
+		updateCastAmendment,
 		type PrivateLoreChoice
 	} from "./cast/castSave"
 	import {
@@ -64,6 +67,8 @@
 		maskingAmendment
 	} from "./editor/entrySave"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import EntryEarmarkNotice from "./editor/EntryEarmarkNotice.svelte"
+	import { askEntryEarmark } from "./editor/entryEarmark"
 	import { v4 as uuid } from "uuid"
 	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import CastMemberForm from "./cast/CastMemberForm.svelte"
@@ -84,9 +89,26 @@
 		type Line
 	} from "$lib/shared/lorebooks/lineReading"
 	import { formatDate } from "./sections/historyDates"
+	import {
+		castChangesWords,
+		castDeleteSentence,
+		castLaterCount,
+		castNewVersionSave,
+		castTakenAt,
+		castVersionAt,
+		castVersionSave,
+		castVersions,
+		type CastVersion
+	} from "./cast/castVersions"
+	import { rowAtVersion } from "./cast/castVersionRead"
+	import VersionRail from "./time/VersionRail.svelte"
+	import VersionDateDialog from "./time/VersionDateDialog.svelte"
+	import { openBookTime } from "./time/bookTime.svelte"
+	import { editsToVersionLabel, momentOfVersion } from "./time/entryVersions"
 	import { parseMoment } from "./time/moment"
 	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
-	import AmendmentList from "./time/AmendmentList.svelte"
+	import EditHistory from "./editHistory/EditHistory.svelte"
+	import { RESTORE_BLOCKED_UNSAVED } from "./editHistory/editHistoryCopy"
 	import {
 		edgesOnLine,
 		laterLabel as laterLabelOf,
@@ -102,7 +124,11 @@
 		type GraphEdge
 	} from "./graphs/graphModel"
 	import { loreRoute } from "./loreRoute.svelte"
-	import type { LoreLens } from "$lib/shared/lorebooks/loreRoute"
+	import {
+		momentKey,
+		reduce,
+		type LoreLens
+	} from "$lib/shared/lorebooks/loreRoute"
 	import { getBookRelationships } from "./relationships.svelte"
 	import { getBookData } from "./bookData.svelte"
 	import type { EntryDecisions } from "./markers"
@@ -293,6 +319,8 @@
 	let linkHow = $state<"amend" | "base">("base")
 
 	let memberDirty = $state(false)
+	/** Changes after each save of the open member: its Edit history asks again. */
+	let memberSaveTick = $state(0)
 	let loreDraft = $state<Record<string, any> | null>(null)
 	let loreDraftKey = $state<string | null>(null)
 	/** The lore draft as it was BUILT — the other half of every diff. */
@@ -341,13 +369,17 @@
 		// list draws the NAME from the joined `character` object and the kind
 		// from the id. Leaving the join behind would show the new card's kind
 		// under the old card's name, which is worse than not resolving at all.
-		return rows.map((row) => {
-			const base = castRows.find((b) => b.id === row.id)
-			if (!base || row.characterId === base.characterId) return row
-			const card = characterList.find((c) => c.id === row.characterId)
-			return { ...row, character: (card ?? null) as any }
-		})
+		return rows.map((row) => withCard(row))
 	})
+	/** The member's card joined to match the version's `characterId`, as the list draws it. */
+	function withCard<T extends { id: number; characterId?: number | null }>(
+		row: T
+	): T {
+		const base = castRows.find((b) => b.id === row.id)
+		if (!base || row.characterId === base.characterId) return row
+		const card = characterList.find((c) => c.id === row.characterId)
+		return { ...row, character: (card ?? null) as any }
+	}
 	/**
 	 * The character lore on the line being read. `entries:list` answers with
 	 * every line's rows (its reply reaches every view of the book), so the
@@ -664,6 +696,38 @@
 			})
 	}
 
+	/**
+	 * The sentence that says why Save is off: a run in progress was shown this
+	 * lore and may still replace its text. Asked when it opens, on Check again,
+	 * and once after a refused save; never polled. An answer that comes back
+	 * after the form has moved on is dropped.
+	 */
+	let loreEarmarkNotice = $state<string | null>(null)
+	let loreEarmarkChecking = $state(false)
+	let loreEarmarkTicket = 0
+
+	async function checkLoreEarmark(entryId: number, onlySentence = false) {
+		const ticket = ++loreEarmarkTicket
+		loreEarmarkChecking = true
+		const notice = await askEntryEarmark(socket, lorebookId, entryId)
+		if (ticket !== loreEarmarkTicket || loreDraftKey !== `entry#${entryId}`)
+			return
+		loreEarmarkChecking = false
+		if (notice !== null || !onlySentence) loreEarmarkNotice = notice
+	}
+
+	$effect(() => {
+		const key = loreDraftKey
+		const mayAsk = !readOnly && !!key?.startsWith("entry#")
+		untrack(() => {
+			loreEarmarkTicket++
+			loreEarmarkNotice = null
+			loreEarmarkChecking = false
+			if (mayAsk)
+				void checkLoreEarmark(Number(key!.slice("entry#".length)))
+		})
+	})
+
 	/** A lore write of ours is on its way; Save stands down meanwhile. */
 	let loreSaving = $state(false)
 	const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "")
@@ -756,6 +820,7 @@
 			loreSaving = false
 			if (awaitingSave === key) awaitingSave = null
 			reportUnanswered(err, "Character lore was not saved")
+			if (!isReplyTimeout(err)) void checkLoreEarmark(id, true)
 			return
 		}
 		loreSaving = false
@@ -777,16 +842,29 @@
 	 * (the workspace's scenes, already scoped to it), dated by the history
 	 * entries they were compiled into.
 	 */
-	let timelineRows = $derived(
-		selectedMember
-			? memberScenes({
-					castId: selectedMember.id,
-					scenes: book.scenes as unknown as TimeSceneRow[],
-					entries: historyEntries,
-					at: momentDate
-				})
-			: []
-	)
+	let timelineRows = $derived.by(() => {
+		if (!selectedMember) return []
+		// 🚧 No timeline: undated, and in the order played — by the first
+		// message each scene holds (message ids only grow), then capture.
+		if (!book.timelineEnabled) {
+			const scenes = book.scenes as unknown as TimeSceneRow[]
+			const first = (id: number) => {
+				const ids = scenes.find((s) => s.id === id)?.selectedMessageIds
+				return ids?.length ? Math.min(...ids) : Infinity
+			}
+			return memberScenes({
+				castId: selectedMember.id,
+				scenes,
+				entries: []
+			}).sort((a, b) => first(a.id) - first(b.id) || a.id - b.id)
+		}
+		return memberScenes({
+			castId: selectedMember.id,
+			scenes: book.scenes as unknown as TimeSceneRow[],
+			entries: historyEntries,
+			at: momentDate
+		})
+	})
 
 	let memberTabs = $derived<PanelTab[]>([
 		{ value: "member", label: "Member", icon: Icons.IdCard },
@@ -832,24 +910,227 @@
 		if (!memberDirty) memberMoment = at
 	})
 
+	/** The cast version the Member tab shows. */
+	let shownCastVersionId = $derived(
+		selectedMember
+			? (castRows.find((r) => r.id === selectedMember!.id)
+					?.castVersionId ?? null)
+			: null
+	)
+
+	/**
+	 * The member's versions on the rail, when the book keeps a timeline.
+	 * `storedRow` is the row as the server sent it, never the resolved one:
+	 * `rowAtVersion` folds the versions over it itself.
+	 */
+	let railed = $derived(
+		book.timelineEnabled && !!selectedMember && !!castAmendmentsFor
+	)
+	let storedRow = $derived(
+		selectedMember
+			? (castRows.find((r) => r.id === selectedMember.id) ?? null)
+			: null
+	)
+	let memberChanges = $derived(
+		railed && selectedMember ? castAmendmentsFor!(selectedMember.id) : []
+	)
+	let castRail = $derived(
+		railed && storedRow
+			? castVersions({
+					baseVersionId: storedRow.baseVersionId ?? null,
+					rows: memberChanges,
+					line
+				})
+			: null
+	)
+	let castInForce = $derived(
+		castRail && storedRow
+			? castVersionAt({
+					versions: castRail.versions,
+					rows: memberChanges,
+					line,
+					moment: momentDate,
+					shownVersionId: storedRow.castVersionId ?? null
+				})
+			: null
+	)
+	/**
+	 * A version picked on the rail that is not the one in force at its date (a
+	 * second node at a shared date) stays selected while the route's moment is
+	 * the one the pick set.
+	 */
+	let pickedKey = $state<string | null>(null)
+	let pickedMoment = $state<string | undefined>(undefined)
+	let castSelected = $derived.by(() => {
+		if (!castRail || !castInForce) return null
+		if (pickedKey && route.moment === pickedMoment) {
+			const picked = castRail.versions.find((v) => v.key === pickedKey)
+			if (picked) return picked
+		}
+		return castInForce
+	})
+	/** The version the draft is being typed on; follows the selection while the form is clean. */
+	let draftVersionKey = $state<string | null>(null)
+	let draftVersion = $derived(
+		castRail
+			? (castRail.versions.find((v) => v.key === draftVersionKey) ??
+					castSelected)
+			: null
+	)
+	/**
+	 * Changes after every save of the member and whenever the selected
+	 * version's row changes on the wire: the edit history asks again on either.
+	 */
+	let editsToken = $derived(
+		`${memberSaveTick}:${castSelected?.row?.updatedAt ?? ""}`
+	)
+	/** The member form, for the two things the page asks of it. */
+	let memberForm:
+		| { discard(): void; saveNewAt(date: StoryDate): Promise<boolean> }
+		| undefined = $state()
+	/** Why Save is off for the version being typed on; null = on. */
+	let saveOff = $derived.by(() => {
+		const v = draftVersion
+		if (!v) return null
+		// 🚧
+		if (!v.own)
+			return `This version is ${openBookTime.lineName(v.branchId)}'s; open it on ${openBookTime.lineName(v.branchId)} to change it.`
+		// 🚧
+		if (v.locked)
+			return "A session wrote this version: it can be deleted here, not edited."
+		// 🚧 A member with no first version has nothing for From the beginning to write.
+		if (v.kind === "beginning" && v.versionId == null)
+			return "This cast member has no first version to save; save a new version instead."
+		return null
+	})
+	/** 🚧 A cast version that changes nothing is refused by the server. */
+	const CHANGE_FIRST =
+		"Change something first: a version holds what differs from the one before."
+	let addBlocked = $derived(memberDirty ? null : CHANGE_FIRST)
+	/** The version the form shows, as the form's row. */
+	let railRow = $derived(
+		railed && storedRow && castRail && castSelected
+			? withCard(rowAtVersion(storedRow, castRail.versions, castSelected))
+			: null
+	)
+
+	/** The moment the draft's version was last in force at. */
+	let momentOfDraft: string | undefined
+	let askingMoment = false
+	// One selection: the moment bar and the rail. A moment that changes the
+	// version shown under unsaved edits is asked about once.
+	$effect(() => {
+		const key = castSelected?.key ?? null
+		const at = route.moment
+		const isDirty = memberDirty
+		const isRailed = railed
+		untrack(() => {
+			if (!isRailed || !isDirty || key === draftVersionKey) {
+				if (!isDirty) draftVersionKey = key
+				momentOfDraft = at
+				return
+			}
+			if (askingMoment) return
+			askingMoment = true
+			const back = momentOfDraft
+			void loreRoute.confirmLeave().then((leave) => {
+				askingMoment = false
+				if (leave) discardForm()
+				else
+					loreRoute.set(
+						reduce(loreRoute.route, {
+							type: "setMoment",
+							moment: back
+						})
+					)
+			})
+		})
+	})
+
+	function discardForm() {
+		memberForm?.discard()
+		memberDirty = false
+	}
+
+	function momentRoute(at: StoryDate | null) {
+		const next = reduce(loreRoute.route, {
+			type: "setMoment",
+			moment: at ? momentKey(at) : undefined
+		})
+		return next
+	}
+
+	async function selectCastVersion(v: CastVersion) {
+		if (!castRail || !storedRow || v.key === castSelected?.key) return
+		const at = momentOfVersion(castRail.versions, v)
+		if (!at) return
+		if (memberDirty) {
+			if (!(await loreRoute.confirmLeave())) return
+			discardForm()
+		}
+		const there = castVersionAt({
+			versions: castRail.versions,
+			rows: memberChanges,
+			line,
+			moment: at,
+			shownVersionId: storedRow.castVersionId ?? null
+		})
+		const next = momentRoute(at)
+		pickedKey = there.key === v.key ? null : v.key
+		pickedMoment = next.moment
+		loreRoute.set(next)
+	}
+
+	async function openCastVersionOnLine(
+		branch: number | null,
+		date: StoryDate | null
+	) {
+		if (memberDirty) {
+			if (!(await loreRoute.confirmLeave())) return
+			discardForm()
+		}
+		pickedKey = null
+		loreRoute.set(
+			reduce(
+				reduce(loreRoute.route, {
+					type: "setBranch",
+					branch: branch ?? undefined
+				}),
+				{
+					type: "setMoment",
+					moment: date ? momentKey(date) : undefined
+				}
+			)
+		)
+	}
+
+	/** The moment a saved new version moves the bar to, once the form is clean. */
+	let moveAfterSave = $state<StoryDate | null>(null)
+	$effect(() => {
+		const at = moveAfterSave
+		if (!at || memberDirty) return
+		untrack(() => {
+			moveAfterSave = null
+			pickedKey = null
+			loreRoute.set(momentRoute(at))
+		})
+	})
+
 	/** What each save of the open member would leave with its own words (★CV-13). */
 	let laterCounts = $derived.by(() => {
 		if (!selectedMember) return undefined
 		const rows = castAmendmentsFor?.(selectedMember.id) ?? []
+		if (railed)
+			return {
+				base: draftVersion ? castLaterCount(rows, draftVersion) : 0
+			}
 		return {
 			base: laterVersionCount(rows, {
 				kind: "base",
 				shownVersionId:
 					castRows.find((r) => r.id === selectedMember!.id)
 						?.castVersionId ?? null
-			}),
-			amend: memberMoment
-				? laterVersionCount(rows, {
-						kind: "amend",
-						branchId: branchId ?? null,
-						moment: memberMoment
-					})
-				: 0
+			})
 		}
 	})
 
@@ -892,6 +1173,34 @@
 	}
 
 	/**
+	 * One `lorebooks:updateBinding`, awaited. `castVersionId` names the base
+	 * version a railed save writes; absent, the server writes the version in
+	 * force at the book's present.
+	 */
+	function sendBinding(
+		castId: number,
+		fields: Record<string, unknown>,
+		target: { castVersionId?: number; changeLaterVersions?: boolean }
+	): Promise<Sockets.Lorebooks.UpdateBinding.Response> {
+		return awaitReply({
+			socket,
+			event: "lorebooks:updateBinding",
+			params: {
+				lorebookBinding: { id: castId, ...fields },
+				...(target.changeLaterVersions
+					? { changeLaterVersions: true }
+					: {}),
+				...(target.castVersionId != null
+					? { castVersionId: target.castVersionId }
+					: {})
+			} as Sockets.Lorebooks.UpdateBinding.Params,
+			errorEvent: "lorebooks:updateBinding:error",
+			fallbackError: "The cast member could not be saved.",
+			match: (data) => data.lorebookBinding?.id === castId
+		})
+	}
+
+	/**
 	 * Write to the member outright — on every line, at every date — and wait
 	 * for the server before saying so.
 	 */
@@ -905,19 +1214,7 @@
 		const warning = baseSaveWarning(castId, fields)
 		let reply: Sockets.Lorebooks.UpdateBinding.Response
 		try {
-			reply = await awaitReply({
-				socket,
-				event: "lorebooks:updateBinding",
-				params: {
-					lorebookBinding: { id: castId, ...fields },
-					...(changeLaterVersions
-						? { changeLaterVersions: true }
-						: {})
-				} as Sockets.Lorebooks.UpdateBinding.Params,
-				errorEvent: "lorebooks:updateBinding:error",
-				fallbackError: "The cast member could not be saved.",
-				match: (data) => data.lorebookBinding?.id === castId
-			})
+			reply = await sendBinding(castId, fields, { changeLaterVersions })
 		} catch (err) {
 			reportUnanswered(err, failTitle)
 			return false
@@ -996,30 +1293,136 @@
 		if (!selectedMember) return false
 		const fields = memberDiff(patch, pristine)
 		if (!fields) return false
-		return writeBase(
+		const saved = await writeBase(
 			selectedMember.id,
 			fields,
 			"Cast member saved",
 			"The cast member was not saved",
 			options?.changeLaterVersions === true
 		)
+		if (saved) memberSaveTick++
+		return saved
 	}
 
-	async function amendMember(
+	/**
+	 * Save on a railed page writes the version the draft was typed on: the base
+	 * through `updateBinding` with its id, a dated one through
+	 * `amendments:update`; the keys no version carries (own name, own
+	 * nickname, voice) follow through `updateBinding` as the book's present has
+	 * them, never with `changeLaterVersions`. A rail save never retires and
+	 * copies a version (only a session's is copied on edit, and those are
+	 * read-only here), so the selection keeps its id.
+	 */
+	async function saveSelected(
 		patch: Record<string, unknown>,
 		pristine: Record<string, unknown>,
 		options?: { changeLaterVersions: boolean }
 	): Promise<boolean> {
-		if (!selectedMember || !memberMoment) return false
-		const fields = memberDiff(patch, pristine)
-		if (!fields) return false
-		return writeAmendment(
-			selectedMember.id,
-			fields,
-			"Amended",
-			memberMoment,
-			options?.changeLaterVersions === true
+		const v = draftVersion
+		if (!selectedMember || !storedRow || !v || saveOff) return false
+		const diff = memberDiff(patch, pristine)
+		if (!diff) return false
+		const { undated, version } = castVersionSave(v, diff)
+		const castId = selectedMember.id
+		const later = options?.changeLaterVersions === true
+		let laterVersions: { changed: number; kept: number } | null | undefined
+		try {
+			if (version) {
+				if (v.kind === "beginning")
+					laterVersions = (
+						await sendBinding(castId, version, {
+							castVersionId: storedRow.baseVersionId ?? undefined,
+							changeLaterVersions: later
+						})
+					).laterVersions
+				else
+					laterVersions = (
+						await updateCastAmendment(socket, {
+							lorebookId,
+							id: v.versionId!,
+							subject: "cast",
+							fields: version,
+							...(later ? { changeLaterVersions: true } : {})
+						})
+					).laterVersions
+			}
+			if (undated) await sendBinding(castId, undated, {})
+		} catch (err) {
+			reportUnanswered(err, "The cast member was not saved")
+			return false
+		}
+		const description = laterVersionsToast(laterVersions)
+		notify.success(
+			description
+				? { title: "Cast member saved", description }
+				: { title: "Cast member saved" }
 		)
+		memberSaveTick++
+		return true
+	}
+
+	/** The date the **Save as a new version…** dialog is asked for, with the draft it will save. */
+	let newVersionAsk = $state.raw<{
+		patch: Record<string, unknown>
+		pristine: Record<string, unknown>
+		options: { changeLaterVersions: boolean }
+		resolve: (saved: boolean) => void
+	} | null>(null)
+
+	function askNewVersion(
+		patch: Record<string, unknown>,
+		pristine: Record<string, unknown>,
+		options: { changeLaterVersions: boolean }
+	): Promise<boolean> {
+		return new Promise((resolve) => {
+			newVersionAsk = { patch, pristine, options, resolve }
+		})
+	}
+
+	/**
+	 * Save as a new version: what changed starts at `date` on the line being
+	 * read; the version shown stays as it is. A date the line already has a
+	 * version at takes the change into that version (the server merges).
+	 */
+	async function createCastVersionAt(
+		date: StoryDate,
+		patch: Record<string, unknown>,
+		pristine: Record<string, unknown>,
+		options: { changeLaterVersions: boolean }
+	): Promise<boolean> {
+		if (!selectedMember || readOnly) return false
+		const diff = memberDiff(patch, pristine)
+		if (!diff) return false
+		const { undated, fields } = castNewVersionSave(diff)
+		const castId = selectedMember.id
+		let reply: Sockets.Amendments.Create.Response | null = null
+		try {
+			if (Object.keys(fields).length)
+				reply = await fileCastVersion(
+					socket,
+					{ lorebookId, castId, branchId },
+					{
+						...date,
+						fields,
+						changeLaterVersions: options.changeLaterVersions
+					}
+				)
+			if (undated) await sendBinding(castId, undated, {})
+		} catch (err) {
+			reportUnanswered(err, "The version was not saved")
+			return false
+		}
+		if (reply) {
+			const where = lineName(reply, branchId)
+			const description = laterVersionsToast(reply.laterVersions)
+			notify.success({
+				title: `Saved as a new version at ${formatDate(date)}${where ? ` on ${where}` : ""}`,
+				...(description ? { description } : {})
+			})
+		} else notify.success({ title: "Cast member saved" })
+		memberSaveTick++
+		moveAfterSave = date
+		return true
 	}
 
 	/**
@@ -1731,6 +2134,7 @@
 						type="button"
 						onclick={saveLore}
 						disabled={loreSaving ||
+							loreEarmarkNotice !== null ||
 							!CHARACTER_LORE_DOOR.validate(
 								loreDraft,
 								loreEntries
@@ -1742,6 +2146,15 @@
 					{@render loreMenu()}
 				{/if}
 			</div>
+			{#if loreEarmarkNotice !== null && !creatingLore && !readOnly}
+				<EntryEarmarkNotice
+					notice={loreEarmarkNotice}
+					checking={loreEarmarkChecking}
+					onCheck={() => {
+						if (selectedLore) void checkLoreEarmark(selectedLore.id)
+					}}
+				/>
+			{/if}
 			<fieldset class="flex min-w-0 flex-col gap-4" disabled={readOnly}>
 				<Editor
 					bind:draft={loreDraft}
@@ -1835,20 +2248,21 @@
 							characters
 						</button>
 					</div>
-					<!-- A shared book: the member reads, every control of the
-					     form and of their placings is disabled. -->
-					<fieldset
-						class="flex min-w-0 flex-col gap-4"
-						disabled={readOnly}
-						data-lore-read-only={readOnly ? "" : undefined}
-					>
+					{#snippet castForm()}
 						<CastMemberForm
-							member={selectedMember}
-							row={selectedRow}
+							bind:this={memberForm}
+							member={selectedMember!}
+							row={railed && railRow ? railRow : selectedRow!}
 							{lorebookId}
 							bind:hasUnsavedChanges={memberDirty}
-							onSave={saveMember}
-							onAmend={memberMoment ? amendMember : undefined}
+							onSave={railed ? saveSelected : saveMember}
+							onSaveNew={railed && !readOnly
+								? askNewVersion
+								: undefined}
+							onSaveAt={railed && !readOnly
+								? createCastVersionAt
+								: undefined}
+							saveOff={railed ? saveOff : null}
 							{laterCounts}
 							momentLabel={memberMoment
 								? formatDate(memberMoment)
@@ -1866,28 +2280,206 @@
 								: undefined}
 							canUpdateCard={!readOnly}
 						/>
-
-						<PresencesPanel
-							{lorebookId}
-							castId={selectedMember.id}
-							memberName={selectedMember.name}
-							{presences}
-							{line}
-							{branchName}
-							{moment}
-						/>
-
-						{#if castAmendmentsFor}
-							<AmendmentList
+					{/snippet}
+					{#snippet memberBelow()}
+						<!-- 🚧 No timeline: a presence is a dated placing, and a
+						     dated change is not shown. -->
+						{#if book.timelineEnabled}
+							<PresencesPanel
 								{lorebookId}
-								amendments={castAmendmentsFor(
-									selectedMember.id
-								)}
+								castId={selectedMember!.id}
+								memberName={selectedMember!.name}
+								{presences}
+								{line}
+								{branchName}
 								{moment}
-								subject="cast"
 							/>
 						{/if}
-					</fieldset>
+
+						<!-- The shown cast version's own Edit history without a
+						     timeline; a railed page draws it inside the rail. -->
+						{#if shownCastVersionId != null && !railed}
+							<EditHistory
+								characterVersionId={shownCastVersionId}
+								updatedAt={String(memberSaveTick)}
+								restoreBlocked={memberDirty
+									? RESTORE_BLOCKED_UNSAVED
+									: undefined}
+							/>
+						{/if}
+					{/snippet}
+					{#snippet railEdits(ids: readonly (number | null)[])}
+						{#each ids as id (id)}
+							{#if id != null && id === castSelected?.versionId}
+								<EditHistory
+									characterVersionId={id}
+									variant="rows"
+									updatedAt={editsToken}
+									restoreBlocked={memberDirty
+										? RESTORE_BLOCKED_UNSAVED
+										: undefined}
+								/>
+							{/if}
+						{/each}
+					{/snippet}
+					{#if railed && castRail && castSelected}
+						<div class="flex min-w-0 flex-col gap-4">
+							<!-- The rail stays selectable for a reader: it is outside
+							     the disabled fieldset. -->
+							<VersionRail
+								versions={castRail.versions}
+								elsewhere={castRail.elsewhere}
+								selectedKey={castSelected.key}
+								lineBranchId={line.branchId}
+								{readOnly}
+								lineName={(id) => openBookTime.lineName(id)}
+								onSelect={selectCastVersion}
+								onAdd={(date) =>
+									void memberForm?.saveNewAt(date)}
+								onOpenOnLine={openCastVersionOnLine}
+								onRedate={(target, date) =>
+									updateCastAmendment(socket, {
+										lorebookId,
+										id:
+											"version" in target
+												? target.version.versionId!
+												: target.row.id,
+										subject: "cast",
+										year: date.year,
+										month: date.month,
+										day: date.day
+									})}
+								onDelete={(target) =>
+									deleteCastAmendment(socket, {
+										lorebookId,
+										id:
+											"version" in target
+												? target.version.versionId!
+												: target.row.id,
+										subject: "cast"
+									})}
+								onRedated={(v, date) => {
+									if (v.key !== castSelected?.key) return
+									const next = momentRoute(date)
+									pickedKey = v.key
+									pickedMoment = next.moment
+									loreRoute.set(next)
+								}}
+								onDeleted={(v) => {
+									if (v.key === pickedKey) pickedKey = null
+									if (v.key === draftVersionKey) discardForm()
+								}}
+								describe={castChangesWords}
+								deleteSentence={castDeleteSentence(
+									selectedMember.name
+								)}
+								takenAt={(d, moving) =>
+									castTakenAt(
+										castRail!.versions,
+										d,
+										line.branchId,
+										moving
+									)}
+								{addBlocked}
+								edits={railEdits}
+							>
+								<!-- 🚧 Name, nickname and voice have no versions: say where
+								     they save while another version is shown. -->
+								{#if !readOnly && storedRow && castSelected.versionId !== (storedRow.castVersionId ?? null)}
+									<p
+										class="text-surface-700-300 text-xs"
+										data-cast-undated-note
+									>
+										Name, nickname and voice are the same at every
+										date: saving them changes this member as the
+										lorebook reads them now.
+									</p>
+								{/if}
+								<!-- A shared book: the member reads, every control of
+								     the form is disabled. -->
+								<fieldset
+									class="flex min-w-0 flex-col gap-4"
+									disabled={readOnly}
+									data-lore-read-only={readOnly
+										? ""
+										: undefined}
+								>
+									{@render castForm()}
+								</fieldset>
+								<!-- The wide rail shows the selected version's edits
+								     itself; this fold is the narrow layout's, hidden
+								     wide but mounted so it asks once for both. -->
+								{#if castSelected.versionId != null}
+									<div class="@min-[36rem]/versions:hidden">
+										<EditHistory
+											characterVersionId={castSelected.versionId}
+											foldLabel={editsToVersionLabel}
+											updatedAt={editsToken}
+											restoreBlocked={memberDirty
+												? RESTORE_BLOCKED_UNSAVED
+												: undefined}
+										/>
+									</div>
+								{/if}
+							</VersionRail>
+							<!-- A reader saves nothing: no dialog, open or closed. -->
+							{#if !readOnly}
+								<VersionDateDialog
+									open={newVersionAsk !== null}
+									title="Save as a new version"
+									description="What you changed starts at this date; the version shown stays as it is."
+									initial={momentDate ?? castSelected.date}
+									bounds={{
+										after: null,
+										before: null,
+										beginning: null
+									}}
+									taken={(d) =>
+										castTakenAt(
+											castRail!.versions,
+											d,
+											line.branchId,
+											null
+										)}
+									takenMode="merge"
+									confirmLabel="Save"
+									onConfirm={(date) => {
+										const ask = newVersionAsk
+										newVersionAsk = null
+										if (ask)
+											void createCastVersionAt(
+												date,
+												ask.patch,
+												ask.pristine,
+												ask.options
+											).then(ask.resolve)
+									}}
+									onCancel={() => {
+										newVersionAsk?.resolve(false)
+										newVersionAsk = null
+									}}
+								/>
+							{/if}
+							<fieldset
+								class="flex min-w-0 flex-col gap-4"
+								disabled={readOnly}
+								data-lore-read-only={readOnly ? "" : undefined}
+							>
+								{@render memberBelow()}
+							</fieldset>
+						</div>
+					{:else}
+						<!-- A shared book: the member reads, every control of the
+						     form and of their placings is disabled. -->
+						<fieldset
+							class="flex min-w-0 flex-col gap-4"
+							disabled={readOnly}
+							data-lore-read-only={readOnly ? "" : undefined}
+						>
+							{@render castForm()}
+							{@render memberBelow()}
+						</fieldset>
+					{/if}
 				</div>
 
 				<div

@@ -1,0 +1,88 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/lorebooks/timelinePass.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-timelinePass-DAbPGQ/data/serene-pub.db
+
+stdout | src/lib/server/lorebooks/timelinePass.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/lorebooks/timelinePass.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/lorebooks/timelinePass.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/lorebooks/timelinePass.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/lorebooks/timelinePass.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/lorebooks/timelinePass.int.test.ts (4 tests | 4 failed) 10897ms
+     × a book with nothing dated is off; each stored fact turns its book on; a string year does not 9ms
+     × notes: born calendar and nothing dated is off, a session clock is on, notes over a book copy that book 2ms
+     × one-shot: a later switch stands, a later dated row switches nothing on, a second boot moves nothing 5ms
+     × the pass itself counts what it set and, run again on its result, changes nothing 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelinePass.int.test.ts > timeline-switch pass > a book with nothing dated is off; each stored fact turns its book on; a string year does not
+ FAIL  |int| src/lib/server/lorebooks/timelinePass.int.test.ts > timeline-switch pass > one-shot: a later switch stands, a later dated row switches nothing on, a second boot moves nothing
+ FAIL  |int| src/lib/server/lorebooks/timelinePass.int.test.ts > timeline-switch pass > the pass itself counts what it set and, run again on its result, changes nothing
+Error: Something went wrong on the server. The server log has the details.
+ ❯ PglitePreparedQuery.queryWithCache node_modules/src/pg-core/session.ts:73:10
+ ❯ PglitePreparedQuery.execute node_modules/src/pglite/session.ts:95:17
+ ❯ holdsSomethingDated src/lib/server/lorebooks/timeline.ts:111:17
+    109|  const s = schema.sessions
+    110|  const historyYear = historyDateColumns(le.fields).year
+    111|  const [book] = await db
+       |                 ^
+    112|   .select({
+    113|    storyCalendar: l.storyCalendar,
+ ❯ src/lib/server/lorebooks/timelinePass.ts:32:18
+ ❯ src/lib/server/db/transactionGuard.ts:144:14
+ ❯ node_modules/@electric-sql/pglite/src/base.ts:430:23
+
+Caused by: error: column reference "id" is ambiguous
+ ❯ ye.Ve node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:17540
+ ❯ ye.nt node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:14926
+ ❯ ye.parse node_modules/@electric-sql/pglite/dist/chunk-EADU5A67.js:1:13678
+ ❯ pe.execProtocol node_modules/@electric-sql/pglite/dist/index.js:3:239489
+ ❯ pe.l node_modules/@electric-sql/pglite/dist/chunk-A7RFOIQ7.js:8:1911
+ ❯ node_modules/@electric-sql/pglite/dist/chunk-A7RFOIQ7.js:8:2130
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { length: 105, severity: 'ERROR', code: '42702', detail: undefined, hint: undefined, position: '1052', internalPosition: undefined, internalQuery: undefined, where: undefined, schema: undefined, table: undefined, dataType: undefined, constraint: undefined, file: 'parse_relation.c', routine: 'colNameToVar' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/timelinePass.int.test.ts > timeline-switch pass > notes: born calendar and nothing dated is off, a session clock is on, notes over a book copy that book
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/lib/server/lorebooks/timelinePass.int.test.ts:253:35
+    251|
+    252|  test("notes: born calendar and nothing dated is off, a session clock …
+    253|   expect(await flag(notes.quiet)).toBe(false)
+       |                                   ^
+    254|   expect(await flag(notes.clocked)).toBe(true)
+    255|   expect(await flag(notes.overDated)).toBe(true)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed (4)
+   Start at  02:59:23
+   Duration  13.03s (transform 1.79s, setup 17ms, import 1.99s, tests 10.90s, environment 0ms)
+

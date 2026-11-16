@@ -548,24 +548,29 @@ describe("entries:create — the two cascades behind every entry write", () => {
 
 		expect(events(h)).not.toContain("lorebookBindingList")
 		expect(emitted(h, "lorebooks:bindingList")).toHaveLength(1)
-		expect(emitted(h, "entries:list")).toHaveLength(1)
+		// A single create no longer re-sends the owner the whole type list:
+		// the targeted `entries:create` carries the list-shaped row (lane
+		// perf-C, 2026-11-13); history alone keeps the relist.
+		expect(emitted(h, "entries:list")).toHaveLength(0)
 	})
 
-	test("builds only the list that was asked for", async () => {
-		// The two cascades are gated independently: a workspace showing the
-		// entries of one type has no reason to pay for the cast as well.
+	test("re-reads no list for a single create, and the targeted event carries the row", async () => {
+		// The two cascades are gated independently, and the entry list is no
+		// longer one of them for a create: the owner's workspace patches one
+		// row from the targeted event, so no list is built even when asked for.
 		const h = fresh()
 		const owner = h.connect("s1", OWNER)
 		await owner.declare("entries:create", "entries:list")
 
 		await owner.fire("entries:create", params)
 
-		expect(count("selectAll(lorebook_entries)")).toBe(1)
+		expect(count("selectAll(lorebook_entries)")).toBe(0)
 		expect(count("lorebooks.findFirst(bindings)")).toBe(0)
-		const list = emitted(h, "entries:list")[0]
-		expect(list.target).toBe("s1")
-		expect(list.data.lorebookId).toBe(3)
-		expect(list.data.typeId).toBe(WORLD_LORE_TYPE_ID)
+		expect(emitted(h, "entries:list")).toHaveLength(0)
+		const created = emitted(h, "entries:create")[0]
+		expect(created.target).toBe("s1")
+		expect(created.data.entry.lorebookId).toBe(3)
+		expect(created.data.entry.typeId).toBe(WORLD_LORE_TYPE_ID)
 	})
 })
 

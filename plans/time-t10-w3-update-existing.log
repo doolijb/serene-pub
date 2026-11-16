@@ -1,0 +1,51 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+Using PGlite database at: /tmp/serene-pub-forms-int-test-27Nhpu/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.forms.int.test.ts (46 tests | 1 failed) 89853ms
+     × a pressed action that parks at its own write answers parked at once, and its outcome arrives as pushes once the owner decides (R-b) 964ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.forms.int.test.ts > R-15 · Elara asks Tom, and the AI answers as Tom > a pressed action that parks at its own write answers parked at once, and its outcome arrives as pushes once the owner decides (R-b)
+AssertionError: expected { sessionId: 13, …(3) } to deeply equal { sessionId: 13, …(2) }
+
+- Expected
++ Received
+
+  {
+    "action": "core:spec/test-parked-press-answer#parked-press-answer",
++   "askedRunId": "parked-press-run",
+    "parked": true,
+    "sessionId": 13,
+  }
+
+ ❯ src/lib/server/sockets/sessions.forms.int.test.ts:1120:15
+    1118|   // Parked, and nothing else: no success, no error, no terminal frame…
+    1119|   // the run has not ended.
+    1120|   expect(ack).toEqual({ sessionId: session.id, action: `${answerId}#${…
+       |               ^
+    1121|   expect(pushes.filter((p) => p.event === "pipelines:progress" && p.da…
+    1122|   expect((await runsOf(session.id)).map((r) => r.specSlug)).toEqual([a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 46 passed (47)
+   Start at  05:24:24
+   Duration  91.57s (transform 6.16s, setup 26ms, import 3.08s, tests 98.43s, environment 0ms)
+

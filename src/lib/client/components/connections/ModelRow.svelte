@@ -45,7 +45,14 @@
 	 * green buttons offering to change a decision you already made is four
 	 * invitations to undo it.
 	 */
-	import * as Icons from "@lucide/svelte"
+	import {
+		ArrowLeftRight,
+		ExternalLink,
+		Settings2,
+		Star,
+		Trash2
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import RowMenu, {
 		type RowMenuEntries
 	} from "$lib/client/components/menus/RowMenu.svelte"
@@ -138,6 +145,14 @@
 
 	let menuOpen = $state(false)
 
+	/** The icons a row action can name (`actionsFor` in `ManagedModelsTab.svelte`). */
+	const ACTION_ICONS: Record<string, Component<any>> = {
+		Settings2,
+		ArrowLeftRight,
+		ExternalLink,
+		Trash2
+	}
+
 	/** The row's ⋯ (RowMenu, the app's one kebab): a destructive action sits
 	 *  under a separator, as it always has. */
 	const menuItems = $derived<RowMenuEntries>(
@@ -145,7 +160,7 @@
 			action.destructive && { separator: true as const },
 			{
 				label: action.label,
-				icon: ((Icons as any)[action.icon ?? ""] as any) ?? undefined,
+				icon: ACTION_ICONS[action.icon ?? ""] ?? undefined,
 				destructive: action.destructive,
 				onSelect: () => onAction?.(action.id)
 			}
@@ -209,11 +224,7 @@
 					<span
 						class="preset-tonal-primary text-primary-ink text-meta flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-bold"
 					>
-						<Icons.Star
-							size={9}
-							fill="currentColor"
-							aria-hidden="true"
-						/>
+						<Star size={9} fill="currentColor" aria-hidden="true" />
 						{capability}
 					</span>
 				{/each}

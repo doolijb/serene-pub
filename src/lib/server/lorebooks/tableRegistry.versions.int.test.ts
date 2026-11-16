@@ -360,6 +360,7 @@ describe("character_versions in the table registry", () => {
 				entries: new Map(),
 				historyEntries: new Map(),
 				scenes: new Map(),
+				amendments: new Map(),
 				spriteSets: new Map(),
 				tags: new Map()
 			})

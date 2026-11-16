@@ -23,6 +23,8 @@ export interface RoutineRunFact {
 	registrationKey: string
 	/** 0 for a routine a person's moment woke; 1 for one a routine's own write woke (R19). */
 	depth: number
+	/** 🚧 Set while the run shows as running: it has lasted past `QUEUE_STATUS_DELAY_MS` and has not parked (`routines/run.ts`). */
+	shownAs?: { name: string }
 }
 
 interface RoutineRuntimeFacts {

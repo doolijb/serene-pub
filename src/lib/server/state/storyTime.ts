@@ -47,6 +47,7 @@ import { and, eq, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm"
 import { getAttributeSlot, i18nText, parseStoryTime, slotField } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { attachedOrOwnBookOf, ownBookOf } from "$lib/server/lorebooks/ownBook"
+import { TIMELINE_OFF_SENTENCES, bookTimelineSql, timelineOf, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import { HISTORY_TYPE_ID, LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	datedOnReading,
@@ -205,8 +206,17 @@ export async function readBookStoryTime(
 	db: Db,
 	lorebookId: number
 ): Promise<BookStoryTime> {
+	return (await readBookStoryTimeWithSwitch(db, lorebookId)).time
+}
+
+/** `readBookStoryTime` plus the book's Timeline switch, read in the same select of the lorebook row. */
+async function readBookStoryTimeWithSwitch(
+	db: Db,
+	lorebookId: number
+): Promise<{ time: BookStoryTime; timelineEnabled: boolean }> {
 	const [book] = await db
 		.select({
+			timelineEnabled: bookTimelineSql(),
 			storyCalendar: schema.lorebooks.storyCalendar,
 			storyClockYear: schema.lorebooks.storyClockYear,
 			storyClockMonth: schema.lorebooks.storyClockMonth,
@@ -229,11 +239,14 @@ export async function readBookStoryTime(
 		.from(schema.lorebookBranches)
 		.where(eq(schema.lorebookBranches.lorebookId, lorebookId))
 	return {
-		lorebookId,
-		calendar: readStoryCalendar(book?.storyCalendar ?? null),
-		clocks: {
-			main: clockOf(book),
-			branches: branches.map((b) => ({ branchId: b.id, clock: clockOf(b) }))
+		timelineEnabled: timelineOf(book),
+		time: {
+			lorebookId,
+			calendar: readStoryCalendar(book?.storyCalendar ?? null),
+			clocks: {
+				main: clockOf(book),
+				branches: branches.map((b) => ({ branchId: b.id, clock: clockOf(b) }))
+			}
 		}
 	}
 }
@@ -247,6 +260,8 @@ const historyDate = historyEntryDate
  *
  * `branchId` null is main. The label is set only when the book declares a
  * calendar — free-form callers keep spelling the parts as they always have.
+ *
+ * Null when the book has no timeline (`lorebooks/timeline.ts`): its story has no present.
  */
 export async function storyNowOf(
 	db: Db,
@@ -264,7 +279,8 @@ export async function storyNowOf(
 	} = {}
 ): Promise<StoryNow | null> {
 	if (!lorebookId) return null
-	const time = await readBookStoryTime(db, lorebookId)
+	const { time, timelineEnabled } = await readBookStoryTimeWithSwitch(db, lorebookId)
+	if (!timelineEnabled) return null
 	const clock =
 		branchId == null
 			? time.clocks.main
@@ -353,7 +369,7 @@ async function sessionStoryClockRow(db: Db, sessionId: number) {
 /**
  * **A session's story now** (P3): its own clock when it has one, else its
  * line's present — on its line, with the fork cut. Null with no book, or a
- * book with no present. What the prompt's `currentDate` reads.
+ * book with no present (or no timeline). What the prompt's `currentDate` reads.
  */
 export async function sessionStoryNowOf(db: Db, sessionId: number): Promise<StoryNow | null> {
 	const row = await sessionStoryClockRow(db, sessionId)
@@ -373,6 +389,9 @@ const FIRST_STORY_DAY: StoryClock = { year: 1, month: 1, day: 1, hour: 0, minute
 
 /** A refusal to move a session's clock, as a sentence a person can read. */
 export class StoryClockRefusal extends Error {}
+
+/** A refusal to move a clock because the governing book's timeline is off. */
+export class TimelineOffRefusal extends StoryClockRefusal {}
 
 /**
  * **Advance a session's story clock** by `by` of `unit` (§5 `advance(n, unit)`):
@@ -479,6 +498,7 @@ async function moveSessionStoryClock(
 			throw new StoryClockRefusal(
 				"This session's lorebook changed while its clock was being advanced. Try again."
 			)
+		if (!(await timelineOfBook(tx, lorebookId))) throw new TimelineOffRefusal(TIMELINE_OFF_SENTENCES.clock)
 		const { start, present } = await storyMoveStartOf(tx, sessionId, row)
 		const calendar = await bookCalendarOf(tx, lorebookId)
 		const planned = step(compactClock(start))

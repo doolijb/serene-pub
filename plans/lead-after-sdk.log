@@ -1,0 +1,81 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+[vitest] removed 2 stale temp entries from /tmp
+10:22:07 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.identity.dom.test.svelte.ts:172:4 This reference only captures the initial value of `held`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:59:11 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:81:9 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:141:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:143:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:159:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:160:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:166:12 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:166:26 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:166:54 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:179:9 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:192:11 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:217:18 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:231:18 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:245:18 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:22:11 AM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:262:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+DOMException [NetworkError]: Failed to execute "fetch()" on "Window" with URL "http://localhost:3000/plugin-ui/acme.worlds/ui/view.html": connect ECONNREFUSED 127.0.0.1:3000
+    at Fetch.onError (file:///home/jody/github/serene-pub/node_modules/happy-dom/lib/fetch/Fetch.js:540:21)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at processTicksAndRejections (node:internal/process/task_queues:89:21)
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+DOMException [NetworkError]: Failed to execute "fetch()" on "Window" with URL "http://localhost:3000/plugin-ui/acme.worlds/ui/view.html": connect ECONNREFUSED 127.0.0.1:3000
+    at Fetch.onError (file:///home/jody/github/serene-pub/node_modules/happy-dom/lib/fetch/Fetch.js:540:21)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at processTicksAndRejections (node:internal/process/task_queues:89:21)
+
+ Test Files  30 passed (30)
+      Tests  296 passed (296)
+   Start at  10:22:07
+   Duration  12.86s (transform 11.43s, setup 203ms, import 22.11s, tests 12.30s, environment 1.52s)
+

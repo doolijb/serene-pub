@@ -16,6 +16,19 @@
 /** The Lorebooks view's section of own books. */
 export const SESSION_NOTES_LABEL = "Session notes"
 
+/**
+ * 🚧 How a session's notes are named wherever one must be named (owner,
+ * 2026-11-13: notes "shouldn't get a name … until the user decides to surface
+ * it"): *‹session›'s notes* by the session's **current** name, else
+ * {@link SESSION_NOTES_LABEL}. Never the stored `lorebooks.name`.
+ */
+export function sessionNotesName(
+	sessionName: string | null | undefined
+): string {
+	const name = sessionName?.trim()
+	return name ? `${name}'s notes` : SESSION_NOTES_LABEL
+}
+
 export const SHARE_LABELS = Object.freeze({
 	/** The one verb when the own book overlays nothing. */
 	asLorebook: "Share as a lorebook",

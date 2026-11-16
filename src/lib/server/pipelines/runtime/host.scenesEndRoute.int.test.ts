@@ -1,12 +1,12 @@
 /**
- * 🚧 (sense-b4) The rule, end to end, with the real predicate. A session that
- * reads an attached lorebook and whose scenes end by themselves
+ * The rule, end to end, with the real predicate. A session that reads an
+ * attached lorebook and whose scenes end by themselves
  * (`scenesEndByThemselves`: the scenes routine is registered and not Off, the
  * scene mode is Automatic, scenes may be placed) writes a pipeline's new
- * place, link or history day to its own book whatever the lorebook's write
- * setting (Full here), and the lorebook takes them only by Apply, which runs by
- * itself as a scene closes when the session's owner owns the lorebook. Every
- * other session writes straight to the lorebook, as before.
+ * place, link or history day straight to the lorebook under Full on its
+ * owner's own lorebook, as every other session does; it still does not settle
+ * by `sources`. A member's session on the owner's lorebook keeps them in its
+ * own book.
  *
  * Bootstrapped world, no mock of the predicate: sessions are made through the
  * create handler from real presets; the writes go through `createHost(…).commit`.
@@ -338,13 +338,14 @@ async function routineOff(sessionId: number) {
 }
 
 describe("the real predicate and the route it picks", () => {
-	it("Story · Living, Automatic: true, and a place goes to the own book", async () => {
+	it("Story · Living, Automatic: true, and a place goes to the lorebook, with nothing in the notes", async () => {
 		const w = await make()
 		expect(await predicate(w.sessionId)).toBe(true)
 		await w.line()
 		const out = await w.room("The Cellar")
-		expect(out).toMatchObject({ route: "own-book", lorebookId: w.own.id })
-		expect(await entriesIn(w.bookId, LOCATION_TYPE_ID)).toHaveLength(0)
+		expect(out).toMatchObject({ route: "book", lorebookId: w.bookId })
+		expect(await entriesIn(w.bookId, LOCATION_TYPE_ID)).toHaveLength(1)
+		expect(await entriesIn(w.own.id)).toHaveLength(0)
 	})
 
 	const straight: [string, () => Promise<World>][] = [
@@ -428,7 +429,7 @@ async function wrote(opts: Parameters<typeof make>[0] = {}) {
 }
 
 describe("under Full on your own lorebook, a session meeting the rule", () => {
-	it("holds the room, the link and the day in its own book; only it reads them", async () => {
+	it("writes the room, the link and the day into the lorebook; a second session reads them at once", async () => {
 		const w = await wrote()
 		expect(await predicate(w.sessionId)).toBe(true)
 		const { lorebooksReadBy } = await import(
@@ -438,9 +439,9 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 			attachedId: w.bookId,
 			ownBookId: w.own.id
 		})
-		const mine = await entriesIn(w.own.id)
-		expect(mine.map((r) => r.id).sort()).toEqual([w.roomId, w.dayId].sort())
-		const links = await linksIn(w.own.id)
+		expect(await entriesIn(w.own.id)).toHaveLength(0)
+		expect(await linksIn(w.own.id)).toHaveLength(0)
+		const links = await linksIn(w.bookId)
 		expect(links).toHaveLength(1)
 		expect(links[0]).toMatchObject({
 			id: w.linkId,
@@ -454,24 +455,27 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 			expect.arrayContaining(["The Hall", "The Cellar"])
 		)
 
-		// The lorebook's own entries and links do not include them.
-		expect((await entriesIn(w.bookId)).map((r) => r.id)).toEqual([
-			w.lore.id
-		])
-		expect(await linksIn(w.bookId)).toHaveLength(0)
+		// The lorebook holds them.
+		expect((await entriesIn(w.bookId)).map((r) => r.id).sort()).toEqual(
+			[w.lore.id, w.roomId, w.dayId].sort()
+		)
 
-		// A second session of the same owner on the same lorebook does not see them.
+		// A second session of the same owner on the same lorebook reads them at once.
 		const other = await make({ bookId: w.bookId })
-		expect(await readNames(other.sessionId)).not.toContain("The Cellar")
-		expect(await readNames(other.sessionId)).toEqual(["The Hall"])
-		expect(await readNames(other.sessionId)).toContain("The Hall")
+		expect(await readNames(other.sessionId)).toHaveLength(3)
+		expect(await readNames(other.sessionId)).toEqual(
+			expect.arrayContaining(["The Hall", "The Cellar"])
+		)
 		expect(await entriesIn(other.own.id)).toHaveLength(0)
 	})
 
 	it("loses them to a swipe and to Back, and Forward brings them back", async () => {
 		const w = await wrote()
 		const ids = async () =>
-			(await entriesIn(w.own.id)).map((r) => r.id).sort()
+			(await entriesIn(w.bookId))
+				.map((r) => r.id)
+				.filter((id) => id !== w.lore.id)
+				.sort()
 		const wrote3 = [w.roomId, w.dayId].sort()
 		expect(await ids()).toEqual(wrote3)
 		const {
@@ -488,10 +492,10 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 		)
 		expect(swiped.changed).toBe(true)
 		expect(await ids()).toEqual([])
-		expect(await linksIn(w.own.id)).toHaveLength(0)
+		expect(await linksIn(w.bookId)).toHaveLength(0)
 		expect(await restoreRetractedState(asDb(), swiped.taken)).toBe(true)
 		expect(await ids()).toEqual(wrote3)
-		expect(await linksIn(w.own.id)).toHaveLength(1)
+		expect(await linksIn(w.bookId)).toHaveLength(1)
 
 		// Back takes them with the turn; Forward (the record read back from JSON) returns them.
 		const undone = await db.transaction(async (tx) =>
@@ -501,7 +505,7 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 		)
 		expect(undone.changed).toBe(true)
 		expect(await ids()).toEqual([])
-		expect(await linksIn(w.own.id)).toHaveLength(0)
+		expect(await linksIn(w.bookId)).toHaveLength(0)
 		expect(await entriesIn(w.bookId)).toHaveLength(1)
 		const record = reviveRetractedState(
 			JSON.parse(JSON.stringify(undone.taken)),
@@ -509,7 +513,7 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 		)!
 		expect(await restoreRetractedState(asDb(), record)).toBe(true)
 		expect(await ids()).toEqual(wrote3)
-		const links = await linksIn(w.own.id)
+		const links = await linksIn(w.bookId)
 		expect(links).toHaveLength(1)
 		expect(links[0]).toMatchObject({
 			id: w.linkId,
@@ -518,7 +522,7 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 		})
 	})
 
-	it("reaches the lorebook when a scene covering the turn ends: room and link in it, the day the lorebook's, an apply record", async () => {
+	it("is in the lorebook before a scene ends, and closing the scene adds no apply record", async () => {
 		const w = await wrote()
 		const { openScene, closeScene } = await import(
 			"$lib/server/scenes/liveScenes"
@@ -529,11 +533,11 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 			channel: "main",
 			atMessageId: w.first.id
 		})
-		expect(
-			await entriesIn(w.bookId, LOCATION_TYPE_ID).then((r) =>
-				r.map((x) => x.title)
-			)
-		).toEqual(["The Hall"])
+		const titles = async () =>
+			(await entriesIn(w.bookId, LOCATION_TYPE_ID))
+				.map((r) => r.title)
+				.sort()
+		expect(await titles()).toEqual(["The Cellar", "The Hall"])
 		await closeScene(asDb(), {
 			sceneId: opened.scene.id,
 			userId: w.who,
@@ -541,20 +545,10 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 		})
 		await settle()
 
-		const places = await entriesIn(w.bookId, LOCATION_TYPE_ID)
-		expect(places.map((r) => r.title).sort()).toEqual([
-			"The Cellar",
-			"The Hall"
-		])
-		const cellar = places.find((r) => r.title === "The Cellar")!
-		const links = await linksIn(w.bookId)
-		expect(links).toHaveLength(1)
-		expect(links[0]).toMatchObject({ toEntryId: w.lore.id })
-		expect(links[0]!.fromEntryId).toBe(cellar.id)
-		const days = await entriesIn(w.bookId, HISTORY_TYPE_ID)
-		expect(days).toHaveLength(1)
-		expect(await entriesIn(w.own.id, HISTORY_TYPE_ID)).toHaveLength(0)
-		expect(await entriesIn(w.own.id, LOCATION_TYPE_ID)).toHaveLength(0)
+		expect(await titles()).toEqual(["The Cellar", "The Hall"])
+		expect(await linksIn(w.bookId)).toHaveLength(1)
+		expect(await entriesIn(w.bookId, HISTORY_TYPE_ID)).toHaveLength(1)
+		expect(await entriesIn(w.own.id)).toHaveLength(0)
 		const records = await db
 			.select()
 			.from(schema.loreImprints)
@@ -564,11 +558,7 @@ describe("under Full on your own lorebook, a session meeting the rule", () => {
 					eq(schema.loreImprints.origin, "apply")
 				)
 			)
-		expect(records.length).toBeGreaterThan(0)
-		expect(records[0]!.cause).toMatchObject({
-			automatic: "scene-close",
-			sceneId: opened.scene.id
-		})
+		expect(records).toHaveLength(0)
 	})
 })
 

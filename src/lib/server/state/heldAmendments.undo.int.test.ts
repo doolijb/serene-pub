@@ -56,7 +56,7 @@ async function world() {
 	const user = await createTestUser(db, `held-undo-${suffix}`)
 	await db
 		.insert(schema.userSettings)
-		.values({ userId: user.id, loreWriteMode: "full" })
+		.values({ userId: user.id, loreWriteMode: "review" })
 	const [book] = await db
 		.insert(schema.lorebooks)
 		.values({ userId: user.id, name: `World ${suffix}` })

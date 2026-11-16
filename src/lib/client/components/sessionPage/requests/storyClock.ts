@@ -146,15 +146,31 @@ export async function answerSetStoryClock(
 	params: unknown,
 	sessionId: number | null,
 	write: StoryClockWrite,
-	noteClock?: (own: StoryClock | null) => void
+	noteClock?: (own: StoryClock | null) => void,
+	/**
+	 * 🚧 Where the person is asked when the server refuses a move back past
+	 * the session's dated writes, and where a confirmed Branch leads.
+	 */
+	moveBack?: {
+		confirm(
+			notice: Sockets.Sessions.StoryClock.ClockMoveBackNotice
+		): Promise<boolean>
+		open(sessionId: number): void
+	}
 ): Promise<Result> {
 	const ask = askOf(params)
 	if (sessionId == null)
 		throw new Error("this page has no session to move the clock of")
-	const res = await write({ sessionId, ...ask })
+	let res = await write({ sessionId, ...ask })
+	if (res.error && res.clockMoveBack && moveBack) {
+		if (!(await moveBack.confirm(res.clockMoveBack)))
+			throw new Error("The story clock was not moved.")
+		res = await write({ sessionId, ...ask, confirmClockMoveBack: true })
+	}
 	if (res.error) throw new Error(res.error)
 	if (res.lorebookId === undefined)
 		throw new Error("the server did not say where the clock stands")
 	noteClock?.(ownClockOf(res))
+	if (typeof res.branchedTo === "number") moveBack?.open(res.branchedTo)
 	return storyClockV1(res)
 }

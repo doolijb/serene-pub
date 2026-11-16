@@ -58,6 +58,7 @@ import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import { dayOnly } from "$lib/shared/lorebooks/storyDate"
 
 import { clockOf } from "$lib/server/state/storyTime"
+import { timelineOf } from "$lib/server/lorebooks/timeline"
 import { BOOK_DEFAULT_RULES } from "$lib/shared/rulesets/rulesOffer"
 
 export async function buildLorebookExportData(
@@ -107,7 +108,11 @@ export async function buildLorebookExportData(
 				)
 			)
 			.orderBy(asc(schema.lorebookEntries.id))
-	).map((row) => toEntryRow(row))
+	).map((row) => ({
+		...toEntryRow(row),
+		// The entry's *not common knowledge* mark travels in its file bag.
+		...(row.notCommonKnowledge ? { notCommonKnowledge: true } : {})
+	}))
 	const historyEntries = entriesOfType(entries, HISTORY_TYPE_ID)
 
 	// All default to true — matches the original always-include-everything
@@ -543,6 +548,20 @@ export async function buildLorebookExportData(
 						? { rulesetVersion: lorebook.rulesetVersion }
 						: {})
 				}
+			}
+		} as typeof specBookWithGraph
+	}
+
+	// 🚧 The Timeline switch (additive optional key, no format bump): written
+	// only when off, so a timelined book exports the bytes it always did; a file
+	// without it imports as on.
+	if (!timelineOf(lorebook)) {
+		const ext = (specBookWithGraph as any).extensions ?? {}
+		specBookWithGraph = {
+			...specBookWithGraph,
+			extensions: {
+				...ext,
+				serenepub: { ...ext.serenepub, timelineEnabled: false }
 			}
 		} as typeof specBookWithGraph
 	}

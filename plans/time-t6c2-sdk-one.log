@@ -1,0 +1,18 @@
+▶ unknown entries · declaration
+  ✔ id, ports, not optional (0.740516ms)
+✔ unknown entries · declaration (1.185414ms)
+▶ unknown entries · the exclusions reach eligibility
+  ✔ placed and unwired: one warning (3.036655ms)
+  ✔ wired straight into eligibility: none (0.422568ms)
+  ✔ wired as one element of a nested list: none (0.396258ms)
+  ✔ eligibility inside a junction branch: none (0.495418ms)
+  ✔ wired into a node that is not eligibility: warning (0.241368ms)
+✔ unknown entries · the exclusions reach eligibility (4.759297ms)
+ℹ tests 6
+ℹ suites 2
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 209.735768

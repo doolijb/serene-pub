@@ -53,6 +53,9 @@ import {
 	sharedCharacterIdsFor
 } from "$lib/server/utils/shares"
 import { pushToUser } from "./utils/userPush"
+import { redactConnections } from "$lib/server/connections/visibility"
+import { isGatedEvent } from "$lib/shared/sockets/interest"
+import { socketWants } from "./interest"
 import type {
 	CharactersShareParams,
 	CharactersShareResponse
@@ -835,323 +838,344 @@ export const charactersCreate: Handler<
 	}
 }
 
+/**
+ * The card editor's save, as a person's: `cause` is `save`, or `restore` when
+ * Edit history puts an edit back through this same save. A refusal throws and
+ * answers on the caller's own `:error`.
+ */
+export async function saveCard(
+	socket: any,
+	params: Sockets.Characters.Update.Params,
+	emitToUser: Parameters<
+		Handler<Sockets.Characters.Update.Params, UpdateResponse>["handler"]
+	>[2],
+	cause: "save" | "restore" = "save"
+): Promise<UpdateResponse> {
+	const data = { ...params.character }
+	const id = data.id
+	const userId = socket.user!.id
+	const tags = (data as any).tags || []
+	// Absent means untouched; an empty array means remove all.
+	const tagsProvided = Array.isArray((params.character as any).tags)
+
+	// Remove fields that shouldn't be in the database update
+	if ("userId" in data) (data as any).userId = undefined
+	if ("id" in data) (data as any).id = undefined
+	// @ts-ignore - Remove avatar from character data to avoid conflicts
+	delete data.avatar
+	// @ts-ignore - Remove tags - will be handled separately
+	delete (data as any).tags
+	delete (data as any).createdAt
+	delete (data as any).updatedAt
+	delete (data as any).vectorizedAt
+	delete (data as any).embedding
+	delete (data as any).embeddingModel
+	delete (data as any).embeddingSourceHash
+	// GENERATED from the name and description; Postgres refuses a write.
+	delete (data as any).embedTextHash
+	// lorebookId: no ownership check exists for it here (unlike sessions,
+	// nothing currently reads a character's own lorebookId for prompt
+	// content), so blocking it outright is the correct minimal fix —
+	// a future feature needing this should validate ownership first.
+	// uuid: table-wide unique index, not per-user — a client-supplied
+	// collision would throw on someone else's row, and otherwise lets
+	// a user silently break their own import-dedup identity.
+	delete (data as any).lorebookId
+	delete (data as any).uuid
+	// A joined relation, not a column — the payload carries it so a
+	// client can build the avatar's real URL, and it has nowhere to go
+	// in an UPDATE.
+	delete (data as any).avatarMedia
+
+	// What the editor sends is the card as a whole, in the columns the
+	// wire still speaks. Its CONTENT (the profile's columns) is written
+	// to a card version, never to the frozen `characters` row; what is
+	// left in `data` are the library's facts (tags aside, which have
+	// their own path). `characterVersion` is the shown version's label:
+	// an in-place save renames the version it writes with it; a new
+	// version takes its label from `saveAsNewVersion`.
+	const sent: Record<string, unknown> = {}
+	for (const column of CARD_CONTENT_COLUMNS)
+		if (column in data) {
+			sent[column] = (data as any)[column]
+			delete (data as any)[column]
+		}
+	const sentLabel = (data as any).characterVersion
+	delete (data as any).characterVersion
+
+	// `folderId`: OWNERSHIP-CHECKED, not blocked. A folder is a shelf
+	// in the caller's own library, so naming someone else's id is not
+	// a move to honour — it files the character at the top level
+	// instead. `undefined` means "not part of this update" and is left
+	// alone; an explicit `null` is the user clearing it.
+	if (data.folderId != null) {
+		const folder = await db.query.characterFolders.findFirst({
+			where: (f, { and, eq }) =>
+				and(
+					eq(f.id, data.folderId as number),
+					eq(f.userId, userId)
+				),
+			columns: { id: true }
+		})
+		if (!folder) data.folderId = null
+	}
+
+	// `isDefaultPersona`: routed through the same transaction as
+	// `characters:setDefaultPersona`, because setting it while another
+	// row still holds it trips `characters_default_persona_unique`.
+	// Taken out of the plain UPDATE below and applied after it.
+	const makeDefault = data.isDefaultPersona === true
+	const clearDefault = data.isDefaultPersona === false
+	delete (data as any).isDefaultPersona
+
+	const stored = await db.query.characters.findFirst({
+		where: and(
+			eq(schema.characters.id, id),
+			eq(schema.characters.userId, userId)
+		),
+		columns: { id: true, extensions: true }
+	})
+	if (!stored) {
+		throw new Error("Character not found or not owned by user.")
+	}
+
+	// The version this save writes: the chosen one (it must be one of
+	// THIS card's) or the current. A Save as new version starts from
+	// the chosen version too, so a new version can be made from an
+	// older one.
+	const current = (await ensureCardVersion(db, id))!
+	let chosen = current
+	if (
+		params.cardVersionId != null &&
+		params.cardVersionId !== current.id
+	) {
+		const found = await db.query.characterVersions.findFirst({
+			where: (v, { and, eq }) =>
+				and(eq(v.id, params.cardVersionId!), eq(v.cardId, id))
+		})
+		if (!found)
+			throw new Error(
+				"That version isn't one of this character's."
+			)
+		chosen = found
+	}
+	const saveAsNew = !!params.saveAsNewVersion
+	// The chosen version, as the columns the editor speaks.
+	const prior = cardAsOfVersion(stored, chosen)
+
+	// 🚧 The likeness (DESIGN-image-generation §5): merged into the
+	// version's extensions, so another tool's keys and ours survive a
+	// save that only moves the likeness. Absent: untouched.
+	const extensionsSent =
+		"extensions" in sent && sent.extensions !== undefined
+	let extensions: Record<string, unknown> = extensionsSent
+		? (sent.extensions as Record<string, unknown>)
+		: prior.extensions
+	if (params.likeness !== undefined)
+		extensions = withLikeness(
+			extensions,
+			await likenessForWrite(params.likeness, userId)
+		)! as Record<string, unknown>
+
+	// 🚧 The timbre (speech build S5): a save that carries `extensions`
+	// has its `serenepub.timbre` validated against the stored one; a
+	// member's `voice` is kept as stored. A refusal throws (below).
+	if (extensionsSent)
+		extensions = await applyTimbreUpdate(
+			extensions,
+			prior.extensions,
+			{
+				db,
+				user: socket.user
+			}
+		)
+	// 🚧 (M2c) A save keeps the STORED plugin-ownership mark and drops
+	// a sent one: only the plugin's own import writes it. The mark is
+	// read from the version, else from the row it was first written on.
+	if (extensionsSent) {
+		const markedOnVersion = !!(prior.extensions as any)?.serenepub
+			?.provided
+		extensions = keepStoredProvidedMark(
+			extensions,
+			markedOnVersion ? prior.extensions : stored.extensions
+		)!
+	}
+	sent.extensions = extensions
+
+	// Strokes (DESIGN-card-strokes §A.3). Sent: they are the new
+	// source, and the prose columns their compile — or, sent empty, the
+	// card returns to the legacy shape keeping whatever prose this save
+	// carries (else the last compile). Absent: untouched — but a card
+	// that HAS strokes keeps its prose derived, so prose sent without
+	// them is recompiled from the stored strokes rather than written
+	// over the cache. "Stored" is the chosen version's.
+	//
+	// Strokes paused (`STROKES_ENABLED` off): none of that. The prose
+	// sent is what is stored, any `strokes` sent are dropped, and a
+	// save that writes prose clears the stored strokes (`[]`).
+	const strokesSent = "strokes" in sent && sent.strokes !== undefined
+	const sendsProse = "description" in sent || "personality" in sent
+	if (!STROKES_ENABLED) {
+		delete sent.strokes
+		Object.assign(sent, applyStrokesToCard(sent as any))
+	} else {
+		Object.assign(
+			sent,
+			applyStrokesToCard(
+				(strokesSent
+					? sent
+					: sendsProse && prior.strokes?.length
+						? { ...sent, strokes: prior.strokes }
+						: sent) as any
+			)
+		)
+		if (!strokesSent) delete sent.strokes
+	}
+
+	// The chosen version's profile with the save laid over it. Fields
+	// the save did not send keep the version's; the face and the
+	// sprite set are not the editor's to move here.
+	const merged: Record<string, unknown> = { ...prior }
+	for (const [key, value] of Object.entries(sent))
+		if (value !== undefined) merged[key] = value
+	const profile: CharacterProfileV1 = {
+		...profileOfCardColumns(merged),
+		faceMediaId: chosen.faceMediaId,
+		spriteSet: chosen.spriteSet
+	}
+
+	// The vector is dropped only when this save CHANGES what it was
+	// computed over — the name and the description
+	// (`characterEmbedText`) — of the CURRENT version, the one the
+	// card's row copies. Compared, not merely named: the editor
+	// re-sends the whole card, and a folder move, an avatar or a
+	// persona flag changes nothing a vector reads. The queue re-embeds
+	// on the text hash either way.
+	const movesCurrent = saveAsNew || chosen.id === current.id
+	const movesEmbeddedText =
+		movesCurrent &&
+		((profile.name ?? "") !== (current.name ?? "") ||
+			(profile.description ?? "") !== (current.description ?? ""))
+
+	const libraryFacts = {
+		...data,
+		// Setting the default also makes it a persona — a default
+		// you cannot play is not a state worth having.
+		...(makeDefault ? { isPersona: true } : {}),
+		...(movesEmbeddedText
+			? {
+					embedding: null,
+					embeddingModel: null,
+					embeddingSourceHash: null,
+					vectorizedAt: null
+				}
+			: {})
+	}
+	const hasFacts = Object.values(libraryFacts).some(
+		(v) => v !== undefined
+	)
+
+	// ONE transaction (tx only): the version, then the library's facts.
+	const label = params.saveAsNewVersion?.label
+	const written = await db.transaction(async (txn) => {
+		const tx = txn as unknown as Db
+		const version = saveAsNew
+			? await newCardVersion(
+					tx,
+					id,
+					profile,
+					label !== undefined ? { label } : undefined
+				)
+			: await updateCardVersion(
+					tx,
+					chosen.id,
+					profile,
+					{
+						...(typeof sentLabel === "string" && sentLabel.trim()
+							? { label: sentLabel.trim() }
+							: {}),
+						redline: { by: { userId }, cause }
+					}
+				)
+		if (hasFacts)
+			await tx
+				.update(schema.characters)
+				.set(libraryFacts)
+				.where(
+					and(
+						eq(schema.characters.id, id),
+						eq(schema.characters.userId, userId)
+					)
+				)
+		return version
+	})
+
+	if (makeDefault) await setDefaultPersona(id, userId)
+	else if (clearDefault)
+		await db
+			.update(schema.characters)
+			.set({ isDefaultPersona: false })
+			.where(
+				and(
+					eq(schema.characters.id, id),
+					eq(schema.characters.userId, userId)
+				)
+			)
+
+	// Process tags after character update. Absent means untouched; an
+	// empty array means remove all.
+	if (tagsProvided) await processCharacterTags(id, tags, userId)
+
+	if (params.avatarFile) {
+		// The face is the written version's; the row's copy moves only
+		// when that is the current version (`updateCardVersion`).
+		await handleCharacterAvatarUpload({
+			character: { id, userId },
+			avatarFile: params.avatarFile,
+			cardVersionId: written.id,
+			// A new version starts with no edit history.
+			...(saveAsNew ? {} : { redline: { by: { userId }, cause } })
+		})
+	}
+
+	// Keep the bound lorebookBindings rows' name/aliases in sync with
+	// this character's current name/nickname/aliases (decision 2, merge
+	// plan) — in every book of the card's owner, never in another
+	// person's (plan A25). Cheap no-op if nothing is bound.
+	await syncLorebookBindingsForCharacter(id)
+
+	const character = await characterForBroadcast(id, stored as any)
+	autoEnqueueCharacter(id, character.name).catch(console.error)
+	const currentNow = (await ensureCardVersion(db, id))!
+	const res: UpdateResponse = {
+		character,
+		cardVersionId: written.id,
+		currentCardVersionId: currentNow.id,
+		cardVersions: await cardVersionsOf(id),
+		...(saveAsNew
+			? {
+					staying: await membersStayingBehind(
+						id,
+						userId,
+						written.number!
+					)
+				}
+			: {})
+	}
+	// LAZY (see `buildCharactersList`), in the order the eager cascade
+	// sent it: the refreshed list, then this handler's own reply.
+	await emitToUser("characters:list", () =>
+		buildCharactersList(userId)
+	)
+	emitToUser("characters:update", res)
+	return res
+}
+
 export const charactersUpdate: Handler<Sockets.Characters.Update.Params, UpdateResponse> = {
 	event: "characters:update",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const data = { ...params.character }
-			const id = data.id
-			const userId = socket.user!.id
-			const tags = (data as any).tags || []
-			// Absent means untouched; an empty array means remove all.
-			const tagsProvided = Array.isArray((params.character as any).tags)
-
-			// Remove fields that shouldn't be in the database update
-			if ("userId" in data) (data as any).userId = undefined
-			if ("id" in data) (data as any).id = undefined
-			// @ts-ignore - Remove avatar from character data to avoid conflicts
-			delete data.avatar
-			// @ts-ignore - Remove tags - will be handled separately
-			delete (data as any).tags
-			delete (data as any).createdAt
-			delete (data as any).updatedAt
-			delete (data as any).vectorizedAt
-			delete (data as any).embedding
-			delete (data as any).embeddingModel
-			delete (data as any).embeddingSourceHash
-			// GENERATED from the name and description; Postgres refuses a write.
-			delete (data as any).embedTextHash
-			// lorebookId: no ownership check exists for it here (unlike sessions,
-			// nothing currently reads a character's own lorebookId for prompt
-			// content), so blocking it outright is the correct minimal fix —
-			// a future feature needing this should validate ownership first.
-			// uuid: table-wide unique index, not per-user — a client-supplied
-			// collision would throw on someone else's row, and otherwise lets
-			// a user silently break their own import-dedup identity.
-			delete (data as any).lorebookId
-			delete (data as any).uuid
-			// A joined relation, not a column — the payload carries it so a
-			// client can build the avatar's real URL, and it has nowhere to go
-			// in an UPDATE.
-			delete (data as any).avatarMedia
-
-			// What the editor sends is the card as a whole, in the columns the
-			// wire still speaks. Its CONTENT (the profile's columns) is written
-			// to a card version, never to the frozen `characters` row; what is
-			// left in `data` are the library's facts (tags aside, which have
-			// their own path). `characterVersion` is the shown version's label:
-			// an in-place save renames the version it writes with it; a new
-			// version takes its label from `saveAsNewVersion`.
-			const sent: Record<string, unknown> = {}
-			for (const column of CARD_CONTENT_COLUMNS)
-				if (column in data) {
-					sent[column] = (data as any)[column]
-					delete (data as any)[column]
-				}
-			const sentLabel = (data as any).characterVersion
-			delete (data as any).characterVersion
-
-			// `folderId`: OWNERSHIP-CHECKED, not blocked. A folder is a shelf
-			// in the caller's own library, so naming someone else's id is not
-			// a move to honour — it files the character at the top level
-			// instead. `undefined` means "not part of this update" and is left
-			// alone; an explicit `null` is the user clearing it.
-			if (data.folderId != null) {
-				const folder = await db.query.characterFolders.findFirst({
-					where: (f, { and, eq }) =>
-						and(
-							eq(f.id, data.folderId as number),
-							eq(f.userId, userId)
-						),
-					columns: { id: true }
-				})
-				if (!folder) data.folderId = null
-			}
-
-			// `isDefaultPersona`: routed through the same transaction as
-			// `characters:setDefaultPersona`, because setting it while another
-			// row still holds it trips `characters_default_persona_unique`.
-			// Taken out of the plain UPDATE below and applied after it.
-			const makeDefault = data.isDefaultPersona === true
-			const clearDefault = data.isDefaultPersona === false
-			delete (data as any).isDefaultPersona
-
-			const stored = await db.query.characters.findFirst({
-				where: and(
-					eq(schema.characters.id, id),
-					eq(schema.characters.userId, userId)
-				),
-				columns: { id: true, extensions: true }
-			})
-			if (!stored) {
-				throw new Error("Character not found or not owned by user.")
-			}
-
-			// The version this save writes: the chosen one (it must be one of
-			// THIS card's) or the current. A Save as new version starts from
-			// the chosen version too, so a new version can be made from an
-			// older one.
-			const current = (await ensureCardVersion(db, id))!
-			let chosen = current
-			if (
-				params.cardVersionId != null &&
-				params.cardVersionId !== current.id
-			) {
-				const found = await db.query.characterVersions.findFirst({
-					where: (v, { and, eq }) =>
-						and(eq(v.id, params.cardVersionId!), eq(v.cardId, id))
-				})
-				if (!found)
-					throw new Error(
-						"That version isn't one of this character's."
-					)
-				chosen = found
-			}
-			const saveAsNew = !!params.saveAsNewVersion
-			// The chosen version, as the columns the editor speaks.
-			const prior = cardAsOfVersion(stored, chosen)
-
-			// 🚧 The likeness (DESIGN-image-generation §5): merged into the
-			// version's extensions, so another tool's keys and ours survive a
-			// save that only moves the likeness. Absent: untouched.
-			const extensionsSent =
-				"extensions" in sent && sent.extensions !== undefined
-			let extensions: Record<string, unknown> = extensionsSent
-				? (sent.extensions as Record<string, unknown>)
-				: prior.extensions
-			if (params.likeness !== undefined)
-				extensions = withLikeness(
-					extensions,
-					await likenessForWrite(params.likeness, userId)
-				)! as Record<string, unknown>
-
-			// 🚧 The timbre (speech build S5): a save that carries `extensions`
-			// has its `serenepub.timbre` validated against the stored one; a
-			// member's `voice` is kept as stored. A refusal throws (below).
-			if (extensionsSent)
-				extensions = await applyTimbreUpdate(
-					extensions,
-					prior.extensions,
-					{
-						db,
-						user: socket.user
-					}
-				)
-			// 🚧 (M2c) A save keeps the STORED plugin-ownership mark and drops
-			// a sent one: only the plugin's own import writes it. The mark is
-			// read from the version, else from the row it was first written on.
-			if (extensionsSent) {
-				const markedOnVersion = !!(prior.extensions as any)?.serenepub
-					?.provided
-				extensions = keepStoredProvidedMark(
-					extensions,
-					markedOnVersion ? prior.extensions : stored.extensions
-				)!
-			}
-			sent.extensions = extensions
-
-			// Strokes (DESIGN-card-strokes §A.3). Sent: they are the new
-			// source, and the prose columns their compile — or, sent empty, the
-			// card returns to the legacy shape keeping whatever prose this save
-			// carries (else the last compile). Absent: untouched — but a card
-			// that HAS strokes keeps its prose derived, so prose sent without
-			// them is recompiled from the stored strokes rather than written
-			// over the cache. "Stored" is the chosen version's.
-			//
-			// Strokes paused (`STROKES_ENABLED` off): none of that. The prose
-			// sent is what is stored, any `strokes` sent are dropped, and a
-			// save that writes prose clears the stored strokes (`[]`).
-			const strokesSent = "strokes" in sent && sent.strokes !== undefined
-			const sendsProse = "description" in sent || "personality" in sent
-			if (!STROKES_ENABLED) {
-				delete sent.strokes
-				Object.assign(sent, applyStrokesToCard(sent as any))
-			} else {
-				Object.assign(
-					sent,
-					applyStrokesToCard(
-						(strokesSent
-							? sent
-							: sendsProse && prior.strokes?.length
-								? { ...sent, strokes: prior.strokes }
-								: sent) as any
-					)
-				)
-				if (!strokesSent) delete sent.strokes
-			}
-
-			// The chosen version's profile with the save laid over it. Fields
-			// the save did not send keep the version's; the face and the
-			// sprite set are not the editor's to move here.
-			const merged: Record<string, unknown> = { ...prior }
-			for (const [key, value] of Object.entries(sent))
-				if (value !== undefined) merged[key] = value
-			const profile: CharacterProfileV1 = {
-				...profileOfCardColumns(merged),
-				faceMediaId: chosen.faceMediaId,
-				spriteSet: chosen.spriteSet
-			}
-
-			// The vector is dropped only when this save CHANGES what it was
-			// computed over — the name and the description
-			// (`characterEmbedText`) — of the CURRENT version, the one the
-			// card's row copies. Compared, not merely named: the editor
-			// re-sends the whole card, and a folder move, an avatar or a
-			// persona flag changes nothing a vector reads. The queue re-embeds
-			// on the text hash either way.
-			const movesCurrent = saveAsNew || chosen.id === current.id
-			const movesEmbeddedText =
-				movesCurrent &&
-				((profile.name ?? "") !== (current.name ?? "") ||
-					(profile.description ?? "") !== (current.description ?? ""))
-
-			const libraryFacts = {
-				...data,
-				// Setting the default also makes it a persona — a default
-				// you cannot play is not a state worth having.
-				...(makeDefault ? { isPersona: true } : {}),
-				...(movesEmbeddedText
-					? {
-							embedding: null,
-							embeddingModel: null,
-							embeddingSourceHash: null,
-							vectorizedAt: null
-						}
-					: {})
-			}
-			const hasFacts = Object.values(libraryFacts).some(
-				(v) => v !== undefined
-			)
-
-			// ONE transaction (tx only): the version, then the library's facts.
-			const label = params.saveAsNewVersion?.label
-			const written = await db.transaction(async (txn) => {
-				const tx = txn as unknown as Db
-				const version = saveAsNew
-					? await newCardVersion(
-							tx,
-							id,
-							profile,
-							label !== undefined ? { label } : undefined
-						)
-					: await updateCardVersion(
-							tx,
-							chosen.id,
-							profile,
-							typeof sentLabel === "string" && sentLabel.trim()
-								? { label: sentLabel.trim() }
-								: undefined
-						)
-				if (hasFacts)
-					await tx
-						.update(schema.characters)
-						.set(libraryFacts)
-						.where(
-							and(
-								eq(schema.characters.id, id),
-								eq(schema.characters.userId, userId)
-							)
-						)
-				return version
-			})
-
-			if (makeDefault) await setDefaultPersona(id, userId)
-			else if (clearDefault)
-				await db
-					.update(schema.characters)
-					.set({ isDefaultPersona: false })
-					.where(
-						and(
-							eq(schema.characters.id, id),
-							eq(schema.characters.userId, userId)
-						)
-					)
-
-			// Process tags after character update. Absent means untouched; an
-			// empty array means remove all.
-			if (tagsProvided) await processCharacterTags(id, tags, userId)
-
-			if (params.avatarFile) {
-				// The face is the written version's; the row's copy moves only
-				// when that is the current version (`updateCardVersion`).
-				await handleCharacterAvatarUpload({
-					character: { id, userId },
-					avatarFile: params.avatarFile,
-					cardVersionId: written.id
-				})
-			}
-
-			// Keep the bound lorebookBindings rows' name/aliases in sync with
-			// this character's current name/nickname/aliases (decision 2, merge
-			// plan) — in every book of the card's owner, never in another
-			// person's (plan A25). Cheap no-op if nothing is bound.
-			await syncLorebookBindingsForCharacter(id)
-
-			const character = await characterForBroadcast(id, stored as any)
-			autoEnqueueCharacter(id, character.name).catch(console.error)
-			const currentNow = (await ensureCardVersion(db, id))!
-			const res: UpdateResponse = {
-				character,
-				cardVersionId: written.id,
-				currentCardVersionId: currentNow.id,
-				cardVersions: await cardVersionsOf(id),
-				...(saveAsNew
-					? {
-							staying: await membersStayingBehind(
-								id,
-								userId,
-								written.number!
-							)
-						}
-					: {})
-			}
-			// LAZY (see `buildCharactersList`), in the order the eager cascade
-			// sent it: the refreshed list, then this handler's own reply.
-			await emitToUser("characters:list", () =>
-				buildCharactersList(userId)
-			)
-			emitToUser("characters:update", res)
-			return res
+			return await saveCard(socket, params, emitToUser)
 		} catch (e: any) {
 			console.error("Error updating character:", e)
 			emitToUser("characters:update:error", {
@@ -2181,6 +2205,17 @@ export const charactersImportFromLibrary = refusable<
 	)
 )
 
+/**
+ * Answer the socket that asked for an export, and no other tab: the file is
+ * for the tab that clicked. Redacted for the recipient and still honouring the
+ * interest gate; a socket that has gone has nobody left to answer.
+ */
+function replyToAsker(socket: any, event: string, data: unknown): void {
+	if (socket.disconnected) return
+	if (isGatedEvent(event) && !socketWants(socket, event)) return
+	socket.emit?.(event, redactConnections(data, socket.user))
+}
+
 export const charactersExportCard: Handler<
 	Sockets.Characters.ExportCard.Params,
 	Sockets.Characters.ExportCard.Response
@@ -2279,7 +2314,7 @@ export const charactersExportCard: Handler<
 				})
 				const filename = `${card.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.charx`
 				const res: Sockets.Characters.ExportCard.Response = { blob, filename }
-				emitToUser("characters:exportCard", res)
+				replyToAsker(socket, "characters:exportCard", res)
 				return res
 			}
 
@@ -2293,7 +2328,7 @@ export const charactersExportCard: Handler<
 					blob,
 					filename
 				}
-				emitToUser("characters:exportCard", res)
+				replyToAsker(socket, "characters:exportCard", res)
 				return res
 			} else {
 				// Export as PNG with embedded data.
@@ -2341,7 +2376,7 @@ export const charactersExportCard: Handler<
 					blob,
 					filename
 				}
-				emitToUser("characters:exportCard", res)
+				replyToAsker(socket, "characters:exportCard", res)
 				return res
 			}
 		} catch (error: any) {
@@ -2827,7 +2862,12 @@ export const charactersSetAvatar: Handler<
 		// The face is the current version's; the row's copy follows it.
 		const current = await ensureCardVersion(db, params.characterId)
 		if (!current) throw new Error("Character not found or access denied")
-		await updateCardVersion(db, current.id, { faceMediaId: params.mediaId })
+		await updateCardVersion(
+			db,
+			current.id,
+			{ faceMediaId: params.mediaId },
+			{ redline: { by: { userId }, cause: "save" } }
+		)
 
 		const broadcast = await characterForBroadcast(
 			params.characterId,
@@ -2856,6 +2896,51 @@ export const charactersSetAvatar: Handler<
 		)
 		return res
 	}
+}
+
+/**
+ * Edit history puts a card version's face back (cause `restore`): the same
+ * ownership check `characters:setAvatar` makes (the file is this card's own),
+ * or no face when `mediaId` is null. A file no longer there is refused.
+ */
+export async function restoreCardFace(
+	socket: any,
+	params: { cardId: number; versionId: number; mediaId: number | null },
+	emitToUser: (event: string, data: any) => void
+): Promise<void> {
+	const userId = socket.user!.id
+	const character = await db.query.characters.findFirst({
+		where: (c, { and, eq }) =>
+			and(eq(c.id, params.cardId), eq(c.userId, userId))
+	})
+	if (!character) throw new Error("Character not found or access denied")
+	if (params.mediaId != null) {
+		const owned = await db.query.files.findFirst({
+			where: (f, { and, eq }) =>
+				and(eq(f.id, params.mediaId!), eq(f.characterId, params.cardId)),
+			columns: { id: true }
+		})
+		if (!owned) throw new Error("That picture is no longer kept.")
+	}
+	await db.transaction(async (tx) =>
+		updateCardVersion(
+			tx as unknown as Db,
+			params.versionId,
+			{ faceMediaId: params.mediaId },
+			{ redline: { by: { userId }, cause: "restore" } }
+		)
+	)
+	const broadcast = await characterForBroadcast(params.cardId, character)
+	await emitToUser(
+		"characters:update",
+		() =>
+			({
+				character: broadcast
+			}) satisfies Partial<Sockets.Characters.Update.Response>
+	)
+	await emitToUser("characters:get", () =>
+		buildCharacterGet(userId, params.cardId)
+	)
 }
 
 /**

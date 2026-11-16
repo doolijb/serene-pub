@@ -7,6 +7,7 @@
 	import type { PoolSource } from "./types"
 	import SceneCastChips from "./SceneCastChips.svelte"
 	import { getLorePoolCtx } from "./poolContext"
+	import { bookTimeline } from "../bookData.svelte"
 
 	/**
 	 * The scenes compiled into one history entry.
@@ -23,6 +24,7 @@
 
 	const socket = useTypedSocket()
 	const pool = getLorePoolCtx()
+	const timeline = bookTimeline()
 	const sceneSummarizesCtx: SceneSummarizesCtx =
 		getContext("sceneSummarizesCtx")
 
@@ -188,7 +190,8 @@
 			</div>
 		{/each}
 	{/if}
-	{#if scenes.length > 0 || unfiled > 0}
+	<!-- 🚧 No timeline: a compile is refused. -->
+	{#if timeline.value && (scenes.length > 0 || unfiled > 0)}
 		<button
 			class="btn btn-sm preset-filled-primary-500 w-full"
 			type="button"

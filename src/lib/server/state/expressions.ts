@@ -35,7 +35,7 @@
  * stopped mid-sentence.
  */
 
-import { Liquid, Tag } from "liquidjs"
+import { Context, Liquid, Tag } from "liquidjs"
 import type { TagToken, TopLevelToken } from "liquidjs"
 import type { SlotValue } from "@serene-pub/sdk"
 import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
@@ -278,18 +278,39 @@ function heldCount(scope: ExpressionScope, subject: unknown): number {
 // ── The instance ────────────────────────────────────────────────────────────
 
 /**
- * One configured Liquid, for one evaluation.
- *
- * Per evaluation and not shared, for the reason `createContextLiquid` is: the
- * filters close over the scope and the seed. A shared instance would answer
- * `owner.hp` for whichever owner evaluated first and roll whichever run's dice
- * got there first — a bug that only appears under two concurrent turns, which
- * is the worst kind to go looking for.
+ * What one evaluation carries on its render context for the filters to read.
+ * Never reachable from template text: a register is not a variable.
  */
-function expressionLiquid(
-	scope: ExpressionScope,
+interface EvaluationState {
+	scope: ExpressionScope
 	seedLabel: string
-): Liquid {
+	/** How many dice this evaluation has thrown; makes two rolls two numbers. */
+	rolls: number
+}
+
+/** The register the evaluation state rides under. Private to this module. */
+const EVALUATION_REGISTER = "serene:expression-evaluation"
+
+type FilterThis = { context: Context }
+
+const evaluationOf = (self: FilterThis): EvaluationState =>
+	self.context.getRegister(EVALUATION_REGISTER) as EvaluationState
+
+/**
+ * One configured Liquid, shared by every evaluation.
+ *
+ * Shared because building one per evaluation was most of what an evaluation
+ * cost. It is safe to share because the filters close over nothing: the scope,
+ * the seed label and the roll counter ride on the render `Context` that
+ * `evaluate` builds for each evaluation, and a filter reads them off
+ * `this.context`. Two evaluations that interleave each carry their own context,
+ * so `owner.hp` is still the owner being evaluated and a roll is still the
+ * dice of the run that threw it. Built lazily, once.
+ */
+let sharedLiquid: Liquid | undefined
+
+function expressionLiquid(): Liquid {
+	if (sharedLiquid) return sharedLiquid
 	const liquid = new Liquid({
 		// The same five parity settings `contextLiquid.ts` explains.
 		jsTruthy: true,
@@ -312,18 +333,21 @@ function expressionLiquid(
 	for (const name of ["include", "render", "layout"])
 		liquid.registerTag(name, refusedTag(name) as any)
 
-	liquid.registerFilter("slot", (id: unknown) => slotFilter(scope, id))
-	liquid.registerFilter(
-		"has",
-		(subject: unknown) => heldCount(scope, subject) > 0
-	)
-	liquid.registerFilter("count", (subject: unknown) =>
+	liquid.registerFilter("slot", function (this: FilterThis, id: unknown) {
+		return slotFilter(evaluationOf(this).scope, id)
+	})
+	liquid.registerFilter("has", function (this: FilterThis, subject: unknown) {
+		return heldCount(evaluationOf(this).scope, subject) > 0
+	})
+	liquid.registerFilter("count", function (this: FilterThis, subject: unknown) {
 		// A list counts itself; anything else is an inventory question. One
 		// filter rather than two because "how many" is one question to a
 		// person, and the two arms can never be confused for each other —
 		// an array is never an entry name.
-		Array.isArray(subject) ? subject.length : heldCount(scope, subject)
-	)
+		return Array.isArray(subject)
+			? subject.length
+			: heldCount(evaluationOf(this).scope, subject)
+	})
 	liquid.registerFilter(
 		"clamp",
 		(value: unknown, min: unknown, max: unknown) => {
@@ -342,18 +366,18 @@ function expressionLiquid(
 	// a pure function of the seed label, so the same run rolls the same dice
 	// however many times it is replayed. A counter makes two rolls in one
 	// expression two different numbers, which is what `2d6` plainly means.
-	let rolls = 0
-	liquid.registerFilter("roll", (spec: unknown) => {
+	liquid.registerFilter("roll", function (this: FilterThis, spec: unknown) {
 		const dice = parseDice(spec)
 		if ("refusal" in dice) throw new Error(dice.refusal)
 		const { count, faces, modifier } = dice
-		const random = seededRandom(`${seedLabel}:${rolls++}`)
+		const state = evaluationOf(this)
+		const random = seededRandom(`${state.seedLabel}:${state.rolls++}`)
 		let total = modifier
 		for (let i = 0; i < count; i++) total += Math.floor(random() * faces) + 1
 		return total
 	})
 
-	return liquid
+	return (sharedLiquid = liquid)
 }
 
 // ── Evaluating ──────────────────────────────────────────────────────────────
@@ -388,14 +412,27 @@ export function evaluate(
 		return { refusal: "an empty expression computes nothing." }
 	const started = performance.now()
 	try {
-		const liquid = expressionLiquid(scope, opts.seedLabel)
-		const value = liquid.evalValueSync(expr, {
-			...scope.state,
-			state: scope.state,
-			owner: scope.owner,
-			who: scope.who,
-			...(scope.change ? { change: scope.change } : {})
-		} as any)
+		const liquid = expressionLiquid()
+		// The context is built here, as `Liquid._evalValue` would for a plain
+		// object, so the evaluation's own state can ride on it.
+		const ctx = new Context(
+			{
+				...scope.state,
+				state: scope.state,
+				owner: scope.owner,
+				who: scope.who,
+				...(scope.change ? { change: scope.change } : {})
+			} as any,
+			liquid.options,
+			{},
+			{ liquid }
+		)
+		ctx.setRegister(EVALUATION_REGISTER, {
+			scope,
+			seedLabel: opts.seedLabel,
+			rolls: 0
+		} satisfies EvaluationState)
+		const value = liquid.evalValueSync(expr, ctx)
 		return { value }
 	} catch (e) {
 		return { refusal: (e as Error).message }
@@ -426,10 +463,7 @@ export function checkExpression(expr: string): string | null {
 		// Parsed through the real instance so the refused tags and the strict
 		// filters are the ones the evaluation will use. The scope is empty:
 		// nothing is read at parse time.
-		expressionLiquid(
-			{ state: {}, owner: {}, who: {} },
-			"check"
-		).parse(`{{ ${expr} }}`)
+		expressionLiquid().parse(`{{ ${expr} }}`)
 		return null
 	} catch (e) {
 		return (e as Error).message
@@ -468,7 +502,7 @@ export function expressionReads(expr: string): ExpressionReads {
 	const ownerKeys: string[] = []
 	const slotIds: string[] = []
 	try {
-		const liquid = expressionLiquid({ state: {}, owner: {}, who: {} }, "read")
+		const liquid = expressionLiquid()
 		const analysis = liquid.analyzeSync(liquid.parse(`{{ ${expr} }}`))
 		for (const [root, uses] of Object.entries(analysis.variables ?? {})) {
 			if (root !== "owner") continue

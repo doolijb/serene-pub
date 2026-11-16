@@ -115,12 +115,12 @@ async function typeSummary(value: string) {
 
 describe("Change later versions too", () => {
 	test("hidden while the form is clean, even with later versions", async () => {
-		await mountForm(row, { laterCounts: { base: 2, amend: 0 } })
+		await mountForm(row, { laterCounts: { base: 2 } })
 		expect(document.querySelector("[data-later-versions]")).toBeNull()
 	})
 
 	test("dirty with later versions: the line and a pressed-state toggle; Save sends the flag, then it resets", async () => {
-		await mountForm(row, { laterCounts: { base: 2, amend: 0 } })
+		await mountForm(row, { laterCounts: { base: 2 } })
 		await typeSummary("Runs the inn.")
 		const box = document.querySelector("[data-later-versions]")!
 		expect(box.textContent).toContain(
@@ -146,7 +146,7 @@ describe("Change later versions too", () => {
 	})
 
 	test("one later version is said in the singular", async () => {
-		await mountForm(row, { laterCounts: { base: 1, amend: 0 } })
+		await mountForm(row, { laterCounts: { base: 1 } })
 		await typeSummary("Runs the inn.")
 		expect(
 			document.querySelector("[data-later-versions]")!.textContent
@@ -154,30 +154,9 @@ describe("Change later versions too", () => {
 	})
 
 	test("no later versions: nothing to offer", async () => {
-		await mountForm(row, { laterCounts: { base: 0, amend: 0 } })
+		await mountForm(row, { laterCounts: { base: 0 } })
 		await typeSummary("Runs the inn.")
 		expect(document.querySelector("[data-later-versions]")).toBeNull()
-	})
-
-	test("reading a moment: the line counts Save as of, and the amend carries the flag", async () => {
-		const amended: unknown[] = []
-		await mountForm(row, {
-			laterCounts: { base: 5, amend: 1 },
-			momentLabel: "Year 3",
-			onAmend: async (_p: unknown, _q: unknown, options: unknown) => {
-				amended.push(options)
-				return true
-			}
-		})
-		await typeSummary("Runs the inn.")
-		expect(
-			document.querySelector("[data-later-versions]")!.textContent
-		).toContain("1 later version keeps its own words.")
-		button(/^Change later versions too$/)!.click()
-		await settle()
-		button(/^Save as of Year 3$/)!.click()
-		await settle()
-		expect(amended).toEqual([{ changeLaterVersions: true }])
 	})
 })
 
@@ -290,7 +269,7 @@ describe("the Greetings row", () => {
 				alternateGreetings: [],
 				groupOnlyGreetings: ["Together."]
 			}),
-			{ laterCounts: { base: 1, amend: 0 } }
+			{ laterCounts: { base: 1 } }
 		)
 		const boxes =
 			field().querySelectorAll<HTMLInputElement>("input.checkbox")

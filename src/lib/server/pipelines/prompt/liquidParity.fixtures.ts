@@ -237,6 +237,19 @@ Example dialogue:
 {%- endif -%}
 {%- endfor -%}`
 
+const HISTORY_LIQUID =
+	"{ {%- for row in history %}" +
+	'"{{ row.date | formatDate }}{% if row.dateDelta %} ({{ row.dateDelta | formatDateDelta }}){% endif %}":' +
+	"{{ row.content | jsonValue: indent: 0 }}{% unless forloop.last %},{% endunless %}" +
+	"{% endfor -%} }"
+
+const EARLIER_SCENES_LIQUID =
+	"[{% for scene in earlierScenes %}" +
+	'{"name":{{ scene.name | jsonValue: indent: 0 }}' +
+	'{% if scene.dateDelta %},"dateDelta":"{{ scene.dateDelta | formatDateDelta }}"{% endif %}' +
+	',"summary":{{ scene.summary | jsonValue: indent: 0 }}}' +
+	"{% unless forloop.last %},{% endunless %}{% endfor %}]"
+
 /**
  * The shipped variable layouts, in Liquid — keyed `<variable>/<variant>`.
  *
@@ -308,22 +321,38 @@ export const LIQUID_LAYOUTS: Record<string, string> = {
 		'"legendaryFigures": {{ relationshipsKnown.legendaryFigures | jsonValue: indent: 1, offset: 1 }}{% endif %}' +
 		"\n}{% else %}{}{% endif %}",
 
-	// `pad` and presence-not-truthiness: a story with a zeroth month is a thing
-	// somebody will build, so `!= nil` rather than a truth test.
+	// A named year prints the calendar's spelling (`formatDate`); otherwise the
+	// parts present, each an object (`!= nil` catches a null part too).
 	"currentDate/content":
-		"{% if currentDate.label %}{{ currentDate.label }}{% else %}" +
-		"{{ currentDate.year }}" +
-		"{% if currentDate.month != nil %}-{{ currentDate.month | pad: 2 }}{% endif %}" +
-		"{% if currentDate.day != nil %}-{{ currentDate.day | pad: 2 }}{% endif %}" +
-		"{% if currentDate.hour != nil %} {{ currentDate.hour | pad: 2 }}:{{ currentDate.minute | pad: 2 }}{% endif %}" +
+		"{% if currentDate.year.name %}{{ currentDate | formatDate }}{% else %}" +
+		"{{ currentDate.year.number }}" +
+		"{% if currentDate.month %}-{{ currentDate.month.number | pad: 2 }}{% endif %}" +
+		"{% if currentDate.day %}-{{ currentDate.day.number | pad: 2 }}{% endif %}" +
+		"{% if currentDate.time %} {{ currentDate.time.hour | pad: 2 }}:{{ currentDate.time.minute | pad: 2 }}{% endif %}" +
 		"{% endif %}",
 
 	"currentDate/wrapped":
 		"The current date in the story is " +
-		"{% if currentDate.label %}{{ currentDate.label }}{% else %}" +
-		"{{ currentDate.year }}" +
-		"{% if currentDate.month != nil %}-{{ currentDate.month | pad: 2 }}{% endif %}" +
-		"{% if currentDate.day != nil %}-{{ currentDate.day | pad: 2 }}{% endif %}" +
-		"{% if currentDate.hour != nil %} {{ currentDate.hour | pad: 2 }}:{{ currentDate.minute | pad: 2 }}{% endif %}" +
-		"{% endif %}."
+		"{% if currentDate.year.name %}{{ currentDate | formatDate }}{% else %}" +
+		"{{ currentDate.year.number }}" +
+		"{% if currentDate.month %}-{{ currentDate.month.number | pad: 2 }}{% endif %}" +
+		"{% if currentDate.day %}-{{ currentDate.day.number | pad: 2 }}{% endif %}" +
+		"{% if currentDate.time %} {{ currentDate.time.hour | pad: 2 }}:{{ currentDate.time.minute | pad: 2 }}{% endif %}" +
+		"{% endif %}.",
+
+	// A row's key is its date, then its delta in parentheses when it has one.
+	"history/content": HISTORY_LIQUID,
+
+	"history/wrapped": "Story history:\n```json\n" + HISTORY_LIQUID + "\n```",
+
+	"earlierScenes/content": EARLIER_SCENES_LIQUID,
+
+	"earlierScenes/wrapped":
+		"Earlier in the story:\n```json\n" + EARLIER_SCENES_LIQUID + "\n```",
+
+	"storyCalendar/content":
+		"Months: {% for m in storyCalendar.months %}{{ m.name }} ({{ m.days }} days){% unless forloop.last %}, {% endunless %}{% endfor %}" +
+		"{% if storyCalendar.weekdays.size %}\nWeekdays: {% for d in storyCalendar.weekdays %}{{ d }}{% unless forloop.last %}, {% endunless %}{% endfor %}{% endif %}" +
+		"{% if storyCalendar.leap %}\nLeap day: every {{ storyCalendar.leap.every }} years, in month {{ storyCalendar.leap.month }}{% endif %}" +
+		"{% if storyCalendar.eras.size %}\nEras: {% for e in storyCalendar.eras %}{{ e.name }}{% if e.start != nil %} from year {{ e.start }}{% endif %}{% if e.backwards %}, counting down{% endif %}{% unless forloop.last %}; {% endunless %}{% endfor %}{% endif %}"
 }

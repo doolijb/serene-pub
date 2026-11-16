@@ -22,7 +22,10 @@ export class TtlCache<T> {
 	// attached caller has given up, not on the first one.
 	private pending = new Map<string, PendingAbortableEntry<T>>()
 
-	constructor(private ttlMs: number) {}
+	constructor(
+		private ttlMs: number,
+		private maxEntries = 500
+	) {}
 
 	get(key: string): T | undefined {
 		const entry = this.entries.get(key)
@@ -35,7 +38,17 @@ export class TtlCache<T> {
 	}
 
 	set(key: string, value: T): void {
-		this.entries.set(key, { value, expiresAt: Date.now() + this.ttlMs })
+		const now = Date.now()
+		for (const [k, e] of this.entries) {
+			if (e.expiresAt <= now) this.entries.delete(k)
+		}
+		this.entries.delete(key)
+		this.entries.set(key, { value, expiresAt: now + this.ttlMs })
+		while (this.entries.size > this.maxEntries) {
+			const oldest = this.entries.keys().next().value
+			if (oldest === undefined) break
+			this.entries.delete(oldest)
+		}
 	}
 
 	async getOrFetch(

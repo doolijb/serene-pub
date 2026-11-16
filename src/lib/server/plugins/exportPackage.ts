@@ -33,7 +33,7 @@
  *  - **prompts / widgets / components / surfaces / engines** — carried from
  *    the owning plugin's stored manifest when there is one.
  */
-import { zipSync } from "fflate"
+import { zipSync, type Zippable } from "fflate"
 import { and, eq, inArray, isNull } from "drizzle-orm"
 import { i18nText, SAVE_MESSAGE_SPEC_ID, sessionEvents } from "@serene-pub/sdk"
 import { isDefaultSave } from "$lib/server/pipelines/entities/presetBindings"
@@ -609,13 +609,20 @@ export async function exportGenrePackage(
 	return { files, manifest, warnings }
 }
 
+const STORED_EXT = /\.(png|jpe?g|webp|gif|woff2|zip|gz|mp3|ogg|mp4|webm)$/i
+
 /** The package folder as one zip, paths as given. */
 export function zipPackage(files: Record<string, Buffer | string>): Buffer {
-	const entries: Record<string, Uint8Array> = {}
-	for (const [path, content] of Object.entries(files))
-		entries[path] =
+	const entries: Zippable = {}
+	for (const [path, content] of Object.entries(files)) {
+		const bytes =
 			typeof content === "string"
 				? new Uint8Array(Buffer.from(content, "utf8"))
 				: new Uint8Array(content)
+		// Already-compressed formats are stored, not deflated again.
+		entries[path] = STORED_EXT.test(path)
+			? [bytes, { level: 0 }]
+			: bytes
+	}
 	return Buffer.from(zipSync(entries, { level: 6 }))
 }

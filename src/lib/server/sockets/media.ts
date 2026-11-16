@@ -336,8 +336,13 @@ async function buildMediaList(
 					: String(row.createdAt),
 			// Summed from the rows already loaded rather than through
 			// `storedBytesByFile`, which would be a second pass over the
-			// same data and could disagree with the list beside it.
-			storedBytes: variants.reduce((sum, v) => sum + v.bytes, 0),
+			// same data and could disagree with the list beside it. A same-as
+			// variant owns no bytes (its path is null), so it is skipped here
+			// exactly as `storedBytesByFile` skips it.
+			storedBytes: variants.reduce(
+				(sum, v) => (v.sameAsVariantId === null ? sum + v.bytes : sum),
+				0
+			),
 			// Field by field, never a spread: `path` lives on this row and
 			// nowhere else, so spreading one is the only way a payload
 			// could still leak the data-dir layout.

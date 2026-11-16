@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/TheDrummer_Cydonia-24B-v4.3-GGUF:IQ4_XS",
+ "n": 20,
+ "results": {
+  "undated": {
+   "acts_still_furious": "12/20",
+   "mentions_time_passing": "3/20"
+  },
+  "as_of": {
+   "acts_still_furious": "9/20",
+   "mentions_time_passing": "9/20"
+  },
+  "ago": {
+   "acts_still_furious": "3/20",
+   "mentions_time_passing": "17/20"
+  },
+  "ago_hint": {
+   "acts_still_furious": "4/20",
+   "mentions_time_passing": "18/20"
+  }
+ },
+ "samples": {
+  "undated": [
+   "[still=0 passed=0] Mira looked up from the ledger she'd been pretending to study, her expression carefully neutral. \"Good evening, Mr. Ash.\" Her voice was cool, professional. \"A room? How fortunate for you that I have one available.\" She set down her quill with deliberate slowness. \"The same room a",
+   "[still=1 passed=0] Mira's head snapped up from the ledger she'd been pretending to study, her eyes flashing with recognition and barely contained anger. Her knuckles whitened as she gripped the edge of the counter, clearly fighting the urge to throw something at the travelling fool who'd just walke",
+   "[still=1 passed=1] Mira looked up from the ledger she'd been pretending to study, her jaw tight. She recognized that smile\u2014the same one he'd worn when he'd slunk out three weeks ago, leaving her husband's lute splintered on the floorboards.  \"A room?\" Her voice was sharp as flint. \"You've got the n"
+  ],
+  "as_of": [
+   "[still=1 passed=1] Mira looked up from the ledger she'd been studying, her expression shifting from concentration to something harder as she recognized Ash's face. Her pen paused mid-stroke, and for a moment she simply stared at him with an unreadable expression. When she finally spoke, her voice w",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been writing in, her expression hardening the moment she recognized the familiar face. She set down her quill with deliberate slowness and fixed Ash with a stare that could have frozen the very rain dripping from his coat.  \"Well, well,\" she s",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression shifting from surprise to something harder. She recognized that face immediately\u2014the one that had walked out of here three years ago without so much as a goodbye, leaving her husband's beloved lute in splinters.  "
+  ],
+  "ago": [
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable behind her professional mask. Recognition flickered in her eyes when she saw Ash, followed by a flash of something harder\u2014annoyance, perhaps even old anger. She closed the book with a soft thump.  \"You'",
+   "[still=0 passed=1] Mira looked up from polishing a tankard, her expression carefully neutral as she recognized the familiar face. Her fingers tightened almost imperceptibly around the cloth before she set it down on the bar.  \"Room? Yes, I have one available,\" she replied, her voice cool and profes",
+   "[still=0 passed=0] Mira looked up from polishing the bar, her expression carefully neutral as she recognized the traveler. Her fingers stilled on the wood, and for a moment her jaw tightened almost imperceptibly. She set down her cloth with deliberate care.  \"Mr. Ash.\" Her voice was cool and profes"
+  ],
+  "ago_hint": [
+   "[still=0 passed=1] Mira looked up from polishing the bar, her expression carefully neutral as she recognized the familiar face. Her fingers tightened almost imperceptibly around the cloth in her hands. \"Room four is available,\" she said evenly, her voice betraying nothing of the memory of that shat",
+   "[still=0 passed=0] Mira looked up from the ledger she'd been studying, her expression carefully neutral as she recognized the familiar face. Her fingers tightened almost imperceptibly on the quill. After a long moment, she closed the book with a soft thud.  \"A room? Yes, we have the corner chamber ",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been writing in, her expression carefully neutral as she recognized the familiar face. She set down her quill with deliberate slowness.  \"Ash.\" Her voice was flat, neither warm nor hostile. \"Three years, and you're back. A room, you say?\" She "
+  ]
+ }
+}

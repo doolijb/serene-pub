@@ -124,10 +124,30 @@ describe("looseEnds — which chores a book has", () => {
 
 	it("an orphan is a background member with no lore and no tie", () => {
 		const members = [
-			{ id: 1, name: "Lone", castKind: "background" as const, updatedAt: 1 },
-			{ id: 2, name: "Lored", castKind: "background" as const, updatedAt: 1 },
-			{ id: 3, name: "Tied", castKind: "background" as const, updatedAt: 1 },
-			{ id: 4, name: "Carded", castKind: "character" as const, updatedAt: 1 }
+			{
+				id: 1,
+				name: "Lone",
+				castKind: "background" as const,
+				updatedAt: 1
+			},
+			{
+				id: 2,
+				name: "Lored",
+				castKind: "background" as const,
+				updatedAt: 1
+			},
+			{
+				id: 3,
+				name: "Tied",
+				castKind: "background" as const,
+				updatedAt: 1
+			},
+			{
+				id: 4,
+				name: "Carded",
+				castKind: "character" as const,
+				updatedAt: 1
+			}
 		]
 		const rows = looseEnds({
 			items: [],
@@ -350,5 +370,64 @@ describe("looseEnds — history dates (★H3, rule C; owner 2026-11-10)", () => 
 			"history-before-fork",
 			"empty-content"
 		])
+	})
+})
+
+describe("looseEnds — the Timeline switch (🚧 no timeline: no time chores)", () => {
+	const d = (year: number) => ({ year, month: null, day: null })
+	const history = (id: number, date: ReturnType<typeof d> | null) =>
+		item({ id, kind: HISTORY, date })
+	const items = [
+		history(1, null),
+		history(2, d(2)),
+		history(3, d(2)),
+		item({ id: 4, content: "" })
+	]
+	const TIME = [
+		"undated-history",
+		"doubled-history-date",
+		"history-before-fork"
+	]
+
+	it("on, the time chores are listed", () => {
+		const found = chores(looseEnds({ items }))
+		expect(found).toContain("undated-history")
+		expect(found).toContain("doubled-history-date")
+		expect(chores(looseEnds({ items, timeline: true }))).toEqual(found)
+	})
+
+	it("off, none of the three is listed and every other chore is as ever", () => {
+		const off = chores(looseEnds({ items, timeline: false }))
+		for (const id of TIME) expect(off).not.toContain(id)
+		expect(off).toEqual(
+			chores(looseEnds({ items })).filter((c) => !TIME.includes(c))
+		)
+		expect(off).toContain("empty-content")
+	})
+
+	it("off, a history entry is no chore of any kind: the book shows none", () => {
+		const ends = looseEnds({ items, timeline: false })
+		expect(ends.filter((e) => e.kind === HISTORY)).toEqual([])
+		expect(ends.some((e) => e.key === items[3].key)).toBe(true)
+	})
+
+	it("off, a history entry before its fork is not listed", () => {
+		const line = lineOf(1, [
+			{
+				id: 1,
+				forkedFromBranchId: null,
+				forkYear: 5,
+				forkMonth: null,
+				forkDay: null
+			}
+		])
+		const rows = [history(9, d(2))]
+		rows[0].branchId = 1
+		expect(chores(looseEnds({ items: rows, line }))).toContain(
+			"history-before-fork"
+		)
+		expect(
+			chores(looseEnds({ items: rows, line, timeline: false }))
+		).toEqual([])
 	})
 })

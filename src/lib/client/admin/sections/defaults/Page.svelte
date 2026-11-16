@@ -54,8 +54,21 @@
 	 * (see `ComboRow` in combos.ts), so asking the build first could tell an
 	 * admin who HAS such a connection that this build cannot do its job.
 	 */
-	import { getContext } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import { getContext, type Component } from "svelte"
+	import {
+		AudioLines,
+		Boxes,
+		CircleHelp,
+		Clapperboard,
+		Combine,
+		FileText,
+		Image as ImageIcon,
+		Loader2,
+		Plus,
+		ScanText,
+		Type,
+		Zap
+	} from "@lucide/svelte"
 	import { openInLoadouts } from "$lib/client/admin/railDoors"
 	import { Portal, Tooltip } from "@skeletonlabs/skeleton-svelte"
 	import { capabilityTagline } from "@serene-pub/sdk"
@@ -85,6 +98,17 @@
 		useStarConfirm,
 		type StarMove
 	} from "$lib/client/components/connections/useStarConfirm.svelte"
+
+	/** The icon per output kind (`OUTPUT_KIND_ICONS` names, in `outputKinds.ts`). */
+	const OUTPUT_KIND_COMPONENTS: Record<string, Component<any>> = {
+		Type: Type,
+		Image: ImageIcon,
+		AudioLines: AudioLines,
+		Clapperboard: Clapperboard,
+		FileText: FileText,
+		Zap: Zap,
+		ScanText: ScanText
+	}
 
 	const socket = useTypedSocket()
 	const interest = getAdminInterestContext()
@@ -125,8 +149,7 @@
 	 */
 	const ONNX_FALLBACKS: Record<string, string> = {
 		[EMBEDDING_CAPABILITY]: "An embeddings service works.",
-		[NER_CAPABILITY]:
-			"Names the lorebook already knows are still matched."
+		[NER_CAPABILITY]: "Names the lorebook already knows are still matched."
 	}
 	const localOnnx = $derived(
 		systemSettingsCtx?.settings?.localOnnxAvailability
@@ -157,9 +180,9 @@
 		Record<string, Sockets.ConnectionDefaults.List.NeededBecause>
 	>({})
 	/** Where the pipeline library places each job's steps. */
-	let usedBy = $state<
-		Record<string, Sockets.ConnectionDefaults.List.JobUse>
-	>({})
+	let usedBy = $state<Record<string, Sockets.ConnectionDefaults.List.JobUse>>(
+		{}
+	)
 	let loading = $state(true)
 
 	/**
@@ -235,7 +258,9 @@
 	 * people to ignore this line.
 	 */
 	let missingRequired = $derived(
-		combos.filter((c) => needed[c.id] && defaults[c.id]?.connectionId == null)
+		combos.filter(
+			(c) => needed[c.id] && defaults[c.id]?.connectionId == null
+		)
 	)
 
 	/** Jobs whose default is set but cannot run: its model is gone or can't do it. */
@@ -551,7 +576,9 @@
 	/** A job's loadouts other than its default, by name. */
 	function otherLoadoutsOf(transform: string): LoadoutSummary[] {
 		return (loadoutsRes?.loadouts ?? [])
-			.filter((l) => l.transform === transform && l.defaultFor !== transform)
+			.filter(
+				(l) => l.transform === transform && l.defaultFor !== transform
+			)
 			.sort(byName)
 	}
 	/**
@@ -632,15 +659,12 @@
 		<p class="text-surface-600-400 text-sm">Admin access required.</p>
 	{:else if loading}
 		<div class="flex items-center justify-center py-10">
-			<Icons.Loader2
-				size={20}
-				class="text-surface-600-400 animate-spin"
-			/>
+			<Loader2 size={20} class="text-surface-600-400 animate-spin" />
 		</div>
 	{:else}
 		{#each groups as group (group.kind)}
 			{@const GroupIcon =
-				(Icons as any)[OUTPUT_KIND_ICONS[group.kind]] ?? Icons.Boxes}
+				OUTPUT_KIND_COMPONENTS[OUTPUT_KIND_ICONS[group.kind]] ?? Boxes}
 			{@const samplingChoices = groupSamplingOptions(group.rows)}
 			{@const groupValue = groupSampling(group.rows)}
 			<section
@@ -700,9 +724,10 @@
 						{@const status = jobStatus(combo)}
 						{@const users = askedBy(combo)}
 						{@const use = usedBy[combo.id]}
-						{@const off = status.label === "Off"
-							? offSentence(combo.id)
-							: null}
+						{@const off =
+							status.label === "Off"
+								? offSentence(combo.id)
+								: null}
 						{@const label = defaultLoadoutName(combo.id)}
 						{@const tagline = capabilityTagline(combo.id as any)}
 						<li
@@ -767,10 +792,7 @@
 									aria-label={`Open in Loadouts: ${label}`}
 									onclick={() => openJobInLoadouts(combo.id)}
 								>
-									<Icons.Combine
-										size={14}
-										aria-hidden="true"
-									/>
+									<Combine size={14} aria-hidden="true" />
 									Open in Loadouts
 								</button>
 							</div>
@@ -991,8 +1013,8 @@
 									class="flex flex-wrap items-center gap-2 text-xs @min-[900px]/content:col-span-5"
 								>
 									<span class="text-surface-600-400">
-										No connection on this pub can do
-										this; the list says why.
+										No connection on this pub can do this;
+										the list says why.
 									</span>
 									{@render addConnection(combo.id)}
 								</p>
@@ -1044,10 +1066,7 @@
 										class="btn btn-sm preset-tonal-surface"
 										onclick={openEmbeddingConnections}
 									>
-										<Icons.Zap
-											size={14}
-											aria-hidden="true"
-										/>
+										<Zap size={14} aria-hidden="true" />
 										Open embedding connections
 									</button>
 								</div>
@@ -1066,9 +1085,10 @@
 
 		{#if !combos.length}
 			<p class="text-surface-600-400 text-sm">
-				No loadouts are declared by this build. That should not happen: the
-				list is aggregated from the adapter manifest and the pipeline
-				definition registry, and an empty one means neither answered.
+				No loadouts are declared by this build. That should not happen:
+				the list is aggregated from the adapter manifest and the
+				pipeline definition registry, and an empty one means neither
+				answered.
 			</p>
 		{/if}
 	{/if}
@@ -1088,7 +1108,7 @@
 	>
 		<div class="min-w-0 @min-[900px]/content:pl-4">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<Icons.Combine
+				<Combine
 					size={14}
 					class="text-surface-600-400 shrink-0"
 					aria-hidden="true"
@@ -1098,7 +1118,7 @@
 				</span>
 				{#if loadout.owner !== "core" && loadout.owner !== "pub"}
 					<span
-						class="bg-surface-200-800 text-surface-700-300 shrink-0 truncate rounded px-1.5 py-0.5 text-meta font-medium"
+						class="bg-surface-200-800 text-surface-700-300 text-meta shrink-0 truncate rounded px-1.5 py-0.5 font-medium"
 					>
 						{loadout.owner}
 					</span>
@@ -1133,7 +1153,7 @@
 				onclick={() =>
 					openInLoadouts(panelsCtx, { loadoutId: loadout.id })}
 			>
-				<Icons.Combine size={14} aria-hidden="true" />
+				<Combine size={14} aria-hidden="true" />
 				Open in Loadouts
 			</button>
 		</div>
@@ -1187,22 +1207,24 @@
 			class="text-surface-600-400 hover:text-surface-950-50 inline-flex size-6 shrink-0 items-center justify-center rounded-full"
 			aria-label={`Details for ${label}`}
 		>
-			<Icons.CircleHelp size={14} aria-hidden="true" />
+			<CircleHelp size={14} aria-hidden="true" />
 		</Tooltip.Trigger>
 		<Portal>
 			<Tooltip.Positioner class="z-[1000]!">
 				<Tooltip.Content
 					class="card preset-filled-surface-950-50 max-w-xs space-y-1 px-2 py-1 text-xs break-words"
 				>
-					<p>Transform: <span class="font-mono">{combo.id}</span></p>
+					<p>
+						Transform: <span class="font-mono">{combo.id}</span>
+					</p>
 					{#if use?.pipelines.length}
 						<p>Pipelines: {use.pipelines.join(", ")}</p>
 					{/if}
 					{#if users.length}
 						<p>
-							Node definitions: <span class="font-mono"
-								>{users.join(", ")}</span
-							>
+							Node definitions: <span class="font-mono">
+								{users.join(", ")}
+							</span>
 						</p>
 					{/if}
 				</Tooltip.Content>
@@ -1219,7 +1241,7 @@
 			class="btn btn-sm preset-filled-primary-500"
 			href="/admin/connections/new"
 		>
-			<Icons.Plus size={14} aria-hidden="true" /> Add a connection
+			<Plus size={14} aria-hidden="true" /> Add a connection
 		</a>
 	{:else}
 		<a class="underline" href="/admin/connections/new">Add a connection</a>

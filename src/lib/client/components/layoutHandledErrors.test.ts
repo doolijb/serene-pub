@@ -28,17 +28,77 @@ function handledErrorEvents(): Set<string> {
 	return new Set([...body.matchAll(/"([^"]+:error)"/g)].map((m) => m[1]!))
 }
 
+function handledWhenAskedErrorEvents(): Set<string> {
+	const source = fs.readFileSync(
+		path.resolve(process.cwd(), "src/lib/client/components/Layout.svelte"),
+		"utf8"
+	)
+	const start = source.indexOf(
+		"const HANDLED_WHEN_ASKED_ERROR_EVENTS = new Set<string>(["
+	)
+	expect(start).toBeGreaterThan(-1)
+	const end = source.indexOf("])", start)
+	const body = source
+		.slice(start, end)
+		.split("\n")
+		.filter((line) => !line.trim().startsWith("//"))
+		.join("\n")
+	return new Set([...body.matchAll(/"([^"]+:error)"/g)].map((m) => m[1]!))
+}
+
+describe("the timeless copy's refusal is said in place only when it names its asker", () => {
+	test("lorebooks:duplicate:error is handled when asked, never whole", () => {
+		expect(
+			handledWhenAskedErrorEvents().has("lorebooks:duplicate:error")
+		).toBe(true)
+		expect(handledErrorEvents().has("lorebooks:duplicate:error")).toBe(
+			false
+		)
+	})
+})
+
+describe("an entry save's or delete's refusal is said in place only when it names its asker", () => {
+	test("entries:update:error and entries:delete:error are handled when asked, never whole", () => {
+		for (const event of ["entries:update:error", "entries:delete:error"]) {
+			expect(handledWhenAskedErrorEvents().has(event)).toBe(true)
+			expect(handledErrorEvents().has(event)).toBe(false)
+		}
+	})
+})
+
 describe("Layout's catch-all leaves these refusals to the surface that asked", () => {
 	test("an entry create's refusal: the modal, the place field or the editor's own toast says it", () => {
 		expect(handledErrorEvents().has("entries:create:error")).toBe(true)
 	})
 
+	test("the Edit history's refusals: the fold, the clear dialogs and the admin row say them in place", () => {
+		for (const event of [
+			"entries:redlines:error",
+			"entries:restoreRedline:error",
+			"entries:clearRedlines:error",
+			"characterVersions:redlines:error",
+			"characterVersions:restoreRedline:error",
+			"characterVersions:clearRedlines:error",
+			"entries:redlineCount:error",
+			"admin:redlineSummary:error",
+			"admin:clearRedlines:error"
+		])
+			expect(handledErrorEvents().has(event), event).toBe(true)
+	})
+
+	test("a refused turn: the session page says it once, in the server's words", () => {
+		// Continue, Pick who speaks and the narrator's turn: `turnFlow` toasts
+		// the refusal itself, so the catch-all must leave it alone.
+		expect(handledErrorEvents().has("sessions:fireTurn:error")).toBe(true)
+	})
+
 	test("a library template write's refusal: the library page, the template form or the layout form says it", () => {
 		const handled = handledErrorEvents()
 		for (const verb of ["Create", "Clone", "Update", "Delete"])
-			expect(handled.has(`pipelines:library${verb}Template:error`), verb).toBe(
-				true
-			)
+			expect(
+				handled.has(`pipelines:library${verb}Template:error`),
+				verb
+			).toBe(true)
 	})
 
 	test("a merge's refusal: the absorb window says it in place, the duplicates list as its own toast", () => {
@@ -57,7 +117,14 @@ describe("the catch-all is the loadouts' one toast (10-05: toasts are central)",
 	 */
 	test("no loadouts refusal is left to a view", () => {
 		const handled = handledErrorEvents()
-		for (const verb of ["create", "update", "delete", "setDefault", "merge", "makeIt"])
+		for (const verb of [
+			"create",
+			"update",
+			"delete",
+			"setDefault",
+			"merge",
+			"makeIt"
+		])
 			expect(handled.has(`loadouts:${verb}:error`), verb).toBe(false)
 		expect(handled.has("localModels:mattingRemove:error")).toBe(false)
 	})

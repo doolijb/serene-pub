@@ -1,0 +1,153 @@
+
+> serene-pub@0.6.0-pr-8 db:generate
+> node scripts/check-db-lock.js drizzle-kit generate --config ./src/lib/server/db/drizzle.config.ts
+
+No database lock found. Continuing...
+Database locked for db operation.
+Running: drizzle-kit generate --config ./src/lib/server/db/drizzle.config.ts
+(node:3203049) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Reading config file '/home/jody/github/serene-pub/src/lib/server/db/drizzle.config.ts'
+Using PGlite database at: /home/jody/.local/share/SerenePub/data/serene-pub.db
+137 tables
+account_invites 9 columns 1 indexes 2 fks
+admin_logbook 11 columns 3 indexes 0 fks
+attribute_carries 8 columns 1 indexes 1 fks
+attribute_configs 15 columns 7 indexes 5 fks
+attribute_declarations 8 columns 2 indexes 1 fks
+attribute_sheets 8 columns 2 indexes 1 fks
+attribute_values 21 columns 7 indexes 5 fks
+audiocpp_settings 18 columns 0 indexes 0 fks
+authored_components 22 columns 1 indexes 1 fks
+binding_merge_logs 13 columns 2 indexes 3 fks
+binding_suggestions 16 columns 2 indexes 2 fks
+cast_amendments 12 columns 4 indexes 4 fks
+cast_member_files 5 columns 2 indexes 2 fks
+cast_presences 14 columns 3 indexes 3 fks
+channel_lanes 6 columns 2 indexes 2 fks
+character_folders 6 columns 2 indexes 1 fks
+character_shares 3 columns 2 indexes 2 fks
+character_tags 2 columns 1 indexes 2 fks
+character_versions 45 columns 10 indexes 8 fks
+characters 38 columns 4 indexes 4 fks
+completion_templates 10 columns 1 indexes 0 fks
+connection_defaults 5 columns 1 indexes 3 fks
+connection_models 18 columns 1 indexes 2 fks
+connection_scripts 5 columns 2 indexes 2 fks
+connections 13 columns 0 indexes 1 fks
+conversation_attachments 5 columns 1 indexes 1 fks
+conversation_members 5 columns 2 indexes 2 fks
+conversation_messages 8 columns 1 indexes 2 fks
+conversations 8 columns 1 indexes 1 fks
+custom_themes 9 columns 0 indexes 1 fks
+dismissed_duplicate_pairs 5 columns 1 indexes 3 fks
+entry_amendments 13 columns 4 indexes 4 fks
+entry_annotations 16 columns 1 indexes 3 fks
+files 24 columns 4 indexes 0 fks
+koboldcpp_settings 14 columns 0 indexes 0 fks
+llm_lane_widths 4 columns 0 indexes 0 fks
+loadouts 20 columns 2 indexes 7 fks
+local_models 16 columns 2 indexes 0 fks
+logit_bias_tokens 7 columns 1 indexes 1 fks
+lore_imprints 15 columns 4 indexes 2 fks
+lore_redlines 11 columns 2 indexes 2 fks
+lore_sources 9 columns 2 indexes 2 fks
+lorebook_bindings 33 columns 8 indexes 7 fks
+lorebook_branches 14 columns 1 indexes 2 fks
+lorebook_entries 29 columns 4 indexes 5 fks
+lorebook_entry_vectors 13 columns 0 indexes 1 fks
+lorebook_shares 3 columns 2 indexes 2 fks
+lorebook_tags 2 columns 1 indexes 2 fks
+lorebooks 27 columns 4 indexes 4 fks
+message_annotations 16 columns 1 indexes 3 fks
+message_parts 8 columns 2 indexes 1 fks
+messages 24 columns 5 indexes 5 fks
+narrative_relationships 23 columns 9 indexes 8 fks
+notifications 12 columns 3 indexes 1 fks
+ollama_settings 3 columns 0 indexes 0 fks
+owner_sheets 7 columns 3 indexes 2 fks
+passphrases 7 columns 1 indexes 1 fks
+pipeline_bindings 9 columns 1 indexes 2 fks
+pipeline_clauses 13 columns 1 indexes 1 fks
+pipeline_composites 8 columns 0 indexes 1 fks
+pipeline_config_notices 11 columns 1 indexes 1 fks
+pipeline_config_selections 8 columns 1 indexes 3 fks
+pipeline_config_values 6 columns 2 indexes 1 fks
+pipeline_configs 10 columns 2 indexes 1 fks
+pipeline_context_templates 13 columns 4 indexes 1 fks
+pipeline_definition_declarations 10 columns 2 indexes 0 fks
+pipeline_definition_registry 36 columns 1 indexes 0 fks
+pipeline_drafts 8 columns 1 indexes 2 fks
+pipeline_edges 10 columns 0 indexes 3 fks
+pipeline_event_registry 8 columns 0 indexes 0 fks
+pipeline_includes 4 columns 0 indexes 1 fks
+pipeline_node_overrides 10 columns 2 indexes 2 fks
+pipeline_node_rebinds 8 columns 1 indexes 2 fks
+pipeline_nodes 18 columns 1 indexes 1 fks
+pipeline_preset_values 6 columns 0 indexes 1 fks
+pipeline_presets 8 columns 1 indexes 1 fks
+pipeline_prompts 16 columns 3 indexes 1 fks
+pipeline_run_artifacts 8 columns 2 indexes 1 fks
+pipeline_run_nodes 11 columns 2 indexes 1 fks
+pipeline_runs 25 columns 3 indexes 2 fks
+pipeline_scripts 11 columns 2 indexes 0 fks
+pipeline_spec_versions 20 columns 1 indexes 1 fks
+pipeline_specs 7 columns 0 indexes 0 fks
+pipeline_variable_templates 14 columns 4 indexes 0 fks
+plugin_files 10 columns 1 indexes 0 fks
+plugin_hook_invocations 16 columns 3 indexes 0 fks
+plugin_user_settings 5 columns 1 indexes 2 fks
+plugins 20 columns 0 indexes 1 fks
+ranking_decisions 11 columns 2 indexes 1 fks
+ranking_subject_stats 15 columns 1 indexes 1 fks
+rankings 12 columns 2 indexes 2 fks
+registrations 23 columns 3 indexes 2 fks
+ruleset_versions 6 columns 1 indexes 2 fks
+rulesets 13 columns 1 indexes 1 fks
+sampling_configs 7 columns 1 indexes 0 fks
+scene_characters 5 columns 3 indexes 2 fks
+scene_cues 9 columns 4 indexes 2 fks
+scenes 32 columns 5 indexes 4 fks
+seen_actions 4 columns 1 indexes 1 fks
+servers 5 columns 0 indexes 0 fks
+session_attribute_picks 5 columns 1 indexes 1 fks
+session_changes 8 columns 1 indexes 1 fks
+session_characters 11 columns 4 indexes 5 fks
+session_functions 7 columns 1 indexes 1 fks
+session_genre_settings 3 columns 0 indexes 0 fks
+session_guests 3 columns 1 indexes 2 fks
+session_imprints 13 columns 2 indexes 1 fks
+session_layout_presets 16 columns 5 indexes 1 fks
+session_messages 36 columns 6 indexes 5 fks
+session_panel_layouts 9 columns 1 indexes 3 fks
+session_personas 11 columns 3 indexes 5 fks
+session_preset_notices 8 columns 1 indexes 1 fks
+session_presets 21 columns 2 indexes 0 fks
+session_tags 2 columns 1 indexes 2 fks
+sessions 46 columns 4 indexes 4 fks
+setup 3 columns 0 indexes 1 fks
+sprite_sets 7 columns 4 indexes 2 fks
+sprites 7 columns 2 indexes 2 fks
+state_proposals 12 columns 3 indexes 4 fks
+system_settings 29 columns 0 indexes 0 fks
+tags 5 columns 2 indexes 1 fks
+tray_items 12 columns 3 indexes 3 fks
+tunnels 16 columns 1 indexes 1 fks
+ui_translations 7 columns 1 indexes 0 fks
+user_annexes 7 columns 1 indexes 1 fks
+user_layout_defaults 6 columns 1 indexes 2 fks
+user_settings 23 columns 1 indexes 1 fks
+user_tokens 8 columns 0 indexes 1 fks
+user_totp 5 columns 0 indexes 1 fks
+user_totp_recovery_codes 5 columns 1 indexes 1 fks
+users 13 columns 1 indexes 1 fks
+variants 14 columns 3 indexes 0 fks
+voicebank_voices 14 columns 2 indexes 1 fks
+widget_settings 7 columns 2 indexes 2 fks
+widget_styles 12 columns 2 indexes 1 fks
+workflows 10 columns 0 indexes 0 fks
+zone_contents 11 columns 3 indexes 2 fks
+
+[✓] Your SQL migration file ➜ drizzle/0161_flowery_bishop.sql 🚀
+
+Database lock released.

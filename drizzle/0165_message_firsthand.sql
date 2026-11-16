@@ -1,0 +1,1 @@
+ALTER TABLE "session_messages" ADD COLUMN "firsthand_cast_member_ids" integer[];

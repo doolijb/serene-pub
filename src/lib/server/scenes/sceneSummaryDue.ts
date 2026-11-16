@@ -10,7 +10,7 @@
  * The one exception is a routine-saved summary that Back reset
  * (`summaryOrigin: "routine"`), which the routine may write again. It closed at
  * least `depth` rounds ago, counted by `replayStoryLane` as the scenes routine
- * counts them. Not due: the session's Summaries is Never, any turn is taken
+ * counts them. Not due: any turn is taken
  * back, or (a branch) the scene is one of the copied lines' — a branch copies
  * messages, never scene rows, so a scene row on a branch is the branch's own
  * and the rule is a guard on the lines it opens over.
@@ -29,8 +29,6 @@ export async function sceneSummaryDueOf(
 	const none = (why: string) => ({ sceneId: null, why })
 	const ctx = await sessionSceneContext(db, sessionId)
 	if (!ctx) return none("this session is not there")
-	if (ctx.settings.summary === "never")
-		return none("this session's Summaries is Never")
 
 	const [rewound] = await db
 		.select({ id: schema.sessionMessages.id })

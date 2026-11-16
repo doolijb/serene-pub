@@ -237,6 +237,11 @@ export async function dispatchStep(
 		adapter,
 		taskType: "summarize_batch",
 		connectionName: connection.name,
+		connection: {
+			id: connection.id,
+			type: connection.type,
+			baseUrl: connection.baseUrl
+		},
 		samplingName: sampling?.name ?? "default",
 		label: call.label,
 		signal: call.signal

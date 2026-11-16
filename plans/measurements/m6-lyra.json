@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+ "n": 20,
+ "results": {
+  "date_only": {
+   "acts_still_furious": "2/20",
+   "mentions_time_passing": "5/20"
+  },
+  "words": {
+   "acts_still_furious": "1/20",
+   "mentions_time_passing": "8/20"
+  },
+  "signed_same_fmt": {
+   "acts_still_furious": "5/20",
+   "mentions_time_passing": "4/20"
+  },
+  "signed_units": {
+   "acts_still_furious": "6/20",
+   "mentions_time_passing": "2/20"
+  }
+ },
+ "samples": {
+  "date_only": [
+   "[still=0 passed=0]  Mira: Mira peered up from the bar where she was polishing a tankard. Her eyes widened a fraction in surprise at seeing Ash, but her face remained impassive. \"Evening, Ash,\" she replied coolly. \"We have one room left, but I'll need you to pay in advance this time.\" Her tone was f",
+   "[still=0 passed=0]  Mira: Mira looked up from polishing a tankard, her eyes widening slightly in surprise at the familiar face. She set the mug down carefully, her expression unreadable as she took in Ash's appearance.   \"A room? For you?\" Her tone was cool, carefully neutral. She crossed her arms,",
+   "[still=0 passed=1]  Mira: Mira looked up from the bar, her eyes widening in surprise at the sight of Ash. She hesitated for a moment before nodding curtly. \"Aye, there's a room. Same as last time - coin for the bed, no questions asked.\" Her tone was brusque, but there was a flicker of something in "
+  ],
+  "words": [
+   "[still=0 passed=0]  Mira: Mira raised an eyebrow at the sight of Ash, her expression unreadable. \"Well, well. Look what the cat dragged in.\" She set down the mug she was polishing and crossed her arms. \"A room, you say? And just who's going to pay for it this time? I'm not running a charity here.\"",
+   "[still=0 passed=0]  Mira: Mira looked up from polishing a tankard, her eyes widening slightly in recognition. She hesitated before setting the mug down and wiping her hands on her apron. \"Ash, is that you? I wasn't sure I'd ever see you again.\" Her tone was neutral, betraying no particular emotion.",
+   "[still=0 passed=1]  Mira: Mira looked up from the bar, her eyes widening slightly in recognition. She straightened up, her expression unreadable as she considered the man before her. \"Ash,\" she said, her voice even. \"It's been a while.\" She paused, her gaze flickering over him before settling on hi"
+  ],
+  "signed_same_fmt": [
+   "[still=1 passed=0]  Mira: Mira frowned at the sight of the scruffy traveler. She had hoped never to lay eyes on Ash again after he had callously broken her late husband's precious lute and disappeared without a word. But here he was, strolling into her inn like nothing had happened. She crossed her",
+   "[still=0 passed=1]  Mira: Mira looked up from polishing a tankard, her expression guarded as she recognized the traveler. She set the mug down with a clink. \"Ash. It's been a while. I suppose there's a room, but I don't take kindly to those who destroy my late husband's property and make off withou",
+   "[still=0 passed=0]  Mira: Mira looked up from the bar, her eyes narrowing as she recognized Ash. For a moment, she said nothing, simply staring at him with a mixture of anger and disbelief. Then, in a low, controlled voice, she replied, \"You have the audacity to show your face here after what you d"
+  ],
+  "signed_units": [
+   "[still=1 passed=0]  Mira: Mira peered up from the bar where she was polishing a tankard. Her eyes widened at the sight of Ash. For a moment she stared in stunned silence, the tankard still in her hands. Then her face flushed with anger and she slammed the cup down on the bar, the sound echoing thro",
+   "[still=0 passed=0]  Mira: Mira looked up from polishing a tankard, her eyes widening slightly in surprise at the unexpected visitor. She set the mug down and wiped her hands on her apron, then stepped out from behind the bar. \"Well, well. Ash, is that you? I haven't seen you in a long while.\" Her t",
+   "[still=0 passed=0]  Mira: Mira looked up from the bar, her eyes widening in surprise at the familiar face. She set down the mug she had been wiping and stepped out from behind the bar, moving closer to Ash. Her voice was low and urgent as she spoke. \"Ash, is that really you? I never thought I'd see"
+  ]
+ }
+}

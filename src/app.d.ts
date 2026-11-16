@@ -506,9 +506,11 @@ declare global {
 		/** Greyed (`aria-disabled`, the press guarded), with why. */
 		back: { disabled: boolean; reason?: string; takes?: string }
 		forward: { disabled: boolean; reason?: string }
-		/** How many turns are ahead, and the words for it ("2 turns ahead"; empty with none). */
+		/** How many presses are ahead, and the words for it ("2 turns ahead", "2 messages ahead"; empty with none). */
 		ahead: number
 		aheadText: string
+		/** 🚧 What one press takes in this session's genre: the labels say *Back one message* or *Back one turn* by it. Absent reads as `turn`. */
+		step?: "message" | "turn"
 		/** Back: the newest turn out of the story. */
 		goBack: () => void
 		/** Forward: the newest rewound turn back into it. */

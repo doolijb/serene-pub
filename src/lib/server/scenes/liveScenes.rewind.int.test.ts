@@ -112,12 +112,15 @@ describe("scene boundaries under Back and Forward", () => {
 		expect(before).toHaveLength(2)
 		expect(before[0].closedAtMessageId).not.toBeNull()
 
+		// Story steps one message per press: the turn ("four", then "three") takes two presses.
+		await back(session.id)
 		await back(session.id)
 		const during = await scenesOf(session.id)
 		expect(during).toHaveLength(1)
 		expect(during[0].id).toBe(before[0].id)
 		expect(during[0].closedAtMessageId).toBeNull()
 
+		await forward(session.id)
 		await forward(session.id)
 		const after = await scenesOf(session.id)
 		expect(after).toHaveLength(2)

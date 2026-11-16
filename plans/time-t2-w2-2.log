@@ -1,0 +1,33 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts (23 tests | 1 failed) 188ms
+     × the prompt names entries with a beginning, and says nothing at 0 10ms
+(node:4157780) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts > Timeline card > the prompt names entries with a beginning, and says nothing at 0
+AssertionError: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
+ ❯ src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts:203:63
+    201|   flip()
+    202|   await settle()
+    203|   expect(q("[data-lore-book-timeline-confirm]")?.textContent).toContai…
+       |                                                               ^
+    204|    "1 dated version and 1 entry with a beginning."
+    205|   )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 3 passed (4)
+      Tests  1 failed | 68 passed (69)
+   Start at  17:06:43
+   Duration  9.18s (transform 16.72s, setup 58ms, import 24.27s, tests 360ms, environment 399ms)
+

@@ -57,13 +57,18 @@ export interface RewindState {
 	regenerate?: string | null
 	/** 🚧 What Back would take; absent when Back is refused or the count is stale. */
 	backTakes?: RewindBackTakes
+	/** 🚧 How far one press of Back goes in this session's genre (`history.back`): the words say *message* or *turn* by it. Sent whether or not Back may be pressed; absent reads as `turn`. */
+	step?: RewindStep
 }
+
+/** One press of Back takes the newest message, or the whole turn. */
+export type RewindStep = "message" | "turn"
 
 /** A session's `rewind` off its payload, or null for a host that sends none. */
 export function rewindStateOf(session: unknown): RewindState | null {
 	const r = (session as { rewind?: unknown } | null | undefined)?.rewind
 	if (!r || typeof r !== "object") return null
-	const { ahead, back, forward, regenerate, backTakes } = r as Record<
+	const { ahead, back, forward, regenerate, backTakes, step } = r as Record<
 		string,
 		unknown
 	>
@@ -113,7 +118,8 @@ export function rewindStateOf(session: unknown): RewindState | null {
 		back: typeof back === "string" ? back : null,
 		forward: typeof forward === "string" ? forward : null,
 		regenerate: typeof regenerate === "string" ? regenerate : null,
-		...(takes ? { backTakes: takes } : {})
+		...(takes ? { backTakes: takes } : {}),
+		...(step === "message" || step === "turn" ? { step } : {})
 	}
 }
 
@@ -123,10 +129,11 @@ const STORY_LANES = new Set(["main", "main:1"])
 /**
  * 🚧 The strip's state as the page holds it: the session's `rewind`, with
  * Back's reason read again off the lines the page has — the server's own
- * cheap rule (`rewindStateOf`, server): a person's line on the story to go
- * back to, and not a branch's copy. So a line that lands enables Back at
- * once, without a re-read of the session; with no person's line loaded the
- * server's word stands. Pure.
+ * cheap rule (`rewindStateOf`, server): a line on the story to go back to
+ * (a person's, where the genre takes a whole turn; any line, where one press
+ * takes a message), and not a branch's copy. So a line that lands enables
+ * Back at once, without a re-read of the session; with no such line loaded
+ * the server's word stands. Pure.
  */
 export function rewindStateWith(
 	session: unknown,
@@ -136,9 +143,18 @@ export function rewindStateWith(
 	if (!state) return null
 	const settledLine = (session as { settledLine?: unknown } | null | undefined)?.settledLine
 	const line = typeof settledLine === "number" ? settledLine : null
-	const story = [...messages].reverse().filter((m) => STORY_LANES.has(m.channel ?? "main"))
-	const newestPerson = story.find((m) => m.role === "user")
-	const newestStory = story[0]
+	// One backward walk, no allocation: the newest story line and the newest person's line.
+	let newestStory: (typeof messages)[number] | undefined
+	let newestPerson: (typeof messages)[number] | undefined
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i]
+		if (!STORY_LANES.has(m.channel ?? "main")) continue
+		if (!newestStory) newestStory = m
+		if (m.role === "user") {
+			newestPerson = m
+			break
+		}
+	}
 	// A served `settled` lifts only when the newest person's line is past the settle line.
 	const pastLine = line !== null && typeof newestPerson?.id === "number" && newestPerson.id > line
 
@@ -147,6 +163,12 @@ export function rewindStateWith(
 		const copied = typeof (newestPerson.metadata as { copyOf?: unknown } | null)?.copyOf === "number"
 		if (copied) back = REWIND_REFUSALS.fork
 		else if (back === REWIND_REFUSALS.nothing || (back === REWIND_REFUSALS.settled && pastLine)) back = null
+	}
+	// One message per press has no floor: any newest story line can be taken,
+	// a character's first reply before anybody has written included.
+	if (state.step === "message" && back === REWIND_REFUSALS.nothing && newestStory) {
+		const copied = typeof (newestStory.metadata as { copyOf?: unknown } | null)?.copyOf === "number"
+		back = copied ? REWIND_REFUSALS.fork : null
 	}
 
 	let regenerate = state.regenerate ?? null
@@ -157,16 +179,24 @@ export function rewindStateWith(
 
 	// The served count describes the turn at load time: a newer story row makes it stale.
 	const takes = state.backTakes
-	const fresh =
-		takes !== undefined &&
-		back === null &&
-		!story.some((m) => typeof m.id === "number" && m.id > takes.throughId)
+	let fresh = takes !== undefined && back === null
+	if (fresh) {
+		// Any story line past the count's through-id (the array need not ascend): stops at the first.
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i]
+			if (STORY_LANES.has(m.channel ?? "main") && typeof m.id === "number" && m.id > takes!.throughId) {
+				fresh = false
+				break
+			}
+		}
+	}
 	return {
 		ahead: state.ahead,
 		back,
 		forward: state.forward,
 		regenerate,
-		...(fresh ? { backTakes: takes } : {})
+		...(fresh ? { backTakes: takes } : {}),
+		...(state.step ? { step: state.step } : {})
 	}
 }
 

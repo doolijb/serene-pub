@@ -13,7 +13,7 @@
  *
  * Client-only: imports Svelte components.
  */
-import * as Icons from "@lucide/svelte"
+import { Cable, Cloud, Cpu, ScanText, Zap } from "@lucide/svelte"
 import type { Component } from "svelte"
 import KoboldCppIcon from "$lib/client/components/icons/KoboldCppIcon.svelte"
 import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
@@ -61,13 +61,21 @@ const KIND_GLYPHS: Record<EndpointKind, ConnectionBrand | string> = {
 	api: "Cloud"
 }
 
+/** The lucide components `KIND_GLYPHS` can name (the brands are handled first). */
+const KIND_GLYPH_ICONS: Record<string, Component<any>> = {
+	Cpu,
+	Zap,
+	ScanText,
+	Cloud
+}
+
 /** The icon component for an endpoint kind, when only the kind is known. */
 export function kindIconComponent(kind: EndpointKind): Component<any> {
 	const glyph = KIND_GLYPHS[kind]
 	return (
 		BRAND_ICONS[glyph as ConnectionBrand] ??
-		((Icons as any)[glyph] as Component<any> | undefined) ??
-		(Icons.Cable as Component<any>)
+		(KIND_GLYPH_ICONS[glyph] as Component<any> | undefined) ??
+		(Cable as Component<any>)
 	)
 }
 

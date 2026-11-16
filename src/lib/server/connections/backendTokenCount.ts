@@ -159,13 +159,13 @@ export const UNCOUNTED_FLOOR = 1.15
 export const UNCOUNTED_MARGIN = 1.05
 /** Texts shorter than this never move the learned ratio; their ratio is noise. */
 const RATIO_MIN_TOKENS = 16
-const CACHE_LIMIT = 8000
+export const CACHE_LIMIT = 8000
 const QUEUE_LIMIT = 512
 const REQUEST_TIMEOUT_MS = 5000
 const BACKOFF_MS = 60_000
 
 /** A text's cache key: content-addressed, so a long card is not held twice. */
-const keyOf = (text: string): string =>
+export const keyOf = (text: string): string =>
 	createHash("sha1").update(text).digest("base64")
 
 /**

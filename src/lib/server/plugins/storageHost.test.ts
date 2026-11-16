@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import fs from "fs"
 import os from "os"
 import path from "path"
@@ -357,7 +357,11 @@ describe("storage usage", () => {
 		const { api } = openAt({ quotaBytes: 1000 })
 		api.write("f.txt", "0123456789")
 		const u = api.usage()
-		expect(u).toEqual({ quotaBytes: 1000, usedBytes: 10, availableBytes: 990 })
+		expect(u).toEqual({
+			quotaBytes: 1000,
+			usedBytes: 10,
+			availableBytes: 990
+		})
 	})
 
 	it("answers from the projection, so a hook can budget before it commits", () => {
@@ -479,5 +483,119 @@ describe("storage files (the SDK spelling)", () => {
 			/the call has ended/
 		)
 		expect(() => tx.api.write("k", "1")).toThrow(/the call has ended/)
+	})
+})
+
+describe("storage projection is measured once per call", () => {
+	const b64 = (n: number, ch = "x") =>
+		Buffer.from(ch.repeat(n)).toString("base64")
+	/** Reference: the sum of files.list(), which walks the tree on its own path. */
+	const listed = (api: StorageApi) =>
+		api.files.list().reduce((n, f) => n + f.bytes, 0)
+
+	it("walks the root directory once for a transaction writing 200 files", () => {
+		fs.mkdirSync(path.join(dir, "sub"))
+		fs.writeFileSync(path.join(dir, "sub", "old.txt"), "12345")
+		const spy = vi.spyOn(fs, "readdirSync")
+		try {
+			const { api } = openAt()
+			for (let i = 0; i < 200; i++) {
+				const r = api.files.write(`d/f${i}.bin`, b64(3))
+				expect(r.kind).toBe("ok")
+				api.usage()
+				api.size()
+			}
+			const walksOfRoot = spy.mock.calls.filter(
+				(c) => String(c[0]) === dir
+			).length
+			expect(walksOfRoot).toBe(1)
+			expect(api.usage().usedBytes).toBe(5 + 200 * 3)
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	it("keeps usage exact through overwrite, new, rebuffer, rmdir, rewrite and deleteAll", () => {
+		// Reference for every step is files.list() summed (its own walk), not
+		// the running number.
+		fs.mkdirSync(path.join(dir, "docs", "deep"), { recursive: true })
+		fs.writeFileSync(path.join(dir, "top.txt"), "aaaa") // 4
+		fs.writeFileSync(path.join(dir, "docs", "a.txt"), "bbbbbb") // 6
+		fs.writeFileSync(path.join(dir, "docs", "deep", "b.txt"), "cc") // 2
+		fs.writeFileSync(path.join(dir, ".sptmp-dead-0"), "zzz") // 3, counted as today
+		const tx = openAt()
+		const api = tx.api
+		const check = (expected: number, skipList = false) => {
+			expect(api.usage().usedBytes).toBe(expected)
+			expect(api.size()).toBe(expected)
+			// list() hides staging temps, so add the 3 dead bytes back.
+			if (!skipList) expect(listed(api) + 3).toBe(expected)
+		}
+		check(15)
+		// write over an existing disk file
+		api.files.write("top.txt", b64(10))
+		check(21)
+		// a new file
+		api.files.write("new.txt", b64(7))
+		check(28)
+		// overwrite a buffered write
+		api.files.write("new.txt", b64(2))
+		check(23)
+		// buffered write inside a directory that is about to be removed
+		api.files.write("docs/extra.txt", b64(5))
+		check(28)
+		// remove the directory: disk files and the buffered write all go
+		const del = api.files.delete("docs")
+		expect(del.kind).toBe("ok")
+		check(15)
+		// write under the removed directory again
+		api.files.write("docs/deep/again.txt", b64(9))
+		check(24)
+		// a buffered write over a directory that holds disk files
+		api.files.write("docs", b64(1))
+		// files.list() walks on its own and still shows the disk files the buffered
+		// file shadows, so only the number is checked here.
+		check(25, true)
+		api.files.delete("docs")
+		api.files.write("docs", b64(1))
+		check(16, true)
+		// sweep a prefix
+		const swept = api.files.deleteAll("new")
+		expect(swept.kind).toBe("ok")
+		check(14, true)
+		// and the commit lands what the number said
+		// (a file cannot be renamed over a directory, so drop "docs" first)
+		api.files.delete("docs")
+		check(13)
+		const before = api.usage().usedBytes
+		tx.commit()
+		const fresh = openAt()
+		expect(fresh.api.usage().usedBytes).toBe(before)
+	})
+
+	it("matches a fresh host when the first size ask comes after the mutations", () => {
+		fs.mkdirSync(path.join(dir, "d"))
+		fs.writeFileSync(path.join(dir, "d", "x"), "1234")
+		fs.writeFileSync(path.join(dir, "y"), "12")
+		const { api } = openAt()
+		api.files.write("d/n", b64(3))
+		api.files.delete("y")
+		api.files.write("d", b64(1))
+		// by hand: d/x is shadowed by the buffered file "d", y is removed: 3 + 1
+		expect(api.usage().usedBytes).toBe(4)
+	})
+
+	it("refuses at the same byte as before: exactly on the quota passes, one over fails", () => {
+		fs.writeFileSync(path.join(dir, "keep"), "1234") // 4 on disk
+		const tx = openAt({ quotaBytes: 100 })
+		const a = tx.api.files.write("a", b64(96)) // 100 exactly
+		expect(a.kind).toBe("ok")
+		expect(tx.api.usage().availableBytes).toBe(0)
+		const over = tx.api.files.write("b", b64(1))
+		expect(over.kind).toBe("err")
+		// shrinking the buffered file frees room, then one byte over is refused
+		expect(tx.api.files.write("a", b64(95)).kind).toBe("ok")
+		expect(tx.api.files.write("b", b64(1)).kind).toBe("ok")
+		expect(tx.api.files.write("b", b64(2)).kind).toBe("err")
 	})
 })

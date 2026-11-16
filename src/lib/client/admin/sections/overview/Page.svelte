@@ -11,7 +11,17 @@
 	 */
 	import { getContext, onMount } from "svelte"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		ChevronRight,
+		Database,
+		Download,
+		Globe,
+		Loader2,
+		Puzzle,
+		Target,
+		Users,
+		Workflow
+	} from "@lucide/svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import { adminHealth } from "$lib/client/admin/adminHealth.svelte"
 	import { appVersionDisplay } from "$lib/shared/constants/version"
@@ -78,10 +88,19 @@
 		 */
 		href?: string
 	}
+	/** The icon per overview card, by the name each card declares. */
+	const CARD_ICONS = {
+		Target,
+		Users,
+		Globe,
+		Database,
+		Workflow,
+		Puzzle
+	}
 	interface Card {
 		title: string
 		href: string
-		icon: keyof typeof Icons
+		icon: keyof typeof CARD_ICONS
 		lines: Line[]
 		progress?: { value: number; max: number; label: string }
 	}
@@ -262,7 +281,7 @@
 				<!-- The launcher can apply it: Admin › Updates downloads,
 				     verifies and restarts into it. -->
 				<a href="/admin/updates" class="btn preset-filled-primary-500">
-					<Icons.Download size={16} aria-hidden="true" />
+					<Download size={16} aria-hidden="true" />
 					Update to {page.data?.latestReleaseTag ?? "the new version"}
 				</a>
 			{:else if page.data?.isNewerReleaseAvailable}
@@ -272,7 +291,7 @@
 					rel="noopener"
 					class="btn preset-tonal"
 				>
-					<Icons.Download size={16} aria-hidden="true" />
+					<Download size={16} aria-hidden="true" />
 					Get {page.data?.latestReleaseTag ?? "the update"}
 				</a>
 			{/if}
@@ -293,7 +312,7 @@
 			</div>
 			{#if !ov}
 				<p class="text-surface-600-400 flex items-center gap-2 text-sm">
-					<Icons.Loader2
+					<Loader2
 						size={16}
 						class="animate-spin"
 						aria-hidden="true"
@@ -350,7 +369,7 @@
 		{#if cards.length}
 			<div class="overview-grid grid gap-3 @min-[700px]/content:gap-4">
 				{#each cards as card (card.title)}
-					{@const IconCmp = Icons[card.icon] as any}
+					{@const IconCmp = CARD_ICONS[card.icon]}
 					<a
 						href={card.lines.find((l) => l.href)?.href ?? card.href}
 						class="panel-card hover:bg-surface-200-800 focus-visible:outline-primary-500 flex flex-col gap-3 transition-colors focus-visible:outline-2"
@@ -366,7 +385,7 @@
 							>
 								{card.title}
 							</h2>
-							<Icons.ChevronRight
+							<ChevronRight
 								size={16}
 								class="text-surface-500 shrink-0"
 								aria-hidden="true"
@@ -374,14 +393,16 @@
 						</div>
 						<ul class="flex flex-col gap-1.5">
 							{#each card.lines as line, i (i)}
-								<li class="flex items-start gap-2 text-chip">
+								<li class="text-chip flex items-start gap-2">
 									<span
 										class="mt-[5.5px] size-2 shrink-0 rounded-full {DOT[
 											line.tone
 										]}"
 										aria-hidden="true"
 									></span>
-									<span class="overview-line min-w-0 break-words">
+									<span
+										class="overview-line min-w-0 break-words"
+									>
 										{line.text}
 									</span>
 								</li>

@@ -21,7 +21,17 @@
 	 * API key**, **Runs locally** or **Address only** (`SETUP_NEED_LABELS`).
 	 */
 	import { getContext, tick } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		AudioLines,
+		Cable,
+		Check,
+		Image,
+		ScanText,
+		Search,
+		Type,
+		Zap
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import {
 		buildConnectionServiceItems,
 		groupConnectionServiceItems,
@@ -167,6 +177,15 @@
 				?.focus()
 		)
 	}
+
+	/** The icons `CONNECTION_SECTIONS` can name (`connectionSections.ts`). */
+	const SECTION_ICONS: Record<string, Component<any>> = {
+		Type: Type,
+		Image: Image,
+		Zap: Zap,
+		ScanText: ScanText,
+		AudioLines: AudioLines
+	}
 </script>
 
 <!-- One button per section. The modalities never mix in one picker. -->
@@ -176,7 +195,7 @@
 	aria-label="Connection type"
 >
 	{#each CONNECTION_SECTIONS as s (s.modality)}
-		{@const Icon = (Icons as any)[s.icon] ?? Icons.Cable}
+		{@const Icon = SECTION_ICONS[s.icon] ?? Cable}
 		<button
 			type="button"
 			class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
@@ -208,7 +227,7 @@
 	</p>
 {/if}
 <div class="relative mt-1">
-	<Icons.Search
+	<Search
 		size={14}
 		class="text-surface-600-400 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
 		aria-hidden="true"
@@ -283,7 +302,7 @@
 							<!-- Outlined, never filled: the whole card is the
 						     button, so nothing inside it may look like one. -->
 							<span
-								class="border-surface-200-800 text-surface-600-400 mt-1 inline-block rounded-full border px-1.5 py-0.5 text-meta {active
+								class="border-surface-200-800 text-surface-600-400 text-meta mt-1 inline-block rounded-full border px-1.5 py-0.5 {active
 									? 'opacity-80'
 									: ''}"
 							>
@@ -292,7 +311,7 @@
 						{/if}
 					</span>
 					{#if active}
-						<Icons.Check size={16} class="mt-0.5 shrink-0" />
+						<Check size={16} class="mt-0.5 shrink-0" />
 					{/if}
 				</button>
 			{/each}

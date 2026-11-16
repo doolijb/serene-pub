@@ -101,12 +101,15 @@ export function getPersonaDataDir({
 export async function handleCharacterAvatarUpload({
 	character,
 	avatarFile,
-	cardVersionId
+	cardVersionId,
+	redline
 }: {
 	character: { id: number; userId: number; avatarMediaId?: number | null }
 	avatarFile: Buffer
 	/** The card version whose face this is; absent: the card's current one. */
 	cardVersionId?: number
+	/** Who and why, for a person's edit of an existing card; absent records nothing. */
+	redline?: import("$lib/server/characters/versions").VersionRedline
 }) {
 	// `createMedia` answers with the file and the original variant it just
 	// wrote (0182). An avatar pointer names the FILE — never a stored
@@ -129,9 +132,12 @@ export async function handleCharacterAvatarUpload({
 			(await ensureCardVersion(tx as unknown as Db, character.id))?.id
 		if (versionId == null)
 			throw new Error(`Character ${character.id} does not exist.`)
-		await updateCardVersion(tx as unknown as Db, versionId, {
-			faceMediaId: created.file.id
-		})
+		await updateCardVersion(
+			tx as unknown as Db,
+			versionId,
+			{ faceMediaId: created.file.id },
+			redline ? { redline } : undefined
+		)
 	})
 	return created
 }

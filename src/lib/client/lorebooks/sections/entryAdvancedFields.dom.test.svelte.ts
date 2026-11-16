@@ -9,6 +9,7 @@ vi.mock("$lib/client/sockets/loadSockets.client", () => ({
 	useTypedSocket: () => ({ emit, on: () => {}, off: () => {} })
 }))
 
+import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import EntryAdvancedFields from "./EntryAdvancedFields.svelte"
 
 let app: Record<string, any> | null = null
@@ -75,5 +76,15 @@ describe("EntryAdvancedFields", () => {
 		expect(draft.useRegex).toBe(true)
 		expect(draft.priority).toBe(7)
 		expect(draft.selectiveLogic).toBe("andAll")
+	})
+
+	test("a form with no entry row of its own (the cast board's lore editor) keeps Beginning and Decay here; a history entry never", () => {
+		fold(
+			{ settings: { showAdvancedControls: true } },
+			{ typeId: WORLD_LORE_TYPE_ID }
+		)
+		expect(
+			document.querySelector("[data-lore-beginning-decay]") != null
+		).toBe(true)
 	})
 })

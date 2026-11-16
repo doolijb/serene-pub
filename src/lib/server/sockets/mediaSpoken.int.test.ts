@@ -142,7 +142,7 @@ describe("cull", () => {
 		await ensureVariant(db, sp, MediaVariant.THUMB)
 		const rows = await variantRows(sp.id)
 		expect(rows.length).toBeGreaterThanOrEqual(2)
-		const abs = rows.map((r) => resolveMediaPath(r.path))
+		const abs = rows.map((r) => resolveMediaPath(r.path!))
 		for (const a of abs) await fs.access(a)
 
 		const derived = await cullableDerived(owner)

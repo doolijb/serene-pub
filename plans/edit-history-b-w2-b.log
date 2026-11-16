@@ -1,0 +1,115 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts (9 tests | 7 failed) 68ms
+     × the closed fold names the count 7ms
+     × Restore sends the row's id; a refusal reads inline 5ms
+     × restoreBlocked disables Restore and carries its words as the title 5ms
+     × the open fold ends with Clear edit history…, which asks and clears 5ms
+     × no Clear button without canClear 4ms
+     × a picture change says only that it changed; a follows side reads in words 4ms
+     × another version closes the fold and asks again 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > the closed fold names the count
+TypeError: Cannot read properties of null (reading 'textContent')
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:150:10
+    148|   send(redlines())
+    149|   await settle()
+    150|   expect(fold()!.textContent!.trim()).toBe("Edit history · 3 edits")
+       |          ^
+    151|   expect(fold()!.getAttribute("aria-expanded")).toBe("false")
+    152|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > Restore sends the row's id; a refusal reads inline
+TypeError: Cannot read properties of null (reading 'click')
+ ❯ openFold src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:131:2
+    129|  )
+    130| async function openFold() {
+    131|  fold()!.click()
+       |  ^
+    132|  await settle()
+    133| }
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:165:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > restoreBlocked disables Restore and carries its words as the title
+TypeError: Cannot read properties of null (reading 'click')
+ ❯ openFold src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:131:2
+    129|  )
+    130| async function openFold() {
+    131|  fold()!.click()
+       |  ^
+    132|  await settle()
+    133| }
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:193:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > the open fold ends with Clear edit history…, which asks and clears
+TypeError: Cannot read properties of null (reading 'click')
+ ❯ openFold src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:131:2
+    129|  )
+    130| async function openFold() {
+    131|  fold()!.click()
+       |  ^
+    132|  await settle()
+    133| }
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:211:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > no Clear button without canClear
+TypeError: Cannot read properties of null (reading 'click')
+ ❯ openFold src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:131:2
+    129|  )
+    130| async function openFold() {
+    131|  fold()!.click()
+       |  ^
+    132|  await settle()
+    133| }
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:235:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > a picture change says only that it changed; a follows side reads in words
+TypeError: Cannot read properties of null (reading 'click')
+ ❯ openFold src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:131:2
+    129|  )
+    130| async function openFold() {
+    131|  fold()!.click()
+       |  ^
+    132|  await settle()
+    133| }
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:267:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts > a version's Edit history > another version closes the fold and asks again
+TypeError: Cannot read properties of null (reading 'click')
+ ❯ openFold src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:131:2
+    129|  )
+    130| async function openFold() {
+    131|  fold()!.click()
+       |  ^
+    132|  await settle()
+    133| }
+ ❯ src/lib/client/lorebooks/editHistory/editHistoryVersion.dom.test.svelte.ts:277:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 2 passed (9)
+   Start at  17:40:38
+   Duration  7.17s (transform 5.13s, setup 18ms, import 6.84s, tests 68ms, environment 125ms)
+

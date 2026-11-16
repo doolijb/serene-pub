@@ -11,7 +11,14 @@
 	 */
 	import type { Snippet } from "svelte"
 	import { onMount } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		ChevronsDownUp,
+		ChevronsUpDown,
+		LayoutPanelTop,
+		RotateCcw,
+		SlidersHorizontal
+	} from "@lucide/svelte"
+	import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
 	import Panel from "./Panel.svelte"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
@@ -319,7 +326,7 @@
 						aria-haspopup="menu"
 						aria-expanded={layoutMenuOpen}
 					>
-						<Icons.SlidersHorizontal size={16} />
+						<SlidersHorizontal size={16} />
 					</button>
 					{#if layoutMenuOpen}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -334,9 +341,10 @@
 								Panels
 							</div>
 							{#each manager.secondaryPanels as inst (inst.id)}
-								{@const IconCmp =
-									(inst.icon && (Icons as any)[inst.icon]) ||
-									Icons.LayoutPanelTop}
+								{@const IconCmp = declaredIconOf(
+									inst.icon,
+									LayoutPanelTop
+								)}
 								<label
 									class="hover:preset-tonal-surface flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs"
 								>
@@ -362,10 +370,10 @@
 									manager.setAllCollapsed(!manager.allCollapsed)}
 							>
 								{#if manager.allCollapsed}
-									<Icons.ChevronsDownUp size={14} />
+									<ChevronsDownUp size={14} />
 									<span>Expand all</span>
 								{:else}
-									<Icons.ChevronsUpDown size={14} />
+									<ChevronsUpDown size={14} />
 									<span>Collapse all</span>
 								{/if}
 							</button>
@@ -377,7 +385,7 @@
 									layoutMenuOpen = false
 								}}
 							>
-								<Icons.RotateCcw size={14} />
+								<RotateCcw size={14} />
 								<span>Reset to default</span>
 							</button>
 
@@ -398,9 +406,7 @@
 
 				<!-- Drawered panel icons -->
 				{#each manager.drawerInstances as inst, i (inst.id)}
-					{@const IconCmp =
-						(inst.icon && (Icons as any)[inst.icon]) ||
-						Icons.LayoutPanelTop}
+					{@const IconCmp = declaredIconOf(inst.icon, LayoutPanelTop)}
 					<button
 						class="rail-btn"
 						class:active={manager.drawerOpenId === inst.id}

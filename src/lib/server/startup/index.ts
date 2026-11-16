@@ -7,6 +7,7 @@ import {
 	type DatabaseUnopenableError
 } from "$lib/server/db/errors"
 import * as schema from "$lib/server/db/schema"
+import { runWithBootMarker } from "$lib/server/startup/bootMarkers"
 
 /**
  * Ordered startup tasks that run once, after the database is ready.
@@ -45,6 +46,11 @@ export interface StartupTask {
 	 * launcher's health reports `failed` (see `getStartupFailures`).
 	 */
 	failsHealth?: boolean
+	/**
+	 * One-shot: skipped once this boot marker exists; written after a clean
+	 * run — `startup/bootMarkers.ts`, ★P9.
+	 */
+	doneMarker?: string
 	run: () => Promise<void>
 }
 
@@ -201,6 +207,21 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
+		 * 🚧 The admin's per-host LLM lane widths (`llm_lane_widths`, perf-I,
+		 * ★P2-b): handed to the LLM queue before anything can generate. Every
+		 * boot, never one-shot. A failed read leaves every host on its derived
+		 * default (1 local or managed, 4 known cloud).
+		 */
+		name: "llm-lane-widths",
+		run: async () => {
+			const { ensureLlmLaneWidthsLoaded } = await import(
+				"$lib/server/connections/llmLaneWidths"
+			)
+			await ensureLlmLaneWidthsLoaded()
+		}
+	},
+	{
+		/**
 		 * Pipeline tables: the type registry, and core's own published specs.
 		 *
 		 * Separate from the seed `sync()` in db/index.ts because the two are
@@ -290,9 +311,11 @@ export const startupTasks: StartupTask[] = [
 		 * launcher's health (`failsHealth`), not to the boot. Lives as long as
 		 * the attic does (its ETL writes seats without members); delete both
 		 * at the RC1 squash.
+		 * One-shot: a boot marker skips it once it has run clean (★P9).
 		 */
 		name: "seat-members",
 		failsHealth: true,
+		doneMarker: "seat-members",
 		run: async () => {
 			const { seatMembers } = await import("$lib/server/sessions/seatMembers")
 			const r = await seatMembers(db)
@@ -311,9 +334,11 @@ export const startupTasks: StartupTask[] = [
 		 * it. One transaction per card set and per book; a unit that fails is
 		 * logged and left, and the task reports it to the launcher's health.
 		 * Lives until the S5 drop.
+		 * One-shot: a boot marker skips it once it has run clean (★P9).
 		 */
 		name: "character-versions",
 		failsHealth: true,
+		doneMarker: "character-versions",
 		run: async () => {
 			const { liftCharacterVersions } = await import(
 				"$lib/server/characters/versionsLift"
@@ -335,9 +360,11 @@ export const startupTasks: StartupTask[] = [
 		 * keeps are on versions). One transaction per card; a card that fails is
 		 * logged and left, and the task reports it to the launcher's health.
 		 * Delete at the RC1 squash, with the attic.
+		 * One-shot: a boot marker skips it once it has run clean (★P9).
 		 */
 		name: "deleted-card-members",
 		failsHealth: true,
+		doneMarker: "deleted-card-members",
 		run: async () => {
 			const { deletedCardMembers } = await import(
 				"$lib/server/cast/deletedCardMembers"
@@ -385,9 +412,11 @@ export const startupTasks: StartupTask[] = [
 		 * has a base version). One transaction per book; a book that fails
 		 * is logged and left, and the task reports it to the launcher's
 		 * health (`failsHealth`). Delete at the RC1 squash.
+		 * One-shot: a boot marker skips it once it has run clean (★P9).
 		 */
 		name: "dc-cairns",
 		failsHealth: true,
+		doneMarker: "dc-cairns",
 		run: async () => {
 			const { dcCairns } = await import("$lib/server/sessions/dcCairns")
 			const r = await dcCairns(db)
@@ -417,12 +446,53 @@ export const startupTasks: StartupTask[] = [
 		}
 	},
 	{
+		/**
+		 * 🚧 A session with the *Summarize finished scenes* routine and a
+		 * stored Summaries value of Never / On close gets the routine at Off /
+		 * Review, and the stored value is cleared. After `pipelines` (genre
+		 * registrations are projected at boot; only the resolver can say
+		 * whether a session has the routine). A session that fails is logged
+		 * and left, and the task reports it to the launcher's health.
+		 */
+		name: "summaries-to-routine",
+		failsHealth: true,
+		run: async () => {
+			const { summariesToRoutine } = await import("$lib/server/sessions/summariesToRoutine")
+			const r = await summariesToRoutine(db)
+			if (r.converted || r.failed)
+				console.log(`[summaries-to-routine] ${r.converted} of ${r.sessions} session(s) converted`)
+		}
+	},
+	{
 		// Plugins load after every core startup task, so a plugin sees a fully
 		// bootstrapped core. On unless SP_PLUGINS_ENABLED turns it off.
 		name: "plugins",
 		run: async () => {
 			const { bootstrapPlugins } = await import("$lib/server/plugins")
 			await bootstrapPlugins(db)
+		}
+	},
+	{
+		/**
+		 * 🚧 Every lorebook's **Timeline** switch from what it stores
+		 * (`lorebooks/timelinePass.ts`): off only for a book with nothing dated,
+		 * no history entry, no clock, the default calendar, one line, no kit or
+		 * primer, and no session of a story-time (or unresolvable) genre reading
+		 * or owning it. After `plugins`, so plugin genres resolve; a book left
+		 * on stays on. One transaction; one-shot, a boot marker skips it once it
+		 * has run clean, so a person's later switch stands.
+		 */
+		name: "timeline-switch",
+		failsHealth: true,
+		doneMarker: "timeline-switch",
+		run: async () => {
+			const { settleTimelineSwitches } = await import(
+				"$lib/server/lorebooks/timelinePass"
+			)
+			const r = await settleTimelineSwitches(db)
+			console.log(
+				`[timeline-switch] ${r.on} lorebook(s) keep a timeline, ${r.off} do not, ${r.notesCopied} session note book(s) follow their lorebook`
+			)
 		}
 	},
 	{
@@ -649,7 +719,13 @@ async function runStartupTasks(): Promise<void> {
 	}
 	for (const task of startupTasks) {
 		try {
-			await task.run()
+			await (task.doneMarker
+				? runWithBootMarker(db, {
+						name: task.name,
+						doneMarker: task.doneMarker,
+						run: task.run
+					})
+				: task.run())
 		} catch (err) {
 			if (task.critical || task.failsHealth) startupFailures.push(task.name)
 			if (task.critical) throw err

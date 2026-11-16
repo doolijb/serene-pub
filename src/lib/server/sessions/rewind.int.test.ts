@@ -800,7 +800,9 @@ describe("🚧 RF fix 5: Back · Forward", () => {
 			back: "There is nothing to go back to yet.",
 			forward: null,
 			regenerate:
-				"Nothing has been written yet, so there is no turn to regenerate."
+				"Nothing has been written yet, so there is no turn to regenerate.",
+			// What one press takes in this session's genre (this file's stand-in genre: a turn).
+			step: "turn"
 		})
 		const { forwardStackRows } = await import("$lib/server/sessions/rewind")
 		const stack = await forwardStackRows(db as any, s.sessionId)

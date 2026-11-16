@@ -1,0 +1,2 @@
+ALTER TABLE "lore_imprints" DROP CONSTRAINT "lore_imprints_subject_kind_check";--> statement-breakpoint
+ALTER TABLE "lore_imprints" ADD CONSTRAINT "lore_imprints_subject_kind_check" CHECK ("lore_imprints"."subject_kind" IN ('entry', 'relationship', 'member', 'overlay', 'annex', 'version'));

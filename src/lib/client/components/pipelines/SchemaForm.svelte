@@ -15,7 +15,7 @@
 	 */
 
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
-	import CodeField from "$lib/client/components/codeField/CodeField.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { enumOptions } from "$lib/shared/i18n/enumOptions"
@@ -249,19 +249,40 @@
 			}
 		}}
 	>
-		<CodeField
-			{id}
-			value={jsonTextOf(value)}
-			oninput={(v) => {
-				jsonTouchedId = id
-				live(v)
-			}}
-			rows={6}
-			label={text(decl.label, key)}
-			describedBy={issue ? `${id}-issue` : undefined}
-			invalid={!!issue}
-			readonly={disabled}
-		/>
+		{#await import("$lib/client/components/codeField/CodeField.svelte")}
+			<LoadingState />
+		{:then { default: CodeField }}
+			<CodeField
+				{id}
+				value={jsonTextOf(value)}
+				oninput={(v) => {
+					jsonTouchedId = id
+					live(v)
+				}}
+				rows={6}
+				label={text(decl.label, key)}
+				describedBy={issue ? `${id}-issue` : undefined}
+				invalid={!!issue}
+				readonly={disabled}
+			/>
+		{:catch}
+			<div
+				class="m-auto flex flex-col items-center gap-3 p-4 text-center"
+				role="alert"
+			>
+				<p class="text-surface-600-400 text-sm">
+					This field did not load. If Serene Pub was just updated,
+					reload to get the new version.
+				</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => location.reload()}
+				>
+					Reload
+				</button>
+			</div>
+		{/await}
 		{#if issue}
 			<p id="{id}-issue" class="text-error-600-400 text-xs">{issue}</p>
 		{/if}

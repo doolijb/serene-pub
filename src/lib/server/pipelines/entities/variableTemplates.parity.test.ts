@@ -347,6 +347,15 @@ const characterLoreCases: Array<[string, unknown]> = [
 	["undefined", undefined]
 ]
 
+const kindMisfits = (type: string | undefined, value: unknown): boolean => {
+	if (!type || value == null) return false
+	const list = Array.isArray(value)
+	if (type === "list") return !list
+	if (type === "object" || type === "record")
+		return list || typeof value !== "object"
+	return typeof value !== type
+}
+
 describe("shipped variable layouts reproduce the code they replaced", () => {
 	for (const t of SHIPPED_VARIABLE_TEMPLATES) {
 		const cases = t.explicit
@@ -364,6 +373,9 @@ describe("shipped variable layouts reproduce the code they replaced", () => {
 
 		describe(`${t.key} (${t.name})`, () => {
 			for (const [label, value] of cases) {
+				// A value of the wrong kind never reaches the layout: the scope
+				// guard writes it out as it came (`variableLayouts.datedRows.test.ts`).
+				if (kindMisfits(declaredType(t.variableId, t.key), value)) continue
 				it(`matches the in-code default for ${label}`, async () => {
 					const viaTemplate = await renderVariable(
 						layoutFor(t.source, t.key),
@@ -764,8 +776,13 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
  * part that is easy to get subtly wrong.
  */
 describe("jsonValue reproduces a nested position", () => {
+	// A key no variable owns, so the value reaches the layout whatever its kind.
 	const render = (source: string, value: unknown) =>
-		renderVariable(layoutFor(source, "characters"), "characters", value)
+		renderVariable(
+			layoutFor(source.replaceAll("characters", "thing"), "thing"),
+			"thing",
+			value
+		)
 
 	it("offsets every line but the first, which is what nesting means", async () => {
 		// `JSON.stringify({ a: { b: 1 } }, null, 2)` renders the inner object as

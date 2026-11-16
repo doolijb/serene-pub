@@ -1,6 +1,7 @@
 <script lang="ts">
 	/** `sp-icon` — an icon from the app's set by kebab-case name; decorative without a label. */
-	import * as Icons from "@lucide/svelte"
+	import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
+	import DeclaredIconPlaceholder from "$lib/client/components/icons/DeclaredIconPlaceholder.svelte"
 	import type { SpElementProps } from "./spElement.svelte"
 
 	let { attrs, host }: SpElementProps = $props()
@@ -10,8 +11,10 @@
 			.filter(Boolean)
 			.map((w) => w[0].toUpperCase() + w.slice(1))
 			.join("")
+	// Curated names answer at once; any other lucide name loads lazily behind
+	// a same-size placeholder, and an unknown name keeps that box (★P15).
 	const Icon = $derived(
-		attrs.name ? ((Icons as unknown as Record<string, unknown>)[pascal(attrs.name)] as typeof Icons.Circle | undefined) : undefined
+		attrs.name ? declaredIconOf(pascal(attrs.name), DeclaredIconPlaceholder) : undefined
 	)
 	// Pixels, or a CSS length that scales with the text (`0.75em`).
 	const size = $derived(

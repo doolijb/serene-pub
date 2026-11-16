@@ -4,7 +4,7 @@
  * update; a benched seat stays in the update's lists; fallen rows say so; and
  * Reassign and Remove show only where a benched seat allows them.
  */
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({
@@ -60,6 +60,12 @@ vi.mock("$lib/client/sockets/interest.svelte", () => {
 })
 
 import EditSessionForm from "./EditSessionForm.svelte"
+
+// The character picker loads its list when it opens; warm the module so the
+// picker's import resolves within `settle()`.
+beforeAll(async () => {
+	await import("../modals/CharacterSelectList.svelte")
+})
 
 let app: ReturnType<typeof mount> | null = null
 afterEach(() => {
@@ -608,6 +614,9 @@ describe("Edit Session — an unsaved row", () => {
 		textBtn("Add a character").click()
 		flushSync()
 		await tick()
+		// The picker's list arrives one chunk fetch after it opens.
+		await new Promise((r) => setTimeout(r, 0))
+		flushSync()
 		const dov = [...document.querySelectorAll("button")].find((b) =>
 			b.textContent?.includes("Dov")
 		) as HTMLButtonElement

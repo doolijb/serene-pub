@@ -1,3 +1,4 @@
+import { resolveLlmLaneHost } from "$lib/server/connections/llmLanes"
 import { currentLlmPriority, llmQueue } from "./llmQueue"
 import type { TaskType } from "./resolveTaskConfig"
 import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnectionAdapter"
@@ -7,6 +8,16 @@ export interface RunQueuedLLMCallParams {
 	adapter: BaseConnectionAdapter
 	taskType: TaskType
 	connectionName: string
+	/**
+	 * The connection this call goes to; its LLM lane is keyed by its host.
+	 * A caller that passes none keeps the fallback LLM lane keyed by
+	 * `connectionName`.
+	 */
+	connection?: {
+		id?: number | null
+		type?: string | null
+		baseUrl?: string | null
+	}
 	samplingName: string
 	sessionId?: number
 	lorebookId?: number
@@ -47,6 +58,7 @@ export async function runQueuedLLMCall({
 	adapter,
 	taskType,
 	connectionName,
+	connection,
 	samplingName,
 	sessionId,
 	lorebookId,
@@ -55,9 +67,15 @@ export async function runQueuedLLMCall({
 }: RunQueuedLLMCallParams): Promise<RunQueuedLLMCallResult> {
 	if (signal?.aborted) return { text: "", isAborted: true }
 
+	const lane = connection
+		? await resolveLlmLaneHost({ ...connection, name: connectionName })
+		: undefined
+	if (signal?.aborted) return { text: "", isAborted: true }
+
 	const { id, done } = llmQueue.enqueue<RunQueuedLLMCallResult>({
 		taskType,
 		connectionName,
+		lane,
 		samplingName,
 		sessionId,
 		lorebookId,

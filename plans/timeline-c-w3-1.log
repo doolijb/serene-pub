@@ -1,0 +1,85 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/components/sessionForms/startSessionTimelineOffer.dom.test.svelte.ts (17 tests | 2 failed) 608ms
+     × a shared lorebook is started in copy mode: it says so, no button 33ms
+     × a shared lorebook is started in copy mode: it says so, no button 25ms
+ ❯ |dom| src/lib/client/components/sessionForms/sessionLorebookReadingTimeline.dom.test.svelte.ts (4 tests | 2 failed) 69ms
+     × off: the Line select stays, no story clock 36ms
+     × off with a clock held: still none drawn 8ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/sessionLorebookReadingTimeline.dom.test.svelte.ts > SessionLorebookReading › timeline > off: the Line select stays, no story clock
+AssertionError: expected 'Line: which version of the lorebook t…' not to contain 'Story clock'
+
+- Expected
++ Received
+
+- Story clock
++ Line: which version of the lorebook this session reads.
++ 		Main is the original; a branch reads Main only up to where it forked. Story clock: the in-story date. The stats this session
++ 		inherits and the story's current date come from this line, at this clock. Line      Main  
+
+ ❯ src/lib/client/components/sessionForms/sessionLorebookReadingTimeline.dom.test.svelte.ts:51:22
+     49|   await render({ timeline: false })
+     50|   expect(text()).toContain("Line")
+     51|   expect(text()).not.toContain("Story clock")
+       |                      ^
+     52|   expect(has('[data-testid="session-story-clock-followed"]')).toBe(fal…
+     53|   expect(text()).not.toContain("Nothing on this line is dated yet")
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/sessionLorebookReadingTimeline.dom.test.svelte.ts > SessionLorebookReading › timeline > off with a clock held: still none drawn
+AssertionError: expected 'Line: which version of the lorebook t…' not to contain 'Story clock'
+
+- Expected
++ Received
+
+- Story clock
++ Line: which version of the lorebook this session reads.
++ 		Main is the original; a branch reads Main only up to where it forked. Story clock: the in-story date. The stats this session
++ 		inherits and the story's current date come from this line, at this clock. Line      Main  
+
+ ❯ src/lib/client/components/sessionForms/sessionLorebookReadingTimeline.dom.test.svelte.ts:59:22
+     57|  test("off with a clock held: still none drawn", async () => {
+     58|   await render({ timeline: false, clock: { year: 1, month: 1, day: 1 }…
+     59|   expect(text()).not.toContain("Story clock")
+       |                      ^
+     60|   expect(has('[data-testid="session-story-clock"]')).toBe(false)
+     61|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/startSessionTimelineOffer.dom.test.svelte.ts > Start a session › timeline offer in the book pick (Lorebook and rules) > a shared lorebook is started in copy mode: it says so, no button
+ FAIL  |dom| src/lib/client/components/sessionForms/startSessionTimelineOffer.dom.test.svelte.ts > Start a session › timeline offer in the plain Lorebook card > a shared lorebook is started in copy mode: it says so, no button
+AssertionError: expected null to be 'copy' // Object.is equality
+
+- Expected:
+"copy"
+
++ Received:
+null
+
+ ❯ src/lib/client/components/sessionForms/startSessionTimelineOffer.dom.test.svelte.ts:236:23
+    234|   await render(rules, true)
+    235|   await pick(6)
+    236|   expect(offerKind()).toBe("copy")
+       |                       ^
+    237|   expect(offerText()).toContain("Plain plays best with one.")
+    238|   expect(offerText()).toContain(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+
+ Test Files  2 failed | 6 passed (8)
+      Tests  4 failed | 79 passed (83)
+   Start at  13:34:51
+   Duration  14.56s (transform 19.51s, setup 77ms, import 36.59s, tests 3.26s, environment 1.05s)
+

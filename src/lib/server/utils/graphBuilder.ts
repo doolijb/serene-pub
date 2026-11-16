@@ -473,6 +473,11 @@ async function runLLM(
 		adapter,
 		taskType: "graph_perspective",
 		connectionName: opts.connection.name,
+		connection: {
+			id: opts.connection.id,
+			type: opts.connection.type,
+			baseUrl: opts.connection.baseUrl
+		},
 		samplingName: opts.sampling.name,
 		label
 	})

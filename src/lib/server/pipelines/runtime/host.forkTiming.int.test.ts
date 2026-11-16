@@ -7,11 +7,10 @@
  * `line_on_first_write` set; the first write that lands forks the line, and its
  * rows stand on the new line. (First describe; the predicate answers false.)
  *
- * A session whose scenes end by themselves (sense-b4) writes its new entry or
- * link to its own book and forks nothing; the line forks when an Apply moves
- * them to the lorebook, and what moved carries the new line. (Second describe;
- * the predicate is switched on per session, the real one is tested in
- * `host.scenesEndRoute.int.test.ts`.)
+ * A session whose scenes end by themselves writes the same way under Full on
+ * its owner's own lorebook: the lorebook takes the write and the line forks
+ * inside the transaction. (Second describe; the predicate is switched on per
+ * session, the real one is tested in `host.scenesEndRoute.int.test.ts`.)
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
@@ -205,7 +204,7 @@ describe("a session whose scenes do not end by themselves: a pipeline's lore wri
 	})
 })
 
-describe("a session whose scenes end by themselves: its own book takes the write, an Apply forks the line", () => {
+describe("a session whose scenes end by themselves, under Full: the lorebook takes the write and the line forks inside its transaction", () => {
 	/** `world()` with the predicate on, a message to anchor to, and the lorebook's owner at Full. */
 	async function meeting() {
 		const w = await world()
@@ -242,7 +241,18 @@ describe("a session whose scenes end by themselves: its own book takes the write
 		expect(await linesOf(w.book.id)).toHaveLength(1)
 	}
 
-	it("the first accepted entry write forks nothing: the entry and its link sit in the own book with no line", async () => {
+	it("a refused entry write (a link to nothing) forks nothing", async () => {
+		const w = await meeting()
+		await expect(
+			(await w.hostFor()).commit!(
+				{ name: "Watchtower", content: "A tower.", links: ["Nowhere At All"] },
+				SAVE as any
+			)
+		).rejects.toThrow()
+		await stays(w)
+	})
+
+	it("the first accepted entry write forks the line, and the entry and its link stand on the new line in the lorebook", async () => {
 		const w = await meeting()
 		const res = (await (
 			await w.hostFor()
@@ -250,64 +260,7 @@ describe("a session whose scenes end by themselves: its own book takes the write
 			{ name: "Watchtower", content: "A tower.", links: ["Aerie"] },
 			SAVE as any
 		)) as { id: number; linkIds: number[]; route: string }
-		expect(res.route).toBe("own-book")
-		await stays(w)
-		const [row] = await db
-			.select()
-			.from(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.id, res.id))
-		expect(row).toMatchObject({ lorebookId: w.own.id, branchId: null })
-		const [link] = await db
-			.select()
-			.from(schema.narrativeRelationships)
-			.where(eq(schema.narrativeRelationships.id, res.linkIds[0]!))
-		expect(link).toMatchObject({ lorebookId: w.own.id, branchId: null })
-	})
-
-	it("the first link write forks nothing: the link sits in the own book with no line", async () => {
-		const w = await meeting()
-		const [den] = await db
-			.insert(schema.lorebookEntries)
-			.values(
-				entryInsert({
-					typeId: WORLD_LORE_TYPE_ID,
-					lorebookId: w.own.id,
-					name: "Den",
-					content: "A den.",
-					position: 1
-				} as any)
-			)
-			.returning({ id: schema.lorebookEntries.id })
-		const res = (await (
-			await w.hostFor()
-		).commit!({ from: den!.id, to: "Aerie" }, LINK as any)) as {
-			id: number
-		}
-		await stays(w)
-		const [link] = await db
-			.select()
-			.from(schema.narrativeRelationships)
-			.where(eq(schema.narrativeRelationships.id, res.id))
-		expect(link).toMatchObject({ lorebookId: w.own.id, branchId: null })
-	})
-
-	it("then an Apply forks the line, and what it moved carries the new line", async () => {
-		const w = await meeting()
-		const res = (await (
-			await w.hostFor()
-		).commit!(
-			{ name: "Watchtower", content: "A tower.", links: ["Aerie"] },
-			SAVE as any
-		)) as { id: number; linkIds: number[] }
-		await stays(w)
-		const { applyOverlayItems } = await import(
-			"$lib/server/lorebooks/ownBook"
-		)
-		const done = await applyOverlayItems(db as any, {
-			sessionId: w.session.id,
-			userId: w.book.userId
-		})
-		expect(done.applied).toContain(res.id)
+		expect(res.route).toBe("book")
 		const after = await sessionOf(w.session.id)
 		expect(after.lineOnFirstWrite).toBe(false)
 		expect(after.lorebookBranchId).not.toBe(w.fork.id)
@@ -320,11 +273,51 @@ describe("a session whose scenes end by themselves: its own book takes the write
 			lorebookId: w.book.id,
 			branchId: after.lorebookBranchId
 		})
-		const links = await db
+		const [link] = await db
 			.select()
 			.from(schema.narrativeRelationships)
-			.where(eq(schema.narrativeRelationships.lorebookId, w.book.id))
-		expect(links).toHaveLength(1)
-		expect(links[0]!.branchId).toBe(after.lorebookBranchId)
+			.where(eq(schema.narrativeRelationships.id, res.linkIds[0]!))
+		expect(link).toMatchObject({
+			lorebookId: w.book.id,
+			branchId: after.lorebookBranchId
+		})
+		expect(
+			await db
+				.select()
+				.from(schema.lorebookEntries)
+				.where(eq(schema.lorebookEntries.lorebookId, w.own.id))
+		).toHaveLength(0)
+	})
+
+	it("the first accepted link write forks the line, and the link stands on the new line in the lorebook", async () => {
+		const w = await meeting()
+		const [hall] = await db
+			.insert(schema.lorebookEntries)
+			.values(
+				entryInsert({
+					typeId: WORLD_LORE_TYPE_ID,
+					lorebookId: w.book.id,
+					name: "Hall",
+					content: "A hall.",
+					position: 2
+				} as any)
+			)
+			.returning({ id: schema.lorebookEntries.id })
+		const res = (await (
+			await w.hostFor()
+		).commit!({ from: "Aerie", to: hall!.id }, LINK as any)) as {
+			id: number
+		}
+		const after = await sessionOf(w.session.id)
+		expect(after.lineOnFirstWrite).toBe(false)
+		expect(after.lorebookBranchId).not.toBe(w.fork.id)
+		const [link] = await db
+			.select()
+			.from(schema.narrativeRelationships)
+			.where(eq(schema.narrativeRelationships.id, res.id))
+		expect(link).toMatchObject({
+			lorebookId: w.book.id,
+			branchId: after.lorebookBranchId
+		})
 	})
 })

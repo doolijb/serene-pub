@@ -2,7 +2,12 @@ import type Handlebars from "handlebars"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter } from "./PromptBlockFormatter"
 import { strokeList } from "./strokeList"
-import { VARIABLE_LAYOUT_HELPER } from "@serene-pub/sdk"
+import {
+	FORMAT_DATE_DELTA_HELPER,
+	FORMAT_DATE_HELPER,
+	VARIABLE_LAYOUT_HELPER
+} from "@serene-pub/sdk"
+import { storyDateDeltaText, storyDateText } from "$lib/shared/lorebooks/storyDateText"
 
 /**
  * 🚧 The one reserved key of a render's context that carries the explicit
@@ -97,6 +102,26 @@ export function registerContextHandlebarsHelpers(
 			n == null
 				? ""
 				: String(n).padStart(typeof width === "number" ? width : 2, "0")
+		)
+
+	/**
+	 * `{{{formatDate date}}}` — a story date value as text: the calendar's
+	 * spelling when its parts carry names, numeric otherwise (`storyDateText`).
+	 * A plain string, not a SafeString, so it can be a subexpression argument;
+	 * a layout prints it with the triple stash.
+	 */
+	if (!handlebars.helpers[FORMAT_DATE_HELPER])
+		handlebars.registerHelper(FORMAT_DATE_HELPER, (v: unknown) =>
+			storyDateText(v)
+		)
+
+	/**
+	 * `{{{formatDateDelta delta}}}` — a story date delta as signed counts
+	 * (`storyDateDeltaText`). A plain string, like `formatDate`.
+	 */
+	if (!handlebars.helpers[FORMAT_DATE_DELTA_HELPER])
+		handlebars.registerHelper(FORMAT_DATE_DELTA_HELPER, (v: unknown) =>
+			storyDateDeltaText(v)
 		)
 
 	/**

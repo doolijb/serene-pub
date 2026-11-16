@@ -541,6 +541,57 @@ describe("re-seeding", () => {
 	})
 })
 
+describe("a pool seeded in one statement", () => {
+	it("re-creates every shipped row of a pool, and the first yields to a person's row of its name", async () => {
+		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+		const { promptPoolKeyFor, poolKeyFor } = await import(
+			"$lib/server/pipelines/entities/promptPool"
+		)
+		const first = CORE_PROMPTS.find(
+			(p) =>
+				CORE_PROMPTS.filter(
+					(q) =>
+						promptPoolKeyFor(q.nodeType, q.slot) ===
+						promptPoolKeyFor(p.nodeType, p.slot)
+				).length > 1
+		)!
+		const poolKey = promptPoolKeyFor(first.nodeType, first.slot)
+		const inPool = CORE_PROMPTS.filter(
+			(p) => promptPoolKeyFor(p.nodeType, p.slot) === poolKey
+		)
+		const nodeDefinitionId = poolKeyFor(first.nodeType)
+		await db
+			.delete(schema.pipelinePrompts)
+			.where(
+				and(
+					eq(
+						schema.pipelinePrompts.nodeDefinitionId,
+						nodeDefinitionId
+					),
+					eq(schema.pipelinePrompts.slot, first.slot)
+				)
+			)
+		await db.insert(schema.pipelinePrompts).values({
+			nodeDefinitionId,
+			slot: first.slot,
+			name: first.name,
+			fields: { systemPrompt: "mine" }
+		})
+
+		const res = await seedPipelinePrompts(db)
+		const mine = res.find((r) => r.pool === poolKey)!
+		expect(mine.created).toEqual(inPool.map((p) => p.seedKey))
+
+		const rows = await poolRows(nodeDefinitionId, first.slot)
+		const byKey = new Map(rows.map((r) => [r.seedKey, r]))
+		expect(byKey.get(first.seedKey)!.name).toBe(`${first.name} (Built-in)`)
+		for (const p of inPool.slice(1))
+			if (p.name !== first.name)
+				expect(byKey.get(p.seedKey)!.name).toBe(p.name)
+		expect(rows.find((r) => r.seedKey == null)!.name).toBe(first.name)
+	})
+})
+
 /**
  * The 0110 and 0114 blocks are gone, and their absence is a decision.
  *

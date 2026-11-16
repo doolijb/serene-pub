@@ -34,6 +34,8 @@ export interface SessionRunRecord {
 	reply?: { channel: string }
 	/** 🚧 A line-bound run (speaking one line): kept for the line's *Speaking…*, never turn work. */
 	lineBound?: true
+	/** 🚧 The routine's name (`RunStatusFrame.routine`): on a routine run's own frames; a relay frame leaves it as held. */
+	routine?: { name: string }
 }
 /** 🚧 The session's genre row as `sessions:genreOf` answered; null = answered, not offered here. */
 export type SessionGenreRecord = Sockets.Sessions.GenreOf.Response["genre"]

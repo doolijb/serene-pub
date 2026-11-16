@@ -76,19 +76,22 @@
 		return () => document.removeEventListener("fullscreenchange", syncDisplay)
 	})
 
+	/** What one press takes, in this session's genre: Story a message, the Lair and the Dungeon Crawler a turn. */
+	const backLabel = $derived(rewind?.step === "message" ? "Back one message" : "Back one turn")
+	const forwardLabel = $derived(rewind?.step === "message" ? "Forward one message" : "Forward one turn")
 	const backTitle = $derived(
 		rewind?.back.reason
-			? `Back one turn — ${rewind.back.reason}`
+			? `${backLabel} — ${rewind.back.reason}`
 			: rewind?.back.takes
 				? `Back: ${rewind.back.takes}`
-				: "Back one turn"
+				: backLabel
 	)
 	const forwardTitle = $derived(
 		rewind?.forward.reason
-			? `Forward one turn — ${rewind.forward.reason}`
+			? `${forwardLabel} — ${rewind.forward.reason}`
 			: rewind?.aheadText
-				? `Forward one turn (${rewind.aheadText})`
-				: "Forward one turn"
+				? `${forwardLabel} (${rewind.aheadText})`
+				: forwardLabel
 	)
 	const regenerateTitle = $derived(
 		rewind?.regenerate?.reason
@@ -98,14 +101,14 @@
 
 	const items = $derived<RowMenuEntries>([
 		rewind && {
-			label: "Back one turn",
+			label: backLabel,
 			icon: Icons.Undo2,
 			disabled: rewind.back.disabled,
 			title: backTitle,
 			onSelect: () => rewind.goBack()
 		},
 		rewind && {
-			label: "Forward one turn",
+			label: forwardLabel,
 			icon: Icons.Redo2,
 			disabled: rewind.forward.disabled,
 			title: forwardTitle,

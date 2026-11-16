@@ -1,0 +1,35 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+[vitest] removed 1 stale temp entry from /tmp
+stdout | src/lib/server/sockets/scenes.afterBoundaryPlaced.int.test.ts > afterBoundaryPlaced relists the history list > a placed scene in a book re-sends that book's history list to its owner
+Using PGlite database at: /tmp/serene-pub-scenes-after-boundary-int-test-Sc3Cbo/data/serene-pub.db
+
+ ❯ |int| src/lib/server/sockets/scenes.afterBoundaryPlaced.int.test.ts (2 tests | 1 failed) 4211ms
+     × a placed scene in a book re-sends that book's history list to its owner 4208ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/scenes.afterBoundaryPlaced.int.test.ts > afterBoundaryPlaced relists the history list > a placed scene in a book re-sends that book's history list to its owner
+AssertionError: expected "vi.fn()" to be called 1 times, but got 0 times
+ ❯ src/lib/server/sockets/scenes.afterBoundaryPlaced.int.test.ts:66:25
+     64|   )
+     65|
+     66|   expect(relistEntries).toHaveBeenCalledTimes(1)
+       |                         ^
+     67|   expect(relistEntries).toHaveBeenCalledWith(
+     68|    expect.objectContaining({ user: { id: 7 } }),
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 20 passed (21)
+   Start at  04:18:04
+   Duration  5.46s (transform 2.93s, setup 37ms, import 2.30s, tests 7.65s, environment 1ms)
+

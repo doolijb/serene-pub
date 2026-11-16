@@ -1,0 +1,21 @@
+▶ the core catalog
+  ✔ the announcement builds — genres, pipelines, hooks validated as one package (140.218474ms)
+  ✔ exactly one create pipeline serves each genre, and one respond serves its turn (43.742574ms)
+  ✔ seven reply specs write the sprite step in, after save, with the text passed in (35.929246ms)
+  ✔ hook declarations are fully-qualified core ids (0.0876ms)
+✔ the core catalog (220.57125ms)
+▶ core's announcement (golden)
+  ✔ the canonical document is unchanged (75.887751ms)
+✔ core's announcement (golden) (76.06381ms)
+▶ 🚧 the timeline mandate and a preset's timeline default in the catalogue
+  ✔ the Lair and the Dungeon Crawler require a timeline; no other core genre does (45.850493ms)
+  ✔ Story Minimal starts undated, in its declaration and its seed; Living and Rule Based say nothing (44.123632ms)
+✔ 🚧 the timeline mandate and a preset's timeline default in the catalogue (90.134794ms)
+ℹ tests 7
+ℹ suites 3
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 745.621828

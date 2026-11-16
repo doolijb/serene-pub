@@ -224,33 +224,29 @@ function statusFor(
 }
 
 /**
- * Put a declaration in the archive, if its hash is not there already.
+ * Queue a declaration for the archive, if its hash is not there already.
  *
- * The insert is conditional on the hash rather than unconditional-with-a-unique
- * violation, because a violation aborts the surrounding statement and this runs
- * inside a boot that must not fail over an audit trail.
+ * The `archived` set, read inside the sync's transaction, is what keeps a hash
+ * out twice; `flushArchive` then writes the queued rows in batches. A unique
+ * violation on the hash index would roll the whole sync back, so the check
+ * happens here, before anything is written.
  */
-async function archiveDeclaration(
-	db: Db,
+function archiveDeclaration(
+	pending: Array<typeof schema.pipelineDefinitionDeclarations.$inferInsert>,
+	archived: Set<string>,
 	entry: RegistryEntry,
 	hash: string,
 	release: string,
 	source: "declared" | "adopted"
-): Promise<boolean> {
-	const [seen] = await db
-		.select({ id: schema.pipelineDefinitionDeclarations.id })
-		.from(schema.pipelineDefinitionDeclarations)
-		.where(
-			and(
-				eq(schema.pipelineDefinitionDeclarations.definitionId, entry.id),
-				eq(schema.pipelineDefinitionDeclarations.version, entry.version),
-				eq(schema.pipelineDefinitionDeclarations.contentHash, hash)
-			)
-		)
-		.limit(1)
-	if (seen) return false
+): boolean {
+	// `archived` is read once per sync and added to as the loop archives, so a
+	// declaration archived earlier in the same pass is seen as present. The row
+	// itself waits in `pending` (loop order) and is written by `flushArchive`.
+	const key = `${entry.id}@${entry.version}\0${hash}`
+	if (archived.has(key)) return false
+	archived.add(key)
 
-	await db.insert(schema.pipelineDefinitionDeclarations).values({
+	pending.push({
 		definitionId: entry.id,
 		version: entry.version,
 		kind: entry.kind,
@@ -282,16 +278,60 @@ async function archiveDeclaration(
  * older than the build's is therefore the row as this build reads it, and it
  * re-hashes to the row's hash only when the two builds agree on the material.
  */
-async function adoptCurrent(db: Db, row: any, release: string): Promise<void> {
+function adoptCurrent(
+	pending: Array<typeof schema.pipelineDefinitionDeclarations.$inferInsert>,
+	archived: Set<string>,
+	row: any,
+	release: string
+): void {
 	if (!row.contentHash) return
-	await archiveDeclaration(
-		db,
+	archiveDeclaration(
+		pending,
+		archived,
 		rowToEntry(row),
 		row.contentHash,
 		row.release ?? release,
 		"adopted"
 	)
 }
+
+/** Rows per multi-row insert. */
+const INSERT_CHUNK = 100
+
+/** Write the pending archive rows, in order, one multi-row insert per chunk. */
+async function flushArchive(
+	tx: Db,
+	pending: Array<typeof schema.pipelineDefinitionDeclarations.$inferInsert>
+): Promise<void> {
+	for (let i = 0; i < pending.length; i += INSERT_CHUNK)
+		await tx
+			.insert(schema.pipelineDefinitionDeclarations)
+			.values(pending.slice(i, i + INSERT_CHUNK))
+	pending.length = 0
+}
+
+/**
+ * Write the pending registry rows, in order, one multi-row insert per chunk,
+ * and put each returned row into `rowsByPin` under its own pin (read from the
+ * row, never by position).
+ */
+async function flushRegistry(
+	tx: Db,
+	pending: Array<typeof schema.pipelineDefinitionRegistry.$inferInsert>,
+	rowsByPin: Map<string, any>
+): Promise<void> {
+	for (let i = 0; i < pending.length; i += INSERT_CHUNK) {
+		const rows = await tx
+			.insert(schema.pipelineDefinitionRegistry)
+			.values(pending.slice(i, i + INSERT_CHUNK))
+			.returning()
+		for (const r of rows) rowsByPin.set(`${r.definitionId}@${r.version}`, r)
+	}
+	pending.length = 0
+}
+
+/** Held in `rowsByPin` for a pin whose insert is still pending. */
+const PENDING_INSERT = Symbol("pending registry insert")
 
 /** Whether this process has said the reverse-diff guard's line — once is enough. */
 let warnedReverseDiffSkip = false
@@ -332,251 +372,313 @@ export async function syncDefinitionRegistry(
 		deprecatedUnpublished: []
 	}
 
-	for (const entry of entries) {
-		const hash = definitionContentHash(entry)
-		const pin = `${entry.id}@${entry.version}`
-
-		const [row] = await db
+	// One transaction for the whole sync: a single commit, and no half-written
+	// registry. A failing statement throws out of the callback to the caller (the
+	// boot's `pipelines` task still fails health), and the transaction rolls back.
+	return db.transaction(async (tx) => {
+		// Both tables are read once, here, instead of once per entry. New registry
+		// and archive rows wait in two pending lists and are written in chunks. A pin
+		// whose insert is pending holds PENDING_INSERT in `rowsByPin`; a duplicate
+		// pin in `entries` that meets it flushes the pending inserts first, so it
+		// finds the row its twin wrote.
+		const rowsByPin = new Map<string, any>()
+		for (const r of await tx
 			.select()
-			.from(schema.pipelineDefinitionRegistry)
-			.where(
-				and(
-					eq(schema.pipelineDefinitionRegistry.definitionId, entry.id),
-					eq(schema.pipelineDefinitionRegistry.version, entry.version)
-				)
-			)
-			.limit(1)
-
-		if (!row) {
-			await archiveDeclaration(db, entry, hash, opts.release, "declared")
-			await db.insert(schema.pipelineDefinitionRegistry).values({
-				definitionId: entry.id,
-				version: entry.version,
-				ownerPluginId: opts.ownerPluginId ?? null,
-				// Core's own types run in-process; anything a plugin owns does
-				// not, ever. An extension hook inside Serene Pub's process cannot
-				// be stopped, so a runaway loop takes the application down rather
-				// than one node (13 §7h). Written from ownership rather than from
-				// the plugin's own claim, so a manifest cannot ask for otherwise.
-				transport: opts.ownerPluginId != null ? "process" : "node",
-				...projectedColumns(entry, opts.release),
-				contentHash: hash
+			.from(schema.pipelineDefinitionRegistry))
+			rowsByPin.set(`${r.definitionId}@${r.version}`, r)
+		const archived = new Set<string>()
+		for (const d of await tx
+			.select({
+				definitionId:
+					schema.pipelineDefinitionDeclarations.definitionId,
+				version: schema.pipelineDefinitionDeclarations.version,
+				contentHash: schema.pipelineDefinitionDeclarations.contentHash
 			})
-			result.inserted.push(pin)
-			continue
-		}
+			.from(schema.pipelineDefinitionDeclarations))
+			archived.add(`${d.definitionId}@${d.version}\0${d.contentHash}`)
 
-		// Before anything can move the pointer, whatever it points at now goes
-		// into the archive. On an install upgrading past 0119 this is the only
-		// moment the pre-archive declaration is still reachable.
-		await adoptCurrent(db, row, opts.release)
+		const archivePending: Array<
+			typeof schema.pipelineDefinitionDeclarations.$inferInsert
+		> = []
+		const registryPending: Array<
+			typeof schema.pipelineDefinitionRegistry.$inferInsert
+		> = []
 
-		if (row.contentHash !== hash) {
-			/**
-			 * The pointer moves.
-			 *
-			 * Both halves matter and neither is optional: the archive keeps the
-			 * declaration the slug is moving *off*, so a hash that named it
-			 * still resolves, and the row takes the whole new projection, so no
-			 * reader sees a mixture of two declarations.
-			 *
-			 * ⚠ `contentHash` is set in the same statement as the columns it
-			 * describes. Split across two writes, a failure between them would
-			 * leave a row whose hash disagrees with its own content — a lie the
-			 * next boot would read as a further pointer move and archive under
-			 * a hash of a declaration nobody wrote.
-			 */
-			await archiveDeclaration(db, entry, hash, opts.release, "declared")
-			await db
-				.update(schema.pipelineDefinitionRegistry)
-				.set({
+		for (const entry of entries) {
+			const hash = definitionContentHash(entry)
+			const pin = `${entry.id}@${entry.version}`
+
+			let row = rowsByPin.get(pin)
+			if (row === PENDING_INSERT) {
+				await flushArchive(tx, archivePending)
+				await flushRegistry(tx, registryPending, rowsByPin)
+				row = rowsByPin.get(pin)
+			}
+
+			if (!row) {
+				archiveDeclaration(
+					archivePending,
+					archived,
+					entry,
+					hash,
+					opts.release,
+					"declared"
+				)
+				registryPending.push({
+					definitionId: entry.id,
+					version: entry.version,
+					ownerPluginId: opts.ownerPluginId ?? null,
+					// Core's own types run in-process; anything a plugin owns does
+					// not, ever. An extension hook inside Serene Pub's process cannot
+					// be stopped, so a runaway loop takes the application down rather
+					// than one node (13 §7h). Written from ownership rather than from
+					// the plugin's own claim, so a manifest cannot ask for otherwise.
+					transport: opts.ownerPluginId != null ? "process" : "node",
 					...projectedColumns(entry, opts.release),
-					status: statusFor(entry, row.status),
 					contentHash: hash
 				})
-				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
-			result.republished.push(pin)
-			continue
-		}
-
-		// Same contract — but the *display* text may still have moved:
-		// labels and descriptions are stripped from the hash precisely so
-		// they can change without a version bump, and that promise is only
-		// kept if the row picks them up here. The stored slots are what a
-		// form renders from (F6), so a description authored after 1.0.0
-		// shipped must reach installs whose rows predate it.
-		const slotsChanged =
-			JSON.stringify(sortDeep(row.slots ?? {})) !==
-			JSON.stringify(sortDeep(entry.slots ?? {}))
-		// `optional` *is* hashed, so a declaration cannot change it without
-		// changing the hash and moving the pointer. What can go stale
-		// is the column itself: it was added long after the property, so
-		// every row written before then carries the default rather than the
-		// truth. Healing it here rather than backfilling in the migration
-		// means the fix needs no hardcoded list of which types declare it.
-		const optionalChanged = !!row.optional !== !!entry.optional
-		// `payloads` (R33) is hashed, but its column arrived after the hash
-		// learned it (0155): a row written in between carries NULL under the
-		// right hash. Healed here on the same footing as `optional`.
-		const payloadsChanged =
-			JSON.stringify(row.payloads ?? null) !== JSON.stringify(entry.payloads ?? null)
-		// The name, on the same footing as `slots` and for the same reason:
-		// stripped from the hash so it can change without a version bump,
-		// which is a promise only kept if the row picks it up here. It was
-		// not projected at all until 0.6, so every existing row carries
-		// NULL and every reader that wanted a name invented one from the
-		// type id — healed here rather than backfilled, so the fix needs no
-		// hardcoded list of which types declare one.
-		const i18nChanged =
-			JSON.stringify(row.i18n ?? null) !==
-			JSON.stringify((entry.i18n as any) ?? null)
-		// Point labels are display text on the same footing as slot
-		// descriptions: stripped from the hash, so kept fresh here.
-		const pointsChanged =
-			JSON.stringify(sortDeep(row.scriptPoints ?? null)) !==
-			JSON.stringify(sortDeep((entry.scriptPoints as any) ?? null))
-		// An entry type's `fields` are a declared schema on exactly the
-		// same footing as `slots`: hashed apart from their display text, so
-		// a relabelled field must reach installs whose rows predate the
-		// rewording, or the form renders the old words forever. The
-		// contract half (`entry_shape`) needs no such healing — it is
-		// hashed whole, so it cannot move without moving the pointer.
-		const configSchemaChanged =
-			JSON.stringify(sortDeep(row.configSchema ?? null)) !==
-			JSON.stringify(sortDeep((entry.configSchema as any) ?? null))
-		// The policy half (plans/31 V6) is outside the hash on purpose — a
-		// flipped `provisional`, a moved timeout, a changed gate default must
-		// reach every install without a pointer move — so it is refreshed
-		// here, on the same footing as the display text.
-		const policyChanged =
-			JSON.stringify(sortDeep(row.policy ?? null)) !==
-			JSON.stringify(sortDeep((entry.policy as any) ?? null))
-		// The status derives from the policy's `provisional`, so it moves
-		// with the line above; a slug that was `removed` and is published
-		// again comes back through here too.
-		const status = statusFor(entry, row.status)
-		const statusChanged = row.status !== status
-		if (
-			configSchemaChanged ||
-			slotsChanged ||
-			optionalChanged ||
-			payloadsChanged ||
-			i18nChanged ||
-			pointsChanged ||
-			policyChanged ||
-			statusChanged ||
-			row.release !== opts.release
-		) {
-			await db
-				.update(schema.pipelineDefinitionRegistry)
-				.set({
-					release: opts.release,
-					...(statusChanged ? { status, removedAt: null } : {}),
-					...(policyChanged
-						? { policy: (entry.policy as any) ?? null }
-						: {}),
-					...(optionalChanged
-						? { optional: entry.optional ?? false }
-						: {}),
-					...(payloadsChanged ? { payloads: entry.payloads ?? null } : {}),
-					...(slotsChanged ? { slots: entry.slots ?? {} } : {}),
-					...(configSchemaChanged
-						? {
-								configSchema:
-									(entry.configSchema as any) ?? null
-							}
-						: {}),
-					...(i18nChanged
-						? { i18n: (entry.i18n as any) ?? null }
-						: {}),
-					...(pointsChanged
-						? {
-								scriptPoints:
-									(entry.scriptPoints as any) ?? null
-							}
-						: {})
-				})
-				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
-			if (slotsChanged || configSchemaChanged) {
-				result.updated.push(pin)
+				rowsByPin.set(pin, PENDING_INSERT)
+				result.inserted.push(pin)
 				continue
 			}
-		}
-		result.unchanged.push(pin)
-	}
 
-	if (opts.complete) {
-		/**
-		 * The reverse-diff (plans/29 R-2): a row of this owner whose slug the
-		 * current build does not publish is marked, never deleted.
-		 *
-		 * Marked, because a stored spec may still pin it — `pipeline_nodes`
-		 * names the slug, and deleting the row would turn a legible notice
-		 * ("this node's definition is gone") into an unknown-type error at
-		 * load. The archive keeps every declaration the slug ever resolved
-		 * to, so a receipt naming its hash still resolves. `removed_at` is
-		 * first-seen: a row already marked keeps its date. The same precedent
-		 * `syncPluginPresets` sets for a withdrawn preset.
-		 */
-		const owner = opts.ownerPluginId ?? null
-		const published = new Set(entries.map((e) => `${e.id}@${e.version}`))
-		const rows = await db
-			.select({
-				id: schema.pipelineDefinitionRegistry.id,
-				definitionId: schema.pipelineDefinitionRegistry.definitionId,
-				version: schema.pipelineDefinitionRegistry.version,
-				status: schema.pipelineDefinitionRegistry.status
-			})
-			.from(schema.pipelineDefinitionRegistry)
-			.where(
-				owner === null
-					? isNull(schema.pipelineDefinitionRegistry.ownerPluginId)
-					: eq(schema.pipelineDefinitionRegistry.ownerPluginId, owner)
+			// Before anything can move the pointer, whatever it points at now goes
+			// into the archive. On an install upgrading past 0119 this is the only
+			// moment the pre-archive declaration is still reachable.
+			adoptCurrent(archivePending, archived, row, opts.release)
+
+			if (row.contentHash !== hash) {
+				/**
+				 * The pointer moves.
+				 *
+				 * Both halves matter and neither is optional: the archive keeps the
+				 * declaration the slug is moving *off*, so a hash that named it
+				 * still resolves, and the row takes the whole new projection, so no
+				 * reader sees a mixture of two declarations.
+				 *
+				 * ⚠ `contentHash` is set in the same statement as the columns it
+				 * describes. Split across two writes, a failure between them would
+				 * leave a row whose hash disagrees with its own content — a lie the
+				 * next boot would read as a further pointer move and archive under
+				 * a hash of a declaration nobody wrote.
+				 */
+				archiveDeclaration(
+					archivePending,
+					archived,
+					entry,
+					hash,
+					opts.release,
+					"declared"
+				)
+				const [moved] = await tx
+					.update(schema.pipelineDefinitionRegistry)
+					.set({
+						...projectedColumns(entry, opts.release),
+						status: statusFor(entry, row.status),
+						contentHash: hash
+					})
+					.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
+					.returning()
+				rowsByPin.set(pin, moved)
+				result.republished.push(pin)
+				continue
+			}
+
+			// Same contract — but the *display* text may still have moved:
+			// labels and descriptions are stripped from the hash precisely so
+			// they can change without a version bump, and that promise is only
+			// kept if the row picks them up here. The stored slots are what a
+			// form renders from (F6), so a description authored after 1.0.0
+			// shipped must reach installs whose rows predate it.
+			const slotsChanged =
+				JSON.stringify(sortDeep(row.slots ?? {})) !==
+				JSON.stringify(sortDeep(entry.slots ?? {}))
+			// `optional` *is* hashed, so a declaration cannot change it without
+			// changing the hash and moving the pointer. What can go stale
+			// is the column itself: it was added long after the property, so
+			// every row written before then carries the default rather than the
+			// truth. Healing it here rather than backfilling in the migration
+			// means the fix needs no hardcoded list of which types declare it.
+			const optionalChanged = !!row.optional !== !!entry.optional
+			// `payloads` (R33) is hashed, but its column arrived after the hash
+			// learned it (0155): a row written in between carries NULL under the
+			// right hash. Healed here on the same footing as `optional`.
+			const payloadsChanged =
+				JSON.stringify(row.payloads ?? null) !==
+				JSON.stringify(entry.payloads ?? null)
+			// The name, on the same footing as `slots` and for the same reason:
+			// stripped from the hash so it can change without a version bump,
+			// which is a promise only kept if the row picks it up here. It was
+			// not projected at all until 0.6, so every existing row carries
+			// NULL and every reader that wanted a name invented one from the
+			// type id — healed here rather than backfilled, so the fix needs no
+			// hardcoded list of which types declare one.
+			const i18nChanged =
+				JSON.stringify(row.i18n ?? null) !==
+				JSON.stringify((entry.i18n as any) ?? null)
+			// Point labels are display text on the same footing as slot
+			// descriptions: stripped from the hash, so kept fresh here.
+			const pointsChanged =
+				JSON.stringify(sortDeep(row.scriptPoints ?? null)) !==
+				JSON.stringify(sortDeep((entry.scriptPoints as any) ?? null))
+			// An entry type's `fields` are a declared schema on exactly the
+			// same footing as `slots`: hashed apart from their display text, so
+			// a relabelled field must reach installs whose rows predate the
+			// rewording, or the form renders the old words forever. The
+			// contract half (`entry_shape`) needs no such healing — it is
+			// hashed whole, so it cannot move without moving the pointer.
+			const configSchemaChanged =
+				JSON.stringify(sortDeep(row.configSchema ?? null)) !==
+				JSON.stringify(sortDeep((entry.configSchema as any) ?? null))
+			// The policy half (plans/31 V6) is outside the hash on purpose — a
+			// flipped `provisional`, a moved timeout, a changed gate default must
+			// reach every install without a pointer move — so it is refreshed
+			// here, on the same footing as the display text.
+			const policyChanged =
+				JSON.stringify(sortDeep(row.policy ?? null)) !==
+				JSON.stringify(sortDeep((entry.policy as any) ?? null))
+			// The status derives from the policy's `provisional`, so it moves
+			// with the line above; a slug that was `removed` and is published
+			// again comes back through here too.
+			const status = statusFor(entry, row.status)
+			const statusChanged = row.status !== status
+			if (
+				configSchemaChanged ||
+				slotsChanged ||
+				optionalChanged ||
+				payloadsChanged ||
+				i18nChanged ||
+				pointsChanged ||
+				policyChanged ||
+				statusChanged ||
+				row.release !== opts.release
+			) {
+				const [healed] = await tx
+					.update(schema.pipelineDefinitionRegistry)
+					.set({
+						release: opts.release,
+						...(statusChanged ? { status, removedAt: null } : {}),
+						...(policyChanged
+							? { policy: (entry.policy as any) ?? null }
+							: {}),
+						...(optionalChanged
+							? { optional: entry.optional ?? false }
+							: {}),
+						...(payloadsChanged
+							? { payloads: entry.payloads ?? null }
+							: {}),
+						...(slotsChanged ? { slots: entry.slots ?? {} } : {}),
+						...(configSchemaChanged
+							? {
+									configSchema:
+										(entry.configSchema as any) ?? null
+								}
+							: {}),
+						...(i18nChanged
+							? { i18n: (entry.i18n as any) ?? null }
+							: {}),
+						...(pointsChanged
+							? {
+									scriptPoints:
+										(entry.scriptPoints as any) ?? null
+								}
+							: {})
+					})
+					.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
+					.returning()
+				rowsByPin.set(pin, healed)
+				if (slotsChanged || configSchemaChanged) {
+					result.updated.push(pin)
+					continue
+				}
+			}
+			result.unchanged.push(pin)
+		}
+
+		await flushArchive(tx, archivePending)
+		await flushRegistry(tx, registryPending, rowsByPin)
+
+		if (opts.complete) {
+			/**
+			 * The reverse-diff (plans/29 R-2): a row of this owner whose slug the
+			 * current build does not publish is marked, never deleted.
+			 *
+			 * Marked, because a stored spec may still pin it — `pipeline_nodes`
+			 * names the slug, and deleting the row would turn a legible notice
+			 * ("this node's definition is gone") into an unknown-type error at
+			 * load. The archive keeps every declaration the slug ever resolved
+			 * to, so a receipt naming its hash still resolves. `removed_at` is
+			 * first-seen: a row already marked keeps its date. The same precedent
+			 * `syncPluginPresets` sets for a withdrawn preset.
+			 */
+			const owner = opts.ownerPluginId ?? null
+			const published = new Set(
+				entries.map((e) => `${e.id}@${e.version}`)
 			)
-		/**
-		 * The guard (U6 review, finding 3). A cull is judged against what the
-		 * build declares, and "declares nothing" is never a build — it is a
-		 * registry read before the contracts loaded, a hot reload that
-		 * re-evaluated half a module. Withdrawing every row on that evidence
-		 * would strip an install of its whole vocabulary at once, so the
-		 * diff runs only when the declared set is at least half of what this
-		 * owner has standing (`removed` rows excepted: they are the diff's
-		 * own past answers). Said once per process and reported on the
-		 * result; the next boot, with the contracts loaded, withdraws what
-		 * this one left.
-		 */
-		const standing = rows.filter((r) => r.status !== "removed").length
-		if (entries.length === 0 || entries.length * 2 < standing) {
-			result.reverseDiffSkipped =
-				`the sync was handed ${entries.length} declaration(s) against ${standing} ` +
-				`standing row(s) for this owner — too few to be a build; the reverse-diff ` +
-				`withdrew nothing`
-			if (!warnedReverseDiffSkip) {
-				warnedReverseDiffSkip = true
-				console.warn(`[pipelines] ${result.reverseDiffSkipped}`)
+			const rows = await tx
+				.select({
+					id: schema.pipelineDefinitionRegistry.id,
+					definitionId:
+						schema.pipelineDefinitionRegistry.definitionId,
+					version: schema.pipelineDefinitionRegistry.version,
+					status: schema.pipelineDefinitionRegistry.status
+				})
+				.from(schema.pipelineDefinitionRegistry)
+				.where(
+					owner === null
+						? isNull(
+								schema.pipelineDefinitionRegistry.ownerPluginId
+							)
+						: eq(
+								schema.pipelineDefinitionRegistry.ownerPluginId,
+								owner
+							)
+				)
+			/**
+			 * The guard (U6 review, finding 3). A cull is judged against what the
+			 * build declares, and "declares nothing" is never a build — it is a
+			 * registry read before the contracts loaded, a hot reload that
+			 * re-evaluated half a module. Withdrawing every row on that evidence
+			 * would strip an install of its whole vocabulary at once, so the
+			 * diff runs only when the declared set is at least half of what this
+			 * owner has standing (`removed` rows excepted: they are the diff's
+			 * own past answers). Said once per process and reported on the
+			 * result; the next boot, with the contracts loaded, withdraws what
+			 * this one left.
+			 */
+			const standing = rows.filter((r) => r.status !== "removed").length
+			if (entries.length === 0 || entries.length * 2 < standing) {
+				result.reverseDiffSkipped =
+					`the sync was handed ${entries.length} declaration(s) against ${standing} ` +
+					`standing row(s) for this owner — too few to be a build; the reverse-diff ` +
+					`withdrew nothing`
+				if (!warnedReverseDiffSkip) {
+					warnedReverseDiffSkip = true
+					console.warn(`[pipelines] ${result.reverseDiffSkipped}`)
+				}
+				return result
 			}
-			return result
-		}
-		const now = new Date()
-		for (const row of rows) {
-			const pin = `${row.definitionId}@${row.version}`
-			if (published.has(pin) || row.status === "removed") continue
-			// The administrator's word survives the code's (U6 review,
-			// finding 6): a deprecated row whose slug is gone stays
-			// `deprecated`, and is named so the boot log can say so.
-			if (row.status === "deprecated") {
-				result.deprecatedUnpublished.push(pin)
-				continue
+			const now = new Date()
+			for (const row of rows) {
+				const pin = `${row.definitionId}@${row.version}`
+				if (published.has(pin) || row.status === "removed") continue
+				// The administrator's word survives the code's (U6 review,
+				// finding 6): a deprecated row whose slug is gone stays
+				// `deprecated`, and is named so the boot log can say so.
+				if (row.status === "deprecated") {
+					result.deprecatedUnpublished.push(pin)
+					continue
+				}
+				await tx
+					.update(schema.pipelineDefinitionRegistry)
+					.set({ status: "removed", removedAt: now })
+					.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
+				result.removed.push(pin)
 			}
-			await db
-				.update(schema.pipelineDefinitionRegistry)
-				.set({ status: "removed", removedAt: now })
-				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
-			result.removed.push(pin)
 		}
-	}
 
-	return result
+		return result
+	})
 }
 
 /**

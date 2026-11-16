@@ -1,0 +1,113 @@
+
+> serene-pub@0.6.0-pr-8 sdk:build
+> npm run build --prefix ../serene-pub-sdk
+
+
+> serene-pub-sdk@0.6.0-pr-8 build
+> npm run build -w @serene-pub/sdk && npm run build -w @serene-pub/contracts -w @serene-pub/conformance && npm run build -w @serene-pub/docs && npm run build -w @serene-pub/cli && npm run build -w @serene-pub/core-catalog && npm run docs:api && npm run docs:examples && npm run build -w @serene-pub/playground
+
+
+> @serene-pub/sdk@0.6.0-pr-8 build
+> tsc -p tsconfig.build.json
+
+
+> @serene-pub/contracts@0.6.0-pr-8 build
+> tsc -p tsconfig.build.json
+
+
+> @serene-pub/conformance@0.6.0-pr-8 build
+> tsc -p tsconfig.build.json
+
+
+> @serene-pub/docs@0.6.0-pr-8 build
+> tsc -p tsconfig.build.json
+
+
+> @serene-pub/cli@0.6.0-pr-8 build
+> tsc -p tsconfig.build.json && node -e "process.platform === 'win32' || require('node:fs').chmodSync('dist/bin.js', 0o755)"
+
+
+> @serene-pub/core-catalog@0.6.0-pr-8 build
+> tsc -p tsconfig.build.json && node scripts/copyNotices.mjs && node scripts/buildComponents.mjs
+
+core components: /home/jody/github/serene-pub-sdk/core-catalog/components/shared/messages/MessageComposer.svelte: Avoid using autofocus
+https://svelte.dev/e/a11y_autofocus
+core components bundle @serene-pub/sdk
+core component messages source → dist/components/messages.source.json (25 files)
+core component composer source → dist/components/composer.source.json (13 files)
+core component turn-line source → dist/components/turn-line.source.json (15 files)
+core component dialogue-box source → dist/components/dialogue-box.source.json (24 files)
+core component stats source → dist/components/stats.source.json (15 files)
+core component lore-entries source → dist/components/lore-entries.source.json (6 files)
+core component scene-portraits source → dist/components/scene-portraits.source.json (7 files)
+core component authors-note source → dist/components/authors-note.source.json (6 files)
+core component turn-order source → dist/components/turn-order.source.json (6 files)
+core component actions source → dist/components/actions.source.json (6 files)
+core component annex source → dist/components/annex.source.json (6 files)
+core component album source → dist/components/album.source.json (6 files)
+core component backdrop source → dist/components/backdrop.source.json (6 files)
+core component chronicle source → dist/components/chronicle.source.json (6 files)
+core component places source → dist/components/places.source.json (8 files)
+core component attendance source → dist/components/attendance.source.json (6 files)
+core component routine-log source → dist/components/routine-log.source.json (7 files)
+core component session-runs source → dist/components/session-runs.source.json (6 files)
+core component messages → dist/components/messages.js (86342 B)
+core component composer → dist/components/composer.js (78841 B)
+core component turn-line → dist/components/turn-line.js (30214 B)
+core component dialogue-box → dist/components/dialogue-box.js (13246 B)
+core component stats → dist/components/stats.js (179790 B)
+core component lore-entries → dist/components/lore-entries.js (20504 B)
+core component scene-portraits → dist/components/scene-portraits.js (36075 B)
+core component authors-note → dist/components/authors-note.js (21849 B)
+core component turn-order → dist/components/turn-order.js (17074 B)
+core component actions → dist/components/actions.js (8910 B)
+core component annex → dist/components/annex.js (17458 B)
+core component album → dist/components/album.js (13300 B)
+core component backdrop → dist/components/backdrop.js (21065 B)
+core component chronicle → dist/components/chronicle.js (55433 B)
+core component places → dist/components/places.js (44055 B)
+core component attendance → dist/components/attendance.js (11809 B)
+core component routine-log → dist/components/routine-log.js (12306 B)
+core component session-runs → dist/components/session-runs.js (19769 B)
+core components share 13 chunk(s), 606346 B; all modules 1294386 B
+
+> serene-pub-sdk@0.6.0-pr-8 docs:api
+> npm run docs:api -w @serene-pub/api-docs
+
+
+> @serene-pub/api-docs@0.6.0-pr-8 docs:api
+> typedoc --options ../typedoc.json
+
+[96m[info][0m Loaded plugin typedoc-plugin-markdown
+[96m/home/jody/github/serene-pub-sdk/sdk/src/descriptors.ts[0m:[93m111[0m:[93m1[0m - [93m[warning][0m The comment for sdk/src/descriptors.9 should not contain any block or modifier tags
+
+[47m[30m111[0m    	| 'workflow'
+
+[96m/home/jody/github/serene-pub-sdk/sdk/src/surfaces.ts[0m:[93m404[0m:[93m1[0m - [93m[warning][0m The comment for sdk/src/surfaces.1 should not contain any block or modifier tags
+
+[47m[30m404[0m    	| {
+
+[93m[warning][0m Failed to resolve link to "WidgetInvokeResult" in comment for sdk/src/componentClient.ComponentContext.invoke
+[93m[warning][0m Failed to resolve link to "WIDGET_REQUEST_APIS" in comment for sdk/src/componentClient.ComponentUiApi
+[93m[warning][0m Failed to resolve link to "ComponentDecl" in comment for sdk/src/layout.WidgetDecl.component
+[93m[warning][0m Failed to resolve link to "RequestDeclined" in comment for sdk/src/surfaces.RequestDeclineCode
+[93m[warning][0m Failed to resolve link to "WidgetRequests" in comment for sdk/src/surfaces.FrameHostMessage
+[93m[warning][0m Failed to resolve link to "WidgetInvokeResult" in comment for sdk/src/surfaces.FrameHostMessage.__type.requestId
+[93m[warning][0m Failed to resolve link to "ComponentDecl" in comment for sdk/src/widgetDecls.WidgetInput.component
+[96m[info][0m markdown generated at /home/jody/github/serene-pub-sdk/docs/generated/api
+[93m[warning][0m Found 0 errors and 9 warnings
+
+> serene-pub-sdk@0.6.0-pr-8 docs:examples
+> cd sdk-tests && tsx ../cli/src/bin.ts docs --examples examples --goldens examples/goldens --out ../docs/generated/examples
+
+wrote 4 example pages to ../docs/generated/examples
+
+> @serene-pub/playground@0.6.0-pr-8 build
+> tsc --noEmit && node build.mjs
+
+  entry (CodeMirror, SDK, UI)                  2234401  entry-vicz3kf4.js
+  styles                                          4399  styles-o7p9q51_.css
+  sucrase (first Run)                           206189  sucrase-mQt7ekLs.js
+  graph: elkjs + renderer (first Graph tab)    1463684  graph-bylcD64e.js
+  total                                        3908673
+playground built in 234ms

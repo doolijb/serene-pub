@@ -1,0 +1,68 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.fullDirect.int.test.ts (20 tests | 1 failed) 4057ms
+     × a dated session's change to an existing entry waits in its notes, dated at its day; its new entry goes to the lorebook 31ms
+ ❯ |int| src/lib/server/pipelines/runtime/host.heldEntryChange.int.test.ts (10 tests | 1 failed) 3119ms
+     × is dated when the session reads at a moment, undated otherwise 43ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.fullDirect.int.test.ts > a change that waits > a dated session's change to an existing entry waits in its notes, dated at its day; its new entry goes to the lorebook
+AssertionError: expected { id: 23, entryId: 23, …(2) } to match object { Object (entryId, route, ...) }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "entryId": 23,
+    "lorebookId": 21,
+-   "route": "own-book",
++   "route": "book",
+  }
+
+ ❯ src/lib/server/pipelines/runtime/host.fullDirect.int.test.ts:445:15
+    443|   const h = await hostOf(w)
+    444|   const out: any = await h.commit!({ entry: vault.id, content: "Sealed…
+    445|   expect(out).toMatchObject({ entryId: vault.id, route: "own-book", lo…
+       |               ^
+    446|   expect((await stored(vault.id)).content).toBe("The Vault, as written…
+    447|   const [held] = await heldRows((await ownBookOf(w.session.id)).id)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.heldEntryChange.int.test.ts > a change to an attached lorebook's entry is held under Review changes and Off > is dated when the session reads at a moment, undated otherwise
+AssertionError: expected undefined to match object { year: 3, month: 2, day: 5 }
+
+- Expected:
+{
+  "day": 5,
+  "month": 2,
+  "year": 3,
+}
+
++ Received:
+undefined
+
+ ❯ src/lib/server/pipelines/runtime/host.heldEntryChange.int.test.ts:331:16
+    329|   ).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDAT…
+    330|   const [held] = await heldRows((await ownBookOf(w.session.id)).id)
+    331|   expect(held).toMatchObject({ year: 3, month: 2, day: 5 })
+       |                ^
+    332|   expect((await readBy(w.session.id, vault.id)).category).toBe("Vaults…
+    333|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 15 passed (17)
+      Tests  2 failed | 192 passed (194)
+   Start at  03:46:03
+   Duration  52.32s (transform 6.77s, setup 120ms, import 18.05s, tests 116.51s, environment 4ms)
+

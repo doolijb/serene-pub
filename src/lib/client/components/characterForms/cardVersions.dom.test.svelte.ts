@@ -307,10 +307,9 @@ describe("Save as new version", () => {
 		})
 		await settle()
 		expect(closeForm).not.toHaveBeenCalled()
-		expect(emitted.at(-1)).toEqual([
-			"characters:get",
-			{ id: 7, cardVersionId: 12 }
-		])
+		expect(
+			emitted.filter((e) => e[0] === "characters:get").at(-1)
+		).toEqual(["characters:get", { id: 7, cardVersionId: 12 }])
 		const line = document.querySelector("[data-staying-line]")!
 		expect(line.textContent?.replace(/\s+/g, " ").trim()).toBe(
 			"2 cast members stay on v1.1: Bianca, Theo."

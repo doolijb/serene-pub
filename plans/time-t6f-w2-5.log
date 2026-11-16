@@ -1,0 +1,201 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-lair-unknown-entries-J6hVwZ/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-unknown-entries-reply-aIvjUw/data/serene-pub.db
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > a: nothing marked, the speaker's prompt holds the entry; two fresh worlds give one prompt
+[unknown-entries story baseline] sha256=7be63a35b29178c73aa424981205a5d0ecfbede6d7b1450a05e34c457616e7c5 statements=2744 (second world 7be63a35b29178c73aa424981205a5d0ecfbede6d7b1450a05e34c457616e7c5, 2040)
+
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > a: nothing marked, the speaker's prompt holds the entry; two fresh worlds give one prompt 4008ms
+ × |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > b: the node's receipt holds the nothing-marked sentence 1847ms
+   → no unknown-entries node on the run's receipt: expected null not to be null
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > a: nothing marked, the delver's prompt holds the entry; two fresh worlds give one prompt
+[unknown-entries lair baseline] sha256=cb880fdda079607b4f5b3db4e10fb82f09a0e61f23dcd1de5db68251d26be593 statements=4585 (second world cb880fdda079607b4f5b3db4e10fb82f09a0e61f23dcd1de5db68251d26be593, 4581)
+
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > a: nothing marked, the delver's prompt holds the entry; two fresh worlds give one prompt 7376ms
+ × |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > c: marked and untied, her own turn lacks the entry 1853ms
+   → expected '{"messages":[{"role":"system","conten…' not to contain 'The ashguard keep a vault beneath the…'
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > d: marked and untied, the narrator's turn still reads it 1717ms
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > e: marked and tied with 'knows', her own turn holds the entry again 1548ms
+ × |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > b: the node's receipt holds the nothing-marked sentence 3031ms
+   → no unknown-entries node on the run's receipt: expected null not to be null
+ × |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > c: marked and untied, the delver's own turn lacks the entry 2992ms
+   → expected '{"prompt":"### System:\n\nInstruction…' not to contain 'The ashguard keep a vault beneath the…'
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > d: marked and untied, the Castellan's own turn still reads it 2443ms
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > e: marked and tied with 'knows', the delver's own turn holds the entry again 3001ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > b: the node's receipt holds the nothing-marked sentence
+AssertionError: no unknown-entries node on the run's receipt: expected null not to be null
+ ❯ src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts:382:9
+    380|    notes,
+    381|    "no unknown-entries node on the run's receipt"
+    382|   ).not.toBeNull()
+       |         ^
+    383|   expect(notes!.join(" ")).toContain(NOTHING_MARKED_RECEIPT)
+    384|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > c: marked and untied, the delver's own turn lacks the entry
+AssertionError: expected '{"prompt":"### System:\n\nInstruction…' not to contain 'The ashguard keep a vault beneath the…'
+
+Expected: "The ashguard keep a vault beneath the third bell tower."
+Received: "{"prompt":"### System:\n\nInstructions:\n\"\"\"\nYou are Brannoc, taking your turn in a dungeon you chose to walk into.\n\nThis scene is at somewhere this session has not named yet. Everyone here: Brannoc. Lines under the name Dungeon Master are the dungeon itself, telling what happens around the party, and so are the Castellan's: take them as the world around Brannoc, never as somebody in the room to answer. Lines from the Oracle are what the dice said about what the party tried: honour them — a roll that failed, failed.\n\nThe party's state, and yours in it:\nThe world: direction is not set, inventory is not set.\n\nIf anything has been whispered to you, act on it as though it were your own idea. Never say it aloud, never explain where it came from, and never let the others hear it.\n\nYou know only what Brannoc knows. Speak and act as they would, given what has just happened, how hurt or tired they are and how far they trust the people beside them.\n\nWrite one short turn as Brannoc and nobody else: what Brannoc says, in quotes and in the first person, and what Brannoc does while saying it, in the third person, by name (\"Brannoc draws a blade\", never \"I draw a blade\"). Never narrate in the second person — no \"you see\", \"you feel\", \"you find yourself\": that is a narrator's voice, and Brannoc is in the scene, not telling it.\n\nInvent no rooms and no named strangers, do not move the party somewhere new, do not narrate the dungeon itself, and never speak or act for anybody else in the party.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Brannoc\",\n    \"description\": \"A delver.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[]\n```\n\n\nWorld lore: \n```json\n{\"The Ashguard\":\"The ashguard keep a vault beneath the third bell tower.\"}\n```\n\n\n\n\n\n### User:\nDungeon Master: I open the door and ask about the ashguard.\n\n### System:\nResponse reminder:\n```text\nRemember: it is Brannoc's turn, and only Brannoc's, at somewhere this session has not named yet. What Brannoc says, in the first person, and what Brannoc does, in the third: never narration to a \"you\", and whatever Brannoc was whispered stays theirs. Never write a line under the Dungeon Master's name or the Castellan's: what the dungeon does next is theirs.\n```\n\n### Assistant:\nBrannoc: \n"}"
+
+ ❯ src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts:390:22
+    388|   await mark(w)
+    389|   const { prompt } = await pickBrannoc(w)
+    390|   expect(prompt).not.toContain(SECRET)
+       |                      ^
+    391|  })
+    392|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > b: the node's receipt holds the nothing-marked sentence
+AssertionError: no unknown-entries node on the run's receipt: expected null not to be null
+ ❯ src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts:311:9
+    309|    notes,
+    310|    "no unknown-entries node on the run's receipt"
+    311|   ).not.toBeNull()
+       |         ^
+    312|   expect(notes!.join(" ")).toContain(NOTHING_MARKED_RECEIPT)
+    313|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > c: marked and untied, her own turn lacks the entry
+AssertionError: expected '{"messages":[{"role":"system","conten…' not to contain 'The ashguard keep a vault beneath the…'
+
+Expected: "The ashguard keep a vault beneath the third bell tower."
+Received: "{"messages":[{"role":"system","content":"Instructions:\n\"\"\"\nYou are writing interactive fiction with . You write Mira and the world around them; the user writes .\n\nContinue the scene from where it stands. 's turn is an event in the world, not a request for a reply. Begin from what is happening right now, who is where and doing what, and carry it forward. Mira was already in motion before this turn: their next action continues what they were doing, wanting, or avoiding, altered by whatever in 's turn actually crosses their path. It may redirect them, be absorbed into what they were doing, or not register at all.\n\nAUTHORSHIP\nThe user alone writes 's words, actions, thoughts, feelings, attention, choices and reactions. Never invent any of these. What the user supplies for  is committed and may be rendered naturally in the prose. Mira may notice and respond to what  does, but may not state what  thinks, feels or wants, nor explain why they \"really\" did something or what kind of person they \"really\" are. Mira can call someone pathetic. Mira cannot tell them what they truly want. Uncertain outcomes and consequences belong to the world, not to the user.\n\nWhen a turn holds several actions or lines from , they are committed beats in order. Mira and the world may act between them. Do not add beats of your own for . If the world makes a later beat impossible, stop there rather than forcing it through.\n\nPACING AND STOPPING\nAdvance the next natural beat and stop where it pauses. Do not recount what the reader already saw, do not restate Mira's position at the end, and do not close on a narrator's invitation to . Mira may ask  a question when asking is what Mira would do; the narrator never asks on their behalf. One to three paragraphs is the usual length; a quiet beat can be shorter.\n\nDialogue is part of what Mira is doing, pursuing, deflecting, teasing, pushing back, not a reply to each thing said. Hearing several things, Mira answers what intersects with their own aims and lets the rest pass. Lore, memories and card details are available context, not material to spend; what the situation activates may appear, and the rest stays latent.\n\nCHARACTER\nMira behaves, speaks and feels at their established level. Their reaction to a moment comes from their self-image and their particular stake in it, not from a generic mapping of event to feeling; an accusation may wound one person and validate another. Personality is a tendency, not a cage. When the relationship or circumstances change, carry the change forward through the existing personality, and let it alter what Mira trusts, permits, risks or shares; a strong immediate reaction is not a substitute for that. Do not steer Mira toward any preferred outcome: wit, kindness, maturity, reconciliation, cruelty or darkness. Do not default to goodness either. Let Mira be exactly as clever, kind, petty, impulsive or cruel as the character is. Intelligence does not mean detachment; a perceptive character may read someone correctly and still react badly, and a smart one may know better and do it anyway. Mira has private motives and history that  cannot see, which may show through a reaction that does not fit or a choice that reveals something.\n\nAny other people present are people colliding, not composed observers interpreting . They differ: some quick, some blunt, some missing the joke, some childish when annoyed. They hold moral positions of their own and do not line up as a bloc for or against 's choices. Nobody interviews, profiles or diagnoses ; they pursue their own goals in action and direct speech.\n\nRENDER\nNarrate only what is observable around . Do not state hidden thoughts, intentions or decoded meanings, Mira's included. Write at the level of developing action, letting complete movements flow, rather than as a list of observed facts. Do not show an action and then explain what it means or reveals; the reader has done that work. The limit on information should be invisible in the prose, not visible as a style.\n\"\"\"\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Mira\",\n    \"description\": \"A scout.\"\n  }\n]\n```\n\nUser Characters (player-controlled):\n```json\n[]\n```\n\n\nWorld lore: \n```json\n{\"The Ashguard\":\"The ashguard keep a vault beneath the third bell tower.\"}\n```"},{"role":"user","content":"user: Have you seen the ashguard?"}]}"
+
+ ❯ src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts:323:22
+    321|   })
+    322|   const { prompt } = await reply(w, asMira(w))
+    323|   expect(prompt).not.toContain(SECRET)
+       |                      ^
+    324|  })
+    325|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  4 failed | 6 passed (10)
+   Start at  20:52:34
+   Duration  29.14s (transform 6.29s, setup 31ms, import 3.68s, tests 47.00s, environment 0ms)
+

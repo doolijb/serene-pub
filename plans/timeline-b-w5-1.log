@@ -1,0 +1,45 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+(node:3642738) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ |dom| src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts (7 tests | 2 failed) 323ms
+     × on: a route to a history entry opens its editor 59ms
+     × off: a route to another entry still opens it, and a route moment is not read 33ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts > the route in the pool > on: a route to a history entry opens its editor
+ FAIL  |dom| src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts > the route in the pool > off: a route to another entry still opens it, and a route moment is not read
+TypeError: Cannot read properties of undefined (reading 'useInterest')
+
+	in <unknown>
+	in EntryInspector.svelte
+	in ResizableSplit.svelte
+	in EntryWorkspace.svelte
+	in EntryWorkspaceFixture.svelte
+	in undefined
+
+ ❯ EntryFireTest src/lib/client/components/lorebookForms/EntryFireTest.svelte:173:11
+    171|   * skip), but the registry is the only listener path, so it is declar…
+    172|   */
+    173|  interest.useInterest<"pipelines:previewRetrieval">(
+       |           ^
+    174|   "pipelines:previewRetrieval",
+    175|   onAnswer
+ ❯ add_svelte_meta.componentTag src/lib/client/lorebooks/sections/EntryInspector.svelte:178:8
+ ❯ src/lib/client/lorebooks/sections/EntryInspector.svelte:259:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  2 failed | 24 passed (26)
+   Start at  10:04:22
+   Duration  17.76s (transform 14.67s, setup 30ms, import 20.23s, tests 7.09s, environment 263ms)
+

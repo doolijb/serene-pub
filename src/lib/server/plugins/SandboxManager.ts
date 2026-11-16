@@ -7,9 +7,10 @@
  * to the `PluginSandbox` contract.
  *
  * Topology (from the SES-vs-QuickJS asymmetry): QuickJS is interruptible, so a
- * single shared QuickJS sandbox hosts every quickjs plugin. SES can only be
- * stopped by terminating its worker, so each SES plugin gets **its own** SES
- * worker — a kill's blast radius is one extension, never all of them.
+ * single shared QuickJS sandbox (a small worker pool inside) hosts every
+ * quickjs plugin. SES can only be stopped by terminating its worker, so each
+ * SES plugin gets **its own** SES worker — a kill's blast radius is one
+ * extension, never all of them.
  *
  * Stopping is per *call*, not per plugin: `abortCall` fires one hook's
  * `ctx.signal` and `killCall` forces one hook to stop, on either backend and
@@ -34,7 +35,12 @@ import { QuickJsSandbox } from "./QuickJsSandbox"
 import { SesWorkerSandbox } from "./SesWorkerSandbox"
 import { HookGracePolicy, type RunStop } from "./hookGrace"
 import { packageAssetsFor, type SandboxConfig } from "./packageHost"
-import type { HookRunResult, PluginSandbox, SandboxKind } from "./types"
+import type {
+	HookRunResult,
+	InvokeOptions,
+	PluginSandbox,
+	SandboxKind
+} from "./types"
 import { hookCtxGrants, type HookCtxKind } from "./hookCtx"
 import { USER_ANNEX_LIMITS } from "@serene-pub/sdk"
 import { insideTransaction } from "$lib/server/db/transactionGuard"
@@ -245,13 +251,17 @@ export function userStorageDir(
  * stops it, per call, without being asked.
  *
  * ⚠ This is not a second deadline for the hook. It is the fix for a starvation
- * the shared QuickJS worker makes possible: one job spinning synchronously
- * holds that thread, so a *different* job parked in its drive loop cannot run
- * the loop that would notice its own deadline. The sandbox's fallback for a
- * job whose inner deadline never fires is its wall-clock backstop at
- * `timeoutMs + 1000`, and that backstop terminates the whole worker — so a
- * hook that overran by starvation takes down the spinner, every other plugin
- * sharing the sandbox, and the loaded bundles with it.
+ * a shared QuickJS worker makes possible: one job spinning synchronously holds
+ * that thread, so a *different* job parked in its drive loop on the same worker
+ * of the pool cannot run the loop that would notice its own deadline. The
+ * sandbox's fallback for a job whose inner deadline never fires is its
+ * wall-clock backstop at `timeoutMs + 1000`, and that backstop terminates the
+ * whole worker — so a hook that overran by starvation takes down the spinner,
+ * every other call on that worker, and the bundles loaded into it.
+ *
+ * Armed when the sandbox reports the call *started* (QuickJS), never when it
+ * was dispatched: a call merely queued behind another on its worker has not
+ * begun its budget, and is never killed for the wait.
  *
  * Killing the starved call *per job* is strictly better and needs no
  * cooperation from the blocked thread at all: QuickJS's kill is a shared-memory
@@ -915,21 +925,28 @@ export class SandboxManager {
 		}
 		this.active.set(callId, active)
 		// The overrun backstop (see `HOOK_DEADLINE_SLACK_MS`). Armed for every
-		// call, because which one will be starved is not knowable in advance,
-		// and cleared on every exit below.
-		this.overruns.set(
-			callId,
-			setTimeout(
-				() =>
-					void this.killCall(
-						callId,
-						`killed: overran its ${opts.timeoutMs}ms deadline ` +
-							`and the sandbox had not stopped it ` +
-							`${HOOK_DEADLINE_SLACK_MS}ms later`
-					).catch(() => {}),
-				opts.timeoutMs + HOOK_DEADLINE_SLACK_MS
+		// call, because which one will be starved is not knowable in advance —
+		// but for QuickJS only once the sandbox reports the call *started*, so
+		// time spent queued behind another call on its worker is not held
+		// against it. Cleared on every exit below.
+		const armOverrun = () => {
+			// The call may already have settled; a timer armed now would leak.
+			if (!this.active.has(callId) || this.overruns.has(callId)) return
+			this.overruns.set(
+				callId,
+				setTimeout(
+					() =>
+						void this.killCall(
+							callId,
+							`killed: overran its ${opts.timeoutMs}ms deadline ` +
+								`and the sandbox had not stopped it ` +
+								`${HOOK_DEADLINE_SLACK_MS}ms later`
+						).catch(() => {}),
+					opts.timeoutMs + HOOK_DEADLINE_SLACK_MS
+				)
 			)
-		)
+		}
+		if (sandbox !== this.quickjs) armOverrun()
 
 		// The settings this call reads: the acting user's own resolution when
 		// they have one, the instance's otherwise. Picked from the descriptor
@@ -945,54 +962,66 @@ export class SandboxManager {
 		let result: HookRunResult
 		try {
 			if (hookCtxGrants(opts.kind).annex) {
-				const annex = await this.annexJobFor(desc, opts.user, opts.frameCause)
+				const annex = await this.annexJobFor(
+					desc,
+					opts.user,
+					opts.frameCause
+				)
 				annexJob = annex.job
 				annexUser = annex.userId
 			}
-			const invoked = sandbox.invoke(
-				{ pluginId: desc.id, hookName },
-				{
-					kind: opts.kind,
-					// `settings` is a reserved input key (12 §6), injected from
-					// the descriptor resolved *now* — same staleness rule as
-					// the grants above. Only when the manifest declares a
-					// schema, so a settings-free plugin's input is unchanged.
-					input: callSettings
-						? { ...input, settings: callSettings }
-						: input,
-					timeoutMs: opts.timeoutMs,
-					seedLabel:
-						opts.seedLabel ?? `${desc.id}:${hookName}:${callId}`,
-					nowMs: opts.nowMs ?? startedAt,
-					maxOutputBytes: opts.maxOutputBytes,
-					// The acting person's own folder (M2b): from the call's
-					// host-side `user` and the grant — never from the input.
-					// Only while the plugin's own frame is open (`frameCause`);
-					// otherwise the sandbox rejects with the one closed sentence.
-					userStorageDir:
-						this.dataDir &&
-						desc.userStorageQuotaBytes &&
-						frameOpenFor(opts.frameCause, desc.id)
-							? userStorageDir(this.dataDir, desc.id, opts.user)
-							: undefined,
-					userStorageDenied:
-						desc.userStorageQuotaBytes && !frameOpenFor(opts.frameCause, desc.id)
-							? USER_STORAGE_CLOSED
-							: undefined,
-					userAnnexJob: annexJob,
-					// For the fetch bridge alone, host-side (R63): everything
-					// for the plugin's own work, only what it lends when its
-					// node runs in another package's pipeline.
-					secrets: secretsForCall(
-						{ ...desc, secrets: callSecrets },
-						!!opts.foreignPipeline
-					),
-					// The address `abortCall`/`killCall` stop this call by. The
-					// call id is already the manager's handle for it, and the
-					// live monitor's — one name for one call, end to end.
-					jobId: String(callId)
-				}
-			)
+			const invokeOptions: InvokeOptions = {
+				kind: opts.kind,
+				// `settings` is a reserved input key (12 §6), injected from
+				// the descriptor resolved *now* — same staleness rule as
+				// the grants above. Only when the manifest declares a
+				// schema, so a settings-free plugin's input is unchanged.
+				input: callSettings
+					? { ...input, settings: callSettings }
+					: input,
+				timeoutMs: opts.timeoutMs,
+				seedLabel: opts.seedLabel ?? `${desc.id}:${hookName}:${callId}`,
+				nowMs: opts.nowMs ?? startedAt,
+				maxOutputBytes: opts.maxOutputBytes,
+				// The acting person's own folder (M2b): from the call's
+				// host-side `user` and the grant — never from the input.
+				// Only while the plugin's own frame is open (`frameCause`);
+				// otherwise the sandbox rejects with the one closed sentence.
+				userStorageDir:
+					this.dataDir &&
+					desc.userStorageQuotaBytes &&
+					frameOpenFor(opts.frameCause, desc.id)
+						? userStorageDir(this.dataDir, desc.id, opts.user)
+						: undefined,
+				userStorageDenied:
+					desc.userStorageQuotaBytes &&
+					!frameOpenFor(opts.frameCause, desc.id)
+						? USER_STORAGE_CLOSED
+						: undefined,
+				userAnnexJob: annexJob,
+				// For the fetch bridge alone, host-side (R63): everything
+				// for the plugin's own work, only what it lends when its
+				// node runs in another package's pipeline.
+				secrets: secretsForCall(
+					{ ...desc, secrets: callSecrets },
+					!!opts.foreignPipeline
+				),
+				// The address `abortCall`/`killCall` stop this call by. The
+				// call id is already the manager's handle for it, and the
+				// live monitor's — one name for one call, end to end.
+				jobId: String(callId)
+			}
+			const invoked =
+				sandbox === this.quickjs
+					? this.quickjs.invoke(
+							{ pluginId: desc.id, hookName },
+							invokeOptions,
+							armOverrun
+						)
+					: sandbox.invoke(
+							{ pluginId: desc.id, hookName },
+							invokeOptions
+						)
 			// After the invoke, never before: the sandbox registers the job
 			// under `jobId` inside `invoke`, so a call asked to stop while it
 			// was still only *about* to start would have nothing to signal and
@@ -1103,20 +1132,23 @@ export class SandboxManager {
 				: undefined
 		if (userId === undefined)
 			return {
-				job: { denied: "annex('user'): no person is acting for this call" }
+				job: {
+					denied: "annex('user'): no person is acting for this call"
+				}
 			}
 		const db = this.annexDb?.() ?? null
 		if (!db)
 			return {
-				job: { denied: "annex('user'): saved data is not available right now" }
+				job: {
+					denied: "annex('user'): saved data is not available right now"
+				}
 			}
 		// A hook can run inside a transaction; the outer handle would wait on its
 		// mutex forever. Decline in words instead.
 		if (insideTransaction())
 			return {
 				job: {
-					denied:
-						"annex('user'): saved data is not available while a database transaction is open"
+					denied: "annex('user'): saved data is not available while a database transaction is open"
 				}
 			}
 		return {
@@ -1138,7 +1170,12 @@ export class SandboxManager {
 		if (userId === undefined || !db)
 			return "The call changed saved data, but saving is not available right now; nothing of it was saved."
 		try {
-			const res = await commitUserAnnexWrites(db, userId, pluginId, writes)
+			const res = await commitUserAnnexWrites(
+				db,
+				userId,
+				pluginId,
+				writes
+			)
 			if (res.ok) return null
 			if ("stale" in res)
 				return "The person's saved data changed while this call ran, so nothing of it was saved."
@@ -1231,7 +1268,8 @@ export function secretsForCall(
 	if (!foreign) return { nonce: desc.secretNonce, values: desc.secrets }
 	const lent = new Set(desc.lentSecrets ?? [])
 	const values: Record<string, string> = {}
-	for (const [k, v] of Object.entries(desc.secrets)) if (lent.has(k)) values[k] = v
+	for (const [k, v] of Object.entries(desc.secrets))
+		if (lent.has(k)) values[k] = v
 	return { nonce: desc.secretNonce, values }
 }
 
@@ -1243,23 +1281,39 @@ const HANDLE_PATTERN = /\u27E6secret:[^\u27E7]*\u27E7/g
  * reason, its logs — with `‹secret›`. A seatbelt: an encoded or split value
  * passes, which is why plugin code holds handles, never values.
  */
-export function scrubSecrets<T extends HookRunResult>(result: T, secrets?: Record<string, string>): T {
+export function scrubSecrets<T extends HookRunResult>(
+	result: T,
+	secrets?: Record<string, string>
+): T {
 	// Each value, and the two forms a plugin most often re-spells one in: as a
 	// URL carries it and as base64 — a seatbelt, not a guarantee.
 	const values = [
 		...new Set(
 			Object.values(secrets ?? {})
-				.filter((v) => typeof v === "string" && v.length >= MIN_SCRUB_LENGTH)
-				.flatMap((v) => [v, encodeURIComponent(v), Buffer.from(v, "utf8").toString("base64")])
+				.filter(
+					(v) => typeof v === "string" && v.length >= MIN_SCRUB_LENGTH
+				)
+				.flatMap((v) => [
+					v,
+					encodeURIComponent(v),
+					Buffer.from(v, "utf8").toString("base64")
+				])
 		)
 	].sort((a, b) => b.length - a.length)
 	const clean = (text: string) =>
-		values.reduce((t, v) => t.split(v).join(SCRUBBED), text).replace(HANDLE_PATTERN, SCRUBBED)
+		values
+			.reduce((t, v) => t.split(v).join(SCRUBBED), text)
+			.replace(HANDLE_PATTERN, SCRUBBED)
 	const deep = (v: unknown): unknown => {
 		if (typeof v === "string") return clean(v)
 		if (Array.isArray(v)) return v.map(deep)
 		if (v && typeof v === "object")
-			return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, deep(x)]))
+			return Object.fromEntries(
+				Object.entries(v as Record<string, unknown>).map(([k, x]) => [
+					k,
+					deep(x)
+				])
+			)
 		return v
 	}
 	const logs = result.logs.map(clean)

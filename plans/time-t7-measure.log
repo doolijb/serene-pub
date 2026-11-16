@@ -1,0 +1,107 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+session 4 (core:genre/story): 117 live, 98 considered
+kept 1 of 5 story-time sessions (gate: sum of diagnostics.considered >= 10)
+session 4: 108 turns replayed
+## Recall recency replay: lastRefRecency weighted 0
+
+### Session 4 (core:genre/story, 117 live)
+
+**1-2, 4. All turns**
+
+| metric | value |
+|---|---|
+| turns replayed | 108 |
+| mean lore candidates | 6.15 |
+| mean selected (shipped) | 6.15 |
+| turns where the selected set differs | 0 |
+| entries out / in (total) | 0 / 0 |
+| mean out / in per differing turn | 0.00 / 0.00 |
+| rank shift, selected in both: mean abs / worst | 0.00 / 0 |
+
+**3. Dropped out (in shipped, not in noRecency)**
+
+_none_
+
+**3. Came in (in noRecency, not in shipped)**
+
+_none_
+
+**5. Examples**
+
+_no differing turns_
+
+**6. Turns where every lore candidate already existed (61 of 108)**
+
+| metric | value |
+|---|---|
+| turns replayed | 61 |
+| mean lore candidates | 5.23 |
+| mean selected (shipped) | 5.23 |
+| turns where the selected set differs | 0 |
+| entries out / in (total) | 0 / 0 |
+| mean out / in per differing turn | 0.00 / 0.00 |
+| rank shift, selected in both: mean abs / worst | 0.00 / 0 |
+
+### All sessions
+
+**1-2, 4. All turns**
+
+| metric | value |
+|---|---|
+| turns replayed | 108 |
+| mean lore candidates | 6.15 |
+| mean selected (shipped) | 6.15 |
+| turns where the selected set differs | 0 |
+| entries out / in (total) | 0 / 0 |
+| mean out / in per differing turn | 0.00 / 0.00 |
+| rank shift, selected in both: mean abs / worst | 0.00 / 0 |
+
+**3. Dropped out (in shipped, not in noRecency)**
+
+_none_
+
+**3. Came in (in noRecency, not in shipped)**
+
+_none_
+
+**5. Examples**
+
+_no differing turns_
+
+**6. Turns where every lore candidate already existed (61 of 108)**
+
+| metric | value |
+|---|---|
+| turns replayed | 61 |
+| mean lore candidates | 5.23 |
+| mean selected (shipped) | 5.23 |
+| turns where the selected set differs | 0 |
+| entries out / in (total) | 0 / 0 |
+| mean out / in per differing turn | 0.00 / 0.00 |
+| rank shift, selected in both: mean abs / worst | 0.00 / 0 |
+
+**7. Inferred shipped lastRefRecency weight per band** (min .. max over positions)
+
+- none observed
+
+Lore candidates with lastRefRecency > 0: 0 of 664
+Distinct lore candidates whose entry has keys: 0 of 32
+Turns where the shipped run left a lore candidate out: 0 of 108
+Lever check: not exercised; no candidate carried the signal, so only 'no score moves when the signal is 0' was asserted.
+
+Embeddings took part: no.
+
+wall 592 s
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  06:32:45
+   Duration  601.51s (transform 2.81s, setup 13ms, import 24ms, tests 601.38s, environment 0ms)
+

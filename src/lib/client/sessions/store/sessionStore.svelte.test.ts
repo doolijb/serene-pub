@@ -241,6 +241,20 @@ describe("scenes and runs and genre", () => {
 		expect(s.runsOf(1).map((r) => r.runId)).toEqual(["b"])
 	})
 
+	it("a relay frame keeps the routine's name; the end frame drops the record; first-load frames merge like pushes", () => {
+		const s = opened()
+		const start = { sessionId: 1, runId: "r", kind: "routine", status: { i18n: { en: "Recap is running" } }, routine: { name: "Recap" } }
+		for (const frame of [start]) s.mergeRunStatus(frame as any)
+		expect(s.runsOf(1).map((r) => r.routine?.name)).toEqual(["Recap"])
+		s.mergeRunStatus({ sessionId: 1, runId: "r", kind: "routine", status: { i18n: { en: "thinking" } } } as any)
+		expect(s.runsOf(1).map((r) => r.routine?.name)).toEqual(["Recap"])
+		// The relay's clear mid-run (no `routine`) leaves the shown run in place.
+		s.mergeRunStatus({ sessionId: 1, runId: "r", kind: "routine", status: null } as any)
+		expect(s.runsOf(1).map((r) => r.routine?.name)).toEqual(["Recap"])
+		s.mergeRunStatus({ sessionId: 1, runId: "r", kind: "routine", status: null, routine: { name: "Recap" } } as any)
+		expect(s.runsOf(1)).toEqual([])
+	})
+
 	it("mergeGenreOf goes undefined, then null, then a row", () => {
 		const s = opened()
 		expect(s.genreOf(1)).toBeUndefined()

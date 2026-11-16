@@ -73,6 +73,7 @@ import {
 	type LLMQueueStatus
 } from "$lib/server/utils/llmQueue"
 import { contextWindowFrom } from "$lib/server/pipelines/runtime/contextWindow"
+import { resolveLlmLaneHost } from "$lib/server/connections/llmLanes"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
@@ -1412,83 +1413,17 @@ export async function dispatchGeneration(
 	request.signal?.addEventListener("abort", onAbort, { once: true })
 
 	/**
-	 * The call itself, on the queue when the caller asked for it.
+	 * What the request said about the reply, before its first token — the
+	 * facts the live row splits every frame by and the result below is
+	 * split by, so the two readings cannot disagree (`messages/replyView`).
 	 *
-	 * The queue's own signal is deliberately unused: the run's abort reaches
-	 * the adapter through `onAbort` above, and a stop that arrives while the
-	 * item is still waiting reaches the queue as a cancel — one source, two
-	 * shapes, the same rule `runQueuedLLMCall` follows.
+	 * The opening is read off the PAYLOAD first (a prompt that ends inside
+	 * an open block is certain) and the adapter second (a chat template it
+	 * asked to reason, whose text comes back inline). Read after
+	 * `generateText()` returned — that is when the adapter decided what it
+	 * asked — and structurally, since a test fake has no such getter.
 	 */
-	const generate = async () => {
-		const queue = request.queue
-		if (!queue) return await adapter.generateText()
-		if (request.signal?.aborted)
-			return { completionResult: "", isAborted: true } as Awaited<
-				ReturnType<typeof adapter.generateText>
-			>
-		const { id, done } = llmQueue.enqueue(
-			{
-				taskType: queue.taskType,
-				connectionName: connection.name ?? "connection",
-				samplingName: target.sampling?.name ?? "default",
-				sessionId: queue.sessionId,
-				messageId: queue.messageId,
-				userId: queue.userId,
-				label: queue.label,
-				// 🚧 The run's family's place in the queue (A13, R26): actions
-				// and session creation, then events, then routines.
-				priority: currentLlmPriority(),
-				// Both lifecycle hooks the base class always has, read
-				// structurally like `recordedWire` reads its getters: a test
-				// fake standing in for a model implements `generateText` and
-				// nothing else, and a queue item that demanded the rest would
-				// fail every one of them for a reason unrelated to the send.
-				preflight:
-					typeof adapter.preflight === "function"
-						? (signal) => adapter.preflight(signal)
-						: undefined,
-				execute: () => adapter.generateText(),
-				onCancel: () => {
-					if (typeof adapter.abort === "function") adapter.abort()
-				},
-				onStatusChange: queue.onStatusChange
-			},
-			queue.queueItemId
-		)
-		const cancelQueued = () => llmQueue.cancel(id)
-		request.signal?.addEventListener("abort", cancelQueued, { once: true })
-		try {
-			return await done
-		} catch (err) {
-			// The queue's own way of saying "stopped" — an item cancelled
-			// while it waited, or force-detached after it ignored its abort.
-			// A stop is an aborted call, never a service error.
-			if (isQueueCancellation(err))
-				return { completionResult: "", isAborted: true } as Awaited<
-					ReturnType<typeof adapter.generateText>
-				>
-			throw err
-		} finally {
-			request.signal?.removeEventListener("abort", cancelQueued)
-		}
-	}
-
-	try {
-		const result = await generate()
-		let text = ""
-		let reasoning = ""
-
-		/**
-		 * What the request said about the reply, before its first token — the
-		 * facts the live row splits every frame by and the result below is
-		 * split by, so the two readings cannot disagree (`messages/replyView`).
-		 *
-		 * The opening is read off the PAYLOAD first (a prompt that ends inside
-		 * an open block is certain) and the adapter second (a chat template it
-		 * asked to reason, whose text comes back inline). Read after
-		 * `generateText()` returned — that is when the adapter decided what it
-		 * asked — and structurally, since a test fake has no such getter.
-		 */
+	const announceFacts = (): ReplyFacts => {
 		const ownLabels = ownLabelsFor(
 			session,
 			request.currentCharacterId ?? null,
@@ -1521,6 +1456,22 @@ export async function dispatchGeneration(
 		)
 		if (stray.length) facts.strayLabels = stray
 		request.onReplyFacts?.(facts)
+		return facts
+	}
+
+	/**
+	 * One call, start to finish: send it, announce the reply's facts, and read
+	 * the stream to its end. This is what the queue runs, so a streamed reply
+	 * holds its host's LLM lane until the stream ends, is aborted or fails —
+	 * a streaming adapter only sends its request inside the `completionResult`
+	 * closure, and a queue item that returned before calling it would free the
+	 * LLM lane with the request still to be sent (★P2-b, 2026-11-13).
+	 */
+	const drain = async () => {
+		const result = await adapter.generateText()
+		let text = ""
+		let reasoning = ""
+		const facts = announceFacts()
 
 		if (typeof result.completionResult === "function") {
 			// Streaming. The chunks are forwarded *and* accumulated: the caller
@@ -1555,6 +1506,81 @@ export async function dispatchGeneration(
 			if (reasoning) request.onReasoning?.(reasoning)
 			if (text) request.onChunk?.(text)
 		}
+
+		return { result, text, reasoning, facts }
+	}
+
+	/** A stop is an aborted call with nothing said, facts announced as ever. */
+	const stopped = () => {
+		const result = { completionResult: "", isAborted: true } as Awaited<
+			ReturnType<typeof adapter.generateText>
+		>
+		return { result, text: "", reasoning: "", facts: announceFacts() }
+	}
+
+	/**
+	 * The call itself, on the queue when the caller asked for it.
+	 *
+	 * The queue's own signal is deliberately unused: the run's abort reaches
+	 * the adapter through `onAbort` above, and a stop that arrives while the
+	 * item is still waiting reaches the queue as a cancel — one source, two
+	 * shapes, the same rule `runQueuedLLMCall` follows.
+	 */
+	const generate = async () => {
+		const queue = request.queue
+		if (!queue) return await drain()
+		if (request.signal?.aborted) return stopped()
+		// The host this call's LLM lane is keyed by — resolved from the
+		// connection, never chosen by time or load.
+		const lane = await resolveLlmLaneHost(connection)
+		if (request.signal?.aborted) return stopped()
+		const { id, done } = llmQueue.enqueue(
+			{
+				taskType: queue.taskType,
+				connectionName: connection.name ?? "connection",
+				lane,
+				samplingName: target.sampling?.name ?? "default",
+				sessionId: queue.sessionId,
+				messageId: queue.messageId,
+				userId: queue.userId,
+				label: queue.label,
+				// 🚧 The run's family's place in the queue (A13, R26): actions
+				// and session creation, then events, then routines.
+				priority: currentLlmPriority(),
+				// Both lifecycle hooks the base class always has, read
+				// structurally like `recordedWire` reads its getters: a test
+				// fake standing in for a model implements `generateText` and
+				// nothing else, and a queue item that demanded the rest would
+				// fail every one of them for a reason unrelated to the send.
+				preflight:
+					typeof adapter.preflight === "function"
+						? (signal) => adapter.preflight(signal)
+						: undefined,
+				execute: drain,
+				onCancel: () => {
+					if (typeof adapter.abort === "function") adapter.abort()
+				},
+				onStatusChange: queue.onStatusChange
+			},
+			queue.queueItemId
+		)
+		const cancelQueued = () => llmQueue.cancel(id)
+		request.signal?.addEventListener("abort", cancelQueued, { once: true })
+		try {
+			return await done
+		} catch (err) {
+			// The queue's own way of saying "stopped" — an item cancelled
+			// while it waited, or force-detached after it ignored its abort.
+			// A stop is an aborted call, never a service error.
+			if (isQueueCancellation(err)) return stopped()
+			throw err
+		} finally {
+			request.signal?.removeEventListener("abort", cancelQueued)
+		}
+	}
+
+	try {
+		const { result, text, reasoning, facts } = await generate()
 
 		// The pipeline's own strip, and the reason no consumer of this function
 		// has to have one. `text` goes on a port and from there into a lore

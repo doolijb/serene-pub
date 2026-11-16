@@ -22,10 +22,12 @@ import {
 import { alias } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { membersAsRead, type MemberAsRead } from "./memberAsRead"
+import { profileOf } from "$lib/shared/characters/profile"
 import { ensureCardVersion } from "$lib/server/characters/versions"
 import {
 	CARD_CONTENT_COLUMNS,
-	cardAsOfVersion
+	cardAsOfVersion,
+	cardColumnsOfProfile
 } from "$lib/server/characters/cardIO"
 
 /** The `characters` columns that are library facts — never the ⏳ copies or the frozen content. */
@@ -89,6 +91,67 @@ export async function cardsNow(
 		if (!version) continue
 		out.set(row.id, cardAsOfVersion(row as CardLibraryRow, version))
 	}
+	return out
+}
+
+/** The three card faces a list shows (internal; not a user-facing name). */
+export type CardNameplate = {
+	id: number
+	name: string
+	nickname: string | null
+	avatarMediaId: number | null
+}
+
+/**
+ * Narrow `cardsNow`: only `id`, `name`, `nickname` and `avatarMediaId`, with
+ * exactly the values `cardsNow(...).get(id)` gives for them (the newest card
+ * version's, through `profileOf` and `cardColumnsOfProfile`). One read of the
+ * newest version per card, selecting just those columns. A card with no
+ * version is read from its own `characters` row — what its v1 would hold
+ * (`firstVersionOf`) — and is **not** lifted: a list read writes nothing.
+ * Soft-deleted cards read like any other; an unknown id is absent.
+ */
+export async function cardNameplatesNow(
+	db: Db,
+	cardIds: readonly number[]
+): Promise<Map<number, CardNameplate>> {
+	const ids = [...new Set(cardIds)]
+	const out = new Map<number, CardNameplate>()
+	if (!ids.length) return out
+	const cv = schema.characterVersions
+	const faceOf = (
+		id: number,
+		row: { name: unknown; nickname: unknown; faceMediaId: unknown }
+	): CardNameplate => {
+		const { name, nickname, avatarMediaId } = cardColumnsOfProfile(
+			profileOf(row)
+		)
+		return { id, name, nickname, avatarMediaId }
+	}
+	const versions = await db
+		.selectDistinctOn([cv.cardId], {
+			cardId: cv.cardId,
+			name: cv.name,
+			nickname: cv.nickname,
+			faceMediaId: cv.faceMediaId
+		})
+		.from(cv)
+		.where(inArray(cv.cardId, ids))
+		.orderBy(asc(cv.cardId), desc(cv.number))
+	for (const v of versions) out.set(v.cardId!, faceOf(v.cardId!, v))
+	const missing = ids.filter((id) => !out.has(id))
+	if (!missing.length) return out
+	const rows = await db
+		.select({
+			id: schema.characters.id,
+			name: schema.characters.name,
+			nickname: schema.characters.nickname,
+			avatarMediaId: schema.characters.avatarMediaId
+		})
+		.from(schema.characters)
+		.where(inArray(schema.characters.id, missing))
+	for (const r of rows)
+		out.set(r.id, faceOf(r.id, { ...r, faceMediaId: r.avatarMediaId }))
 	return out
 }
 

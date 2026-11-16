@@ -36,7 +36,7 @@
  * session's own book is an own-book landing: written there directly, forking no line.
  */
 
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import {
 	getRuleset,
 	i18nText,
@@ -390,6 +390,7 @@ async function rowForSide(
 				and(
 					inArray(R.lorebookId, r.books),
 					eq(R.status, "active"),
+					isNull(R.knowledgeKind),
 					c.fromNodeId != null
 						? eq(R.fromNodeId, c.fromNodeId)
 						: eq(R.fromEntryId, c.fromEntryId!),
@@ -722,7 +723,11 @@ async function writeColumn(
 	if (target === "entry-field") {
 		if (at.entryId == null) return "no entry behind it"
 		const [row] = await db
-			.select({ fields: schema.lorebookEntries.fields, lorebookId: schema.lorebookEntries.lorebookId })
+			.select({
+				fields: schema.lorebookEntries.fields,
+				lorebookId: schema.lorebookEntries.lorebookId,
+				typeId: schema.lorebookEntries.typeId
+			})
 			.from(schema.lorebookEntries)
 			.where(eq(schema.lorebookEntries.id, at.entryId))
 			.limit(1)
@@ -746,6 +751,24 @@ async function writeColumn(
 				fields[field],
 				value
 			)
+			// The Edit history's row, on the handle of the write.
+			const { recordEntryRedline } = await import("$lib/server/lorebooks/redlines")
+			const { routineRunOf } = await import("$lib/server/pipelines/routines/runs")
+			const entry = { id: at.entryId, typeId: row.typeId }
+			await recordEntryRedline(db, {
+				before: { ...entry, fields },
+				after: { ...entry, fields: { ...fields, [field]: value } },
+				named: [field],
+				cause: "routine",
+				by: {
+					run: {
+						sessionId: anchor.sessionId,
+						messageId: anchor.messageId,
+						runId: anchor.runId,
+						shownAs: routineRunOf(runId)?.shownAs?.name ?? null
+					}
+				}
+			})
 		}
 		return null
 	}

@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/TheDrummer_Cydonia-24B-v4.3-GGUF:IQ4_XS",
+ "n": 20,
+ "results": {
+  "date_only": {
+   "acts_still_furious": "1/20",
+   "mentions_time_passing": "15/20"
+  },
+  "words": {
+   "acts_still_furious": "4/20",
+   "mentions_time_passing": "16/20"
+  },
+  "signed_same_fmt": {
+   "acts_still_furious": "2/20",
+   "mentions_time_passing": "13/20"
+  },
+  "signed_units": {
+   "acts_still_furious": "4/20",
+   "mentions_time_passing": "14/20"
+  }
+ },
+ "samples": {
+  "date_only": [
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable. Recognition flickered across her face as she saw Ash, but her greeting was cool and professional. \"There's a room available,\" she said simply, gesturing toward the stairs. \"Same price as last time\u2014thre",
+   "[still=0 passed=1] Mira glanced up from the ledger she'd been reviewing, her expression carefully neutral as she took in the familiar face. Her fingers tightened almost imperceptibly around her quill. \"Room three is available. Payment in advance.\" She stood, moving with deliberate calm toward the k",
+   "[still=0 passed=0] Mira looked up from the ledger she'd been studying, her expression unreadable as she recognized the familiar face. She set down her quill with deliberate care, her eyes never leaving Ash as she rose from behind the desk. \"Well, well. You've got some nerve showing your face here a"
+  ],
+  "words": [
+   "[still=0 passed=1] Mira looked up from the ledger she'd been writing in, her eyes narrowing as recognition flickered across her face. Her jaw tightened almost imperceptibly, but she set down her quill with practiced composure. \"Ash.\" She said his name like a stone dropping into still water\u2014flat and",
+   "[still=1 passed=1] Mira looked up from the ledger she'd been writing in, her expression carefully neutral as she recognized the familiar face. She set down her quill and regarded Ash with those same steady eyes that had watched a thousand travelers come and go through her doors.   \"Evening, Ash,\" s",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable as she recognized the familiar face. She set down her quill with deliberate care, folding her hands on the worn counter.  \"Ash,\" she said simply, her voice neutral. \"It's been a while.\" Her eyes flicker"
+  ],
+  "signed_same_fmt": [
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable. Recognition flickered across her face when she saw Ash, followed quickly by something harder\u2014resentment, perhaps, or old anger barely contained.  \"A room?\" she repeated, her voice flat. She set down he",
+   "[still=0 passed=1] Mira glanced up from the ledger she'd been reviewing, her expression carefully neutral as she took in the familiar face. Recognition flickered in her eyes, though she made no mention of their history. She set down her quill and folded her hands on the worn wooden counter.  \"Eveni",
+   "[still=0 passed=0] Mira looked up from the ledger she'd been studying, her expression unreadable as she recognized the familiar face. She set down her quill with deliberate care, her eyes never leaving Ash.  \"A room? For you?\" She stood, wiping her hands on her apron. \"The last time you were here, "
+  ],
+  "signed_units": [
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable. Recognition flickered across her face as she saw Ash standing in her doorway, rain dripping from his coat onto her clean floor. She set down her quill with deliberate slowness.  \"Ash,\" she said evenly,",
+   "[still=0 passed=0] Mira glanced up from the ledger she'd been reviewing, her expression carefully neutral as she recognized the familiar face. She set down her quill and studied Ash for a moment before responding.  \"A room? Aye, I've got one available,\" she said, her tone professional despite the h",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable as she recognized the familiar face. She set down her quill with deliberate care, her eyes never leaving Ash.  \"A room? For you?\" She stood, wiping her hands on her apron. \"The same man who left without"
+  ]
+ }
+}

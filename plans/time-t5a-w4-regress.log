@@ -1,0 +1,95 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/autoApply.int.test.ts (18 tests | 3 failed) 3832ms
+     × close-out applies everything eligible and leaves a conflicted change held 208ms
+     × a change waiting on an earlier change of this session applies with it, in one Apply 89ms
+     × appliedBatchesOf lists a press and an automatic Apply, newest first, with who and what 125ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > close-out applies everything eligible and leaves a conflicted change held
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:395:31
+    393|   expect(done).toMatchObject({
+    394|    applied: [eA.id, eB.id, eC.id],
+    395|    appliedChanges: [category!.id],
+       |                               ^
+    396|    // Offered, re-checked at accept time, and kept with its reason.
+    397|    stillHeld: [
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically folds a chain of changes in order > a change waiting on an earlier change of this session applies with it, in one Apply
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:428:28
+    426|   const done = await auto(w.session.id, "close-out")
+    427|   expect(done).toMatchObject({
+    428|    appliedChanges: [first!.id, second!.id],
+       |                            ^
+    429|    stillHeld: []
+    430|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > the two list reads > appliedBatchesOf lists a press and an automatic Apply, newest first, with who and what
+AssertionError: expected { …(7) } to match object { by: null, …(4) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "automatic": "scene-close",
+    "by": null,
+-   "count": 3,
++   "count": 2,
+    "items": [
+      {
+        "entryId": 59,
+        "kind": "entry",
+        "title": "Brine Gate",
+      },
+      {
+        "entryId": 60,
+        "kind": "entry",
+        "title": "Cinder Row",
+-     },
+-     {
+-       "changes": [
+-         {
+-           "after": "Sealed.",
+-           "before": "Locked.",
+-           "field": "content",
+-           "label": "Content",
+-         },
+-       ],
+-       "entryId": 57,
+-       "kind": "entry-change",
+-       "title": "The Vault",
+      },
+    ],
+    "sceneId": 8,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:625:22
+    623|    pressed.batch
+    624|   ])
+    625|   expect(batches[0]).toMatchObject({
+       |                      ^
+    626|    by: null,
+    627|    automatic: "scene-close",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed | 10 passed (11)
+      Tests  3 failed | 132 passed (135)
+   Start at  03:47:24
+   Duration  17.14s (transform 4.86s, setup 70ms, import 4.49s, tests 41.31s, environment 2ms)
+

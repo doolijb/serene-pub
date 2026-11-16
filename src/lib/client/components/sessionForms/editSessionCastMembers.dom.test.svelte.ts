@@ -3,7 +3,7 @@
  * as its cast member, and Save sends `castMemberIds` — the whole set — only
  * when the person changed it.
  */
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({
@@ -57,6 +57,12 @@ vi.mock("$lib/client/sockets/interest.svelte", () => {
 })
 
 import EditSessionForm from "./EditSessionForm.svelte"
+
+// The character picker loads its list when it opens; warm the module so the
+// picker's import resolves within `settle()`.
+beforeAll(async () => {
+	await import("../modals/CharacterSelectList.svelte")
+})
 
 let app: ReturnType<typeof mount> | null = null
 afterEach(() => {
@@ -235,6 +241,9 @@ describe("Edit Session — members of the session's lorebook", () => {
 		) as HTMLButtonElement
 		add.click()
 		await tick()
+		flushSync()
+		// The picker's list arrives one chunk fetch after it opens.
+		await new Promise((r) => setTimeout(r, 0))
 		flushSync()
 		expect(document.body.textContent).toContain("Session notes")
 		expect(document.body.textContent).toContain("Tess")

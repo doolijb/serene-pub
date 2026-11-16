@@ -577,6 +577,36 @@ export type DossierLineCache = Map<
 	{ key: string; line: ConversationLineV1 }
 >
 
+/**
+ * The dossier last handed out per line cache (one cache per page), returned
+ * again when a rerun builds the same content. A memo no reader tracks.
+ */
+const lastDossier = new WeakMap<DossierLineCache, ConversationDossierV1>()
+
+/** Structural equality for JSON-shaped data; a missing key and an `undefined` one differ. */
+function samePlainData(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) return true
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
+			return false
+		for (let i = 0; i < a.length; i++)
+			if (!samePlainData(a[i], b[i])) return false
+		return true
+	}
+	const plain = (x: unknown): x is Record<string, unknown> => {
+		if (typeof x !== "object" || x === null) return false
+		const proto = Object.getPrototypeOf(x)
+		return proto === Object.prototype || proto === null
+	}
+	if (!plain(a) || !plain(b)) return false
+	const keys = Object.keys(a)
+	if (keys.length !== Object.keys(b).length) return false
+	for (const k of keys) {
+		if (!Object.hasOwn(b, k) || !samePlainData(a[k], b[k])) return false
+	}
+	return true
+}
+
 /** What the conversation's dossier is built from: the page's stores and contexts, read as the build reads them. */
 export interface DossierSources {
 	data: SessionPageData
@@ -862,7 +892,7 @@ export function projectConversationDossier(
 					]
 				})
 		: undefined
-	return {
+	const next: ConversationDossierV1 = {
 		sessionId: session.id,
 		lines,
 		// 🚧 Live scenes (§14 C): each row with its lane, boundaries, clocks
@@ -879,7 +909,14 @@ export function projectConversationDossier(
 		// 🚧 Back · Forward (RF fix 5): the server's state off the session; the
 		// strip adds the owner rule and a reply being written.
 		...(src.data.rewind
-			? { rewind: { ahead: src.data.rewind.ahead, back: src.data.rewind.back, forward: src.data.rewind.forward } }
+			? {
+					rewind: {
+						ahead: src.data.rewind.ahead,
+						back: src.data.rewind.back,
+						forward: src.data.rewind.forward,
+						...(src.data.rewind.step ? { step: src.data.rewind.step } : {})
+					}
+				}
 			: {}),
 		// 🚧 pr-6s2 (I §I-1): the settle line — the conversation marks the newest settled line it shows.
 		settledThrough: typeof (session as { settledLine?: unknown }).settledLine === "number" ? (session as { settledLine: number }).settledLine : null,
@@ -951,6 +988,8 @@ export function projectConversationDossier(
 		// 🚧 The runs in flight (the `sessions:runStatus` pushes the page hears):
 		// a spoken line whose pending run is here reads Speaking… (A4).
 		liveRunIds: src.data.liveRunIds,
+		// 🚧 The routine runs showing as running — names only, for the turn line.
+		runningRoutineNames: src.data.runningRoutineNames,
 		// 🚧 Whether this pub can speak at all (server-read boolean + reason): the
 		// speak icons grey with the reason when it cannot. Read aloud Off is NOT
 		// a reason; on-demand still works.
@@ -1135,4 +1174,14 @@ export function projectConversationDossier(
 		},
 		appBackground: !!userSettingsCtx.settings?.backgroundImagePath
 	}
+	// A streamed reasoning delta replaces the generating row's `metadata`, so
+	// this reruns every frame and builds an equal object; the widget wire skips
+	// a section by reference, so hand back the held one. The same object comes
+	// back only when its content is equal, so a widget misses nothing; one
+	// embedded by reference and mutated in place would be missed (the page's
+	// owners replace `sessionFrames`, `storyCalendar`, `lorebookAnnexView`).
+	const prev = lastDossier.get(lineCache)
+	if (prev && samePlainData(prev, next)) return prev
+	lastDossier.set(lineCache, next)
+	return next
 }

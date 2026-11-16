@@ -104,6 +104,10 @@ import { readStoredFacts } from "$lib/shared/connections/modelFacts"
 import { readSpeechFacts } from "$lib/shared/connectionAdapters/speechFacts"
 import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
 import { hostKey, sameHost } from "$lib/shared/connections/hostKey"
+import {
+	listLlmLaneHosts,
+	setLlmLaneWidth
+} from "$lib/server/connections/llmLaneWidths"
 import { discoverLocalProviders } from "$lib/server/connections/discoverLocal"
 import {
 	encryptApiKeyField,
@@ -1066,6 +1070,45 @@ export const connectionsSetCapability: Handler<
 		await emitToUser("connectionDefaults:list", () =>
 			buildConnectionDefaultsList()
 		)
+		return res
+	}
+}
+
+export const connectionsLlmLanes: Handler<
+	Sockets.Connections.LlmLanes.Params,
+	Sockets.Connections.LlmLanes.Response
+> = {
+	event: "connections:llmLanes",
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			emitToUser("connections:llmLanes:error", {
+				error: CAPABILITY_DENIED
+			})
+			return { hosts: [] }
+		}
+		const res = { hosts: await listLlmLaneHosts() }
+		emitToUser("connections:llmLanes", res)
+		return res
+	}
+}
+
+export const connectionsSetLlmLaneWidth: Handler<
+	Sockets.Connections.SetLlmLaneWidth.Params,
+	Sockets.Connections.SetLlmLaneWidth.Response
+> = {
+	event: "connections:setLlmLaneWidth",
+	handler: async (socket, params, emitToUser) => {
+		const { laneKey, width } = params
+		const fail = (error: string) => {
+			emitToUser("connections:setLlmLaneWidth:error", { error })
+			return { laneKey, width, error }
+		}
+		if (!socket.user!.isAdmin) return fail(CAPABILITY_DENIED)
+		const { error } = await setLlmLaneWidth(laneKey, width)
+		if (error) return fail(error)
+		const res = { laneKey, width }
+		emitToUser("connections:setLlmLaneWidth", res)
+		emitToUser("connections:llmLanes", { hosts: await listLlmLaneHosts() })
 		return res
 	}
 }
@@ -2622,6 +2665,8 @@ export function registerConnectionHandlers(
 	register(socket, modelsRefreshSpeech, emitToUser)
 	register(socket, connectionsCapabilities, emitToUser)
 	register(socket, afterModelChange(connectionsSetCapability), emitToUser)
+	register(socket, connectionsLlmLanes, emitToUser)
+	register(socket, connectionsSetLlmLaneWidth, emitToUser)
 	register(socket, connectionsScripts, emitToUser)
 	register(socket, connectionsAttachScript, emitToUser)
 	register(socket, connectionsDetachScript, emitToUser)

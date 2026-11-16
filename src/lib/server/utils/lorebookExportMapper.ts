@@ -56,6 +56,14 @@ import {
 	type EntryTypeId
 } from "$lib/shared/entries/types"
 import { isSlotLoreRef } from "@serene-pub/sdk"
+import {
+	ENTRY_DATE_PARTS,
+	clampDecayRate
+} from "$lib/shared/lorebooks/amendments"
+import {
+	beginningProblem,
+	takesBeginning
+} from "$lib/server/utils/lorebookEntries"
 import { readsAsRegex } from "$lib/shared/entries/runawayPattern"
 
 /**
@@ -118,6 +126,8 @@ export interface ExportableEntry {
 	useRegex: boolean | null
 	caseSensitive: boolean
 	extraJson: Record<string, any> | null
+	/** The entry's *not common knowledge* mark; absent is unmarked. */
+	notCommonKnowledge?: boolean
 	name?: string | null
 	/**
 	 * The condition, in the row's own spelling: comma-joined keys and a mode
@@ -305,7 +315,8 @@ export function entryFacts(entry: ExportableEntry): Record<string, unknown> {
 		facts.enabled = entry.enabled
 	}
 	if (entry.matchMode === "regex") facts.matchMode = entry.matchMode
-	if (entry.recursionDepth != null) facts.recursionDepth = entry.recursionDepth
+	if (entry.recursionDepth != null)
+		facts.recursionDepth = entry.recursionDepth
 	if (entry.provenance && entry.provenance !== HUMAN_PROVENANCE)
 		facts.provenance = entry.provenance
 	return facts
@@ -319,6 +330,61 @@ export function entryFacts(entry: ExportableEntry): Record<string, unknown> {
 const MATCH_WHOLE_WORDS_BY_MODE: Readonly<Record<string, boolean>> = {
 	word: true,
 	substring: false
+}
+
+/**
+ * An entry's own Serene Pub values beside its type's declared ones: a Beginning
+ * (`year`, `month`, `day`, on a type that takes one), a decay rate above 0 and
+ * the *not common knowledge* mark. Each travels only when set, so an entry
+ * with none writes none.
+ */
+function beginningAndDecay(entry: ExportableEntry): Record<string, unknown> {
+	const out: Record<string, unknown> = {}
+	if (takesBeginning(entry.typeId))
+		for (const part of ENTRY_DATE_PARTS)
+			if (typeof entry[part] === "number") out[part] = entry[part]
+	if (typeof entry.decayRate === "number" && entry.decayRate > 0)
+		out.decayRate = entry.decayRate
+	if (entry.notCommonKnowledge === true) out.notCommonKnowledge = true
+	return out
+}
+
+/**
+ * The inverse of `beginningAndDecay` on a file's `serenepub` bag: a finite
+ * decay rate clamped to 0–1 (anything else is 0, left out), and the date parts
+ * only when they make a Beginning (`beginningProblem`), else none (Perpetual);
+ * `notCommonKnowledge` is `true` only for a literal `true`.
+ */
+export function importedBeginningAndDecay(
+	meta: Record<string, unknown> | null | undefined,
+	typeId: string
+): {
+	year?: number
+	month?: number
+	day?: number
+	decayRate?: number
+	notCommonKnowledge?: boolean
+} {
+	const out: {
+		year?: number
+		month?: number
+		day?: number
+		decayRate?: number
+		notCommonKnowledge?: boolean
+	} = {}
+	if (!meta) return out
+	if (takesBeginning(typeId)) {
+		const parts: Record<string, unknown> = {}
+		for (const part of ENTRY_DATE_PARTS)
+			if (meta[part] != null) parts[part] = meta[part]
+		if (Object.keys(parts).length && beginningProblem(parts) === null)
+			Object.assign(out, parts)
+	}
+	const rate = meta.decayRate
+	if (typeof rate === "number" && Number.isFinite(rate) && rate > 0)
+		out.decayRate = clampDecayRate(rate)
+	if (meta.notCommonKnowledge === true) out.notCommonKnowledge = true
+	return out
 }
 
 function baseEntryFields(
@@ -514,6 +580,9 @@ export function mapEntry(
 					: {}),
 				...entryFacts(entry),
 				...bag,
+				...(exportProfile === "0.5-compat"
+					? {}
+					: beginningAndDecay(entry)),
 				...(refs.bindingLocalId != null
 					? { bindingLocalId: refs.bindingLocalId }
 					: {}),
@@ -621,10 +690,13 @@ function fileGroups<T extends ExportableEntryWithPosition>(
 		ENTRY_TYPE_IDS.indexOf(typeId as CoreEntryTypeId)
 	return ENTRY_TYPE_IDS.map((typeId) =>
 		entries
-			.filter((e) => typeRank(e.typeId) >= 0 && readAs(e.typeId) === typeId)
+			.filter(
+				(e) => typeRank(e.typeId) >= 0 && readAs(e.typeId) === typeId
+			)
 			.sort(
 				(a, b) =>
-					typeRank(a.typeId) - typeRank(b.typeId) || a.position - b.position
+					typeRank(a.typeId) - typeRank(b.typeId) ||
+					a.position - b.position
 			)
 	)
 }
@@ -907,6 +979,11 @@ export interface ExportedNarrativeRelationship {
 	 * it — every file written before — reads one way.
 	 */
 	reverseRelationshipType?: string
+	/**
+	 * A knowledge tie's kind (`knowledgeKinds.ts`); written only when set. A
+	 * file without it is an ordinary link.
+	 */
+	knowledgeKind?: string
 	/** The relationship's own name; written only when set (plan B1). */
 	name?: string
 	description: string
@@ -927,6 +1004,8 @@ interface NarrativeRelationshipLike {
 	reverseRelationshipType?: string | null
 	/** The row's `title`; absent is unnamed. */
 	title?: string
+	/** The row's knowledge kind; absent or null is an ordinary link. */
+	knowledgeKind?: string | null
 	description: string | null
 	visibility: string
 	status: string
@@ -986,6 +1065,7 @@ export function mapNarrativeRelationship(
 			? { reverseRelationshipType: rel.reverseRelationshipType }
 			: {}),
 		...(rel.title ? { name: rel.title } : {}),
+		...(rel.knowledgeKind ? { knowledgeKind: rel.knowledgeKind } : {}),
 		// The importer stores a missing description as "", so the file says
 		// "" too: a stored NULL written as null would make the imported
 		// book's export differ from its file.

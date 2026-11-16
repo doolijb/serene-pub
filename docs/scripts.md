@@ -24,6 +24,8 @@ Every script has a **type**, and the type decides two things: what the script is
 
 Plugins can add types of their own; they show the same way.
 
+For a worked **Rescore candidates** script, see the SDK guide [Make living entries fade in recall](./sdk/guides/time.md#make-living-entries-fade-in-recall).
+
 **Inject messages** and **Transform messages** are separate on purpose. Injection can only add, so you can trust an injection script with a session's history in a way you might not trust one that rewrites it. Injected messages reach the model through the context template; see [Context templates → The injectionsByIndex map](./context-templates.md#the-injectionsbyindex-map).
 
 **Stop generation** is different from the rest. A stop script never changes the text; it only answers "where should this end?" Every stop script at a place gets its say, and the earliest ending wins, so their order does not matter.

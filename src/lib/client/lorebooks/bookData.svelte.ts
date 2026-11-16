@@ -45,6 +45,12 @@ export interface BookData {
 	readonly bookAccess: BookAccess
 	/** `bookAccess !== "owner"`: hide or disable every write verb. */
 	readonly readOnly: boolean
+	/**
+	 * 🚧 The open book's **Timeline** switch (notes over a lorebook answer with
+	 * their lorebook's, as the list carries it); true when not known. Every
+	 * time control reads this, never the row.
+	 */
+	readonly timelineEnabled: boolean
 	/** The open book's name, or null when it is not known. */
 	readonly bookName: string | null
 	/** Whose book it is, by name — null when it is the reader's own or not known. */
@@ -133,6 +139,20 @@ export function bookReadOnly(): { readonly value: boolean } {
 }
 
 /**
+ * Whether the open book keeps a timeline — true outside the workspace (a
+ * component mounted alone, or in a session page). Call during init; the
+ * answer is a getter, so read it inside a `$derived`.
+ */
+export function bookTimeline(): { readonly value: boolean } {
+	const data = getContext<BookData | undefined>(KEY)
+	return {
+		get value() {
+			return data?.timelineEnabled ?? true
+		}
+	}
+}
+
+/**
  * The context map that provides `data`, for `mount(Lens, { context })` — a
  * test mounting one lens without the workspace.
  */
@@ -159,6 +179,7 @@ export function staticBookData(
 		drawnRulesLists: Sockets.Entries.Types.Response["types"][number][]
 		library: BookLibrary | null
 		bookAccess: BookAccess
+		timelineEnabled: boolean
 		bookName: string | null
 		ownerName: string | null
 	}>,
@@ -173,6 +194,9 @@ export function staticBookData(
 		},
 		get readOnly() {
 			return (values().bookAccess ?? "owner") !== "owner"
+		},
+		get timelineEnabled() {
+			return values().timelineEnabled ?? true
 		},
 		get bookName() {
 			return values().bookName ?? null

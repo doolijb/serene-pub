@@ -105,7 +105,12 @@ describe("🚧 the mirror's rewind column", () => {
 		const { session, ids } = await seat()
 		const [m1, m2, m3, m4] = ids
 		const { rewindTurn, forwardTurn } = await import("$lib/server/sessions/rewind")
-		expect(await rewindTurn(db as any, { sessionId: session.id, userId: ownerId })).toMatchObject({ ok: true })
+		// Story steps one message per press: the turn (m4, then m3) takes two presses.
+		for (const taken of [m4, m3])
+			expect(await rewindTurn(db as any, { sessionId: session.id, userId: ownerId })).toMatchObject({
+				ok: true,
+				messageIds: [taken]
+			})
 		const legacy = await ordinals("sessionMessages", ids)
 		const mirror = await ordinals("messages", ids)
 		expect(legacy[m3]).not.toBeNull()
@@ -114,7 +119,8 @@ describe("🚧 the mirror's rewind column", () => {
 		expect(mirror[m4]).toBe(legacy[m4])
 		expect(mirror[m1]).toBeNull()
 		expect(mirror[m2]).toBeNull()
-		expect(await forwardTurn(db as any, { sessionId: session.id, userId: ownerId })).toMatchObject({ ok: true })
+		for (let press = 0; press < 2; press++)
+			expect(await forwardTurn(db as any, { sessionId: session.id, userId: ownerId })).toMatchObject({ ok: true })
 		for (const table of ["sessionMessages", "messages"] as const) {
 			expect(Object.values(await ordinals(table, ids)).every((o) => o === null)).toBe(true)
 		}
@@ -124,7 +130,9 @@ describe("🚧 the mirror's rewind column", () => {
 		const { session, ids } = await seat()
 		const m2 = ids[1]
 		const { rewindTurn } = await import("$lib/server/sessions/rewind")
-		expect(await rewindTurn(db as any, { sessionId: session.id, userId: ownerId })).toMatchObject({ ok: true })
+		// Story steps one message per press: the turn (m4, m3) takes two presses.
+		for (let press = 0; press < 2; press++)
+			expect(await rewindTurn(db as any, { sessionId: session.id, userId: ownerId })).toMatchObject({ ok: true })
 		const { newestMessageId } = await import("$lib/server/state/write")
 		const { roundOf } = await import("$lib/server/rulesets/rounds")
 		expect(await newestMessageId(db as any, session.id)).toBe(m2)

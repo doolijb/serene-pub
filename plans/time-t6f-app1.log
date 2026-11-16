@@ -1,0 +1,414 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-8O6yFU/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-lair-unknown-entries-XN2LJy/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-unknown-entries-reply-iIqbZD/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ✓ |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > every published node has something to run it > binds every type the shipped specs use 8ms
+ ✓ |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > every published node has something to run it > publishes all seven namespaces with an active version 32ms
+ × |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > every provider has a dispatch path > routes each provider the specs use, with none falling through 6ms
+   → providers with no dispatch path: core:oracle/speak: expected [ 'core:oracle/speak' ] to deeply equal []
+ ✓ |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > the summarize batching > cuts messages into batches that leave the model room to answer 1ms
+ ✓ |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > the summarize batching > produces one empty batch rather than none for an empty session 1ms
+stdout | src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > not invoked: today's output exactly, and no receipt line
+Using PGlite database at: /tmp/serene-pub-vitest-bindings-firsthand-dHgFia/data/serene-pub.db
+
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > not invoked: today's output exactly, and no receipt line 396ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > a narrator turn (firsthandFor wired, undefined or null) reads everything and says so 141ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > a member that never spoke in a closed scene: its lines are left out, with the note 134ms
+stdout | src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > a: nothing marked, the speaker's prompt holds the entry; two fresh worlds give one prompt
+[unknown-entries story baseline] sha256=7be63a35b29178c73aa424981205a5d0ecfbede6d7b1450a05e34c457616e7c5 statements=2745 (second world 7be63a35b29178c73aa424981205a5d0ecfbede6d7b1450a05e34c457616e7c5, 2041)
+
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > a: nothing marked, the speaker's prompt holds the entry; two fresh worlds give one prompt 3835ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > a card-less seat's turn (firsthandFor null, member in the scope) is filtered, not read whole 138ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > one that spoke in the scene, even only before the history window, keeps its lines 114ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > composes with a channel read: a subset of the unfiltered read, never more 161ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > a one-row read (messageId) is never filtered 107ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/session-history@1 with firsthandFor > with firsthandBy naming a tracked slot: a line after the member's value moved away is left out 148ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/earlier-scenes@1 with firsthandFor > not invoked: every scene, and no receipt line 101ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/earlier-scenes@1 with firsthandFor > a narrator turn reads everything and says so 107ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/earlier-scenes@1 with firsthandFor > a summary is left out for a member that never spoke, kept for one that spoke; the note 115ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/earlier-scenes@1 with firsthandFor > firsthandBy: a scene whose last line the member's place excludes is left out 139ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/history-entries@1 with firsthandFor > not invoked: byte-identical output, and no receipt line 219ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/history-entries@1 with firsthandFor > left out: a missed scene, and a mixed entry; kept: attended, and none of this session's 219ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/history-entries@1 with firsthandFor > one entry left out: the singular receipt 162ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/history-entries@1 with firsthandFor > a narrator turn reads everything: exclusions unchanged, and says so 214ms
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > b: the node's receipt holds the nothing-marked sentence 1737ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > core:query/history-entries@1 with firsthandFor > eligibility blocks a vector-search copy of a left-out entry 169ms
+stdout | src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > statements the two bindings add per reply > none when not invoked; a few when invoked
+firsthand binding statements added: history +13 (no stat), +67 (stat, 3 members); earlier-scenes +13 (no stat), +67 (stat, 3 members)
+
+stdout | src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > statements the two bindings add per reply > none when not invoked; a few when invoked
+history-entries statements added: not invoked total 96; invoked, no slot: +6
+
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.firsthand.int.test.ts > statements the two bindings add per reply > none when not invoked; a few when invoked 317ms
+stdout | src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > a: nothing marked, the delver's prompt holds the entry; two fresh worlds give one prompt
+[unknown-entries lair baseline] sha256=cb880fdda079607b4f5b3db4e10fb82f09a0e61f23dcd1de5db68251d26be593 statements=4586 (second world cb880fdda079607b4f5b3db4e10fb82f09a0e61f23dcd1de5db68251d26be593, 4582)
+
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > a: nothing marked, the delver's prompt holds the entry; two fresh worlds give one prompt 7014ms
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > c: marked and untied, her own turn lacks the entry 1738ms
+stdout | src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > by scene: a benched member who spoke was there; hidden, rewound and generating lines do not count; another lane is in no scene
+Using PGlite database at: /tmp/serene-pub-vitest-firsthandFilter-lF7siD/data/serene-pub.db
+
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > d: marked and untied, the narrator's turn still reads it 1572ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > by scene: a benched member who spoke was there; hidden, rewound and generating lines do not count; another lane is in no scene 218ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > a member who spoke only before the judged lines was still there 117ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > a character with no seat, and no character, read everything 112ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > with a place slot: after it left and before it arrived are left out; missing values fall back to the scene 150ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > a card-less seat's turn is one member's turn: a scene it never spoke in is left out 112ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > the place rule reads the messages clock only: a later timeline value does not drop lines 144ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > an untracked slot reads by scene alone and says so 123ms
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > history entries: left out when a scene of this session compiled into it was missed; other sessions' and deleted sessions' scenes are not judged 123ms
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > b: the node's receipt holds the nothing-marked sentence 2851ms
+stdout | src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > a closed scene with no live line is judged by its stored cast; the extra read happens only when such a scene exists
+firsthand stored-cast read: without a bare scene 13, with one 14
+
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > a closed scene with no live line is judged by its stored cast; the extra read happens only when such a scene exists 278ms
+stdout | src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > statements: no slot; a slot with three members
+firsthand statements: no slot 13, no slot judging history entries 13, slot with 3 members 67, slot with 3 members judging history entries 67
+
+ ✓ |int| src/lib/server/sessions/firsthandFilter.int.test.ts > loadFirsthandView > statements: no slot; a slot with three members 187ms
+ ✓ |int| src/lib/server/pipelines/runtime/unknownEntries.reply.int.test.ts > Story's own turn and the knowledge filter > e: marked and tied with 'knows', her own turn holds the entry again 1443ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the walk is capable of the measurement it is used for > built every shipped spec and resolved a descriptor for every node 2ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the walk is capable of the measurement it is used for > saw declared params slots, and saw specs that wire them 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the walk is capable of the measurement it is used for > classified every slot kind the shipped types declare 0ms
+ × |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no shipped spec leaves a declared slot unwired 4ms
+   → a node type declares this slot, `config/panel/declarations.ts` renders a control for it, and `resolveInput` resolves only the config keys a spec named — so the value a person sets is stored and never read. Wire it (`params: slot.params()`), or delete the declaration.: expected [ …(2) ] to deeply equal []
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no ledger entry has quietly stopped applying 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > stands at zero open entries 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > the semantic arm's queries step wires its own embedding connection 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > all three reply specs wire the generate node's connection, sampling and params 3ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > respond wires the params slot on both relationship reads 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > the image spec wires the render node's params slot 0ms
+ × |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the check fails when a slot goes unwired > names the node when `params: slot.params()` is removed 35ms
+   → expected [ …(3) ] to deeply equal [ Array(1) ]
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > c: marked and untied, the delver's own turn lacks the entry 2889ms
+stdout | src/lib/server/pipelines/runtime/bindings.entryKnowledge.int.test.ts > core:query/unknown-entries@1 > nothing marked: empty outputs and the nothing-marked note
+Using PGlite database at: /tmp/serene-pub-vitest-bindings-entry-knowledge-nsZ6rz/data/serene-pub.db
+
+ × |unit| src/lib/server/pipelines/boot/specHashes.test.ts > published spec hashes > resolves every recorded pin to the hash recorded for it 118ms
+   → This pin now names a different document. That is shippable — the edited document publishes as a new version row and the slug's pointer moves to it, with no migration — but it must be deliberate: bump the spec's *_VERSION and add the new pin, or record the new hash against the existing one in the same commit as the edit.: expected [ …(2) ] to deeply equal []
+ ✓ |unit| src/lib/server/pipelines/boot/specHashes.test.ts > published spec hashes > records every spec this build publishes 56ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.entryKnowledge.int.test.ts > core:query/unknown-entries@1 > nothing marked: empty outputs and the nothing-marked note 295ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.entryKnowledge.int.test.ts > core:query/unknown-entries@1 > a marked entry the speaker is not tied to is left out, under all three sources 28ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.entryKnowledge.int.test.ts > core:query/unknown-entries@1 > a narrator reads everything and says so 17ms
+ ✓ |int| src/lib/server/pipelines/runtime/bindings.entryKnowledge.int.test.ts > core:query/unknown-entries@1 > a kept-from tie on an unmarked entry leaves it out 31ms
+stdout | src/lib/server/sessions/firsthandFilter.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-Wcll8U/data/serene-pub.db
+
+stdout | src/lib/server/sessions/firsthandFilter.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-qaEIZR/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+[db] previous shutdown: unknown
+
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > d: marked and untied, the Castellan's own turn still reads it 2360ms
+ ✓ |int| src/lib/server/sockets/sessions.lairUnknownEntries.int.test.ts > The Lair's delver turn and the knowledge filter > e: marked and tied with 'knows', the delver's own turn holds the entry again 2785ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > resolves every recorded pin to the hash recorded for it 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > records every type this build publishes 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > still publishes every type it has published before 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > ignores display text, which is the promise that lets labels change 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > leaves the substrate's settings slot out, so declaring the switch moved no pin 8ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > strips a script point's display text, and hashes what it accepts 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > strips a parameter's display text at every level, and agrees with the SDK about which words those are 18ms
+ ✓ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > moves for a port, for review.fields — and not for provisional, timeoutMs or any policy key 2ms
+stdout | src/lib/server/sessions/firsthandFilter.test.ts
+Migrations applied.
+
+stdout | src/lib/server/sessions/firsthandFilter.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sessions/firsthandFilter.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/sessions/firsthandFilter.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by scene > the member was there for a scene it spoke in; one it never spoke in is left out 2ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by scene > own lines are kept even in a scene judged elsewhere 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by scene > an open scene is kept for the speaker 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by scene > a line in no scene is kept 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by scene > a member who spoke only outside the judged lines was still there 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by place > equal values keep, different values leave out, missing falls back to the scene 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by place > the member's own lines are kept 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by place > rule 2 can leave out a line of a scene the member spoke in 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by place > rule 2 can keep a line of a scene the member never spoke in 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by place > the member's missing value falls back to the scene 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > by place > a speaker-less line falls back to the scene 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > summaries > the last line the member was there for keeps the summary 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > summaries > more than half was there for keeps it; exactly half and not the last leaves it out 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > summaries > a scene never spoken in is left out; a closed scene with no live line is kept only by its stored cast 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > summaries > an open scene with no live line is kept without a stored cast 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > summaries > a scene with live lines is judged by them, not by the stored cast 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > history entries > an entry whose scenes the member was all there for is kept; one with a missed scene is left out 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > history entries > left-out ids come ascending 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > history entries > an entry with none of this session's scenes is not in scenesOfEntry and is kept 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > history entries > a compiled scene with no live line counts as there only for a member in its stored cast 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > history entries > the place rule can make a compiled scene missed 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > history entries > firsthandViewOf builds scenesOfEntry by scene id ascending, skipping scenes not compiled 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > values > normalisation 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > values > in force: newest message point at or before; timeline points never count 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > receipts > lines 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > receipts > summaries 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > receipts > history entries 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > receipts > the exclusion reason 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > receipts > suffix when the slot is not tracked, and reads-all 0ms
+ ✓ |unit| src/lib/server/sessions/firsthandFilter.test.ts > firsthandViewOf at the size of a long session > 5,000 lines, 200 scenes and 1,000-point trails are judged in under a second 4ms
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts > the allow-list > is printed, so it cannot go quietly stale
+
+[declaredReads] 1 declared name(s) allowed to go unread, each with what closes it:
+ · core:task/build-keeper-context@1 afterWrite
+     an ORDERING edge, declared for sequencing alone: the reply write's result, taken on a port so the keeper runs AFTER the write rather than beside it, and never looked inside — a write result in a prompt is a row id the model reads as prose. Closes when the executor grows an ordering edge that is not a data port.
+
+
+stdout | src/lib/server/pipelines/boot/declaredReads.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the walk is capable of the measurement it is used for > walked every bound handler and resolved its definition 2ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the walk is capable of the measurement it is used for > every core handler declares what it reads 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the walk is capable of the measurement it is used for > saw in-ports, slots and parameters, and saw them read 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > every declared name is read, and every read is declared > no bound definition declares an in-port, slot or parameter its handler does not read 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > every declared name is read, and every read is declared > no handler declares a read its definition does not supply 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the allow-list > is printed, so it cannot go quietly stale 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the allow-list > has no entry that has quietly stopped applying 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the allow-list > carries a reason on every line 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the allow-list > stands at one entry, and it is the one it says 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the allow-list > every allowance's kind is the kind the walk found 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > session-history: `budget` declared again WITH a reader (history window, 2026-10-03), `priority` still declared 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > the lore scans: the `text` in-port is culled on all four 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > the lore scans: `speaker` is on the two gated reads and no others 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > assemble@2: `truncation` culled — assemble drops nothing, the ranker does 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > batch-messages: `minBatchMessages` is read 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > the three generating oracles declare no `prompts` slot 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > extract-cast: the `messages` in-port is culled; the extractor reads `content` 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the §5f decisions are what the code says > rank-semantic: the two window sizes belong to query-windows alone 0ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the check fails when a declaration goes wrong > names a declared port and parameter nobody reads 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the check fails when a declaration goes wrong > names a read the definition does not supply 1ms
+ ✓ |unit| src/lib/server/pipelines/boot/declaredReads.test.ts > the check fails when a declaration goes wrong > names a handler that declares nothing 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no shipped spec leaves a declared slot unwired
+AssertionError: a node type declares this slot, `config/panel/declarations.ts` renders a control for it, and `resolveInput` resolves only the config keys a spec named — so the value a person sets is stored and never read. Wire it (`params: slot.params()`), or delete the declaration.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a connection slot the spec never wires — the control renders and does nothing.",
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a sampling slot the spec never wires — the control renders and does nothing.",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:402:5
+    400|     "and never read. Wire it (`" +
+    401|     "params: slot.params()`), or delete the declaration."
+    402|   ).toEqual([])
+       |     ^
+    403|  })
+    404|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the check fails when a slot goes unwired > names the node when `params: slot.params()` is removed
+AssertionError: expected [ …(3) ] to deeply equal [ Array(1) ]
+
+- Expected
++ Received
+
+  [
+    "core:spec/story-respond node \"gather.history.read\" slot \"params\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"connection\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"sampling\"",
+  ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:600:5
+    598|   expect(
+    599|    broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
+    600|   ).toEqual([
+       |     ^
+    601|    'core:spec/story-respond node "gather.history.read" slot "params"'
+    602|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/specHashes.test.ts > published spec hashes > resolves every recorded pin to the hash recorded for it
+AssertionError: This pin now names a different document. That is shippable — the edited document publishes as a new version row and the slug's pointer moves to it, with no migration — but it must be deliberate: bump the spec's *_VERSION and add the new pin, or record the new hash against the existing one in the same commit as the edit.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/story-respond@1.21.0: recorded 12007bbfaccef3, code 132e6d51cab887",
++   "core:spec/lair-reply@1.0.0: recorded c4fe814f1e089, code 14fa075cce73ab",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/specHashes.test.ts:1968:5
+    1966|       "same commit as the edit."
+    1967|     : undefined
+    1968|   ).toEqual([])
+       |     ^
+    1969|  })
+    1970|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > every provider has a dispatch path > routes each provider the specs use, with none falling through
+AssertionError: providers with no dispatch path: core:oracle/speak: expected [ 'core:oracle/speak' ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:oracle/speak",
++ ]
+
+ ❯ src/lib/server/pipelines/runtime/allPipelines.int.test.ts:150:5
+    148|    missing,
+    149|    `providers with no dispatch path: ${missing.join(", ")}`
+    150|   ).toEqual([])
+       |     ^
+    151|  })
+    152| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  3 failed | 8 passed (11)
+      Tests  4 failed | 115 passed (119)
+   Start at  21:04:33
+   Duration  36.63s (transform 10.25s, setup 77ms, import 40.35s, tests 59.10s, environment 3ms)
+

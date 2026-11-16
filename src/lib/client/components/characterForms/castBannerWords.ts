@@ -44,6 +44,8 @@ export interface CastBannerMember {
 	} | null
 	/** The member reads from an older card version than the card's current one. */
 	behindCard?: boolean
+	/** Set when the member is in a session's notes (that session's id), not a lorebook. */
+	ownBookSessionId?: number | null
 }
 
 /** The field names as a reader sees them, lower case for use mid-sentence. */
@@ -106,6 +108,8 @@ export interface CastBannerWords {
 export function castBannerWords(
 	members: readonly CastBannerMember[] | null | undefined
 ): CastBannerWords | null {
+	// Notes are not a lorebook: the lead, the count and the retells leave them out.
+	members = members?.filter((m) => m.ownBookSessionId == null)
 	if (!members || members.length === 0) return null
 	const books = new Set(members.map((m) => m.lorebookId)).size
 	const lead = `In ${plural(books, "lorebook", "lorebooks")}:`

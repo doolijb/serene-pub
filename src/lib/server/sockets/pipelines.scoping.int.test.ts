@@ -1232,6 +1232,9 @@ describe("the builder's structural payload", () => {
 		expect([...new Set(reads.map((n: any) => n.clauseChain))].sort()).toEqual([
 			"cast",
 			"characterLore",
+			// 2026-11-12 (sense-prm): the summaries of earlier scenes, read as
+			// data; Assemble decides which show.
+			"earlierScenes",
 			// Spec 1.18.0: the entity mechanism, a third way of retrieving lore —
 			// by the names the scene is using rather than by an author's keys.
 			"entities",

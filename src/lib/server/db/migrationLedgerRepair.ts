@@ -1,7 +1,7 @@
 import fs from "fs"
 import path from "path"
 import { sql } from "drizzle-orm"
-import { readMigrationFiles } from "drizzle-orm/migrator"
+import { readMigrationFilesMemo } from "./migrationSet"
 import { rawRows } from "./rawRows"
 
 /**
@@ -93,7 +93,7 @@ export function readJournalMigrations(
 	const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8")) as {
 		entries: { tag: string; when: number }[]
 	}
-	const files = readMigrationFiles({ migrationsFolder })
+	const files = readMigrationFilesMemo(migrationsFolder)
 	if (files.length !== journal.entries.length) {
 		throw new Error(
 			`Migration journal lists ${journal.entries.length} entries but ${files.length} files were read.`

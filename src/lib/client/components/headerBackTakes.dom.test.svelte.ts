@@ -13,13 +13,17 @@ afterEach(() => {
 
 const TAKES = "your line and 3 replies (Ash, Birch, Narrator)"
 
-function mountWith(back: { disabled: boolean; reason?: string; takes?: string }) {
+function mountWith(
+	back: { disabled: boolean; reason?: string; takes?: string },
+	step?: "message" | "turn"
+) {
 	vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} })
 	const rewind = {
 		back,
 		forward: { disabled: true },
 		ahead: 0,
 		aheadText: "",
+		...(step ? { step } : {}),
 		goBack: () => {},
 		goForward: () => {}
 	}
@@ -36,7 +40,9 @@ function mountWith(back: { disabled: boolean; reason?: string; takes?: string })
 		context: new Map<string, unknown>([["openSessionCtx", ctx]])
 	})
 	flushSync()
-	return document.querySelector<HTMLButtonElement>('header button[aria-label="Back one turn"]')!
+	return document.querySelector<HTMLButtonElement>(
+		`header button[aria-label="${step === "message" ? "Back one message" : "Back one turn"}"]`
+	)!
 }
 
 describe("the header's Back, in words", () => {
@@ -54,6 +60,22 @@ describe("the header's Back, in words", () => {
 		expect(document.getElementById(b.getAttribute("aria-describedby")!)?.textContent?.trim()).toBe(
 			"Wait for the reply to finish."
 		)
+	})
+
+	test("where one press takes a message, the button says so", () => {
+		// Story steps by message; a genre that takes a whole turn, and a host
+		// that says nothing, keep "turn" (the cases around this one).
+		const plain = mountWith({ disabled: false }, "message")
+		expect(plain.getAttribute("aria-label")).toBe("Back one message")
+		expect(plain.getAttribute("title")).toBe("Back one message")
+		expect(
+			document.querySelector('header button[aria-label="Forward one message"]') === null
+		).toBe(false)
+		unmount(app!)
+		app = null
+		document.body.innerHTML = ""
+		const grey = mountWith({ disabled: true, reason: "Wait for the reply to finish." }, "message")
+		expect(grey.getAttribute("title")).toBe("Back one message — Wait for the reply to finish.")
 	})
 
 	test("neither: plain title, nothing described", () => {

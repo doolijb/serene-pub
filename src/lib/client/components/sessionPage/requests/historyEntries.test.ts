@@ -9,6 +9,7 @@ import { describe, expect, test } from "vitest"
 import { WIDGET_REQUEST_ASKERS } from "@serene-pub/sdk"
 import {
 	answerHistoryEntries,
+	readChronicle,
 	awaitsSummary,
 	firstLineOf,
 	summaryStatusOf,
@@ -671,5 +672,104 @@ describe("🚧 ★S2-1b: Not yet compiled", () => {
 			4,
 			"none"
 		])
+	})
+})
+
+describe("🚧 a lorebook with no timeline", () => {
+	const OFF: Reading = { ...OWNER_READING, timeline: false }
+	const at = (id: number, over: Partial<SceneRow> = {}): SceneRow => ({
+		id,
+		sessionId: 7,
+		historyEntryId: null,
+		name: `Scene ${id}`,
+		selectedMessageIds: [id],
+		summary: "",
+		graphed: false,
+		branchId: null,
+		...over
+	})
+
+	test("the answer carries no time; every scene of the session on its line is one group in played order, filed or not", async () => {
+		const { d, asked } = deps({
+			reading: OFF,
+			sceneList: () => [
+				at(35),
+				at(33, { historyEntryId: 3 }),
+				at(31),
+				at(37, { branchId: 77 }),
+				at(38, { sessionId: 8 })
+			],
+			readOpenScenes: async () => ({
+				sessionId: 7,
+				scenes: [
+					{
+						id: 35,
+						name: "Scene 35",
+						channel: "main",
+						openedAtMessageId: 35,
+						since: "Day 1",
+						lineCount: 1,
+						cast: []
+					}
+				],
+				settings: {
+					mode: "suggested",
+					triggers: {
+						dayCrossed: true,
+						timeAction: true,
+						placeChanged: true,
+						narration: false,
+						length: null,
+						pause: null
+					},
+					summary: "onClose"
+				}
+			})
+		})
+		const out = await answerHistoryEntries({}, d)
+		expect(asked).toEqual(["clock 7"])
+		expect(out.timeline).toBe(false)
+		expect(out.current).toBeNull()
+		expect(out.scenes).toEqual([])
+		expect(out.earlier).toEqual([])
+		expect(out.earlierTotal).toBe(0)
+		expect(out.clock.present).toBeNull()
+		expect(out.clock.label).toBe("")
+		expect(out.unfiledDays!.length).toBe(1)
+		expect(out.unfiledDays![0].date).toBeNull()
+		expect(out.unfiledDays![0].label).toBe("")
+		expect(out.unfiledDays![0].scenes.map((s) => s.id)).toEqual([
+			31, 33, 35
+		])
+		expect(out.openScene?.since).toBe("")
+	})
+
+	test("timeline true, and timeline absent, read as a timeline", async () => {
+		for (const reading of [
+			{ ...OWNER_READING, timeline: true },
+			OWNER_READING
+		]) {
+			const { d, asked } = deps({ reading })
+			const out = await answerHistoryEntries({}, d)
+			expect(out.timeline).toBe(true)
+			expect(asked).toEqual(["clock 7", "history 4", "lines 4"])
+			expect(out.current?.id).toBe(3)
+		}
+	})
+
+	test("a guest gets a clock with no present, and history is never asked", async () => {
+		const { d, asked } = deps({ reading: { ...OFF, isOwner: false } })
+		const out = await answerHistoryEntries({}, d)
+		expect(asked).toEqual(["clock 7"])
+		expect(out.timeline).toBe(false)
+		expect(out.ownerOnly).toBe(true)
+		expect(out.clock.present).toBeNull()
+		expect(out.clock.label).toBe("")
+	})
+
+	test("readChronicle with two arguments still reads history and lines", async () => {
+		const { d, asked } = deps({ reading: OFF })
+		await readChronicle(d, 0)
+		expect(asked).toEqual(["clock 7", "history 4", "lines 4"])
 	})
 })

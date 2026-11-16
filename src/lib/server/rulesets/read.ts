@@ -552,6 +552,7 @@ export async function tiesBetween(db: Db, session: RulesetSession, views: readon
 				inArray(r.lorebookId, books.ids),
 				eq(r.status, "active"),
 				ne(r.visibility, "secret"),
+				isNull(r.knowledgeKind),
 				// The attached book on the session's line; the notes are the session's own.
 				or(
 					isNull(r.branchId),

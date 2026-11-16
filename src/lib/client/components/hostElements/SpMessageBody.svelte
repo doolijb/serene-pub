@@ -17,6 +17,7 @@
 		renderMarkdownWithQuotedText,
 		strictSanitize
 	} from "$lib/client/utils/markdownToHTML"
+	import { untrack } from "svelte"
 	import { ownerOf } from "./context.svelte"
 	import { flag, type SpElementProps } from "./spElement.svelte"
 
@@ -24,8 +25,37 @@
 	const streaming = $derived(flag(attrs.streaming))
 	const owner = $derived(ownerOf(host))
 
+	// While a body streams the markdown renders at most every 50 ms — a trailing
+	// update always lands, and the same renderer runs. Not streaming, the text
+	// renders at once, as it always has.
+	const THROTTLE_MS = 50
+	let shown = $state(untrack(() => attrs.text ?? ""))
+	let lastSet = 0
+	$effect(() => {
+		const text = attrs.text ?? ""
+		if (!streaming) {
+			// Kept in step while idle, so a stream that starts on this body
+			// renders from its current text, never from the last stream's.
+			lastSet = 0
+			untrack(() => (shown = text))
+			return
+		}
+		const wait = THROTTLE_MS - (Date.now() - lastSet)
+		if (wait <= 0) {
+			lastSet = Date.now()
+			untrack(() => (shown = text))
+			return
+		}
+		const timer = setTimeout(() => {
+			lastSet = Date.now()
+			shown = text
+		}, wait)
+		return () => clearTimeout(timer)
+	})
+	const source = $derived(streaming ? shown : (attrs.text ?? ""))
+
 	const html = $derived.by(() => {
-		const rendered = renderMarkdownWithQuotedText(attrs.text ?? "")
+		const rendered = renderMarkdownWithQuotedText(source)
 		return owner && owner !== "core" ? strictSanitize(rendered) : rendered
 	})
 </script>

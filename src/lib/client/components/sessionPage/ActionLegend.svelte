@@ -11,7 +11,8 @@
 	 * own verdict, so the legend never disagrees with the button.
 	 */
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
-	import * as Icons from "@lucide/svelte"
+	import { CircleHelp, CircleSlash, Play, TextCursorInput, X } from "@lucide/svelte"
+	import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
 	import { desktop } from "$lib/client/utils/breakpoint.svelte"
 	import { type LegendSection } from "./actionLegend"
 	import { collectsNote } from "./collects"
@@ -45,7 +46,7 @@
 			.split("-")
 			.map((p) => p.charAt(0).toUpperCase() + p.slice(1))
 			.join("")
-		return (Icons as Record<string, unknown>)[pascal] ?? Icons.Play
+		return declaredIconOf(pascal, Play)
 	}
 
 	const triggerClass = $derived(
@@ -57,7 +58,7 @@
 </script>
 
 {#snippet triggerBody()}
-	<Icons.CircleHelp size={16} class="shrink-0" aria-hidden="true" />
+	<CircleHelp size={16} class="shrink-0" aria-hidden="true" />
 	{#if variant === "row"}
 		<span>{TRIGGER}</span>
 	{/if}
@@ -74,7 +75,7 @@
 			</h3>
 			<ul class="space-y-3" data-legend-venue={section.venue}>
 				{#each section.entries as entry (entry.identity)}
-					{@const Icon = iconOf(entry.icon) as typeof Icons.Play}
+					{@const Icon = iconOf(entry.icon)}
 					{@const asks = collectsNote(entry.collects)}
 					<li class="flex gap-3" data-legend-action={entry.identity}>
 						<span
@@ -99,7 +100,7 @@
 							{/if}
 							{#if asks}
 								<p class="text-surface-600-400 flex items-center gap-1 text-xs" data-legend-collects>
-									<Icons.TextCursorInput size={12} aria-hidden="true" />
+									<TextCursorInput size={12} aria-hidden="true" />
 									{asks}
 								</p>
 							{/if}
@@ -108,7 +109,7 @@
 									class="text-surface-600-400 flex items-center gap-1 text-xs"
 									data-legend-reason
 								>
-									<Icons.CircleSlash size={12} aria-hidden="true" />
+									<CircleSlash size={12} aria-hidden="true" />
 									Not now: {entry.reason}
 								</p>
 							{/if}
@@ -157,7 +158,7 @@
 							class="btn-icon hover:preset-tonal pointer-coarse:min-h-11 pointer-coarse:min-w-11"
 							aria-label="Close"
 						>
-							<Icons.X size={18} aria-hidden="true" />
+							<X size={18} aria-hidden="true" />
 						</Dialog.CloseTrigger>
 					</header>
 					{@render body()}

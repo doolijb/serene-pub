@@ -26,6 +26,9 @@ export const CONTEXT_HANDLEBARS_HELPERS = [
 	"json",
 	"jsonValue",
 	"strokeList",
+	// The SDK's `FORMAT_DATE_HELPER` and `FORMAT_DATE_DELTA_HELPER`, as literals.
+	"formatDate",
+	"formatDateDelta",
 	"systemBlock",
 	"assistantBlock",
 	"userBlock",
@@ -47,6 +50,9 @@ export const CONTEXT_LIQUID_FILTERS = [
 	"json",
 	"jsonValue",
 	"strokeList",
+	// The two date helpers, as filters.
+	"formatDate",
+	"formatDateDelta",
 	// The SDK's `VARIABLE_LAYOUT_HELPER`, as a filter (see the helper above).
 	"layout"
 ] as const

@@ -1,0 +1,67 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts (10 tests | 2 failed) 11675ms
+     × text equal to what the session reads writes nothing: no amendment, no imprint 32ms
+     × two entries of the name: nothing written, the note, the run goes on 30ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts > create-lore-entry — shown, an entry of the attached lorebook > text equal to what the session reads writes nothing: no amendment, no imprint
+AssertionError: expected [ Array(1) ] to be undefined
+
+- Expected:
+undefined
+
++ Received:
+[
+  "'Mira' (entry 6) already says this; nothing was written.",
+]
+
+ ❯ src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts:218:21
+    216|   ).commit!({ name: "Mira", content: "A baker. ", match: { name: "Mira…
+    217|   expect(out).toMatchObject({ entryId: mira.id, matched: true, written…
+    218|   expect(out.notes).toBeUndefined()
+       |                     ^
+    219|   expect(await heldRows((await ownBookOf(w)).id)).toEqual([])
+    220|   expect(await imprintCount(w)).toBe(0)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts > create-lore-entry — shown, an entry of the attached lorebook > two entries of the name: nothing written, the note, the run goes on
+AssertionError: expected { lorebookId: 12, route: 'book', …(2) } to deeply equal { lorebookId: 12, …(3) }
+
+- Expected
++ Received
+
+  {
+    "lorebookId": 12,
+    "notes": [
+      "2 entries answer to 'mira' — 'Mira' (entry 9), 'Mira' (entry 10); nothing was written for it.",
+    ],
+-   "route": "own-book",
++   "route": "book",
+    "written": false,
+  }
+
+ ❯ src/lib/server/pipelines/runtime/host.loreMatchShown.int.test.ts:248:15
+    246|    CREATE
+    247|   )
+    248|   expect(out).toEqual({
+       |               ^
+    249|    lorebookId: w.book.id,
+    250|    route: "own-book",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  2 failed | 14 passed (16)
+   Start at  04:59:41
+   Duration  12.71s (transform 11.36s, setup 82ms, import 1.63s, tests 21.81s, environment 1ms)
+

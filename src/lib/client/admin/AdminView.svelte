@@ -18,10 +18,16 @@
 	 * view is in Focus. Links inside the view to admin addresses move the
 	 * section instead of loading a page (`interceptAdminLink`).
 	 */
-	import { getContext, onMount, setContext, untrack, type Component } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		getContext,
+		onMount,
+		setContext,
+		untrack,
+		type Component
+	} from "svelte"
 	import { page } from "$app/state"
 	import { adminNavFor } from "$lib/client/shell/adminNav"
+	import { ADMIN_NAV_ICONS } from "$lib/client/shell/adminNavIcons"
 	import { adminHealth } from "./adminHealth.svelte"
 	import { adminRouter, interceptAdminLink } from "./adminRouter.svelte"
 	import { sectionHrefFor } from "./adminRoutes"
@@ -108,7 +114,7 @@
 				return {
 					key: i.href,
 					label: i.label,
-					icon: Icons[i.icon] as Component<any>,
+					icon: ADMIN_NAV_ICONS[i.icon],
 					href: i.href,
 					dot: level
 						? level === "error"
@@ -321,7 +327,7 @@
 				<li>
 					<a
 						href={item.action.href}
-						class="text-surface-800-200 hover:text-primary-ink block truncate text-chip underline-offset-2 hover:underline"
+						class="text-surface-800-200 hover:text-primary-ink text-chip block truncate underline-offset-2 hover:underline"
 						onclick={() => (showList = false)}
 					>
 						{item.title}
@@ -385,11 +391,22 @@
 			]}
 		>
 			{#if loadFailed === adminRouter.path}
-				<div class="m-auto flex flex-col items-center gap-3 text-center" role="alert" data-admin-load-failed>
+				<div
+					class="m-auto flex flex-col items-center gap-3 text-center"
+					role="alert"
+					data-admin-load-failed
+				>
 					<p class="text-surface-600-400 text-sm">
-						This page did not load. If Serene Pub was just updated, reload to get the new version.
+						This page did not load. If Serene Pub was just updated,
+						reload to get the new version.
 					</p>
-					<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => location.reload()}>Reload</button>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface"
+						onclick={() => location.reload()}
+					>
+						Reload
+					</button>
 				</div>
 			{:else if notFound}
 				<div
@@ -427,7 +444,12 @@
 		     row, so the list runs the view's full height), the way back below
 		     it — so narrowing or widening the view (Escape out of Focus)
 		     never mounts the section afresh and never loses its edits. -->
-		<div class={["flex min-h-0 flex-1", vm.mode === "desk" ? "" : "flex-col"]}>
+		<div
+			class={[
+				"flex min-h-0 flex-1",
+				vm.mode === "desk" ? "" : "flex-col"
+			]}
+		>
 			{#if vm.mode === "desk"}
 				{@render sectionList()}
 			{:else}

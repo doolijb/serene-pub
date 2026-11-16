@@ -312,3 +312,47 @@ describe("what refuses a delete", () => {
 		).toBe(false)
 	})
 })
+
+describe("the History layout from before the relative date", () => {
+	const HISTORY = "core:var/history@1"
+	const OLD_SOURCE = [
+		`{`,
+		`  {{~#each history~}}`,
+		`    {{{jsonValue @key indent=0}}}:{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}`,
+		`  {{~/each~}}`,
+		`}`
+	].join("\n")
+
+	it("is refreshed once; a second boot changes nothing; a copy is left alone", async () => {
+		const { seedVariableTemplates } = await import(
+			"$lib/server/pipelines/boot/seedVariableTemplates"
+		)
+		const rows = await listVariableTemplates(db, HISTORY)
+		const content = rows.find((r: any) => r.name === "JSON")!
+		const shipped = SHIPPED_VARIABLE_TEMPLATES.find(
+			(t) => t.variableId === HISTORY && t.variant === "content"
+		)!
+		expect(content.source).toBe(shipped.source)
+		expect(content.source).toContain("formatDate")
+
+		// An install that booted before this change holds the old text.
+		const copy = await duplicateVariableTemplate(db, content.id, "History copy")
+		await updateVariableTemplate(db, copy.id, { source: OLD_SOURCE })
+		await db
+			.update(schema.pipelineVariableTemplates)
+			.set({ source: OLD_SOURCE })
+			.where(eq(schema.pipelineVariableTemplates.id, content.id))
+
+		const first = await seedVariableTemplates(db)
+		expect(first.refreshed).toHaveLength(1)
+		expect((await resolveVariableTemplate(db, content.id))?.source).toBe(
+			shipped.source
+		)
+		expect((await resolveVariableTemplate(db, copy.id))?.source).toBe(OLD_SOURCE)
+
+		const second = await seedVariableTemplates(db)
+		expect(second.refreshed).toEqual([])
+		expect(second.created).toEqual([])
+		expect((await resolveVariableTemplate(db, copy.id))?.source).toBe(OLD_SOURCE)
+	}, 60_000)
+})

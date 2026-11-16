@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings, nodeDefinitionsOf } from "./pluginBindings"
-import { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
+import { SandboxManager } from "$lib/server/plugins/SandboxManager"
 import {
 	spec,
 	compile,
@@ -21,7 +21,7 @@ import * as C from "@serene-pub/contracts"
 /**
  * A plugin's node on the spine (20 §9): a registry row with `transport:
  * 'process'` resolves to a binding that calls the plugin's exported hook
- * through the real `RuntimeManager` sandbox — and the executor never learns
+ * through the real `SandboxManager` sandbox — and the executor never learns
  * which side implemented it. This is the tool architecture's load-bearing
  * seam: an AI-callable tool is exactly such a node.
  */
@@ -53,7 +53,7 @@ const BUNDLE = `module.exports = { hooks: {
 } }`
 
 let db: TestDb
-let mgr: RuntimeManager
+let mgr: SandboxManager
 let sessionId: number
 
 beforeAll(async () => {
@@ -89,7 +89,7 @@ beforeAll(async () => {
 		ports: { in: { q: {} }, out: { main: {} } }
 	} as any)
 
-	mgr = new RuntimeManager({ onInvocation: () => {} })
+	mgr = new SandboxManager({ onInvocation: () => {} })
 	mgr.register({
 		id: "acme/tools",
 		name: "Acme Tools",

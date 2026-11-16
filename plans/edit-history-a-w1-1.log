@@ -1,0 +1,35 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/lorebooks/redlines.callSites.int.test.ts > it never travels > a copy carries none; deleting the entry and a purge remove them; Share as a lorebook clears them
+Using PGlite database at: /tmp/serene-pub-vitest-redlines-sites-5RnOFt/data/serene-pub.db
+
+ ❯ |int| src/lib/server/lorebooks/redlines.callSites.int.test.ts (7 tests | 1 failed) 6499ms
+     × a copy carries none; deleting the entry and a purge remove them; Share as a lorebook clears them 202ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/redlines.callSites.int.test.ts > it never travels > a copy carries none; deleting the entry and a purge remove them; Share as a lorebook clears them
+Error: This session reads a lorebook, so its notes are shared to that lorebook, or that lorebook is merged into them.
+ ❯ shareAsLorebook src/lib/server/lorebooks/ownBook.ts:1216:40
+    1214|  if (!session) throw new OwnBookRefusal(SHARE_REFUSALS.missing)
+    1215|  if (session.userId !== input.userId) throw new OwnBookRefusal(SHARE_R…
+    1216|  if (session.lorebookId != null) throw new OwnBookRefusal(SHARE_REFUSA…
+       |                                        ^
+    1217|  const ownBook = await ownBookFor(db, input.sessionId)
+    1218|  const name = input.name?.trim() || session.name?.trim() || ownBook.na…
+ ❯ src/lib/server/lorebooks/redlines.callSites.int.test.ts:285:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 14 passed (15)
+   Start at  03:05:50
+   Duration  11.41s (transform 5.61s, setup 50ms, import 12.04s, tests 11.34s, environment 1ms)
+

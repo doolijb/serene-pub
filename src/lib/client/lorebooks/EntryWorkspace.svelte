@@ -5,6 +5,15 @@
 	import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 	import { getContext, onDestroy, onMount, tick, untrack } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
+	import KeywordChips from "./editor/KeywordChips.svelte"
+	import PartOfField from "./editor/PartOfField.svelte"
+	import BeginningDecayRow from "./time/BeginningDecayRow.svelte"
+	import {
+		readsAsRegex,
+		runawayPatternOf
+	} from "$lib/shared/entries/runawayPattern"
+	import { keyList } from "$lib/shared/entries/keyList"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
@@ -23,12 +32,15 @@
 	} from "$lib/client/components/lorebookForms/entryManager"
 	import {
 		HISTORY_TYPE_ID,
-		LOCATION_TYPE_ID
+		LOCATION_TYPE_ID,
+		isFileableEntryType
 	} from "$lib/shared/entries/types"
 	import EntryPool from "./EntryPool.svelte"
 	import LooseEndsQueue from "./LooseEndsQueue.svelte"
 	import type { ChoreField, LooseEnd } from "./looseEnds"
 	import ReadInLine from "./editor/ReadInLine.svelte"
+	import EntryEarmarkNotice from "./editor/EntryEarmarkNotice.svelte"
+	import { askEntryEarmark } from "./editor/entryEarmark"
 	import {
 		canFileUnder,
 		deleteWarning,
@@ -41,16 +53,21 @@
 		lineName,
 		maskedBaseWarning,
 		maskedFields,
-		maskingAmendment
+		maskingAmendment,
+		deleteEntryAmendment,
+		updateEntryAmendment
 	} from "./editor/entrySave"
 	import { compileActivityAt } from "./editor/compileSave"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { v4 as uuid } from "uuid"
 	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import type { RefLink } from "./editor/refs"
 	import { retrievalReadout } from "./editor/retrievalReadout.svelte"
 	import { loreRoute } from "./loreRoute.svelte"
 	import {
 		compactStep,
+		momentKey,
+		reduce,
 		sameLineAndMoment,
 		type LoreLens
 	} from "$lib/shared/lorebooks/loreRoute"
@@ -97,6 +114,34 @@
 	import { parseMoment } from "./time/moment"
 	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 	import AmendmentList from "./time/AmendmentList.svelte"
+	import VersionRail from "./time/VersionRail.svelte"
+	import VersionDateDialog from "./time/VersionDateDialog.svelte"
+	import MoveDownTheTreeDialog from "./time/MoveDownTheTreeDialog.svelte"
+	import { openBookTime } from "./time/bookTime.svelte"
+	import {
+		versionDateBounds,
+		carriedFields,
+		entryVersions,
+		momentOfVersion,
+		splitNewVersion,
+		splitVersionSave,
+		takenVersion,
+		versionAt,
+		zoneOf,
+		blockedSentence,
+		editsToVersionLabel,
+		otherLinesRead,
+		sameEverywherePlan,
+		versionRedlineIds,
+		ZONE_FIELDS,
+		type EntryVersion,
+		type ZoneField
+	} from "./time/entryVersions"
+	import {
+		setVersionZones
+	} from "./time/versionZones"
+	import EditHistory from "./editHistory/EditHistory.svelte"
+	import { CLEAR_ACTION_LABEL } from "./editHistory/editHistoryCopy"
 	import {
 		changedFields,
 		offWindowAmendments,
@@ -259,6 +304,8 @@
 	 * nothing.
 	 */
 	const book = getBookData()
+	/** 🚧 The book's Timeline switch: every time control here reads this one value. */
+	let timelineOn = $derived(book.timelineEnabled)
 	/** The doors' rows as stored; a kind absent has not arrived yet. */
 	let rowsByKind = $derived.by(() => {
 		const out: Record<string, PoolSource[]> = {}
@@ -336,12 +383,41 @@
 	let newMenuOpen = $state(false)
 	/** The open row's own menu, which holds what is not a field. */
 	let editorMenuOpen = $state(false)
+	let moveDownOpen = $state(false)
+	/** The open entry's Edit history, as its fold reports it (for the ⋯ item). */
+	let editHistoryState = $state<{
+		entryId: number
+		count: number
+		canClear: boolean
+	} | null>(null)
+	let clearHistoryOpen = $state(false)
 	/** The save control's second half, offered only while reading as-of. */
 	let saveMenuOpen = $state(false)
 
-	let orderBy = $derived(chosenOrder ?? DEFAULT_POOL_SORT)
+	// 🚧 No timeline: the Scenes list opens in the order played.
+	let orderBy = $derived(
+		chosenOrder ??
+			(!timelineOn && descriptor.id === "scenes"
+				? "position-asc"
+				: DEFAULT_POOL_SORT)
+	)
 
-	let route = $derived(loreRoute.route)
+	// 🚧 No timeline: the route as the pool reads it. No moment is read, and a
+	// route naming a history entry (and no scene) selects nothing, as the shell
+	// draws it. The route itself is never written back.
+	let route = $derived.by(() => {
+		const r = loreRoute.route
+		if (timelineOn) return r
+		const namesHistory =
+			r.entryId != null &&
+			r.sceneId == null &&
+			(rowsByKind[HISTORY_TYPE_ID] ?? []).some((h) => h.id === r.entryId)
+		return {
+			...r,
+			moment: undefined,
+			...(namesHistory ? { entryId: undefined } : {})
+		}
+	})
 	/**
 	 * The scenes on the line being read — shared ones, this branch's own and
 	 * each ancestor line's (the chain, never a sibling's): the rule
@@ -416,14 +492,47 @@
 		rowMenu: undefined
 	})
 
+	/**
+	 * 🚧 No timeline: the scenes in the order they were played — by the first
+	 * message each holds (message ids only grow, across sessions), then by
+	 * capture. No scene is filed under a dated entry here, so no date
+	 * orders them.
+	 */
+	let playedRank = $derived.by(() => {
+		const rank = new Map<number, number>()
+		const first = (s: PoolSource) => {
+			const ids = (s.selectedMessageIds ?? []) as number[]
+			return ids.length ? Math.min(...ids) : Infinity
+		}
+		;[...scenesOnLine]
+			.sort((a, b) => first(a) - first(b) || a.id - b.id)
+			.forEach((scene, i) => rank.set(scene.id, i))
+		return rank
+	})
+
+	/** 🚧 The History divider's figure: the book's history entries on the line, archived ones not counted. */
+	let historyDividerCount = $derived(
+		(book.rows[HISTORY_TYPE_ID] ?? []).filter((r) => !r.archived).length
+	)
+
 	let poolItems = $derived.by(() => {
 		const out: PoolItem[] = []
 		for (const door of poolDoors) {
+			// 🚧 No timeline: history entries stay in the book but are not listed.
+			if (!timelineOn && door.kind === HISTORY_TYPE_ID) continue
 			const rows =
 				door.store === "scenes"
 					? scenesOnLine
 					: (resolvedByKind[door.kind!] ?? [])
-			for (const row of rows) out.push(door.toPoolItem(row))
+			for (const row of rows) {
+				const item = door.toPoolItem(row)
+				if (!timelineOn && door.store === "scenes") {
+					const at = playedRank.get(row.id) ?? row.id
+					item.order = at
+					item.position = at
+				}
+				out.push(item)
+			}
 		}
 		// Everything is every kind, the people too (note 12).
 		if (!descriptor.kind) out.push(...castItems)
@@ -464,8 +573,10 @@
 	 * What the timeline cursor says is not true yet at the moment being read.
 	 *
 	 * Only dated rows can be later than a date, so the question is asked of
-	 * History alone; every other kind orders by position and would answer it
-	 * with a number that means something else entirely.
+	 * every entry row with a numeric `year`: a history entry's date, or
+	 * another entry's Beginning. Scenes, cast and library pieces are not
+	 * asked; they order by position and would answer with a number that means
+	 * something else entirely.
 	 *
 	 * ⚠ The cursor's KEY and each row's own date, by `compareDates` — never
 	 * the packed `position`, which is placement only and collides.
@@ -477,7 +588,12 @@
 		return new Set(
 			keysAfter(
 				poolItems
-					.filter((i) => i.kind === HISTORY_TYPE_ID)
+					.filter(
+						(i) =>
+							i.kind !== SCENE_KIND &&
+							i.kind !== CAST_KIND &&
+							!i.fromLibrary
+					)
 					.map((i) => {
 						const row = sourceByKey.get(i.key) as any
 						return {
@@ -613,14 +729,21 @@
 	 */
 	let readOnly = $derived(book.readOnly)
 
+	// 🚧 No timeline: a history entry is not offered as a new entry.
 	let creatableDoors = $derived(
 		readOnly
 			? []
 			: descriptor.kind
-				? descriptor.creatable
+				? descriptor.creatable &&
+					(timelineOn || descriptor.kind !== HISTORY_TYPE_ID)
 					? [descriptor]
 					: []
-				: doors.filter((d) => d.creatable && d.kind)
+				: doors.filter(
+						(d) =>
+							d.creatable &&
+							d.kind &&
+							(timelineOn || d.kind !== HISTORY_TYPE_ID)
+					)
 	)
 
 	/**
@@ -632,6 +755,9 @@
 	 * lands, or the moment is dragged — and calling that "unsaved changes"
 	 * told the reader they had edits they had never made.
 	 */
+	/** Zone fields made to differ by version in this draft; cleared with it. */
+	const promoted = new SvelteSet<ZoneField>()
+
 	let dirty = $derived.by(() => {
 		if (!draft) return false
 		if (isNew)
@@ -642,8 +768,9 @@
 			)
 		if (!pristineDraft) return false
 		return (
+			promoted.size > 0 ||
 			JSON.stringify(pristineDraft) !==
-			JSON.stringify($state.snapshot(draft))
+				JSON.stringify($state.snapshot(draft))
 		)
 	})
 
@@ -844,6 +971,7 @@
 		draft = null
 		draftKey = null
 		pristineDraft = null
+		promoted.clear()
 		hasUnsavedChanges = false
 	}
 
@@ -978,6 +1106,343 @@
 	})
 
 	/**
+	 * 🚧 The rail is drawn for a stored entry (not a history entry) while the
+	 * book keeps a timeline: the form shows one entry with its versions, and
+	 * the rail's selection is the version in force at the moment.
+	 */
+	/**
+	 * The entry's and its dated changes' save times: a save of a version alone
+	 * moves only the latter, and the edit history asks again on either.
+	 */
+	let editsToken = $derived(
+		selectedSource
+			? [
+					selectedSource.updatedAt ?? "",
+					...(amendmentsFor?.(selectedSource.id) ?? []).map(
+						(a) => `${a.id}:${a.updatedAt ?? ""}`
+					)
+				].join("|")
+			: null
+	)
+	let railed = $derived(
+		timelineOn &&
+			!isNew &&
+			!libraryOpen &&
+			activeDoor.store === "entries" &&
+			activeDoor.kind !== HISTORY_TYPE_ID &&
+			selectedSource != null
+	)
+	let rail = $derived(
+		railed && selectedSource
+			? entryVersions({
+					entry: selectedSource as any,
+					amendments: amendmentsFor?.(selectedSource.id) ?? [],
+					line
+				})
+			: null
+	)
+	let shownVersion = $derived(
+		rail ? versionAt(rail.versions, momentDate) : null
+	)
+	let carried = $derived(
+		rail ? carriedFields(rail.versions) : new Set<string>()
+	)
+	/** The entry version the draft is being typed on; follows the shown one while the draft is clean. */
+	let draftVersionKey = $state<string | null>(null)
+	let draftVersion = $derived(
+		rail
+			? (rail.versions.find((v) => v.key === draftVersionKey) ??
+					shownVersion)
+			: null
+	)
+	/** Only an own entry version, or the beginning of an entry this line owns, is written in place. */
+	let saveOff = $derived(!!draftVersion && !draftVersion.own)
+
+	setVersionZones({
+		get railed() {
+			return railed
+		},
+		zoneOf: (field) => zoneOf(field, carried, promoted),
+		sameEverywhere,
+		get entryZoneRow() {
+			return entryZoneRow
+		}
+	})
+
+	/**
+	 * The entry area writes the entry's own stored values, so it is editable
+	 * only where *From the beginning* is: on the line that owns the entry.
+	 */
+	let entryEditable = $derived(!readOnly && !!rail && rail.versions[0].own)
+	let entryOwnerLine = $derived(
+		openBookTime.lineName(selectedSource?.branchId ?? null)
+	)
+	let entryBelongsSentence = $derived(
+		`The entry belongs to ${entryOwnerLine}; open it there to change it.`
+	)
+	/** A field of the four can move into the dated version being edited. */
+	let canPromote = $derived(
+		!readOnly && draftVersion?.kind === "dated" && draftVersion.own
+	)
+
+	/** The form draws the entry zone's row; History, scenes and the cast keep their own forms. */
+	let entryZoneRow = $derived(
+		!!draft &&
+			activeDoor.store === "entries" &&
+			activeDoor.kind !== HISTORY_TYPE_ID &&
+			draft.typeId !== HISTORY_TYPE_ID
+	)
+	/** The row as the person left it for one entry; not remembered across entries. */
+	let rowOpenFor = $state<{ key: string | null; open: boolean } | null>(null)
+	/** A form that cannot write the row opens it. */
+	let entryRowDisabled = $derived(
+		railed ? !entryEditable : readOnly || libraryOpen
+	)
+	let entryRowOpen = $derived(
+		rowOpenFor && rowOpenFor.key === draftKey
+			? rowOpenFor.open
+			: entryRowDisabled
+	)
+	function setEntryRowOpen(open: boolean) {
+		rowOpenFor = { key: draftKey, open }
+	}
+	// A keyword the server will refuse says so inside the row: the row opens.
+	$effect(() => {
+		const keys = draft?.keys
+		const bad =
+			!!draft &&
+			heldFields.includes("keys") &&
+			readsAsRegex(draft) &&
+			(Array.isArray(keys) ? keys : keyList(keys)).some(
+				(k: string) => runawayPatternOf(k) !== null
+			)
+		if (bad) untrack(() => setEntryRowOpen(true))
+	})
+	let heldFields = $derived(
+		ZONE_FIELDS.filter((f) => zoneOf(f, carried, promoted) === "entry")
+	)
+	let parentName = $derived.by(() => {
+		const id = draft?.anchorEntryId
+		if (id == null) return null
+		return (
+			bookPool.find((item) => item.key === `entry#${id}`)?.name || `#${id}`
+		)
+	})
+	let promotable = $derived(
+		canPromote
+			? ([
+					{ field: "keys", name: "Keywords" },
+					{ field: "anchorEntryId", name: "Part of" },
+					{ field: "constant", name: "Pinned" },
+					{ field: "enabled", name: "Off" }
+				] as const).filter(
+					(z) =>
+						heldFields.includes(z.field) &&
+						!(
+							z.field === "anchorEntryId" &&
+							typeof draft?.typeId === "string" &&
+							!isFileableEntryType(draft.typeId)
+						)
+				)
+			: []
+	)
+
+	/** Whether the pending Save would write the entry where other lines read it. */
+	let writesSharedEntry = $derived.by(() => {
+		if (!railed || !draft || !draftVersion || !selectedSource) return false
+		if (!pristineDraft) return false
+		if (!otherLinesRead(selectedSource as any, openBookTime.branches))
+			return false
+		const snap = $state.snapshot(draft) as Record<string, unknown>
+		return (
+			splitVersionSave({
+				diff: changedFields(snap, pristineDraft),
+				draft: snap,
+				selected: draftVersion,
+				carried,
+				promoted
+			}).entryPatch !== null
+		)
+	})
+
+	/** What **Make it the same everywhere** does to a field that differs by version. */
+	function sameEverywhere(
+		field: ZoneField
+	): { count: number; run: () => void } | { blocked: string } {
+		if (!rail || !draft) return { blocked: "" }
+		const snap = $state.snapshot(draft) as Record<string, unknown>
+		const others = Object.keys(
+			changedFields(snap, pristineDraft ?? {})
+		).filter((k) => k !== field)
+		if (others.length || [...promoted].some((f) => f !== field))
+			return { blocked: "Save or discard your changes first." }
+		if (promoted.has(field) && !carried.has(field))
+			return { count: 0, run: () => promoted.delete(field) }
+		const plan = sameEverywherePlan(field, rail.versions, snap[field])
+		if (plan.blockedBy)
+			return {
+				blocked: blockedSentence(
+					plan.blockedBy,
+					openBookTime.lineName(plan.blockedBy.branchId)
+				)
+			}
+		if (!entryEditable) return { blocked: entryBelongsSentence }
+		return {
+			count: plan.versionsChanged,
+			run: () => void runSameEverywhere(field, plan, snap)
+		}
+	}
+
+	async function runSameEverywhere(
+		field: ZoneField,
+		plan: ReturnType<typeof sameEverywherePlan>,
+		snap: Record<string, unknown>
+	) {
+		if (!selectedSource || saving) return
+		const id = selectedSource.id
+		const door = activeDoor
+		saving = true
+		try {
+			for (const row of plan.rewrites)
+				await updateEntryAmendment(socket, {
+					lorebookId,
+					id: row.id,
+					subject: "entry",
+					fields: row.fields
+				} as Sockets.Amendments.Update.Params)
+		} catch (err) {
+			saving = false
+			reportUnanswered(err, `${door.label} was not saved`)
+			return
+		}
+		if (!(await writeEntryFields(plan.entryPatch, false))) {
+			saving = false
+			return
+		}
+		saving = false
+		settleDraft(`entry#${id}`, snap)
+		promoted.delete(field)
+	}
+
+	$effect(() => {
+		void selectedKey
+		untrack(() => promoted.clear())
+	})
+
+	/** The moment the draft's entry version was last in force at. */
+	let momentOfDraft: string | undefined
+	let askingMoment = false
+	// One selection: the moment bar and the rail. A moment that changes the
+	// entry version under unsaved edits is asked about once.
+	$effect(() => {
+		const key = shownVersion?.key ?? null
+		const moment = route.moment
+		const isDirty = dirty
+		const isRailed = railed
+		untrack(() => {
+			if (!isRailed || !isDirty || key === draftVersionKey) {
+				if (!isDirty) draftVersionKey = key
+				momentOfDraft = moment
+				return
+			}
+			// A save in flight is what changed the version (a new version
+			// lands before the draft settles): the draft goes with it, unasked.
+			if (saving) {
+				draftVersionKey = key
+				momentOfDraft = moment
+				return
+			}
+			if (askingMoment) return
+			askingMoment = true
+			const back = momentOfDraft
+			void loreRoute.confirmLeave().then((leave) => {
+				askingMoment = false
+				if (leave) discardDraft()
+				else
+					loreRoute.set(
+						reduce(loreRoute.route, {
+							type: "setMoment",
+							moment: back
+						})
+					)
+			})
+		})
+	})
+
+	/** The rail's re-date: the edited row of a version, or an Elsewhere row. */
+	function redateEntryVersion(
+		target:
+			| { version: EntryVersion }
+			| { row: Sockets.Amendments.EntryRow },
+		date: StoryDate
+	) {
+		return updateEntryAmendment(socket, {
+			lorebookId,
+			id:
+				"version" in target
+					? target.version.editRow!.id
+					: target.row.id,
+			subject: "entry",
+			year: date.year,
+			month: date.month,
+			day: date.day
+		})
+	}
+
+	/** The rail's delete: every row of a version in id order, or one Elsewhere row. */
+	async function deleteEntryVersion(
+		target: { version: EntryVersion } | { row: Sockets.Amendments.EntryRow }
+	) {
+		const rows = "version" in target ? target.version.rows : [target.row]
+		for (const r of [...rows].sort((x, y) => x.id - y.id))
+			await deleteEntryAmendment(socket, {
+				lorebookId,
+				id: r.id,
+				subject: "entry"
+			})
+	}
+
+	async function selectVersion(v: EntryVersion) {
+		if (!rail || v.key === shownVersion?.key) return
+		const at = momentOfVersion(rail.versions, v)
+		if (!at) return
+		if (dirty) {
+			if (!(await loreRoute.confirmLeave())) return
+			discardDraft()
+		}
+		loreRoute.set(
+			reduce(loreRoute.route, {
+				type: "setMoment",
+				moment: momentKey(at)
+			})
+		)
+	}
+
+	async function openVersionOnLine(
+		branchId: number | null,
+		date: StoryDate | null
+	) {
+		if (dirty) {
+			if (!(await loreRoute.confirmLeave())) return
+			discardDraft()
+		}
+		loreRoute.set(
+			reduce(
+				reduce(loreRoute.route, {
+					type: "setBranch",
+					branch: branchId ?? undefined
+				}),
+				{
+					type: "setMoment",
+					moment: date ? momentKey(date) : undefined
+				}
+			)
+		)
+	}
+
+	let newVersionOpen = $state(false)
+
+	/**
 	 * Whether this save is a choice.
 	 *
 	 * Only an existing ENTRY read at a moment can be amended: a scene has no
@@ -985,8 +1450,11 @@
 	 * alone.
 	 */
 	let canAmend = $derived(
-		draftMoment !== null &&
+		// 🚧 No timeline: nothing dated is written, so a save is only a save.
+		timelineOn &&
+			draftMoment !== null &&
 			!isNew &&
+			activeDoor.kind === HISTORY_TYPE_ID &&
 			activeDoor.store === "entries" &&
 			selectedSource != null
 	)
@@ -1029,6 +1497,47 @@
 					"The server did not answer in time. Your changes are still here."
 			})
 	}
+
+	/**
+	 * The sentence that says why Save is off: a run in progress was shown this
+	 * entry and may still replace its text. Asked when an entry opens, on Check
+	 * again, and once after a refused save; never polled. An answer that comes
+	 * back after the editor has moved on is dropped.
+	 */
+	let earmarkNotice = $state<string | null>(null)
+	let earmarkChecking = $state(false)
+	let earmarkTicket = 0
+
+	async function checkEarmark(entryId: number, onlySentence = false) {
+		const ticket = ++earmarkTicket
+		earmarkChecking = true
+		const notice = await askEntryEarmark(socket, lorebookId, entryId)
+		if (ticket !== earmarkTicket || draftKey !== `entry#${entryId}`) return
+		earmarkChecking = false
+		if (notice !== null || !onlySentence) earmarkNotice = notice
+	}
+
+	/** After a refused save: ask once, unless nobody answered the save. */
+	function askAfterRefusal(err: unknown, entryId: number) {
+		if (isReplyTimeout(err)) return
+		void checkEarmark(entryId, true)
+	}
+
+	$effect(() => {
+		const key = draftKey
+		const mayAsk =
+			!isNew &&
+			!readOnly &&
+			!libraryOpen &&
+			activeDoor.store === "entries" &&
+			!!key?.startsWith("entry#")
+		untrack(() => {
+			earmarkTicket++
+			earmarkNotice = null
+			earmarkChecking = false
+			if (mayAsk) void checkEarmark(Number(key!.slice("entry#".length)))
+		})
+	})
 
 	/**
 	 * After our own write lands: the draft that was sent is dropped so the
@@ -1078,6 +1587,7 @@
 		} catch (err) {
 			saving = false
 			reportUnanswered(err, "The amendment was not saved")
+			askAfterRefusal(err, entryId)
 			return
 		}
 		saving = false
@@ -1280,6 +1790,10 @@
 			// ⚠ The DIFF, never the whole draft. The editor draws the entry as
 			// it reads at the moment, so the draft holds other amendments'
 			// values too — writing it whole would bake them into the base.
+			if (railed) {
+				await saveVersion()
+				return
+			}
 			const fields = pendingFields()
 			// Nothing to write. In the queue, Save still moves on: the row
 			// stays a loose end and the reader has chosen to pass it.
@@ -1288,33 +1802,178 @@
 				return
 			}
 			const id = payload.id as number
-			const key = `entry#${id}`
-			const warning = baseSaveWarning(kind, id, fields)
-			awaitingSave = key
 			saving = true
-			try {
-				await awaitReply({
-					socket,
-					event: "entries:update",
-					params: { entry: { ...fields, id, typeId: kind } as any },
-					replyKey: interestKey("entries:update", lorebookId),
-					errorEvent: "entries:update:error",
-					fallbackError: "The entry could not be saved.",
-					match: (data) => data.entry?.id === id
-				})
-			} catch (err) {
-				saving = false
-				if (awaitingSave === key) awaitingSave = null
-				reportUnanswered(err, `${door.label} was not saved`)
-				return
-			}
+			const ok = await writeEntryFields(fields, true)
 			saving = false
-			// The draft itself is settled by the channel's `onUpdated`, which
-			// hears the same reply; this only says how it went.
+			if (ok) await savedThen(id)
+		}
+	}
+
+	/**
+	 * Writes entry fields to the entry itself and says how it went. The draft
+	 * is settled by the channel's `onUpdated` when `settles` (a plain save);
+	 * a railed save settles its own draft, because the entry's reply is the
+	 * entry, not the version being read. Returns whether the server took it.
+	 */
+	async function writeEntryFields(
+		fields: Record<string, unknown>,
+		settles: boolean,
+		toast = true
+	): Promise<boolean> {
+		const door = activeDoor
+		const kind = door.kind!
+		const id = selectedSource!.id
+		const key = `entry#${id}`
+		const warning = baseSaveWarning(kind, id, fields)
+		if (settles) awaitingSave = key
+		const requestId = uuid()
+		try {
+			await awaitReply({
+				socket,
+				event: "entries:update",
+				params: {
+					entry: { ...fields, id, typeId: kind } as any,
+					requestId
+				},
+				replyKey: interestKey("entries:update", lorebookId),
+				errorEvent: "entries:update:error",
+				fallbackError: "The entry could not be saved.",
+				match: (data) => data?.requestId === requestId,
+				matchError: (data) =>
+					(data as { requestId?: string } | undefined)?.requestId ===
+					requestId
+			})
+		} catch (err) {
+			if (awaitingSave === key) awaitingSave = null
+			reportUnanswered(err, `${door.label} was not saved`)
+			// Layout leaves a refusal that names its asker to the asker.
+			if (!isReplyTimeout(err))
+				notify.error({
+					title: `${door.label} was not saved`,
+					description:
+						(err instanceof Error && err.message) ||
+						"The entry could not be saved."
+				})
+			askAfterRefusal(err, id)
+			return false
+		}
+		if (toast) {
 			if (warning) notify.warning(warning)
 			else notify.success({ title: `${door.label} saved` })
-			await savedThen(id)
 		}
+		return true
+	}
+
+	/**
+	 * Save on a railed entry: the entry's own fields go to the entry, the
+	 * rest to the entry version being edited, both from one diff. The draft
+	 * is kept until the server has it; focus stays where it was.
+	 */
+	async function saveVersion() {
+		if (!draft || !selectedSource || !railed || saving) return
+		const version = draftVersion
+		if (!version || !version.own) return
+		const snap = $state.snapshot(draft) as Record<string, unknown>
+		const diff = changedFields(snap, pristineDraft ?? {})
+		const id = selectedSource.id
+		if (!Object.keys(diff).length && promoted.size === 0) {
+			notify.error({ title: "Nothing has changed" })
+			await savedThen(id)
+			return
+		}
+		const { entryPatch, versionFields } = splitVersionSave({
+			diff,
+			draft: snap,
+			selected: version,
+			carried,
+			promoted
+		})
+		const door = activeDoor
+		saving = true
+		if (versionFields && version.editRow) {
+			try {
+				await updateEntryAmendment(socket, {
+					lorebookId,
+					id: version.editRow.id,
+					subject: "entry",
+					fields: versionFields
+				} as Sockets.Amendments.Update.Params)
+			} catch (err) {
+				saving = false
+				reportUnanswered(err, `${door.label} was not saved`)
+				askAfterRefusal(err, id)
+				return
+			}
+		}
+		if (entryPatch && !(await writeEntryFields(entryPatch, false))) {
+			saving = false
+			return
+		}
+		saving = false
+		if (!entryPatch) notify.success({ title: `${door.label} saved` })
+		settleDraft(`entry#${id}`, snap)
+		promoted.clear()
+		await savedThen(id)
+	}
+
+	/**
+	 * Save as a new version: what changed starts at `date` on the line being
+	 * read; the version shown stays as it is. A date the line already has a
+	 * version at takes the change into that version (a merge).
+	 */
+	async function createVersionAt(date: StoryDate) {
+		if (!draft || !selectedSource || !railed || !rail || readOnly || saving)
+			return
+		if (!activeDoor.validate(draft, siblings, true)) return
+		const snap = $state.snapshot(draft) as Record<string, unknown>
+		const diff = changedFields(snap, pristineDraft ?? {})
+		const { entryPatch, fields } = splitNewVersion({
+			diff,
+			draft: snap,
+			carried,
+			promoted
+		})
+		const entryId = selectedSource.id
+		const branchId = line.branchId
+		const taken = takenVersion(rail.versions, date, branchId)
+		const writesVersion = !(taken && !Object.keys(fields).length)
+		let reply: Sockets.Amendments.List.Response | null = null
+		saving = true
+		if (writesVersion) {
+			try {
+				reply = await fileEntryAmendments(
+					socket,
+					{ lorebookId, entryId, branchId },
+					[{ ...date, fields }],
+					knownAmendmentIds(entryId)
+				)
+			} catch (err) {
+				saving = false
+				reportUnanswered(err, "The version was not saved")
+				askAfterRefusal(err, entryId)
+				return
+			}
+		}
+		if (entryPatch && !(await writeEntryFields(entryPatch, false, false))) {
+			saving = false
+			return
+		}
+		saving = false
+		if (writesVersion) {
+			const name = lineName(reply, branchId)
+			notify.success({
+				title: `Saved as a new version at ${formatDate(date)}${name ? ` on ${name}` : ""}`
+			})
+		}
+		settleDraft(`entry#${entryId}`, snap)
+		promoted.clear()
+		loreRoute.set(
+			reduce(loreRoute.route, {
+				type: "setMoment",
+				moment: momentKey(date)
+			})
+		)
+		await savedThen(entryId)
 	}
 
 	/**
@@ -1432,6 +2091,15 @@
 		if (!want || want.n === focusedRequest) return
 		if (!draft || draftKey !== `entry#${want.entryId}`) return
 		focusedRequest = want.n
+		if (
+			want.field === "keywords" &&
+			untrack(
+				() =>
+					entryZoneRow &&
+					zoneOf("keys", carried, promoted) === "entry"
+			)
+		)
+			setEntryRowOpen(true)
 		void tick().then(() => {
 			const field = document.querySelector<HTMLElement>(
 				`[data-lore-editor] [data-lore-field="${want.field}"]`
@@ -1696,6 +2364,9 @@
 						: (descriptorForKind(item.kind) ?? descriptor)}
 			{descriptor}
 			{libraryName}
+			historyCount={descriptor.id === "scenes" && timelineOn
+				? historyDividerCount
+				: null}
 			{bindings}
 			{vectorizationEnabled}
 			{selectedKey}
@@ -1882,7 +2553,7 @@
 					{#if offWindowOpen}
 						{@render offWindowForm()}
 					{:else}
-						{#if draft}
+						{#if draft && !railed}
 							{@render markToggle(
 								!!draft.constant,
 								Icons.Pin,
@@ -1900,6 +2571,19 @@
 								() =>
 									(draft!.enabled = draft!.enabled === false)
 							)}
+							{#if !readOnly && !isNew && selectedSource && selectedSource.branchId != null && (selectedSource.branchId ?? null) === (route.branch ?? null) && activeDoor.kind !== HISTORY_TYPE_ID}
+								<button
+									class="btn btn-sm preset-tonal-surface w-full justify-start"
+									type="button"
+									data-lore-move-down-tree
+									onclick={() => {
+										editorMenuOpen = false
+										moveDownOpen = true
+									}}
+								>
+									<Icons.GitBranch size={14} aria-hidden="true" /> Move down the tree…
+								</button>
+							{/if}
 						{/if}
 						{#if !isNew && selectedSource}
 							{#if selectedSource.archived}
@@ -1919,13 +2603,29 @@
 									<Icons.Archive size={14} /> Archive
 								</button>
 							{/if}
-							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
-								type="button"
-								onclick={() => (offWindowOpen = true)}
-							>
-								<Icons.CalendarOff size={14} /> Off for a while…
-							</button>
+							<!-- 🚧 No timeline: a period off is two dated changes. -->
+							{#if timelineOn}
+								<button
+									class="btn btn-sm preset-tonal-surface w-full justify-start"
+									type="button"
+									onclick={() => (offWindowOpen = true)}
+								>
+									<Icons.CalendarOff size={14} /> Off for a while…
+								</button>
+							{/if}
+							{#if editHistoryState && editHistoryState.entryId === selectedSource.id && editHistoryState.canClear && editHistoryState.count > 0}
+								<button
+									class="btn btn-sm preset-tonal-surface text-error-600-400 w-full justify-start"
+									type="button"
+									onclick={() => {
+										editorMenuOpen = false
+										clearHistoryOpen = true
+									}}
+								>
+									<Icons.History size={14} />
+									{CLEAR_ACTION_LABEL}
+								</button>
+							{/if}
 						{/if}
 					{/if}
 				</Popover.Content>
@@ -1949,7 +2649,9 @@
 			class="btn btn-sm preset-filled-primary-500 rounded-r-none"
 			type="button"
 			onclick={saveAsAmendment}
-			disabled={saving || !activeDoor.validate(draft!, siblings)}
+			disabled={saving ||
+				earmarkNotice !== null ||
+				!activeDoor.validate(draft!, siblings)}
 			title="File this change as an amendment dated {dated}"
 		>
 			<Icons.Save size={16} aria-hidden="true" />
@@ -2001,6 +2703,7 @@
 									save()
 								}}
 								disabled={saving ||
+									earmarkNotice !== null ||
 									!activeDoor.validate(draft!, siblings)}
 							>
 								<Icons.PenLine size={14} aria-hidden="true" />
@@ -2012,6 +2715,107 @@
 			</Portal>
 		</Popover>
 	</div>
+{/snippet}
+
+{#snippet entryZone()}
+	<!-- The entry's own values, in one row that opens on demand: Beginning,
+	     Decay, and each of Keywords, Part of, Pinned and Off until a dated
+	     change carries it. -->
+	<section
+		aria-label="The entry"
+		class="flex flex-col gap-2"
+		data-lore-entry-zone
+	>
+		{#if draft}
+			<BeginningDecayRow
+				bind:draft
+				idPrefix="entryZone"
+				lineWords={railed
+					? `On ${openBookTime.lineName(selectedSource?.branchId ?? null)}`
+					: undefined}
+				bind:open={() => entryRowOpen, setEntryRowOpen}
+				disabled={entryRowDisabled}
+				held={heldFields}
+				{parentName}
+				{promotable}
+				onPromote={(f) => promoted.add(f)}
+			>
+				{#snippet lineAction()}
+					{#if entryEditable && selectedSource && selectedSource.branchId != null && !isNew}
+						<button
+							type="button"
+							class="btn btn-sm preset-tonal-surface min-h-11"
+							data-lore-move-down-tree
+							onclick={() => (moveDownOpen = true)}
+						>
+							<Icons.GitBranch size={14} aria-hidden="true" />
+							Move down the tree…
+						</button>
+					{/if}
+				{/snippet}
+				{#snippet children()}
+					{#if draft}
+						{#if zoneOf("keys", carried, promoted) === "entry"}
+							<div data-lore-field="keywords">
+								<KeywordChips
+									bind:keys={draft.keys}
+									idPrefix="entryZone"
+									regex={readsAsRegex(draft)}
+									semantic={vectorizationEnabled}
+								/>
+							</div>
+						{/if}
+						{#if zoneOf("anchorEntryId", carried, promoted) === "entry"}
+							<PartOfField
+								bind:draft
+								pool={bookPool}
+								newRowBranchId={route.branch ?? null}
+								idPrefix="entryZone"
+							/>
+						{/if}
+						{#if zoneOf("constant", carried, promoted) === "entry"}
+							{@render markToggle(
+								!!draft.constant,
+								Icons.Pin,
+								"Pinned",
+								"Always in the prompt",
+								"pinned",
+								() => (draft!.constant = !draft!.constant)
+							)}
+						{/if}
+						{#if zoneOf("enabled", carried, promoted) === "entry"}
+							{@render markToggle(
+								draft.enabled === false,
+								Icons.Ghost,
+								"Off",
+								"Out of every prompt",
+								"off",
+								() => (draft!.enabled = draft!.enabled === false)
+							)}
+						{/if}
+					{/if}
+				{/snippet}
+			</BeginningDecayRow>
+		{/if}
+		{#if railed && !entryEditable && !readOnly}
+			<div
+				class="text-surface-700-300 flex flex-wrap items-center gap-2 text-xs"
+			>
+				<span>{entryBelongsSentence}</span>
+				<button
+					type="button"
+					class="text-surface-700-300 min-h-11 underline"
+					onclick={() =>
+						void openVersionOnLine(
+							selectedSource?.branchId ?? null,
+							null
+						)}
+				>
+					Open on {entryOwnerLine}
+				</button>
+			</div>
+		{/if}
+	</section>
 {/snippet}
 
 {#snippet editor()}
@@ -2072,13 +2876,31 @@
 						type="button"
 						onclick={save}
 						disabled={saving ||
+							saveOff ||
+							earmarkNotice !== null ||
 							!activeDoor.validate(draft, siblings)}
+						title={saveOff && draftVersion
+							? `This is ${openBookTime.lineName(draftVersion.branchId)}'s version: open it there to change it, or save it as a new version.`
+							: undefined}
 					>
 						<Icons.Save size={16} aria-hidden="true" />
 						<span>
 							{isNew ? "Create" : queue ? "Save & next" : "Save"}
 						</span>
 					</button>
+					{#if railed}
+						<button
+							class="btn btn-sm preset-tonal-surface shrink-0"
+							type="button"
+							onclick={() => (newVersionOpen = true)}
+							disabled={saving ||
+								earmarkNotice !== null ||
+								!activeDoor.validate(draft, siblings)}
+						>
+							<Icons.CalendarPlus size={16} aria-hidden="true" />
+							<span>Save as a new version…</span>
+						</button>
+					{/if}
 				{/if}
 				{#if !readOnly && !libraryOpen && activeDoor.store === "entries" && (isNew || selectedSource)}
 					{@render editorMenu()}
@@ -2097,6 +2919,23 @@
 					</button>
 				{/if}
 			</div>
+			{#if writesSharedEntry}
+				<p class="text-warning-700-300 text-xs" data-lore-whole-warning>
+					Saving changes the entry itself: it reads this way
+					everywhere, on every line and at every moment, until a later
+					version changes it.
+				</p>
+			{/if}
+			{#if earmarkNotice !== null && !isNew && !readOnly && !libraryOpen}
+				<EntryEarmarkNotice
+					notice={earmarkNotice}
+					checking={earmarkChecking}
+					onCheck={() => {
+						const id = selectedSource?.id
+						if (id != null) void checkEarmark(id)
+					}}
+				/>
+			{/if}
 			<!-- A shared book's fields read, never write: one `disabled`
 			     fieldset stills every control the editor draws. -->
 			{#if libraryOpen && libraryOpenRow}
@@ -2117,31 +2956,152 @@
 					{/if}
 				</div>
 			{/if}
-			<fieldset
-				class="flex min-w-0 flex-col gap-4"
-				disabled={readOnly || libraryOpen}
-				data-lore-read-only={readOnly || libraryOpen ? "" : undefined}
-			>
-				<Editor
-					bind:draft
-					source={selectedSource ?? null}
-					{isNew}
-					bind:bindings
-					{vectorizationEnabled}
-					{lorebookId}
-					{siblings}
-					{onNavigateToGraph}
+			{#snippet railEdits(ids: readonly (number | null)[])}
+				{#if selectedItem}
+					<EditHistory
+						{lorebookId}
+						entryId={selectedItem.id}
+						amendmentIds={ids}
+						variant="rows"
+						updatedAt={selectedSource?.updatedAt ?? null}
+					/>
+				{/if}
+			{/snippet}
+			{#snippet fields()}
+				<fieldset
+					class="flex min-w-0 flex-col gap-4"
+					disabled={readOnly || libraryOpen}
+					data-lore-read-only={readOnly || libraryOpen
+						? ""
+						: undefined}
+				>
+					{#if draft}
+						<Editor
+							bind:draft
+							source={selectedSource ?? null}
+							{isNew}
+							bind:bindings
+							{vectorizationEnabled}
+							{lorebookId}
+							{siblings}
+							{onNavigateToGraph}
+						/>
+					{/if}
+				</fieldset>
+			{/snippet}
+			{#if railed && rail && shownVersion}
+				<VersionRail
+					versions={rail.versions}
+					elsewhere={rail.elsewhere}
+					selectedKey={shownVersion.key}
+					lineBranchId={line.branchId}
+					{readOnly}
+					lineName={(id) => openBookTime.lineName(id)}
+					onSelect={selectVersion}
+					onRedate={redateEntryVersion}
+					onDelete={deleteEntryVersion}
+					onAdd={(date) => void createVersionAt(date)}
+					onOpenOnLine={openVersionOnLine}
+					onRedated={(v, date) => {
+						if (v.key === shownVersion?.key)
+							loreRoute.set(
+								reduce(loreRoute.route, {
+									type: "setMoment",
+									moment: momentKey(date)
+								})
+							)
+					}}
+					onDeleted={(v) => {
+						if (v.key === draftVersionKey) discardDraft()
+					}}
+					edits={railEdits}
+				>
+					{@render fields()}
+					<!-- The wide rail shows each version's edits itself; this fold
+					     is the narrow layout's, scoped to the version shown. -->
+					{#if selectedItem}
+						<div class="@min-[36rem]/versions:hidden">
+							<EditHistory
+								{lorebookId}
+								entryId={selectedItem.id}
+								updatedAt={editsToken}
+								amendmentIds={versionRedlineIds(shownVersion)}
+								foldLabel={editsToVersionLabel}
+								bind:clearOpen={clearHistoryOpen}
+								onState={(s) => (editHistoryState = s)}
+							/>
+						</div>
+					{/if}
+				</VersionRail>
+				<!-- A reader saves nothing: no dialog, open or closed. -->
+				{#if !readOnly}
+				<VersionDateDialog
+					open={newVersionOpen}
+					title="Save as a new version"
+					description="What you changed starts at this date; the version shown stays as it is."
+					initial={momentDate}
+					bounds={versionDateBounds(rail.versions)}
+					taken={(d) =>
+						takenVersion(rail?.versions ?? [], d, line.branchId)}
+					takenMode="merge"
+					confirmLabel="Save"
+					busy={saving}
+					onConfirm={(date) => {
+						newVersionOpen = false
+						void createVersionAt(date)
+					}}
+					onCancel={() => (newVersionOpen = false)}
 				/>
-			</fieldset>
+				{/if}
+			{:else}
+				{@render fields()}
+			{/if}
+			{#if entryZoneRow}
+				{@render entryZone()}
+			{/if}
+			<!-- Not inside the rail: ⋯ opens it with the Timeline off too. -->
+			{#if !readOnly && selectedSource}
+				<MoveDownTheTreeDialog
+					open={moveDownOpen}
+					{lorebookId}
+					entryId={selectedSource.id}
+					dirty={hasUnsavedChanges}
+					onClose={() => (moveDownOpen = false)}
+					onMoved={async () => {
+						await tick()
+						const next =
+							document.querySelector<HTMLElement>(
+								"[data-lore-entry-zone] [data-lore-beginning-decay] > div > button:not(:disabled)"
+							) ??
+							document.querySelector<HTMLElement>(
+								'[aria-label="More actions for this entry"]'
+							)
+						next?.focus()
+					}}
+				/>
+			{/if}
 			<!-- What the newest run did with this row, under the fields and
 			     above the account of why. A row nothing has saved has no run to
 			     report on. -->
 			{#if !isNew && selectedItem && !libraryOpen && activeDoor.store === "entries"}
-				<AmendmentList
-					{lorebookId}
-					amendments={amendmentsFor?.(selectedItem.id) ?? []}
-					moment={route.moment}
-				/>
+				<!-- 🚧 No timeline: dated changes are not shown. A railed entry
+				     has its versions on the rail; a history entry keeps its list. -->
+				{#if timelineOn && activeDoor.kind === HISTORY_TYPE_ID}
+					<AmendmentList
+						{lorebookId}
+						amendments={amendmentsFor?.(selectedItem.id) ?? []}
+						moment={route.moment}
+					/>
+				{/if}
+				{#if !(railed && rail && shownVersion)}
+					<EditHistory
+						{lorebookId}
+						entryId={selectedItem.id}
+						updatedAt={selectedSource?.updatedAt ?? null}
+						bind:clearOpen={clearHistoryOpen}
+						onState={(s) => (editHistoryState = s)}
+					/>
+				{/if}
 				<ReadInLine
 					{lorebookId}
 					sessionId={readingSessionId}

@@ -1,0 +1,38 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |unit| src/lib/shared/lorebooks/storySpan.test.ts (60 tests | 1 failed) 67ms
+     × free-form never borrows: unknown span 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/shared/lorebooks/storySpan.test.ts > storySpanBetween / storySpanWords > free-form never borrows: unknown span
+AssertionError: expected null to be '1 year' // Object.is equality
+
+- Expected:
+"1 year"
+
++ Received:
+null
+
+ ❯ src/lib/shared/lorebooks/storySpan.test.ts:189:52
+    187| describe("storySpanBetween / storySpanWords", () => {
+    188|  it.each(spanRows)("%s", (_name, earlier, later, calendar, words) => {
+    189|   expect(storySpanWords(earlier, later, calendar)).toBe(words)
+       |                                                    ^
+    190|   expect(storySpanBetween(earlier, later, calendar) === null).toBe(
+    191|    words === null
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 445 passed (446)
+   Start at  13:14:58
+   Duration  1.66s (transform 2.62s, setup 42ms, import 3.60s, tests 172ms, environment 1ms)
+

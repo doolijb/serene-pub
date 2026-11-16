@@ -1,0 +1,17 @@
+
+> serene-pub@0.6.0-pr-8 check
+> svelte-kit sync && svelte-check --tsconfig ./tsconfig.json
+
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+1794771042985 START "/home/jody/github/serene-pub"
+1794771042996 WARNING "src/lib/client/components/modals/NewNameModal.svelte" 48:23 "This reference only captures the initial value of `checkboxChecked`. Did you mean to reference it inside a closure instead?\nhttps://svelte.dev/e/state_referenced_locally"
+1794771042997 WARNING "src/lib/client/components/connections/QuantPicker.svelte" 184:1 "Non-interactive element `<section>` should not be assigned mouse or keyboard event listeners\nhttps://svelte.dev/e/a11y_no_noninteractive_element_interactions"
+1794771042997 WARNING "src/lib/client/components/modals/SummarizeLoreModal.svelte" 141:57 "This reference only captures the initial value of `initialLoreType`. Did you mean to reference it inside a closure instead?\nhttps://svelte.dev/e/state_referenced_locally"
+1794771042997 WARNING "src/lib/client/components/pipelines/RunProgressCard.svelte" 324:4 "Screenreaders already announce `<img>` elements as an image\nhttps://svelte.dev/e/a11y_img_redundant_alt"
+1794771042998 WARNING "src/lib/client/components/media/MediaManagerTab.svelte" 1094:8 "Screenreaders already announce `<img>` elements as an image\nhttps://svelte.dev/e/a11y_img_redundant_alt"
+1794771042998 WARNING "src/lib/client/components/settingsTabs/ImportSettingsTab.svelte" 580:6 "A form label must be associated with a control\nhttps://svelte.dev/e/a11y_label_has_associated_control"
+1794771042998 WARNING "src/lib/client/lorebooks/bookTimelineProbe.svelte" 5:2 "This reference only captures the initial value of `out`. Did you mean to reference it inside a closure instead?\nhttps://svelte.dev/e/state_referenced_locally"
+1794771043001 WARNING "src/lib/client/components/Layout.svelte" 3274:6 "Non-interactive element `<div>` should not be assigned mouse or keyboard event listeners\nhttps://svelte.dev/e/a11y_no_noninteractive_element_interactions"
+1794771043001 WARNING "src/lib/client/components/modals/OllamaInstallModal.svelte" 14:26 "This reference only captures the initial value of `modelName`. Did you mean to reference it inside a closure instead?\nhttps://svelte.dev/e/state_referenced_locally"
+1794771043001 COMPLETED 11582 FILES 0 ERRORS 9 WARNINGS 9 FILES_WITH_PROBLEMS

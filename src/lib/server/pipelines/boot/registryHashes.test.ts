@@ -186,7 +186,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// entry's typed fields, checked against its entry type
 	// (`fieldsFindings`) at the review gate and at the commit; review fields
 	// `name`, `content`, `fields`. Additive. (was "15401f006df68c")
-	"core:outlet/create-lore-entry@1": "4906326bc8f09", // pr-6 §C-1: `sources` (+ `match`, `bind` on create)
+	// Moved 2026-11-15 (lane time-t5b): two params, `defaultBeginning` and
+	// `defaultDecayRate` — what a new entry starts with, over its entry type's
+	// default. Additive, no default; no shipped spec sets them, so no document
+	// moves. (was "17b54c04c534e9")
+	"core:outlet/create-lore-entry@1": "172474c373854e", // pr-6 §C-1: `sources` (+ `match`, `bind` on create); lore-match 2026-11-13: `shown`
 	// NEW 2026-10-21 (Lair rewrite D2, L1): change an entry of the session's
 	// lorebook — `entry` (id | write result | name), `name?`, `content?`,
 	// `fields?` (a patch; null clears a field); out `entryId`;
@@ -777,7 +781,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Dungeon Crawler roll line) are left out of the read. Default on, so
 	// every other spec reads what it read. Measured with other lanes'
 	// in-flight edits in the tree. (was "4d8a07e5d38b0")
-	"core:query/session-history@1": "bf56f6315cb53",
+	"core:query/session-history@1": "88becba316579", // 2026-11-15 time-t6b: firsthandFor/firsthandBy in-ports added (was "bf56f6315cb53")
 	// Lair character turns (owner ruling 2026-09-30): the standing turn plan
 	// a character turn plays from. A new type: no migration.
 	"core:query/turn-plan@1": "a71a679f5d817",
@@ -898,7 +902,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-02 (lorebooks Wave 8): the keyword lane's new `exclusions` out-
 	// port (lorebooks C2). Edited in place; no migration (the slug's pointer moves
 	// at boot). (was "e1166297a747a")
-	"core:query/history-entries@1": "1403d2cf364be7",
+	"core:query/history-entries@1": "dd12a4e6fec4c", // 2026-11-15 time-t6c1: firsthandFor/firsthandBy in-ports added (was "1403d2cf364be7")
 	// Re-projected by 0186: the same `scanDepth` correction, on this type's own
 	// duplicate declaration of the field. Deliberately still a separate schema
 	// rather than folded into the shared `loreSlots` — the two overlap in that
@@ -1206,7 +1210,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// system block so the top of the prompt stays cache-stable. Nothing else
 	// moved: with the old order put back the descriptor hashes to the old pin.
 	// (was "a09e1d06836e8")
-	"core:task/assemble@2": "77b5ad64835be" /* (was "980fcefab8e91") — lead, sense-prm 2026-11-12: the earlier-scenes query and block (optional in-port, renders entry) */,
+	"core:task/assemble@2": "13d026c54e7d85" /* (was "77b5ad64835be") — time-t7d 2026-11-15: renders storyCalendar (core:var/story-calendar@1), additive; (was "980fcefab8e91") — lead, sense-prm 2026-11-12: the earlier-scenes query and block (optional in-port, renders entry) */,
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	// Moved (enum member labels, 2026-09-29): `style` gained `members` — a label
@@ -1849,8 +1853,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:query/round-worth@1": "17f5045d5976ed",
 	"core:query/scene-boundaries@1": "12e77a18036ca5" /* new — lead, sense-scn 2026-11-12 */,
 	"core:query/scene-summary-due@1": "d78f075f52a77" /* new — lead, sense-sum 2026-11-12 */,
-	"core:query/earlier-scenes@1": "baf88f0f6b87b" /* new — lead, sense-prm 2026-11-12 */,
-	"core:outlet/summarize-finished-scene@1": "1443315d18526" /* new — lead, sense-sum 2026-11-12 */,
+	"core:query/earlier-scenes@1": "3dbaa76aa7888", // 2026-11-15 time-t6b: firsthandFor/firsthandBy in-ports added (was "baf88f0f6b87b")
+	"core:query/entries-named@1": "1ee43a2b9ae71a" /* new — lead, lore-match 2026-11-13 */,
+	"core:query/unknown-entries@1": "156b3a840fe94b" /* new — time-t6c2 2026-11-15 */,
+	"core:outlet/summarize-finished-scene@1": "1803781561967b" /* (was "1443315d18526") — lead, 2026-11-13: it declares `review.fields` (every effectful definition does; the SDK's forms test caught the gap). */,
 	// New 2026-10-31 (M2c path B; pinned by E): the Guide's draft reader (T) and the four library outlets (T), each with review.fields.
 	"core:task/read-library-draft@1": "143fcc2d9e0fb7",
 	"core:outlet/create-character@1": "11cab3736ed8b5",
@@ -1913,11 +1919,19 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// moves these hashes: roles, render, source kind, export key, the anchor
 	// policy and the declared `fields` schema are all contract, so changing any
 	// of them is `@2` and not an edit here.
-	"core:entry/world-lore@1": "100f8933de881b",
+	// Moved 2026-11-15 (lane time-t5b; owner 2026-11-14, §8 item 4): declares
+	// `defaultBeginning` and `defaultDecayRate`, what an entry a session
+	// creates starts with. Same `@1` under the freeze; the pointer moves at boot.
+	// (was "100f8933de881b")
+	"core:entry/world-lore@1": "4dc31b709358e",
 	// Moved 2026-09-30 (same ruling): `render` names `core:var/character-lore@1`
 	// in place of the `character-card` destination. With it put back the
 	// descriptor hashes to the old pin (was "50f9370f3ab1").
-	"core:entry/character-lore@1": "16fb98fc8626a4",
+	// Moved 2026-11-15 (lane time-t5b; owner 2026-11-14, §8 item 4): declares
+	// `defaultBeginning` and `defaultDecayRate`, what an entry a session
+	// creates starts with. Same `@1` under the freeze; the pointer moves at boot.
+	// (was "16fb98fc8626a4")
+	"core:entry/character-lore@1": "999e2ea3c174f",
 	// A15 (2026-09-30): month and day take the story-time rule's range
 	// (`STORY_TIME_PART_RANGES` — a floor of 1, no ceiling) instead of a
 	// Gregorian 1–12 / 1–31 that refused dates the book's calendar allows.
@@ -1955,7 +1969,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// profile. Same `@1` under the freeze. Proven: the snapshot with
 	// `entryShape.exportKey` removed hashes to the old pin.
 	// (was "124df05bc5d692")
-	"core:entry/location@1": "98ba6f0d87011",
+	// Moved 2026-11-15 (lane time-t5b; owner 2026-11-14, §8 item 4): declares
+	// `defaultBeginning` and `defaultDecayRate`, what an entry a session
+	// creates starts with. Same `@1` under the freeze; the pointer moves at boot.
+	// (was "98ba6f0d87011")
+	"core:entry/location@1": "ed97be0eba767",
 	// NEW (attributes phase 3a, 2026-09-26): a thing somebody can hold. World
 	// lore's roles, band and layout plus `supply` (unique · limited ·
 	// unlimited) and `supplyLimit`.
@@ -1963,7 +1981,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// item; only the 0.5-compat export profile writes it as world lore. Same
 	// `@1` under the freeze. Proven: the snapshot with `entryShape.exportKey`
 	// removed hashes to the old pin. (was "1eea67730e8c97")
-	"core:entry/item@1": "12c63b4101539c",
+	// Moved 2026-11-15 (lane time-t5b; owner 2026-11-14, §8 item 4): declares
+	// `defaultBeginning` and `defaultDecayRate`, what an entry a session
+	// creates starts with. Same `@1` under the freeze; the pointer moves at boot.
+	// (was "12c63b4101539c")
+	"core:entry/item@1": "95957352e862f",
 	// NEW (rulesets W3-S, 2026-10-17): the entry types a ruleset's
 	// repertoires derive (`core:entry/<ruleset>.<repertoire>@1`) — Story's
 	// things and conditions, Vis Itineris's eight entryable repertoires.

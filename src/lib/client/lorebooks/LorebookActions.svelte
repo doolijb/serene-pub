@@ -159,6 +159,7 @@
 		name: string
 		primaryRuleset?: string
 		starterKit?: Sockets.StarterKits.Ref
+		timelineEnabled?: boolean
 	}) {
 		if (!details.name.trim() && !details.starterKit) return
 		creating = false
@@ -171,7 +172,10 @@
 				? { starterKit: details.starterKit }
 				: details.primaryRuleset
 					? { primaryRuleset: details.primaryRuleset }
-					: {})
+					: {}),
+			...(details.timelineEnabled !== undefined
+				? { timelineEnabled: details.timelineEnabled }
+				: {})
 		}
 		socket.emit("lorebooks:create", req)
 	}
@@ -555,6 +559,7 @@
 	bind:open={creating}
 	onOpenChange={(details) => (creating = details.open)}
 	onConfirm={handleCreateConfirm}
+	asksTimeline
 	onCancel={() => (creating = false)}
 	onImportInstead={() => {
 		creating = false

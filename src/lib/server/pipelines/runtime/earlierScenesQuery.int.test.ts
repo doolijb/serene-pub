@@ -128,7 +128,8 @@ describe("core:query/earlier-scenes@1", () => {
 		expect(r.value.main.scenes).toEqual([
 			expect.objectContaining({
 				summary: "Summary from 10.",
-				firstLineId: 10
+				firstLineId: 10,
+				openedStoryClock: null
 			})
 		])
 	}, 60_000)

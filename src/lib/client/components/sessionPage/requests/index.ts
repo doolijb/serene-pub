@@ -119,6 +119,10 @@ import {
 	type SummarizeScenesDeps
 } from "./summarizeScenes"
 import { answerCompileHistoryEntry, compileByDate } from "./compileHistoryEntry"
+import {
+	askClockMoveBack,
+	openBranchedSession
+} from "../clockMoveBackConfirm"
 import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 import { answerSessionPlaces, type SessionPlacesRead } from "./sessionPlaces"
 import {
@@ -549,7 +553,8 @@ export const WIDGET_REQUEST_ANSWERS: {
 			p,
 			d.sessionId(),
 			d.writeStoryClock,
-			d.noteStoryClock
+			d.noteStoryClock,
+			{ confirm: askClockMoveBack, open: openBranchedSession }
 		),
 	// The lorebook's next date after the one the session reads now.
 	"start-history-entry": (p, _from, d) =>

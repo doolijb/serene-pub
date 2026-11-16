@@ -36,7 +36,7 @@
  * `registrySync.ts`.
  */
 
-import { allDefinitions, allScriptKinds } from "@serene-pub/sdk"
+import { allDefinitions, allScriptKinds, type SpecDocument } from "@serene-pub/sdk"
 // Core's **entry** types are declared in the catalog rather than the
 // contracts, and declaring one registers it — so this import is what puts
 // them in `allDefinitions()` below. The catalog is already loaded by way of
@@ -440,7 +440,31 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		await import("$lib/server/pipelines/boot/logitBiasCarryOver")
 	).carryOverLogitBiasEntries(db)
 
-	report.specs = await seedCoreSpecs(db)
+	// One document map for the rest of this task, by spec slug, and it holds
+	// nothing until pass 1 of `seedCoreSpecs` has run: pass 1 heals present
+	// versions in place (`healNodeExpose` writes `pipeline_nodes.expose`,
+	// `healClauseChains` writes `pipeline_clauses.parent_clause_chain`), so the
+	// first entry lands in pass 4 (`reconcilePublishedConfigs`, "4 — configs" in
+	// `seed.ts`). The order test in `bootstrap.queries.int.test.ts` guards that.
+	// Four readers take this map: pass 4, the registration refit, the preset
+	// reconcile and the context-template scan (`migrateLegacyToPipelines` reads
+	// declarations on its own, on an upgrade boot only). None of the steps
+	// between writes a document table (`pipeline_nodes`, `_edges`,
+	// `_clauses`, `_includes`, `_presets`, `_preset_values`) or moves a spec's
+	// `active_version_id`:
+	//   seedSessionPresets — session_presets (seed.ts:512,544,571);
+	//   projectRegistrations — session_presets, registrations
+	//     (registrations/project.ts:143,157; registrations/write.ts:73-83);
+	//   refitRegistrations — in-memory verdicts only;
+	//   reconcilePresetBindings — session_preset_notices (presetReconcile.ts);
+	//   moveSpeakerRebinds — pipeline_node_rebinds (seed.ts:838,844,860);
+	//   reprojectBindingSubjects — pipeline_bindings (bindingSubjects.ts:82,97,101);
+	//   reconcilePlacedNodes — pipeline_config_notices (placedNodeReconcile.ts:143,172);
+	//   migrateLegacyToPipelines — configs, config values, prompts, selections
+	//     (migrate/migrateLegacy.ts:331,359).
+	// A step added here that writes one of those must evict the slugs it wrote.
+	const docs = new Map<string, SpecDocument | null>()
+	report.specs = await seedCoreSpecs(db, { docs })
 
 	// After the specs: a preset names a type by slug, and the slug's spec row
 	// must exist for the Types admin page to resolve it (23 §9).
@@ -463,7 +487,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		// every registration goes back through the door once a boot — a
 		// broken one is left out as stale, and the reconcile below says so.
 		const { refitRegistrations } = await import("$lib/server/pipelines/registrations/fit")
-		report.registrationFit = await refitRegistrations(db)
+		report.registrationFit = await refitRegistrations(db, undefined, docs)
 	}
 
 	// Straight after the presets, and the order is the whole point: the seed
@@ -475,7 +499,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	const { reconcilePresetBindings } = await import(
 		"$lib/server/pipelines/boot/presetReconcile"
 	)
-	report.presetBindings = await reconcilePresetBindings(db)
+	report.presetBindings = await reconcilePresetBindings(db, docs)
 
 	// Runs after the specs, which is why it lives here rather than
 	// in a migration (PLAN-turn-order R20): the Turn order control's row
@@ -531,7 +555,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		const { scanContextTemplateFits } = await import(
 			"$lib/server/pipelines/entities/contextTemplateFit"
 		)
-		report.templateFits = await scanContextTemplateFits(db)
+		report.templateFits = await scanContextTemplateFits(db, docs)
 		for (const m of report.templateFits.misfits)
 			console.warn(
 				`[pipelines] '${m.specSlug}' selects a context template that no longer fits: ${m.message}`

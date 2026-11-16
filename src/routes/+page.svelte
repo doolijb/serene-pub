@@ -44,8 +44,7 @@
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
 	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
-	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
-	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
 	import KoboldCppIcon from "$lib/client/components/icons/KoboldCppIcon.svelte"
 	import { connectionTypeIcon } from "$lib/client/components/connections/connectionTypeIcon"
@@ -3762,7 +3761,7 @@
 <!-- The wizard's two pickers, behind Choose a character / Choose a persona
 	and Change. Each hides what the other holds (`wizardPicks`). The persona
 	picker holds a standing `characters:list` interest, so it is mounted only
-	on the Who you are step. -->
+	on the Who you are step, and its code loads when the step mounts it. -->
 <CharacterSelectModal
 	open={showCharacterPicker}
 	characters={wizardCharacters}
@@ -3777,23 +3776,28 @@
 	}}
 />
 {#if dataReady && !setupComplete && currentWizardStep === "persona"}
-	<PersonaSelectModal
-		open={showPersonaPicker}
-		excludeIds={personaPickExcludes(selectedCharacterId)}
-		onOpenChange={(e) => (showPersonaPicker = e.open)}
-		onSelect={(personaId: number) => (selectedPersonaId = personaId)}
-		onCreateNew={() => {
-			showPersonaPicker = false
-			showPersonaCreator = true
-		}}
-	/>
+	{#await import("$lib/client/components/modals/PersonaSelectModal.svelte") then { default: PersonaSelectModal }}
+		<PersonaSelectModal
+			open={showPersonaPicker}
+			excludeIds={personaPickExcludes(selectedCharacterId)}
+			onOpenChange={(e) => (showPersonaPicker = e.open)}
+			onSelect={(personaId: number) => (selectedPersonaId = personaId)}
+			onCreateNew={() => {
+				showPersonaPicker = false
+				showPersonaCreator = true
+			}}
+		/>
+	{/await}
 {/if}
 
+<!-- The binding linker's code loads when its gate mounts it. -->
 {#if bindingLinkerData}
-	<BindingLinkerModal
-		bind:open={bindingLinkerOpen}
-		orphanedBindings={bindingLinkerData.orphanedBindings}
-		onOpenChange={(e) => (bindingLinkerOpen = e.open)}
-		onDone={() => (bindingLinkerData = null)}
-	/>
+	{#await import("$lib/client/components/modals/BindingLinkerModal.svelte") then { default: BindingLinkerModal }}
+		<BindingLinkerModal
+			bind:open={bindingLinkerOpen}
+			orphanedBindings={bindingLinkerData.orphanedBindings}
+			onOpenChange={(e) => (bindingLinkerOpen = e.open)}
+			onDone={() => (bindingLinkerData = null)}
+		/>
+	{/await}
 {/if}

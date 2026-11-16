@@ -5,7 +5,11 @@
  * panel open (the panel's, the page's character and persona creators), and a
  * Skeleton dialog renders its content hidden while closed, so three inputs
  * shared `id="characterCreatorStepName"` and every `<label for>` resolved to
- * whichever came first in the DOM. The ids are `$props.id()`-derived now.
+ * whichever came first in the DOM. The ids are `$props.id()`-derived, and
+ * they live in `CharacterCreatorSteps`, the step panes the modal loads on
+ * first open; the ids tests render that component directly. The modal's own
+ * tests cover its frame: it renders at once, with the loading status where
+ * the step panes go.
  *
  * `render` from `svelte/server`: the repo
  * has no browser test environment, and the markup is what this is about.
@@ -23,10 +27,29 @@ vi.mock("$lib/client/sockets/socketInstance", () => ({
 }))
 
 import CharacterCreatorModal from "./CharacterCreatorModal.svelte"
+import CharacterCreatorSteps from "./CharacterCreatorSteps.svelte"
 
 function renderOpen(idPrefix: string): string {
-	return render(CharacterCreatorModal, {
-		props: { open: true },
+	return render(CharacterCreatorSteps, {
+		props: {
+			currentStep: 0,
+			characterData: {
+				name: "",
+				nickname: "",
+				avatar: "",
+				description: "",
+				personality: "",
+				firstMessage: ""
+			},
+			validationErrors: {},
+			cropOpen: false,
+			cropSrc: "",
+			cropFrame: null,
+			handleAvatarChange: () => {},
+			onCropSaved: () => {},
+			clearAvatarSelection: () => {},
+			clearValidationError: () => {}
+		},
 		idPrefix
 	}).body
 }
@@ -70,5 +93,18 @@ describe("CharacterCreatorModal ids", () => {
 		expect(nameInputId(renderOpen("one"))).not.toBe(
 			nameInputId(renderOpen("two"))
 		)
+	})
+})
+
+describe("CharacterCreatorModal frame", () => {
+	test("an open creator renders its frame at once, with the loading status where the steps go", () => {
+		const html = render(CharacterCreatorModal, {
+			props: { open: true },
+			idPrefix: "frame"
+		}).body
+		expect(html).toContain("Create Character")
+		expect(html).toContain("Step 1 of 5: Name")
+		expect(html).not.toMatch(/<label[^>]*>\s*Name\*/)
+		expect(html).toContain('role="status"')
 	})
 })

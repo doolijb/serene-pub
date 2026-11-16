@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, it, expect, afterEach } from "vitest"
 import { HOOK_CTX_KINDS, hookCtxKeysFor } from "./hookCtx"
-import { QuickJsSandbox } from "./QuickJsSandbox"
+import { QuickJsSandbox, workerSlotFor } from "./QuickJsSandbox"
 
 /**
  * The QuickJS plugin backend, exercised through the worker path (the default).
@@ -235,6 +235,71 @@ describe("QuickJsSandbox", () => {
 			expect(r.value).toEqual({ id: "a", woke: "woke", aborted: true })
 	}, 15_000)
 
+	it("the guest cannot see the input or annex transport globals", async () => {
+		const probe = `async function () {
+			return [typeof __spInputJson, typeof globalThis.__spAnnexJson, Object.getOwnPropertyNames(globalThis).filter(function (k) { return k.indexOf("__sp") === 0 }).length].join(",")
+		}`
+		await withHook("probe", probe)
+		const t = await rt.invoke(
+			{ pluginId: "p1", hookName: "probe" },
+			opts({})
+		)
+		expect(t.ok && t.value).toBe("undefined,undefined,0")
+		// A kind granted the annex gets the second global set, then deleted.
+		const q = await rt.invoke(
+			{ pluginId: "p1", hookName: "probe" },
+			opts({}, { kind: "query" })
+		)
+		expect(q.ok && q.value).toBe("undefined,undefined,0")
+	})
+
+	it("a 64 KB input with awkward characters round-trips byte-identically", async () => {
+		await withHook("echo", "async function (input) { return input.s }")
+		const unit = 'a"b\\c\nd\u2028e\u2029f\u{1F600}g\t'
+		let s = ""
+		while (s.length < 64 * 1024) s += unit
+		const r = await rt.invoke(
+			{ pluginId: "p1", hookName: "echo" },
+			opts({ s }, { timeoutMs: 5000 })
+		)
+		expect(r.ok && r.value).toBe(s)
+	})
+
+	it("a parked hook ends as a timeout at its deadline, not at the backstop", async () => {
+		await withHook(
+			"hang",
+			"async function () { await new Promise(function () {}) }"
+		)
+		const t0 = Date.now()
+		const r = await rt.invoke(
+			{ pluginId: "p1", hookName: "hang" },
+			opts({}, { timeoutMs: 300 })
+		)
+		const elapsed = Date.now() - t0
+		console.log("parked timeout elapsed ms", elapsed)
+		expect(r.ok).toBe(false)
+		if (!r.ok) expect(r.outcome).toBe("timeout")
+		expect(elapsed).toBeGreaterThanOrEqual(280)
+		expect(elapsed).toBeLessThan(600)
+	}, 10_000)
+
+	it("abort wakes a parked hook promptly", async () => {
+		await withHook("park", PARK)
+		const running = rt.invoke(
+			{ pluginId: "p1", hookName: "park" },
+			opts({ id: "a" }, { timeoutMs: 8000, jobId: "a" })
+		)
+		// Let the evaluator reach its parked wait before the abort lands.
+		await sleep(200)
+		const t0 = Date.now()
+		expect(rt.abort("a")).toBe(true)
+		const r = await running
+		const elapsed = Date.now() - t0
+		console.log("abort wake elapsed ms", elapsed)
+		expect(r.ok).toBe(true)
+		expect(elapsed).toBeLessThan(100)
+	}, 15_000)
+
 	it("aborting one job leaves a concurrent job on the same sandbox running", async () => {
 		await withHook("park", PARK)
 		const a = rt.invoke(
@@ -416,12 +481,18 @@ describe("QuickJsSandbox — the hook ctx per kind", () => {
 			{ pluginId: "p1", hookName: "globals" },
 			opts({}, { kind: "task" })
 		)
-		expect(r.ok && r.value).toEqual({ fetch: "undefined", storage: "undefined" })
+		expect(r.ok && r.value).toEqual({
+			fetch: "undefined",
+			storage: "undefined"
+		})
 		const o = await rt.invoke(
 			{ pluginId: "p1", hookName: "globals" },
 			opts({}, { kind: "oracle" })
 		)
-		expect(o.ok && o.value).toEqual({ fetch: "function", storage: "object" })
+		expect(o.ok && o.value).toEqual({
+			fetch: "function",
+			storage: "object"
+		})
 	})
 
 	it("a query hook reads a file the package ships through ctx.package (M2a)", async () => {
@@ -431,7 +502,9 @@ describe("QuickJsSandbox — the hook ctx per kind", () => {
 			writeFileSync(join(root, "assets", "a.json"), '{"hello":"world"}')
 			writeFileSync(join(root, "secret.txt"), "no")
 			rt = new QuickJsSandbox()
-			await rt.load("p1", `module.exports = { hooks: { read: async (input, ctx) => {
+			await rt.load(
+				"p1",
+				`module.exports = { hooks: { read: async (input, ctx) => {
 				var ok = await ctx.package.read("assets/a.json");
 				var out = await ctx.package.read("secret.txt");
 				return {
@@ -441,8 +514,14 @@ describe("QuickJsSandbox — the hook ctx per kind", () => {
 					outside: out.kind,
 					reason: out.reason
 				};
-			} } }`, "h1", { packageAssets: { root, dir: "assets" } })
-			const r = await rt.invoke({ pluginId: "p1", hookName: "read" }, opts({}, { kind: "query" }))
+			} } }`,
+				"h1",
+				{ packageAssets: { root, dir: "assets" } }
+			)
+			const r = await rt.invoke(
+				{ pluginId: "p1", hookName: "read" },
+				opts({}, { kind: "query" })
+			)
 			expect(r.ok).toBe(true)
 			if (r.ok)
 				expect(r.value).toEqual({
@@ -453,7 +532,10 @@ describe("QuickJsSandbox — the hook ctx per kind", () => {
 					reason: "package: 'secret.txt' is not one of this package's assets"
 				})
 			// A task's ctx has no package at all.
-			const t = await rt.invoke({ pluginId: "p1", hookName: "read" }, opts({}, { kind: "task" }))
+			const t = await rt.invoke(
+				{ pluginId: "p1", hookName: "read" },
+				opts({}, { kind: "task" })
+			)
 			expect(t.ok).toBe(false)
 		} finally {
 			rmSync(root, { recursive: true, force: true })
@@ -477,5 +559,76 @@ describe("QuickJsSandbox — the hook ctx per kind", () => {
 				{ ...opts({}), kind: undefined as unknown as "task" }
 			)
 		).rejects.toThrow(/without a hook ctx kind/)
+	})
+})
+
+describe("QuickJsSandbox — the worker pool", () => {
+	const SRC = `module.exports = { hooks: {
+		ok: function () { return { ok: true } },
+		spin: function () { for (;;) {} }
+	} }`
+
+	/** An id for a plugin that lands on `slot` (or, with `not`, on any other). */
+	const idOn = (prefix: string, pick: (slot: number) => boolean) => {
+		for (let i = 0; i < 1000; i++)
+			if (pick(workerSlotFor(`${prefix}-${i}`))) return `${prefix}-${i}`
+		throw new Error("no id found")
+	}
+
+	it("a call on another worker is not held behind a spinning hook", async () => {
+		rt = new QuickJsSandbox()
+		const a = "spinner"
+		const b = idOn("bystander", (s) => s !== workerSlotFor(a))
+		await rt.load(a, SRC, "h1")
+		await rt.load(b, SRC, "h1")
+		const ref = (id: string, hookName: string) => ({
+			pluginId: id,
+			hookName
+		})
+		expect((await rt.invoke(ref(a, "ok"), opts({}))).ok).toBe(true)
+		expect((await rt.invoke(ref(b, "ok"), opts({}))).ok).toBe(true)
+
+		const spin = rt.invoke(ref(a, "spin"), opts({}, { timeoutMs: 2000 }))
+		await sleep(50)
+		const t0 = Date.now()
+		const r = await rt.invoke(ref(b, "ok"), opts({}, { timeoutMs: 100 }))
+		const elapsed = Date.now() - t0
+		expect(r.ok).toBe(true)
+		expect(elapsed).toBeLessThan(50)
+		const rs = await spin
+		expect(!rs.ok && rs.outcome).toBe("timeout")
+	}, 30_000)
+
+	it("a queued job is not killed before it starts", async () => {
+		rt = new QuickJsSandbox()
+		const a = "spinner"
+		const b = idOn("queued", (s) => s === workerSlotFor(a))
+		await rt.load(a, SRC, "h1")
+		await rt.load(b, SRC, "h1")
+		const ref = (id: string, hookName: string) => ({
+			pluginId: id,
+			hookName
+		})
+
+		const spin = rt.invoke(ref(a, "spin"), opts({}, { timeoutMs: 1500 }))
+		await sleep(50)
+		const queued = await rt.invoke(
+			ref(b, "ok"),
+			opts({}, { timeoutMs: 300 })
+		)
+		expect(queued.ok).toBe(true)
+		const rs = await spin
+		expect(!rs.ok && rs.outcome).toBe("timeout")
+	}, 30_000)
+
+	it("workerSlotFor is deterministic and in range", () => {
+		for (let size = 2; size <= 4; size++)
+			for (const id of ["a", "plugin-x", "owner/slug", "ünï", ""]) {
+				const slot = workerSlotFor(id, size)
+				expect(slot).toBe(workerSlotFor(id, size))
+				expect(Number.isInteger(slot)).toBe(true)
+				expect(slot).toBeGreaterThanOrEqual(0)
+				expect(slot).toBeLessThan(size)
+			}
 	})
 })

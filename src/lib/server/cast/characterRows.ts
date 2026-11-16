@@ -489,23 +489,53 @@ async function buildRows(
 			: []
 	)
 	const bookById = new Map(books.map((b) => [b.id, b]))
-	const reachOfBooks = (ids: readonly number[]) => {
-		const distinct = [...new Set(ids)]
-		const one =
-			distinct.length === 1 ? bookById.get(distinct[0]!) : undefined
-		return {
-			lorebookCount: distinct.length,
-			lorebook: one
-				? {
-						id: one.id,
-						name: one.name,
-						sessionId: one.sessionId,
-						sessionName:
-							one.sessionId != null
-								? (sessionNames.get(one.sessionId) ?? null)
-								: null
-					}
+	const bookReach = (book: {
+		id: number
+		name: string
+		sessionId: number | null
+	}) => ({
+		id: book.id,
+		name: book.name,
+		sessionId: book.sessionId,
+		sessionName:
+			book.sessionId != null
+				? (sessionNames.get(book.sessionId) ?? null)
 				: null
+	})
+	/**
+	 * A card row's reach counts real lorebooks only and names notes apart
+	 * (`notesCount`); a member's own row counts its own book, notes included.
+	 */
+	const reachOfBooks = (
+		ids: readonly number[],
+		{ notesApart }: { notesApart: boolean }
+	) => {
+		const distinct = [...new Set(ids)]
+		if (!notesApart) {
+			const one =
+				distinct.length === 1 ? bookById.get(distinct[0]!) : undefined
+			return {
+				lorebookCount: distinct.length,
+				notesCount: 0,
+				lorebook: one ? bookReach(one) : null
+			}
+		}
+		const known = distinct.flatMap((id) => {
+			const book = bookById.get(id)
+			return book ? [book] : []
+		})
+		const real = known.filter((b) => b.sessionId == null)
+		const notes = known.filter((b) => b.sessionId != null)
+		const one =
+			real.length === 1
+				? real[0]
+				: real.length === 0 && notes.length === 1
+					? notes[0]
+					: undefined
+		return {
+			lorebookCount: real.length,
+			notesCount: notes.length,
+			lorebook: one ? bookReach(one) : null
 		}
 	}
 
@@ -648,7 +678,10 @@ async function buildRows(
 					description: card.description
 				}),
 				face: faceOf(card.avatarMediaId),
-				reach: reachOfBooks(members.map((m) => m.lorebookId)),
+				reach: reachOfBooks(
+					members.map((m) => m.lorebookId),
+					{ notesApart: true }
+				),
 				hasOwnWords: listed.some(ownWords),
 				isFavorite: mine && card.isFavorite,
 				isPersona: mine && card.isPersona,
@@ -686,7 +719,7 @@ async function buildRows(
 							summary: stored.summary
 						}),
 				face: read ? faceOf(read.faceMediaId) : null,
-				reach: reachOfBooks([stored.lorebookId]),
+				reach: reachOfBooks([stored.lorebookId], { notesApart: false }),
 				hasOwnWords: read ? ownWords(read) : stored.characterId == null,
 				isFavorite: false,
 				isPersona: false,

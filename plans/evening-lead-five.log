@@ -1,0 +1,138 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stderr | src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts (6 tests | 1 failed) 233ms
+     × a session whose lorebook is its own notes reads those notes' members 24ms
+ ❯ |dom| src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts (14 tests | 1 failed) 609ms
+     × a grey Start says why under it, and the reason goes once the cast is in 35ms
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts (25 tests | 1 failed) 931ms
+     × has no Bench, and keeps Ready to add and its X 28ms
+ ❯ |dom| src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts (4 tests | 1 failed) 178ms
+     × an unsaved card row and an unsaved card-less row have no Bench, and both ask before they go 34ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts > Edit Session — an unsaved row > has no Bench, and keeps Ready to add and its X
+TypeError: Cannot read properties of undefined (reading 'click')
+ ❯ src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts:614:7
+    612|    b.textContent?.includes("Dov")
+    613|   ) as HTMLButtonElement
+    614|   dov.click()
+       |       ^
+    615|   flushSync()
+    616|   await tick()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts > Edit Session — members of the session's lorebook > a session whose lorebook is its own notes reads those notes' members
+AssertionError: expected 'This is a disabled drag and drop list…' to contain 'Session notes'
+
+- Expected
++ Received
+
+- Session notes
++ This is a disabled drag and drop listTab to one the items and press space-bar or enter to start dragging it  The crawl  Save    Name Session name     Participants   Settings   Privacy   Changes here wait for Save — adding, benching, bringing
++ 						back and reordering. Reassigning a benched seat's lines
++ 						happens at once.  Characters  M  Mira    Add a character  Personas    Add a persona Benched In the session, out of the turns. Their lines stay
++ 								theirs.        The story, what your lines are called and the tags wait
++ 						for Save. Everything marked “Applies at once” — the
++ 						genre's settings, each pipeline's and the routines —
++ 						changes the session as you set it. The story Scenario    Attributes Loading…         Tags       Some controls are hidden. Show advanced controls  What this session sees of your data Anything you own and add here becomes
++ 									visible to this session's other
++ 									participants, and is read by the pipelines
++ 									that generate its replies. This shows only
++ 									your own data — never what anyone else has
++ 									shared. Loading…          Add characters    Loading… Select persona    Show all characters    No personas yet — turn on Show all characters, or flag a character as a persona in the Characters view. New persona  Select character      Cancel Continue Remove character? Are you sure you want to remove this character from the session? It takes effect when you save
++ 						the session. Cancel Remove Discard unsaved changes? Your session has unsaved changes. Are you sure you want
++ 						to discard them? Cancel Discard
+
+ ❯ src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts:239:37
+    237|   await tick()
+    238|   flushSync()
+    239|   expect(document.body.textContent).toContain("Session notes")
+       |                                     ^
+    240|   expect(document.body.textContent).toContain("Tess")
+    241|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts > Edit Session — card and card-less seats save alike > an unsaved card row and an unsaved card-less row have no Bench, and both ask before they go
+TypeError: Cannot read properties of undefined (reading 'click')
+ ❯ addUnsavedRows src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts:197:12
+    195|      ?.textContent?.trim() === name
+    196|   ) as HTMLInputElement
+    197|  pick("Dov").click()
+       |            ^
+    198|  pick("Tess").click()
+    199|  flushSync()
+ ❯ Module.track_reactivity_loss node_modules/svelte/src/internal/client/reactivity/async.js:213:14
+ ❯ src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts:244:4
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts > Start a session › Who is in it > a grey Start says why under it, and the reason goes once the cast is in
+Error: no checkbox named Corin
+ ❯ checkbox src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:186:18
+    184|     ?.textContent?.trim() === name
+    185|  )
+    186|  if (!box) throw new Error(`no checkbox named ${name}`)
+       |                  ^
+    187|  return box
+    188| }
+ ❯ addCharacters src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:194:3
+ ❯ Module.track_reactivity_loss node_modules/svelte/src/internal/client/reactivity/async.js:213:14
+ ❯ src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:201:4
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  4 failed | 1 passed (5)
+      Tests  4 failed | 50 passed (54)
+   Start at  00:09:22
+   Duration  11.11s (transform 17.64s, setup 39ms, import 28.63s, tests 2.07s, environment 632ms)
+

@@ -22,7 +22,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import * as Icons from "@lucide/svelte"
-	import SchemaForm from "./SchemaForm.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { notify } from "$lib/client/utils/notify"
 	import { queueAfterThis, queuePosition } from "./reviewQueue"
 	import { reviewPlainLine } from "./reviewWording"
@@ -249,7 +249,11 @@
 				</div>
 			</div>
 
-			<SchemaForm schema={current.schema as any} bind:values />
+			{#await import("./SchemaForm.svelte")}
+				<LoadingState />
+			{:then { default: SchemaForm }}
+				<SchemaForm schema={current.schema as any} bind:values />
+			{/await}
 
 			{#if sentAs.length}
 				<section class="flex flex-col gap-2" aria-label="As it will be sent">

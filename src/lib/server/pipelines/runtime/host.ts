@@ -143,6 +143,7 @@ import { parseSeatRef, seatInPlay, seatOf } from "$lib/server/sessions/seats"
 import { inPlay } from "$lib/shared/sessions/inPlay"
 import { SHOW_SPRITE_SPEC_ID } from "@serene-pub/core-catalog"
 import { attachedOrOwnBookOf, ownBookOf } from "$lib/server/lorebooks/ownBook"
+import { TIMELINE_OFF_SENTENCES, sessionTimelineOf } from "$lib/server/lorebooks/timeline"
 import {
 	asShownSprite,
 	nextSpriteMetadata,
@@ -1626,10 +1627,14 @@ async function annexWriteBookOf(
  * 🚧 Where a session's lore write lands (PLAN-rulesets §26): the attached
  * book on the session's line when the session may write it, else the
  * session's own notes — every row there stamped with the message that wrote it
- * (`loreWriteTargetFor`). 🚧 (sense-b4) A session whose scenes end by themselves
- * (`scenesEndByThemselves`) always writes its own book, whatever the lorebook's
- * write setting, with `opts.notes` or without, and carries the two-book reading
- * (`alsoReads`); `scenesEndByThemselves` on the result says so.
+ * (`loreWriteTargetFor`). Under Full on the owner's own lorebook the write is
+ * the lorebook's (`book`), whether or not the session's scenes end by
+ * themselves; the notes take it under Review changes and Off, for a book the
+ * owner does not own, and for a filing tool's `opts.notes`. On the notes route
+ * a session that reads an attached lorebook carries the two-book reading
+ * (`alsoReads`). `scenesEndByThemselves` on the result is the session's own
+ * answer on every route: a session whose scenes end by themselves settles by
+ * scene close, never by `sources`.
  */
 async function sessionLoreWriteTo(
 	db: Db,
@@ -1640,8 +1645,7 @@ async function sessionLoreWriteTo(
 	 * 🚧 Into the session's own notes whatever the book allows (lane 2): a
 	 * filing tool on *Remember things*' Review — the lore write mode's own
 	 * Review, where the person carries a note into their book. Host-internal:
-	 * no declared port sets it. Moot for a session whose scenes end by
-	 * themselves: its writes are all the own book's.
+	 * no declared port sets it.
 	 */
 	opts: { notes?: boolean } = {}
 ): Promise<{
@@ -1649,30 +1653,29 @@ async function sessionLoreWriteTo(
 	lorebookId: number
 	line: LoreWriteLine
 	sourceMessageId: number | null
-	/** 🚧 Host-internal: the session's scenes end by themselves (false on the `book` route). */
+	/** 🚧 Host-internal: the session's scenes end by themselves, on every route. */
 	scenesEndByThemselves: boolean
 }> {
 	const { loreWriteTargetFor, ownBookFor, turnAnchorOf, scenesEndByThemselves } = await import(
 		"$lib/server/lorebooks/ownBook"
 	)
 	const endsByThemselves = await scenesEndByThemselves(db, sessionId)
-	const target =
-		opts.notes || endsByThemselves
-			? {
-					route: "own-book" as const,
-					lorebookId: (await ownBookFor(db, sessionId)).id,
-					sourceMessageId: await turnAnchorOf(db, sessionId, anchorMessageId)
-				}
-			: // Routed only: the line forks inside the write's own transaction
-				// (`forkedLoreLine`), after its checks, so a refused write forks nothing.
-				await loreWriteTargetFor(db, sessionId, { anchorMessageId, fork: false })
+	const target = opts.notes
+		? {
+				route: "own-book" as const,
+				lorebookId: (await ownBookFor(db, sessionId)).id,
+				sourceMessageId: await turnAnchorOf(db, sessionId, anchorMessageId)
+			}
+		: // Routed only: the line forks inside the write's own transaction
+			// (`forkedLoreLine`), after its checks, so a refused write forks nothing.
+			await loreWriteTargetFor(db, sessionId, { anchorMessageId, fork: false })
 	if (target.route === "book")
 		return {
 			route: "book",
 			lorebookId: target.lorebookId,
 			line: await loreWriteLineOf(db, sessionId, target.lorebookId),
 			sourceMessageId: null,
-			scenesEndByThemselves: false
+			scenesEndByThemselves: endsByThemselves
 		}
 	// The notes of a session that reads them alone on a line: the write lands
 	// where the session reads, dated as an attached book's write is.
@@ -1689,7 +1692,7 @@ async function sessionLoreWriteTo(
 	// 🚧 A session that reads an attached lorebook carries that reading with the
 	// write, and dates a row by the newest history day of the two books.
 	// Not for a filing tool's write into the notes (`opts.notes`), unless the session's
-	// scenes end by themselves: then every write on the route carries it.
+	// scenes end by themselves: then every write on the notes route carries it.
 	const reads = (!opts.notes || endsByThemselves) && own?.holderBookId != null ? own : null
 	const counted = reads ? await ownBookDaysCounted(db, sessionId) : null
 	return {
@@ -1736,6 +1739,7 @@ async function ownBookDaysCounted(
 	const { compareDates, formatDate } = await import("$lib/shared/lorebooks/storyDate")
 	const reading = await sessionReadingOf(db, sessionId)
 	if (!reading || reading.holderBookId == null) return null
+	if (reading.timelineOff) return { dating: null, now: null }
 	const ownDay = await writeDatingAt(db, {
 		lorebookId: reading.holderBookId,
 		branchId: null,
@@ -1763,15 +1767,170 @@ async function ownBookDaysCounted(
 }
 
 /**
+ * 🚧 The session's notes as a write on the `book` route reaches them: the
+ * notes' id, the message a notes row anchors to, and the line a row written
+ * there carries — main's head, dated by the newest history day of the two
+ * books, reading the lorebook beside it (`alsoReads`). Null on the notes
+ * route, with no notes, or when the notes are the lorebook. Never makes the
+ * notes; call before the write's transaction.
+ */
+async function notesBesideBook(
+	db: Db,
+	sessionId: number,
+	anchorMessageId: number | undefined,
+	target: { route: "book" | "own-book"; lorebookId: number; line: LoreWriteLine }
+): Promise<{ lorebookId: number; sourceMessageId: number | null; line: LoreWriteLine } | null> {
+	if (target.route !== "book") return null
+	const notes = await ownBookOf(db, sessionId)
+	if (!notes || notes.id === target.lorebookId) return null
+	const { turnAnchorOf } = await import("$lib/server/lorebooks/ownBook")
+	return {
+		lorebookId: notes.id,
+		sourceMessageId: await turnAnchorOf(db, sessionId, anchorMessageId),
+		line: {
+			branchId: null,
+			historyEntryId: (await ownBookDaysCounted(db, sessionId))?.dating?.historyEntryId ?? null,
+			reading: {
+				lorebookId: notes.id,
+				branchId: null,
+				moment: null,
+				forkedAt: null,
+				line: MAIN_LINE
+			},
+			alsoReads: { lorebookId: target.lorebookId, reading: target.line.reading }
+		}
+	}
+}
+
+/**
+ * 🚧 The notes row a link's end answers to, when it answers to exactly one the
+ * session sees: an id that is a seen notes row, or a name that `entryNamed`
+ * finds once among the notes' rows as the notes' reading reads them. Anything
+ * else (no hit, a tie, unseen, an id of the lorebook) is null: not a notes end.
+ */
+async function notesRowAnswering(
+	tx: Db,
+	notes: { lorebookId: number; line: LoreWriteLine },
+	raw: unknown
+): Promise<number | null> {
+	const { entriesAsRead, entryNamed } = await import("$lib/server/state/entriesOnReading")
+	const read = (ids?: readonly number[]) =>
+		entriesAsRead(tx, notes.lorebookId, notes.line.reading, "session", null, ids)
+	const id = linkEndId(raw)
+	if (id !== null) {
+		const [row] = await read([id])
+		return row && !row.unseen ? row.entryId : null
+	}
+	const name = typeof raw === "string" ? raw.trim() : ""
+	if (!name) return null
+	const hit = entryNamed(name, await read())
+	return hit.kind === "one" ? hit.entryId : null
+}
+
+/**
+ * 🚧 The date a history write files under: its own `fields` year, else the
+ * session's story now (the notes' days counted when `countNotes`); null with
+ * neither. A month or day with no year is refused.
+ */
+async function historyDateOf(
+	tx: Db,
+	a: {
+		nodeKey: string
+		sessionId: number
+		fields: Record<string, unknown>
+		countNotes: boolean
+	}
+): Promise<{ year: number; month: number | null; day: number | null } | null> {
+	const { sessionStoryNowOf } = await import("$lib/server/state/storyTime")
+	const { fields } = a
+	const part = (v: unknown) => (typeof v === "number" ? v : null)
+	if (typeof fields.year !== "number" && (part(fields.month) !== null || part(fields.day) !== null))
+		// 🚧 Provisional copy: the owner has not seen this sentence.
+		throw new HostScopeError(
+			`${a.nodeKey}: a history date needs a year. Give this write a year in its fields, or leave the date out to use the story's day.`
+		)
+	if (typeof fields.year === "number")
+		return { year: fields.year, month: part(fields.month), day: part(fields.day) }
+	// 🚧 With the notes in the reading, the default day counts the notes' own
+	// history days too.
+	const storyNow = a.countNotes
+		? ((await ownBookDaysCounted(tx, a.sessionId))?.now ?? (await sessionStoryNowOf(tx, a.sessionId)))
+		: await sessionStoryNowOf(tx, a.sessionId)
+	return storyNow
+		? {
+				year: storyNow.year,
+				month: storyNow.month ?? null,
+				day: storyNow.month != null ? (storyNow.day ?? null) : null
+			}
+		: null
+}
+
+/**
+ * 🚧 Whether a history day on the `book` route is the notes' to take: the
+ * notes hold a day for that date, or the session's scenes end by themselves
+ * and rule C would refuse the day on the line (a pending line fork's own
+ * fork date, else `historyDayOwnerRefusal`). Takes the notes' advisory lock
+ * (after the lorebook's); call on the write's transaction handle, before the
+ * line forks.
+ */
+async function historyDayInNotes(
+	tx: Db,
+	a: {
+		sessionId: number
+		notesId: number
+		lorebookId: number
+		line: LoreWriteLine
+		scenesEndByThemselves: boolean
+		date: { year: number; month: number | null; day: number | null }
+	}
+): Promise<boolean> {
+	const { historyEntryOfDate, historyDayOwnerRefusal } = await import(
+		"$lib/server/scenes/historyEntryOfDate"
+	)
+	await tx.execute(sql`select pg_advisory_xact_lock(${a.notesId})`)
+	const waiting = await historyEntryOfDate(
+		tx,
+		{ lorebookId: a.notesId, branchId: null, date: a.date },
+		{ create: false }
+	)
+	if (waiting) return true
+	if (!a.scenesEndByThemselves) return false
+	const { forkDateOf } = await import("$lib/shared/lorebooks/lineReading")
+	const { compareDates, dayOnly } = await import("$lib/shared/lorebooks/storyDate")
+	if (await pendingLineFork(tx, a.sessionId, a.lorebookId)) {
+		const m = a.line.reading.moment
+		const forkDate = forkDateOf({
+			id: 0,
+			forkYear: m?.year ?? null,
+			forkMonth: m?.month ?? null,
+			forkDay: m?.day ?? null
+		})
+		return forkDate === null || compareDates(dayOnly(a.date), forkDate) <= 0
+	}
+	try {
+		return (
+			(await historyDayOwnerRefusal(tx, {
+				lorebookId: a.lorebookId,
+				branchId: a.line.branchId,
+				date: a.date
+			})) !== null
+		)
+	} catch (e) {
+		// Only a refusal means the line is asked as usual; a database fault passes through unchanged.
+		const { BranchRefusal } = await import("$lib/server/state/reading")
+		if (e instanceof Error && (e.constructor === Error || e instanceof BranchRefusal)) return false
+		throw e
+	}
+}
+
+/**
  * 🚧 The line a lore write lands on, after the session's first write forked
  * it: call on the write's transaction handle, after the book's lock, before
  * the insert. A session still riding its parent's line forks its own here
  * (`ensureSessionLine`), inside the transaction, so a refusal that rolls the
  * transaction back forks nothing and two first writers cannot both fork. A
  * write to the session's notes (`own-book`) forks nothing: the notes are
- * main, or the line the session already reads them on. 🚧 (sense-b4) A session
- * whose scenes end by themselves always has the `own-book` route, so it forks
- * nothing here.
+ * main, or the line the session already reads them on.
  */
 async function forkedLoreLine(
 	tx: Db,
@@ -1796,8 +1955,8 @@ async function holderBookOf(db: Db, sessionId: number): Promise<number | undefin
 
 /**
  * Whether the session's next write to this book forks its own line first
- * (`line_on_first_write`). 🚧 (sense-b4) Inert for a session whose scenes end
- * by themselves: its writes carry the own book's id, never `sessions.lorebook_id`.
+ * (`line_on_first_write`): true only for a write to the attached lorebook
+ * (`sessions.lorebook_id`), so a write to the notes never waits on a fork.
  */
 async function pendingLineFork(
 	db: Db,
@@ -2177,6 +2336,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			? `${nodeKey}: refused — a second message on channel '${channel}', the live row's channel; put it on the live row as blocks, or on another channel`
 			: null
 	}
+	/** The refusal for a change that names an entry's own date, held or dated. */
+	const neverAmendedSentence = (nodeKey: string, stored: typeof schema.lorebookEntries.$inferSelect) =>
+		// 🚧 Provisional copy: the owner has not seen this sentence.
+		`${nodeKey}: '${stored.title ?? `entry ${stored.id}`}' keeps its date in the lorebook, and a session's change cannot move it — change it in the lorebook.`
 	/**
 	 * 🚧 A session's change to an entry of its attached lorebook, held: one
 	 * held amendment in the session's own book (`base` set), the lorebook
@@ -2219,10 +2382,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			const kept = Object.keys(data).filter((k) => !sameValue(data[k], read[k]))
 			if (!kept.length) return false
 			if (kept.some((k) => NEVER_AMENDED.has(k)))
-				// 🚧 Provisional copy: the owner has not seen this sentence.
-				throw new HostScopeError(
-					`${nodeKey}: '${stored.title ?? `entry ${stored.id}`}' keeps its date in the lorebook, and a session's change cannot move it — change it in the lorebook.`
-				)
+				throw new HostScopeError(neverAmendedSentence(nodeKey, stored))
 			const day = reading.moment ? dayOnly(reading.moment) : null
 			await tx.insert(schema.entryAmendments).values({
 				lorebookId: own.id,
@@ -2242,6 +2402,86 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			: db.transaction(async (tx) => hold(tx as unknown as Db))
 	}
 	/**
+	 * Whether a session's change to an entry of the attached lorebook waits in
+	 * its notes (`holdLoreEntryChange`) rather than being written: the one
+	 * decision `changeLoreEntry` and the two outlets that report it share.
+	 * `lorebookId` is the book the session's write lands in (`sessionLoreWriteTo`).
+	 * It is written only when that is the entry's own lorebook (the `book` route:
+	 * Full on a lorebook the owner owns) — in place for a session with no moment,
+	 * as a dated version at the session's day for one with a moment. It waits
+	 * when the entry is on another line than the session's or that line is still
+	 * to be forked; when the session holds a change on the entry already (a
+	 * second one goes with it); when the moment's Timeline is off; and when the
+	 * change is dated before the entry's Beginning.
+	 */
+	const lorebookChangeHeld = async (
+		a: {
+			sessionId: number
+			lorebookId: number
+			line: LoreWriteLine
+			stored: typeof schema.lorebookEntries.$inferSelect
+		},
+		at?: Db
+	): Promise<boolean> => {
+		const { sessionId, lorebookId, line, stored } = a
+		const dbx = at ?? db
+		if (stored.lorebookId !== lorebookId) return true
+		if (line.reading.moment != null) {
+			if (line.reading.timelineOff === true) return true
+			const { beginningRefusal } = await import("$lib/server/lorebooks/entryVersions")
+			const { dayOnly } = await import("$lib/shared/lorebooks/storyDate")
+			if (await beginningRefusal(dbx, lorebookId, stored.id, dayOnly(line.reading.moment))) return true
+		}
+		if (
+			(stored.branchId ?? null) !== (line.branchId ?? null) ||
+			(await pendingLineFork(dbx, sessionId, lorebookId))
+		)
+			return true
+		const own = await ownBookOf(dbx, sessionId)
+		if (!own) return false
+		const [waiting] = await dbx
+			.select({ id: schema.entryAmendments.id })
+			.from(schema.entryAmendments)
+			.where(
+				and(
+					eq(schema.entryAmendments.lorebookId, own.id),
+					eq(schema.entryAmendments.entryId, stored.id),
+					isNotNull(schema.entryAmendments.base)
+				)
+			)
+			.limit(1)
+		return !!waiting
+	}
+	/**
+	 * Who the Edit history names for a write of this run: a person's press (no
+	 * anchor, a `scope.userId`) files what is theirs as a `save`; any other write
+	 * is the run's, under the routine's shown name, else the pipeline's (as
+	 * `earmarkNotice` names it).
+	 */
+	const redlineAuthorOf = async (
+		tx: Db,
+		anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null,
+		sessionId: number
+	) => {
+		if (anchor == null && scope.userId != null)
+			return { cause: "save" as const, by: { userId: scope.userId, sessionId } }
+		const { routineRunOf } = await import("$lib/server/pipelines/routines/runs")
+		const runId = anchor?.runId ?? scope.runId ?? null
+		let shownAs = routineRunOf(runId)?.shownAs?.name?.trim() || null
+		if (!shownAs && scope.specId) {
+			const [spec] = await tx
+				.select({ name: schema.pipelineSpecs.name })
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, scope.specId))
+				.limit(1)
+			shownAs = spec?.name?.trim() || null
+		}
+		return {
+			cause: "routine" as const,
+			by: { run: { sessionId, messageId: anchor?.messageId ?? null, runId, shownAs } }
+		}
+	}
+	/**
 	 * 🚧 The write `update-lore-entry@1` makes, and `create-lore-entry@1` makes
 	 * when its `match` finds the entry (pass 8, R-h): the name, the content
 	 * and the typed-field patch onto a stored entry of the session's line,
@@ -2249,8 +2489,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	 * open transaction with the book's lock held (the match path); absent,
 	 * this opens its own and takes the lock, and only when something changes.
 	 * A stored entry that is not in the session's own book is the attached
-	 * lorebook's: that change is held (`holdLoreEntryChange`), in every lore
-	 * write mode. Returns whether anything changed — the caller records it.
+	 * lorebook's: its change is written under Full on the owner's own
+	 * lorebook, and otherwise held (`lorebookChangeHeld`, `holdLoreEntryChange`).
+	 * `held` is that decision when the caller already made it. Returns whether
+	 * anything changed — the caller records it.
 	 */
 	const changeLoreEntry = async (
 		a: {
@@ -2265,21 +2507,47 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null
 			/** 🚧 History days are filed through: never held (see `fileOntoHistoryDay`). */
 			writeThrough?: true
+			/** The caller's `lorebookChangeHeld` answer for a lorebook entry. */
+			held?: boolean
 		},
 		at?: Db
 	): Promise<boolean> => {
-		const { nodeKey, lorebookId, line, stored, patch, anchor } = a
+		const { nodeKey, lorebookId, line, stored, anchor } = a
+		let patch = a.patch
 		const entryId = stored.id
 		const typeId = stored.typeId
-		if (!a.writeThrough && stored.lorebookId !== (await ownBookOf(at ?? db, a.sessionId))?.id) {
-			const held: Record<string, unknown> = { ...patch }
-			if (typeof a.name === "string" && a.name.trim()) held.name = a.name.trim()
-			if (typeof a.content === "string") held.content = a.content
-			return holdLoreEntryChange({ nodeKey, sessionId: a.sessionId, stored, data: held }, at)
+		// 🚧 A history entry's date is not re-written while the book has no timeline;
+		// the rest of the change goes through.
+		if (
+			line.reading.timelineOff === true &&
+			typeId === (await import("$lib/shared/entries/types")).HISTORY_TYPE_ID
+		) {
+			const { year, month, day, ...rest } = patch
+			void year
+			void month
+			void day
+			patch = rest
+			if (
+				!Object.keys(patch).length &&
+				!(typeof a.name === "string" && a.name.trim()) &&
+				typeof a.content !== "string"
+			)
+				return false
 		}
-		// A session about to fork its line stands on no line of its own yet, so
-		// no stored row is on the line this write would land on: refused here,
-		// before anything forks.
+		if (!a.writeThrough && stored.lorebookId !== (await ownBookOf(at ?? db, a.sessionId))?.id) {
+			const waits =
+				a.held ?? (await lorebookChangeHeld({ sessionId: a.sessionId, lorebookId, line, stored }, at))
+			if (waits) {
+				const held: Record<string, unknown> = { ...patch }
+				if (typeof a.name === "string" && a.name.trim()) held.name = a.name.trim()
+				if (typeof a.content === "string") held.content = a.content
+				return holdLoreEntryChange({ nodeKey, sessionId: a.sessionId, stored, data: held }, at)
+			}
+		}
+		// A notes entry, or a history day filed through, is refused on another
+		// line than the session's: a session about to fork its line stands on no
+		// line of its own yet, so no stored row is on the line this write would
+		// land on — refused here, before anything forks.
 		if (
 			(stored.branchId ?? null) !== (line.branchId ?? null) ||
 			(await pendingLineFork(at ?? db, a.sessionId, lorebookId))
@@ -2290,6 +2558,66 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		const data: Record<string, unknown> = { ...patch }
 		if (typeof a.name === "string" && a.name.trim()) data.name = a.name.trim()
 		if (typeof a.content === "string") data.content = a.content
+		// A lorebook entry changed by a session whose reading has a moment is
+		// written as a dated version at that day, never over the stored row.
+		if (
+			!a.writeThrough &&
+			stored.lorebookId !== (await ownBookOf(at ?? db, a.sessionId))?.id &&
+			line.reading.moment != null &&
+			line.reading.timelineOff !== true
+		) {
+			const { sessionId } = a
+			const moment = line.reading.moment
+			const version = async (tx: Db): Promise<boolean> => {
+				await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
+				const { sessionReadingOf } = await import("$lib/server/state/reading")
+				const { entryOverlaysFor, entryAt, MAIN_HEAD } = await import("$lib/server/state/entriesOnReading")
+				const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
+				const { sameValue, imprintMade, imprintField } = await import("$lib/server/lorebooks/imprints")
+				const { NEVER_AMENDED } = await import("$lib/shared/lorebooks/amendments")
+				const { dayOnly } = await import("$lib/shared/lorebooks/storyDate")
+				const { beginningRefusal, writeEntryVersion } = await import("$lib/server/lorebooks/entryVersions")
+				const { recordRedline } = await import("$lib/server/lorebooks/redlines")
+				const reading = (await sessionReadingOf(tx, sessionId)) ?? { ...MAIN_HEAD }
+				const overlays = await entryOverlaysFor(tx, stored.lorebookId, reading, [stored.id])
+				const read = entryAt(toEntryRow(stored), overlays, reading) as unknown as Record<string, unknown>
+				const kept = Object.keys(data).filter((k) => !sameValue(data[k], read[k]))
+				if (!kept.length) return false
+				if (kept.some((k) => NEVER_AMENDED.has(k)))
+					throw new HostScopeError(neverAmendedSentence(nodeKey, stored))
+				const date = dayOnly(moment)
+				if (await beginningRefusal(tx, lorebookId, stored.id, date))
+					return holdLoreEntryChange({ nodeKey, sessionId, stored, data }, tx)
+				const fields = Object.fromEntries(kept.map((k) => [k, data[k]]))
+				const written = await writeEntryVersion(tx, {
+					lorebookId,
+					entryId: stored.id,
+					branchId: line.branchId ?? null,
+					date,
+					fields
+				})
+				const before = written.kind === "merged" ? written.before : {}
+				if (anchor) {
+					const subject = { lorebookId, subject: "version" as const, subjectId: written.id }
+					if (written.kind === "made") await imprintMade(tx, anchor, subject)
+					else
+						for (const key of kept)
+							await imprintField(tx, anchor, { ...subject, field: key }, before[key], written.after[key])
+				}
+				await recordRedline(tx, {
+					entryId: stored.id,
+					amendmentId: written.id,
+					before,
+					after: written.after,
+					keys: kept,
+					...(await redlineAuthorOf(tx, anchor, sessionId))
+				})
+				return true
+			}
+			return at
+				? version(at)
+				: db.transaction(async (tx) => version(tx as unknown as Db))
+		}
 		const { splitUpdate, mergeFields } = await import("$lib/server/utils/lorebookEntries")
 		const { columns, fields: fieldPatch } = splitUpdate(typeId, data)
 		const set = {
@@ -2319,6 +2647,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					wrote[0] as Record<string, unknown>,
 					[...Object.keys(columns), ...Object.keys(fieldPatch).map(entryFieldAddress)]
 				)
+			// The Edit history's row for this write (a held change, returned above, records none).
+			if (was && wrote[0]) {
+				const { recordEntryRedline } = await import("$lib/server/lorebooks/redlines")
+				await recordEntryRedline(tx, {
+					before: was as Record<string, unknown>,
+					after: wrote[0] as Record<string, unknown>,
+					named: [...Object.keys(columns), ...Object.keys(fieldPatch).map(entryFieldAddress)],
+					...(await redlineAuthorOf(tx, anchor, a.sessionId))
+				})
+			}
 			return wrote
 		}
 		const [updated] = at
@@ -2350,8 +2688,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	 * 🚧 The write `create-lore-entry@1` makes for a history entry: history
 	 * has one entry per day, so a second write for a date is filed onto the
 	 * day's entry (a paragraph after what it holds), never a second row. The
-	 * date is the write's own `fields` year, else the session's story now;
-	 * with neither it is refused (never Year 1 by default). Inside the caller's
+	 * date is the caller's (`historyDateOf`); none is refused (never Year 1 by
+	 * default). Inside the caller's
 	 * transaction, which holds the book's lock; the content change is
 	 * `changeLoreEntry`'s, imprinted, and a day entry this made is imprinted
 	 * as made first, so a retake removes it after reverting its content.
@@ -2364,6 +2702,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			lorebookId: number
 			line: LoreWriteLine
 			fields: Record<string, unknown>
+			/** The day the write files under (`historyDateOf`); null is refused. */
+			date: { year: number; month: number | null; day: number | null } | null
 			content: string
 			sourceMessageId: number | null
 			anchor: import("$lib/server/lorebooks/imprints").ImprintAnchor | null
@@ -2374,45 +2714,17 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		changed: boolean
 		note: string | null
 	}> => {
-		const { nodeKey, lorebookId, line, fields, anchor } = a
-		const { assertDateLands, bookCalendarOf, sessionStoryNowOf } = await import(
-			"$lib/server/state/storyTime"
-		)
+		const { nodeKey, lorebookId, line, fields, anchor, date } = a
+		const { assertDateLands, bookCalendarOf } = await import("$lib/server/state/storyTime")
 		const { historyEntryOfDate, historyDayOwnerRefusal } = await import(
 			"$lib/server/scenes/historyEntryOfDate"
 		)
 		const { imprintMade } = await import("$lib/server/lorebooks/imprints")
 		const { formatDate, dayOnly } = await import("$lib/shared/lorebooks/storyDate")
 		const { BranchRefusal } = await import("$lib/server/state/reading")
-		const part = (v: unknown) => (typeof v === "number" ? v : null)
-		if (
-			typeof fields.year !== "number" &&
-			(part(fields.month) !== null || part(fields.day) !== null)
-		)
-			// 🚧 Provisional copy: the owner has not seen this sentence.
-			throw new HostScopeError(
-				`${nodeKey}: a history date needs a year. Give this write a year in its fields, or leave the date out to use the story's day.`
-			)
 		// 🚧 On the own-book route of a session that reads an attached lorebook:
-		// the default day counts the notes' own history days too, and a date is
-		// checked against the lorebook's calendar, never the notes' own.
+		// a date is checked against the lorebook's calendar, never the notes' own.
 		const calendarBookId = line.alsoReads?.lorebookId ?? lorebookId
-		const storyNow =
-			typeof fields.year === "number"
-				? null
-				: line.alsoReads
-					? ((await ownBookDaysCounted(tx, a.sessionId))?.now ?? (await sessionStoryNowOf(tx, a.sessionId)))
-					: await sessionStoryNowOf(tx, a.sessionId)
-		const date =
-			typeof fields.year === "number"
-				? { year: fields.year, month: part(fields.month), day: part(fields.day) }
-				: storyNow
-					? {
-							year: storyNow.year,
-							month: storyNow.month ?? null,
-							day: storyNow.month != null ? (storyNow.day ?? null) : null
-						}
-					: null
 		if (!date)
 			// 🚧 Provisional copy: the owner has not seen this sentence.
 			throw new HostScopeError(
@@ -10298,7 +10610,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key}: onRefusal takes 'halt' or 'skip', not '${String(p.onRefusal)}'`
 						)
 					const updatedBy = `run:${scope.runId ?? "unknown"}`
-					const { advanceSessionStoryClock, advanceSessionStoryClockTo, StoryClockRefusal } = await import(
+					const { advanceSessionStoryClock, advanceSessionStoryClockTo, StoryClockRefusal, TimelineOffRefusal } = await import(
 						"$lib/server/state/storyTime"
 					)
 					const step = {
@@ -10330,6 +10642,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							const done = target
 								? await advanceSessionStoryClockTo(t, sessionId, target)
 								: await advanceSessionStoryClock(t, sessionId, step.by, step.unit)
+							const { clockMoveBackRefusal } = await import("$lib/server/sessions/clockMoveBack")
+							const back = await clockMoveBackRefusal(t, sessionId, done.from, done.clock, cause)
+							if (back) throw new StoryClockRefusal(back)
 							// 🚧 A `to` move that did not move writes no ledger row.
 							if (target && (done as unknown as { by: number }).by === 0) return done
 							await recordClockMove(t, {
@@ -10346,12 +10661,21 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						})
 					} catch (e) {
 						if (!(e instanceof StoryClockRefusal)) throw e
+						// A book with no timeline never moves: the receipt says so, whatever `onRefusal` is, with no ledger row and no event. A malformed step still halts.
+						if (e instanceof TimelineOffRefusal && (target ? true : clockStepRefusal(step) === null))
+							return {
+								id: sessionId,
+								sessionId,
+								clock: null,
+								label: "",
+								skipped: TIMELINE_OFF_SENTENCES.clock,
+								moved: 0
+							}
 						// 🚧 `onRefusal: 'skip'` (§15 G7): a well-formed step the
 						// story cannot take — no clock yet, a date the calendar
 						// cannot place — moves nothing and says why in the
 						// ledger and on the receipt, and the run finishes. A
 						// malformed step is the spec's mistake and still halts.
-						const { clockStepRefusal } = await import("@serene-pub/sdk")
 						if (onRefusal !== "skip" || (!target && clockStepRefusal(step) !== null))
 							throw new HostScopeError(`${node.key}: ${e.message}`)
 						const skipped = await clockSkipReason(db, sessionId, e.message)
@@ -11548,6 +11872,36 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * holds an edit to (`reviewGate.ts lorePatchFindings`).
 					 */
 					const fields = typedFieldsOf(node.key, typeId, p.fields, { partial: false })
+					/**
+					 * The Beginning and Decay a new entry starts with: the
+					 * step's params (checked, never coerced) over the entry
+					 * type's defaults (`entryDefaults`). The date is the
+					 * session's reading, null with the Timeline off.
+					 */
+					const { entryTypeDefaultsLayer, entryTypeSentenceName, checkStepDefaults, newEntryTime } =
+						await import("$lib/server/lorebooks/entryDefaults")
+					const { takesBeginning } = await import("$lib/server/utils/lorebookEntries")
+					const stepDefaults = checkStepDefaults(p.params, {
+						name: entryTypeSentenceName(typeId),
+						takesBeginning: takesBeginning(typeId)
+					})
+					if ("refusal" in stepDefaults)
+						throw new HostScopeError(`${node.key}: ${stepDefaults.refusal}`)
+					const newEntryAt = newEntryTime({
+						type: entryTypeDefaultsLayer(typeId),
+						step: stepDefaults.layer,
+						date: (await (await import("$lib/server/state/reading")).sessionReadingOf(db, sessionId))?.moment ?? null,
+						takesBeginning: takesBeginning(typeId)
+					})
+
+					// A book with no timeline keeps no history: nothing is written, the run goes on.
+					if (typeId === HISTORY_TYPE_ID && !(await sessionTimelineOf(db, sessionId)))
+						return {
+							lorebookId: (await attachedOrOwnBookOf(db, sessionId)) ?? null,
+							route: "book" as const,
+							written: false,
+							notes: [...(checked?.notes ?? []), TIMELINE_OFF_SENTENCES.history]
+						}
 
 					/**
 					 * ⚠ `position` is allocated rather than left at the old
@@ -11566,6 +11920,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						notes: (p as { toNotes?: unknown }).toNotes === true
 					})
 					const lorebookId = target.lorebookId
+					// 🚧 On the `book` route, a change waiting in the notes is looked for
+					// first: the notes' reading (its main head) and where a row the notes
+					// take lands, made before the transaction.
+					const notes = await notesBesideBook(db, sessionId, turnMessageId, target)
 					// 🚧 `bind`: the cast member the entry is filed under,
 					// resolved before the transaction.
 					const anchorBindingId =
@@ -11590,9 +11948,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// 🚧 RF fix 4: the entry and the links it made, imprinted in the same transaction.
 					const anchor = await imprintAnchor(sessionId)
 					const linkAnchor = linkAnchorOf(sessionId, anchor, target)
+					// 🚧 The anchor of a link written into the notes beside the `book` route.
+					const notesAnchor = notes
+						? linkAnchorOf(sessionId, anchor, { line: notes.line, sourceMessageId: notes.sourceMessageId })
+						: null
 					const { imprintMade } = await import("$lib/server/lorebooks/imprints")
 					let settled: Awaited<ReturnType<typeof settleThrough>> | null = null
-					const { row, entryId, matched, changed, linkIds, madeLinkIds, dayNote, heldIn } = await db.transaction(
+					const written = await db.transaction(
 						async (tx) => {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(${lorebookId})`
@@ -11600,24 +11962,116 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							// 🚧 `match` (R-h): the entry this would duplicate,
 							// found under the book's lock, on what the session reads
 							// now (`target.line.reading`, before any fork). One → it is
-							// changed, by the code `update-lore-entry@1` runs: an
-							// attached lorebook's entry is held, so a match forks
-							// nothing; the line forks only for an insert or a history day.
+							// changed, by the code `update-lore-entry@1` runs (written in
+							// place, as a dated version, or held, `lorebookChangeHeld`); a match forks nothing,
+							// so on a line still to be forked it is held; the line forks
+							// only for an insert, a history day or links.
 							// History is filed onto the day's one entry: the date is
 							// the match (`fileOntoHistoryDay`), and `match` is not read.
-							const foundId =
-								typeId !== HISTORY_TYPE_ID && p.match !== undefined
-									? await findLoreMatch(
+							// 🚧 A write that carries `shown` and matches `{ name }` is read by
+							// `lookLoreMatch`: one entry it was shown is rewritten, one it was
+							// not shown gets a paragraph, a key alone is no match, two of the
+							// name change nothing. Any other write goes through `findLoreMatch`.
+							const loreMatch = await import("$lib/server/pipelines/runtime/loreMatch")
+							// The notes first, then the lorebook (the route's own book order).
+							const matchAt = notes
+								? { lorebookId: notes.lorebookId, typeId, reading: notes.line.reading }
+								: { lorebookId, typeId, reading: target.line.reading }
+							const matchThen = notes
+								? { lorebookId, reading: target.line.reading }
+								: target.line.alsoReads
+							const shown = loreMatch.shownIdsOf((p as { shown?: unknown }).shown)
+							const matchName =
+								typeId !== HISTORY_TYPE_ID && p.match !== undefined && shown !== null
+									? loreMatch.matchNameOf(p.match)
+									: null
+							const look =
+								matchName !== null
+									? await loreMatch.lookLoreMatch(
 											tx as unknown as Db,
-											{ lorebookId, typeId, reading: target.line.reading },
-											p.match,
-											node.key,
-											target.line.alsoReads
+											matchAt,
+											matchName,
+											matchThen
 										)
 									: null
-							// A write that names links writes rows to the book: it forks too.
-							const line =
-								foundId === null || links.length
+							const shownNotes: string[] = []
+							if (look?.by === "name" && look.ids.length > 1)
+								return {
+									tie: `${look.ids.length} entries answer to '${matchName!.trim()}' — ${look.ids
+										.map((h) => `'${h.name}' (entry ${h.id})`)
+										.join(", ")}; nothing was written for it.`
+								}
+							if (look?.by === "key")
+								shownNotes.push(
+									`'${matchName!.trim()}' met a key of ${look.ids
+										.map((h) => `'${h.name}' (entry ${h.id})`)
+										.join(", ")}; written as a new entry.`
+								)
+							const foundId =
+								look !== null
+									? look.by === "name"
+										? look.ids[0]!.id
+										: null
+									: typeId !== HISTORY_TYPE_ID && p.match !== undefined
+										? await findLoreMatch(
+												tx as unknown as Db,
+												matchAt,
+												p.match,
+												node.key,
+												matchThen
+											)
+										: null
+							// A match that is a row waiting in the notes (`book` route) is changed
+							// there: the write, its links and its imprints are the notes'.
+							const inNotes =
+								notes !== null &&
+								foundId !== null &&
+								(
+									await tx
+										.select({ lorebookId: schema.lorebookEntries.lorebookId })
+										.from(schema.lorebookEntries)
+										.where(eq(schema.lorebookEntries.id, foundId))
+										.limit(1)
+								)[0]?.lorebookId === notes.lorebookId
+							if (inNotes)
+								await tx.execute(sql`select pg_advisory_xact_lock(${notes!.lorebookId})`)
+							// 🚧 A history day on the `book` route goes to the notes when they hold
+							// a day for its date, or rule C would refuse it on the line of a session
+							// whose scenes end by themselves: decided before the line forks.
+							const historyDate =
+								typeId === HISTORY_TYPE_ID
+									? await historyDateOf(tx as unknown as Db, {
+											nodeKey: node.key,
+											sessionId,
+											fields,
+											countNotes: target.line.alsoReads !== undefined || notes !== null
+										})
+									: null
+							const dayInNotes =
+								notes !== null &&
+								historyDate !== null &&
+								(await historyDayInNotes(tx as unknown as Db, {
+									sessionId,
+									notesId: notes.lorebookId,
+									lorebookId,
+									line: target.line,
+									scenesEndByThemselves: target.scenesEndByThemselves,
+									date: historyDate
+								}))
+							const toNotes = inNotes || dayInNotes
+							// Where the rows this write makes land: the notes for a notes match or day.
+							const writeBookId = toNotes ? notes!.lorebookId : lorebookId
+							// A link of a row the lorebook holds whose end is a row waiting in the
+							// notes is written there; found before the line forks.
+							const linkToNotes: (number | null)[] = []
+							if (notes && !toNotes)
+								for (const link of links)
+									linkToNotes.push(await notesRowAnswering(tx as unknown as Db, notes, link.to))
+							const linksToLorebook = links.some((_, i) => (linkToNotes[i] ?? null) === null)
+							// A write that makes a row or a link in the lorebook forks the line.
+							const line: LoreWriteLine = toNotes
+								? notes!.line
+								: foundId === null || linksToLorebook
 									? await forkedLoreLine(tx as unknown as Db, sessionId, target)
 									: target.line
 							const historyDay =
@@ -11625,11 +12079,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									? await fileOntoHistoryDay(tx as unknown as Db, {
 											nodeKey: node.key,
 											sessionId,
-											lorebookId,
+											lorebookId: writeBookId,
 											line,
 											fields,
+											date: historyDate,
 											content,
-											sourceMessageId: target.sourceMessageId,
+											sourceMessageId: dayInNotes ? notes!.sourceMessageId : target.sourceMessageId,
 											anchor
 										})
 									: null
@@ -11655,22 +12110,73 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									.limit(1)
 								if (!stored)
 									throw new HostScopeError(`${node.key}: entry ${matchedId} is no longer in this session's lorebook.`)
-								if (stored.lorebookId !== (await ownBookOf(tx as unknown as Db, sessionId))?.id)
-									heldIn = stored.lorebookId
-								changed = await changeLoreEntry(
-									{
-										nodeKey: node.key,
-										sessionId,
-										lorebookId,
-										line,
-										stored,
-										patch: fields,
-										name: p.name,
-										content: p.content,
-										anchor
-									},
-									tx as unknown as Db
-								)
+								// An entry of the lorebook waits or is written (in place, or as a dated version): one decision,
+								// shared with `changeLoreEntry` (`lorebookChangeHeld`).
+								let held: boolean | undefined
+								if (stored.lorebookId !== (await ownBookOf(tx as unknown as Db, sessionId))?.id) {
+									held = await lorebookChangeHeld(
+										{ sessionId, lorebookId, line, stored },
+										tx as unknown as Db
+									)
+									if (held) heldIn = stored.lorebookId
+								}
+								if (look?.by === "name") {
+									// What the session reads of it: the attached lorebook's entry on
+									// the session's reading of that book, an own-book one on the line's.
+									const reads = inNotes
+										? notes!.line.reading
+										: stored.lorebookId === lorebookId || !target.line.alsoReads
+											? target.line.reading
+											: target.line.alsoReads.reading
+									const read = await loreMatch.contentAsRead(tx as unknown as Db, stored, reads)
+									const entryName = look.ids[0]!.name
+									const appends = !shown!.includes(stored.id)
+									const next = appends
+										? loreMatch.appendedContent(read, content)
+										: content.trim() === "" || read.trim() === content.trim()
+											? null
+											: content
+									if (next === null)
+										shownNotes.push(
+											`'${entryName}' (entry ${stored.id}) already says this; nothing was written.`
+										)
+									else {
+										changed = await changeLoreEntry(
+											{
+												nodeKey: node.key,
+												sessionId,
+												lorebookId: writeBookId,
+												line,
+												stored,
+												patch: fields,
+												name: undefined,
+												content: next,
+												anchor,
+												held
+											},
+											tx as unknown as Db
+										)
+										if (appends)
+											shownNotes.push(
+												`added to '${entryName}' (entry ${stored.id}) as a new paragraph.`
+											)
+									}
+								} else
+									changed = await changeLoreEntry(
+										{
+											nodeKey: node.key,
+											sessionId,
+											lorebookId: writeBookId,
+											line,
+											stored,
+											patch: fields,
+											name: p.name,
+											content: p.content,
+											anchor,
+											held
+										},
+										tx as unknown as Db
+									)
 							} else
 							[created] = await tx
 								.insert(schema.lorebookEntries)
@@ -11680,6 +12186,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 											// The typed fields first: the
 											// name and body are the ports'.
 											...fields,
+											...(newEntryAt as Record<string, unknown>),
 											typeId,
 											lorebookId,
 											name,
@@ -11709,17 +12216,28 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							// twice is found the second time (`written: false`),
 							// and is the run's once, not twice.
 							const made: number[] = []
-							for (const link of links) {
-								const wrote = await writeLoreLink(
-									tx,
-									lorebookId,
-									entryId,
-									link,
-									node.key,
-									line
-								)
+							// The links written into the notes, by the book of their row.
+							const madeInNotes = new Set<number>()
+							if (linkToNotes.some((n) => n !== null))
+								await tx.execute(sql`select pg_advisory_xact_lock(${notes!.lorebookId})`)
+							for (const [i, link] of links.entries()) {
+								const noteEnd = linkToNotes[i] ?? null
+								const wrote =
+									noteEnd !== null
+										? await writeLoreLink(
+												tx,
+												notes!.lorebookId,
+												entryId,
+												{ ...link, to: noteEnd },
+												node.key,
+												notes!.line
+											)
+										: await writeLoreLink(tx, writeBookId, entryId, link, node.key, line)
 								ids.push(wrote.id)
-								if (wrote.written) made.push(wrote.id)
+								if (wrote.written) {
+									made.push(wrote.id)
+									if (noteEnd !== null) madeInNotes.add(wrote.id)
+								}
 							}
 							/**
 							 * 🚧 **The Exits line, linked on save** (Lair
@@ -11749,25 +12267,39 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								line
 							}))
 								made.push(id)
+							const bookOfLink = (id: number) => (madeInNotes.has(id) ? notes!.lorebookId : writeBookId)
 							if (anchor) {
 								const t = tx as unknown as Db
 								// A matched entry's changes were imprinted as changes.
 								if (created && !historyDay)
 									await imprintMade(t, anchor, { lorebookId, subject: "entry", subjectId: entryId })
 								for (const id of made)
-									await imprintMade(t, anchor, { lorebookId, subject: "relationship", subjectId: id })
-							} else if (linkAnchor)
+									await imprintMade(t, anchor, { lorebookId: bookOfLink(id), subject: "relationship", subjectId: id })
+							} else
 								// 🚧 A press-started run with no turn message: a link the notes took
 								// is imprinted at the newest message, as an entry anchors there.
-								for (const id of made)
-									await imprintMade(tx as unknown as Db, linkAnchor, { lorebookId, subject: "relationship", subjectId: id })
+								for (const id of made) {
+									const at = madeInNotes.has(id) ? notesAnchor : linkAnchor
+									if (at)
+										await imprintMade(tx as unknown as Db, at, { lorebookId: bookOfLink(id), subject: "relationship", subjectId: id })
+								}
 							if (checked) {
 								const t = tx as unknown as Db
-								const base = { sessionId, runId: scope.runId ?? null, lorebookId, ids: checked.ids }
+								const base = {
+									sessionId,
+									runId: scope.runId ?? null,
+									lorebookId: heldIn !== null ? lorebookId : writeBookId,
+									ids: checked.ids
+								}
 								if (created || changed)
 									await recordLoreSources(t, { ...base, subjectKind: "entry", subjectId: entryId })
 								for (const id of made)
-									await recordLoreSources(t, { ...base, subjectKind: "relationship", subjectId: id })
+									await recordLoreSources(t, {
+										...base,
+										lorebookId: madeInNotes.has(id) ? notes!.lorebookId : base.lorebookId,
+										subjectKind: "relationship",
+										subjectId: id
+									})
 								// 🚧 (sense-b4) A session whose scenes end by themselves does not settle by
 								// `sources`: its write is the own book's, kept as provenance only.
 								if (!target.scenesEndByThemselves)
@@ -11784,10 +12316,35 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								linkIds: ids,
 								madeLinkIds: made,
 								dayNote: historyDay?.note ?? null,
-								heldIn
-							}
+								heldIn,
+								inNotes,
+								dayInNotes,
+								writeBookId,
+								shownNotes
+}
+}
+)
+					if ("tie" in written)
+						return {
+							lorebookId,
+							route: target.route,
+							written: false,
+							notes: [...(checked?.notes ?? []), written.tie]
 						}
-					)
+					const {
+						row,
+						entryId,
+						matched,
+						changed,
+						linkIds,
+						madeLinkIds,
+						dayNote,
+						heldIn,
+						inNotes,
+						dayInNotes,
+						writeBookId,
+						shownNotes
+					} = written
 					await announceSettled(sessionId, settled)
 					// The run's book read (C4) predates this entry: a later
 					// read in the same run must see it.
@@ -11798,7 +12355,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					else if (changed) record(node, "lore_entry", entryId, "updated")
 					for (const id of madeLinkIds)
 						record(node, "lore_link", id, "created")
-					const allNotes = [...(checked?.notes ?? []), ...(dayNote ? [dayNote] : [])]
+					const allNotes = [...(checked?.notes ?? []), ...(dayNote ? [dayNote] : []), ...shownNotes]
 					const noted = allNotes.length ? { notes: allNotes } : {}
 					// `linkIds` is one id per requested link, in order: a
 					// repeated link names the row it repeated.
@@ -11806,8 +12363,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						return {
 							id: entryId,
 							entryId,
-							lorebookId: heldIn ?? lorebookId,
-							route: heldIn !== null ? ("own-book" as const) : target.route,
+							lorebookId: heldIn ?? writeBookId,
+							route: heldIn !== null || inNotes || dayInNotes ? ("own-book" as const) : target.route,
 							matched: true,
 							written: false,
 							...(linkIds.length ? { linkIds } : {}),
@@ -11815,8 +12372,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						}
 					return {
 						id: entryId,
-						lorebookId,
-						route: target.route,
+						lorebookId: dayInNotes ? writeBookId : lorebookId,
+						route: dayInNotes ? ("own-book" as const) : target.route,
 						...(linkIds.length ? { linkIds } : {}),
 						...noted
 					}
@@ -11851,29 +12408,56 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							? await checkLoreSources(db, scope, node.key, p.sources)
 							: null
 					const target = await sessionLoreWriteTo(db, sessionId, turnMessageId)
-					// 🚧 `entry` is resolved over what the session reads: its attached
-					// lorebook's entries, then its own book's (one name rule over both).
-					// Where the write would have gone to the lorebook itself, only the
-					// lorebook's entries are named, as before held changes existed.
+					// 🚧 `entry` is resolved over what the session reads. On the `book` route
+					// the session's notes first (a change or an entry waiting there), then the
+					// lorebook as the session reads it. On the notes route with a lorebook
+					// attached: the lorebook's entries, then the notes' (one name rule over
+					// both), or, for a session whose scenes end by themselves, the notes first
+					// and then the lorebook (`alsoReads`).
 					const { lorebooksReadBy, sessionEntriesAsRead } = await import(
 						"$lib/server/lorebooks/ownBook"
 					)
-					const entryId = await resolveLoreLinkEnd(
-						db,
-						target.lorebookId,
-						p.entry,
-						node.key,
-						target.line.reading,
-						"change",
-						target.route !== "book" &&
-							!target.scenesEndByThemselves &&
-							(await lorebooksReadBy(db, sessionId)).attachedId != null
-							? (ids) => sessionEntriesAsRead(db, sessionId, "session", null, ids)
-							: undefined,
-						// 🚧 (sense-b4) Scenes end by themselves: the own book first, then the
-						// lorebook as the session reads it, as the rest of the route does.
-						target.scenesEndByThemselves ? target.line.alsoReads : undefined
-					)
+					const waitingNotes = target.route === "book" ? await ownBookOf(db, sessionId) : null
+					const notesFirst =
+						waitingNotes && waitingNotes.id !== target.lorebookId
+							? {
+									lorebookId: waitingNotes.id,
+									reading: {
+										lorebookId: waitingNotes.id,
+										branchId: null,
+										moment: null,
+										forkedAt: null,
+										line: MAIN_LINE
+									} as LineReading
+								}
+							: null
+					const entryId = notesFirst
+						? await resolveLoreLinkEnd(
+								db,
+								notesFirst.lorebookId,
+								p.entry,
+								node.key,
+								notesFirst.reading,
+								"change",
+								undefined,
+								{ lorebookId: target.lorebookId, reading: target.line.reading }
+							)
+						: await resolveLoreLinkEnd(
+								db,
+								target.lorebookId,
+								p.entry,
+								node.key,
+								target.line.reading,
+								"change",
+								target.route !== "book" &&
+									!target.scenesEndByThemselves &&
+									(await lorebooksReadBy(db, sessionId)).attachedId != null
+									? (ids) => sessionEntriesAsRead(db, sessionId, "session", null, ids)
+									: undefined,
+								// Scenes end by themselves: the own book first, then the lorebook as
+								// the session reads it, as the rest of the notes route does.
+								target.scenesEndByThemselves ? target.line.alsoReads : undefined
+							)
 					const [stored] = await db
 						.select()
 						.from(schema.lorebookEntries)
@@ -11881,17 +12465,28 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.limit(1)
 					if (!stored)
 						throw new HostScopeError(`${node.key}: entry ${entryId} is no longer in this session's lorebook.`)
-					// 🚧 Where the change lands: an entry of the attached lorebook is held
-					// as an amendment in the session's own book (`changeLoreEntry`; the
-					// result names the entry's lorebook and `own-book`, where the write
-					// went); an entry of the own book is written as it always was.
+					// 🚧 Where the change lands: an entry of the attached lorebook is written
+					// (in place, or as a dated version) on the `book` route and otherwise held as an amendment in the
+					// session's own book (`lorebookChangeHeld`; the result names the entry's
+					// lorebook and `own-book` where it waits); an entry of the own book is
+					// written there, as it always was.
 					const ownBook = await ownBookOf(db, sessionId)
-					const held = stored.lorebookId !== ownBook?.id
+					const inLorebook = stored.lorebookId !== ownBook?.id
+					const held =
+						inLorebook &&
+						(await lorebookChangeHeld({
+							sessionId,
+							lorebookId: target.lorebookId,
+							line: target.line,
+							stored
+						}))
 					const landing = held
 						? { route: "own-book" as const, lorebookId: stored.lorebookId, line: target.line }
-						: target.route === "book"
-							? await sessionLoreWriteTo(db, sessionId, turnMessageId, { notes: true })
-							: target
+						: inLorebook
+							? target
+							: target.route === "book"
+								? await sessionLoreWriteTo(db, sessionId, turnMessageId, { notes: true })
+								: target
 					const { lorebookId, line } = landing
 					const patch = typedFieldsOf(node.key, stored.typeId, p.fields, { partial: true })
 					const change = {
@@ -11903,7 +12498,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						patch,
 						name: p.name,
 						content: p.content,
-						anchor: await imprintAnchor(sessionId)
+						anchor: await imprintAnchor(sessionId),
+						held
 					}
 					// 🚧 A history entry moved to another day: the date checks the
 					// socket's update runs, in the change's one transaction. A save
@@ -11911,8 +12507,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// editable).
 					const { HISTORY_TYPE_ID } = await import("$lib/shared/entries/types")
 					let moved: import("$lib/shared/lorebooks/storyDate").StoryDate | null = null
+					// A lorebook entry written as a dated version names no history day to re-date.
+					const datedVersion =
+						inLorebook && !held && line.reading.moment != null && line.reading.timelineOff !== true
+					// 🚧 Timeline off: `changeLoreEntry` drops the date parts, so none run.
 					if (
 						!held &&
+						!datedVersion &&
+						line.reading.timelineOff !== true &&
 						stored.typeId === HISTORY_TYPE_ID &&
 						["year", "month", "day"].some((k) => Object.prototype.hasOwnProperty.call(patch, k))
 					) {
@@ -12059,36 +12661,58 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 
 					const target = await sessionLoreWriteTo(db, sessionId, turnMessageId)
 					const lorebookId = target.lorebookId
+					// 🚧 On the `book` route, a row waiting in the notes can be an end.
+					const notes = await notesBesideBook(db, sessionId, turnMessageId, target)
 					// 🚧 RF fix 4: a link this write made is imprinted with it.
-					const anchor = (await imprintAnchor(sessionId)) ?? linkAnchorOf(sessionId, null, target)
+					const turnAnchor = await imprintAnchor(sessionId)
+					const anchor = turnAnchor ?? linkAnchorOf(sessionId, null, target)
+					const notesAnchor =
+						turnAnchor ??
+						(notes
+							? linkAnchorOf(sessionId, null, { line: notes.line, sourceMessageId: notes.sourceMessageId })
+							: null)
 					const { imprintMade } = await import("$lib/server/lorebooks/imprints")
 					// Both ends under the book's own lock, for the reason the
 					// entry write takes it: an end resolved by name must not be
 					// renumbered or renamed out from under the insert — and the
 					// standing-row lookup must not race a second run's insert.
 					let settled: Awaited<ReturnType<typeof settleThrough>> | null = null
-					const { fromId, link } = await db.transaction(
+					const { fromId, link, bookId } = await db.transaction(
 						async (tx) => {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(${lorebookId})`
 							)
-							const line = await forkedLoreLine(tx as unknown as Db, sessionId, target)
-							const from = await resolveLoreLinkEnd(
-								tx,
-								lorebookId,
-								p.from,
-								node.key,
-								line.reading,
-								"link",
-								undefined,
-								line.alsoReads
-							)
+							// 🚧 An end that answers to exactly one seen notes row is the notes':
+							// the link is written there, and the line forks nothing.
+							const notesFrom = notes ? await notesRowAnswering(tx as unknown as Db, notes, p.from) : null
+							const notesTo = notes ? await notesRowAnswering(tx as unknown as Db, notes, p.to) : null
+							const inNotes = notes !== null && (notesFrom !== null || notesTo !== null)
+							if (inNotes) await tx.execute(sql`select pg_advisory_xact_lock(${notes.lorebookId})`)
+							const line = inNotes ? notes.line : await forkedLoreLine(tx as unknown as Db, sessionId, target)
+							const bookId = inNotes ? notes.lorebookId : lorebookId
+							const endOf = (raw: unknown, known: number | null) =>
+								known !== null
+									? Promise.resolve(known)
+									: resolveLoreLinkEnd(tx, lorebookId, raw, node.key, target.line.reading)
+							const from = inNotes
+								? await endOf(p.from, notesFrom)
+								: await resolveLoreLinkEnd(
+										tx,
+										lorebookId,
+										p.from,
+										node.key,
+										line.reading,
+										"link",
+										undefined,
+										line.alsoReads
+									)
+							const to = inNotes ? await endOf(p.to, notesTo) : p.to
 							const wrote = await writeLoreLink(
 								tx,
-								lorebookId,
+								bookId,
 								from,
 								{
-									to: p.to,
+									to,
 									linkType: p.params?.linkType,
 									reverseLinkType: p.params?.reverseLinkType,
 									name: p.name,
@@ -12097,9 +12721,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								node.key,
 								line
 							)
-							if (anchor && wrote.written)
-								await imprintMade(tx as unknown as Db, anchor, {
-									lorebookId,
+							const madeAnchor = inNotes ? notesAnchor : anchor
+							if (madeAnchor && wrote.written)
+								await imprintMade(tx as unknown as Db, madeAnchor, {
+									lorebookId: bookId,
 									subject: "relationship",
 									subjectId: wrote.id
 								})
@@ -12108,7 +12733,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									await recordLoreSources(tx as unknown as Db, {
 										sessionId,
 										runId: scope.runId ?? null,
-										lorebookId,
+										lorebookId: bookId,
 										subjectKind: "relationship",
 										subjectId: wrote.id,
 										ids: checked.ids
@@ -12122,7 +12747,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 										{ runId: scope.runId, userId: scope.userId }
 									)
 							}
-							return { fromId: from, link: wrote }
+							return { fromId: from, link: wrote, bookId }
 						}
 					)
 					await announceSettled(sessionId, settled)
@@ -12138,12 +12763,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						return {
 							id: link.id,
 							fromEntryId: link.fromEntryId,
-							lorebookId: link.lorebookId ?? lorebookId,
+							lorebookId: link.lorebookId ?? bookId,
 							written: false,
 							...noted
 						}
 					record(node, "lore_link", link.id, "created")
-					return { id: link.id, fromEntryId: fromId, lorebookId, ...noted }
+					return { id: link.id, fromEntryId: fromId, lorebookId: bookId, ...noted }
 				}
 
 				case "core:outlet/graph-proposal": {

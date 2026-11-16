@@ -4,7 +4,7 @@
  * as a fold, and every edit writing the object WHOLE — so a value is complete
  * from its first edit, and a number typed as text is stored as a number.
  */
-import { afterEach, describe, expect, test } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
 import SchemaForm from "./SchemaForm.svelte"
 
@@ -66,5 +66,24 @@ describe("SchemaForm — an object field", () => {
 		text.dispatchEvent(new Event("input", { bubbles: true }))
 		flushSync()
 		expect(values.authorsNote).toEqual({ text: "It is raining.", depth: 2, interval: 1, role: "system" })
+	})
+})
+
+describe("SchemaForm — a json field", () => {
+	test("shows the house loading state first, the code field once its chunk arrives", async () => {
+		const host = document.createElement("div")
+		document.body.append(host)
+		const app = mount(SchemaForm, {
+			target: host,
+			props: {
+				schema: { blob: { type: "json" as const, label: { en: "Blob" }, default: {} } } as never,
+				values: {}
+			}
+		})
+		flushSync()
+		expect(host.querySelector("[role=status]")).not.toBeNull()
+		await vi.waitFor(() => expect(host.querySelector("#sf-blob")).not.toBeNull())
+		expect(host.querySelector("[role=status]")).toBeNull()
+		unmount(app)
 	})
 })

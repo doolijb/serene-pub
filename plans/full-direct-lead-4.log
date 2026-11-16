@@ -1,0 +1,58 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts (10 tests | 2 failed) 3353ms
+     × nothing settles while the scene's summary runs or is in review; it settles when the summary is saved 57ms
+     × what is applied and what is settled come back together: the furthest settle, the Apply's previous 70ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles one scene behind when a scene closes > nothing settles while the scene's summary runs or is in review; it settles when the summary is saved
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:226:35
+    224|   })
+    225|   expect(await refused(m[0]!.id)).toBe(true)
+    226|   expect(await refused(m[1]!.id)).toBe(false)
+       |                                   ^
+    227|  })
+    228|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles one scene behind when a scene closes > what is applied and what is settled come back together: the furthest settle, the Apply's previous
+AssertionError: expected 38 to be 39 // Object.is equality
+
+- Expected
++ Received
+
+- 39
++ 38
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:398:41
+    396|    }
+    397|   })
+    398|   expect(await settledOf(w.session.id)).toBe(m[2]!.id)
+       |                                         ^
+    399|  })
+    400| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 7 passed (8)
+      Tests  2 failed | 86 passed (88)
+   Start at  02:55:44
+   Duration  43.37s (transform 7.96s, setup 67ms, import 7.47s, tests 118.60s, environment 2ms)
+

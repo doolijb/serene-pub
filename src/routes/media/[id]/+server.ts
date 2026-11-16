@@ -35,17 +35,20 @@
  * convention in this codebase.
  */
 import type { RequestHandler } from "@sveltejs/kit"
+import { open, type FileHandle } from "node:fs/promises"
+import { Readable } from "node:stream"
+import { parseByteRange } from "$lib/server/plugins/frameHost"
 import { db } from "$lib/server/db"
 import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
 import {
 	canViewMedia,
-	ensureVariant,
 	getMedia,
 	getMediaByUuid,
 	getVariantById,
+	locateVariant,
 	variantsFor,
 	type FileRow,
-	type ResolvedVariant
+	type LocatedVariant
 } from "$lib/server/media"
 import {
 	MediaFidelity,
@@ -84,6 +87,58 @@ function acceptsMime(header: string | null, mime: string): boolean {
 	return false
 }
 
+/** A located variant made ready to answer with: the open file for a stored
+ *  row, nothing to open for one derived in memory or answered 304 unread. */
+interface Served {
+	located: LocatedVariant
+	handle: FileHandle | null
+}
+
+function servedMime(s: Served): string {
+	return s.located.kind === "stored"
+		? s.located.row.mime
+		: s.located.resolved.mime
+}
+function servedHash(s: Served): string {
+	return s.located.kind === "stored"
+		? s.located.row.hash
+		: s.located.resolved.hash
+}
+function servedId(s: Served): number | undefined {
+	return s.located.kind === "stored"
+		? s.located.row.id
+		: (s.located.resolved.row?.id ?? undefined)
+}
+
+/**
+ * Make a located variant ready. A stored row whose hash is the client's
+ * `If-None-Match` is ready unread (the 304 touches no file); otherwise its file
+ * is opened HERE, before any response starts, and a file gone from disk is "not
+ * resolved" exactly as a failed read always was — the caller moves on.
+ */
+async function ready(
+	located: LocatedVariant | null,
+	ifNoneMatch: string | null
+): Promise<Served | null> {
+	if (!located) return null
+	if (located.kind === "derived") return { located, handle: null }
+	if (ifNoneMatch === `"${located.row.hash}"`)
+		return { located, handle: null }
+	try {
+		return { located, handle: await open(located.absPath, "r") }
+	} catch {
+		return null
+	}
+}
+
+async function resolveVariant(
+	file: FileRow,
+	variant: MediaVariantName,
+	ifNoneMatch: string | null
+): Promise<Served | null> {
+	return ready(await locateVariant(db, file, variant), ifNoneMatch)
+}
+
 /**
  * What a bare `/media/{uuid}` serves: the display form, followed from the
  * file's STORED pointer rather than compared at request time — a live
@@ -92,31 +147,38 @@ function acceptsMime(header: string | null, mime: string): boolean {
  */
 async function resolveDisplay(
 	file: FileRow,
-	accept: string | null
-): Promise<ResolvedVariant | null> {
-	let resolved: ResolvedVariant | null = null
+	accept: string | null,
+	ifNoneMatch: string | null
+): Promise<Served | null> {
+	let resolved: Served | null = null
 
 	if (file.displayVariantId) {
 		const pointed = await getVariantById(db, file.displayVariantId)
 		if (pointed) {
-			resolved = await ensureVariant(
-				db,
+			resolved = await resolveVariant(
 				file,
-				pointed.variant as MediaVariantName
+				pointed.variant as MediaVariantName,
+				ifNoneMatch
 			)
 		}
 	}
 	// Nothing pointed at yet — a format that needs converting, and this
 	// request is the one that pays for it.
-	if (!resolved) resolved = await ensureVariant(db, file, MediaVariant.DISPLAY)
+	if (!resolved) {
+		resolved = await resolveVariant(file, MediaVariant.DISPLAY, ifNoneMatch)
+	}
 	// Last resort: the bytes as uploaded. Better than 404 for a file whose
 	// conversion failed.
 	if (!resolved) {
-		resolved = await ensureVariant(db, file, MediaVariant.ORIGINAL)
+		resolved = await resolveVariant(
+			file,
+			MediaVariant.ORIGINAL,
+			ifNoneMatch
+		)
 	}
 	if (!resolved) return null
 
-	if (acceptsMime(accept, resolved.mime)) return resolved
+	if (acceptsMime(accept, servedMime(resolved))) return resolved
 
 	// The client cannot decode what the pointer names. Fall back to another
 	// FULL-FIDELITY representation it can take — smallest first, since they are
@@ -125,18 +187,21 @@ async function resolveDisplay(
 	const alternates = (await variantsFor(db, file.id))
 		.filter(
 			(v) =>
-				v.id !== current.row?.id &&
+				v.id !== servedId(current) &&
 				v.fidelity === MediaFidelity.FULL &&
 				acceptsMime(accept, v.mime)
 		)
 		.sort((a, b) => a.bytes - b.bytes)
 	for (const alternate of alternates) {
-		const usable = await ensureVariant(
-			db,
+		const usable = await resolveVariant(
 			file,
-			alternate.variant as MediaVariantName
+			alternate.variant as MediaVariantName,
+			ifNoneMatch
 		)
-		if (usable) return usable
+		if (usable) {
+			await current.handle?.close().catch(() => {})
+			return usable
+		}
 	}
 	// Nothing acceptable exists. Serve the pointer anyway — a strict-Accept
 	// client is better served than 406'd.
@@ -187,34 +252,36 @@ export const GET: RequestHandler = async (event) => {
 	if (!(await canViewMedia(file, user.id))) return NOT_FOUND()
 
 	const accept = event.request.headers.get("accept")
+	const ifNoneMatch = event.request.headers.get("if-none-match")
 	let negotiated = false
-	let resolved: ResolvedVariant | null = null
+	let served: Served | null = null
 
 	if (requested) {
-		resolved = await ensureVariant(db, file, requested)
-		if (!resolved) {
+		served = await resolveVariant(file, requested, ifNoneMatch)
+		if (!served) {
 			// A culled original, or a derivation that failed. Falling back to
 			// the display form is the ruled answer for `?v=original` and the
 			// sensible one for a thumbnail: an image matters more than its
 			// optimisation.
-			resolved = await resolveDisplay(file, accept)
+			served = await resolveDisplay(file, accept, ifNoneMatch)
 			negotiated = true
 		}
 	} else {
-		resolved = await resolveDisplay(file, accept)
+		served = await resolveDisplay(file, accept, ifNoneMatch)
 		negotiated = true
 	}
-	if (!resolved) return NOT_FOUND()
+	if (!served) return NOT_FOUND()
 
+	const mime = servedMime(served)
 	// A sensible name for a file whose on-disk name is a hash: the uploader's
 	// filename when we kept one, otherwise the id with the served extension.
 	const downloadName =
-		file.filename ?? `${file.id}.${resolved.mime.split("/")[1] ?? "bin"}`
+		file.filename ?? `${file.id}.${mime.split("/")[1] ?? "bin"}`
 
 	// The RESOLVED variant's hash, not the file's — the file's hash identifies
 	// the original, and serving a thumbnail under it would collide two
 	// different sets of bytes on one ETag.
-	const etag = `"${resolved.hash}"`
+	const etag = `"${servedHash(served)}"`
 	const headers: Record<string, string> = {
 		ETag: etag,
 		// Unconditionally immutable: `rev` changes whenever the bytes behind
@@ -229,18 +296,64 @@ export const GET: RequestHandler = async (event) => {
 	// acceptsMime for why this must not depend on whether it changed anything.
 	if (negotiated) headers["Vary"] = "Accept"
 
-	if (event.request.headers.get("if-none-match") === etag) {
+	if (ifNoneMatch === etag) {
+		await served.handle?.close().catch(() => {})
 		return new Response(null, { status: 304, headers })
 	}
 
-	return new Response(new Uint8Array(resolved.bytes), {
-		headers: {
-			...headers,
-			"Content-Type": resolved.mime,
-			"Content-Length": String(resolved.bytes.byteLength),
-			"Content-Disposition": `${
-				download ? "attachment" : "inline"
-			}; filename="${encodeURIComponent(downloadName)}"`
-		}
+	// Past the 304 every stored row has an open handle (see `ready`).
+	let size: number
+	let slice: (range?: { start: number; end: number }) => BodyInit
+	const { located, handle } = served
+	if (located.kind === "stored" && handle) {
+		size = (await handle.stat()).size
+		slice = (range) =>
+			Readable.toWeb(
+				range
+					? handle.createReadStream(range)
+					: handle.createReadStream()
+			) as unknown as ReadableStream
+	} else if (located.kind === "derived") {
+		const bytes = located.resolved.bytes
+		size = bytes.byteLength
+		// The Buffer itself (or a view of it) — no copy; it is a valid body at
+		// runtime, the DOM typings just do not say so.
+		slice = (range) =>
+			(range
+				? bytes.subarray(range.start, range.end + 1)
+				: bytes) as unknown as BodyInit
+	} else {
+		return NOT_FOUND()
+	}
+
+	const range = parseByteRange(event.request.headers.get("range"), size)
+	if (range === "unsatisfiable") {
+		await handle?.close().catch(() => {})
+		return new Response(null, {
+			status: 416,
+			headers: { ...headers, "Content-Range": `bytes */${size}` }
+		})
+	}
+
+	const full: Record<string, string> = {
+		...headers,
+		"Accept-Ranges": "bytes",
+		"Content-Type": mime,
+		"Content-Disposition": `${
+			download ? "attachment" : "inline"
+		}; filename="${encodeURIComponent(downloadName)}"`
+	}
+	if (range) {
+		return new Response(slice(range), {
+			status: 206,
+			headers: {
+				...full,
+				"Content-Length": String(range.end - range.start + 1),
+				"Content-Range": `bytes ${range.start}-${range.end}/${size}`
+			}
+		})
+	}
+	return new Response(slice(), {
+		headers: { ...full, "Content-Length": String(size) }
 	})
 }

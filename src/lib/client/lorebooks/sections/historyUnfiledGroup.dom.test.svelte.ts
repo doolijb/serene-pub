@@ -9,6 +9,7 @@ const { st } = vi.hoisted(() => ({
 	st: {
 		scenes: [] as any[],
 		readOnly: false,
+		timeline: true,
 		branch: null as number | null,
 		nav: [] as any[],
 		sent: [] as { event: string; data: any }[]
@@ -25,6 +26,9 @@ vi.mock("../bookData.svelte", () => ({
 		},
 		get readOnly() {
 			return st.readOnly
+		},
+		get timelineEnabled() {
+			return st.timeline
 		}
 	})
 }))
@@ -76,6 +80,7 @@ afterEach(() => {
 	document.body.innerHTML = ""
 	st.scenes = []
 	st.readOnly = false
+	st.timeline = true
 	st.branch = null
 	st.nav.length = 0
 	st.sent.length = 0
@@ -97,6 +102,14 @@ const compileButtons = () =>
 	) as HTMLButtonElement[]
 
 describe("the Not yet compiled group", () => {
+	test("🚧 no timeline: draws nothing, however many scenes wait", async () => {
+		st.timeline = false
+		st.scenes = [scene(1, "The gate", at(1, 1, 2))]
+		await show()
+		expect(norm(document.body.textContent)).toBe("")
+		expect(compileButtons().length).toBe(0)
+	})
+
 	test("draws nothing with no unfiled scenes", async () => {
 		st.scenes = [scene(1, "Filed", { historyEntryId: 5, ...at(1, 1, 1) })]
 		await show()

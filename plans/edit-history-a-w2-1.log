@@ -1,0 +1,177 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/sockets/entries.redlines.int.test.ts > what a form save records > a content change leaves one save row with before, after and the person
+Using PGlite database at: /tmp/serene-pub-vitest-entries-redlines-gpD26U/data/serene-pub.db
+
+ ❯ |int| src/lib/server/sockets/entries.redlines.int.test.ts (13 tests | 9 failed) 5887ms
+     × a content change leaves one save row with before, after and the person 1946ms
+     × a save that changes nothing, a mark, and an archive leave none 11ms
+     × says You for the asker's own row, newest first, with labels 10ms
+     × names the session to a viewer who may open it, hides it from one who may not, and survives a delete 46ms
+     × brings a routine's rewrite back, and the restore is itself listed 20ms
+     × restores a typed field through the same save 8ms
+     × count and clear an entry, then a lorebook 8ms
+     × a member who is not the owner cannot clear or count 8ms
+     × summary and clear are admin only 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > what a form save records > a content change leaves one save row with before, after and the person
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:119:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > what a form save records > a save that changes nothing, a mark, and an archive leave none
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:128:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > entries:redlines > says You for the asker's own row, newest first, with labels
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:143:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > entries:redlines > names the session to a viewer who may open it, hides it from one who may not, and survives a delete
+AssertionError: expected [ 'A routine in Session 7', …(2) ] to deeply equal [ 'By itself, from Session 7', …(2) ]
+
+- Expected
++ Received
+
+  [
+-   "By itself, from Session 7",
++   "A routine in Session 7",
+    "Remember things in Elsewhere",
+    "Remember things in Session 7",
+  ]
+
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:167:43
+    165|
+    166|   const mine = await list(w.user.id, w.entry.id)
+    167|   expect(mine.redlines.map((r) => r.who)).toEqual([
+       |                                           ^
+    168|    `By itself, from Session ${w.tag}`,
+    169|    "Remember things in Elsewhere",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > entries:restoreRedline > brings a routine's rewrite back, and the restore is itself listed
+AssertionError: promise rejected "TypeError: Cannot read properties of unde…" instead of resolving
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:193:22
+    191|   const [row] = await redlinesOf(w.entry.id)
+    192|   const { r, result } = await restore(w.user.id, row!.id)
+    193|   await expect(result).resolves.toEqual({ redlineId: row!.id, entryId:…
+       |                      ^
+    194|   expect((await rowOf(w.entry.id)).content).toBe("A baker.")
+    195|   const res = await list(w.user.id, w.entry.id)
+
+Caused by: TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ entryRestoreRedlineHandler.redlineId src/lib/server/sockets/redlines.ts:205:4
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:193:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > entries:restoreRedline > restores a typed field through the same save
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:233:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > count and clear > count and clear an entry, then a lorebook
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:261:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > count and clear > a member who is not the owner cannot clear or count
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:287:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > admin > summary and clear are admin only
+TypeError: Cannot read properties of undefined (reading 'cause')
+ ❯ applyEntryUpdate src/lib/server/sockets/entries.ts:531:16
+    529|    after: updated[0],
+    530|    named: [...Object.keys(columns), ...Object.keys(fields).map((k) => …
+    531|    cause: edit.cause,
+       |                ^
+    532|    by: { userId: edit.userId }
+    533|   })
+ ❯ saveEntry src/lib/server/sockets/entries.ts:1343:6
+ ❯ Object.handler src/lib/server/sockets/refusable.ts:56:12
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:300:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  9 failed | 6 passed (15)
+   Start at  03:02:30
+   Duration  6.45s (transform 5.75s, setup 22ms, import 860ms, tests 11.73s, environment 1ms)
+

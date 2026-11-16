@@ -212,6 +212,7 @@ describe("Merge ‹book› into these notes, in the Session notes row's menu (�
 					isSharedWithMe: opts.sharedWithMe === true,
 					sessionId: 9,
 					sessionName: "Crawl",
+					notesWritten: true,
 					attached: opts.attached
 						? { id: 20, name: "Brackenvale" }
 						: null
@@ -220,7 +221,7 @@ describe("Merge ‹book› into these notes, in the Session notes row's menu (�
 		})
 		await settle()
 		const trigger = document.querySelector<HTMLButtonElement>(
-			"button[aria-label='Book options']"
+			'button[aria-label="Crawl\'s notes options"]'
 		)
 		if (!trigger) return []
 		trigger.click()

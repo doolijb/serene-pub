@@ -28,10 +28,16 @@
 
 	interface Props {
 		lorebookId: number
+		/** A session's notes: its name by the helper. The Name field is not drawn. */
+		notesName?: string | null
 		hasUnsavedChanges?: boolean
 	}
 
-	let { lorebookId, hasUnsavedChanges = $bindable(false) }: Props = $props()
+	let {
+		lorebookId,
+		notesName = null,
+		hasUnsavedChanges = $bindable(false)
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -362,35 +368,41 @@
 				shape="square"
 				noun="cover"
 				glyph={Icons.BookMarked}
-				subject={`${editLorebook.name || "this book"}'s cover`}
+				subject={notesName
+					? `${notesName} cover`
+					: `${editLorebook.name || "this book"}'s cover`}
 				onRemove={() => (coverRemoved = true)}
 				deferStoredCrop
 				bind:cropPending={coverCropPending}
 			/>
-			<div class="min-w-0 flex-1">
-				<label class="font-semibold" for="lorebookName">Name*</label>
-				<input
-					id="lorebookName"
-					class="input input-lg w-full {validationErrors.name
-						? 'border-error-500'
-						: ''}"
-					type="text"
-					placeholder="Enter lorebook name"
-					bind:value={editLorebook.name}
-					required
-					oninput={() => {
-						if (validationErrors.name) {
-							const { name, ...rest } = validationErrors
-							validationErrors = rest
-						}
-					}}
-				/>
-				{#if validationErrors.name}
-					<p class="text-error-600-400 mt-1 text-sm" role="alert">
-						{validationErrors.name}
-					</p>
-				{/if}
-			</div>
+			{#if !notesName}
+				<div class="min-w-0 flex-1">
+					<label class="font-semibold" for="lorebookName">
+						Name*
+					</label>
+					<input
+						id="lorebookName"
+						class="input input-lg w-full {validationErrors.name
+							? 'border-error-500'
+							: ''}"
+						type="text"
+						placeholder="Enter lorebook name"
+						bind:value={editLorebook.name}
+						required
+						oninput={() => {
+							if (validationErrors.name) {
+								const { name, ...rest } = validationErrors
+								validationErrors = rest
+							}
+						}}
+					/>
+					{#if validationErrors.name}
+						<p class="text-error-600-400 mt-1 text-sm" role="alert">
+							{validationErrors.name}
+						</p>
+					{/if}
+				</div>
+			{/if}
 		</fieldset>
 		<div>
 			<label class="font-semibold" for="lorebookDescription">

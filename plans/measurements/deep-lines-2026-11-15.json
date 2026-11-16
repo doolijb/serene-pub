@@ -1,0 +1,14 @@
+{
+ "main: readingOf ms": 2,
+ "main: entries query ms": 2,
+ "main: entries read": 200,
+ "depth 1: readingOf ms": 2,
+ "depth 1: entries query ms": 1,
+ "depth 1: entries read": 205,
+ "depth 50: readingOf ms": 2,
+ "depth 50: entries query ms": 9,
+ "depth 50: entries read": 450,
+ "depth 200: readingOf ms": 2,
+ "depth 200: entries query ms": 34,
+ "depth 200: entries read": 1200
+}

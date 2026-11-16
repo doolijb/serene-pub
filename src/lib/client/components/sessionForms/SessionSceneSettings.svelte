@@ -18,6 +18,10 @@
 	 * (`shape.scenes.place`, live scenes §15 G2), and the genre's own
 	 * **declared triggers** (★9, its summarize-scene spec's) follow core's as switches, on by default,
 	 * stored under the override's `triggers[key]` only when turned off.
+	 *
+	 * 🚧 A session that has the *Summarize finished scenes* routine (any mode)
+	 * shows no Summaries choice: that routine's mode decides, and this card
+	 * names it. The choice stays for a session without the routine.
 	 */
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
@@ -59,6 +63,15 @@
 
 	/** 🚧 Does the session run the scenes routine, not Off? `null` until known. */
 	let scenesRoutineOn = $state<boolean | null>(null)
+	/** 🚧 The *Summarize finished scenes* routine when the session has it (any mode). */
+	let summaryRoutine = $state<{ name: string; mode: string } | null>(null)
+	/** Whether the routines have answered. Until then, for a session that exists, neither the Summaries select nor the routine's line shows: a pick made before the answer would be dropped by the server without a word. */
+	let routinesKnown = $state(false)
+	const ROUTINE_MODE_WORDS: Record<string, string> = {
+		full: "Full",
+		review: "Review",
+		off: "Off"
+	}
 	$effect(() => {
 		if (typeof sessionId !== "number") return
 		return requestWithInterest(
@@ -71,6 +84,11 @@
 						r.pipeline === "core:spec/scene-boundaries" &&
 						r.mode !== "off"
 				)
+				const found = (res.routines ?? []).find(
+					(r) => r.pipeline === "core:spec/scene-summaries"
+				)
+				summaryRoutine = found ? { name: found.name, mode: found.mode } : null
+				routinesKnown = true
 			}
 		)
 	})
@@ -284,24 +302,32 @@
 		</fieldset>
 	{/if}
 
-	<div class="flex flex-col gap-1">
-		<Select
-			label="Summaries"
-			describedBy="{uid}-summary-help"
-			{disabled}
-			options={(["onClose", "onRequest", "never"] as const).map((m) => ({
-				value: m,
-				label: SCENE_SUMMARY_LABELS[m]
-			}))}
-			value={resolved.summary}
-			onValueChange={(v) => {
-				if (v) set({ ...resolved, summary: v as SceneSettings["summary"] })
-			}}
-		/>
-		<p class="text-surface-600-400 text-xs" id="{uid}-summary-help">
-			{SUMMARY_HELP[resolved.summary]}
+	{#if summaryRoutine}
+		<p class="text-surface-600-400 text-xs" data-scene-summaries-routine>
+			{`Summaries are written by the ${summaryRoutine.name} routine (${
+				ROUTINE_MODE_WORDS[summaryRoutine.mode] ?? summaryRoutine.mode
+			}).${disabled ? "" : " Change it under Routines."}`}
 		</p>
-	</div>
+	{:else if routinesKnown || typeof sessionId !== "number"}
+		<div class="flex flex-col gap-1">
+			<Select
+				label="Summaries"
+				describedBy="{uid}-summary-help"
+				{disabled}
+				options={(["onClose", "onRequest", "never"] as const).map((m) => ({
+					value: m,
+					label: SCENE_SUMMARY_LABELS[m]
+				}))}
+				value={resolved.summary}
+				onValueChange={(v) => {
+					if (v) set({ ...resolved, summary: v as SceneSettings["summary"] })
+				}}
+			/>
+			<p class="text-surface-600-400 text-xs" id="{uid}-summary-help">
+				{SUMMARY_HELP[resolved.summary]}
+			</p>
+		</div>
+	{/if}
 
 	{#if !followsGenre && !disabled}
 		<button

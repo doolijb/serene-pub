@@ -4,7 +4,7 @@
  * Save, Save writes each (`characterId` for the card, `castMemberId` for the
  * card-less seat), and a fresh read of the session puts both back.
  */
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({
@@ -61,6 +61,12 @@ vi.mock("$lib/client/sockets/interest.svelte", () => {
 })
 
 import EditSessionForm from "./EditSessionForm.svelte"
+
+// The character picker loads its list when it opens; warm the module so the
+// picker's import resolves within `settle()`.
+beforeAll(async () => {
+	await import("../modals/CharacterSelectList.svelte")
+})
 
 let app: ReturnType<typeof mount> | null = null
 afterEach(() => {
@@ -187,6 +193,9 @@ async function addUnsavedRows() {
 	button("Add a character").click()
 	flushSync()
 	await tick()
+	// The picker's list arrives one chunk fetch after it opens.
+	await new Promise((r) => setTimeout(r, 0))
+	flushSync()
 	const pick = (name: string) =>
 		[...document.querySelectorAll("input[type=checkbox]")].find(
 			(i) =>

@@ -35,6 +35,11 @@ import {
 	storyMoveStartOf
 } from "$lib/server/state/storyTime"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
+import {
+	sessionTimelineSql,
+	TIMELINE_OFF_SENTENCES,
+	timelineOf
+} from "$lib/server/lorebooks/timeline"
 import { stateVersionOf } from "$lib/server/state/resolve"
 import { advanceStoryTime, type StoryTimeUnit } from "$lib/shared/lorebooks/storyDate"
 
@@ -88,12 +93,14 @@ export async function clockMoveProblem(
 			storyClockMonth: schema.sessions.storyClockMonth,
 			storyClockDay: schema.sessions.storyClockDay,
 			storyClockHour: schema.sessions.storyClockHour,
-			storyClockMinute: schema.sessions.storyClockMinute
+			storyClockMinute: schema.sessions.storyClockMinute,
+			timelineEnabled: sessionTimelineSql()
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!row) return `There is no session ${sessionId}.`
+	if (!timelineOf(row)) return TIMELINE_OFF_SENTENCES.clock
 	// 🚧 pr-6 (§B-3a): no shared book — the session's own book.
 	const book = row.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
 	if (book == null) return `There is no session ${sessionId}.`

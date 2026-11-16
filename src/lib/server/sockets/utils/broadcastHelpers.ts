@@ -194,11 +194,27 @@ export async function emitToUserRedacted(
  * @param event The event name
  * @param data The data to emit, or a `LazyPayload` that builds it
  */
+/**
+ * A recipient list one caller keeps across several broadcasts of one event.
+ *
+ * The streaming push (`pipelines/runtime/liveRow.ts`) announces one row many
+ * times a second, and for `sessionMessage` the lane only FILTERS users — it
+ * never varies the payload per user — so the roster and lane reads answer the
+ * same for every frame of one row. The caller owns the memo (one per run) and
+ * hands it in; this helper fills it on the first broadcast that passes the
+ * interest gate and reuses it after. A failed read is not kept, so one bad
+ * lookup cannot silence the run. Callers that want the live roster pass none.
+ */
+export interface SessionRecipientsMemo {
+	value: Promise<Array<{ userId: number }>> | null
+}
+
 export async function broadcastToSessionUsers(
 	io: AuthenticatedSocket["io"],
 	sessionId: number,
 	event: string,
-	data: any | LazyPayload
+	data: any | LazyPayload,
+	opts?: { recipients?: SessionRecipientsMemo }
 ) {
 	// The gate comes BEFORE the two reads below, which is the whole of it for
 	// this helper: the streaming push broadcasts one row per chunk, so the
@@ -241,31 +257,48 @@ export async function broadcastToSessionUsers(
 		? (scopeOfPayload(event, payload) ?? String(sessionId))
 		: undefined
 
-	// Get session owner
-	const session = await db.query.sessions.findFirst({
-		where: eq(schema.sessions.id, sessionId),
-		columns: { userId: true }
-	})
+	const resolve = async () => {
+		// Get session owner
+		const session = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, sessionId),
+			columns: { userId: true }
+		})
 
-	if (!session) return
+		if (!session) return null
 
-	// Get all guests
-	const guests = await db.query.sessionGuests.findMany({
-		where: eq(schema.sessionGuests.sessionId, sessionId),
-		columns: { userId: true }
-	})
+		// Get all guests
+		const guests = await db.query.sessionGuests.findMany({
+			where: eq(schema.sessionGuests.sessionId, sessionId),
+			columns: { userId: true }
+		})
 
-	// 🚧 Personal channel lanes (owner ruling 2026-10-17): a row on a
-	// personal lane reaches its person and the session's owner alone, and a
-	// whole-session push is narrowed per member (`channels/lanePush.ts`).
-	const { laneScopedRecipients } = await import("$lib/server/channels/lanePush")
-	const recipients = await laneScopedRecipients(
-		db,
-		sessionId,
-		event,
-		payload,
-		[session.userId, ...guests.map((guest) => guest.userId)]
-	)
+		// 🚧 Personal channel lanes (owner ruling 2026-10-17): a row on a
+		// personal lane reaches its person and the session's owner alone, and a
+		// whole-session push is narrowed per member (`channels/lanePush.ts`).
+		const { laneScopedRecipients } = await import("$lib/server/channels/lanePush")
+		return laneScopedRecipients(db, sessionId, event, payload, [
+			session.userId,
+			...guests.map((guest) => guest.userId)
+		])
+	}
+
+	const memo = opts?.recipients
+	let recipients: Array<{ userId: number; data: any }> | null
+	if (memo) {
+		if (!memo.value) {
+			const pending = resolve().then((r) => r ?? [])
+			memo.value = pending
+			pending.catch(() => {
+				if (memo.value === pending) memo.value = null
+			})
+		}
+		// The memo holds who; this frame's payload is what they get.
+		recipients = (await memo.value).map(({ userId }) => ({
+			userId,
+			data: payload
+		}))
+	} else recipients = await resolve()
+	if (!recipients) return
 
 	await emitRedacted(io, event, recipients, scope)
 }

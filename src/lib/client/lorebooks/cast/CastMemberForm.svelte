@@ -8,8 +8,8 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { normalizeSpriteName } from "$lib/shared/sprites"
-	import { ownNameValue } from "$lib/shared/lorebooks/memberIdentity"
 	import type { CastMember, CastRow } from "../castPool"
+	import type { StoryDate } from "../sections/historyDates"
 	import {
 		draftFollowsRow,
 		memberDraftOf,
@@ -36,6 +36,7 @@
 	import { mediaThumbUrl } from "$lib/client/utils/media"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { laterVersionsLine } from "./castSave"
+	import { bookTimeline } from "../bookData.svelte"
 	import CardUpdateOffer from "./CardUpdateOffer.svelte"
 	import UseFromCardSwitch from "./UseFromCardSwitch.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
@@ -94,20 +95,32 @@
 			options: SaveOptions
 		) => Promise<boolean>
 		/**
-		 * File the change as a dated overlay instead. Absent at now, where
-		 * there is nothing to choose between.
+		 * How many later versions **Save** would leave with their own words.
+		 * Absent, there is nothing to offer.
 		 */
-		onAmend?: (
+		laterCounts?: { base: number }
+		/**
+		 * The page draws the member's versions on a rail: Save writes the
+		 * version shown, and **Save as a new version…** hands the draft up to be
+		 * dated. Resolves true once the new version has landed, false on cancel.
+		 */
+		onSaveNew?: (
 			patch: Record<string, unknown>,
 			pristine: Record<string, unknown>,
 			options: SaveOptions
 		) => Promise<boolean>
 		/**
-		 * How many later versions each save would leave with their own words:
-		 * `base` for **Save** (and "change them outright"), `amend` for
-		 * **Save as of**. Absent, there is nothing to offer.
+		 * The rail's **+ Add a version here**: the same new version at a date
+		 * already chosen (`saveNewAt`). The draft stays in this form.
 		 */
-		laterCounts?: { base: number; amend: number }
+		onSaveAt?: (
+			date: StoryDate,
+			patch: Record<string, unknown>,
+			pristine: Record<string, unknown>,
+			options: SaveOptions
+		) => Promise<boolean>
+		/** Why Save is off on a railed form (a version that is changed elsewhere); null = on. */
+		saveOff?: string | null
 		/** The moment being read, spelled for the button. */
 		momentLabel?: string | null
 		onDelete: () => void
@@ -143,8 +156,10 @@
 		lorebookId,
 		hasUnsavedChanges = $bindable(false),
 		onSave,
-		onAmend,
 		laterCounts,
+		onSaveNew,
+		onSaveAt,
+		saveOff = null,
 		momentLabel = null,
 		onDelete,
 		onLinkCharacter,
@@ -342,8 +357,8 @@
 			pristine: Record<string, unknown>,
 			options: SaveOptions
 		) => Promise<boolean>
-	) {
-		if (saving) return
+	): Promise<boolean> {
+		if (saving) return false
 		const forId = member.id
 		const linked = member.linked
 		const sent = $state.snapshot(draft) as MemberDraft
@@ -361,6 +376,7 @@
 			if (draftFor === forId) changeLater = false
 		}
 		if (ok && draftFor === forId) pristine = sent
+		return ok
 	}
 
 	function save() {
@@ -368,42 +384,34 @@
 		void submit(onSave)
 	}
 
-	/** Own names are not dated: an amendment never carries them. */
-	function undated(patch: Record<string, unknown>) {
-		const { ownName: _n, ownNickname: _k, ...rest } = patch
-		return rest
+	/** Throws the draft away: the form reads the row again, as it does for a member it has not seen. */
+	export function discard() {
+		aliasDraft = ""
+		changeLater = false
+		seed()
 	}
 
-	/** An own name or nickname typed and not yet saved. */
-	let ownNamesDirty = $derived(
-		ownNameValue(draft.ownName) !== ownNameValue(pristine.ownName) ||
-			ownNameValue(draft.ownNickname) !==
-				ownNameValue(pristine.ownNickname)
-	)
-
-	function amend() {
-		if (notesBlockSave()) return
-		if (onAmend)
-			void submit((patch, was, options) =>
-				onAmend(undated(patch), undated(was), options)
-			)
+	/** Saves the draft as a new version at `date` (the rail's add button); the draft stays here until it lands. */
+	export function saveNewAt(date: StoryDate): Promise<boolean> {
+		if (!onSaveAt || notesBlockSave()) return Promise.resolve(false)
+		return submit((patch, was, options) =>
+			onSaveAt(date, patch, was, options)
+		)
 	}
 
-	let saveMenuOpen = $state(false)
+	function saveNew() {
+		if (!onSaveNew || notesBlockSave()) return
+		void submit(onSaveNew)
+	}
 
-	/**
-	 * The later versions the PRIMARY button leaves with their own words:
-	 * Save as of while a moment is read, else Save. The menu's "change them
-	 * outright" is a base save; it says its own count when that differs.
-	 */
-	let datedPrimary = $derived(!!onAmend && !!momentLabel)
-	let primaryLater = $derived(
-		(datedPrimary ? laterCounts?.amend : laterCounts?.base) ?? 0
-	)
-	let outrightLater = $derived(laterCounts?.base ?? 0)
+	// 🚧 No timeline: nothing dated is written, so there is no later version to
+	// change and no dated card change; Save writes in place.
+	const timeline = bookTimeline()
+	/** The later versions Save leaves with their own words. */
+	let primaryLater = $derived(timeline.value ? (laterCounts?.base ?? 0) : 0)
 
 	/** Read at a moment, a card change is dated from it (#115). */
-	let cardDated = $derived(!!onAmend && !!momentLabel)
+	let cardDated = $derived(timeline.value && !!momentLabel)
 
 	let cardMenuItems = $derived([
 		member.linked
@@ -836,7 +844,7 @@
 	/**
 	 * Upload a picture to this lorebook and pick it, like a gallery picture:
 	 * the server only STORES it, and the draft takes it as the face, so Save
-	 * (or Save as of a date) writes it like every other field (review
+	 * writes it like every other field (review
 	 * 2026-10-13). It joins **This book's pictures** at the front.
 	 */
 	async function uploadFace(e: Event) {
@@ -1181,8 +1189,7 @@
 										<p class="text-surface-700-300 text-xs">
 											Kept with this lorebook, not added
 											to the card, and picked as their
-											face. Save to keep it, or Save as of
-											a date to date it.
+											face. Save to keep it.
 										</p>
 										{#if faceError}
 											<p
@@ -1877,7 +1884,7 @@
 	</div>
 
 	<div class="flex flex-wrap items-center gap-2">
-		{#if dirty && primaryLater > 0}
+		{#if dirty && primaryLater > 0 && !saveOff}
 			<div
 				class="flex min-w-0 flex-wrap items-center gap-2"
 				data-later-versions
@@ -1899,101 +1906,35 @@
 				</button>
 			</div>
 		{/if}
-		{#if onAmend && momentLabel}
-			<!-- The same two-action save the entry editor offers, and the same
-			     rule: the one that rewrites what was always true is in the
-			     menu, never the primary (STYLE-GUIDE §6.1). -->
-			<div class="ml-auto flex items-center">
+		{#if onSaveNew}
+			<!-- A railed page: Save writes the version shown; the new version is
+			     its own button (STYLE-GUIDE §6.1: one primary). -->
+			<div class="ml-auto flex flex-wrap items-center gap-2">
 				<button
-					class="btn btn-sm preset-filled-primary-500 rounded-r-none"
+					class="btn btn-sm preset-filled-primary-500 pointer-coarse:min-h-11"
 					type="button"
 					disabled={saving ||
-						ownNamesDirty ||
+						!!saveOff ||
 						(!member.linked && !draft.name.trim()) ||
 						(member.linked &&
 							draft.ownName !== null &&
 							!draft.ownName.trim())}
-					onclick={amend}
-					title={ownNamesDirty
-						? "A name in this book is not dated: Save keeps it for every moment"
-						: `File this change as an amendment dated ${momentLabel}`}
+					title={saveOff ?? undefined}
+					onclick={save}
 				>
-					<Icons.Save size={14} aria-hidden="true" />
-					Save as of {momentLabel}
+					<Icons.Save size={14} aria-hidden="true" /> Save
 				</button>
-				<Popover
-					open={saveMenuOpen}
-					onOpenChange={(e) => (saveMenuOpen = e.open)}
-					positioning={{ placement: "bottom-end" }}
+				<button
+					class="btn btn-sm preset-tonal-surface pointer-coarse:min-h-11"
+					type="button"
+					disabled={saving || !dirty}
+					title={dirty
+						? undefined
+						: /* 🚧 */ "Change something first: a version holds what differs from the one before."}
+					onclick={saveNew}
 				>
-					<Popover.Trigger
-						class="btn btn-sm preset-filled-primary-500 rounded-l-none border-l border-white/25 p-2"
-						title="Other ways to save this change"
-						aria-label="Other ways to save this change"
-					>
-						<Icons.ChevronDown size={16} aria-hidden="true" />
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-surface-100-900 flex w-[min(90vw,320px)] flex-col gap-3 p-4 shadow-xl"
-							>
-								<div class="flex flex-col gap-1">
-									<span class="text-sm font-semibold">
-										Save as of {momentLabel}
-									</span>
-									<p
-										class="text-surface-700-300 text-xs leading-relaxed"
-									>
-										They stay as they are. The change begins
-										at {momentLabel} and reads from then on.
-									</p>
-								</div>
-								<hr class="border-surface-200-800" />
-								<div class="flex flex-col gap-2">
-									<p
-										class="text-surface-700-300 text-xs leading-relaxed"
-									>
-										Or change them outright: they read this
-										way <strong>everywhere</strong>
-										, on every line and at every moment — including
-										before
-										{momentLabel}, where it is who they
-										always were.
-									</p>
-									{#if dirty && outrightLater > 0 && outrightLater !== primaryLater}
-										<p
-											class="text-surface-700-300 text-xs"
-											data-later-versions-outright
-										>
-											{laterVersionsLine(outrightLater)}
-										</p>
-									{/if}
-									<button
-										class="btn btn-sm preset-tonal-warning w-full justify-start"
-										type="button"
-										disabled={saving ||
-											(!member.linked &&
-												!draft.name.trim()) ||
-											(member.linked &&
-												draft.ownName !== null &&
-												!draft.ownName.trim())}
-										onclick={() => {
-											saveMenuOpen = false
-											save()
-										}}
-									>
-										<Icons.PenLine
-											size={14}
-											aria-hidden="true"
-										/>
-										Change the member
-									</button>
-								</div>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
+					Save as a new version…
+				</button>
 			</div>
 		{:else}
 			<button

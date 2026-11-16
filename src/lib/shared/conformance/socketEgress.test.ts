@@ -492,6 +492,19 @@ const REDACTING_EMITTERS: Deliberate[] = [
 	},
 	{
 		subject:
+			"src/lib/server/sockets/characters.ts :: replyToAsker → socket.emit(<computed>)",
+		reason:
+			"A card export (`characters:exportCard`, charx / json / png) answers " +
+			"the socket that asked and no other: the archive is a download for " +
+			"one tab, and sending it to every tab of the user cost each of them " +
+			"the whole file (performance lane perf-E, 2026-11-13). The room is " +
+			"that socket and the subject is its own `socket.user`, so recipient " +
+			"and subject are the same person — redacted per socket, as " +
+			"`emitToUser` does per room. The payload is the card's own bytes and " +
+			"holds no connection."
+	},
+	{
+		subject:
 			"src/lib/server/sockets/connections.ts :: replyToAsker → socket.emit(<computed>)",
 		reason:
 			"The create ack (`connections:create`) answers the socket that asked " +
@@ -575,7 +588,7 @@ const REDACTING_EMITTERS: Deliberate[] = [
 	},
 	{
 		subject:
-			"src/lib/server/sockets/utils/userPush.ts :: installUserPush.push → io.to(…).emit(<computed>)",
+			"src/lib/server/sockets/utils/userPush.ts :: push.tail → io.to(…).emit(<computed>)",
 		reason:
 			"Hole 1, closed. The review gate's push transport — shared with " +
 			"the cap pause (E1c), which parks the same way — bound once per " +

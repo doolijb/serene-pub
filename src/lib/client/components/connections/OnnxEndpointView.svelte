@@ -49,7 +49,17 @@
 	 * the same sentence (`localOnnxRefusal` on the server).
 	 */
 	import { getContext } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		Cable,
+		Download,
+		Package,
+		PowerOff,
+		ScanText,
+		Settings,
+		TriangleAlert,
+		Zap
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
@@ -131,10 +141,13 @@
 	)
 	const section = $derived(sectionForModality(modality))
 	const isEmbeddings = $derived(modality === "embeddings")
+	/** The icons the two ONNX sections name (`connectionSections.ts`). */
+	const SECTION_ICONS: Record<string, Component<any>> = {
+		Zap,
+		ScanText
+	}
 	/** The section's mark — the same one the index card wears. */
-	const SectionIcon = $derived(
-		((Icons as any)[section?.icon ?? ""] as any) ?? Icons.Cable
-	)
+	const SectionIcon = $derived(SECTION_ICONS[section?.icon ?? ""] ?? Cable)
 
 	const lane = useLaneStatus(
 		() => modality,
@@ -181,14 +194,14 @@
 	)
 
 	const onnxTabs = $derived([
-		{ value: "models", label: "Models", icon: Icons.Package },
+		{ value: "models", label: "Models", icon: Package },
 		{
 			value: "downloads",
 			label: "Arriving",
-			icon: Icons.Download,
+			icon: Download,
 			hasActivity: arriving > 0
 		},
-		{ value: "settings", label: "Settings", icon: Icons.Settings }
+		{ value: "settings", label: "Settings", icon: Settings }
 	])
 	/** The chip on the row its loadout holds: "In use" (never *active*). */
 	const activeWord = "In use"
@@ -288,7 +301,9 @@
 		switch (model.local?.state) {
 			case "on_disk":
 				return {
-					label: isEmbeddings ? "Use in Embeddings" : "Use in Entities",
+					label: isEmbeddings
+						? "Use in Embeddings"
+						: "Use in Entities",
 					press: () => {
 						if (!unavailable) onMakeActive(model)
 					},
@@ -341,7 +356,7 @@
 		<p
 			class="preset-tonal-warning flex items-start gap-2 rounded-lg p-2 text-xs break-words"
 		>
-			<Icons.TriangleAlert
+			<TriangleAlert
 				size={14}
 				class="mt-0.5 shrink-0"
 				aria-hidden="true"
@@ -397,7 +412,7 @@
 				class="btn btn-sm preset-tonal-surface min-h-11"
 				onclick={unloadNow}
 			>
-				<Icons.PowerOff size={14} aria-hidden="true" />
+				<PowerOff size={14} aria-hidden="true" />
 				Unload now
 			</button>
 		{/if}
@@ -502,7 +517,7 @@
 						data-get-more
 						onclick={getMore}
 					>
-						<Icons.Download size={14} aria-hidden="true" />
+						<Download size={14} aria-hidden="true" />
 						Get more…
 					</button>
 				</div>
@@ -562,7 +577,7 @@
 					class="btn btn-sm preset-filled-primary-500"
 					onclick={getMore}
 				>
-					<Icons.Download size={15} aria-hidden="true" />
+					<Download size={15} aria-hidden="true" />
 					Get more…
 				</button>
 			{/if}
@@ -616,7 +631,7 @@
 			<td class="px-2 py-1.5">
 				{#if chip}
 					<span
-						class="{chip.preset} inline-block rounded px-1.5 py-0.5 text-meta font-medium whitespace-nowrap"
+						class="{chip.preset} text-meta inline-block rounded px-1.5 py-0.5 font-medium whitespace-nowrap"
 					>
 						{chip.label}
 					</span>

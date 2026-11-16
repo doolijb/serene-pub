@@ -43,7 +43,16 @@
 	 * (`status.blocked`, the Admin Needs you case). Fix is tonal surface but on
 	 * that row; Start is filled on the row that can start (`rowActionClass`).
 	 */
-	import * as Icons from "@lucide/svelte"
+	import {
+		ArrowRight,
+		ChevronRight,
+		Play,
+		RefreshCw,
+		Square,
+		Star,
+		TriangleAlert
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import {
 		rowActionClass,
 		rowStatusClasses,
@@ -91,6 +100,15 @@
 		onAction
 	}: Props = $props()
 
+	/** The icon per row action (the actions in `connectionRowStatus.ts`). */
+	const ACTION_ICONS = {
+		Square,
+		Play,
+		TriangleAlert,
+		RefreshCw,
+		ArrowRight
+	}
+
 	/**
 	 * The mark for where the compute is — Ollama's and KoboldCPP's own logos
 	 * for their connections (2026-10-03), the kind's glyph for the rest. The
@@ -101,7 +119,8 @@
 	const KindIcon = $derived(connectionTypeIcon(type, kindIconComponent(kind)))
 	const ActionIcon = $derived(
 		status.action
-			? (((Icons as any)[status.action.icon] as any) ?? Icons.Play)
+			? (ACTION_ICONS[status.action.icon as keyof typeof ACTION_ICONS] ??
+					Play)
 			: null
 	)
 
@@ -134,14 +153,14 @@
 </script>
 
 <div
-	class="flex min-h-11 items-center gap-1 rounded-base {selected
+	class="rounded-base flex min-h-11 items-center gap-1 {selected
 		? 'sidebar-row-active'
 		: marks.edge}"
 	data-row-blocked={status.blocked ? "" : undefined}
 >
 	<button
 		type="button"
-		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 items-center gap-2.5 rounded-base px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {selected
+		class="focus-visible:ring-primary-500 rounded-base flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {selected
 			? ''
 			: 'hover:bg-surface-200-800'}"
 		aria-current={selected ? "true" : undefined}
@@ -156,12 +175,12 @@
 
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="min-w-0 truncate text-lead font-medium">
+				<span class="text-lead min-w-0 truncate font-medium">
 					{title}
 				</span>
 				{#if showChip}
 					<span
-						class="shrink-0 rounded-full px-1.5 py-0.5 text-meta {managed
+						class="text-meta shrink-0 rounded-full px-1.5 py-0.5 {managed
 							? 'preset-tonal-tertiary'
 							: 'border-surface-300-700 text-surface-600-400 border'}"
 					>
@@ -185,7 +204,7 @@
 					     muted line, the label first so a long reason truncates
 					     after it, never before. -->
 					<span
-						class="flex min-w-0 items-center gap-1.5 text-chip {marks.text}"
+						class="text-chip flex min-w-0 items-center gap-1.5 {marks.text}"
 						title={stateLine}
 					>
 						<span
@@ -197,19 +216,15 @@
 				{/if}
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-ink flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-meta font-bold"
+						class="preset-tonal-primary text-primary-ink text-meta flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 font-bold"
 					>
-						<Icons.Star
-							size={8}
-							fill="currentColor"
-							aria-hidden="true"
-						/>
+						<Star size={8} fill="currentColor" aria-hidden="true" />
 						{capability}
 					</span>
 				{/each}
 				{#if secondary && !status.action}
 					<span
-						class="text-surface-600-400 min-w-0 truncate text-chip"
+						class="text-surface-600-400 text-chip min-w-0 truncate"
 						title={secondary}
 					>
 						{secondary}
@@ -233,7 +248,7 @@
 		{#if !status.action}
 			<span class="shrink-0 basis-[86px] text-right">
 				<span
-					class="flex items-center justify-end gap-1.5 text-chip {marks.text}"
+					class="text-chip flex items-center justify-end gap-1.5 {marks.text}"
 				>
 					<span
 						class="size-1.5 shrink-0 rounded-full {marks.dot}"
@@ -251,7 +266,7 @@
 					</span>
 				{/if}
 			</span>
-			<Icons.ChevronRight
+			<ChevronRight
 				size={16}
 				class="text-surface-500 shrink-0"
 				aria-hidden="true"

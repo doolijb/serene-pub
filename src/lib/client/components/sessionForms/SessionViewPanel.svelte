@@ -647,7 +647,8 @@
 					<section class="panel-card" aria-label="This session only">
 						{#if appliesItself}
 							<p class="text-surface-600-400 mb-1.5 text-xs">
-								The lorebook takes this session's changes by itself as each scene closes.
+								<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
+								The lorebook takes what waits here by itself as each scene closes.
 								{#if mayApply && panelsCtx}
 									<button
 										class="text-primary-ink hover:underline"

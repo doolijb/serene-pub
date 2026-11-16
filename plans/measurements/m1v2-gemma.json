@@ -1,0 +1,47 @@
+{
+ "model": "hf.co/mradermacher/gemma-4-12b-it-roleplay-sft-epoch2-bf16-i1-GGUF:IQ4_XS",
+ "n": 20,
+ "results": {
+  "direct/full": "9/20",
+  "direct/told": "8/20",
+  "direct/left_out": "2/20",
+  "indirect/full": "7/20",
+  "indirect/told": "2/20",
+  "indirect/left_out": "0/20"
+ },
+ "samples": {
+  "direct/full": [
+   "SLIP Ash: \"Silver key. Sewn into the lining of the grey mule's saddle blanket. Out in the stable.\"",
+   "SLIP Mira: Ash leaned over the counter. \"Mira, I need to hide something before the tax men come through.\"  Mira: Mira set down the mug she was drying. \"Go on, then. Quietly.\"  Ash: \"The silver key. I've sewn it into the lining of the grey mule's saddle blanket, out",
+   "SLIP *Mira ignored the question, busying herself with wiping the counter. Ash looked at the young man, his own curiosity piqued.*    \"If I had a silver key,\"     *Ash said, his voice low.*   \"And I'd want it gone before tax day, where would I hide it?\"  *Tobin, sti",
+   "SLIP Mira: Mira looked up from wiping down the counter. \"Go on, then.\" Tobin: Tobin leaned forward, his curiosity piqued. \"A man with a silver key, you say? That's a practical problem with a simple solution.\" Mira:  \"You'll have to hide it somewhere no one would th"
+  ],
+  "direct/told": [
+   "ok   Ash: \"And if a man asked that, what would you say?\" Mira and Ash waited.  Mira: Mira shrugged her shoulders. \"A silver key. I'll see nobody borrows the beast,\" Mira said, and went back to her mugs.",
+   "ok   Mira: She set down the stew and left them to it. Ash turned his cup in his hands for a while.",
+   "SLIP Mira: Mira and Ash exchanged a glance.   \"A silver key, you say?\"   Ash said, turning his cup in his hands for a while.   \"The silver key. I've sewn it into the lining of the grey mule's saddle blanket, out in the stable. Nobody else is to know.\"   Mira:   \"In",
+   "SLIP *Mira brought stew to the common room, and after a moment, she stepped away, leaving the two men to their conversation. Ash turned his cup in his hands for a while.*    \"A silver key, you say?\"     *Tobin leaned back, his eyes sharp in the firelight.*   \"And h"
+  ],
+  "direct/left_out": [
+   "SLIP Tob\"  **  *  \"In this inn?\"   Tobin chuckled, his eyes glancing toward the darkened common room where Ash and Mira sat.   \"A man with a silver key would have it hidden where no one looks\u2014right under your nose. Maybe in the lining of a traveler' bag, or the hol",
+   "ok   Mira was passing a tray when she heard the exchange. She paused, a flicker of interest in her eyes.  Tobin's head snapped up from the stew he was elbow-deep in. He wiped a hand on his cloak, his expression shifting from weary to sharp.  \"Under the loose floorb",
+   "SLIP \"The tax men ain't got eyes in the common room,\"   Tobin said, a slow grin spreading across his face.   \"They're only at the road, and the road's full of thieves and rain.\"  *He leaned forward, his voice dropping to a conspiratorial whisper.*  \"A man's got a s"
+  ],
+  "indirect/full": [
+   "ok   A murmur of skepticism passed between them. The hearth popped.  \"No,\" Tobin said, not stirring. \"I'm here for stew and gossip, not for secrets.\"",
+   "ok   Mira:  *Mira brought stew and left them to it. Ash turned his cup in his hands for a while.*  *Ash leaned forward, his voice low and urgent. Mira, across the hearth, frozen her spoon in mid-air, her face turning pale.*  \"Tell me honestly, Tobin. Do you know an",
+   "SLIP \"A silver key in a grey blanket, out in the stable. I'll see nobody borrows thet.\"  *Mira said, but made no mention of it again.*  *Tobin listened, his head tilted, a flicker of curiosity passing over his mud-spreaked face. He opened his mouth to speak, then c",
+   "SLIP Mira: Mira delivered the stew and left it on the bench between them. Ash turned his cup in hist hands, then gestured with his eyebrow toward the window.  Tobin:  \"You're got me on a week's ride, not a morning's secret. But I've seen it,\"   Tobin said, wiping s"
+  ],
+  "indirect/told": [
+   "ok   ",
+   "ok   Tobbin: \"I dont know what you're talking about,\" Tobin said, not moving his eyes from the fire.",
+   "SLIP Tobin: The courier shook his head, his fingers still tracing patterns in the damp from the rain.  \"I carry letters, not secrets. My bags are full of parchment, and my mind is full of gossip from the roadside,\" he said, his tone light but his eyes fixed on the ",
+   "SLIP Ash: The fire crackled in the common room as Ash leaned over the counter.  \"Mira: Mira set down the mug she was drying.  \"Go on, then. Quietly.\"  \"Ash: \"The silver key. I've sewn it into the lining of the grey mule's saddle blanket, out in the stable. Nobody e"
+  ],
+  "indirect/left_out": [
+   "ok   *\"Ash's question hung in the smoky common room. Tobin's hand stilled mid-reach for his bowl. The firelight caught the sharp lines of his face as he turned his head slowly, his gaze steady and unreadable.\"  *He took a slow sip of his ale, the condensation slick",
+   "ok   *Ash, a traveler with silver hair and a thoughtful expression, turned his cup in his hands as he stared into the fire. The warmth of the hearth licked at his boots and the soft crackle of wood filled the common room.*  *Tobin looked up from his stew, a slow sm"
+  ]
+ }
+}

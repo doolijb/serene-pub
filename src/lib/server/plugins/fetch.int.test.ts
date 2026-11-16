@@ -5,6 +5,7 @@ import os from "os"
 import path from "path"
 import { SesWorkerSandbox } from "./SesWorkerSandbox"
 import { QuickJsSandbox } from "./QuickJsSandbox"
+import { FETCH_RESPONSE_MAX_BYTES } from "./fetchHost"
 import type { PluginSandbox, SandboxKind } from "./types"
 
 /**
@@ -60,6 +61,22 @@ beforeAll(async () => {
 		if (url.indexOf("/echo-auth") === 0) {
 			res.writeHead(200, { "content-type": "text/plain" })
 			return res.end("auth=" + (req.headers.authorization ?? ""))
+		}
+		// A body of n bytes, with or without a Content-Length.
+		if (url.indexOf("/big") === 0) {
+			const q = new URL(url, "http://x")
+			const n = Number(q.searchParams.get("n"))
+			const body = "a".repeat(n)
+			if (q.searchParams.get("chunked") === "1") {
+				res.writeHead(200, { "content-type": "text/plain" })
+				for (let i = 0; i < n; i += 65536) res.write(body.slice(i, i + 65536))
+				return res.end()
+			}
+			res.writeHead(200, {
+				"content-type": "text/plain",
+				"content-length": String(n)
+			})
+			return res.end(body)
 		}
 		res.writeHead(200, { "content-type": "text/plain" })
 		res.end("hello:" + req.method + ":" + url)
@@ -566,4 +583,50 @@ describe.each(BACKENDS)("secret handles at the network boundary (%s)", (kind) =>
 		expect(served.some((u) => u.startsWith("/echo-auth?k=") && u.includes(encodeURIComponent(SECRET)))).toBe(true)
 		expect(JSON.stringify(inPath)).not.toContain(SECRET)
 	}, 15_000)
+})
+
+describe.each(BACKENDS)("the fetch response cap (%s)", (kind) => {
+	const SENTENCE =
+		"fetch: the response is larger than 4 MB — keep bigger payloads in ctx.storage"
+	const LEN_HOOK = `module.exports = { hooks: {
+		get: async function (input, ctx) {
+			var res = await ctx.fetch(input.url);
+			return { length: res.body.length };
+		}
+	} }`
+	const run = async (n: number, chunked: boolean) => {
+		rt = make(kind)
+		await rt.load("p", LEN_HOOK, "h", { networkHosts: [host] })
+		return rt.invoke(
+			{ pluginId: "p", hookName: "get" },
+			{
+				...opts({ url: `${baseUrl}big?n=${n}&chunked=${chunked ? 1 : 0}` }),
+				timeoutMs: 15_000
+			}
+		)
+	}
+
+	it("refuses a body one byte over the cap, by Content-Length", async () => {
+		const r = await run(FETCH_RESPONSE_MAX_BYTES + 1, false)
+		expect(r.ok).toBe(false)
+		if (!r.ok) expect(r.reason).toContain(SENTENCE)
+	}, 30_000)
+
+	it("refuses a body one byte over the cap, chunked with no length", async () => {
+		const r = await run(FETCH_RESPONSE_MAX_BYTES + 1, true)
+		expect(r.ok).toBe(false)
+		if (!r.ok) expect(r.reason).toContain(SENTENCE)
+	}, 30_000)
+
+	it("passes a body one byte under the cap intact", async () => {
+		for (const chunked of [false, true]) {
+			const r = await run(FETCH_RESPONSE_MAX_BYTES - 1, chunked)
+			expect(r.ok).toBe(true)
+			if (r.ok)
+				expect((r.value as { length: number }).length).toBe(
+					FETCH_RESPONSE_MAX_BYTES - 1
+				)
+			await rt.dispose()
+		}
+	}, 30_000)
 })

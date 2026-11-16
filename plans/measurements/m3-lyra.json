@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+ "n": 20,
+ "results": {
+  "undated": {
+   "acts_still_furious": "14/20",
+   "mentions_time_passing": "0/20"
+  },
+  "as_of": {
+   "acts_still_furious": "7/20",
+   "mentions_time_passing": "6/20"
+  },
+  "ago": {
+   "acts_still_furious": "7/20",
+   "mentions_time_passing": "15/20"
+  },
+  "ago_hint": {
+   "acts_still_furious": "14/20",
+   "mentions_time_passing": "13/20"
+  }
+ },
+ "samples": {
+  "undated": [
+   "[still=0 passed=0]  Mira: Mira turned from the hearth where she was stirring a pot of stew, her green eyes flashing with anger as they fell on Ash. \"You've got some nerve showing your face here after what you did,\" she said, her voice low and dangerous. She slammed the wooden spoon down on the work",
+   "[still=1 passed=0]  Mira: The innkeeper's eyes flashed with anger as she recognized the face of the man who had so callously broken her late husband's prized lute and left without a word or apology. \"You have the audacity to show your face here again after what you did?\" she spat, her voice low and",
+   "[still=0 passed=0]  Mira: Mira's eyes flashed with anger as she recognized the man who had wronged her. She slammed her hands on the counter, voice rising. \"You dare show your face here again, after what you did? That lute was the only thing I had left of my husband, and you destroyed it without a "
+  ],
+  "as_of": [
+   "[still=0 passed=1]  Mira: Mira stared at Ash, her hands tightening on the bar top. A flash of hurt and anger crossed her face before she smoothed it into a cool mask. \"Ash. It's been a long time.\" Her voice was flat, giving nothing away. \"I have one room left. Upstairs. 5 gold.\" She gestured to the",
+   "[still=1 passed=0]  Mira: The innkeeper looked up from the bar, her eyes narrowing as she recognized the traveler. Her lips pressed into a thin line, and she turned away, busying herself with polishing a glass. \"We're full,\" she said, her tone sharp and dismissive. \"I suggest you try the Silver Cha",
+   "[still=0 passed=0]  Mira: Mira's eyes narrowed as she recognized the face of the man who had so carelessly destroyed her late husband's most prized possession. Her voice was cool and controlled as she replied, \"I have one room left, but it will be ten silver coins for the night.\" She kept her gaze "
+  ],
+  "ago": [
+   "[still=0 passed=1]  Mira: Mira stared at Ash, her lips pursed and eyes narrowed. Her hands gripped the edge of the bar as if holding herself back. \"You,\" she said, her voice low and controlled. \"I haven't seen you around here in a long time. Three years, I think.\" She fixed him with an accusing loo",
+   "[still=0 passed=0]  Mira: The innkeeper looked up from the bar, her eyes widening slightly in recognition. She recovered quickly, her expression settling into a neutral mask. \"Ash. I thought you might never show your face here again.\" Her tone was cool, tinged with a hint of lingering anger. She wi",
+   "[still=0 passed=1]  Mira: Mira's eyes widened in recognition as Ash stepped inside. Her lips pursed as she recalled the incident three years ago when he'd carelessly broken her late husband's prized lute before disappearing without a word. She hesitated before replying coolly, \"There is one room le"
+  ],
+  "ago_hint": [
+   "[still=1 passed=0]  Mira: Mira glared at Ash, her face a mask of barely contained fury. She grabbed a towel and roughly dried the water from his coat, her movements sharp and angry. \"A room? After what you did, you have the nerve to come back here?\" She hissed under her breath, so only he could hea",
+   "[still=0 passed=1]  Mira: The innkeeper looked up from the bar, her eyes widening slightly in recognition. She recovered quickly, her expression settling into a neutral mask. \"Ash,\" she said coolly, \"It's been a long time. I'm afraid all my rooms are occupied tonight. The rain seems to have driven ",
+   "[still=0 passed=1]  Mira: Mira's eyes widened in shock as Ash entered, her face draining of color. She gripped the bar top tightly, her knuckles turning white. \"Ash,\" she hissed, her voice low and trembling with barely contained rage. \"What are you doing here, after all this time? I thought I made "
+  ]
+ }
+}

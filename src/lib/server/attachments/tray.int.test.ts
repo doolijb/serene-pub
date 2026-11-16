@@ -530,7 +530,7 @@ describe("tray store (PGlite integration)", () => {
 				where: eq(schema.variants.fileId, item.file!.id)
 			})
 			const { resolveMediaPath } = await import("$lib/server/media")
-			const stored = await fs.readFile(resolveMediaPath(variant!.path))
+			const stored = await fs.readFile(resolveMediaPath(variant!.path!))
 			expect(stored.includes(Buffer.from("tEXt"))).toBe(false)
 			expect(stored.equals(clean)).toBe(true)
 		},

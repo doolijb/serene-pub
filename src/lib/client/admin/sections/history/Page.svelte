@@ -19,7 +19,16 @@
 	 * Object facet changes.
 	 */
 	import { getContext, untrack } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		ChevronsDown,
+		History as HistoryIcon,
+		LoaderCircle,
+		Pencil,
+		Plus,
+		Trash2,
+		X,
+		Zap
+	} from "@lucide/svelte"
 	import {
 		adminGoto as goto,
 		adminPage as page,
@@ -48,6 +57,14 @@
 		typeLabel,
 		whenSince
 	} from "./logbookView"
+
+	/** The icon per logbook action (`ACTION_ICON` names, in `logbookView.ts`). */
+	const ACTION_ICONS = {
+		Plus,
+		Pencil,
+		Trash2,
+		Zap
+	}
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const interest = getInterestContext()
@@ -121,7 +138,9 @@
 	const onReply = (res: Sockets.Admin.Logbook.Response) => {
 		if (res.requestId !== currentRequest) return
 		records =
-			appendFor === currentRequest ? [...records, ...res.records] : res.records
+			appendFor === currentRequest
+				? [...records, ...res.records]
+				: res.records
 		actors = res.actors
 		hasMore = res.hasMore
 		loading = false
@@ -170,7 +189,8 @@
 	/** The one object this page is narrowed to, named from its newest record. */
 	let narrowedTo = $derived(
 		type && objectId != null
-			? records.find((r) => (r.objectId ?? "") === objectId)?.objectLabel ||
+			? records.find((r) => (r.objectId ?? "") === objectId)
+					?.objectLabel ||
 					(objectId ? `#${objectId}` : typeLabel(type))
 			: null
 	)
@@ -193,7 +213,12 @@
 			custom: true,
 			text: (r) => `${typeLabel(r.objectType)} ${r.objectLabel}`
 		},
-		{ key: "summary", label: "Change", primary: true, text: (r) => r.summary }
+		{
+			key: "summary",
+			label: "Change",
+			primary: true,
+			text: (r) => r.summary
+		}
 	]
 
 	const filters: AdminChangelistFilter<LogbookRecordView>[] = $derived([
@@ -247,7 +272,7 @@
 	rowHref={(r) => `/admin/history/${r.id}`}
 	defaultSort="when"
 	defaultSortDir="desc"
-	emptyIcon={Icons.History}
+	emptyIcon={HistoryIcon}
 	emptyMessage="No changes recorded yet. Changes made in the admin sections will appear here."
 >
 	{#snippet headerExtra()}
@@ -263,7 +288,7 @@
 						aria-label="Show every {typeLabel(type)}"
 						onclick={() => setParam("id", null)}
 					>
-						<Icons.X size={12} aria-hidden="true" />
+						<X size={12} aria-hidden="true" />
 					</button>
 				</span>
 			</div>
@@ -271,20 +296,27 @@
 	{/snippet}
 	{#snippet cell(row, col)}
 		{#if col.key === "when"}
-			<time class="text-surface-700-300 text-xs whitespace-nowrap" datetime={row.at}>
+			<time
+				class="text-surface-700-300 text-xs whitespace-nowrap"
+				datetime={row.at}
+			>
 				{fmtWhen(row.at)}
 			</time>
 		{:else if col.key === "action"}
-			{@const Icon = Icons[ACTION_ICON[row.action]]}
+			{@const Icon = ACTION_ICONS[ACTION_ICON[row.action]]}
 			<span
-				class="{ACTION_TONE[row.action]} inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-meta"
+				class="{ACTION_TONE[
+					row.action
+				]} text-meta inline-flex items-center gap-1 rounded-full px-2 py-0.5"
 			>
 				<Icon size={12} aria-hidden="true" />
 				{LOGBOOK_ACTION_LABELS[row.action]}
 			</span>
 		{:else if col.key === "object"}
 			<span class="flex min-w-0 flex-col">
-				<span class="truncate">{row.objectLabel || typeLabel(row.objectType)}</span>
+				<span class="truncate">
+					{row.objectLabel || typeLabel(row.objectType)}
+				</span>
 				<span class="text-surface-600-400 text-meta">
 					{typeLabel(row.objectType)}
 				</span>
@@ -302,9 +334,13 @@
 			disabled={loadingOlder}
 		>
 			{#if loadingOlder}
-				<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+				<LoaderCircle
+					size={16}
+					class="animate-spin"
+					aria-hidden="true"
+				/>
 			{:else}
-				<Icons.ChevronsDown size={16} aria-hidden="true" />
+				<ChevronsDown size={16} aria-hidden="true" />
 			{/if}
 			Load older changes
 		</button>

@@ -3,12 +3,14 @@ import { modelModalityChoices } from "./modelModality"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 describe("modelModalityChoices", () => {
-	test("an OpenAI-compatible model is for chat, embeddings or images", () => {
-		// Images since the OpenAI-images module (2026-10-12).
+	test("an OpenAI-compatible model is for chat, images, embeddings or speech", () => {
+		// Images since the OpenAI-images module (2026-10-12); speech since
+		// Speech became a section (2026-11-12).
 		expect(modelModalityChoices(CONNECTION_TYPE.OPENAI)).toEqual([
 			"text-gen",
 			"image-gen",
-			"embeddings"
+			"embeddings",
+			"tts"
 		])
 	})
 

@@ -55,6 +55,7 @@ import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
+import { TIMELINE_OFF_SENTENCES, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 import { SHARE_REFUSALS, SURFACED_BOOK_REFUSAL } from "$lib/shared/lorebooks/sessionNotes"
 import { STORY_CALENDAR_PRESETS, parseStoryCalendar, type StoryCalendar } from "@serene-pub/sdk"
@@ -138,7 +139,17 @@ export async function ownBookFor(
 		) {
 			const [moved] = await db
 				.update(schema.lorebooks)
-				.set({ overlayOf, primaryRuleset: session.primaryRuleset, rulesetVersion })
+				.set({
+					overlayOf,
+					primaryRuleset: session.primaryRuleset,
+					rulesetVersion,
+					// Notes over a lorebook carry that lorebook's Timeline switch, copied in the statement that re-points them.
+					...(overlayOf != null && existing.overlayOf !== overlayOf
+						? {
+								timelineEnabled: sql<boolean>`coalesce((select o.timeline_enabled from lorebooks o where o.id = ${overlayOf}), true)`
+							}
+						: {})
+				})
 				.where(eq(schema.lorebooks.id, existing.id))
 				.returning()
 			return moved ?? existing
@@ -162,7 +173,7 @@ export async function ownBookFor(
  * calendar; without, core's own-book calendar with the declared `periods` and
  * `seasons` laid on it. No declaration, or one that does not parse: core's.
  */
-async function genreCalendarOf(tx: Db, sessionId: number): Promise<StoryCalendar> {
+export async function genreCalendarOf(tx: Db, sessionId: number): Promise<StoryCalendar> {
 	const [session] = await tx
 		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
@@ -203,6 +214,8 @@ export async function insertOwnBook(
 		rulesetVersion: string | null
 		/** The book's calendar; absent, the session's genre declares it (`shape.calendar`), else core's. */
 		calendar?: StoryCalendar | null
+		/** 🚧 The notes' Timeline switch when they overlay nothing; ignored when `overlayOf` is set. Absent, the column's default. */
+		timelineEnabled?: boolean
 	}
 ): Promise<OwnBookRow> {
 	const calendar = row.calendar !== undefined ? row.calendar : await genreCalendarOf(tx, row.sessionId)
@@ -221,7 +234,12 @@ export async function insertOwnBook(
 			storyClockMonth: null,
 			storyClockDay: null,
 			storyClockHour: null,
-			storyClockMinute: null
+			storyClockMinute: null,
+			...(row.overlayOf != null
+				? { timelineEnabled: await timelineOfBook(tx, row.overlayOf) }
+				: row.timelineEnabled !== undefined
+					? { timelineEnabled: row.timelineEnabled }
+					: {})
 		})
 		.onConflictDoNothing()
 	const made = await ownBookOf(tx, row.sessionId)
@@ -763,7 +781,8 @@ export async function copyOwnBookToBranch(
 			storyClockMonth: parent.storyClockMonth,
 			storyClockDay: parent.storyClockDay,
 			storyClockHour: parent.storyClockHour,
-			storyClockMinute: parent.storyClockMinute
+			storyClockMinute: parent.storyClockMinute,
+			timelineEnabled: parent.timelineEnabled
 		})
 		.returning({ id: schema.lorebooks.id })
 	const chain = await copyParentLineChain(tx, input, parent.id, made!.id)
@@ -1241,6 +1260,9 @@ export async function shareAsLorebook(
 			primaryRuleset: session.primaryRuleset,
 			rulesetVersion: session.rulesetVersion ?? null
 		})
+		// Its entries' Edit history never travels with the shared book.
+		const { clearRedlines } = await import("$lib/server/lorebooks/redlines")
+		await clearRedlines(tx as unknown as Db, { lorebookId: ownBook.id })
 		return fresh.id
 	})
 	return { lorebookId: ownBook.id, name, ownBookId }
@@ -1448,7 +1470,8 @@ interface HeldVerdict {
  * every key agrees is **done**. A conflict whose `base` is an earlier waiting
  * change's value says so (`earlier`: that session row on the same entry). So
  * is an undated change whose key a dated line amendment decides (folding it
- * into the row would be shadowed).
+ * into the row would be shadowed). A dated change waits, never done, when
+ * its date is before the entry's Beginning.
  */
 async function heldChangeVerdict(
 	t: Db,
@@ -1457,6 +1480,18 @@ async function heldChangeVerdict(
 	stored: EntryRow,
 	earlier: readonly HeldRow[] = []
 ): Promise<HeldVerdict> {
+	// 🚧 No timeline: a dated change waits, with its reason; nothing dated is applied or dropped.
+	if (held.year != null && reading.timelineOff === true)
+		return { agreeing: [], conflict: TIMELINE_OFF_SENTENCES.dated, done: false }
+	if (held.year != null) {
+		const heldDate = { year: held.year, month: held.month ?? null, day: held.month != null ? (held.day ?? null) : null }
+		const { beginningRefusal } = await import("$lib/server/lorebooks/entryVersions")
+		const beforeBeginning = await beginningRefusal(t, stored.lorebookId, stored.id, heldDate)
+		if (beforeBeginning) return { agreeing: [], conflict: beforeBeginning, done: false }
+		// A date the line already has a version at is no conflict here: a session's own
+		// earlier change, applied a moment before, is such a version, and the change
+		// after it must still apply. The rail reads rows that share a date as one version.
+	}
 	const { entryOverlaysFor, entryAt, amendmentDeciding } = await import("$lib/server/state/entriesOnReading")
 	const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
 	const { sameValue, unwrap } = await import("$lib/server/lorebooks/imprints")
@@ -1555,7 +1590,14 @@ async function standaloneLinksOf(
 	const all = await t
 		.select()
 		.from(r)
-		.where(and(eq(r.lorebookId, ownBookId), isNull(r.branchId), isNull(r.rulesRunId)))
+		.where(
+			and(
+				eq(r.lorebookId, ownBookId),
+				isNull(r.branchId),
+				isNull(r.rulesRunId),
+				isNull(r.knowledgeKind)
+			)
+		)
 		.orderBy(r.id)
 	const facts = await linkEndFactsOf(t, all)
 	const rows = all.filter(
@@ -1782,7 +1824,12 @@ export async function overlayItemsOf(db: Db, sessionId: number): Promise<Overlay
 }
 
 /** The update a wire-key change makes to an entry row, as the host's write makes it (the default vector goes stale with a name or content). Use only `t`. */
-async function writeEntryKeys(t: Db, entry: { id: number; typeId: string }, data: Record<string, unknown>): Promise<void> {
+async function writeEntryKeys(
+	t: Db,
+	entry: { id: number; typeId: string },
+	data: Record<string, unknown>,
+	edit: { cause: "apply" | "take-back"; by: import("$lib/server/lorebooks/redlines").RedlineAuthor }
+): Promise<void> {
 	const { splitUpdate, mergeFields, DEFAULT_VECTOR_NAME } = await import("$lib/server/utils/lorebookEntries")
 	const { columns, fields } = splitUpdate(entry.typeId, data)
 	const set = {
@@ -1791,10 +1838,23 @@ async function writeEntryKeys(t: Db, entry: { id: number; typeId: string }, data
 	}
 	if (!Object.keys(set).length) return
 	const e = schema.lorebookEntries
-	await t
+	const [before] = await t.select().from(e).where(eq(e.id, entry.id)).limit(1)
+	const [after] = await t
 		.update(e)
 		.set({ ...set, updatedAt: new Date() })
 		.where(eq(e.id, entry.id))
+		.returning()
+	// The Edit history's row, on the handle of the write.
+	if (before && after) {
+		const { recordEntryRedline } = await import("$lib/server/lorebooks/redlines")
+		await recordEntryRedline(t, {
+			before: before as Record<string, unknown>,
+			after: after as Record<string, unknown>,
+			named: Object.keys(data),
+			cause: edit.cause,
+			by: edit.by
+		})
+	}
 	if ("title" in columns || "content" in columns)
 		await t
 			.delete(schema.lorebookEntryVectors)
@@ -1808,6 +1868,10 @@ async function writeEntryKeys(t: Db, entry: { id: number; typeId: string }, data
 
 /** Who an Apply's records name: the person who pressed, or the cause that applied them by itself (P1: the record shows why). */
 type ApplyWho = { by: { userId: number } } | { automatic: AutomaticApplyCause; sceneId?: number }
+
+/** The Edit history's author of an Apply: the person who pressed (with the session), or the session alone when it applied by itself. */
+const applyAuthor = (who: ApplyWho, sessionId: number): import("$lib/server/lorebooks/redlines").RedlineAuthor =>
+	"by" in who ? { userId: who.by.userId, sessionId } : { sessionId }
 
 /** 🚧 Why a lorebook took a session's changes without a press. */
 export type AutomaticApplyCause = "scene-close" | "scene-summary" | "close-out"
@@ -2016,6 +2080,8 @@ export async function applyOverlayItems(
 		// the session's line now is merged into that day, whatever the list said; every other one moves.
 		const merges: { own: EntryRow; loreDayId: number }[] = []
 		const moves: OverlayEntryItem[] = []
+		// 🚧 With the target's timeline off, a notes' history day neither moves nor merges: it waits.
+		const targetTimelineOff = !(await timelineOfBook(t, bookId))
 		for (const entryId of [...new Set([...chosen.map((c) => c.entryId), ...chosenParagraphs.map((c) => c.notesEntryId)])].sort(
 			(x, y) => x - y
 		)) {
@@ -2025,10 +2091,20 @@ export async function applyOverlayItems(
 				.where(and(eq(e.id, entryId), eq(e.lorebookId, ownBook.id)))
 				.limit(1)
 			if (!own) continue
+			if (own.typeId === HISTORY_TYPE_ID && targetTimelineOff) {
+				heldDays.push({ notesEntryId: own.id, reason: TIMELINE_OFF_SENTENCES.history })
+				continue
+			}
 			const date = own.typeId === HISTORY_TYPE_ID ? historyEntryDate(own.fields) : null
 			const found = date ? await lorebookDayOfDate(t, { lorebookId: bookId, branchId, date }) : null
 			if (found) merges.push({ own, loreDayId: found.historyEntryId })
-			else
+			else {
+				// The day another line owns is not this session's to write: a moved day waits like a merged one.
+				const ownedElsewhere = date ? await historyDayOwnerRefusal(t, { lorebookId: bookId, branchId, date }) : null
+				if (ownedElsewhere) {
+					heldDays.push({ notesEntryId: own.id, reason: ownedElsewhere })
+					continue
+				}
 				moves.push({
 					kind: "entry",
 					entryId,
@@ -2036,6 +2112,7 @@ export async function applyOverlayItems(
 					title: own.title ?? "",
 					sourceMessageId: own.sourceMessageId ?? null
 				})
+			}
 		}
 		// 🚧 A merged day: its paragraph goes after what the lorebook's day holds, everything dated by the
 		// own day is pointed at the lorebook's day, the own day goes. Never a second entry for a date.
@@ -2107,7 +2184,7 @@ export async function applyOverlayItems(
 			}
 			const before = lore.content ?? ""
 			const after = joinParagraph(before, own.content ?? "")
-			if (after !== before) await writeEntryKeys(t, lore, { content: after })
+			if (after !== before) await writeEntryKeys(t, lore, { content: after }, { cause: "apply", by: applyAuthor(who, input.sessionId) })
 			await tx.insert(schema.loreImprints).values({
 				sessionId: input.sessionId,
 				messageId: own.sourceMessageId ?? null,
@@ -2352,7 +2429,7 @@ export async function applyOverlayItems(
 			const fields = Object.fromEntries(keys.map((k) => [k, allFields[k]]))
 			const base = (held.base ?? {}) as Record<string, { v: unknown } | null>
 			const dated = held.year != null
-			if (!dated) await writeEntryKeys(t, stored, fields)
+			if (!dated) await writeEntryKeys(t, stored, fields, { cause: "apply", by: applyAuthor(who, input.sessionId) })
 			else
 				await tx
 					.update(a)
@@ -2746,7 +2823,7 @@ export async function takeBackApply(
 					.set({ historyEntryId: ownId })
 					.where(and(inArray(table.id, ids), eq(table.historyEntryId, lore.id)))
 			}
-			if (content !== (lore.content ?? "")) await writeEntryKeys(t, lore, { content })
+			if (content !== (lore.content ?? "")) await writeEntryKeys(t, lore, { content }, { cause: "take-back", by: { userId: input.userId, sessionId } })
 		}
 		for (const { amendmentId, rows, entry, dated } of plan) {
 			const anchor = rows[0]!.messageId ?? null
@@ -2757,7 +2834,10 @@ export async function takeBackApply(
 					.set({ lorebookId: ownBook.id, branchId: null, base, sourceMessageId: anchor })
 					.where(eq(a.id, amendmentId))
 			else {
-				await writeEntryKeys(t, entry, Object.fromEntries(rows.map((r) => [causeOf(r).key, unwrap(r.before)])))
+				await writeEntryKeys(t, entry, Object.fromEntries(rows.map((r) => [causeOf(r).key, unwrap(r.before)])), {
+					cause: "take-back",
+					by: { userId: input.userId, sessionId }
+				})
 				await tx.insert(a).values({
 					id: amendmentId,
 					lorebookId: ownBook.id,
@@ -2812,10 +2892,19 @@ async function assertTurnStands(
  * own book overlays, belongs to the lorebook's owner, and
  * the write setting in force for the lorebook (`bookLoreWriteMode`) is Full;
  * for `scene-close` and `scene-summary` also the scene (this session's) is
- * closed, and for `scene-close` its summary is not running or in review. Never
- * throws (a failure is a warning, and null). **Never call it with a
- * transaction handle**: it opens its own transaction, only through
- * `applyOverlayItems`, and the caller announces the settle after the commit.
+ * closed, and for `scene-close` its summary is not running or in review.
+ *
+ * **The story settles when a scene closes**, whether or not anything was
+ * applied: on the `book` route (`loreWriteRoute`, the stricter of the person's
+ * and the book's setting) the settle line moves through the scene's end (for
+ * `close-out`, through `before - 1`, else the newest message), never past the
+ * message before a waiting summary's start, nor before the oldest item still
+ * waiting in the notes after the Apply. The result carries it as `settled`;
+ * with nothing applied the lists are empty and `batch` is null; with nothing
+ * applied and the line unmoved the result is null. Never throws (a failure is
+ * a warning, and null). **Never call it with a transaction handle**: it opens
+ * its own transactions, the Apply's (through `applyOverlayItems`) and the
+ * settle's, and the caller announces the settle after the commit.
  */
 export async function applyHeldAutomatically(
 	db: Db,
@@ -2876,9 +2965,12 @@ export async function applyHeldAutomatically(
 		const selectedOf = (s: { selectedMessageIds: number[] | null }) => (s.selectedMessageIds ?? []) as number[]
 		const waiting = (s: { summaryStatus: string }) => s.summaryStatus === "running" || s.summaryStatus === "review"
 		let through: number | null = null
+		// Where the scene that closed began: the story settles one scene behind it.
+		let closedStart: number | null = null
 		if (input.automatic !== "close-out") {
 			const scene = scenes.find((s) => s.id === input.sceneId)
 			if (!scene) return null
+			closedStart = scene.openedAtMessageId ?? (selectedOf(scene).length ? Math.min(...selectedOf(scene)) : null)
 			// Closed: its close message; a scene captured by selection, the greatest message it holds.
 			if (scene.closedAtMessageId != null) through = scene.closedAtMessageId
 			else if (scene.openedAtMessageId == null && selectedOf(scene).length) through = Math.max(...selectedOf(scene))
@@ -2943,16 +3035,81 @@ export async function applyHeldAutomatically(
 			)
 			amendmentIds = amendmentIds.filter((id) => dated.has(id))
 		}
-		if (!entryIds.length && !amendmentIds.length && !linkIds.length) return null
-		const done = await applyOverlayItems(db, {
-			sessionId: input.sessionId,
-			userId: session.userId,
-			entryIds,
-			amendmentIds,
-			linkIds,
-			automatic: { automatic: input.automatic, ...(input.sceneId != null ? { sceneId: input.sceneId } : {}) }
+		const done =
+			!entryIds.length && !amendmentIds.length && !linkIds.length
+				? null
+				: await applyOverlayItems(db, {
+						sessionId: input.sessionId,
+						userId: session.userId,
+						entryIds,
+						amendmentIds,
+						linkIds,
+						automatic: { automatic: input.automatic, ...(input.sceneId != null ? { sceneId: input.sceneId } : {}) }
+					})
+
+		// On the book route the story settles, applied or not: at Close out through what it closes; when a
+		// scene closes, through the scene before it, so Back can still walk into the scene that just closed.
+		const route = loreWriteRoute({
+			attachedId: session.lorebookId,
+			bookOwnerId: book.userId,
+			sessionOwnerId: session.userId,
+			mode: await sessionLoreWriteMode(db, input.sessionId)
 		})
-		return { ...done, userId: session.userId }
+		let settleTo: number | null = null
+		if (route === "book") {
+			if (input.automatic !== "close-out") settleTo = closedStart != null ? closedStart - 1 : null
+			else if (input.before != null) settleTo = input.before - 1
+			else {
+				const [newest] = await db
+					.select({ id: sql<number | null>`max(${schema.sessionMessages.id})` })
+					.from(schema.sessionMessages)
+					.where(eq(schema.sessionMessages.sessionId, input.sessionId))
+				settleTo = newest?.id ?? null
+			}
+		}
+		if (settleTo != null && waitingStart != null) settleTo = Math.min(settleTo, waitingStart - 1)
+		if (settleTo != null) {
+			const stillWaiting = (await overlayItemsOf(db, input.sessionId))
+				.map((i) => i.sourceMessageId)
+				.filter((n): n is number => n != null)
+			if (stillWaiting.length) settleTo = Math.min(settleTo, Math.min(...stillWaiting) - 1)
+		}
+		let settled: ApplyOverlayResult["settled"] = null
+		if (settleTo != null && settleTo > 0) {
+			const { settleThrough } = await import("$lib/server/sessions/settle")
+			const target = settleTo
+			settled = await db.transaction(async (tx) =>
+				settleThrough(tx as unknown as Db, input.sessionId, target, { userId: session.userId })
+			)
+		}
+		if (done) {
+			if (settled?.moved && (!done.settled?.moved || settled.settledMessageId! > done.settled.settledMessageId!))
+				return {
+					...done,
+					settled: {
+						moved: true,
+						settledMessageId: settled.settledMessageId,
+						previousSettledMessageId: done.settled ? done.settled.previousSettledMessageId : settled.previousSettledMessageId
+					},
+					userId: session.userId
+				}
+			return { ...done, userId: session.userId }
+		}
+		if (!settled?.moved) return null
+		return {
+			lorebookId: session.lorebookId,
+			applied: [],
+			appliedChanges: [],
+			stillHeld: [],
+			batch: null,
+			dropped: [],
+			appliedLinks: [],
+			mergedDays: [],
+			droppedLinks: [],
+			heldDays: [],
+			settled,
+			userId: session.userId
+		}
 	} catch (err) {
 		console.warn(`[apply] automatic apply for session ${input.sessionId} failed:`, err)
 		return null

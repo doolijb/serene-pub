@@ -62,6 +62,7 @@ export async function replaceRows(
 	const byKey = new Map(owned.map((r) => [r.key, r]))
 	let changed = false
 	const keep = new Set<string>()
+	const inserts: RegistrationInsert[] = []
 	for (const row of want) {
 		keep.add(row.key)
 		const had = byKey.get(row.key)
@@ -72,8 +73,10 @@ export async function replaceRows(
 				.update(schema.registrations)
 				.set({ ...row, state: had.state, updatedAt: new Date() })
 				.where(eq(schema.registrations.id, had.id))
-		else await db.insert(schema.registrations).values(row)
+		else inserts.push(row)
 	}
+	// The new rows in one statement, in the order `rows` gave them.
+	if (inserts.length) await db.insert(schema.registrations).values(inserts)
 	const gone = owned.filter((r) => !keep.has(r.key)).map((r) => r.id)
 	if (gone.length) {
 		changed = true

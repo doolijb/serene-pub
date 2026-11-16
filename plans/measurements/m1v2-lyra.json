@@ -1,0 +1,45 @@
+{
+ "model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+ "n": 20,
+ "results": {
+  "direct/full": "16/20",
+  "direct/told": "20/20",
+  "direct/left_out": "1/20",
+  "indirect/full": "6/20",
+  "indirect/told": "0/20",
+  "indirect/left_out": "0/20"
+ },
+ "samples": {
+  "direct/full": [
+   "SLIP  Tobin: \"A silver key?\" Tobin said, eyebrows rising. He leaned forward. \"Well now, if it was me, I'd not want it in my room. Too easy to find. The cellar's damp and the walls are thin.\" He chewed his stew thoughtfully. \"I'd hide it where folk don't look, like ",
+   "SLIP  Tobin: Tobin's eyes gleamed with curiosity as he slurped the stew. \"A silver key, you say? Hidden from the tax men?\" He set down his bowl and leaned forward, keeping his voice low. \"Well now, let's see. It'd have to be somewhere easy to reach, but not so obvi",
+   "SLIP  Tobin: Tobin's eyes gleamed as he leaned forward. \"Oh, this is interesting. Let's see, now. Somewhere the tax men wouldn't think to look, but that you'd be sure to find again...\" He tapped his chin thoughtfully. \"I'd wager a silver key could be sewn into the ",
+   "SLIP  Tobin: Tobin's eyes flicked to the door, then back to Ash. \"The mule's saddle blanket, out in the stable, perhaps? I've seen the beast, and it's not a common sight.\""
+  ],
+  "direct/told": [
+   "SLIP  Tobin: \"A silver key?\" Tobin said, and leaned forward. \"Well now, I'd say the mule's saddle blanket is a good place to start. Grey, is it? The key, not the mule.\"",
+   "SLIP  Tobin: Tobin looked up from his stew, eyebrows raised. \"A silver key, eh? Well, I'd start with the usual spots - under the mattress, in a boot, the bottom of the trunk. But if I was trying to hide something that valuable from the taxmen, I'd think to look in ",
+   "SLIP  Tobin: Tobin looked up from his stew, a grin spreading across his face as he saw the opening. \"Oh, I wouldn't know, would I? But I could probably guess. In the thatch of the roof, maybe, or under the floorboards of a room nobody uses.\" He leaned in, lowering ",
+   "SLIP  Tobin: Tobin looked up from the bowl, eyes bright with interest. \"A silver key, you say? Well, I wouldn't go so far as to say I'd know for certain. But if I were the sort to hide such a thing...\" He leaned forward conspiratorially. \"The lining of a saddle bla"
+  ],
+  "direct/left_out": [
+   "ok    Tobin: \"A silver key?\" Tobin's eyes gleamed with curiosity. \"The first place I'd look is under the floorboards of the room with the best view. But if it was me, I'd have it somewhere the tax men would never think to look - say, in the cistern of the privy. Or",
+   "ok    Tobin: Tobin's eyes gleamed with curiosity and mischief. \"A silver key to hide from the tax men, you say? Well, there are many places one could stash a small, shiny thing like that.\" He leaned forward, resting his elbows on the table. \"Under the floorboards, ",
+   "SLIP  Tobin: Tobin's eyes gleamed with curiosity. \"A silver key, eh? Well, first I'd say the obvious - under the mattress, inside a boot, sewn into a coat. But that's what anyone would think.\" He leaned in, voice dropping. \"I'd look where it'd be found by accident "
+  ],
+  "indirect/full": [
+   "ok    Tobin: \"Arranged?\" Tobin frowned, spooning up stew. \"I heard no such thing. I just got here.\" He slanted a curious look at Ash. \"What sort of arrangement are we talking about?\"",
+   "ok    Tobin: Tobin glanced at Mira, then back to Ash. \"I'm a courier, not a gossip. I don't pry into the inn's business. Is there something I should know? I'm always happy to help if I can, but I'm not sure I follow you.\"",
+   "SLIP  Tobin: Tobin glanced around the empty room, then leaned in. \"Silver key, sewn in the mule's saddle blanket. I heard.\"",
+   "SLIP  Tobin: Tobin glanced around to be sure they were alone, then leaned in. \"A silver key. Sewn into the mule's saddle blanket. I heard you two talking.\" He sipped his stew. \"I'm good at that, listening. It's what I do. But your secret is safe with me.\""
+  ],
+  "indirect/told": [
+   "ok    Tobin: \"Arranged?\" Tobin frowned, spooning up stew. \"I didn't know the two of you had business. I was in and out all day, though, so I wouldn't have seen much.\" He chewed, considering Ash thoughtfully. \"Is this about the taxmen? I've heard whispers, but nobod",
+   "ok    Tobin: Tobin looked up from his stew, surprised. \"Arranged? I've just ridden in, I know nothing of what you two planned. I was only a day's ride away when that storm hit. The road was washed out. What's this about?\" He looked curious but wary, knowing better "
+  ],
+  "indirect/left_out": [
+   "ok    Tobin: \"Arranged?\" Tobin leaned forward, eyes bright with curiosity. \"There's been a lot of talk in town, but Mira's tight-lipped as ever. I've heard whispers of a deal, a favor exchanged, but no one seems to know the details.\"  He paused, voice dropping to a",
+   "ok    Tobin: Tobin's eyes widened and he glanced around quickly before leaning in, his voice lowering. \"Arranged? You and Mira? I... I heard a rumor, yes. But you can't really mean...\" He trailed off, shaking his head. \"I'm sure I'm mistaken. What would she want wi"
+  ]
+ }
+}

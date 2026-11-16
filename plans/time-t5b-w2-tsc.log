@@ -1,0 +1,2 @@
+src/lib/server/lorebooks/tableRegistry.versions.int.test.ts(357,56): error TS2345: Argument of type '{ branches: Map<any, any>; bindings: Map<any, any>; entries: Map<any, any>; historyEntries: Map<any, any>; scenes: Map<any, any>; spriteSets: Map<any, any>; tags: Map<...>; }' is not assignable to parameter of type 'IdMaps'.
+  Property 'amendments' is missing in type '{ branches: Map<any, any>; bindings: Map<any, any>; entries: Map<any, any>; historyEntries: Map<any, any>; scenes: Map<any, any>; spriteSets: Map<any, any>; tags: Map<...>; }' but required in type 'IdMaps'.

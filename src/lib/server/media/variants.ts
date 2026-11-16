@@ -31,7 +31,12 @@ import {
 } from "$lib/shared/constants/MediaVisibility"
 import { resolveMediaPath, variantRelPath } from "./paths"
 import type { FileRow, VariantRow } from "./index"
-import { makeFitted, makeThumbnail, WEB_SAFE_IMAGE_MIMES } from "./thumbnail"
+import {
+	makeFitted,
+	makeThumbnail,
+	thumbnailCut,
+	WEB_SAFE_IMAGE_MIMES
+} from "./thumbnail"
 import { convertMedia, MediaDowngradeError, refusalToError } from "./convert"
 
 /*
@@ -179,12 +184,39 @@ export async function getVariantById(
  * remove a variant wants `cullVariant`.
  */
 export async function removeVariant(db: Db, row: VariantRow): Promise<void> {
-	try {
-		await fs.unlink(resolveMediaPath(row.path))
-	} catch {
-		// Already gone, or never written. Removing the row is the point.
+	// A same-as variant owns no path: its bytes are another row's, so there is
+	// nothing to unlink — unlinking through it could destroy the only copy.
+	if (row.path !== null) {
+		try {
+			await fs.unlink(resolveMediaPath(row.path))
+		} catch {
+			// Already gone, or never written. Removing the row is the point.
+		}
+		// Same-as variants naming these bytes go with them, so nothing is left
+		// pointing at a row that is gone.
+		await db
+			.delete(schema.variants)
+			.where(eq(schema.variants.sameAsVariantId, row.id))
 	}
 	await db.delete(schema.variants).where(eq(schema.variants.id, row.id))
+}
+
+/**
+ * The source row a same-as variant names, or null when it is gone — in which
+ * case the same-as variant is stale and is dropped here (it unlinks nothing).
+ * Callers have already checked `row.sameAsVariantId !== null`.
+ */
+async function sourceOfSameAs(
+	db: Db,
+	row: VariantRow
+): Promise<VariantRow | null> {
+	const source =
+		row.sameAsVariantId !== null
+			? await getVariantById(db, row.sameAsVariantId)
+			: null
+	if (source && source.path !== null) return source
+	await removeVariant(db, row)
+	return null
 }
 
 /**
@@ -219,6 +251,8 @@ export async function setDisplayPointer(
 /** Read a stored variant's bytes. Null when the file is gone from disk — a
  *  dangling reference is expected (28 §2), not exceptional. */
 async function readVariant(row: VariantRow): Promise<ResolvedVariant | null> {
+	// A same-as variant is resolved to its source before it gets here.
+	if (row.path === null) return null
 	try {
 		const bytes = await fs.readFile(resolveMediaPath(row.path))
 		return {
@@ -457,11 +491,55 @@ async function deriveThumb(
 ): Promise<ResolvedVariant | null> {
 	// The frame is in the ORIGINAL's pixels, and every representation in
 	// `SOURCE_PRIORITY` is full size, so it applies to whichever one was loaded.
+	// The stored size already answers "is the source its own thumbnail" for a
+	// webp — same rule as `makeThumbnail`, without decoding the image to ask.
+	if (
+		source.mime === "image/webp" &&
+		file.width != null &&
+		file.height != null &&
+		thumbnailCut(file.width, file.height, source.mime, file.frame)
+			.serveSource
+	) {
+		return recordSameAs(db, file, source)
+	}
 	const thumb = await makeThumbnail(source.bytes, source.mime, file.frame)
 	// Already small enough to be its own thumbnail. Serving the source is the
 	// long-standing behaviour and the reason `thumbUrl` can be unconditional.
-	if (!thumb) return source
+	if (!thumb) return recordSameAs(db, file, source)
 	return storeReduced(db, file, MediaVariant.THUMB, thumb)
+}
+
+/**
+ * Record that the THUMB is the source's own bytes: a same-as variant, a row
+ * with no path of its own that names the source row. Later requests find the
+ * row and stream the source without reading it to decide. Returns the source,
+ * as before. Nothing is written when the derived-form cache is off.
+ */
+async function recordSameAs(
+	db: Db,
+	file: FileRow,
+	source: ResolvedVariant
+): Promise<ResolvedVariant> {
+	if (source.row && (await cacheEnabled(db, file))) {
+		await db
+			.insert(schema.variants)
+			.values({
+				fileId: file.id,
+				variant: MediaVariant.THUMB,
+				mime: source.row.mime,
+				bytes: source.row.bytes,
+				path: null,
+				sameAsVariantId: source.row.id,
+				hash: source.row.hash,
+				width: source.row.width,
+				height: source.row.height,
+				isOriginal: false,
+				cache: true,
+				fidelity: MediaFidelity.REDUCED
+			})
+			.onConflictDoNothing()
+	}
+	return source
 }
 
 /**
@@ -496,7 +574,13 @@ async function storeReduced(
 	db: Db,
 	file: FileRow,
 	variant: MediaVariantName,
-	made: { bytes: Buffer; width: number; height: number; mime: string; ext: string }
+	made: {
+		bytes: Buffer
+		width: number
+		height: number
+		mime: string
+		ext: string
+	}
 ): Promise<ResolvedVariant | null> {
 	if (!(await cacheEnabled(db, file))) {
 		return {
@@ -563,7 +647,12 @@ export async function ensureVariant(
 
 	const work = (async (): Promise<ResolvedVariant | null> => {
 		try {
-			const existing = await getVariant(db, file.id, variant)
+			let existing = await getVariant(db, file.id, variant)
+			if (existing && existing.sameAsVariantId !== null) {
+				// Resolves to the source's bytes; a vanished source drops the
+				// stale same-as variant and falls through to derive again.
+				existing = await sourceOfSameAs(db, existing)
+			}
 			if (existing) return await readVariant(existing)
 
 			// An original is the bytes somebody gave us. There is nothing to
@@ -599,4 +688,50 @@ export async function ensureVariant(
 
 	inFlight.set(key, work)
 	return work
+}
+
+/**
+ * A variant located without reading it: a stored row and where its bytes live,
+ * or — when nothing was stored — the bytes derived for this one request.
+ */
+export type LocatedVariant =
+	| { kind: "stored"; row: VariantRow; absPath: string }
+	| { kind: "derived"; resolved: ResolvedVariant }
+
+/**
+ * Resolve one representation like `ensureVariant`, but when a row is stored
+ * return it with its absolute path and read NOTHING — the route answers a
+ * conditional request from the row's hash and streams the file itself. With no
+ * row it falls back to `ensureVariant` (derive; bytes in memory). Whether the
+ * stored file is still on disk is the caller's to find out when it opens it.
+ * Never throws; null for the same failures `ensureVariant` reports.
+ */
+export async function locateVariant(
+	db: Db,
+	file: FileRow,
+	variant: MediaVariantName
+): Promise<LocatedVariant | null> {
+	try {
+		let existing = await getVariant(db, file.id, variant)
+		if (existing && existing.sameAsVariantId !== null) {
+			// The same-as variant streams its source file, with the source's
+			// hash as the ETag; a vanished source falls through to derive.
+			existing = await sourceOfSameAs(db, existing)
+		}
+		if (existing && existing.path !== null) {
+			return {
+				kind: "stored",
+				row: existing,
+				absPath: resolveMediaPath(existing.path)
+			}
+		}
+	} catch (err) {
+		const why = err instanceof Error ? err.message : String(err)
+		console.warn(
+			`[media] locating ${variant} for file ${file.id} failed: ${why}`
+		)
+		return null
+	}
+	const resolved = await ensureVariant(db, file, variant)
+	return resolved ? { kind: "derived", resolved } : null
 }

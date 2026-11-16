@@ -137,9 +137,9 @@ describe("sessions:refresh — shape 2", () => {
 		expect(annData.coversFromId).toBe(first.id)
 		expect(annData).not.toHaveProperty("pagination")
 		expect(annData).not.toHaveProperty("userDraft")
-		expect(annData.messages.map((r: any) => r.content)).toEqual(["everyone", "ann's secret"])
+		expect(annData.session.sessionMessages.map((r: any) => r.content)).toEqual(["everyone", "ann's secret"])
 		expect(to(bo.id)[0].data.session.sessionMessages.map((r: any) => r.content)).toEqual(["everyone", "bo's secret"])
-		expect(to(owner.id)[0].data.messages.length).toBe(3)
+		expect(to(owner.id)[0].data.session.sessionMessages.length).toBe(3)
 		expect(annData.session.channels).toBeTruthy()
 	})
 
@@ -154,9 +154,9 @@ describe("sessions:refresh — shape 2", () => {
 		const io = capturingIo([owner.id], ["sessions:refresh"])
 		await pushSessionToParticipants(io, session.id, owner.id)
 		const data = io.sent[0].data
-		expect(data.messages.length).toBe(100)
+		expect(data.session.sessionMessages.length).toBe(100)
 		expect(data.coversFromId).toBe(ids[20])
-		expect(data.messages[0].id).toBe(ids[20])
+		expect(data.session.sessionMessages[0].id).toBe(ids[20])
 	})
 })
 

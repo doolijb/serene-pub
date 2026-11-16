@@ -1,0 +1,150 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts (10 tests | 1 failed) 3645ms
+     × what is applied and what is settled come back together: the furthest settle, the Apply's previous 71ms
+ ❯ |int| src/lib/server/lorebooks/autoApply.int.test.ts (18 tests | 4 failed) 4676ms
+     × scene-close applies what the closed scene covers and leaves later items held; records carry the cause, never a person 519ms
+     × close-out applies everything eligible and leaves a conflicted change held 448ms
+     × a change waiting on an earlier change of this session applies with it, in one Apply 70ms
+     × appliedBatchesOf lists a press and an automatic Apply, newest first, with who and what 124ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > scene-close applies what the closed scene covers and leaves later items held; records carry the cause, never a person
+AssertionError: expected { moved: true, …(2) } to match object { moved: true, settledMessageId: 2 }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "moved": true,
+-   "settledMessageId": 2,
++   "settledMessageId": 3,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:252:25
+    250|   expect((record!.cause as any).by).toBeUndefined()
+    251|   // Apply settles through what it applied; a held item behind it caps…
+    252|   expect(done!.settled).toMatchObject({
+       |                         ^
+    253|    moved: true,
+    254|    settledMessageId: m[0]!.id
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > close-out applies everything eligible and leaves a conflicted change held
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:373:31
+    371|   expect(done).toMatchObject({
+    372|    applied: [eA.id, eB.id, eC.id],
+    373|    appliedChanges: [category!.id],
+       |                               ^
+    374|    // Offered, re-checked at accept time, and kept with its reason.
+    375|    stillHeld: [
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically folds a chain of changes in order > a change waiting on an earlier change of this session applies with it, in one Apply
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:406:28
+    404|   const done = await auto(w.session.id, "close-out")
+    405|   expect(done).toMatchObject({
+    406|    appliedChanges: [first!.id, second!.id],
+       |                            ^
+    407|    stillHeld: []
+    408|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > the two list reads > appliedBatchesOf lists a press and an automatic Apply, newest first, with who and what
+AssertionError: expected { …(7) } to match object { by: null, …(4) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "automatic": "scene-close",
+    "by": null,
+-   "count": 3,
++   "count": 2,
+    "items": [
+      {
+        "entryId": 59,
+        "kind": "entry",
+        "title": "Brine Gate",
+      },
+      {
+        "entryId": 60,
+        "kind": "entry",
+        "title": "Cinder Row",
+-     },
+-     {
+-       "changes": [
+-         {
+-           "after": "Sealed.",
+-           "before": "Locked.",
+-           "field": "content",
+-           "label": "Content",
+-         },
+-       ],
+-       "entryId": 57,
+-       "kind": "entry-change",
+-       "title": "The Vault",
+      },
+    ],
+    "sceneId": 8,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:603:22
+    601|    pressed.batch
+    602|   ])
+    603|   expect(batches[0]).toMatchObject({
+       |                      ^
+    604|    by: null,
+    605|    automatic: "scene-close",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.settle.int.test.ts > the story settles when a scene closes > what is applied and what is settled come back together: the furthest settle, the Apply's previous
+AssertionError: expected { lorebookId: 21, …(11) } to match object { applied: [ 12 ], settled: { …(3) } }
+(10 matching properties omitted from actual)
+
+- Expected
++ Received
+
+@@ -2,9 +2,9 @@
+    "applied": [
+      12,
+    ],
+    "settled": {
+      "moved": true,
+-     "previousSettledMessageId": null,
++     "previousSettledMessageId": 37,
+      "settledMessageId": 39,
+    },
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.settle.int.test.ts:302:16
+    300|   const s1 = await scene(w, { openedAtMessageId: m[0]!.id, closedAtMes…
+    301|   const done = await auto(w.session.id, "scene-close", s1.id)
+    302|   expect(done).toMatchObject({
+       |                ^
+    303|    applied: [keep.id],
+    304|    settled: { moved: true, settledMessageId: m[2]!.id, previousSettled…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  2 failed | 3 passed (5)
+      Tests  5 failed | 43 passed (48)
+   Start at  21:58:11
+   Duration  8.32s (transform 4.36s, setup 101ms, import 3.81s, tests 17.66s, environment 1ms)
+

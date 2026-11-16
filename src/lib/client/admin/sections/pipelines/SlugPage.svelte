@@ -25,7 +25,20 @@
 	 * **Where it runs** lists the genres and presets that register it.
 	 */
 	import { getContext, onMount, tick, untrack } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		Construction,
+		Diff,
+		GitCommitHorizontal,
+		History,
+		List,
+		MousePointerClick,
+		Network,
+		ScrollText,
+		Search,
+		SlidersHorizontal,
+		Ticket,
+		Workflow
+	} from "@lucide/svelte"
 	import AdminChangeForm, {
 		type AdminSaveIntent
 	} from "$lib/client/components/admin/AdminChangeForm.svelte"
@@ -569,7 +582,17 @@
 
 	const LEGEND = "text-surface-600-400 text-xs font-medium"
 
-	const TABS: { id: Tab; label: string; icon: keyof typeof Icons }[] = [
+	/** The icon per workspace tab, by the name `TABS` declares. */
+	const TAB_ICONS = {
+		SlidersHorizontal,
+		Workflow,
+		ScrollText,
+		Diff,
+		History,
+		GitCommitHorizontal,
+		Ticket
+	}
+	const TABS: { id: Tab; label: string; icon: keyof typeof TAB_ICONS }[] = [
 		{ id: "configure", label: "Configure", icon: "SlidersHorizontal" },
 		{ id: "canvas", label: "Canvas", icon: "Workflow" },
 		{ id: "scripts", label: "Scripts", icon: "ScrollText" },
@@ -582,7 +605,7 @@
 		TABS.map((t) => ({
 			value: t.id,
 			label: t.label,
-			icon: Icons[t.icon] as any,
+			icon: TAB_ICONS[t.icon],
 			count:
 				t.id === "changes"
 					? changeRows.length || undefined
@@ -748,7 +771,7 @@
 				<!-- ── configure toolbar: find a setting, choose the navigator ── -->
 				<div class="flex flex-wrap items-center gap-2">
 					<div class="relative max-w-md min-w-0 flex-1 basis-48">
-						<Icons.Search
+						<Search
 							size={14}
 							class="text-surface-600-400 absolute top-1/2 left-2.5 -translate-y-1/2"
 						/>
@@ -806,7 +829,7 @@
 							title="Compact step list"
 							onclick={() => rememberNavView("list")}
 						>
-							<Icons.List size={15} /> List
+							<List size={15} /> List
 						</button>
 						<button
 							type="button"
@@ -817,7 +840,7 @@
 							title="The full signal-path map"
 							onclick={() => rememberNavView("map")}
 						>
-							<Icons.Network size={15} /> Map
+							<Network size={15} /> Map
 						</button>
 					</div>
 				</div>
@@ -919,7 +942,7 @@
 							<div
 								class="panel-card text-surface-600-400 flex flex-col items-center gap-1 text-center text-sm"
 							>
-								<Icons.MousePointerClick
+								<MousePointerClick
 									size={20}
 									class="opacity-60"
 								/>
@@ -958,7 +981,7 @@
 				</div>
 
 				<p class="text-surface-600-400 flex items-start gap-2 text-xs">
-					<Icons.Construction size={14} class="mt-0.5 shrink-0" />
+					<Construction size={14} class="mt-0.5 shrink-0" />
 					<span>
 						Changing what a pipeline <em>does</em>
 						— swapping a node, reordering, publishing a new version —

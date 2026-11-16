@@ -89,16 +89,20 @@ export interface ChainNode {
  */
 export async function chainNodesFor(
 	db: Db,
-	specVersionId: number
+	specVersionId: number,
+	byPinIn?: Map<string, any>
 ): Promise<Map<string, ChainNode>> {
 	const nodes = await db
 		.select()
 		.from(schema.pipelineNodes)
 		.where(eq(schema.pipelineNodes.specVersionId, specVersionId))
-	const registry = await db.select().from(schema.pipelineDefinitionRegistry)
-	const byPin = new Map<string, any>(
-		(registry as any[]).map((r) => [`${r.definitionId}@${r.version}`, r])
-	)
+	const byPin =
+		byPinIn ??
+		new Map<string, any>(
+			(
+				(await db.select().from(schema.pipelineDefinitionRegistry)) as any[]
+			).map((r) => [`${r.definitionId}@${r.version}`, r])
+		)
 	return new Map(
 		(nodes as any[]).map((n) => [
 			n.nodeKey as string,

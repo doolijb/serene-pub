@@ -42,6 +42,7 @@
  * deadlocks PGlite silently.
  */
 
+import { withoutTimelinePassMark } from "$lib/server/lorebooks/timeline"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import { copyLorebookTables, type IdMap } from "$lib/server/lorebooks/tableRegistry"
@@ -90,7 +91,14 @@ export async function duplicateLorebookRows(
 	const [book] = await tx
 		.insert(schema.lorebooks)
 		// A copy is nobody's surfaced book (★B-3): it starts ordinary.
-		.values({ ...bookColumns, name, userId, surfacedFromSessionId: null })
+		// Nor one the `timeline-switch` pass touched: the mark stays with the source.
+		.values({
+			...bookColumns,
+			extraJson: withoutTimelinePassMark(bookColumns.extraJson),
+			name,
+			userId,
+			surfacedFromSessionId: null
+		})
 		.returning({ id: schema.lorebooks.id })
 	const newId = book.id
 

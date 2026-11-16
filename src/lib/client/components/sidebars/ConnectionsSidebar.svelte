@@ -52,7 +52,23 @@
 		type Snippet
 	} from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
-	import * as Icons from "@lucide/svelte"
+	import {
+		Boxes,
+		ChevronRight,
+		CircleAlert,
+		MessageSquare,
+		Package,
+		Plug,
+		Plus,
+		RefreshCcw,
+		RefreshCw,
+		Save as SaveIcon,
+		SearchX,
+		Settings as SettingsIcon,
+		Trash2,
+		Workflow
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { notify } from "$lib/client/utils/notify"
@@ -1048,6 +1064,13 @@
 	onDestroy(() => {
 		onclose = undefined
 	})
+
+	/** The icons `apiConnectionTabs` can name (`connectionViewChrome.ts`). */
+	const API_TAB_ICONS: Record<string, Component<any>> = {
+		Package: Package,
+		Workflow: Workflow,
+		Settings: SettingsIcon
+	}
 </script>
 
 <!-- The keydown is the view's Ctrl+N (New connection) and Escape for its
@@ -1211,7 +1234,7 @@
 		<summary
 			class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-semibold"
 		>
-			<Icons.ChevronRight
+			<ChevronRight
 				size={14}
 				class="transition-transform group-open:rotate-90"
 				aria-hidden="true"
@@ -1238,7 +1261,7 @@
 				onclick={handleDelete}
 				aria-label={`Delete connection ${connection.name}`}
 			>
-				<Icons.Trash2 size={14} aria-hidden="true" />
+				<Trash2 size={14} aria-hidden="true" />
 				Delete connection
 			</button>
 		{/if}
@@ -1304,7 +1327,7 @@
 				? `Save changes to ${connection.name}`
 				: "No changes to save"}
 		>
-			<Icons.Save size={16} aria-hidden="true" />
+			<SaveIcon size={16} aria-hidden="true" />
 			Save
 		</button>
 		<button
@@ -1315,7 +1338,7 @@
 			title="Reset unsaved changes"
 			aria-label="Reset unsaved changes"
 		>
-			<Icons.RefreshCcw size={16} aria-hidden="true" />
+			<RefreshCcw size={16} aria-hidden="true" />
 		</button>
 		{#if showDelete && !comesWithApp}
 			<button
@@ -1325,7 +1348,7 @@
 				title={`Delete ${connection.name}`}
 				aria-label={`Delete connection ${connection.name}`}
 			>
-				<Icons.Trash2 size={16} aria-hidden="true" />
+				<Trash2 size={16} aria-hidden="true" />
 			</button>
 		{/if}
 	</div>
@@ -1457,7 +1480,7 @@
 				title={paneTitle}
 				icon={connectionTypeIcon(
 					connection?.type ?? selectedRow?.type,
-					Icons.Plug
+					Plug
 				)}
 				chips={showPaneChip ? paneServiceChip : undefined}
 			/>
@@ -1533,7 +1556,7 @@
 						>
 							<div class="flex min-w-0 items-center gap-2">
 								{#if unfinished}
-									<Icons.CircleAlert
+									<CircleAlert
 										size={16}
 										class="text-primary-500 shrink-0"
 										aria-hidden="true"
@@ -1628,7 +1651,7 @@
 													"models"
 												)}
 										>
-											<Icons.Package
+											<Package
 												size={16}
 												aria-hidden="true"
 											/>
@@ -1641,7 +1664,7 @@
 											class="btn btn-sm preset-filled-primary-500 shrink-0"
 											onclick={openSessions}
 										>
-											<Icons.MessageSquare
+											<MessageSquare
 												size={16}
 												aria-hidden="true"
 											/>
@@ -1662,8 +1685,7 @@
 								tabs={apiTabs.map((t) => ({
 									value: t.value,
 									label: t.label,
-									icon:
-										(Icons as any)[t.icon] ?? Icons.Package
+									icon: API_TAB_ICONS[t.icon] ?? Package
 								}))}
 								bind:value={
 									() => apiTab,
@@ -1694,7 +1716,7 @@
 									: "Models"}
 							>
 								<div class="flex min-w-0 items-center gap-2">
-									<Icons.Boxes
+									<Boxes
 										size={16}
 										class="text-surface-500 shrink-0"
 										aria-hidden="true"
@@ -1717,7 +1739,7 @@
 										title="Ask the host for its models again"
 										aria-label="Refresh models"
 									>
-										<Icons.RefreshCw
+										<RefreshCw
 											size={14}
 											class={syncing
 												? "animate-spin"
@@ -1850,7 +1872,7 @@
 													/>
 												{:else}
 													<EmptyState
-														icon={Icons.SearchX}
+														icon={SearchX}
 														message="Nothing matches."
 														ctaLabel="Clear filter"
 														onCta={() =>
@@ -1871,7 +1893,7 @@
 												(addByNameOpen =
 													!addByNameOpen)}
 										>
-											<Icons.Plus
+											<Plus
 												size={14}
 												aria-hidden="true"
 											/>
@@ -2023,7 +2045,7 @@
 					onclick={handleUpdate}
 					aria-label={`Save changes to ${connection.name}`}
 				>
-					<Icons.Save size={16} aria-hidden="true" />
+					<SaveIcon size={16} aria-hidden="true" />
 					Save
 				</button>
 				<button

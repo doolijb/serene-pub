@@ -102,6 +102,15 @@ export const HANDLEBARS_HELPER_DOCS: Readonly<
 		description:
 			"Present, as distinct from falsy — for `{{#if (isSet x)}}`."
 	},
+	formatDate: {
+		signature: "formatDate date",
+		description:
+			"A story date value as text, in the calendar's spelling when its parts are named."
+	},
+	formatDateDelta: {
+		signature: "formatDateDelta delta",
+		description: "A story date delta as signed counts, like `-0y 2m 3d`."
+	},
 	layout: {
 		signature: 'layout variable "reference"',
 		description:
@@ -940,6 +949,8 @@ const LIQUID_TAGS: LiquidTagSnippet[] = [
 /** Liquid's filters: core's (`CONTEXT_LIQUID_FILTERS`) and the standard set. */
 export const LIQUID_FILTER_DOCS: Readonly<Record<string, string>> = {
 	pad: "pad: width — a number, zero-padded",
+	formatDate: "formatDate — a story date value as text",
+	formatDateDelta: "formatDateDelta — a story date delta as signed counts",
 	layout: 'layout: "reference" — the variable written out by the named layout, in this template only',
 	json: "json: indent — the value as JSON",
 	jsonValue: "jsonValue: offset — one value as JSON, indented as if nested",

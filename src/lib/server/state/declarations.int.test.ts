@@ -339,6 +339,50 @@ describe("loading at boot", () => {
 		expect(seen.lastSeenAt).toBeInstanceOf(Date)
 	})
 
+	test("a second last-seen pass adds no rows, and a stored row keeps its props and origin", async () => {
+		reset()
+		const u = await user()
+		const { declareSlot, recordLastSeen } = await import(
+			"$lib/server/state/declarations"
+		)
+		defineAttributeSlot(HP, {
+			type: "integer",
+			descriptor: "How much punishment they can still take.",
+			appliesTo: ["cast"]
+		})
+		const id = `author${n}:slot/tension@1`
+		await declareSlot(db, u.id, id, tension)
+		const first = await recordLastSeen(db)
+		const count = async () =>
+			(await db.select().from(schema.attributeDeclarations)).length
+		const before = await count()
+		const second = await recordLastSeen(db)
+		expect(await count()).toBe(before)
+		expect(second).toEqual(first)
+
+		// A stored row under an id the registry now reports as code is left alone.
+		const [row] = await db
+			.select()
+			.from(schema.attributeDeclarations)
+			.where(eq(schema.attributeDeclarations.id, id))
+		expect(row.origin).toBe("stored")
+		await db
+			.update(schema.attributeDeclarations)
+			.set({ origin: "stored" })
+			.where(eq(schema.attributeDeclarations.id, HP))
+		const [kept] = await db
+			.select()
+			.from(schema.attributeDeclarations)
+			.where(eq(schema.attributeDeclarations.id, HP))
+		await recordLastSeen(db)
+		const [after] = await db
+			.select()
+			.from(schema.attributeDeclarations)
+			.where(eq(schema.attributeDeclarations.id, HP))
+		expect(after.origin).toBe("stored")
+		expect(after.props).toEqual(kept.props)
+	})
+
 	test("a stored row this build refuses costs itself and nothing else", async () => {
 		reset()
 		const u = await user()

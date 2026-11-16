@@ -492,6 +492,103 @@ describe("core's remote Chronicle", () => {
 	)
 })
 
+describe("🚧 a lorebook with no timeline", () => {
+	const NO_PRESENT: HistoryEntriesV1["clock"] = {
+		present: null,
+		label: "",
+		own: false,
+		linePresent: null,
+		linePresentLabel: "",
+		behind: false
+	}
+	const TIMELESS: HistoryEntriesV1 = {
+		...ANSWER,
+		timeline: false,
+		current: null,
+		scenes: [],
+		earlier: [],
+		earlierTotal: 0,
+		clock: NO_PRESENT,
+		unfiledDays: [
+			{
+				date: null,
+				label: "",
+				scenes: [ANSWER.scenes[0]!, ANSWER.scenes[1]!]
+			}
+		]
+	}
+
+	test(
+		"the owner reads one list of scenes and a note: no clock, Now, Not yet compiled or Earlier",
+		{ timeout: 120_000 },
+		async () => {
+			const { view, asked } = await mountChronicle({ answer: TIMELESS })
+			expect(view.refused).toEqual([])
+			for (const name of ["clock", "now", "unfiled", "earlier"])
+				expect(view.query(part(name)) === null, name).toBe(true)
+			expect(text(view.query(part("note")))).toBe(
+				"This lorebook keeps no timeline, so there are no story dates here."
+			)
+			const scenes = view.query(part("scenes"))!
+			expect(scenes === null).toBe(false)
+			expect(scenes.querySelectorAll(part("scene")).length).toBe(2)
+			await view.click(part("open"))
+			await view.settle()
+			expect(asked.filter((a) => a.kind === "open-lore")).toEqual([
+				{
+					kind: "open-lore",
+					params: { lorebookId: 4, scope: "scenes" }
+				}
+			])
+		}
+	)
+
+	test(
+		"a guest is told the scenes are the lorebook owner's to read",
+		{ timeout: 120_000 },
+		async () => {
+			const { view } = await mountChronicle({
+				viewer: GUEST,
+				answer: {
+					...TIMELESS,
+					ownerOnly: true,
+					scenes: [],
+					unfiledDays: undefined
+				}
+			})
+			expect(view.query(part("clock")) === null).toBe(true)
+			expect(view.queryAll(part("note")).map((n) => text(n))).toContain(
+				"This session's scenes are its lorebook owner's to read."
+			)
+		}
+	)
+
+	test(
+		"flipping the switch redraws on the next story:moved, both ways",
+		{ timeout: 120_000 },
+		async () => {
+			let timeline = true
+			const { view } = await mountChronicle({
+				answer: () => (timeline ? ANSWER : TIMELESS)
+			})
+			expect(view.query(part("clock")) === null).toBe(false)
+			const flip = async (to: boolean) => {
+				timeline = to
+				await view.event({ kind: "story:moved" })
+				await new Promise((r) => setTimeout(r, 300))
+				await view.settle()
+			}
+			await flip(false)
+			expect(view.query(part("clock")) === null).toBe(true)
+			expect(text(view.query(part("note")))).toBe(
+				"This lorebook keeps no timeline, so there are no story dates here."
+			)
+			await flip(true)
+			expect(view.query(part("clock")) === null).toBe(false)
+		}
+	)
+})
+
 describe("the page mounts Chronicle remote", () => {
 	test("core's own module, served at /core-ui/chronicle, granted 'lore' for its requests", () => {
 		const widget = coreDefaultWidgets(true).find((p) => p.id === "chronicle")!

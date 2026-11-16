@@ -65,6 +65,7 @@ import {
 	type SessionCut
 } from "$lib/shared/lorebooks/lineReading"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { sessionTimelineSql, timelineOf, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import { onLineSql } from "./lineSql"
 
 /** Where a read of a book stands. */
@@ -85,6 +86,8 @@ export interface LineReading {
 	holderBookId?: number
 	/** 🚧 Set when the reading is of the session's own notes, which the session reads alone (no attached book). */
 	onOwnBook?: true
+	/** 🚧 Set when the reading was made for a book whose timeline is off (`lorebooks/timeline.ts`): the reading has no moment, and nothing written at it is dated. `false`: the switch was read and is on. Absent: not asked. */
+	timelineOff?: boolean
 	/** History entry id → its date, filled as rows are asked about. */
 	dates?: Map<number, StoryDate | null>
 }
@@ -218,6 +221,8 @@ export async function readingOf(
 		branch?: BranchPick | null
 		moment?: StoryDate | null
 		forkCut?: boolean
+		/** The book's Timeline switch when the caller already has it; absent, asked of the book only when a moment is passed. */
+		timelineEnabled?: boolean
 	} = {}
 ): Promise<LineReading> {
 	const branch = pick.branch ?? "main"
@@ -231,7 +236,19 @@ export async function readingOf(
 		if (pick.forkCut !== false) forkedAt = found.forkedAt
 		else line = uncutLine(line)
 	}
-	return { lorebookId, branchId, moment: pick.moment ?? null, forkedAt, line }
+	// A moment asked of a book with no timeline reads as it stands now.
+	const timelineEnabled =
+		pick.timelineEnabled ?? (pick.moment ? await timelineOfBook(db, lorebookId) : undefined)
+	if (timelineEnabled === false)
+		return { lorebookId, branchId, moment: null, forkedAt, line, timelineOff: true }
+	return {
+		lorebookId,
+		branchId,
+		moment: pick.moment ?? null,
+		forkedAt,
+		line,
+		...(timelineEnabled ? { timelineOff: false } : {})
+	}
 }
 
 type BranchAncestry = { sessionId: number; mark: number; lineId?: number | null }[] | null | undefined
@@ -320,6 +337,7 @@ export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineR
 			storyClockYear: schema.sessions.storyClockYear,
 			storyClockMonth: schema.sessions.storyClockMonth,
 			storyClockDay: schema.sessions.storyClockDay,
+			timelineEnabled: sessionTimelineSql(),
 			// One query on the hot path: the own book rides along as a scalar.
 			ownBookId: sql<number | null>`(select id from lorebooks where session_id = sessions.id limit 1)`
 		})
@@ -336,15 +354,18 @@ export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineR
 	const bookId = session.lorebookId ?? ownBookId
 	if (bookId == null) return null
 	const onOwnBook = ownBookId != null
+	// Timeline off: no moment anywhere (stored clocks are ignored, never cleared); session cuts stay.
+	const timelineOff = !timelineOf(session)
 	const mark = <T extends LineReading>(r: T): T =>
-		onOwnBook || holderBookId != null
+		onOwnBook || holderBookId != null || timelineOff
 			? {
 					...r,
+					...(timelineOff ? { timelineOff: true as const } : {}),
 					...(onOwnBook ? { onOwnBook: true as const } : {}),
 					...(holderBookId != null ? { holderBookId } : {})
 				}
 			: r
-	const own = momentOf(session)
+	const own = timelineOff ? null : momentOf(session)
 	// A branch session also carries its session cuts (plan §32 §5b); a session
 	// with no ancestry reads exactly as it always did.
 	const withCuts = async (line: Line): Promise<Line> =>
@@ -354,11 +375,12 @@ export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineR
 	try {
 		const reading = await readingOf(db, bookId, {
 			branch: session.lorebookBranchId ?? "main",
-			moment: own
+			moment: own,
+			timelineEnabled: !timelineOff
 		})
 		reading.line = await withCuts(reading.line)
 		// Following its line: the line's present when the line sets one.
-		if (!own) reading.moment = await linePresentOf(db, bookId, reading.branchId)
+		if (!own && !timelineOff) reading.moment = await linePresentOf(db, bookId, reading.branchId)
 		return mark(reading)
 	} catch (e) {
 		// A stale branch id (it cannot be another book's: the handler checks,
@@ -368,9 +390,10 @@ export async function sessionReadingOf(db: Db, sessionId: number): Promise<LineR
 			return mark({
 				lorebookId: bookId,
 				branchId: null,
-				moment: own ?? (await linePresentOf(db, bookId, null)),
+				moment: timelineOff ? null : (own ?? (await linePresentOf(db, bookId, null))),
 				forkedAt: null,
-				line: await withCuts(MAIN_LINE)
+				line: await withCuts(MAIN_LINE),
+				timelineOff
 			})
 		throw e
 	}
@@ -482,8 +505,11 @@ export interface StoryDating {
  * falls exactly on the moment being read, and otherwise keep the date of the
  * value they change — authoring at now edits the value in force, from its
  * own date.
+ *
+ * Null when the reading's book has no timeline (`lorebooks/timeline.ts`): nothing is dated.
  */
 export async function writeDatingAt(db: Db, reading: LineReading): Promise<StoryDating | null> {
+	if (reading.timelineOff || (reading.timelineOff === undefined && !(await timelineOfBook(db, reading.lorebookId)))) return null
 	const rows = await db
 		.select({
 			id: schema.lorebookEntries.id,

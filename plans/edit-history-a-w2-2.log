@@ -1,0 +1,42 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/sockets/entries.redlines.int.test.ts (13 tests | 1 failed) 6125ms
+     × names the session to a viewer who may open it, hides it from one who may not, and survives a delete 24ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sockets/entries.redlines.int.test.ts > entries:redlines > names the session to a viewer who may open it, hides it from one who may not, and survives a delete
+AssertionError: expected [ 'A routine in Session 7', …(2) ] to deeply equal [ 'By itself, from Session 7', …(2) ]
+
+- Expected
++ Received
+
+  [
+-   "By itself, from Session 7",
++   "A routine in Session 7",
+    "Remember things in Elsewhere",
+    "Remember things in Session 7",
+  ]
+
+ ❯ src/lib/server/sockets/entries.redlines.int.test.ts:167:43
+    165|
+    166|   const mine = await list(w.user.id, w.entry.id)
+    167|   expect(mine.redlines.map((r) => r.who)).toEqual([
+       |                                           ^
+    168|    `By itself, from Session ${w.tag}`,
+    169|    "Remember things in Elsewhere",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 14 passed (15)
+   Start at  03:02:46
+   Duration  6.76s (transform 5.44s, setup 34ms, import 954ms, tests 12.01s, environment 1ms)
+

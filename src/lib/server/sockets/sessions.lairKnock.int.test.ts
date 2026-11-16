@@ -922,10 +922,9 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		expect(planner).toContain("From here:\\n- Leads to The Drowned Hall.")
 	})
 
-	test("the room and its links are in the session's own book until a scene closes, then in the lorebook", async () => {
+	test("the room and its links are in the lorebook at once, none in the session's own book (a press, no imprint)", async () => {
 		const schema = await import("$lib/server/db/schema")
 		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
-		const { openScene, closeScene } = await import("$lib/server/scenes/liveScenes")
 		const w = await lair()
 		reset(KNOCK)
 		await reply(w, "the knock")
@@ -933,7 +932,6 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 		const { ack } = await pressKnock(w, TYPED)
 		expect(ack?.error).toBeUndefined()
 		await storyWentOn(w, 3)
-		const own = (await ownBookOf(testDb as unknown as Db, w.session.id))!
 		const inBook = async (lorebookId: number) => ({
 			rooms: await testDb
 				.select()
@@ -949,29 +947,13 @@ describe("B6 · Answer the door links the new room to where the party stand", ()
 				.from(schema.narrativeRelationships)
 				.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
 		})
-		// Before: the session's own book holds the room and both its links; the lorebook holds neither.
-		const before = await inBook(own.id)
-		expect(before.rooms).toHaveLength(1)
-		expect(before.links.length).toBeGreaterThanOrEqual(2)
-		expect(await inBook(w.lorebookId)).toEqual({ rooms: [], links: [] })
-		// A scene covering the turn closes: Apply runs by itself (the owner owns the lorebook, Full).
-		const rows = await rowsOf(w.session.id)
-		const open = await openScene(testDb as unknown as Db, {
-			sessionId: w.session.id,
-			userId: w.owner.id,
-			channel: "main",
-			atMessageId: rows[0]!.id
-		})
-		await closeScene(testDb as unknown as Db, {
-			sceneId: open.scene.id,
-			userId: w.owner.id,
-			atMessageId: rows[rows.length - 1]!.id
-		})
+		// Under Full on the owner's own lorebook the room and both its links land in the lorebook at once.
 		const after = await inBook(w.lorebookId)
 		expect(after.rooms).toHaveLength(1)
 		expect(after.rooms[0]!.content).toBe(TYPED)
-		expect(after.links.length).toBe(before.links.length)
-		expect(await inBook(own.id)).toEqual({ rooms: [], links: [] })
+		expect(after.links.length).toBeGreaterThanOrEqual(2)
+		const own = await ownBookOf(testDb as unknown as Db, w.session.id)
+		if (own) expect(await inBook(own.id)).toEqual({ rooms: [], links: [] })
 	})
 
 	test("drafted: the link is written once the master approves the draft", async () => {

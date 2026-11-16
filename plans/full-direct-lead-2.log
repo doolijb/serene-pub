@@ -1,0 +1,15 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+[vitest] removed 2 stale temp entries from /tmp
+
+ Test Files  149 passed (149)
+      Tests  1477 passed | 1 skipped (1478)
+   Start at  23:27:31
+   Duration  458.11s (transform 32.24s, setup 898ms, import 166.72s, tests 1183.86s, environment 3.62s)
+

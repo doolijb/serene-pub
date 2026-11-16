@@ -1,0 +1,40 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |unit| src/lib/shared/sockets/scopedReplies.test.ts (54 tests | 1 failed) 13ms
+     × every scoped event of the families has a declared scope path 5ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/shared/sockets/scopedReplies.test.ts > lorebook-family SCOPED replies > every scoped event of the families has a declared scope path
+AssertionError: Add the event to SCOPE_PATHS so tsc checks its Response carries the key: expected [ 'amendments:moveDownTheTree' ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "amendments:moveDownTheTree",
++ ]
+
+ ❯ src/lib/shared/sockets/scopedReplies.test.ts:157:5
+    155|    scoped.filter((event) => !(event in SCOPE_PATHS)),
+    156|    "Add the event to SCOPE_PATHS so tsc checks its Response carries th…
+    157|   ).toEqual([])
+       |     ^
+    158|   // And nothing stale: a path for an event no longer scoped is a check
+    159|   // on nothing.
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 92 passed (93)
+   Start at  00:48:47
+   Duration  823ms (transform 629ms, setup 43ms, import 774ms, tests 31ms, environment 1ms)
+

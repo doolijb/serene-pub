@@ -1,0 +1,24 @@
+▶ the outlets
+  ✔ create-lore-entry takes the typed fields as json, and a reviewer may retype them (0.688998ms)
+  ✔ update-lore-entry changes an entry the session has: which entry is not the reviewer’s (0.10672ms)
+  ✔ the contracts, pinned (create moved with its port; update is new) (5.015004ms)
+✔ the outlets (6.32394ms)
+▶ fieldsFindings
+  ✔ reads the type by declaration, descriptor, versioned or bare id (0.624808ms)
+  ✔ an unknown type is a finding naming the declared ones (0.171849ms)
+  ✔ a misfit is refused with the field named, never trimmed (0.197519ms)
+  ✔ a derived entry type: whole needs the piece's description; a patch only what it names (0.527239ms)
+  ✔ the title is the name port, never a field (0.126049ms)
+  ✔ a duration is held to what a piece’s is (0.15321ms)
+✔ fieldsFindings (2.021464ms)
+▶ a pipeline asks for them and saves them
+  ✔ jsonSchemaOf(type) → generate-json → create-lore-entry fields, and update-lore-entry by name (3.741929ms)
+✔ a pipeline asks for them and saves them (3.810078ms)
+ℹ tests 10
+ℹ suites 3
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 340.237326

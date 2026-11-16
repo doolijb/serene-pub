@@ -163,4 +163,27 @@ describe("SummarizeLoreModal — the history a scene is filed under", () => {
 		expect(text()).not.toContain("Late days.")
 		expect(text()).toContain("Early days.")
 	})
+
+	test("with the timeline on the History entry block is drawn", async () => {
+		open({ initialLoreType: "scene", timeline: true })
+		await settle()
+		expect(text().includes("History entry")).toBe(true)
+	})
+
+	test("with the timeline off the block is absent and a scene is made under no history entry", async () => {
+		open({ initialLoreType: "scene", timeline: false })
+		await settle()
+		expect(text().includes("History entry")).toBe(false)
+
+		const generate = [...document.querySelectorAll("button")].find((b) =>
+			b.textContent?.includes("Generate summary")
+		) as HTMLButtonElement
+		expect(generate).toBeDefined()
+		generate.click()
+		await settle()
+
+		const create = client.emits.find((e) => e.event === "scenes:create")
+		expect(create).toBeDefined()
+		expect(create?.payload.scene.historyEntryId).toBeNull()
+	})
 })

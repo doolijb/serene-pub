@@ -171,6 +171,13 @@ export interface LooseEndsInput {
 	suggestions?: readonly { id: number; name: string }[]
 	/** Possible duplicate pairs. */
 	duplicates?: readonly { nameA: string; nameB: string }[]
+	/**
+	 * 🚧 The book's Timeline switch (absent reads as on). Off, the three time
+	 * chores (`undated-history`, `doubled-history-date`, `history-before-fork`)
+	 * are not listed, nor any chore about a history entry (the book shows
+	 * none); every other chore is as ever.
+	 */
+	timeline?: boolean
 }
 
 const blank = (s: string | null | undefined) => !s || s.trim().length === 0
@@ -182,6 +189,7 @@ const blank = (s: string | null | undefined) => !s || s.trim().length === 0
 export function looseEnds(input: LooseEndsInput): LooseEnd[] {
 	const out: LooseEnd[] = []
 	const linked = input.linkedKeys ?? new Set<string>()
+	const timeline = input.timeline ?? true
 	const entry = (chore: ChoreId, item: PoolItem): LooseEnd => ({
 		id: `${chore}:${item.key}`,
 		chore,
@@ -197,11 +205,14 @@ export function looseEnds(input: LooseEndsInput): LooseEnd[] {
 		// people are not entries (a member's chores are below).
 		if (item.archived) continue
 		if (item.kind === SCENE_KIND || item.kind === CAST_KIND) continue
+		// With no timeline the book shows no history entries, so none is a chore.
+		if (!timeline && item.kind === HISTORY_TYPE_ID) continue
 
 		if (needsKeywords(item)) out.push(entry("needs-keywords", item))
-		if (item.kind === HISTORY_TYPE_ID && !item.date)
+		if (timeline && item.kind === HISTORY_TYPE_ID && !item.date)
 			out.push(entry("undated-history", item))
 		if (
+			timeline &&
 			input.line &&
 			item.kind === HISTORY_TYPE_ID &&
 			item.date &&
@@ -216,7 +227,7 @@ export function looseEnds(input: LooseEndsInput): LooseEnd[] {
 	}
 
 	// Archived rows count: the server's one-per-date check does too.
-	const dated = input.items
+	const dated = (timeline ? input.items : [])
 		.filter((i) => i.kind === HISTORY_TYPE_ID && i.date)
 		.sort((a, b) => compareDates(a.date!, b.date!) || a.id - b.id)
 	for (let i = 0; i < dated.length; ) {

@@ -21,6 +21,7 @@ import { lineOf, MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
 import { edgesOnLine } from "../graphs/asOf"
 import type { PoolItem } from "../poolFilter"
 import { BookRelationships } from "../relationships.svelte"
+import { bookDataContext, staticBookData } from "../bookData.svelte"
 import PlaceLinks from "./PlaceLinks.svelte"
 
 type Listener = (payload: unknown) => void
@@ -163,12 +164,23 @@ function render(
 		pool?: PoolItem[]
 		/** The place's body as the editor holds it — where an Exits line is read. */
 		content?: string
+		/** 🚧 The book's Timeline switch; absent mounts outside a workspace. */
+		timelineEnabled?: boolean
 	} = {}
 ) {
 	const host = document.createElement("div")
 	document.body.append(host)
 	const app = mount(PlaceLinks, {
 		target: host,
+		context:
+			opts.timelineEnabled === undefined
+				? undefined
+				: bookDataContext(
+						staticBookData(() => ({
+							lorebookId: BOOK,
+							timelineEnabled: opts.timelineEnabled
+						}))
+					),
 		props: {
 			place: { id: placeId, name: NAMES[placeId] },
 			lorebookId: BOOK,
@@ -177,8 +189,11 @@ function render(
 			reading: {
 				branchId: opts.branchId ?? null,
 				line: opts.line ?? MAIN_LINE,
-				moment: undefined,
-				datedBy: [],
+				moment: opts.timelineEnabled === undefined ? undefined : "Y3",
+				datedBy:
+					opts.timelineEnabled === undefined
+						? []
+						: [{ id: 77, year: 3, month: null, day: null }],
 				lineName: (id: number | null) => (id == null ? "main" : `line ${id}`)
 			},
 			createPlace: opts.createPlace,
@@ -923,5 +938,44 @@ describe("PlaceLinks — Read links from the Exits line", () => {
 		expect(host.querySelector("[data-exits-note]")?.textContent?.trim()).toBe(
 			"Stopped: linked 1 way from the Exits line; 1 left unlinked."
 		)
+	})
+})
+
+describe("PlaceLinks — the Timeline switch", () => {
+	async function drawLink(timelineEnabled: boolean) {
+		list([])
+		const host = render(GUARDROOM, { timelineEnabled })
+		host.querySelector<HTMLButtonElement>("[data-place-link-add]")!.click()
+		flushSync()
+		const form = host.querySelector<HTMLElement>("[data-place-link-new]")!
+		form.querySelector<HTMLButtonElement>('button[aria-label="Show The other place options"]')!.click()
+		await settle()
+		document
+			.querySelector<HTMLElement>('[role="listbox"][data-state="open"] [role="option"]')!
+			.click()
+		await settle()
+		return form
+	}
+
+	test("on: a link starts dated by the moment and a When control is drawn", async () => {
+		// Two dates make the picker worth drawing (one option hides it).
+		list([])
+		const form = await drawLink(true)
+		expect(form.textContent).toContain("When")
+		form.querySelector<HTMLButtonElement>("[data-place-link-submit]")!.click()
+		flushSync()
+		expect(sent("narrativeGraph:createRelationship")[0].params).toMatchObject({
+			historyEntryId: 77
+		})
+	})
+
+	test("off: a link starts undated and no When control is drawn", async () => {
+		const form = await drawLink(false)
+		expect(form.textContent).not.toContain("When")
+		form.querySelector<HTMLButtonElement>("[data-place-link-submit]")!.click()
+		flushSync()
+		expect(
+			"historyEntryId" in sent("narrativeGraph:createRelationship")[0].params
+		).toBe(false)
 	})
 })

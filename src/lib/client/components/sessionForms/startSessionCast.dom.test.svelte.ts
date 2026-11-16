@@ -10,7 +10,7 @@
  * - Who you play as is one row with **Change**, which opens the persona
  *   picker and replaces the choice.
  */
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 
 vi.mock("$app/environment", () => ({
@@ -68,6 +68,12 @@ vi.mock("$lib/client/utils/toaster", () => ({
 }))
 
 import StartSessionForm from "./StartSessionForm.svelte"
+
+// The character picker loads its list when it opens; warm the module so the
+// picker's import resolves within `settle()`.
+beforeAll(async () => {
+	await import("../modals/CharacterSelectList.svelte")
+})
 
 const GENRE = "test:genre/troupe@1"
 

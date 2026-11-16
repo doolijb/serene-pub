@@ -134,16 +134,40 @@ describe("earlierScenesOf", () => {
 				sceneId: early.id,
 				name: "Scene 1",
 				summary: "Summary from 10.",
-				firstLineId: 10
+				firstLineId: 10,
+				openedStoryClock: null
 			},
 			{
 				sceneId: late.id,
 				name: "Scene 2",
 				summary: "Later.",
-				firstLineId: 50
+				firstLineId: 50,
+				openedStoryClock: null
 			}
 		])
 	})
+
+	it("carries the story clock the scene opened at, null when it recorded none", async () => {
+		const session = await makeSession()
+		await addScene(session.id, 10, {
+			name: "Dated",
+			openedStoryClockYear: 412,
+			openedStoryClockMonth: 3,
+			openedStoryClockDay: 5,
+			openedStoryClockHour: 9,
+			openedStoryClockMinute: 30
+		})
+		await addScene(session.id, 20, { name: "Undated" })
+		const [dated, undated] = await read(session.id)
+		expect(dated.openedStoryClock).toEqual({
+			year: 412,
+			month: 3,
+			day: 5,
+			hour: 9,
+			minute: 30
+		})
+		expect(undated.openedStoryClock).toBeNull()
+	}, 60_000)
 
 	it("shows a default name as numbered on its lane, not as stored", async () => {
 		const session = await makeSession()
@@ -165,7 +189,8 @@ describe("earlierScenesOf", () => {
 				sceneId: picked.id,
 				name: "Picked",
 				summary: "Summary from 0.",
-				firstLineId: 29
+				firstLineId: 29,
+				openedStoryClock: null
 			}
 		])
 	})

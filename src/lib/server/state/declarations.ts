@@ -312,24 +312,39 @@ export async function recordLastSeen(
 	const originOf = (id: string): DeclarationOrigin =>
 		slotOwner(id) === "core" ? "code" : "plugin"
 
-	let slots = 0
-	for (const decl of sdkAttributeSlots()) {
-		if (decl.origin !== "code") continue
-		const { id, origin: _o, ...props } = decl
-		await db
-			.insert(schema.attributeDeclarations)
-			.values({
+	// One multi-row upsert per table. Both lists come from registry maps keyed
+	// by id, so an id never appears twice in one statement.
+	const rowsOf = (decls: Iterable<{ id: string; origin: string }>) => {
+		const rows: {
+			id: string
+			origin: DeclarationOrigin
+			props: Record<string, unknown>
+			lastSeenAt: Date
+		}[] = []
+		for (const decl of decls) {
+			if (decl.origin !== "code") continue
+			const { id, origin: _o, ...props } = decl
+			rows.push({
 				id,
 				origin: originOf(id),
 				props: props as unknown as Record<string, unknown>,
 				lastSeenAt: now
 			})
+		}
+		return rows
+	}
+
+	const slotRows = rowsOf(sdkAttributeSlots())
+	if (slotRows.length)
+		await db
+			.insert(schema.attributeDeclarations)
+			.values(slotRows)
 			.onConflictDoUpdate({
 				target: schema.attributeDeclarations.id,
 				set: {
-					origin: originOf(id),
-					props: props as unknown as Record<string, unknown>,
-					lastSeenAt: now,
+					origin: sql`excluded.origin`,
+					props: sql`excluded.props`,
+					lastSeenAt: sql`excluded.last_seen_at`,
 					updatedAt: now
 				},
 				// A stored row is somebody's, and a code declaration under the
@@ -338,33 +353,24 @@ export async function recordLastSeen(
 				// build with looser rules.
 				setWhere: sql`${schema.attributeDeclarations.origin} <> 'stored'`
 			})
-		slots++
-	}
 
-	let sheets = 0
-	for (const decl of sdkAttributeSheets()) {
-		if (decl.origin !== "code") continue
-		const { id, origin: _o, ...props } = decl
+	const sheetRows = rowsOf(sdkAttributeSheets())
+	if (sheetRows.length)
 		await db
 			.insert(schema.attributeSheets)
-			.values({
-				id,
-				origin: originOf(id),
-				props: props as unknown as Record<string, unknown>,
-				lastSeenAt: now
-			})
+			.values(sheetRows)
 			.onConflictDoUpdate({
 				target: schema.attributeSheets.id,
 				set: {
-					origin: originOf(id),
-					props: props as unknown as Record<string, unknown>,
-					lastSeenAt: now,
+					origin: sql`excluded.origin`,
+					props: sql`excluded.props`,
+					lastSeenAt: sql`excluded.last_seen_at`,
 					updatedAt: now
 				},
 				setWhere: sql`${schema.attributeSheets.origin} <> 'stored'`
 			})
-		sheets++
-	}
+	const slots = slotRows.length
+	const sheets = sheetRows.length
 	return { slots, sheets }
 }
 

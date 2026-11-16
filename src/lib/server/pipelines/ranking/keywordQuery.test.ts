@@ -13,6 +13,8 @@ import {
 	MAX_RECURSION_DEPTH,
 	keywordQuery,
 	normaliseTfidf,
+	poolTermProfileFor,
+	resetPoolCaches,
 	type LoreRow
 } from "$lib/server/pipelines/ranking/keywordQuery"
 import { DEFAULT_RETRIEVAL } from "$lib/server/pipelines/ranking/weights"
@@ -644,10 +646,18 @@ describe("selective logic — found, and then excluded", () => {
 			keys: "lair",
 			content: "Something vast sleeps here: a dragon."
 		})
-		const wyrm = conditioned({ id: 2, name: "The Wyrm", content: "Scales like coins." })
-		const r = run([lair, wyrm], ["we reached the lair, past the old statue"], {
-			retrieval: { ...DEFAULT_RETRIEVAL, maxRecursionDepth: 1 }
+		const wyrm = conditioned({
+			id: 2,
+			name: "The Wyrm",
+			content: "Scales like coins."
 		})
+		const r = run(
+			[lair, wyrm],
+			["we reached the lair, past the old statue"],
+			{
+				retrieval: { ...DEFAULT_RETRIEVAL, maxRecursionDepth: 1 }
+			}
+		)
 		expect(r.candidates.map((c) => c.id)).toEqual([1])
 		const skipped = r.skipped.find((s) => s.id === 2)
 		expect(skipped?.kind).toBe("excluded")
@@ -798,11 +808,14 @@ describe("the lexical reading is a switch, not an edit", () => {
 
 describe("match facts at the source, and archived entries (L1)", () => {
 	it("a candidate names the keys that matched and the message each was in", () => {
-		const r = run([entry({ keys: "ashguard, riders, dragon" })], [
-			"hello there",
-			"the ashguard rode north",
-			"and the riders followed"
-		])
+		const r = run(
+			[entry({ keys: "ashguard, riders, dragon" })],
+			[
+				"hello there",
+				"the ashguard rode north",
+				"and the riders followed"
+			]
+		)
 		const matched = r.candidates[0].matched ?? []
 		expect(matched.map((m) => m.key).sort()).toEqual(["ashguard", "riders"])
 		expect(matched.find((m) => m.key === "ashguard")?.messageId).toBe(2)
@@ -812,7 +825,10 @@ describe("match facts at the source, and archived entries (L1)", () => {
 	it("an archived entry is excluded, and says so", () => {
 		const r = run([entry({ archived: true })], ["the ashguard rode north"])
 		expect(r.candidates).toHaveLength(0)
-		expect(r.skipped[0]).toMatchObject({ kind: "excluded", reason: "entry is archived" })
+		expect(r.skipped[0]).toMatchObject({
+			kind: "excluded",
+			reason: "entry is archived"
+		})
 	})
 })
 
@@ -827,24 +843,36 @@ describe("regex keys that are not run (plan S3)", () => {
 		)
 		expect(performance.now() - started).toBeLessThan(500)
 		expect(r.candidates).toHaveLength(0)
-		expect(r.skipped[0]!.reason).toContain("the pattern “(a+)+$” was not checked")
+		expect(r.skipped[0]!.reason).toContain(
+			"the pattern “(a+)+$” was not checked"
+		)
 		expect(r.diagnostics.patternsNotRun).toEqual([
 			{
 				id: 1,
 				source: "worldLore",
 				key: "(a+)+$",
-				why: expect.stringContaining("repeats a group that already repeats")
+				why: expect.stringContaining(
+					"repeats a group that already repeats"
+				)
 			}
 		])
 	})
 
 	it("still matches the entry on its other keys, and still reports the one it skipped", () => {
 		const r = run(
-			[entry({ name: "Plain", keys: ["(a+)+$", "ash\\w+"], matchMode: "regex" })],
+			[
+				entry({
+					name: "Plain",
+					keys: ["(a+)+$", "ash\\w+"],
+					matchMode: "regex"
+				})
+			],
 			[`the ashguard ${aaa}`]
 		)
 		expect(r.candidates.map((c) => c.id)).toEqual([1])
-		expect(r.diagnostics.patternsNotRun.map((p) => p.key)).toEqual(["(a+)+$"])
+		expect(r.diagnostics.patternsNotRun.map((p) => p.key)).toEqual([
+			"(a+)+$"
+		])
 	})
 
 	it("reports a runaway condition key, and reads it as absent", () => {
@@ -860,11 +888,16 @@ describe("regex keys that are not run (plan S3)", () => {
 			[`the ashguard ${aaa}`]
 		)
 		expect(r.candidates.map((c) => c.id)).toEqual([1])
-		expect(r.diagnostics.patternsNotRun.map((p) => p.key)).toEqual(["(\\w+\\s?)+$"])
+		expect(r.diagnostics.patternsNotRun.map((p) => p.key)).toEqual([
+			"(\\w+\\s?)+$"
+		])
 	})
 
 	it("says nothing when every pattern ran", () => {
-		const r = run([entry({ keys: ["ash\\w+"], matchMode: "regex" })], ["the ashguard"])
+		const r = run(
+			[entry({ keys: ["ash\\w+"], matchMode: "regex" })],
+			["the ashguard"]
+		)
 		expect(r.diagnostics.patternsNotRun).toEqual([])
 	})
 })
@@ -881,10 +914,20 @@ describe("one scan, one budget for patterns (plan S3)", () => {
 	const DIGITS = "1".repeat(450)
 	const book = (slowKeys: number): LoreRow[] => [
 		...Array.from({ length: slowKeys }, (_, i) =>
-			entry({ id: 1000 + i, name: `Slow ${i}`, keys: [`\\d+\\d+zq${i}`], matchMode: "regex" })
+			entry({
+				id: 1000 + i,
+				name: `Slow ${i}`,
+				keys: [`\\d+\\d+zq${i}`],
+				matchMode: "regex"
+			})
 		),
 		...Array.from({ length: 41 }, (_, i) =>
-			entry({ id: 1 + i, name: `Link ${i}`, keys: [`link${i}`], content: `link${i + 1} ${DIGITS}` })
+			entry({
+				id: 1 + i,
+				name: `Link ${i}`,
+				keys: [`link${i}`],
+				content: `link${i + 1} ${DIGITS}`
+			})
 		)
 	]
 	const scan = (slowKeys: number, maxRecursionDepth: number) =>
@@ -901,10 +944,16 @@ describe("one scan, one budget for patterns (plan S3)", () => {
 			// One budget, one bound past it, and the scan's own work. Before,
 			// each pass opened a budget of its own: 0.4 s at depth 0, 1.4 s at
 			// 5 and 8.5 s at 40.
-			expect(ms).toBeLessThan(PATTERN_SCAN_BUDGET_MS + PATTERN_TIME_BOUND_MS + 300)
-			expect(r.diagnostics.recursionDepth).toBe(Math.min(depth, MAX_RECURSION_DEPTH))
+			expect(ms).toBeLessThan(
+				PATTERN_SCAN_BUDGET_MS + PATTERN_TIME_BOUND_MS + 300
+			)
+			expect(r.diagnostics.recursionDepth).toBe(
+				Math.min(depth, MAX_RECURSION_DEPTH)
+			)
 			expect(
-				r.diagnostics.patternsNotRun.some((p) => p.why.includes("this turn's time"))
+				r.diagnostics.patternsNotRun.some((p) =>
+					p.why.includes("this turn's time")
+				)
 			).toBe(true)
 		}
 	)
@@ -912,15 +961,98 @@ describe("one scan, one budget for patterns (plan S3)", () => {
 	it("skips the slow keys after a few turns, and the scan is quick again", async () => {
 		let last = scan(20, 3)
 		let turns = 1
-		while (turns < 15 && last.diagnostics.patternsNotRun.some((p) => !p.why.includes("too long"))) {
+		while (
+			turns < 15 &&
+			last.diagnostics.patternsNotRun.some(
+				(p) => !p.why.includes("too long")
+			)
+		) {
 			await new Promise<void>((resolve) => setImmediate(resolve))
 			last = scan(20, 3)
 			turns++
 		}
 		expect(last.diagnostics.patternsNotRun).toHaveLength(20)
-		expect(last.diagnostics.patternsNotRun.every((p) => p.why.includes("too long"))).toBe(true)
+		expect(
+			last.diagnostics.patternsNotRun.every((p) =>
+				p.why.includes("too long")
+			)
+		).toBe(true)
 		const started = performance.now()
 		scan(20, 3)
 		expect(performance.now() - started).toBeLessThan(100)
+	})
+})
+
+describe("pool caches (perf-G)", () => {
+	const pool = (over: Partial<LoreRow> = {}): LoreRow[] => [
+		entry({
+			id: 1,
+			name: "The Ashguard",
+			keys: "ashguard",
+			content: "oathbound riders of the north"
+		}),
+		entry({
+			id: 2,
+			name: "Vigil",
+			keys: "ashguard",
+			content: "Alice keeps a hidden moonstone watch",
+			...over
+		}),
+		entry({
+			id: 3,
+			name: "Harbor",
+			keys: "harbor",
+			content: "ships and salt"
+		})
+	]
+	const refs = [{ name: "Alice", ref: { kind: "character" as const, id: 9 } }]
+	const talk = ["Alice asked about the ashguard and the moonstone"]
+	const signals = (r: ReturnType<typeof run>) => JSON.stringify(r)
+
+	it("a hit equals a cold computation", () => {
+		resetPoolCaches()
+		const cold = run(pool(), talk, { entityRefs: refs })
+		const hit = run(pool(), talk, { entityRefs: refs })
+		resetPoolCaches()
+		const fresh = run(
+			pool().map((e) => ({ ...e, content: `${e.content}`.slice() })),
+			talk,
+			{ entityRefs: refs.map((r) => ({ ...r })) }
+		)
+		expect(hit).toEqual(cold)
+		expect(hit).toEqual(fresh)
+	})
+
+	it("a cast change invalidates the gazetteer", () => {
+		resetPoolCaches()
+		const before = run(pool(), talk, { entityRefs: refs })
+		const other = [{ ...refs[0]!, name: "Bob" }]
+		const after = run(pool(), talk, { entityRefs: other })
+		resetPoolCaches()
+		const cold = run(pool(), talk, { entityRefs: other })
+		expect(after).toEqual(cold)
+		expect(signals(after)).not.toBe(signals(before))
+	})
+
+	it("a content change invalidates the pool term profile", () => {
+		resetPoolCaches()
+		const before = run(pool(), talk, { entityRefs: refs })
+		const edited = pool({ content: "Alice keeps a hidden silver watch" })
+		const after = run(edited, talk, { entityRefs: refs })
+		resetPoolCaches()
+		const cold = run(edited, talk, { entityRefs: refs })
+		expect(after).toEqual(cold)
+		expect(signals(after)).not.toBe(signals(before))
+	})
+
+	it("the pool cache rejects a matching key over different texts", () => {
+		resetPoolCaches()
+		const sameKey = () => "k"
+		const a = poolTermProfileFor(["alpha beta", "gamma"], sameKey)
+		const b = poolTermProfileFor(["alpha beta", "delta"], sameKey)
+		expect(b).not.toBe(a)
+		expect(b.termRarity.has("delta")).toBe(true)
+		expect(a.termRarity.has("delta")).toBe(false)
+		expect(poolTermProfileFor(["alpha beta", "delta"], sameKey)).toBe(b)
 	})
 })

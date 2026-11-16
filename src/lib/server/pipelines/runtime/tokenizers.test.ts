@@ -132,3 +132,77 @@ describe("an id that cannot be honoured degrades rather than throwing", () => {
 		expect(t.degraded).toMatch(/openai-gpt5-imaginary/)
 	})
 })
+
+describe("the memoised local counters count what the package counts", () => {
+	const direct = {
+		[TokenCounterOptions.LLAMA]: async (t: string) =>
+			(await import("llama-tokenizer-js")).default.encode(t).length,
+		[TokenCounterOptions.LLAMA3]: async (t: string) =>
+			(await import("llama3-tokenizer-js")).default.encode(t).length,
+		[TokenCounterOptions.MISTRAL]: async (t: string) =>
+			(await import("mistral-tokenizer-js")).default.encode(t).length,
+		[TokenCounterOptions.OPENAI_GPT4O]: async (t: string) =>
+			(await import("gpt-tokenizer/encoding/o200k_base")).countTokens(t)
+	}
+
+	it.each(Object.keys(direct))(
+		"%s: the same text twice equals the package's own count",
+		async (id) => {
+			const t = await loadTokenizer(id)
+			for (const sample of SAMPLES) {
+				const want = await direct[id as keyof typeof direct](sample)
+				expect(t.count(sample)).toBe(want)
+				expect(t.count(sample)).toBe(want)
+			}
+		},
+		60_000
+	)
+
+	it("an edited text is counted afresh (the key is the content)", async () => {
+		const t = await loadTokenizer(TokenCounterOptions.LLAMA3)
+		const a = "The quick brown fox."
+		const b = a + " It jumped over the lazy dog, twice, in the dark."
+		expect(t.count(a)).toBe(await direct[TokenCounterOptions.LLAMA3](a))
+		expect(t.count(b)).toBe(await direct[TokenCounterOptions.LLAMA3](b))
+		expect(t.count(a)).toBe(await direct[TokenCounterOptions.LLAMA3](a))
+	}, 60_000)
+
+	it("two tokenizers on one text each give their own package's count", async () => {
+		const text =
+			"日本語のテキストとemoji 🜁🜂 mixed with ASCII, and plain English too."
+		const llama = await loadTokenizer(TokenCounterOptions.LLAMA)
+		const mistral = await loadTokenizer(TokenCounterOptions.MISTRAL)
+		const wantL = await direct[TokenCounterOptions.LLAMA](text)
+		const wantM = await direct[TokenCounterOptions.MISTRAL](text)
+		// Interleaved, so a shared map would hand one the other's answer.
+		expect(llama.count(text)).toBe(wantL)
+		expect(mistral.count(text)).toBe(wantM)
+		expect(llama.count(text)).toBe(wantL)
+		expect(mistral.count(text)).toBe(wantM)
+	}, 60_000)
+})
+
+describe.skipIf(!process.env.PERF_BENCH)("bench", () => {
+	const para =
+		"The caravan crossed the salt flats at dawn, and Vell counted the water barrels twice before saying a word to anyone. "
+	const body = para.repeat(Math.ceil(4096 / para.length))
+	for (const id of [
+		TokenCounterOptions.LLAMA3,
+		TokenCounterOptions.OPENAI_GPT4O
+	]) {
+		it(`${id} p50 over 50 counts of ~4 KB`, async () => {
+			const t = await loadTokenizer(id)
+			const times: number[] = []
+			for (let i = 0; i < 50; i++) {
+				const t0 = performance.now()
+				t.count(body)
+				times.push(performance.now() - t0)
+			}
+			const first = times[0]
+			times.sort((a, b) => a - b)
+			console.log(
+				`BENCH ${id} bytes ${body.length} p50 ms ${times[25].toFixed(3)} first ms ${first.toFixed(3)}`
+			)
+		}, 60_000)
+	}
+})

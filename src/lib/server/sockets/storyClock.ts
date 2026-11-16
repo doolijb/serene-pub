@@ -32,6 +32,7 @@ import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 import { sessionReadingOf } from "$lib/server/state/reading"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
+import { TIMELINE_OFF_SENTENCES, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import {
 	advanceSessionStoryClock,
 	bookCalendarOf,
@@ -42,6 +43,14 @@ import {
 	StoryClockRefusal
 } from "$lib/server/state/storyTime"
 import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
+import {
+	ClockMoveBackRefusal,
+	clockMoveBackNotice,
+	moveClockBackOnBranch,
+	personMoveDestination,
+	type ClockMoveBackNotice,
+	type PersonClockMove
+} from "$lib/server/sessions/clockMoveBack"
 
 type Reading = Sockets.Sessions.StoryClock.Reading
 
@@ -92,9 +101,11 @@ export async function readSessionStoryClock(
 			present: null,
 			linePresent: null,
 			calendar: null,
+			timeline: true,
 			isOwner: access.isOwner
 		}
 	const branchId = reading?.branchId ?? null
+	const timelineOff = reading?.timelineOff === true
 	const lineNow = await storyNowOf(db, book, branchId, {
 		line: reading?.line ?? null
 	})
@@ -104,9 +115,10 @@ export async function readSessionStoryClock(
 		lorebookId: book,
 		branchId,
 		own,
-		present: own ?? linePresent,
+		present: timelineOff ? null : (own ?? linePresent),
 		linePresent,
 		calendar: await bookCalendarOf(db, book),
+		timeline: reading?.timelineOff !== true,
 		isOwner: access.isOwner
 	}
 }
@@ -141,8 +153,14 @@ const sameClock = (a: StoryClock | null, b: StoryClock | null) =>
 export async function setSessionStoryClock(
 	sessionId: number,
 	userId: number,
-	params: Sockets.Sessions.SetStoryClock.Params
-): Promise<{ moved: boolean; from?: StoryClock | null; to?: StoryClock | null }> {
+	params: Sockets.Sessions.SetStoryClock.Params,
+	io?: unknown
+): Promise<{
+	moved: boolean
+	from?: StoryClock | null
+	to?: StoryClock | null
+	branchedTo?: number
+}> {
 	const access = await checkSessionAccess(sessionId, userId)
 	if (!access.isOwner)
 		throw new StoryClockRefusal(
@@ -162,13 +180,42 @@ export async function setSessionStoryClock(
 	if (book == null) throw new StoryClockRefusal(`There is no session ${sessionId}.`)
 	const was = clockOf(before)
 
+	/** 🚧 A move back past the session's own dated writes follows its On revision, confirmed first. Judged before the write and outside the move's own lock: this is the person's door only, and a concurrent pipeline step only moves forward. */
+	const moveBackGate = async (
+		move: PersonClockMove,
+		to: StoryClock | null
+	): Promise<{ branchedTo: number } | null> => {
+		const notice = await clockMoveBackNotice(db, sessionId, move)
+		if (!notice) return null
+		if (params.confirmClockMoveBack !== true)
+			throw new ClockMoveBackRefusal(notice)
+		if (notice.mode !== "branch") return null
+		const branched = await moveClockBackOnBranch(db, {
+			sessionId,
+			userId,
+			to,
+			...(io ? { io } : {})
+		})
+		if (!branched.ok) throw new StoryClockRefusal(branched.error)
+		return { branchedTo: branched.sessionId }
+	}
+
 	if (stepping) {
 		if (!STORY_TIME_UNITS.includes(params.unit as StoryTimeUnit))
 			throw new StoryClockRefusal(
 				`Step by one of ${STORY_TIME_UNITS.join(", ")}.`
 			)
+		const move: PersonClockMove = {
+			by: params.by as number,
+			unit: params.unit as StoryTimeUnit
+		}
+		const branched = await moveBackGate(
+			move,
+			(await personMoveDestination(db, sessionId, move))?.to ?? null
+		)
+		if (branched) return { moved: false, ...branched }
 		// The step's own refusals (no present, a step of nothing, a date
-		// that does not land) are StoryClockRefusals with their sentence.
+		// that does not land, a book with no timeline) are StoryClockRefusals with their sentence.
 		const stepped = await advanceSessionStoryClock(
 			db,
 			sessionId,
@@ -194,7 +241,14 @@ export async function setSessionStoryClock(
 				`That clock does not fit this lorebook. ${problem}`
 			)
 	}
+	// A book with no timeline refuses a set; following its line only clears a stored clock.
+	if (clock && !(await timelineOfBook(db, book))) throw new StoryClockRefusal(TIMELINE_OFF_SENTENCES.clock)
 	if (sameClock(was, clock)) return { moved: false }
+	const branched = await moveBackGate(
+		clock ? { to: clock } : { follow: true },
+		clock
+	)
+	if (branched) return { moved: false, ...branched }
 	// The settings form's own write: checked against the calendar again and
 	// written under the book's calendar lock, in one transaction.
 	const { sessionLinePatch } = await import("$lib/server/sockets/sessions")
@@ -293,7 +347,22 @@ export const sessionsStoryClock: Handler<
 				params.sessionId,
 				socket.user!.id
 			)
-			const res = { sessionId: params.sessionId, ...token, ...reading }
+			// 🚧 A read with `moveTo` also answers whether that move needs confirming (the owner's alone).
+			let asked: { clockMoveBack?: ClockMoveBackNotice | null } = {}
+			if (params.moveTo !== undefined && reading.isOwner) {
+				const to = params.moveTo === null ? null : clockFrom(params.moveTo)
+				asked = {
+					clockMoveBack:
+						params.moveTo !== null && !to
+							? null
+							: await clockMoveBackNotice(
+									db,
+									params.sessionId,
+									to ? { to } : { follow: true }
+								)
+				}
+			}
+			const res = { sessionId: params.sessionId, ...token, ...reading, ...asked }
 			emitToUser("sessions:storyClock", res)
 			return res
 		} catch (error: any) {
@@ -322,17 +391,34 @@ export const sessionsSetStoryClock: Handler<
 		const token = tokenOf(params)
 		const userId = socket.user!.id
 		try {
-			const { moved, from, to } = await setSessionStoryClock(
+			const { moved, from, to, branchedTo } = await setSessionStoryClock(
 				params.sessionId,
 				userId,
-				params
+				params,
+				socket.io
 			)
 			if (moved) await announceMoved(socket, params.sessionId, userId, { from, to })
+			// 🚧 The branch is a new session the person is taken to: their list and its row are pushed, no clock-moved news.
+			if (branchedTo !== undefined) {
+				try {
+					const { relistSessionMembers } = await import("$lib/server/sockets/sessions")
+					const { broadcastSessionRow } = await import("$lib/server/sessions/rowPush")
+					await relistSessionMembers(socket.io, branchedTo)
+					broadcastSessionRow(socket.io, branchedTo)
+				} catch (err) {
+					console.warn("[storyClock] branch list push failed:", err)
+				}
+			}
 			const reading = await readSessionStoryClock(
 				params.sessionId,
 				userId
 			)
-			const res = { sessionId: params.sessionId, ...token, ...reading }
+			const res = {
+				sessionId: params.sessionId,
+				...token,
+				...reading,
+				...(branchedTo !== undefined ? { branchedTo } : {})
+			}
 			emitToUser("sessions:setStoryClock", res)
 			return res
 		} catch (error: any) {
@@ -342,7 +428,10 @@ export const sessionsSetStoryClock: Handler<
 				error:
 					error instanceof StoryClockRefusal
 						? error.message
-						: "The story clock could not be moved."
+						: "The story clock could not be moved.",
+				...(error instanceof ClockMoveBackRefusal
+					? { clockMoveBack: error.notice }
+					: {})
 			}
 			if (!(error instanceof StoryClockRefusal))
 				console.warn("[storyClock] write failed:", error)

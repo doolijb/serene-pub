@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/TheDrummer_Cydonia-24B-v4.3-GGUF:IQ4_XS",
+ "n": 20,
+ "results": {
+  "undated": {
+   "acts_still_furious": "13/20",
+   "mentions_time_passing": "3/20"
+  },
+  "value_ago": {
+   "acts_still_furious": "5/20",
+   "mentions_time_passing": "18/20"
+  },
+  "key_ago": {
+   "acts_still_furious": "6/20",
+   "mentions_time_passing": "19/20"
+  },
+  "value_as_of": {
+   "acts_still_furious": "9/20",
+   "mentions_time_passing": "12/20"
+  }
+ },
+ "samples": {
+  "undated": [
+   "[still=1 passed=0] Mira looked up from the ledger she'd been studying, her expression carefully neutral despite the cold knot in her stomach. \"There's a room available,\" she said evenly, though her fingers tightened on the quill. \"But I'll need payment in advance this time.\"  She studied Ash's face",
+   "[still=0 passed=0] Mira's head snapped up from the ledger she'd been pretending to study, her eyes narrowing as she recognized the familiar face. Her knuckles whitened against the worn counter, and for a moment the only sound was the crackling fire and rain outside.  \"You have *gall*,\" she hissed, ",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression carefully neutral, though her knuckles whitened where she gripped her pen. She recognized that smile\u2014the one he'd given her two years ago when he'd left without paying, without a word of explanation, and without m"
+  ],
+  "value_ago": [
+   "[still=0 passed=1] Mira looked up from polishing the bar, her expression carefully neutral as she recognized the familiar face. Her fingers tightened almost imperceptibly around the cloth in her hands. \"Room four is available,\" she said evenly, her voice betraying nothing of the complicated knot of",
+   "[still=0 passed=0] Mira looked up from the ledger she'd been studying, her expression carefully neutral as she recognized the familiar face. Her fingers tightened almost imperceptibly on the quill before she set it down with deliberate care.  \"Mr. Ash,\" she said coolly, her tone professional despit",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been writing in, her expression carefully neutral as she recognized the familiar face. Three years had passed since that night\u2014three years since Ash had carelessly broken her husband's beloved lute and disappeared without so much as an apology"
+  ],
+  "key_ago": [
+   "[still=0 passed=1] Mira looked up from polishing the bar, her expression carefully neutral as she recognized the familiar face. Her hands stilled on the cloth, and for a moment she simply stared at the traveller who had walked back into her life unannounced.   \"A room,\" she repeated flatly, setting",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression carefully neutral as she recognized the familiar face. Her fingers tightened almost imperceptibly on the quill, though her voice remained professional and calm.  \"Good evening,\" she said, closing the book with a s",
+   "[still=0 passed=1] Mira looked up from the ledger she'd been studying, her expression unreadable as she recognized the familiar face. Her fingers tightened imperceptibly on the quill, but her voice remained level and professional. \"Room four is available. But before I hand over the key, I think we "
+  ],
+  "value_as_of": [
+   "[still=0 passed=1] Mira looked up from the ledger she was writing in, her pen freezing mid-stroke. Recognition flickered across her face, followed immediately by a hardening of her features. She set down the pen with deliberate care.  \"Ash,\" she said flatly, her voice carrying none of the warmth sh",
+   "[still=0 passed=1] Mira's head snapped up from the ledger she'd been studying, her pen pausing mid-stroke. Recognition flashed across her features\u2014first surprise, then something harder. Her jaw tightened as she set down the pen with deliberate care.  \"Room 3,\" she said curtly, her voice clipped. \"U",
+   "[still=1 passed=1] Mira looked up from the ledger she'd been studying, her expression hardening as recognition flashed across her features. She set down her quill with deliberate care.  \"Ash.\" She said his name like a curse, her voice tight. \"After three years, you have the nerve to walk back in he"
+  ]
+ }
+}

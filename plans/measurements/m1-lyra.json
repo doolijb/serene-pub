@@ -1,0 +1,46 @@
+{
+ "model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+ "n": 20,
+ "results": {
+  "direct/full": "13/20",
+  "direct/told": "14/20",
+  "direct/left_out": "7/20",
+  "indirect/full": "5/20",
+  "indirect/told": "0/20",
+  "indirect/left_out": "0/20"
+ },
+ "samples": {
+  "direct/full": [
+   "SLIP  Tobin: \"A silver key?\" Tobin said, and leaned forward. \"Well now, I'd say he'd put it somewhere the tax men would never think to look.\" He glanced around the common room, then back to Ash with a grin. \"The loose hearthstone, maybe. You could tuck it right und",
+   "ok    Tobin: Tobin looked up from his stew, his eyes glinting with interest. \"A silver key, you say? Well, I'd start by looking in the room of any guests who've not been here long. A newcomer is less likely to be searched.\"",
+   "SLIP  Tobin: \"A silver key, hmm.\" Tobin looked around the common room, his eyes lingering on the hearth for a moment before moving on. \"Well, it wouldn't be on the person, that's certain. And the rooms are all searched now and again. Probably somewhere in the commo",
+   "SLIP  Tobin: Tobin looked up from his stew, a grin spreading across his face. \"Well, I'd look in the obvious places first. Under the bed, in a cupboard, in the roof.\" He tapped his chin. \"But if I really wanted to keep it safe, I might hide it under a hearthstone. "
+  ],
+  "direct/told": [
+   "SLIP  Tobin: \"A silver key?\" Tobin said, raising an eyebrow as he slurped the stew. \"I'd wager he'd put it somewhere the rushes don't get swept too often. Under a loose floorboard, or a hearthstone, mayhap.\"  He leaned forward. \"Why, do you have a key to hide?\"",
+   "SLIP  Tobin: Tobin looked up from his stew, eyebrows raised. \"A silver key, eh? Well, I'd look for it where it wouldn't be obvious.\" He gazed around the room, then met Ash's eyes with a sly smile. \"Maybe under the hearthstone. The loose one on the left side of the ",
+   "SLIP  Tobin: Tobin looked up from his stew, a grin spreading across his face. \"Oh, I don't know,\" he said, eyes twinkling. \"But if I were a man with a silver key to hide, I might have put it under the third hearthstone from the left, the loose one. What do you thin",
+   "SLIP  Tobin: Tobin looked up from his stew, his eyes glinting with interest. \"A silver key, you say? Hidden from tax men? Well, I'd look in the last place they'd think to search.\" He leaned in closer, lowering his voice. \"Under a loose hearthstone, perhaps? Somewhe"
+  ],
+  "direct/left_out": [
+   "SLIP  Tobin: \"A silver key?\" Tobin's eyes gleamed with curiosity. \"The walls have loose stones in the corners. The floorboards squeak in the room at the top of the stairs. But if I were you, I'd look behind the tapestry in Mira's room. Big enough to hide a key, and",
+   "ok    Tobin: Tobin's eyes gleamed with curiosity and mischief. \"A silver key to hide from the tax men, you say? Well, if I were the sort to know such things, I'd say the floorboards under the bed in room four have a tendency to squeak, especially when someone heavy",
+   "SLIP  Tobin: Tobin's eyes gleamed with interest at the question. \"Well, there's the obvious places - under the floorboards in his room, behind the tapestry in the common room. But if I was clever, I'd hide it where no one would think to look.\" He leaned in closer, ",
+   "SLIP  Tobin: Tobin's eyes gleamed with curiosity as he considered the question. He leaned forward, his voice low and conspiratorial. \"Well, if it were me, I'd look in the hearth, but not among the ashes. There's a loose stone on the back wall, right near the chimne"
+  ],
+  "indirect/full": [
+   "ok    Tobin: \"Arranged?\" Tobin frowned, then shook his head. \"I got in after the tax men came through, so I didn't see anything. Why? Should I know something?\" He leaned forward, curiosity plain in his eyes. \"Anything interesting happening in these parts?\"",
+   "ok    Tobin: Tobin glanced up from his stew, then back down, stirring it with his spoon. \"I might have seen something,\" he said, not meeting Ash's eyes. \"But if I did, I wouldn't be the sort to repeat it.\"",
+   "SLIP  Tobin: Tobin glanced around the empty room, then leaned in. \"Silver key under the third hearthstone from the left? That's what I heard.\" He grinned. \"I have a nose for gossip, but my lips are sealed. So long as you share that stew.\"",
+   "SLIP  Tobin: Tobin glanced around the empty common room before leaning closer. \"Silver key. Under the third hearthstone. I was here when you and Mira spoke,\" he said quietly. \"The floorboards creak and the walls have ears, if you know what I mean. But my lips are s"
+  ],
+  "indirect/told": [
+   "ok    Tobin: \"Arranged?\" Tobin frowned, spooning up stew. \"I'm not in the habit of listening at keyholes, friend. What did you and Mira arrange?\"",
+   "ok    Tobin: Tobin looked up from his stew, eyebrows raised. \"Arranged? I wasn't here this morning. I only just arrived.\" He leaned in, lowering his voice. \"Why? What are you two up to?\""
+  ],
+  "indirect/left_out": [
+   "ok    Tobin: \"Arranged?\" Tobin perked up, leaning forward with a gleam in his eye. \"What, with the innkeeper? No, but I'm all ears if you're willing to share. I've known Mira for years and never seen her take a special interest in a guest before.\" He grinned mischi",
+   "ok    Tobin: Tobin's eyes widened and he glanced around quickly before leaning in. \"Arranged? I don't know what you mean,\" he said, voice low. \"All I know is Mira's not one to spread gossip. Whatever dealings the two of you have, it's between you. I try to keep my "
+  ]
+ }
+}

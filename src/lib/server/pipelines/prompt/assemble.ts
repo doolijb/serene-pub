@@ -40,8 +40,14 @@ import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import type { WireMode } from "$lib/shared/connectionAdapters/wireMode"
 import type { MidSystem } from "$lib/shared/connectionAdapters/midSystem"
 import { entryDeclarations } from "$lib/server/entries/declarations"
-import type { EntryOrderKey, EntryRoles, StoryCalendar } from "@serene-pub/sdk"
-import { formatStoryTime, FORBIDDEN_TEMPLATE_NAMES } from "@serene-pub/sdk"
+import type {
+	EntryOrderKey,
+	EntryRoles,
+	StoryCalendar,
+	StoryDateDelta,
+	StoryDateValue
+} from "@serene-pub/sdk"
+import { FORBIDDEN_TEMPLATE_NAMES } from "@serene-pub/sdk"
 import {
 	CORE_TEMPLATE_ENGINE,
 	renderTemplate,
@@ -62,6 +68,8 @@ import {
 	type NamedLayouts,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
+import { storyDateDeltaOf } from "$lib/shared/lorebooks/storySpan"
+import { storyDateValueOf, type StoryClock } from "$lib/shared/lorebooks/storyDate"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
 import type { RetrievalBand } from "$lib/server/pipelines/ranking/weights"
 import { applyPromptBlocks } from "$lib/server/pipelines/prompt/promptBlocks"
@@ -193,53 +201,107 @@ const rolesOfSource = (source: string): EntryRoles | undefined =>
 	ROLES_BY_SOURCE.get(source)
 
 /**
- * An allocation set as `{"<heading>": "<content>"}`, with the type choosing the
- * heading and the order.
+ * One History day as a prompt variable holds it — `core:var/history@1`'s row.
+ * `date` is the order key as a `StoryDateValue` (null when the allocation
+ * carries none); `dateDelta` is the row's date minus the story's now (null
+ * without a now of the story's own, or without a date). Core supplies the
+ * values; the variable's layout decides how and where they print.
+ */
+export interface HistoryRow {
+	date: StoryDateValue | null
+	dateDelta: StoryDateDelta | null
+	content: string
+}
+
+/**
+ * An allocation set as the value its variable lays out, with the type
+ * choosing the projection by what it declares:
  *
- * Two projections, and the type picks between them by what it declares:
- *
- *  · **a `title` role** — headed by the title, in the order they arrived.
- *    World lore and character lore.
- *  · **an `order` role and no title** — sorted by the declared order keys and
- *    headed by the order key itself. History is not *named*; it is **dated**,
- *    and its heading is that date.
+ *  · **a `title` role** — `{"<title>": "<content>"}`, in the order they
+ *    arrived. World lore and character lore.
+ *  · **an `order` role and no title** — a list of {@link HistoryRow}, sorted
+ *    by the declared order keys, newest first. History is not *named*; it is
+ *    **dated**, and its date is carried as a value, never as a heading.
  *
  * A source with neither (or one no type declares) falls back to the title form,
  * which is what every non-entry allocation already got.
  *
- * `undefined` rather than `{}` when empty, matching the legacy engines: a
- * template writing `{{#if worldLore}}` has to see the same falsiness, and an
- * empty object is truthy. The object, not the JSON — stringification happens at
- * the call site, so a variable layout is handed the shape and decides how to
- * present it. The emptiness rule stays here, per variable, because it is not
- * uniform: `characters` renders `[]` for an empty cast (`JSON.stringify([])` is
- * a truthy string) while world lore vanishes, and unifying the two would change
- * one of them.
+ * `undefined` rather than `{}` or `[]` when empty, matching the legacy
+ * engines: a template writing `{{#if worldLore}}` has to see the same
+ * falsiness, and an empty object or list is truthy. The value, not the JSON —
+ * stringification happens at the call site, so a variable layout is handed the
+ * shape and decides how to present it. The emptiness rule stays here, per
+ * variable, because it is not uniform: `characters` renders `[]` for an empty
+ * cast while world lore vanishes, and unifying the two would change one of
+ * them. The titled form wants a non-empty title and truthy content; the
+ * ordered form skips blank-after-trim content.
  *
- * ⚠ **The two bodies below are the two that were here, unchanged.** What moved
- * is *which one runs*, from a hardcoded call site to the declaration. The
- * emptiness rules differ between them — the titled form wants a non-empty
- * heading and truthy content, the ordered form skips blank-after-trim content —
- * and that difference is preserved rather than tidied, because tidying it is a
- * change to what a prompt contains.
+ * `storyTime` (`{ now, calendar }`, off the template context) names the
+ * dates under a declared calendar and measures each row from the story's now;
+ * a now borrowed from the newest History day (`from: "history"`) has nothing
+ * to be distant from, so every `dateDelta` is null then.
  */
 export function objectByRole(
 	allocations: readonly Allocation[],
-	roles: EntryRoles | undefined
-): Record<string, string> | undefined {
-	const obj: Record<string, string> = {}
+	roles: EntryRoles | undefined,
+	storyTime?: unknown
+): Record<string, string> | HistoryRow[] | undefined {
+	if (!roles?.title && roles?.order) return historyRowsOf(allocations, roles.order, storyTime)
 
-	if (!roles?.title && roles?.order) {
-		for (const a of sortByOrder(allocations, roles.order)) {
-			if (!a.content?.trim()) continue
-			obj[distinctKey(obj, orderKeyOf(a, roles.order))] = a.content
-		}
-	} else {
-		for (const a of allocations)
-			if (a.name && a.content) obj[a.name] = a.content
-	}
+	const obj: Record<string, string> = {}
+	for (const a of allocations)
+		if (a.name && a.content) obj[a.name] = a.content
 
 	return Object.keys(obj).length ? obj : undefined
+}
+
+type StoryTimeReading = {
+	now?: (StoryClock & { from?: string }) | null
+	calendar?: StoryCalendar | null
+}
+
+/**
+ * The story's own now as a clock to measure from, or null: no story time, no
+ * now (no book, or its Timeline is off), or a now borrowed from the newest
+ * History day.
+ */
+const deltaNowOf = (storyTime: unknown): StoryClock | null => {
+	const now = (storyTime as StoryTimeReading | undefined)?.now
+	return now && now.from !== "history" ? now : null
+}
+
+const calendarOf = (storyTime: unknown): StoryCalendar | null =>
+	(storyTime as StoryTimeReading | undefined)?.calendar ?? null
+
+/** A clock as the date value and its distance from the story's now. */
+function datedOf(
+	clock: StoryClock | null | undefined,
+	storyTime: unknown
+): { date: StoryDateValue | null; dateDelta: StoryDateDelta | null } {
+	if (!clock || typeof clock.year !== "number") return { date: null, dateDelta: null }
+	const calendar = calendarOf(storyTime)
+	return {
+		date: storyDateValueOf(clock, calendar),
+		dateDelta: storyDateDeltaOf(clock, deltaNowOf(storyTime), calendar)
+	}
+}
+
+function historyRowsOf(
+	allocations: readonly Allocation[],
+	order: readonly EntryOrderKey[],
+	storyTime: unknown
+): HistoryRow[] | undefined {
+	const rows: HistoryRow[] = []
+	for (const a of sortByOrder(allocations, order)) {
+		if (!a.content?.trim()) continue
+		const meta = a.meta as Record<string, number | null | undefined> | undefined
+		const clock =
+			meta && typeof meta.year === "number"
+				? { year: meta.year, month: meta.month ?? null, day: meta.day ?? null }
+				: null
+		rows.push({ ...datedOf(clock, storyTime), content: a.content })
+	}
+	return rows.length ? rows : undefined
 }
 
 /**
@@ -270,61 +332,13 @@ const partOf = (a: Allocation, field: string): number =>
 	Number((a.meta as Record<string, unknown> | undefined)?.[field] ?? 0)
 
 /**
- * The heading for an allocation of an ordered type — its order key, rendered.
+ * The story's present as a `StoryDateValue` (`core:var/current-date@1`): the
+ * session's story now when the book gives one — with its hour and minute when
+ * it has them — else the most recent allocated history entry's date.
  *
- * ⚠ **Core formats this, not the type**, and that is the honest limit of what
- * the roles vocabulary buys here. The `order` role says which fields order the
- * allocation, which is what chooses this projection; *how those fields read as a
- * heading* is calendar knowledge, and history is the only ordered type there
- * is. A second one wants a **named policy** — the way `anchor` names
- * `core:policy/binding-visibility@1` — rather than a branch in this function.
- *
- * What `formatHistoryDateKey` produced over the same parts — the first key
- * with an absent one reading `0`, every later present key appended zero-padded
- * to two, an absent middle key skipped rather than terminating the string —
- * except a heading of the first key alone, which is named: `Year 412`, never
- * `412` (plan A20 b). A bare `412` is an integer-like key, and an object lists
- * those ascending ahead of every other key, so the oldest year-only entry
- * would lead a list that is newest first everywhere else.
- */
-const orderKeyOf = (a: Allocation, order: readonly EntryOrderKey[]): string => {
-	const meta = a.meta as Record<string, unknown> | undefined
-	const parts = order.map((k) => meta?.[k.field])
-	const lead = String(parts[0] ?? 0)
-	const rest = parts.slice(1).filter((part) => part != null)
-	if (!rest.length) return `${partName(order[0].field)} ${lead}`
-	return [lead, ...rest.map((part) => String(part).padStart(2, "0"))].join("-")
-}
-
-/** An order key's field as a heading word: `year` → `Year`. */
-const partName = (field: string): string =>
-	field.charAt(0).toUpperCase() + field.slice(1)
-
-/**
- * `key`, or — when an earlier allocation already holds it — `key (2)`,
- * `key (3)`, … (plan A20 a). Two history entries on one date are two events,
- * and a heading that repeated would keep only the last of them.
- */
-const distinctKey = (taken: Record<string, string>, key: string): string => {
-	if (!Object.hasOwn(taken, key)) return key
-	let n = 2
-	while (Object.hasOwn(taken, `${key} (${n})`)) n++
-	return `${key} (${n})`
-}
-
-/**
- * The story's present, as parts: the session's story now when the book gives
- * one, else the most recent allocated history entry's date.
- *
- * ⚠ Returned `formatDate(...)` — a finished `"412-03"` — until the layout took
- * over the formatting. A pre-formatted value is one a layout cannot lay out:
- * the separator, the order, whether the month is padded and whether it is even
- * a number were all decided here, several layers above anyone who might want
- * them different.
- *
- * `month` and `day` are omitted rather than set to null when the entry lacks
- * that precision, so a layout can ask `{{#if (isSet currentDate.month)}}`
- * without having to know the difference.
+ * A value, never a finished string: the names carry the calendar's spelling
+ * and the variable's layout decides the separator, the order and the padding.
+ * `undefined` when there is no present at all.
  */
 function currentDateOf(
 	allocations: readonly Allocation[],
@@ -332,66 +346,34 @@ function currentDateOf(
 	/**
 	 * The book's story time, off the template context (`session_cast` →
 	 * build-template-context; DESIGN-story-time P5 + the lorebook clock).
-	 * Absent on every caller without a book, which keeps this byte-identical.
+	 * Absent on every caller without a book.
 	 */
 	storyTime?: unknown
-):
-	| {
-			year: number
-			month?: number
-			day?: number
-			hour?: number
-			minute?: number
-			label?: string
-	  }
-	| undefined {
-	const story = storyTime as
-		| {
-				now?: {
-					from?: string
-					year: number
-					month?: number
-					day?: number
-					hour?: number
-					minute?: number
-				} | null
-				calendar?: StoryCalendar | null
-		  }
-		| undefined
+): StoryDateValue | undefined {
+	const story = storyTime as StoryTimeReading | undefined
+	const calendar = story?.calendar ?? null
 	// The story's present wins: the session's own clock (story-time P3), else
 	// its line's present — the line's clock, else the newest history entry
 	// the line holds (`sessionStoryNowOf`), retrieved this turn or not (plan
 	// A20 c). The newest ALLOCATED entry only without one: no book.
-	let date:
-		| { year: number; month?: number; day?: number; hour?: number; minute?: number }
-		| undefined
 	const clock = story?.now ?? undefined
-	if (clock) {
-		date = {
-			year: clock.year,
-			...(clock.month != null ? { month: clock.month } : {}),
-			...(clock.day != null ? { day: clock.day } : {}),
-			...(clock.hour != null
-				? { hour: clock.hour, minute: clock.minute ?? 0 }
-				: {})
-		}
-	} else {
-		const order = roles?.order
-		const newest = order ? sortByOrder(allocations, order)[0] : allocations[0]
-		if (!newest?.meta) return undefined
-		const m = newest.meta as { year?: number; month?: number; day?: number }
-		if (m.year === undefined) return undefined
-		date = {
-			year: m.year,
-			...(m.month != null ? { month: m.month } : {}),
-			...(m.day != null ? { day: m.day } : {})
-		}
-	}
-	// `label` only under a declared calendar, so a free-form book's layout
-	// reads exactly the parts it always did.
-	return story?.calendar
-		? { ...date, label: formatStoryTime(date, story.calendar) }
-		: date
+	if (clock)
+		return storyDateValueOf(
+			{
+				year: clock.year,
+				month: clock.month,
+				day: clock.day,
+				hour: clock.hour,
+				minute: clock.hour != null ? (clock.minute ?? 0) : null
+			},
+			calendar
+		)
+	const order = roles?.order
+	const newest = order ? sortByOrder(allocations, order)[0] : allocations[0]
+	if (!newest?.meta) return undefined
+	const m = newest.meta as { year?: number; month?: number; day?: number }
+	if (m.year === undefined) return undefined
+	return storyDateValueOf({ year: m.year, month: m.month, day: m.day }, calendar)
 }
 
 /**
@@ -574,7 +556,12 @@ export interface RenderInput extends RenderRun {
 	 * (`core:var/earlier-scenes@1`), oldest first. Absent or empty renders
 	 * nothing.
 	 */
-	earlierScenes?: ReadonlyArray<{ name: string; summary: string }>
+	earlierScenes?: ReadonlyArray<{
+		name: string
+		summary: string
+		/** The scene's story clock when it opened; absent or null reads as no date. */
+		openedStoryClock?: StoryClock | null
+	}>
 	/**
 	 * The annex as a template reads it — `annex.<owner>.<key>` (typed
 	 * templates P6): every declared key of every owner in scope, from
@@ -764,9 +751,14 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	// What each key held before its layout, for a template that names another
 	// layout for it (`layout <key> "<reference>"`, the pre-pass below).
 	const rawByKey = new Map<string, unknown>()
+	// The scope guard's receipt lines (a value that does not fit its variable's
+	// declared root kind), reported with the render's own notes.
+	const layoutNotes: string[] = []
 	const layout = (key: string, value: unknown) => {
 		rawByKey.set(key, value)
-		return renderVariable(input.variables, key, value, input)
+		return renderVariable(input.variables, key, value, input, (line) =>
+			layoutNotes.push(line)
+		)
 	}
 
 	/**
@@ -787,32 +779,43 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	 */
 	const declared = declaredBandKeys(input.variables)
 	const laidOut: Record<string, unknown> = {}
-	for (const key of [...CORE_RENDERED_BANDS, ...declared])
-		laidOut[key] = await bandValue(key, allocationsFrom(key), layout, {
-			selected: !!input.variables?.[key]?.source,
-			core: meansCoreBand(input.variables, key),
-			variableId: variableOfKey(input.variables, key),
-			record: (value) => rawByKey.set(key, value)
-		})
 	// Core's history roles carry the dates; a `history` the spec re-pointed at
 	// a variable of its own carries none of core's (2026-10-13).
 	const historyRoles = meansCoreBand(input.variables, "history")
 		? rolesOfSource("history")
 		: undefined
 	const historyAllocations = allocationsFrom("history")
+	const storyTime = (
+		input.templateContext as { storyTime?: unknown } | undefined
+	)?.storyTime
+	for (const key of [...CORE_RENDERED_BANDS, ...declared])
+		laidOut[key] = await bandValue(key, allocationsFrom(key), layout, {
+			selected: !!input.variables?.[key]?.source,
+			core: meansCoreBand(input.variables, key),
+			variableId: variableOfKey(input.variables, key),
+			record: (value) => rawByKey.set(key, value),
+			storyTime
+		})
 	const currentDateLaidOut = await layout(
 		"currentDate",
-		currentDateOf(
-			historyAllocations,
-			historyRoles,
-			(input.templateContext as { storyTime?: unknown } | undefined)
-				?.storyTime
-		)
+		currentDateOf(historyAllocations, historyRoles, storyTime)
 	)
 
 	const earlierScenesLaidOut = await layout(
 		"earlierScenes",
-		input.earlierScenes?.length ? input.earlierScenes : undefined
+		input.earlierScenes?.length
+			? input.earlierScenes.map((s) => ({
+					name: s.name,
+					summary: s.summary,
+					...datedOf(s.openedStoryClock, storyTime)
+				}))
+			: undefined
+	)
+
+	// The book's calendar as a value; a free-form book has none, so it renders nothing.
+	const storyCalendarLaidOut = await layout(
+		"storyCalendar",
+		calendarOf(storyTime) ?? undefined
 	)
 
 	refuseBandCollisions(declared, input.prompts, input.templateContext)
@@ -848,6 +851,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		history: laidOut.history,
 		currentDate: currentDateLaidOut,
 		earlierScenes: earlierScenesLaidOut,
+		storyCalendar: storyCalendarLaidOut,
 		sessionMessages: input.messages,
 		// Script injections, resolved from depth to a render index — the same
 		// arithmetic and the same moment as `postHistory.targetIndex` (§20):
@@ -961,7 +965,9 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 					? currentDateLaidOut
 					: key === "earlierScenes"
 						? earlierScenesLaidOut
-						: key in laidOut
+						: key === "storyCalendar"
+							? storyCalendarLaidOut
+							: key in laidOut
 						? laidOut[key]
 						: (LAID_OUT_CONTEXT_KEYS as readonly string[]).includes(key)
 							? (context as Record<string, unknown>)[key]
@@ -985,7 +991,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			laidOutSafeFor(
 				input.engine,
 				neutralizeRenderScope(context),
-				[...LAID_OUT_CONTEXT_KEYS, ...CORE_RENDERED_BANDS, "currentDate", "earlierScenes", ...declared]
+				[...LAID_OUT_CONTEXT_KEYS, ...CORE_RENDERED_BANDS, "currentDate", "earlierScenes", "storyCalendar", ...declared]
 			),
 			explicit.renders && neutralizeRenderScope(explicit.renders)
 		),
@@ -1070,7 +1076,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	// The pack's own account of what it did comes first: a reader debugging a
 	// prompt with a section missing should meet "prompt blocks, in order: …"
 	// before anything about role structure.
-	const notes: string[] = [...packed.notes]
+	const notes: string[] = [...packed.notes, ...layoutNotes]
 	for (const band of unrenderedBands(bandsInPlay, packed.template, declared))
 		notes.push(unrenderedBandNote(band, declared.includes(band)))
 	if (isSplit && messages!.length === 0 && rendered.trim() !== "") {
@@ -1147,7 +1153,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			// line (`explicit.uses`) says what it rendered through.
 			const placed = new Set(referencedVariables(explicit.template))
 			const layouts = [
-				...[...CORE_RENDERED_BANDS, ...declared, "currentDate", "earlierScenes"]
+				...[...CORE_RENDERED_BANDS, ...declared, "currentDate", "earlierScenes", "storyCalendar"]
 					.filter((key) => placed.has(key))
 					.map((key) => layoutUseOf(input.variables, key)),
 				...explicit.uses
@@ -1286,6 +1292,8 @@ async function bandValue(
 		variableId?: string
 		/** The value the band held, when it is not laid out through `layout`. */
 		record?: (value: unknown) => void
+		/** The story's time (`{ now, calendar }`), which dates an ordered band's rows. */
+		storyTime?: unknown
 	}
 ): Promise<unknown> {
 	// Core's entry roles are looked up by source kind, and a core key's kind is
@@ -1299,26 +1307,32 @@ async function bandValue(
 	// its own under that name is a declared band like any other.
 	if (key === RECALLED_LINES_BAND && opts.variableId === RECALLED_LINES_VARIABLE) {
 		const lines = recalledLinesOf(allocations)
-		return lines === undefined ? undefined : await layout(key, lines)
+		return lines === undefined
+			? undefined
+			: await layout(key, lines)
 	}
-	const value = bandObjectOf(allocations, roles, opts.core)
-	if (opts.core || opts.selected) return await layout(key, value)
+	const value = bandObjectOf(allocations, roles, opts.core, opts.storyTime)
+	if (opts.core || opts.selected)
+		return await layout(key, value)
 	// A key no layout is selected for still has a floor of its own variable's
 	// (the automatic JSON row's output); a core key re-pointed elsewhere goes
 	// through it so the variable — not the key — decides.
 	if (CORE_BANDS.has(key))
-		return value === undefined ? undefined : await layout(key, value)
+		return value === undefined
+			? undefined
+			: await layout(key, value)
 	opts.record?.(value)
 	return value === undefined ? undefined : JSON.stringify(value)
 }
 
-/** The title-keyed object for a band, else its contents as a list, else `undefined`. */
+/** The band's projection (`objectByRole`), else its contents as a list, else `undefined`. */
 function bandObjectOf(
 	allocations: readonly Allocation[],
 	roles: ReturnType<typeof rolesOfSource>,
-	core: boolean
-): Record<string, string> | string[] | undefined {
-	const obj = objectByRole(allocations, roles)
+	core: boolean,
+	storyTime?: unknown
+): Record<string, string> | HistoryRow[] | string[] | undefined {
+	const obj = objectByRole(allocations, roles, storyTime)
 	if (obj || core) return obj
 	const contents = allocations.map((a) => a.content).filter(Boolean)
 	return contents.length ? contents : undefined
@@ -1428,8 +1442,8 @@ function includedBandKeys(
  * Typed templates P0: a plugin source that declares its own band (Twenty
  * Questions' `secret-entry`) had its candidates ranked, budgeted and included —
  * and then dropped here, because only core's three were ever read. The value is
- * the title-keyed object `objectByRole` builds, minified, which is the same
- * shape `{{{worldLore}}}` renders; when no allocation carries a title the
+ * what `objectByRole` builds (the title-keyed object, or an ordered type's
+ * dated rows), minified; when no allocation carries a title the
  * contents go out as a minified JSON array instead, so a nameless candidate is
  * still never lost. Only the allocation projection enters — nothing else.
  *

@@ -300,3 +300,38 @@ describe("deep links — every lens's address still lands on it", () => {
 		})
 	})
 })
+
+describe("🚧 no timeline — Time and Lives are not offered", () => {
+	const ids = (d: readonly { id: string }[]) => d.map((x) => x.id)
+	const alt = { altKey: true, shiftKey: true }
+
+	it("on (or absent), the track is as ever", () => {
+		expect(ids(lensesShown(true))).toEqual(ids(lensesShown(true, true)))
+		expect(ids(lensesShown(true))).toContain("time")
+		expect(ids(lensesShown(true))).toContain("lives")
+	})
+
+	it("off, neither is offered, with advanced on or off", () => {
+		for (const advanced of [true, false]) {
+			expect(ids(lensesShown(advanced, false))).not.toContain("time")
+			expect(ids(lensesShown(advanced, false))).not.toContain("lives")
+		}
+		expect(ids(lensesShown(true, false))).toContain("graph")
+	})
+
+	it("off, a named Time or Lives draws the default lens; others stand", () => {
+		expect(lensShown("time", true, false)).toBe("list")
+		expect(lensShown("lives", true, false)).toBe("list")
+		expect(lensShown("places", true, false)).toBe("places")
+		expect(lensShown("time", true, true)).toBe("time")
+		expect(lensShown("time", true)).toBe("time")
+	})
+
+	it("off, their shortcuts are not heard; on, they are", () => {
+		expect(lensForKey(press("Digit5", alt), true, false)).toBeNull()
+		expect(lensForKey(press("Digit6", alt), true, false)).toBeNull()
+		expect(lensForKey(press("Digit5", alt), true, true)).toBe("time")
+		expect(lensForKey(press("Digit5", alt), true)).toBe("time")
+		expect(lensForKey(press("Digit7", alt), true, false)).toBe("places")
+	})
+})

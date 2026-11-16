@@ -86,11 +86,11 @@ A summarizer registers three ways: on an **action** (a summary you ask for), on 
 
 Lore outlets carry **sources**: the ids of the messages a write was generated from.
 
-- A write **with** sources is committed. It moves the session's settle line to the newest of them, and from there [Back](./sessions.md#back-and-forward) stops at that line. The exception is a session whose scenes end by themselves: its write waits in Session notes, and the line moves when the write is applied to the lorebook.
+- A write **with** sources is committed. It moves the session's settle line to the newest of them, and from there [Back](./sessions.md#back-and-forward) stops at that line. The exception is a session whose scenes end by themselves: its write doesn't move the line. Under **Full** on your own lorebook the write lands at once, and when a scene closes the line moves to the end of the scene before it; otherwise the write waits in Session notes, and the line moves when it is applied to the lorebook.
 - A write **without** sources is a change, taken back with its turn.
 - Core's own generated writes (summaries, scene summaries, compile, the graph build) always pass sources.
 
-A lore write that creates an entry can **match** an entry already there, by its id, its name or one of its keys, and update that one instead; two candidates are refused, naming both. It can also **bind** a new entry to a character, so that it is that character's lore.
+A lore write that creates an entry can **match** an entry already there, by its id, its name or one of its keys, and update that one instead; two candidates are refused, naming both. A write that also says which entries its model was shown (**Entries the lines name**, a query that finds the entries named in the lines a step read) reads a name match the way Story's sweep and Chat's **Remember things** do: an entry it was shown is rewritten and keeps its name, one it wasn't shown gets a new paragraph, a key alone is no match, and two of the name write nothing and say so in the run's record (see [When a session writes about something that already has an entry](./lorebooks.md#when-a-session-writes-about-something-that-already-has-an-entry)). It can also **bind** a new entry to a character, so that it is that character's lore.
 
 **Scenes first.** Pipelines put story events into scenes first; history is compiled from scenes by a person's press of **Compile** (see [Compiling scenes into a history entry](./summarization.md#compiling-scenes-into-a-history-entry)).
 
@@ -274,6 +274,8 @@ A priority of **always** puts every entry from that source in ahead of the rest,
 
 A source that found nothing this turn still reserves its share and hands what it didn't use to the others. A source added by a plugin takes part the same way, with its own share and limit, and the run's report lists which shares came from a step's own settings and which were the shipped defaults.
 
+An entry's **Decay** doesn't change what recall picks; to make living entries fade, see the SDK guide [Make living entries fade in recall](./sdk/guides/time.md#make-living-entries-fade-in-recall).
+
 ## A source's band in the context template
 
 Each source's entries arrive in the prompt as a **band** with a name a context template uses, such as `worldLore`, `characterLore` or `history`. A plugin can add its own: Twenty Questions adds `secretEntry` (the thing the character is thinking of) and `briefing`, and its template places them with `{{{secretEntry}}}` and `{{{briefing}}}`.
@@ -338,6 +340,38 @@ While any run in the chain is waiting for review, the rest of the session is not
 ## The cast a pipeline reads
 
 A pipeline sees every live seat in the session's cast, benched ones included; each carries whether it is enabled (not benched), on player seats as well as character seats. Turn-taking, `{{characterNames}}`, the `characters` variable and the speaker pickers leave out benched seats, so a benched seat is out of the prompt. Card detail for non-speakers follows the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)).
+
+## What a character was there for
+
+🚧 A reply reads the whole session unless its pipeline asks for less. A pipeline can ask that a character, on its own turn, is not shown what it was not there for: its **Session history**, **Earlier scenes** and **History entries** steps then leave those lines, scene summaries and days out of that character's prompt. No shipped pipeline does this yet; a pipeline author switches it on step by step (see the SDK guide [What a character was there for](./sdk/guides/genres-presets-and-routines.md#what-a-character-was-there-for)).
+
+- **By scene.** A character was there for a scene when it spoke at least once in it. Hidden lines, lines taken **Back** and swiped-away replies don't count. Its own lines are always kept, lines in no scene are kept, and the scene still going counts as the speaker's.
+- **By place**, when the pipeline names a stat the genre keeps on each cast member, such as a location: a line counts when the character's value at that line matches the speaker's. Only places set during this session count. Where either has no value, the scene rule decides. So a character that spoke in a scene and then left the room misses what was said after it left.
+- **Summaries** under *Earlier in the story*: kept when the character was there for the scene's last line or for more than half of its lines. A scene whose lines are all gone is kept only when the scene's own list of who took part holds the character.
+- **History entries.** A day's history entry is left out of the character's prompt when the character missed at least one of this session's scenes that were compiled into it, by the rules above. An entry with no scene of this session behind it, such as another session's day or a day a person wrote, always stays. In a pipeline that passes the History read's exclusions to its eligibility step, as every shipped reply does, the entry stays out however the reply finds it (by keywords, by name, by meaning), and the run's ranking record says why.
+- **Bench** doesn't make a character absent: a benched character that spoke in a scene was there for it.
+- **A narrator reads everything.** On a narrator's or an envoy's turn, or a step that writes for several characters, nothing is left out.
+- A character seat with no card is filtered the same way.
+
+The run's report says what was left out, in that step's **Notes**: *12 messages left out: Mira was not there*, *1 scene summary left out: Mira was not there*, *1 history entry left out: Mira was not there for all of its scenes*, or *Reads everything: not one cast member's turn* (see [Inspecting a run](#inspecting-a-run)). It shapes one character's prompt only: nobody's screen loses a message.
+
+Limits: a scene that never ends counts whole for anyone who spoke once in it, unless a place narrows it; a genre that runs no scenes gets the place rule only; a summary is never cut in two; a day's entry can't be cut in two either, so leaving it out also leaves out everything else that day holds, other sessions' scenes and anything a person added; a character that missed one scene of a day loses that day's entry, apart from its own lines still in the history; a scene whose lines are all gone (deleted, hidden or taken **Back**) counts for the characters its stored cast lists as taking part, and for nobody else; the history is read before it is filtered, so a character that missed a lot reads fewer lines than the window could hold; a pipeline that does not pass the History read's exclusions on to its eligibility step leaves nothing out, whatever the read's notes say (the pipeline check warns); a step that reads lore through the triggers read (narration, **Look**) is not filtered; and with **Max Recursion Depth** above 0, a left-out history entry can still bring in other entries its text names.
+
+A genre can keep its own rule instead, with a script; the SDK guide has one that keeps what the character said or was named in.
+
+## What a character does not know
+
+🚧 Every entry is common knowledge unless its lorebook's owner marks it **not common knowledge** (see [Lorebooks](./lorebooks.md#what-a-character-knows)). A pipeline can then leave a marked entry out of a character's prompt, on that character's own turn, unless the character is tied to the entry. Story's reply and the Lair's delver voices do this on a character's own turn (the narrator, the Castellan and room drafts read everything). A pipeline author places the **Entries not known** step and passes its exclusions to the eligibility step (see the SDK guide [What a character does not know](./sdk/guides/genres-presets-and-routines.md#what-a-character-does-not-know)).
+
+- **Any tie counts as knowing.** A link from the character to the entry ("member of → The Guild") is enough, and so are *was told*, *knows* and *has been there*.
+- **Kept from** leaves an entry out of that character's prompt whether or not it is marked.
+- **Dates and lines.** A tie counts on the session's line from its date on (undated ties always count). When a knowing tie and a *kept from* tie both count, the later one wins; on the same date, the one on the nearer line; then *kept from*. With the lorebook's **Timeline** off, dates play no part.
+- **Every lorebook the session reads** is judged, and ties kept in the session's notes count.
+- **A narrator reads everything**, as above.
+
+The entry is simply absent: the model is never told what the character does not know. The step's **Notes** say what was left out, such as *3 entries left out: not known by Mira*, and each entry's line in the ranking says *Not known by Mira.* or *Kept from Mira.*
+
+Limits: the places of the current scene and their ways are listed for the prompt without passing the eligibility step, so a marked place the character stands in, or a marked way out of it, still reaches its prompt; an entry the character does know still names an entry it is linked to, known or not; a step that reads lore through the triggers read (narration, **Look**) is not filtered; and a pipeline that places the step but does not pass its exclusions on leaves nothing out (the pipeline check warns).
 
 ## Attachments in a prompt
 

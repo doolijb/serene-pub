@@ -1099,8 +1099,8 @@ async function rewriteOwnRows(c: FoldContext): Promise<void> {
  * `cast_member` to the copy of the member, `location` and `session_location` to the copy of the entry, `lorebook`
  * P to O; and their `scene_id`, `history_entry_id`, `branch_id`), owner sheets, attribute carries and zone contents
  * (`owner_id` by kind), imprints (member and entry subjects, `lorebook_id`, the paths of the rule-fed overlay, the
- * annex subject P to O), lore sources (`lorebook_id`, entry subjects), pending and decided state proposals
- * (`payload.owner`), ranking evidence of this session's entries (`lore-entry` subjects). Judged not to name P's rows:
+ * annex subject P to O; a version subject to the copy of its amendment, while one on a held amendment, never copied,
+ * stays), lore sources (`lorebook_id`, entry subjects), pending and decided state proposals (`payload.owner`), ranking evidence of this session's entries (`lore-entry` subjects). Judged not to name P's rows:
  * `session_tags`, `session_changes`, `session_imprints` and `widget_settings` (member refs only, done by
  * `rekeySessionRefs`; a chosen image is a label, never a sprite set id), `scene_cues` (this session's own scenes,
  * which keep their ids), `session_attribute_picks` (slot ids), `tray_items`, `session_functions`, `registrations`,
@@ -1197,6 +1197,9 @@ async function moveSessionRows(c: FoldContext): Promise<void> {
 			const to = (
 				row.subjectKind === "entry" ? maps.entries : maps.bindings
 			).get(row.subjectId)
+			if (to != null) next = { subjectId: to, lorebookId: c.ownId }
+		} else if (row.subjectKind === "version") {
+			const to = maps.amendments.get(row.subjectId)
 			if (to != null) next = { subjectId: to, lorebookId: c.ownId }
 		} else if (row.subjectKind === "annex") {
 			if (row.subjectId === c.parentId)

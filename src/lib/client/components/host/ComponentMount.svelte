@@ -217,6 +217,8 @@
 				? { allowed: true }
 				: frameInvokeVerdict(action, { lastInteractionAt }, Date.now()),
 		trusted: coreTrusted,
+		// The remote's worker runs the SDK's `componentWire`, which receives `{ t: "message" }`.
+		peerTakesOneMessage: true,
 		// A plugin's write request (D4) needs a person's press in this box, as
 		// a message-changing invoke does: the last trusted event, still current.
 		personBehind: () => personPressCurrent(lastInteractionAt, Date.now()),

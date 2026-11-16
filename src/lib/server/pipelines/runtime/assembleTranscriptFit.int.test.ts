@@ -102,7 +102,8 @@ describe("assemble — the conversation fitted to the window", () => {
 const scene = (name: string, firstLineId: number, summary = `${name} happened.`) => ({
 	name,
 	summary,
-	firstLineId
+	firstLineId,
+	openedStoryClock: null
 })
 const systemText = (value: any) =>
 	value.context.messages

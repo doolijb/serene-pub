@@ -1,0 +1,130 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/autoApply.int.test.ts (18 tests | 3 failed) 4661ms
+     × close-out applies everything eligible and leaves a conflicted change held 448ms
+     × a change waiting on an earlier change of this session applies with it, in one Apply 83ms
+     × appliedBatchesOf lists a press and an automatic Apply, newest first, with who and what 121ms
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+Using PGlite database at: /tmp/serene-pub-forms-int-test-qgStBV/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.forms.int.test.ts (46 tests | 1 failed) 100536ms
+     × a pressed action that parks at its own write answers parked at once, and its outcome arrives as pushes once the owner decides (R-b) 1061ms
+timeless copy: 3422 ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > close-out applies everything eligible and leaves a conflicted change held
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:395:31
+    393|   expect(done).toMatchObject({
+    394|    applied: [eA.id, eB.id, eC.id],
+    395|    appliedChanges: [category!.id],
+       |                               ^
+    396|    // Offered, re-checked at accept time, and kept with its reason.
+    397|    stillHeld: [
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically folds a chain of changes in order > a change waiting on an earlier change of this session applies with it, in one Apply
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:428:28
+    426|   const done = await auto(w.session.id, "close-out")
+    427|   expect(done).toMatchObject({
+    428|    appliedChanges: [first!.id, second!.id],
+       |                            ^
+    429|    stillHeld: []
+    430|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > the two list reads > appliedBatchesOf lists a press and an automatic Apply, newest first, with who and what
+AssertionError: expected { …(7) } to match object { by: null, …(4) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "automatic": "scene-close",
+    "by": null,
+-   "count": 3,
++   "count": 2,
+    "items": [
+      {
+        "entryId": 59,
+        "kind": "entry",
+        "title": "Brine Gate",
+      },
+      {
+        "entryId": 60,
+        "kind": "entry",
+        "title": "Cinder Row",
+-     },
+-     {
+-       "changes": [
+-         {
+-           "after": "Sealed.",
+-           "before": "Locked.",
+-           "field": "content",
+-           "label": "Content",
+-         },
+-       ],
+-       "entryId": 57,
+-       "kind": "entry-change",
+-       "title": "The Vault",
+      },
+    ],
+    "sceneId": 8,
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:625:22
+    623|    pressed.batch
+    624|   ])
+    625|   expect(batches[0]).toMatchObject({
+       |                      ^
+    626|    by: null,
+    627|    automatic: "scene-close",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.forms.int.test.ts > R-15 · Elara asks Tom, and the AI answers as Tom > a pressed action that parks at its own write answers parked at once, and its outcome arrives as pushes once the owner decides (R-b)
+AssertionError: expected { sessionId: 13, …(3) } to deeply equal { sessionId: 13, …(2) }
+
+- Expected
++ Received
+
+  {
+    "action": "core:spec/test-parked-press-answer#parked-press-answer",
++   "askedRunId": "parked-press-run",
+    "parked": true,
+    "sessionId": 13,
+  }
+
+ ❯ src/lib/server/sockets/sessions.forms.int.test.ts:1120:15
+    1118|   // Parked, and nothing else: no success, no error, no terminal frame…
+    1119|   // the run has not ended.
+    1120|   expect(ack).toEqual({ sessionId: session.id, action: `${answerId}#${…
+       |               ^
+    1121|   expect(pushes.filter((p) => p.event === "pipelines:progress" && p.da…
+    1122|   expect((await runsOf(session.id)).map((r) => r.specSlug)).toEqual([a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  2 failed | 273 passed (275)
+      Tests  4 failed | 2438 passed | 2 skipped (2444)
+   Start at  03:52:43
+   Duration  1353.03s (transform 18.33s, setup 2.27s, import 184.66s, tests 3843.29s, environment 63ms)
+

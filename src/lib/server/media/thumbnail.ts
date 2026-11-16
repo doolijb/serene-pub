@@ -15,12 +15,12 @@
  * the router for it directly.
  */
 import {
-	cropRaster,
 	decodeImage,
 	encodeRaster,
 	resizeRaster,
 	type RasterImage
 } from "./convert/codecs"
+import { decodeForThumbnail, encodeThumbnail } from "./thumbnailWorker"
 import {
 	clampFrame,
 	defaultFrame,
@@ -51,6 +51,29 @@ export interface ThumbnailResult {
 }
 
 /**
+ * The thumbnail's cut, and whether the source already IS its own thumbnail —
+ * the frame is the whole image, its longest edge is within `THUMB_MAX_EDGE`,
+ * and the bytes are already webp. One rule, spelled once: `makeThumbnail` asks
+ * it with the decoded size, `deriveThumb` with the stored size to skip the
+ * decode.
+ */
+export function thumbnailCut(
+	width: number,
+	height: number,
+	mime: string,
+	frame?: MediaFrame | null
+): { cut: MediaFrame; whole: boolean; serveSource: boolean } {
+	const cut = clampFrame(frame ?? defaultFrame(width, height), width, height)
+	const whole =
+		cut.x === 0 && cut.y === 0 && cut.w === width && cut.h === height
+	const serveSource =
+		whole &&
+		Math.max(cut.w, cut.h) <= THUMB_MAX_EDGE &&
+		mime === "image/webp"
+	return { cut, whole, serveSource }
+}
+
+/**
  * The thumbnail is cut from the file's FRAME, and from `defaultFrame` when it
  * has none — see `$lib/shared/media/frame`. A thumbnail is shown in a square
  * cell at every call site, so the crop is decided here, where the pixels are,
@@ -71,41 +94,34 @@ export async function makeThumbnail(
 	mime: string,
 	frame?: MediaFrame | null
 ): Promise<ThumbnailResult | null> {
-	const src = await decodeImage(buffer, mime)
+	const src = await decodeForThumbnail(buffer, mime)
 	// Clamped against the DECODED size, not the stored one: a frame is checked
 	// against `files.width/height` when it is set, and this is the source of
 	// truth for the bytes actually in hand.
-	const cut = clampFrame(
-		frame ?? defaultFrame(src.width, src.height),
+	const { cut, whole, serveSource } = thumbnailCut(
 		src.width,
-		src.height
+		src.height,
+		mime,
+		frame
 	)
-	const whole =
-		cut.x === 0 &&
-		cut.y === 0 &&
-		cut.w === src.width &&
-		cut.h === src.height
-
+	if (serveSource) return null
 	const longest = Math.max(cut.w, cut.h)
-	if (whole && longest <= THUMB_MAX_EDGE && mime === "image/webp") return null
-
-	const cropped: RasterImage = whole
-		? src
-		: cropRaster(src, cut.x, cut.y, cut.w, cut.h)
 
 	const scale = Math.min(1, THUMB_MAX_EDGE / longest)
 	const width = Math.max(1, Math.round(cut.w * scale))
 	const height = Math.max(1, Math.round(cut.h * scale))
 
-	const raster: RasterImage =
-		scale < 1 ? await resizeRaster(cropped, width, height) : cropped
+	// Crop, resize and encode run together on the thumbnail worker.
+	const bytes = await encodeThumbnail(src, {
+		cut: whole ? null : cut,
+		resizeTo: scale < 1 ? { width, height } : null,
+		quality: THUMB_QUALITY
+	})
 
 	return {
-		bytes: await encodeRaster(raster, "image/webp", {
-			quality: THUMB_QUALITY
-		}),
-		width: raster.width,
-		height: raster.height,
+		bytes,
+		width: scale < 1 ? width : cut.w,
+		height: scale < 1 ? height : cut.h,
 		mime: "image/webp",
 		ext: "webp"
 	}
@@ -156,7 +172,8 @@ export async function makeFitted(
 ): Promise<FittedResult | null> {
 	const src = await decodeImage(buffer, mime)
 	const longest = Math.max(src.width, src.height)
-	if (longest <= FITTED_MAX_EDGE && WEB_SAFE_IMAGE_MIMES.has(mime)) return null
+	if (longest <= FITTED_MAX_EDGE && WEB_SAFE_IMAGE_MIMES.has(mime))
+		return null
 
 	const scale = Math.min(1, FITTED_MAX_EDGE / longest)
 	const width = Math.max(1, Math.round(src.width * scale))

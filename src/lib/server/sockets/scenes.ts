@@ -60,6 +60,8 @@ import {
 import { onLineSql } from "$lib/server/state/lineSql"
 import { lockBookCalendar } from "$lib/server/state/storyTime"
 import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
+import { bookShownName } from "$lib/server/lorebooks/notesShown"
+import { TIMELINE_OFF_SENTENCES, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import {
 	sceneDay,
 	unfiledScenesByEntry
@@ -331,6 +333,9 @@ export const sceneCreateHandler: Handler<
 			const primerProblem = await primerRowEditProblem(db, lorebook.id)
 			if (primerProblem) throw new Error(primerProblem)
 		}
+		// A scene filed under a history day needs a timeline; one with no day is saved as ever.
+		if (historyEntryId != null && !(await timelineOfBook(db, lorebook.id)))
+			throw new Error(TIMELINE_OFF_SENTENCES.history)
 
 		// A scene written from a session is on the session's line — the branch
 		// it reads this book on — and a scene written anywhere else is on main.
@@ -1396,6 +1401,7 @@ export const sceneCompileHandler: Handler<
 					: []
 			if (!book || book.userId !== userId)
 				return refuse("Lorebook not found or access denied.")
+			if (!(await timelineOfBook(db, lorebookId!))) return refuse(TIMELINE_OFF_SENTENCES.history)
 			if ((await bookLoreWriteMode(db, lorebookId!)) === "off")
 				return refuse(LORE_WRITES_OFF)
 			const date = asked.date == null ? null : storyDateFrom(asked.date)
@@ -1521,6 +1527,7 @@ export const sceneCompileHandler: Handler<
 			)
 		if (!row || row.lorebook.userId !== userId)
 			return refuse("History entry not found or access denied.")
+		if (!(await timelineOfBook(db, row.lorebook.id))) return refuse(TIMELINE_OFF_SENTENCES.history)
 		// A compile folds what sessions played into the book: the owner's
 		// lore write mode Off refuses it before any work (plan A22). Its save
 		// is an ordinary entry edit, so the refusal sits here.
@@ -1667,7 +1674,7 @@ export const sceneCompileHandler: Handler<
 					historyEntryId: params.historyEntryId,
 					historyEntryDate,
 					lorebookId: historyEntry.lorebookId,
-					lorebookLabel: lorebook.name,
+					lorebookLabel: await bookShownName(db, lorebook),
 					branchId,
 					moment,
 					...(dayUnfiled.length > 0 && { sceneIds: dayUnfiled.map((x) => x.id) }),
@@ -1913,7 +1920,15 @@ export async function processScene(
 			sceneId: params.sceneId,
 			sceneName: shownSceneName ?? undefined,
 			lorebookId: scene.lorebookId,
-			lorebookLabel: lorebook.name,
+			lorebookLabel: await bookShownName(db, {
+				name: lorebook.name,
+				sessionId: (
+					await db
+						.select({ sessionId: schema.lorebooks.sessionId })
+						.from(schema.lorebooks)
+						.where(eq(schema.lorebooks.id, lorebook.id))
+				)[0]?.sessionId ?? null
+			}),
 			historyEntryId: scene.historyEntryId ?? undefined,
 			ephemeralOnCancel:
 				params.ephemeralOnCancel === true || inheritedEphemeral,
@@ -2535,6 +2550,8 @@ activityStore.setSceneReviewDiscarded(async (sceneId, statusBefore) => {
 activityStore.setCompileReviewApplied(async (activity) => {
 	await db.transaction(async (tx) => {
 		await lockBookCalendar(tx, activity.lorebookId)
+		// A review begun while the timeline was on files nothing once it is off.
+		if (!(await timelineOfBook(tx, activity.lorebookId))) return
 		let line: Line
 		try {
 			line = await lineOfBook(tx, activity.lorebookId, activity.branchId)
@@ -2962,7 +2979,7 @@ export function runSceneSummaries(
  * scene in the background, as the session's owner, as a routine's run (its
  * model calls queue after people's). `review` parks the result for the
  * owner's review; `full` saves it by itself. Refuses with a sentence when the
- * scene is gone, not this session's, no longer `none`, or the save's own
+ * scene is gone, not this session's, not `none` any more, or the save's own
  * refusals say no (the owner's lorebook, the primer, lore writes Off).
  * Returns at once; the run is never awaited and is its own root.
  */

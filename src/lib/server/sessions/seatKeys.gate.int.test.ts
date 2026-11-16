@@ -526,11 +526,14 @@ describe("Back before the pass, the pass, Forward, Back again", () => {
 		const { rewindTurn, forwardTurn } = await import(
 			"$lib/server/sessions/rewind"
 		)
-		const back1 = await rewindTurn(asDb(), {
-			sessionId: s.id,
-			userId: ownerId
-		})
-		expect(back1).toMatchObject({ ok: true })
+		// Story steps one message per press: the turn is the reply, then the owner's line.
+		for (const taken of [reply.id, mine.id]) {
+			const back1 = await rewindTurn(asDb(), {
+				sessionId: s.id,
+				userId: ownerId
+			})
+			expect(back1).toMatchObject({ ok: true, messageIds: [taken] })
+		}
 		const takenOf = async (id: number) =>
 			(
 				await testDb
@@ -565,8 +568,9 @@ describe("Back before the pass, the pass, Forward, Back again", () => {
 		// The pass.
 		const first = await seatKeys(asDb())
 		expect(first.failed).toBe(0)
-		// The person's line holds the turn's tally, the reply's the state: two records.
-		expect(first.rekeyed.rewind_taken).toBe(2)
+		// The reply's record holds the card-form tally Back found and the state; the
+		// owner's line's tally is replayed from the history left, which names no card: one record.
+		expect(first.rekeyed.rewind_taken).toBe(1)
 		expect(first.rekeyed.annex_core).toBeGreaterThan(0)
 		expect(first.rekeyed.annex_audiences).toBeGreaterThan(0)
 		expect(first.left).toBe(0)
@@ -599,6 +603,7 @@ describe("Back before the pass, the pass, Forward, Back again", () => {
 			[sm(heroMember.id)]: "dead",
 			"user:1": { made: true }
 		})
+		expect(rec2.turn.tally.lanes.main.turnsBy).toEqual({ [sm(heroMember.id)]: 1 })
 		expect(JSON.stringify(rec2)).not.toContain("session_cast")
 		expect(JSON.stringify(rec2)).not.toContain(cr(hero.id))
 		expect(JSON.stringify(rec2)).not.toContain(cr(persona.id))
@@ -616,11 +621,13 @@ describe("Back before the pass, the pass, Forward, Back again", () => {
 
 		// Forward, the flip on: the restored rows are member form, ids kept.
 		memberFormSwitch.on = true
-		const fwd = await forwardTurn(asDb(), {
-			sessionId: s.id,
-			userId: ownerId
-		})
-		expect(fwd).toMatchObject({ ok: true })
+		for (let press = 0; press < 2; press++) {
+			const fwd = await forwardTurn(asDb(), {
+				sessionId: s.id,
+				userId: ownerId
+			})
+			expect(fwd).toMatchObject({ ok: true })
+		}
 		const values = (
 			await testDb.select().from(schema.attributeValues)
 		).filter((r) => r.sessionId === s.id)
@@ -669,11 +676,13 @@ describe("Back before the pass, the pass, Forward, Back again", () => {
 		expect(await seatKeys(asDb())).toEqual(ZEROS)
 
 		// Back again: the record written is member form.
-		const back2 = await rewindTurn(asDb(), {
-			sessionId: s.id,
-			userId: ownerId
-		})
-		expect(back2).toMatchObject({ ok: true })
+		for (const taken of [reply.id, mine.id]) {
+			const back2 = await rewindTurn(asDb(), {
+				sessionId: s.id,
+				userId: ownerId
+			})
+			expect(back2).toMatchObject({ ok: true, messageIds: [taken] })
+		}
 		const rec3 = await takenOf(reply.id)
 		expect(rec3.state.values[0]).toMatchObject({
 			id: anchored.id,

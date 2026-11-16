@@ -85,6 +85,8 @@ describe("openRenders (typed templates P2)", () => {
 			worldLore: "core:var/world-lore@1",
 			characterLore: "core:var/character-lore@1",
 			history: "core:var/history@1",
+			// 2026-11-12 (sense-prm): Assemble renders *Earlier in the story*.
+			earlierScenes: "core:var/earlier-scenes@1",
 			currentDate: "core:var/current-date@1",
 			secretEntry: "showcase.twenty-questions:var/secret-entry@1",
 			briefing: "showcase.twenty-questions:var/briefing@1"

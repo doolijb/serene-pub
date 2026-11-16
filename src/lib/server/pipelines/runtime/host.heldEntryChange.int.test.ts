@@ -3,7 +3,7 @@
  * amendment (Stage B, thin slice): one `entry_amendments` row in the session's
  * own book (`base` set), the lorebook untouched, read only by the session that
  * holds it. Driven through the real outlets (`update-lore-entry@1`,
- * `create-lore-entry@1`'s `match`) in each lore write mode.
+ * `create-lore-entry@1`'s `match`) under Review changes and Off.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
@@ -208,8 +208,8 @@ const ownBookOf = async (sessionId: number) => {
 	return ownBookFor(db as unknown as Db, sessionId)
 }
 
-describe("a change to an attached lorebook's entry is held, in every lore write mode", () => {
-	it.each<Mode>(["full", "review", "off"])(
+describe("a change to an attached lorebook's entry is held under Review changes and Off", () => {
+	it.each<Mode>(["review", "off"])(
 		"%s: the lorebook is untouched; one held amendment; only this session reads it",
 		async (mode) => {
 			const w = await world({ mode })
@@ -321,7 +321,7 @@ describe("a change to an attached lorebook's entry is held, in every lore write 
 	)
 
 	it("is dated when the session reads at a moment, undated otherwise", async () => {
-		const w = await world({ clock: { year: 3, month: 2, day: 5 } })
+		const w = await world({ mode: "review", clock: { year: 3, month: 2, day: 5 } })
 		await messageIn(w.session.id)
 		const vault = await place(w.book.id, "The Vault")
 		await (
@@ -333,7 +333,7 @@ describe("a change to an attached lorebook's entry is held, in every lore write 
 	})
 
 	it("two changes to one field in two turns: the second's base is the first's value", async () => {
-		const w = await world()
+		const w = await world({ mode: "review" })
 		const vault = await place(w.book.id, "The Vault")
 		const m1 = await messageIn(w.session.id)
 		await (
@@ -352,7 +352,7 @@ describe("a change to an attached lorebook's entry is held, in every lore write 
 	})
 
 	it("a change that changes nothing writes nothing", async () => {
-		const w = await world()
+		const w = await world({ mode: "review" })
 		const vault = await place(w.book.id, "The Vault")
 		await messageIn(w.session.id)
 		const host = await hostFor(w.session.id, w.user.id, "run-same")
@@ -471,7 +471,7 @@ describe("a change to an attached lorebook's entry is held, in every lore write 
 	})
 
 	it("refuses a change that would move a history entry's date, with the sentence, and writes nothing", async () => {
-		const w = await world()
+		const w = await world({ mode: "review" })
 		await messageIn(w.session.id)
 		const [day] = await db
 			.insert(schema.lorebookEntries)
@@ -530,7 +530,7 @@ describe("a change to an attached lorebook's entry is held, in every lore write 
 describe("the names vocabulary", () => {
 	it("a held name is the holder's alone", async () => {
 		const { loadVocabulary } = await import("$lib/server/annotations")
-		const w = await world()
+		const w = await world({ mode: "review" })
 		const other = await sessionOn(w.user.id, w.book.id)
 		const vault = await place(w.book.id, "The Vault")
 		await messageIn(w.session.id)

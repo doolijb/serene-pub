@@ -1170,13 +1170,49 @@ export interface EvidenceProfile {
 	termsOf: (text: string) => ReadonlySet<string>
 }
 
+/**
+ * The half of the evidence profile that depends on the pool alone, never on
+ * the conversation: each pool text's terms and every term's rarity. Read-only
+ * once built, so a caller may keep it between scans of the same pool.
+ */
+export interface PoolTermProfile {
+	termsByText: ReadonlyMap<string, ReadonlySet<string>>
+	termRarity: ReadonlyMap<string, number>
+	entryCount: number
+}
+
+export function buildPoolTermProfile(
+	entryTexts: readonly string[]
+): PoolTermProfile {
+	const termsByText = new Map<string, ReadonlySet<string>>()
+	const termDf = new Map<string, number>()
+	for (const text of entryTexts) {
+		let terms = termsByText.get(text)
+		if (!terms) {
+			terms = new Set(tokenize(text))
+			termsByText.set(text, terms)
+		}
+		for (const t of terms) termDf.set(t, (termDf.get(t) ?? 0) + 1)
+	}
+	const entryCount = entryTexts.length
+	const termRarity = new Map<string, number>()
+	for (const [t, df] of termDf) termRarity.set(t, rarity(df, entryCount))
+	return { termsByText, termRarity, entryCount }
+}
+
 export function buildEvidenceProfile(input: {
 	/** The recent conversation window — the query side. */
 	window: string
 	/** The candidate pool — the collection being searched. */
 	entryTexts: readonly string[]
 	gazetteer: Gazetteer
+	/**
+	 * `buildPoolTermProfile(entryTexts)`, when the caller already has it for
+	 * this exact pool. Absent, it is built here.
+	 */
+	pool?: PoolTermProfile
 }): EvidenceProfile {
+	const pool = input.pool ?? buildPoolTermProfile(input.entryTexts)
 	const { entities, extractorVersion } = extractEntities(
 		input.window,
 		input.gazetteer
@@ -1209,9 +1245,10 @@ export function buildEvidenceProfile(input: {
 		return found
 	}
 
+	/** Per call; falls back to the pool's shared read-only terms, never writes them. */
 	const termsCache = new Map<string, ReadonlySet<string>>()
 	const termsOf = (text: string): ReadonlySet<string> => {
-		const hit = termsCache.get(text)
+		const hit = termsCache.get(text) ?? pool.termsByText.get(text)
 		if (hit) return hit
 		const terms = new Set(tokenize(text))
 		termsCache.set(text, terms)
@@ -1220,19 +1257,13 @@ export function buildEvidenceProfile(input: {
 
 	const entryCount = input.entryTexts.length
 	const entityDf = new Map<string, number>()
-	const termDf = new Map<string, number>()
-	for (const text of input.entryTexts) {
+	for (const text of input.entryTexts)
 		for (const key of sharedWith(text))
 			entityDf.set(key, (entityDf.get(key) ?? 0) + 1)
-		for (const t of termsOf(text)) termDf.set(t, (termDf.get(t) ?? 0) + 1)
-	}
 
 	const entityRarity = new Map<string, number>()
 	for (const e of entities)
 		entityRarity.set(e.key, rarity(entityDf.get(e.key) ?? 0, entryCount))
-
-	const termRarity = new Map<string, number>()
-	for (const [t, df] of termDf) termRarity.set(t, rarity(df, entryCount))
 
 	return {
 		extractorVersion,
@@ -1241,7 +1272,7 @@ export function buildEvidenceProfile(input: {
 		entityRarity,
 		// A pool of nothing has no scale, and no candidates either.
 		referenceEntityRarity: entryCount > 0 ? rarity(1, entryCount) : 0,
-		termRarity,
+		termRarity: pool.termRarity,
 		windowTerms: new Set(tokenize(input.window)),
 		termsOf
 	}

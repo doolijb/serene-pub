@@ -59,6 +59,7 @@ import {
 } from "./entrySources"
 import {
 	embed,
+	batchEmbed,
 	isModelReady,
 	isModelLoading,
 	getLoadedModelId,
@@ -502,6 +503,7 @@ embeddingLane.registerEmitter((event, payload) => {
 })
 
 export function stopVectorization() {
+	scanBuffers.clear()
 	embeddingLane.stop()
 }
 
@@ -737,6 +739,7 @@ export function moveQueueGroup(
 }
 
 export function removeQueueGroup(groupId: string): void {
+	scanBuffers.delete(`group:${groupId}`)
 	embeddingLane.removeGroup(groupId)
 }
 
@@ -1072,14 +1075,198 @@ export async function pickNextItem(
 	return (await embeddingLane.pickNext(currentModel)) as QueueItem | null
 }
 
+/**
+ * How many candidates one background scan fetches. A scan is a full-table read
+ * with a text-hash predicate that no index serves, so draining N rows one scan
+ * each was O(N²); one scan per K rows is N/K scans. Fixed, not a setting.
+ */
+const SCAN_BATCH_SIZE = 50
+
+/** Candidates of one scan embedded together, in one `batchEmbed` call. */
+const EMBED_CHUNK_SIZE = 16
+
+/** One candidate a scan found: the row's identity, text and text hash. */
+type ScanRow = { id: number; text: string; sourceHash: string }
+
+/** Out-parameter of a picker's scan mode: the limit in, the rows out. */
+type ScanSink = { limit: number; rows: ScanRow[] }
+
+/**
+ * The vector for a scan-time text, shared by the rest of its chunk. Used only
+ * when the row still hashes to what the scan read (`hash`), so a vector is
+ * never reused for text that moved.
+ */
+type Prefetch = { hash: string; vector: () => Promise<number[] | null> }
+
+/** The vector a picked item writes: its chunk's when still valid, else its own. */
+async function vectorFor(
+	text: string,
+	sourceHash: string,
+	prefetch?: Prefetch
+): Promise<number[]> {
+	if (prefetch && prefetch.hash === sourceHash) {
+		const vector = await prefetch.vector()
+		if (vector) return vector
+	}
+	return embed(truncateForEmbedding(text))
+}
+
+/** One picker of a chain: its scan form, and its by-id form (fresh item or `null`). */
+type ChainPicker = {
+	scan: (limit: number) => Promise<ScanRow[]>
+	pick: (id: number, prefetch?: Prefetch) => Promise<QueueItem | null>
+}
+
+/**
+ * A picker's two forms over one scope — the same function with the same
+ * arguments, so a buffered row is re-read through exactly the recipe that
+ * found it.
+ */
+function chainPicker(
+	run: (
+		onlyId?: number,
+		prefetch?: Prefetch,
+		scan?: ScanSink
+	) => Promise<QueueItem | null>
+): ChainPicker {
+	return {
+		scan: async (limit) => {
+			const sink: ScanSink = { limit, rows: [] }
+			await run(undefined, undefined, sink)
+			return sink.rows
+		},
+		pick: (id, prefetch) => run(id, prefetch)
+	}
+}
+
+type BufferEntry = {
+	picker: ChainPicker
+	id: number
+	prefetch: Prefetch
+}
+
+/**
+ * The scan buffers, one per pick chain (`"global"` or `group:<groupId>`).
+ *
+ * Key: the chain, with the model the buffer was scanned under (`model`) — a
+ * buffer of another model is never read, it is replaced on the next pick.
+ * Invalidation: nothing in a buffer is trusted. Each pick re-reads the head by
+ * primary key through the picker's own `onlyId` form (fresh text, fresh hash,
+ * or `null` when the row needs no vector), and an entry is dropped
+ * only when that answers `null`. `stopVectorization()` and `removeQueueGroup()`
+ * clear them, and every pick prunes the buffers of groups the lane dropped.
+ */
+const scanBuffers = new Map<string, { model: string; entries: BufferEntry[] }>()
+
+/** Cut a scan's rows into chunks that share one lazily started `batchEmbed`. */
+function bufferEntries(picker: ChainPicker, rows: ScanRow[]): BufferEntry[] {
+	const entries: BufferEntry[] = []
+	for (let start = 0; start < rows.length; start += EMBED_CHUNK_SIZE) {
+		const chunk = rows.slice(start, start + EMBED_CHUNK_SIZE)
+		let batch: Promise<number[][] | null> | undefined
+		const batchOf = () =>
+			(batch ??= batchEmbed(
+				chunk.map((r) => truncateForEmbedding(r.text))
+			).then(
+				(vectors) =>
+					Array.isArray(vectors) &&
+					vectors.length === chunk.length &&
+					vectors.every((v) => Array.isArray(v))
+						? vectors
+						: null,
+				() => null
+			))
+		chunk.forEach((row, index) =>
+			entries.push({
+				picker,
+				id: row.id,
+				prefetch: {
+					hash: row.sourceHash,
+					vector: async () => (await batchOf())?.[index] ?? null
+				}
+			})
+		)
+	}
+	return entries
+}
+
+/**
+ * The next item of one chain of pickers, scanning once per `SCAN_BATCH_SIZE`
+ * rows rather than once per row. Same rows, same order, same writes: the head
+ * entry is revalidated on every pick and stays while it still needs a
+ * vector, so an unprocessed or failed item is handed straight back.
+ */
+async function nextOfChain(
+	chain: string,
+	currentModel: string,
+	pickers: ChainPicker[]
+): Promise<QueueItem | null> {
+	// Drain, refill, drain, refill, drain: the second refill's buffer is read
+	// before answering `null`, so a race that empties the first refill cannot
+	// end a run with rows unembedded.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const buffer = scanBuffers.get(chain)
+		if (buffer && buffer.model === currentModel) {
+			while (buffer.entries.length) {
+				const head = buffer.entries[0]!
+				const item = await head.picker.pick(head.id, head.prefetch)
+				if (item) return item
+				if (buffer.entries[0] === head) buffer.entries.shift()
+			}
+		}
+		if (attempt === 2) break
+		// Empty or of another model: scan again, first picker with rows wins.
+		let filled: { model: string; entries: BufferEntry[] } | undefined
+		for (const picker of pickers) {
+			const rows = await picker.scan(SCAN_BATCH_SIZE)
+			if (rows.length) {
+				filled = {
+					model: currentModel,
+					entries: bufferEntries(picker, rows)
+				}
+				break
+			}
+		}
+		if (!filled) {
+			scanBuffers.delete(chain)
+			return null
+		}
+		scanBuffers.set(chain, filled)
+	}
+	return null
+}
+
+/**
+ * Delete the buffer of every group the lane does not hold (picked empty, or
+ * replaced). Group ids are random, so a dropped group's buffer is never read.
+ */
+function pruneDroppedGroupBuffers(): void {
+	const live = new Set(embeddingLane.snapshotGroups().map((g) => g.groupId))
+	for (const key of scanBuffers.keys())
+		if (key.startsWith("group:") && !live.has(key.slice(6)))
+			scanBuffers.delete(key)
+}
+
+/** Test hook: the chains that currently hold a scan buffer. */
+export function _scanBufferKeys(): string[] {
+	return [...scanBuffers.keys()]
+}
+
 async function pickFromGroup(
 	group: PriorityGroup,
 	currentModel: string
 ): Promise<QueueItem | null> {
+	pruneDroppedGroupBuffers()
+	const pickers: ChainPicker[] = []
+
 	// 1. Session messages
 	if (group.sessionId) {
-		const item = await pickSessionMessage(currentModel, group.sessionId)
-		if (item) return item
+		const sessionId = group.sessionId
+		pickers.push(
+			chainPicker((id, pf, scan) =>
+				pickSessionMessage(currentModel, sessionId, id, pf, scan)
+			)
+		)
 	}
 
 	// 2. Lorebook content (world lore, places and items → character lore →
@@ -1087,49 +1274,85 @@ async function pickFromGroup(
 	// index source (`entrySources.ts`, finding #150).
 	for (const lorebookId of group.lorebookIds) {
 		for (const source of ENTRY_INDEX_SOURCES) {
-			const entry = await pickEntryOfSource(source, currentModel, lorebookId)
-			if (entry) return entry
+			pickers.push(
+				chainPicker((id, pf, scan) =>
+					pickEntryOfSource(
+						source,
+						currentModel,
+						lorebookId,
+						id,
+						pf,
+						scan
+					)
+				)
+			)
 		}
-
-		const nn = await pickNarrativeNode(currentModel, lorebookId)
-		if (nn) return nn
-
-		const nr = await pickNarrativeRelationship(currentModel, lorebookId)
-		if (nr) return nr
+		pickers.push(
+			chainPicker((id, pf, scan) =>
+				pickNarrativeNode(currentModel, lorebookId, id, pf, scan)
+			)
+		)
+		pickers.push(
+			chainPicker((id, pf, scan) =>
+				pickNarrativeRelationship(
+					currentModel,
+					lorebookId,
+					id,
+					pf,
+					scan
+				)
+			)
+		)
 	}
 
 	// 3. Characters
 	if (group.characterIds.length > 0) {
-		const char = await pickCharacter(currentModel, group.characterIds)
-		if (char) return char
+		const characterIds = group.characterIds
+		pickers.push(
+			chainPicker((id, pf, scan) =>
+				pickCharacter(currentModel, characterIds, id, pf, scan)
+			)
+		)
 	}
 
 	// 4. The characters this session's users voice. A separate list from the
 	// cast above over the same table — a row already picked as cast is
 	// embedded by the time this runs, so the staleness filter skips it.
 	if (group.personaIds.length > 0) {
-		const persona = await pickCharacter(currentModel, group.personaIds)
-		if (persona) return persona
+		const personaIds = group.personaIds
+		pickers.push(
+			chainPicker((id, pf, scan) =>
+				pickCharacter(currentModel, personaIds, id, pf, scan)
+			)
+		)
 	}
 
-	return null
+	return nextOfChain(`group:${group.groupId}`, currentModel, pickers)
 }
 
 async function pickGlobalNextItem(
 	currentModel: string
 ): Promise<QueueItem | null> {
-	const message = await pickSessionMessage(currentModel)
-	if (message) return message
-	for (const source of ENTRY_INDEX_SOURCES) {
-		const entry = await pickEntryOfSource(source, currentModel)
-		if (entry) return entry
-	}
-	return (
-		(await pickNarrativeNode(currentModel)) ??
-		(await pickNarrativeRelationship(currentModel)) ??
-		(await pickCharacter(currentModel)) ??
-		null
-	)
+	const pickers: ChainPicker[] = [
+		chainPicker((id, pf, scan) =>
+			pickSessionMessage(currentModel, undefined, id, pf, scan)
+		),
+		...ENTRY_INDEX_SOURCES.map((source) =>
+			chainPicker((id, pf, scan) =>
+				pickEntryOfSource(source, currentModel, undefined, id, pf, scan)
+			)
+		),
+		chainPicker((id, pf, scan) =>
+			pickNarrativeNode(currentModel, undefined, id, pf, scan)
+		),
+		chainPicker((id, pf, scan) =>
+			pickNarrativeRelationship(currentModel, undefined, id, pf, scan)
+		),
+		chainPicker((id, pf, scan) =>
+			pickCharacter(currentModel, undefined, id, pf, scan)
+		)
+	]
+	return nextOfChain("global", currentModel, pickers)
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,7 +1410,9 @@ export async function writeEmbeddingIfFresh(
 async function pickSessionMessage(
 	currentModel: string,
 	sessionId?: number,
-	onlyId?: number
+	onlyId?: number,
+	prefetch?: Prefetch,
+	scan?: ScanSink
 ): Promise<QueueItem | null> {
 	const where = and(
 		sessionId ? eq(schema.sessionMessages.sessionId, sessionId) : undefined,
@@ -1207,9 +1432,17 @@ async function pickSessionMessage(
 			desc(schema.sessionMessages.sessionId),
 			asc(schema.sessionMessages.id)
 		)
-		.limit(1)
+		.limit(scan?.limit ?? 1)
 
 	if (!rows.length) return null
+	if (scan) {
+		scan.rows = rows.map((r) => ({
+			id: r.id,
+			text: r.text,
+			sourceHash: r.sourceHash
+		}))
+		return null
+	}
 	const { id, text, sourceHash } = rows[0]
 	return queueItem({
 		type: "message",
@@ -1217,7 +1450,7 @@ async function pickSessionMessage(
 		id,
 		currentModel,
 		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
+			const vector = await vectorFor(text, sourceHash, prefetch)
 			await writeEmbeddingIfFresh(
 				MESSAGE_STORE,
 				id,
@@ -1364,8 +1597,8 @@ export async function ensureSessionMessageEmbedded(
 /**
  * The three entry pickers, as one.
  *
- * They read the same rows of the same table now, so what used to be three
- * near-identical blocks is one parameterised by the declared type, the label
+ * They read the same rows of the same table, so one block serves all three,
+ * parameterised by the declared type, the label
  * the progress event carries, and whether the embed text is prefixed with a
  * title. That last one is the only real difference between them, and it is what
  * the type's `embedText` role declares: `[title, content]` for the two lore
@@ -1376,7 +1609,9 @@ async function pickEntry(
 	labelType: VectorizationItemLabel["type"],
 	currentModel: string,
 	lorebookId?: number,
-	onlyId?: number
+	onlyId?: number,
+	prefetch?: Prefetch,
+	scan?: ScanSink
 ): Promise<QueueItem | null> {
 	if (!typeIds.length) return null
 	const where = and(
@@ -1405,9 +1640,17 @@ async function pickEntry(
 		.from(schema.lorebookEntries)
 		.leftJoin(schema.lorebookEntryVectors, defaultVectorJoin)
 		.where(where)
-		.limit(1)
+		.limit(scan?.limit ?? 1)
 
 	if (!rows.length) return null
+	if (scan) {
+		scan.rows = rows.map((r) => ({
+			id: r.id,
+			text: r.text,
+			sourceHash: r.sourceHash
+		}))
+		return null
+	}
 	const {
 		id,
 		typeId,
@@ -1425,13 +1668,8 @@ async function pickEntry(
 		lorebookId: rowLorebookId,
 		currentModel,
 		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
-			await writeEntryVectorIfFresh(
-				id,
-				sourceHash,
-				currentModel,
-				vector
-			)
+			const vector = await vectorFor(text, sourceHash, prefetch)
+			await writeEntryVectorIfFresh(id, sourceHash, currentModel, vector)
 		}
 	})
 }
@@ -1445,20 +1683,26 @@ const pickEntryOfSource = (
 	source: EntryIndexSource,
 	currentModel: string,
 	lorebookId?: number,
-	onlyId?: number
+	onlyId?: number,
+	prefetch?: Prefetch,
+	scan?: ScanSink
 ) =>
 	pickEntry(
 		entryTypesOfSource(source),
 		source,
 		currentModel,
 		lorebookId,
-		onlyId
+		onlyId,
+		prefetch,
+		scan
 	)
 
 async function pickNarrativeNode(
 	currentModel: string,
 	lorebookId?: number,
-	onlyId?: number
+	onlyId?: number,
+	prefetch?: Prefetch,
+	scan?: ScanSink
 ): Promise<QueueItem | null> {
 	const where = and(
 		lorebookId
@@ -1478,9 +1722,17 @@ async function pickNarrativeNode(
 		})
 		.from(schema.lorebookBindings)
 		.where(where)
-		.limit(1)
+		.limit(scan?.limit ?? 1)
 
 	if (!rows.length) return null
+	if (scan) {
+		scan.rows = rows.map((r) => ({
+			id: r.id,
+			text: r.text,
+			sourceHash: r.sourceHash
+		}))
+		return null
+	}
 	const { id, name, lorebookId: rowLorebookId, text, sourceHash } = rows[0]
 	return queueItem({
 		type: "narrativeNode",
@@ -1489,7 +1741,7 @@ async function pickNarrativeNode(
 		lorebookId: rowLorebookId,
 		currentModel,
 		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
+			const vector = await vectorFor(text, sourceHash, prefetch)
 			await writeEmbeddingIfFresh(
 				BINDING_STORE,
 				id,
@@ -1504,7 +1756,9 @@ async function pickNarrativeNode(
 async function pickNarrativeRelationship(
 	currentModel: string,
 	lorebookId?: number,
-	onlyId?: number
+	onlyId?: number,
+	prefetch?: Prefetch,
+	scan?: ScanSink
 ): Promise<QueueItem | null> {
 	const where = and(
 		lorebookId
@@ -1531,9 +1785,17 @@ async function pickNarrativeRelationship(
 		})
 		.from(schema.narrativeRelationships)
 		.where(where)
-		.limit(1)
+		.limit(scan?.limit ?? 1)
 
 	if (!rows.length) return null
+	if (scan) {
+		scan.rows = rows.map((r) => ({
+			id: r.id,
+			text: r.text,
+			sourceHash: r.sourceHash
+		}))
+		return null
+	}
 	const {
 		id,
 		fromName,
@@ -1549,7 +1811,7 @@ async function pickNarrativeRelationship(
 		lorebookId: rowLorebookId,
 		currentModel,
 		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
+			const vector = await vectorFor(text, sourceHash, prefetch)
 			await writeEmbeddingIfFresh(
 				RELATIONSHIP_STORE,
 				id,
@@ -1564,7 +1826,9 @@ async function pickNarrativeRelationship(
 async function pickCharacter(
 	currentModel: string,
 	characterIds?: number[],
-	onlyId?: number
+	onlyId?: number,
+	prefetch?: Prefetch,
+	scan?: ScanSink
 ): Promise<QueueItem | null> {
 	if (characterIds !== undefined && characterIds.length === 0) return null
 
@@ -1585,9 +1849,17 @@ async function pickCharacter(
 		})
 		.from(schema.characters)
 		.where(where)
-		.limit(1)
+		.limit(scan?.limit ?? 1)
 
 	if (!rows.length) return null
+	if (scan) {
+		scan.rows = rows.map((r) => ({
+			id: r.id,
+			text: r.text,
+			sourceHash: r.sourceHash
+		}))
+		return null
+	}
 	const { id, name, text, sourceHash } = rows[0]
 	return queueItem({
 		type: "character",
@@ -1595,7 +1867,7 @@ async function pickCharacter(
 		id,
 		currentModel,
 		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
+			const vector = await vectorFor(text, sourceHash, prefetch)
 			await writeEmbeddingIfFresh(
 				CHARACTER_STORE,
 				id,
@@ -1765,7 +2037,10 @@ export async function scopedMissingVectors(
 								schema.lorebookBindings.lorebookId,
 								lorebookIds
 							),
-							columnStoreNeedsEmbedding(BINDING_STORE, currentModel)
+							columnStoreNeedsEmbedding(
+								BINDING_STORE,
+								currentModel
+							)
 						)
 					)
 					.orderBy(desc(schema.lorebookBindings.id))

@@ -851,8 +851,11 @@ describe("one undo rule: a scene boundary goes with a line only when nothing sit
 		await openScene(d(), { sessionId: w.sessionId, userId: ownerId, atMessageId: w.person })
 		const before = await scenesOf(w)
 		expect(before).toHaveLength(1)
-		expect(await back(w)).toMatchObject({ ok: true })
+		// Story steps one message per press: the whole turn is the reply, then the person's line.
+		expect(await back(w)).toMatchObject({ ok: true, messageIds: [w.reply] })
+		expect(await back(w)).toMatchObject({ ok: true, messageIds: [w.person] })
 		expect(await scenesOf(w)).toEqual([])
+		expect(await forward(w)).toMatchObject({ ok: true })
 		expect(await forward(w)).toMatchObject({ ok: true })
 		expect(await scenesOf(w)).toEqual(before)
 	})

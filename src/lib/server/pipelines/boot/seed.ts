@@ -256,7 +256,10 @@ export interface SpecSeedReport {
  * which is what carries the edit to an install. Immutability is untouched; what
  * the pointer resolves to is what moves.
  */
-export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
+export async function seedCoreSpecs(
+	db: Db,
+	opts: { docs?: Map<string, SpecDocument | null> } = {}
+): Promise<SpecSeedReport[]> {
 	const { saveDocument, assertInstallSlashNamesFree } = await import(
 		"$lib/server/pipelines/boot/store"
 	)
@@ -386,7 +389,7 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	// Runs for present specs as well as published ones, and that is the point:
 	// it establishes the shipped-config invariant on an instance upgraded from
 	// before configs existed, which no publish would ever trigger.
-	const reconciled = await reconcilePublishedConfigs(db)
+	const reconciled = await reconcilePublishedConfigs(db, opts.docs)
 	for (const report of out)
 		report.reconciled = reconciled.get(report.id) ?? []
 
@@ -417,22 +420,46 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
  * the most expensive step in the sequence for a report field.
  */
 export async function reconcilePublishedConfigs(
-	db: Db
+	db: Db,
+	docs: Map<string, SpecDocument | null> = new Map<string, SpecDocument | null>()
 ): Promise<Map<string, SpecSeedReport["reconciled"]>> {
+	const { publishedDocuments } = await import(
+		"$lib/server/pipelines/registrations/door"
+	)
+	const { loadDocument } = await import("$lib/server/pipelines/boot/store")
 	const out = new Map<string, SpecSeedReport["reconciled"]>()
 	const specs = await db
 		.select()
 		.from(schema.pipelineSpecs)
 		.orderBy(asc(schema.pipelineSpecs.id))
+	// The registry's only writer in the `pipelines` task is
+	// `syncDefinitionRegistry`, which runs at the top of `bootstrapPipelines`
+	// before every reader, so this one read is the registry every spec of this
+	// loop is reconciled against.
+	const byPin = new Map<string, any>(
+		(
+			(await db.select().from(schema.pipelineDefinitionRegistry)) as any[]
+		).map((r) => [`${r.definitionId}@${r.version}`, r])
+	)
 
 	for (const spec of specs as any[]) {
 		if (!spec.activeVersionId) continue
+		// Read through `docs`, only when a declaration read asks. A null in the
+		// map (unpublished active version, or a load that threw) is loaded
+		// again here so the throw reaches the catch below.
+		let docPromise: Promise<SpecDocument> | undefined
+		const docOf = () =>
+			(docPromise ??= publishedDocuments(db, [spec.slug], docs).then(
+				(m) => m.get(spec.slug) ?? loadDocument(db, spec.activeVersionId)
+			))
 		try {
 			const reports = await reconcileConfigs(
 				db,
 				spec.id,
 				spec.activeVersionId,
-				spec.slug
+				spec.slug,
+				byPin,
+				docOf
 			)
 			out.set(
 				spec.slug,

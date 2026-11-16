@@ -1,0 +1,66 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts (0 test)
+ ❯ |unit| src/lib/server/utils/lorebookExportMapper.test.ts (54 tests | 1 failed) 16ms
+     × a rate is clamped to 1, a non-number is 0, a bad Beginning is dropped 4ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts [ src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts ]
+Error: Transform failed with 1 error:
+/home/jody/github/serene-pub/src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts:109:6: ERROR: The symbol "rowOf" has already been declared
+  Plugin: vite:esbuild
+  File: /home/jody/github/serene-pub/src/lib/server/lorebooks/redlines.beginningDecay.int.test.ts:109:6
+  
+  The symbol "rowOf" has already been declared
+  107|  			.where(eq(schema.lorebookEntries.id, id))
+  108|  	)[0]!
+  109|  const rowOf = async (id: number) =>
+     |        ^
+  110|  	(
+  111|  		await testDb
+  
+ ❯ failureErrorWithLog node_modules/vite/node_modules/esbuild/lib/main.js:1467:15
+ ❯ node_modules/vite/node_modules/esbuild/lib/main.js:736:50
+ ❯ responseCallbacks.<computed> node_modules/vite/node_modules/esbuild/lib/main.js:603:9
+ ❯ handleIncomingPacket node_modules/vite/node_modules/esbuild/lib/main.js:658:12
+ ❯ Socket.readFromStdout node_modules/vite/node_modules/esbuild/lib/main.js:581:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/utils/lorebookExportMapper.test.ts > an entry's Beginning and decay rate > a rate is clamped to 1, a non-number is 0, a bad Beginning is dropped
+AssertionError: expected { decayRate: 0.2 } to deeply equal {}
+
+- Expected
++ Received
+
+- {}
++ {
++   "decayRate": 0.2,
++ }
+
+ ❯ src/lib/server/utils/lorebookExportMapper.test.ts:985:5
+    983|   expect(
+    984|    importedBeginningAndDecay({ year: 5, decayRate: 0.2 }, HISTORY_TYPE…
+    985|   ).toEqual({})
+       |     ^
+    986|  })
+    987| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 1 passed (3)
+      Tests  1 failed | 57 passed (58)
+   Start at  17:16:55
+   Duration  5.83s (transform 4.32s, setup 49ms, import 4.66s, tests 3.45s, environment 1ms)
+

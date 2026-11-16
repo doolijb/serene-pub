@@ -24,7 +24,7 @@ import type { Handler } from "$lib/shared/events"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
 import * as os from "os"
-import { eq, and } from "drizzle-orm"
+import { eq, and, isNull } from "drizzle-orm"
 import { v4 as uuid } from "uuid"
 import { createMedia } from "$lib/server/media"
 import {
@@ -855,7 +855,8 @@ export const importExecuteSillyTavern: Handler<
 				const existing = await db.query.lorebooks.findFirst({
 					where: and(
 						eq(schema.lorebooks.userId, userId),
-						eq(schema.lorebooks.name, name)
+						eq(schema.lorebooks.name, name),
+						isNull(schema.lorebooks.sessionId)
 					)
 				})
 				if (existing) lorebookNameToId.set(name, existing.id)

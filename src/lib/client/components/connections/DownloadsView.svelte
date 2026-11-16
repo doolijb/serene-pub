@@ -39,7 +39,15 @@
 	 *   word would be a claim the data cannot back.
 	 */
 	import { getContext } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		Box,
+		Cpu,
+		Download,
+		Eraser,
+		HardDrive,
+		Server
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -121,8 +129,15 @@
 		onnx: "HardDrive",
 		matting: "HardDrive"
 	}
+	/** The icons `TILE` can name. */
+	const TILE_ICONS: Record<string, Component<any>> = {
+		Cpu,
+		Box,
+		Server,
+		HardDrive
+	}
 	function tileIcon(source: DownloadSource) {
-		return ((Icons as any)[TILE[source]] as any) ?? Icons.Download
+		return TILE_ICONS[TILE[source]] ?? Download
 	}
 
 	/** Bytes as one unit for both halves, chosen by the size of the thing. */
@@ -187,7 +202,7 @@
 			menuItems={[
 				{
 					label: "Clear finished",
-					icon: Icons.Eraser,
+					icon: Eraser,
 					disabled:
 						!finished.length && !failed.length && !cancelled.length,
 					onSelect: () => downloads.clearFinished()
@@ -199,7 +214,7 @@
 	{#if empty}
 		<!-- One sentence. Nothing is arriving, which is not a problem to
 		     solve, so there is no button (STYLE-GUIDE §6.7). -->
-		<EmptyState icon={Icons.Download} message="Nothing is downloading." />
+		<EmptyState icon={Download} message="Nothing is downloading." />
 	{:else}
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 			{#if inFlight.length}
@@ -220,7 +235,7 @@
 							</span>
 							<span class="min-w-0 flex-1">
 								<span
-									class="block truncate text-lead font-medium"
+									class="text-lead block truncate font-medium"
 								>
 									{item.name}
 								</span>
@@ -283,11 +298,15 @@
 							<span class="min-w-0 flex-1">
 								<span class="flex min-w-0 items-center gap-1.5">
 									<span
-										class="min-w-0 truncate text-lead font-medium"
+										class="text-lead min-w-0 truncate font-medium"
 									>
 										{item.name}
 									</span>
-									<Badge tone="success" size="sm" class="shrink-0">
+									<Badge
+										tone="success"
+										size="sm"
+										class="shrink-0"
+									>
 										Done
 									</Badge>
 								</span>
@@ -328,7 +347,7 @@
 							</span>
 							<span class="min-w-0 flex-1">
 								<span
-									class="block truncate text-lead font-medium"
+									class="text-lead block truncate font-medium"
 								>
 									{item.name}
 								</span>
@@ -365,7 +384,7 @@
 							<span class="min-w-0 flex-1">
 								<span class="flex min-w-0 items-center gap-1.5">
 									<span
-										class="min-w-0 truncate text-lead font-medium"
+										class="text-lead min-w-0 truncate font-medium"
 									>
 										{item.name}
 									</span>

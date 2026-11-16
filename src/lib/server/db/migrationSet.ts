@@ -20,6 +20,7 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { readMigrationFiles } from "drizzle-orm/migrator"
 
 export interface MigrationSet {
 	/** sha256 over each journal entry and its SQL file, in journal order. */
@@ -28,11 +29,60 @@ export interface MigrationSet {
 	latestTag: string | null
 }
 
+/** What drizzle's `readMigrationFiles` returns. */
+export type MigrationFiles = ReturnType<typeof readMigrationFiles>
+
+type Journal = {
+	entries?: { idx: number; tag: string; when: number; breakpoints: boolean }[]
+}
+
+/**
+ * Key of the set on disk: the journal's and each listed SQL file's `mtimeMs`
+ * and `size` (a stat, never a read). Any edit to the set changes a stamp or a
+ * size, so a stale answer is impossible; a missing file throws here, as the
+ * read would have.
+ */
+function setKey(folder: string): { key: string; journal: Journal } {
+	const journalPath = path.join(folder, "meta/_journal.json")
+	const js = fs.statSync(journalPath)
+	const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as Journal
+	let key = `${js.mtimeMs}:${js.size}`
+	for (const e of journal.entries ?? []) {
+		const st = fs.statSync(path.join(folder, `${e.tag}.sql`))
+		key += `|${e.tag}:${st.mtimeMs}:${st.size}`
+	}
+	return { key, journal }
+}
+
+const filesMemo = new Map<string, { key: string; files: MigrationFiles }>()
+const setMemo = new Map<string, { key: string; set: MigrationSet }>()
+
+/**
+ * Drizzle's own `readMigrationFiles`, read and hashed once per process for an
+ * unchanged set. Drizzle's reader stays the only hasher: the ledger repair's
+ * byte-identity guarantee rests on its hash being the one its migrator writes.
+ * Memo key and invalidation: see `setKey`. One entry per folder; the array is a
+ * copy, so a caller cannot reorder the cache.
+ */
+export function readMigrationFilesMemo(
+	migrationsFolder: string
+): MigrationFiles {
+	const folder = path.resolve(migrationsFolder)
+	const { key } = setKey(folder)
+	let hit = filesMemo.get(folder)
+	if (!hit || hit.key !== key) {
+		hit = { key, files: readMigrationFiles({ migrationsFolder }) }
+		filesMemo.set(folder, hit)
+	}
+	return [...hit.files]
+}
+
 /** The set in `migrationsFolder`, as its journal lists it. */
 export function readMigrationSet(migrationsFolder: string): MigrationSet {
-	const journal = JSON.parse(
-		fs.readFileSync(path.join(migrationsFolder, "meta/_journal.json"), "utf8")
-	) as { entries?: { idx: number; tag: string; when: number; breakpoints: boolean }[] }
+	const folder = path.resolve(migrationsFolder)
+	const { key, journal } = setKey(folder)
+	const hit = setMemo.get(folder)
+	if (hit && hit.key === key) return { ...hit.set }
 	const entries = journal.entries ?? []
 	const hash = createHash("sha256")
 	for (const e of entries) {
@@ -40,16 +90,18 @@ export function readMigrationSet(migrationsFolder: string): MigrationSet {
 		// Line endings normalised: a Windows checkout of the same files is the
 		// same set.
 		const sql = fs
-			.readFileSync(path.join(migrationsFolder, `${e.tag}.sql`), "utf8")
+			.readFileSync(path.join(folder, `${e.tag}.sql`), "utf8")
 			.replace(/\r\n/g, "\n")
 		hash.update(sql)
 		hash.update("\0")
 	}
-	return {
+	const set: MigrationSet = {
 		fingerprint: hash.digest("hex"),
 		count: entries.length,
 		latestTag: entries.at(-1)?.tag ?? null
 	}
+	setMemo.set(folder, { key, set })
+	return { ...set }
 }
 
 export const STALE_BUILD_MESSAGE =

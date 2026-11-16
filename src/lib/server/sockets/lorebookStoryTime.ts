@@ -28,6 +28,10 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 import { refusable } from "./refusable"
+import {
+	TIMELINE_OFF_SENTENCES,
+	timelineOfBook
+} from "$lib/server/lorebooks/timeline"
 import { relayToBookReaders } from "./utils/bookReaders"
 import {
 	datesThatDoNotLand,
@@ -223,6 +227,8 @@ export const lorebookSetCalendarHandler: Handler<
 		await assertOwnedBook(db, socket.user!.id, params.lorebookId)
 		const primerProblem = await primerRowEditProblem(db, params.lorebookId)
 		if (primerProblem) throw new Error(primerProblem)
+		if (!(await timelineOfBook(db, params.lorebookId)))
+			throw new Error(TIMELINE_OFF_SENTENCES.dated)
 		// Throws with every fault named; a malformed calendar is never repaired.
 		const calendar = parseStoryCalendar(params.calendar ?? null)
 		await db.transaction(async (tx) => {
@@ -263,6 +269,8 @@ export const lorebookSetClockHandler: Handler<
 		await assertOwnedBook(db, socket.user!.id, params.lorebookId)
 		const primerProblem = await primerRowEditProblem(db, params.lorebookId)
 		if (primerProblem) throw new Error(primerProblem)
+		if (!(await timelineOfBook(db, params.lorebookId)))
+			throw new Error(TIMELINE_OFF_SENTENCES.clock)
 		const branchId = params.branchId ?? null
 		if (branchId !== null) {
 			const [line] = await db

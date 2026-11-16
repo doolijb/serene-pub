@@ -1,0 +1,44 @@
+{
+ "model": "hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M",
+ "n": 20,
+ "results": {
+  "undated": {
+   "acts_still_furious": "16/20",
+   "mentions_time_passing": "0/20"
+  },
+  "value_ago": {
+   "acts_still_furious": "6/20",
+   "mentions_time_passing": "12/20"
+  },
+  "key_ago": {
+   "acts_still_furious": "2/20",
+   "mentions_time_passing": "12/20"
+  },
+  "value_as_of": {
+   "acts_still_furious": "13/20",
+   "mentions_time_passing": "8/20"
+  }
+ },
+ "samples": {
+  "undated": [
+   "[still=1 passed=0]  Mira: Mira turned from the bar, a dark scowl on her face. She pointed an accusing finger at Ash. \"You! How dare you show your face here again, after what you did!\" Her voice shook with barely suppressed rage. \"Did you think I wouldn't recognize you, after the way you broke my hu",
+   "[still=1 passed=0]  Mira: Mira's eyes narrowed as she recognized the tall stranger. In an instant, her face twisted with barely contained rage. \"You! You have the audacity to show your face here again, after what you did?\" Her voice trembled with suppressed anger. \"Get out of my inn this instant, b",
+   "[still=1 passed=0]  Mira: Mira looked up from the bar, her eyes narrowing as she recognized Ash. For a moment she just stared, then she slammed down the tankard she'd been polishing. \"You!\" she snarled, marching around the bar towards him. \"What in the seven hells do you think you're doing, waltzin"
+  ],
+  "value_ago": [
+   "[still=1 passed=0]  Mira: Mira, her dark hair pulled back, looked up from the bar. Her eyes narrowed as she recognized Ash. In a clipped tone, she replied, \"Ash. I'm surprised you have the nerve to show your face here again.\" She crossed her arms. \"A room is 5 silver a night. Breakfast included. Bu",
+   "[still=0 passed=0]  Mira: Mira looked up from polishing a tankard, her eyes widening slightly at the sight of the familiar face. She set down the tankard and wiped her hands on her apron, her expression unreadable. \"Ash. I didn't expect to see you again.\" Her tone was neutral, but there was an unde",
+   "[still=0 passed=0]  Mira: Mira's eyes widened in surprise at the sight of Ash, her cheeks flushing with a mix of anger and old affection. She straightened her apron, her voice tight as she replied, \"Ash. I never thought I'd see you again.\""
+  ],
+  "key_ago": [
+   "[still=0 passed=0]  Mira: Mira raised an eyebrow at the sight of Ash, her expression unreadable. \"Well, well. Look what the cat dragged in,\" she said coolly, wiping her hands on her apron. \"I thought I told you never to come back here.\"",
+   "[still=0 passed=0]  Mira: Mira looked up from polishing a tankard, her eyes widening slightly at the sight of the familiar face. She set the tankard down with a soft clink, her fingers tightening around it for a moment before she let go. \"Ash,\" she said, her voice cool and steady despite the flicke",
+   "[still=0 passed=1]  Mira: Mira's eyes widened in surprise at the sight of Ash, her grip tightening on the tankard she was polishing. \"Ash?\" she said, her voice barely above a whisper. \"What in the seven hells are you doing here?\" She set down the tankard with a sharp clack, her blue eyes flashing w"
+  ],
+  "value_as_of": [
+   "[still=1 passed=0]  Mira: Mira tensed at the sight of Ash, her jaw clenching. She grabbed a mug from the bar, gripping it tightly. \"You have some nerve showing your face here after what you did,\" she said, her voice low and controlled, \"breaking my husband's precious lute and disappearing like a th",
+   "[still=1 passed=1]  Mira: Mira's eyes narrowed as she recognized the traveller. Her lips pressed into a thin line. \"Ash,\" she said, her voice tight with barely contained anger. \"After all this time, you waltz in here like nothing happened? That lute was the last gift from my husband before he died,",
+   "[still=1 passed=0]  Mira: Mira's eyes narrowed as she recognized Ash. Her voice was cold. \"What are you doing here, Ash? Haven't you caused enough trouble already?\" She glared at him, arms crossed tightly."
+  ]
+ }
+}

@@ -17,15 +17,19 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 
 import {
 	castAmendmentParams,
+	castFieldWord,
 	castMaskedWarning,
+	deleteCastAmendment,
 	deleteMemberCopy,
 	deletedMemberToast,
 	fileCastAmendment,
+	fileCastVersion,
 	isOurCastAmendment,
 	laterVersionCount,
 	laterVersionsLine,
 	laterVersionsToast,
-	undoMergeToast
+	undoMergeToast,
+	updateCastAmendment
 } from "./castSave"
 
 const target = { lorebookId: 4, castId: 9, branchId: 7 }
@@ -48,6 +52,9 @@ function list(
 			fields: {},
 			columns: {} as Sockets.Lorebooks.CastVersionColumns,
 			historyEntryId: null,
+			writeOrder: c.id,
+			sourceSessionId: null,
+			sourceSessionName: null,
 			createdAt: "",
 			updatedAt: "",
 			...c
@@ -158,6 +165,106 @@ describe("fileCastAmendment", () => {
 		)
 		handlers.get("amendments:create:error")!({ error: "Not in this book." })
 		await expect(done).rejects.toThrow("Not in this book.")
+	})
+})
+
+describe("the cast version writes", () => {
+	const later = { changed: 0, kept: 1 }
+	const withLater = (
+		l: Sockets.Amendments.List.Response
+	): Sockets.Amendments.List.Response => ({ ...l, laterVersions: later })
+	const sock = () => ({ emit: () => {} }) as any
+
+	describe("updateCastAmendment", () => {
+		const params = {
+			lorebookId: 4,
+			id: 2,
+			subject: "cast" as const,
+			fields: { summary: "x" }
+		}
+		test("a plain relist does not answer it; the reply with laterVersions holding the row does", async () => {
+			const done = updateCastAmendment(sock(), params)
+			handlers.get("amendments:list#4")!(list([{ id: 2 }]))
+			handlers.get("amendments:list#4")!(withLater(list([{ id: 3 }])))
+			handlers.get("amendments:list#5")?.(withLater(list([{ id: 2 }], 5)))
+			handlers.get("amendments:list#4")!(withLater(list([{ id: 2 }])))
+			const reply = await done
+			expect(reply.laterVersions).toEqual(later)
+		})
+		test("a re-date waits for the row at the date asked", async () => {
+			let settled = false
+			const done = updateCastAmendment(sock(), {
+				lorebookId: 4,
+				id: 2,
+				subject: "cast",
+				year: 8,
+				month: null,
+				day: null
+			}).then(() => (settled = true))
+			handlers.get("amendments:list#4")!(
+				withLater(list([{ id: 2, year: 3 }]))
+			)
+			await Promise.resolve()
+			expect(settled).toBe(false)
+			handlers.get("amendments:list#4")!(
+				withLater(list([{ id: 2, year: 8 }]))
+			)
+			await done
+			expect(settled).toBe(true)
+		})
+		test("a refusal rejects, with a sentence when the server sent none", async () => {
+			const done = updateCastAmendment(sock(), params)
+			handlers.get("amendments:update:error")!({})
+			await expect(done).rejects.toThrow(
+				"The version could not be saved."
+			)
+		})
+	})
+
+	describe("fileCastVersion", () => {
+		const planned = { year: 3, fields: { summary: "x" } }
+		test("answered by a reply with laterVersions holding a row of the member on the line at the date, a known id included", async () => {
+			const done = fileCastVersion(sock(), target, planned)
+			handlers.get("amendments:list#4")!(list([{ id: 2 }]))
+			handlers.get("amendments:list#4")!(
+				withLater(list([{ id: 2, branchId: null }]))
+			)
+			handlers.get("amendments:list#4")!(
+				withLater(list([{ id: 2, castId: 8 }]))
+			)
+			handlers.get("amendments:list#4")!(
+				withLater(list([{ id: 2, year: 4 }]))
+			)
+			handlers.get("amendments:list#4")!(
+				withLater(
+					list([{ id: 2, fields: { summary: "more", name: "y" } }])
+				)
+			)
+			const reply = await done
+			expect(reply.cast.map((c) => c.id)).toEqual([2])
+		})
+		test("a refusal rejects with the fallback sentence", async () => {
+			const done = fileCastVersion(sock(), target, planned)
+			handlers.get("amendments:create:error")!({})
+			await expect(done).rejects.toThrow(
+				"The version could not be saved."
+			)
+		})
+	})
+
+	describe("deleteCastAmendment", () => {
+		test("waits for a list for the book without the row", async () => {
+			const done = deleteCastAmendment(sock(), {
+				lorebookId: 4,
+				id: 2,
+				subject: "cast"
+			})
+			handlers.get("amendments:list#4")!(list([{ id: 2 }]))
+			handlers.get("amendments:list#5")?.(list([], 5))
+			handlers.get("amendments:list#4")!(list([{ id: 3 }]))
+			const reply = await done
+			expect(reply.cast.map((c) => c.id)).toEqual([3])
+		})
 	})
 })
 
@@ -471,5 +578,13 @@ describe("later versions (CV-13)", () => {
 				changeLaterVersions: true
 			})
 		).toMatchObject({ changeLaterVersions: true })
+	})
+})
+
+describe("castFieldWord", () => {
+	test("the member's own name, nickname and voice have words", () => {
+		expect(castFieldWord("ownName")).toBe("the name in this book")
+		expect(castFieldWord("ownNickname")).toBe("the nickname in this book")
+		expect(castFieldWord("timbre")).toBe("the voice")
 	})
 })

@@ -6,6 +6,7 @@ import { relations, sql } from "drizzle-orm"
 import { PromptFormats } from "../../shared/constants/PromptFormats"
 import type { ShownSprite } from "../../shared/sprites"
 import type { RetoldFlags } from "../../shared/lorebooks/retold"
+import type { KnowledgeKind } from "../../shared/lorebooks/knowledgeKinds"
 import type { CharacterTimbreInput } from "../../shared/characters/timbre"
 import type { CharacterLikenessInput } from "../../shared/characters/likeness"
 import type { RenderMode } from "../../shared/constants/completionTemplates"
@@ -1393,6 +1394,17 @@ export const lorebooks = pgTable(
 		 * of days and there is still one comparator.
 		 */
 		storyCalendar: json("story_calendar").$type<StoryCalendar | null>(),
+		/**
+		 * 🚧 The book's **Timeline** switch (owner, 2026-11-14). On: dates on
+		 * entries, dated changes, history entries, the calendar and the story
+		 * clock work as `docs/lorebook-time.md` says. Off: the book is read as
+		 * it stands now, written undated, and its story time does not move;
+		 * nothing dated is deleted, so switching on brings it all back. Lines
+		 * are not part of it. Read only through `lorebooks/timeline.ts`.
+		 * `lorebooks/timelinePass.ts` sets it once for existing books from what
+		 * they store.
+		 */
+		timelineEnabled: boolean("timeline_enabled").notNull().default(true),
 		/** Main's clock. A branch's is on `lorebook_branches`. */
 		/**
 		 * The story's clock — where the story currently stands on this line
@@ -3194,7 +3206,19 @@ export const sessionMessages = pgTable(
 		),
 		index("session_messages_cast_member_idx")
 			.on(table.castMemberId)
-			.where(sql`${table.castMemberId} IS NOT NULL`)
+			.where(sql`${table.castMemberId} IS NOT NULL`),
+		// Paged reads, turn direction, the boundary watcher and RAG all filter
+		// by session and order by id with a limit (★P8, 2026-11-13).
+		index("session_messages_session_id_id_idx").on(
+			table.sessionId,
+			table.id
+		),
+		// The rows still generating — the boot's derelict-reply pass and the
+		// per-session "is anything running" reads. Tiny: almost every row is
+		// settled (★P8).
+		index("session_messages_generating_idx")
+			.on(table.sessionId)
+			.where(sql`${table.isGenerating}`)
 	]
 )
 
@@ -3388,7 +3412,9 @@ export const messages = pgTable(
 		index("messages_session_rewind_idx").on(t.sessionId, t.rewindOrdinal),
 		index("messages_cast_member_idx")
 			.on(t.castMemberId)
-			.where(sql`${t.castMemberId} IS NOT NULL`)
+			.where(sql`${t.castMemberId} IS NOT NULL`),
+		// Same paged-read shape as `session_messages` (★P8, 2026-11-13).
+		index("messages_session_id_id_idx").on(t.sessionId, t.id)
 	]
 )
 
@@ -3799,8 +3825,22 @@ export const variants = pgTable(
 		bytes: integer("bytes").notNull(),
 		/** Relative to the data dir. THE ONLY PLACE A PATH LIVES — never
 		 *  serialised to a non-admin client. Never spread this row into a
-		 *  response. */
-		path: text("path").notNull(),
+		 *  response.
+		 *
+		 *  NULL on a **same-as variant** and only there (the CHECK below): that
+		 *  row owns no bytes, so nothing may ever unlink a path through it. */
+		path: text("path"),
+		/**
+		 * 🚧 A **same-as variant** (★P10, 2026-11-13): this row's bytes ARE
+		 * that variant's — same file, same bytes on disk — so it carries the
+		 * source's id instead of a path of its own. Written when the source is
+		 * already its own thumbnail (a whole-frame WebP within the thumb edge),
+		 * so the next request finds a row instead of re-reading the source.
+		 * No FK, like `file_id`; `removeVariant` drops the same-as rows that
+		 * name a row it removes. ⚠ Not the display pointer
+		 * (`files.display_variant_id`, which picks a variant for the bare URL).
+		 */
+		sameAsVariantId: integer("same_as_variant_id"),
 		/** sha256 of THESE bytes. The ETag the route serves. */
 		hash: text("hash").notNull(),
 		width: integer("width"),
@@ -3839,6 +3879,13 @@ export const variants = pgTable(
 		check(
 			"variants_fidelity_check",
 			sql`${t.fidelity} IN ('full', 'reduced')`
+		),
+		// A row owns a path or names a source, never both, never neither: a
+		// same-as variant that owned a path would let a cull or a re-cut
+		// unlink the source's bytes ([C6]).
+		check(
+			"variants_same_as_check",
+			sql`(${t.path} IS NULL) = (${t.sameAsVariantId} IS NOT NULL)`
 		)
 	]
 )
@@ -4446,7 +4493,20 @@ export const systemSettings = pgTable(
 		ggufListCache: jsonb("gguf_list_cache")
 			.notNull()
 			.default({})
-			.$type<Record<string, { text: string; fetchedAt: string }>>()
+			.$type<Record<string, { text: string; fetchedAt: string }>>(),
+		/**
+		 * 🚧 **Boot markers** (★P9, 2026-11-13): one key per one-off startup
+		 * task that has finished a clean run — marker key → when it was
+		 * written (ISO). The next boot skips that task and logs one line
+		 * saying so. Written and read only through `startup/bootMarkers.ts`;
+		 * a task that throws or reports a unit it left writes none. Clearing
+		 * a key re-runs its task on the next boot. ⚠ Not a setting: nobody
+		 * edits it, and no screen shows it.
+		 */
+		bootMarkers: jsonb("boot_markers")
+			.notNull()
+			.default({})
+			.$type<Record<string, string>>()
 	},
 	(t) => [
 		check(
@@ -5194,6 +5254,16 @@ export const narrativeRelationships = pgTable(
 		 */
 		reverseRelationshipType: text("reverse_relationship_type"),
 		/**
+		 * NULL for every ordinary row. Set only on a cast→entry row: such a
+		 * row is a **knowledge tie** (`was_told`, `knows`, `has_been_there`,
+		 * or `kept_from` for the opposite). A knowledge tie is left out of the
+		 * relationship graph, tie ranking, the ties in a prompt, the link hop,
+		 * lore links, the Timeline, embeddings and ruleset ties, and is carried
+		 * by export / import / copies. Its only writer is
+		 * `lorebooks/entryKnowledge.ts`.
+		 */
+		knowledgeKind: text("knowledge_kind").$type<KnowledgeKind>(),
+		/**
 		 * 🚧 **From the rules** (PLAN-rulesets-functions T2–T4, 2026-10-23):
 		 * the run (`pipeline_runs.run_id`, the SDK's own run id) whose ruleset
 		 * outlet last wrote this row as a **projection** — a held tie side's
@@ -5292,6 +5362,12 @@ export const narrativeRelationships = pgTable(
 		check(
 			"narrative_relationships_reverse_check",
 			sql`${table.reverseRelationshipType} IS NULL OR ${table.fromEntryId} IS NOT NULL OR ${table.toEntryId} IS NOT NULL`
+		),
+		// A knowledge tie runs from a cast binding to an entry, with a known kind
+		// and no reverse wording.
+		check(
+			"narrative_relationships_knowledge_check",
+			sql`${table.knowledgeKind} IS NULL OR (${table.knowledgeKind} IN ('was_told','knows','has_been_there','kept_from') AND ${table.fromNodeId} IS NOT NULL AND ${table.toEntryId} IS NOT NULL AND ${table.reverseRelationshipType} IS NULL)`
 		),
 		// One entry↔entry link per pair, relationship type, name, line and
 		// date (case aside). Two differently named doors between the same
@@ -7046,7 +7122,11 @@ export const pipelineRuns = pgTable(
 	(t) => [
 		index("pipeline_runs_session_idx").on(t.sessionId, t.id),
 		/** The tree a root run fathered — the inspector's "what did this ask" and the descendant count. */
-		index("pipeline_runs_root_idx").on(t.rootRunId)
+		index("pipeline_runs_root_idx").on(t.rootRunId),
+		// The admin overview's "last day of real runs" (★P8, 2026-11-13).
+		index("pipeline_runs_started_idx")
+			.on(t.startedAt)
+			.where(sql`NOT ${t.isPreview}`)
 	]
 )
 
@@ -7080,7 +7160,14 @@ export const pipelineRunNodes = pgTable(
 		tokens: integer("tokens"),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
-	(t) => [index("pipeline_run_nodes_run_idx").on(t.runId, t.seq)]
+	(t) => [
+		index("pipeline_run_nodes_run_idx").on(t.runId, t.seq),
+		// Which definitions failed lately — the jobs view's error read
+		// (★P8, 2026-11-13). Failed nodes only, so it stays small.
+		index("pipeline_run_nodes_err_definition_idx")
+			.on(t.definitionId)
+			.where(sql`${t.result} = 'err'`)
+	]
 )
 
 /**
@@ -7523,7 +7610,10 @@ export const pluginHookInvocations = pgTable(
 			t.pluginId,
 			t.finishedAt
 		),
-		index("plugin_hook_invocations_run_idx").on(t.runId)
+		index("plugin_hook_invocations_run_idx").on(t.runId),
+		// The unfiltered admin list and the retention prune both order or
+		// cut by `finished_at` alone (★P5, ★P8, 2026-11-13).
+		index("plugin_hook_invocations_finished_idx").on(t.finishedAt)
 	]
 )
 
@@ -8941,6 +9031,24 @@ export const lorebookEntries = pgTable(
 		 * the manager list without being destroyed.
 		 */
 		archived: boolean("archived").notNull().default(false),
+		/**
+		 * The entry's **Decay**: 0 is a fact (*Decay: Fact*); above 0, up to 1,
+		 * a living entry at that rate (*Decay: Living*). The entry's own, like
+		 * its date: a dated change never carries it, and writers clamp it into
+		 * 0–1 (`clampDecayRate`). Stored and shown; recall does not read it.
+		 * ⚠ Not `recencyDecay`, a ranking parameter of the semantic mechanism.
+		 */
+		decayRate: real("decay_rate").notNull().default(0),
+		/**
+		 * True when the entry is **not common knowledge**: only the cast
+		 * members tied to it (*has been there*, *was told*, *knows*) read it.
+		 * False (unmarked) is common knowledge, every entry's start. The only
+		 * writer is `lorebooks/entryKnowledge.ts`, for the lorebook's owner.
+		 * Not per version and not per line; the edit history does not record it.
+		 */
+		notCommonKnowledge: boolean("not_common_knowledge")
+			.notNull()
+			.default(false),
 		/**
 		 * Who wrote this row — `human`, `summarizer`, `graph-builder`.
 		 *
@@ -10833,7 +10941,7 @@ export const loreImprints = pgTable(
 		lorebookId: integer("lorebook_id")
 			.notNull()
 			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		/** `entry` · `relationship` · `member` · `overlay` (the notes' rule-fed overlay, by the notes' id) · 🚧 `annex` (a lorebook annex write, M0 SHAPES L9; `field` = owner/key). */
+		/** `entry` · `relationship` · `member` · `overlay` (the notes' rule-fed overlay, by the notes' id) · 🚧 `annex` (a lorebook annex write, M0 SHAPES L9; `field` = owner/key) · 🚧 `version` (an entry version, an `entry_amendments` row; `field` = its wire key). */
 		subjectKind: text("subject_kind").notNull(),
 		subjectId: integer("subject_id").notNull(),
 		/** The column (`title`), a typed field (`fields.standing`), an overlay path; NULL = the row was made. */
@@ -10865,7 +10973,7 @@ export const loreImprints = pgTable(
 			.where(sql`${t.status} = 'kept'`),
 		check(
 			"lore_imprints_subject_kind_check",
-			sql`${t.subjectKind} IN ('entry', 'relationship', 'member', 'overlay', 'annex')`
+			sql`${t.subjectKind} IN ('entry', 'relationship', 'member', 'overlay', 'annex', 'version')`
 		),
 		check(
 			"lore_imprints_origin_check",
@@ -10874,6 +10982,91 @@ export const loreImprints = pgTable(
 		check(
 			"lore_imprints_status_check",
 			sql`${t.status} IN ('standing', 'kept', 'settled')`
+		)
+	]
+)
+
+/**
+ * 🚧 **A redline** (owner, 2026-11-13/14: "keep a change history … that's not
+ * a dated change on the timeline"; "card edit history should be per
+ * version"): one edit kept with what each changed key held before and after,
+ * when, and who. The UI calls the list **Edit history**. Written only by
+ * `recordRedline` (`server/lorebooks/redlines.ts`), on the transaction of the
+ * write it records; a subject keeps its newest 50, never evicting the newest
+ * a person wrote. Three subjects, exactly one key set (CHECK):
+ *
+ * - an **entry** (`entry_id`, cascade): its name, content, keys or typed
+ *   fields, or a dated change's fields (`amendment_id`, cascade; NULL is the
+ *   entry itself). The lorebook's; its owner clears it.
+ * - a **card version** (`character_version_id`, cascade): its profile fields.
+ *   The card owner's; the card owner clears it.
+ * - a **cast version** (`character_version_id`, cascade): its profile fields.
+ *   The lorebook's; the lorebook's owner clears it.
+ *
+ * ⚠ The `lore_` prefix is provisional: a card version's rows are not lore.
+ * Never keyed by a lorebook: Apply and Take back move an entry between
+ * books. `session_id`,
+ * `message_id` and `user_id` are plain ints with no key, so deleting a
+ * session or a person never erases the lorebook's history; `shown_as` is the
+ * routine's or pipeline's shown name as it read when the row was written.
+ *
+ * `changes` is `{ [wire key]: { before, after } }`, each wrapped `{ v }`,
+ * NULL where the key was absent.
+ *
+ * ⚠ Not a **lore imprint** (a session's per-turn undo record, which goes with
+ * its session), not an **amendment** (a dated change on the timeline), not
+ * the **admin logbook**. It belongs to the lorebook and never travels: not
+ * copied, not exported, cleared by Share as a lorebook.
+ */
+export const loreRedlines = pgTable(
+	"lore_redlines",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** The entry edited; NULL when the subject is a character version. */
+		entryId: integer("entry_id").references(() => lorebookEntries.id, {
+			onDelete: "cascade"
+		}),
+		/** The card version or cast version edited; NULL when the subject is an entry. */
+		characterVersionId: integer("character_version_id").references(
+			() => characterVersions.id,
+			{ onDelete: "cascade" }
+		),
+		/** The dated change this edit changed; NULL = the entry itself. Only with `entry_id`. */
+		amendmentId: integer("amendment_id").references(() => entryAmendments.id, {
+			onDelete: "cascade"
+		}),
+		changes: jsonb("changes")
+			.$type<Record<string, { before: { v: unknown } | null; after: { v: unknown } | null }>>()
+			.notNull(),
+		/** `save` · `routine` · `apply` · `revert` · `take-back` · `restore`. */
+		cause: text("cause").notNull(),
+		/** The person who made it — plain, no key. NULL: a run, or an Apply made by itself. */
+		userId: integer("user_id"),
+		/** The session a run or an Apply came from — plain, no key. */
+		sessionId: integer("session_id"),
+		/** The turn's message, when a turn caused it — plain, no key. */
+		messageId: integer("message_id"),
+		/** The run that wrote it, so taking the turn back takes this row with it. Never shown. */
+		runId: text("run_id"),
+		/** The routine's or pipeline's shown name as it read when written. */
+		shownAs: text("shown_as"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("lore_redlines_entry_idx").on(t.entryId, t.id),
+		index("lore_redlines_amendment_idx")
+			.on(t.amendmentId)
+			.where(sql`${t.amendmentId} IS NOT NULL`),
+		index("lore_redlines_character_version_idx")
+			.on(t.characterVersionId, t.id)
+			.where(sql`${t.characterVersionId} IS NOT NULL`),
+		check(
+			"lore_redlines_subject_check",
+			sql`(${t.entryId} IS NULL) <> (${t.characterVersionId} IS NULL) AND (${t.amendmentId} IS NULL OR ${t.entryId} IS NOT NULL)`
+		),
+		check(
+			"lore_redlines_cause_check",
+			sql`${t.cause} IN ('save', 'routine', 'apply', 'revert', 'take-back', 'restore')`
 		)
 	]
 )
@@ -11833,3 +12026,23 @@ export const voicebankVoicesRelations = relations(
 		})
 	})
 )
+
+/**
+ * 🚧 An admin's override of how many model requests one host takes at once —
+ * its LLM lane width (perf-I, owner ruling ★P2-b, 2026-11-13). One row per
+ * host, keyed by the URL origin `scheme://host[:port]` an LLM lane is keyed by
+ * (`llmLaneHostOf`); no row means the derived default (1 for a local or managed
+ * host, 4 for a known cloud host). Owned, with every write, by
+ * `server/connections/llmLaneWidths.ts`. Governs requests in flight per host,
+ * never model residency or loading order.
+ */
+export const llmLaneWidths = pgTable("llm_lane_widths", {
+	laneKey: text("lane_key").primaryKey(),
+	width: integer("width").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.notNull()
+		.defaultNow()
+})

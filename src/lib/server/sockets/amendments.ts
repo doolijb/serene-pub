@@ -31,11 +31,13 @@ import * as schema from "$lib/server/db/schema"
 import type { CharacterProfileField } from "$lib/shared/characters/profile"
 import {
 	compareDates,
+	formatDate,
 	type StoryClock,
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
 import {
 	amendmentDateProblem,
+	amendmentDecayProblem,
 	NEVER_AMENDED,
 	type AsOf
 } from "$lib/shared/lorebooks/amendments"
@@ -53,6 +55,7 @@ import {
 } from "$lib/server/utils/lorebookEntries"
 import type { KeyList } from "$lib/server/pipelines/ranking/signals"
 import { verifyBindingTargetAccess, versionOnlyProblem } from "./lorebooks"
+import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { cardTakenBy, memberOfCard } from "$lib/server/utils/castMemberCards"
 import { parseRetoldFlags } from "$lib/shared/lorebooks/retold"
 import {
@@ -69,7 +72,8 @@ import {
 	reparentCastVersions,
 	updateCastVersion,
 	writeCastVersion,
-	type CastVersionChanges
+	type CastVersionChanges,
+	type VersionRedline
 } from "$lib/server/characters/versions"
 import { castVersionsInForce } from "$lib/server/cast/memberAsRead"
 import {
@@ -84,7 +88,12 @@ import {
 	keepHistoryForForks,
 	type KeptHistory
 } from "$lib/server/utils/forkHistory"
-import { relistEntries } from "./entries"
+import { earmarkNotice, earmarkedKeys, relistEntries } from "./entries"
+import {
+	assertAtOrAfterBeginning,
+	ownChangeAt,
+	writeEntryVersion
+} from "$lib/server/lorebooks/entryVersions"
 import { sceneListByLorebookHandler } from "./scenes"
 import { narrativeGraphListHandler } from "./narrativeGraph"
 import { lineOfBook } from "$lib/server/state/reading"
@@ -117,6 +126,11 @@ import {
 } from "$lib/server/utils/ownedBook"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { bookLinesReply } from "./lorebookStoryTime"
+import {
+	moveEntriesDownTheTree,
+	NOTES_REFUSAL,
+	sessionsOnLines
+} from "$lib/server/lorebooks/moveDownTheTree"
 import { tellMemberSessions } from "$lib/server/sessions/memberSessions"
 
 const iso = (d: Date | null | undefined) =>
@@ -341,6 +355,27 @@ export async function buildAmendmentsList(
 			.where(eq(schema.lorebookBranches.lorebookId, lorebookId))
 	])
 	const cards = await parentCardsOf(db, versions)
+	// A session is named only to someone who may open it: one access check
+	// per distinct session, one query for the names.
+	const sessionIds = [
+		...new Set(
+			versions
+				.map((v) => v.sourceSessionId)
+				.filter((id): id is number => id != null)
+		)
+	]
+	const sessionName = new Map<number, string>()
+	if (sessionIds.length) {
+		const named = await db
+			.select({ id: schema.sessions.id, name: schema.sessions.name })
+			.from(schema.sessions)
+			.where(inArray(schema.sessions.id, sessionIds))
+		for (const row of named) {
+			const name = row.name?.trim()
+			if (name && (await checkSessionAccess(row.id, userId)).hasAccess)
+				sessionName.set(row.id, name)
+		}
+	}
 	const byMember = new Map<number, VersionRow[]>()
 	for (const v of versions) {
 		const list = byMember.get(v.castMemberId!) ?? []
@@ -394,6 +429,12 @@ export async function buildAmendmentsList(
 					columnsOfVersion(prev, cards, v.parentVersionId != null)
 				),
 				columns,
+				writeOrder: v.writeOrder,
+				sourceSessionId: v.sourceSessionId ?? null,
+				sourceSessionName:
+					v.sourceSessionId != null
+						? (sessionName.get(v.sourceSessionId) ?? null)
+						: null,
 				historyEntryId: v.historyEntryId ?? null,
 				// The personal axis: a change dated against her life applies
 				// only to appearances at or past this point (design §4d).
@@ -951,6 +992,9 @@ async function cleanFields(
 		const dated =
 			subject.kind === "entry" ? amendmentDateProblem(raw as Record<string, unknown>) : null
 		if (dated) throw new Error(dated)
+		const decay =
+			subject.kind === "entry" ? amendmentDecayProblem(raw as Record<string, unknown>) : null
+		if (decay) throw new Error(decay)
 		for (const [key, value] of Object.entries(raw as Record<string, unknown>))
 			if (!NEVER_AMENDED.has(key)) fields[key] = value
 	}
@@ -1237,7 +1281,8 @@ async function writeToLaterVersions(
 	written: VersionRow,
 	changes: CastVersionChanges,
 	writtenBy: string,
-	apply: boolean
+	apply: boolean,
+	redline: VersionRedline
 ): Promise<LaterVersions> {
 	const out: LaterVersions = { changed: 0, kept: 0 }
 	const follows = Object.values(changes).some(isFollow)
@@ -1264,6 +1309,7 @@ async function writeToLaterVersions(
 			member: written.castMemberId!,
 			changes,
 			writtenBy,
+			redline,
 			at: {
 				branchId: v.branchId ?? null,
 				date: dateOfVersion(v),
@@ -1348,10 +1394,12 @@ async function writeCastChange(
 	if (!changes && !cardChange) throw new Error(NOTHING_A_MEMBER_HAS)
 
 	const writtenBy = `user:${userId}`
+	const person: VersionRedline = { by: { userId }, cause: "save" }
 	const { version } = await writeCastVersion(tx, {
 		member: subject.memberId,
 		changes: changes ?? { nodeState: after.nodeState },
 		writtenBy,
+		redline: person,
 		at: {
 			branchId: at.branchId,
 			date: at.date,
@@ -1379,7 +1427,8 @@ async function writeCastChange(
 		version,
 		changes ?? {},
 		writtenBy,
-		changeLater && changes != null
+		changeLater && changes != null,
+		person
 	)
 }
 
@@ -1407,6 +1456,7 @@ async function rewriteCastChange(
 			}
 		: undefined
 	const writtenBy = `user:${userId}`
+	const person: VersionRedline = { by: { userId }, cause: "save" }
 	const around = place
 		? await cardChangeAround(tx, row, subject.lorebookId)
 		: undefined
@@ -1450,7 +1500,12 @@ async function rewriteCastChange(
 			})
 	}
 	if (!fields) {
-		const moved = await updateCastVersion(tx, row.id, { place: placed })
+		const moved = await updateCastVersion(
+			tx,
+			row.id,
+			{ place: placed },
+			{ redline: person }
+		)
 		await moveSwitch(moved)
 		return { changed: 0, kept: 0 }
 	}
@@ -1484,10 +1539,12 @@ async function rewriteCastChange(
 
 	let version = row
 	if (changes || placed)
-		version = await updateCastVersion(tx, row.id, {
-			changes: changes ?? undefined,
-			place: placed
-		})
+		version = await updateCastVersion(
+			tx,
+			row.id,
+			{ changes: changes ?? undefined, place: placed },
+			{ redline: person }
+		)
 	if (placed) await moveSwitch(version)
 	if (cardChange) {
 		const around = await cardChangeAround(tx, version, subject.lorebookId)
@@ -1512,7 +1569,8 @@ async function rewriteCastChange(
 		version,
 		changes ?? {},
 		writtenBy,
-		changeLater && changes != null
+		changeLater && changes != null,
+		person
 	)
 }
 
@@ -1555,6 +1613,18 @@ export const amendmentsListHandler: Handler<
 	},
 	"The book's amendments could not be read."
 )
+
+/** A dated change to an entry's name, content or typed field waits while a live run earmarks the entry. */
+async function assertNotEarmarked(
+	entryId: number,
+	typeId: string,
+	fields: Record<string, unknown>,
+	userId: number
+): Promise<void> {
+	if (!earmarkedKeys(typeId, fields).length) return
+	const notice = await earmarkNotice(entryId, userId)
+	if (notice) throw new Error(notice)
+}
 
 export const amendmentsCreateHandler: Handler<
 	Sockets.Amendments.Create.Params,
@@ -1620,18 +1690,41 @@ export const amendmentsCreateHandler: Handler<
 				line: branchId ?? entry.branchId ?? null
 			}
 			const fields = await cleanFields(params.fields, subject, userId)
+			await assertNotEarmarked(entry.id, entry.typeId, fields, userId)
 			await writeDated(async (tx) => {
 				await assertOverlayAnchor(tx, subject, fields)
-				await tx.insert(schema.entryAmendments).values({
+				const written = await writeEntryVersion(tx, {
 					lorebookId: params.lorebookId,
 					entryId: entry.id,
 					branchId,
-					year,
-					month,
-					day,
+					date: { year, month, day },
 					fields,
 					historyEntryId
 				})
+				if (written.kind === "merged") {
+					const { recordRedline } = await import("$lib/server/lorebooks/redlines")
+					await recordRedline(tx as unknown as Db, {
+						entryId: entry.id,
+						amendmentId: written.id,
+						before: written.before,
+						after: written.after,
+						keys: [
+							...new Set([
+								...Object.keys(written.before),
+								...Object.keys(written.after)
+							])
+						],
+						cause: "save",
+						by: { userId }
+					})
+					// A person's write on the version turns the session's record of it kept.
+					const { markImprintsKept } = await import("$lib/server/lorebooks/imprints")
+					await markImprintsKept(tx as unknown as Db, {
+						subjectKind: "version",
+						subjectId: written.id,
+						fields: Object.keys(fields)
+					})
+				}
 			})
 		} else {
 			// ⚠ The member must be IN this book, exactly as an entry must be.
@@ -1689,16 +1782,17 @@ export const amendmentsCreateHandler: Handler<
 	"That amendment could not be saved."
 )
 
-export const amendmentsUpdateHandler: Handler<
-	Sockets.Amendments.Update.Params,
-	Sockets.Amendments.Update.Response
-> = refusable(
-	"amendments:update",
-	async (
-		socket,
-		params: Sockets.Amendments.Update.Params,
-		emitToUser
-	) => {
+/**
+ * `amendments:update`'s whole body. A dated change's `fields` edit keeps its
+ * before and after in the entry's edit history, with `cause` (`restore` when
+ * Restore of an edit-history row calls it).
+ */
+export async function updateAmendment(
+	socket: any,
+	params: Sockets.Amendments.Update.Params,
+	emitToUser: (event: string, data: any) => void,
+	cause: "save" | "restore"
+): Promise<Sockets.Amendments.Update.Response> {
 		const userId = socket.user!.id
 		const book = await assertOwnedBook(db, userId, params.lorebookId)
 		const primerProblem = await primerRowEditProblem(db, book.id)
@@ -1836,6 +1930,12 @@ export const amendmentsUpdateHandler: Handler<
 				amendmentId: params.id
 			}
 			patch.fields = await cleanFields(params.fields, subject, userId)
+			await assertNotEarmarked(
+				row.entryId,
+				row.typeId,
+				patch.fields as Record<string, unknown>,
+				userId
+			)
 		}
 		if (!Object.keys(patch).length) throw new Error("Nothing to change.")
 
@@ -1843,17 +1943,78 @@ export const amendmentsUpdateHandler: Handler<
 		// transaction under the book's lock (`lockBookCalendar`, A18(d)).
 		await db.transaction(async (tx) => {
 			await lockBookCalendar(tx, params.lorebookId)
-			if ("year" in patch)
+			if ("year" in patch) {
 				await assertDateLands(tx, params.lorebookId, patch as unknown as StoryDate)
+				const [owner] = await tx
+					.select({ entryId: table.entryId })
+					.from(table)
+					.where(eq(table.id, params.id))
+					.limit(1)
+				if (owner)
+					await assertAtOrAfterBeginning(
+						tx,
+						params.lorebookId,
+						owner.entryId,
+						patch as unknown as StoryDate
+					)
+				// One change per entry, line and date: a move onto a taken date is refused.
+				const [moving] = await tx
+					.select({ entryId: table.entryId, branchId: table.branchId })
+					.from(table)
+					.where(eq(table.id, params.id))
+					.limit(1)
+				if (moving) {
+					const clash = await ownChangeAt(tx, {
+						entryId: moving.entryId,
+						branchId: moving.branchId,
+						date: patch as unknown as StoryDate,
+						exceptId: params.id
+					})
+					if (clash) {
+						const calendar = await bookCalendarOf(tx, params.lorebookId)
+						throw new Error(
+							`This entry already has a version dated ${formatDate(patch as unknown as StoryDate, calendar)} on this line. Pick another date, or change that version instead.`
+						)
+					}
+				}
+			}
 			await assertOverlayAnchor(
 				tx,
 				subject,
 				patch.fields as Record<string, unknown> | undefined
 			)
+			const [kept] = subject || "year" in patch
+				? await tx.select({ fields: table.fields }).from(table).where(eq(table.id, params.id)).limit(1)
+				: []
 			await tx
 				.update(table)
 				.set(patch)
 				.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId)))
+			if (subject && patch.fields) {
+				const before = (kept?.fields ?? {}) as Record<string, unknown>
+				const after = patch.fields as Record<string, unknown>
+				const { recordRedline } = await import("$lib/server/lorebooks/redlines")
+				await recordRedline(tx as unknown as Db, {
+					entryId: subject.entryId,
+					amendmentId: params.id,
+					before,
+					after,
+					keys: [...new Set([...Object.keys(before), ...Object.keys(after)])],
+					cause,
+					by: { userId }
+				})
+			}
+			// A person's edit of the version turns the session's record of it kept: the fields edited, and all of them on a re-date.
+			if (subject || "year" in patch) {
+				const stored = Object.keys((kept?.fields ?? {}) as Record<string, unknown>)
+				const edited = patch.fields ? Object.keys(patch.fields as Record<string, unknown>) : []
+				const { markImprintsKept } = await import("$lib/server/lorebooks/imprints")
+				await markImprintsKept(tx as unknown as Db, {
+					subjectKind: "version",
+					subjectId: params.id,
+					fields: [...new Set([...(patch.fields ? stored : []), ...edited, ...("year" in patch ? stored : [])])]
+				})
+			}
 		})
 
 		// The book's vocabulary reads amended names (plan C1): an amendment
@@ -1862,7 +2023,15 @@ export const amendmentsUpdateHandler: Handler<
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
 		return res
-	},
+}
+
+export const amendmentsUpdateHandler: Handler<
+	Sockets.Amendments.Update.Params,
+	Sockets.Amendments.Update.Response
+> = refusable(
+	"amendments:update",
+	(socket, params: Sockets.Amendments.Update.Params, emitToUser) =>
+		updateAmendment(socket, params, emitToUser, "save"),
 	"That amendment could not be saved."
 )
 
@@ -1919,11 +2088,25 @@ export const amendmentsDeleteHandler: Handler<
 			})
 		} else {
 			const table = schema.entryAmendments
-			const gone = await db
-				.delete(table)
+			const gone = await db.transaction(async (tx) => {
 				// A held amendment is one session's own change: never deleted from the lorebook's screen.
-				.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId), isNull(table.base)))
-				.returning({ id: table.id })
+				const removed = await tx
+					.delete(table)
+					.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId), isNull(table.base)))
+					.returning({ id: table.id })
+				// A deleted version takes its per-turn records with it: a record with no row is dropped anyway.
+				if (removed.length) {
+					await tx
+						.delete(schema.loreImprints)
+						.where(
+							and(
+								eq(schema.loreImprints.subjectKind, "version"),
+								eq(schema.loreImprints.subjectId, params.id)
+							)
+						)
+				}
+				return removed
+			})
 			// A delete that found nothing is not a success: an id from another
 			// book, or one already gone.
 			if (!gone.length) throw new Error("That amendment is not in this lorebook.")
@@ -2246,6 +2429,81 @@ export const amendmentsDeleteBranchHandler: Handler<
 )
 
 /**
+ * Move entries down the tree: from the line they are on to a line it was
+ * forked from, for good (only `lorebook_entries.branch_id` changes; the rule
+ * is `$lib/shared/lorebooks/moveDownTheTree`). The lorebook owner's alone;
+ * never a session's notes or a provided book. The refusal is said inside the
+ * move dialog.
+ */
+export const amendmentsMoveDownTheTreeHandler: Handler<
+	Sockets.Amendments.MoveDownTheTree.Params,
+	Sockets.Amendments.MoveDownTheTree.Response
+> = refusable(
+	"amendments:moveDownTheTree",
+	async (
+		socket,
+		params: Sockets.Amendments.MoveDownTheTree.Params,
+		emitToUser
+	) => {
+		const userId = socket.user!.id
+		const book = await assertOwnedBook(db, userId, params.lorebookId)
+		const [own] = await db
+			.select({ sessionId: schema.lorebooks.sessionId })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, book.id))
+			.limit(1)
+		if (own?.sessionId != null) throw new Error(NOTES_REFUSAL)
+		const primerProblem = await primerRowEditProblem(db, book.id)
+		if (primerProblem) throw new Error(primerProblem)
+
+		const asked = params.entryIds as unknown
+		const target = params.branchId as unknown
+		if (
+			!Array.isArray(asked) ||
+			asked.length === 0 ||
+			!asked.every((id) => Number.isInteger(id)) ||
+			!(target === null || Number.isInteger(target))
+		)
+			throw new Error(
+				"Choose the entries to move and the line to move them to."
+			)
+		const entryIds = [...new Set(asked as number[])]
+		if (entryIds.length > 500) throw new Error("Move at most 500 entries at once.")
+
+		const result = await db.transaction((tx) =>
+			moveEntriesDownTheTree(tx, {
+				lorebookId: book.id,
+				entryIds,
+				target: target as number | null
+			})
+		)
+
+		// The lists land before the reply closes the dialog. Best-effort: the
+		// move has landed, so a failed refresh is never its refusal.
+		try {
+			for (const typeId of new Set(result.moved.map((m) => m.typeId)))
+				await relistEntries(socket, book.id, typeId as any, emitToUser)
+		} catch (err) {
+			console.warn("[amendments:moveDownTheTree] list refresh failed:", err)
+		}
+		const res = {
+			lorebookId: book.id,
+			branchId: target as number | null,
+			entryIds
+		}
+		emitToUser("amendments:moveDownTheTree", res)
+		await announceReadingMoved(
+			(socket as any).io,
+			await sessionsOnLines(db, book.id, result.startedLines)
+		)
+		return res
+	},
+	"The entry could not be moved.",
+	undefined,
+	(p) => ({ lorebookId: (p as any)?.lorebookId })
+)
+
+/**
  * The book's lists, re-sent after a delete that kept history entries for its
  * forks: a view holds each entry with its line, and one moved to a fork, or
  * copied onto one, would otherwise read as the deleted line's — off every
@@ -2476,6 +2734,7 @@ export function registerAmendmentHandlers(
 	register(socket, amendmentsForkHandler, emitToUser)
 	register(socket, amendmentsRenameBranchHandler, emitToUser)
 	register(socket, amendmentsDeleteBranchHandler, emitToUser)
+	register(socket, amendmentsMoveDownTheTreeHandler, emitToUser)
 	register(socket, amendmentsPlaceHandler, emitToUser)
 	register(socket, amendmentsUnplaceHandler, emitToUser)
 }

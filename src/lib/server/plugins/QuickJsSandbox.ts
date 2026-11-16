@@ -14,20 +14,29 @@
  * than on SES alone. A fetch cannot answer by value, so `bridgeFetch` hands the
  * guest a promise the *host* holds the resolvers for (`context.newPromise`) and
  * settles it when the real request lands; the loop pumps the job queue in the
- * gaps, which is what wakes the hook. Same allowlist, same SSRF re-validation
+ * gaps (waiting for a fetch, a stop flag or the deadline rather than polling),
+ * which is what wakes the hook. Same allowlist, same SSRF re-validation
  * per redirect hop, same cancellation refusal — one `fetchHost.ts` source, so
  * neither backend can drift from the other's rules.
  *
- * The design mirrors `pipelines/scripts/host.ts`: one pooled worker holds the
- * WASM module warm, each invocation gets a **fresh QuickJS runtime + context**
- * (clean per-call isolation, zero state leak), the interrupt handler enforces
- * the inner deadline between VM instructions, and a wall-clock kill terminates
- * a stuck worker as the outer backstop. `SP_PLUGINS_INLINE=1` forces the
- * in-process path (no backstop) for debugging. One evaluator source string
- * runs on both hosts, so the two paths can never drift.
+ * The design mirrors `pipelines/scripts/host.ts`: a **pool of workers** — half
+ * the cores, at least 2, at most 4 (`QUICKJS_POOL_SIZE`), spawned lazily — each
+ * holds the WASM module warm and every loaded bundle, and a plugin's calls
+ * always land on one worker of the pool (`workerSlotFor`, a hash of its id), so
+ * a hook spinning synchronously holds one worker, never every plugin. Each
+ * invocation gets a **fresh QuickJS runtime + context** (clean per-call
+ * isolation, zero state leak), the interrupt handler enforces the inner
+ * deadline between VM instructions, and a wall-clock kill terminates a stuck
+ * worker as the outer backstop. That backstop is armed when the worker reports
+ * a job *started* — never when it is posted, so a call queued behind another is
+ * not killed for the wait — and it terminates only that job's worker.
+ * `SP_PLUGINS_INLINE=1` forces the in-process path (no backstop) for debugging.
+ * One evaluator source string runs on both hosts, so the two paths can never
+ * drift.
  */
 
 import { Worker } from "node:worker_threads"
+import { availableParallelism } from "node:os"
 import { createRequire } from "node:module"
 import { AMBIENT_PRELUDE } from "./prelude"
 import { STORAGE_HOST_SOURCE } from "./storageHost"
@@ -213,7 +222,7 @@ function buildBridge(context, host, names) {
 // abandoned, because they hold live QuickJS objects and JS_FreeRuntime asserts
 // its GC list is empty. Every unsettled deferred is therefore tracked in the
 // open set and disposed with the frame, before the context goes.
-function bridgeFetch(context, hostFetch, alive, open) {
+function bridgeFetch(context, hostFetch, alive, open, notify) {
 	var fn = context.newFunction("__fetch", function (urlHandle, optsHandle) {
 		var url = hostArg(context, urlHandle);
 		var optsJson = hostArg(context, optsHandle);
@@ -232,6 +241,7 @@ function bridgeFetch(context, hostFetch, alive, open) {
 				// was consumed by the VM when this function returned it.
 				deferred.resolve(h);
 				h.dispose();
+				notify();
 			},
 			function (e) {
 				if (!alive()) return;
@@ -244,6 +254,7 @@ function bridgeFetch(context, hostFetch, alive, open) {
 				});
 				deferred.reject(h);
 				h.dispose();
+				notify();
 			}
 		);
 		return deferred.handle;
@@ -286,7 +297,7 @@ function annexJsonOf(job) {
 	return JSON.stringify(Object.assign({}, base, { nowMs: job.nowMs }));
 }
 
-function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants, annexJson) {
+function buildProgram(source, hookName, seedLabel, nowMs, grants) {
 	return (
 		'(async function () {\n' +
 		'"use strict";\n' +
@@ -312,7 +323,7 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants, ann
 		// they are frozen); the canonical, cross-backend surface is ctx.*.
 		'Math.random = __rng;\n' +
 		'Date.now = function () { return ' + Math.floor(nowMs) + '; };\n' +
-		'var __input = JSON.parse(' + JSON.stringify(inputJson) + ');\n' +
+		'var __input = JSON.parse(__spInputJson);\ndelete globalThis.__spInputJson;\n' +
 		'var ctx = {\n' +
 		'  random: __rng,\n' +
 		'  now: function () { return ' + Math.floor(nowMs) + '; },\n' +
@@ -337,7 +348,7 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants, ann
 		// and the older six passed through synchronously.
 		(grants.storage ? 'ctx.storage = __wrapStorage(ctx.storage);\nctx.storage.user = __wrapStorage(__storageUserHost, true);\n' : '') +
 		(grants.package ? 'ctx.package = __wrapPackage(ctx.package);\n' : '') +
-		(grants.annex ? 'ctx.annex = __makeHookAnnex(JSON.parse(' + JSON.stringify(annexJson) + '));\n' : '') +
+		(grants.annex ? 'ctx.annex = __makeHookAnnex(JSON.parse(__spAnnexJson));\ndelete globalThis.__spAnnexJson;\n' : '') +
 		// The abort capability, wired *before* the bundle is evaluated: the
 		// first registration wins, so a hook cannot displace its own abort. The
 		// controller is the prelude's — nothing host-side crosses here, only a
@@ -376,6 +387,10 @@ module.exports = {
 		if (!bundle)
 			return { ok: false, reason: "plugin not loaded", kind: "missing" }
 		const qjs = await (enginePromise || (enginePromise = getQuickJS()))
+		// The job has begun: the worker host tells the sandbox, which arms its
+		// wall-clock backstop from here, never from the post. Absent inline.
+		if (typeof module.exports.onStart === "function")
+			module.exports.onStart(job)
 		// Shared memory, not a message: a synchronous hook blocks this worker's
 		// event loop, so a postMessage would sit in a queue the runaway call
 		// never lets us drain — while the interrupt handler runs *between VM
@@ -434,6 +449,9 @@ module.exports = {
 			// Whether this call's context is still standing. Read by the fetch
 			// bridge's settle callbacks, which can land after any ending.
 			let contextLive = true
+			// Set by the drive loop while it is parked; called when a held
+			// fetch settles so the loop wakes at once instead of polling.
+			let wakeUp = null
 			// Deferreds handed to the guest that have not settled yet.
 			const openFetches = new Set()
 			try {
@@ -486,7 +504,10 @@ module.exports = {
 						function () {
 							return contextLive
 						},
-						openFetches
+						openFetches,
+						function () {
+							if (wakeUp) wakeUp()
+						}
 					)
 				const reg = context.newFunction(
 					"__registerAbort",
@@ -498,14 +519,30 @@ module.exports = {
 				)
 				context.setProp(context.global, "__registerAbort", reg)
 				reg.dispose()
+				// The input (and the annex start, only for a kind granted it)
+				// crosses as one string global; the program parses it where the
+				// literal used to sit and deletes it at once.
+				try {
+					const names = [["__spInputJson", job.inputJson]]
+					if (job.grants.annex)
+						names.push(["__spAnnexJson", annexJsonOf(job)])
+					for (const [name, value] of names) {
+						const h = context.newString(value)
+						try {
+							context.setProp(context.global, name, h)
+						} finally {
+							h.dispose()
+						}
+					}
+				} catch (e) {
+					return classifyFailure(e, flags, job.timeoutMs)
+				}
 				const program = buildProgram(
 					bundle.source,
 					job.hookName,
-					job.inputJson,
 					job.seedLabel,
 					job.nowMs,
-					job.grants,
-					annexJsonOf(job)
+					job.grants
 				)
 				const evaluated = context.evalCode(program)
 				if (evaluated.error) {
@@ -577,11 +614,30 @@ module.exports = {
 								reason: "timeout after " + job.timeoutMs + "ms",
 								kind: "timeout"
 							}
-						// Yield the thread: the deadline has to keep advancing,
-						// and this is where a concurrent job on this worker gets
-						// its turn.
-						await new Promise(function (r) {
-							setTimeout(r, 1)
+						// Yield the thread until something can change the
+						// outcome: a held fetch settling, a stop flag, or the
+						// deadline. This is where a concurrent job on this
+						// worker gets its turn.
+						const left = Math.max(0, deadline - Date.now()) + 1
+						await new Promise(function (resolve) {
+							let timer = null
+							let done = false
+							// Once only, and never clearing a later wait's slot:
+							// this wait's waitAsync can still land after the loop
+							// has moved on.
+							function fin() {
+								if (done) return
+								done = true
+								if (timer) clearTimeout(timer)
+								timer = null
+								if (wakeUp === fin) wakeUp = null
+								resolve()
+							}
+							wakeUp = fin
+							timer = setTimeout(fin, left)
+							const w = Atomics.waitAsync(flags, 0, f, left)
+							if (w.async) w.value.then(fin)
+							else fin()
 						})
 					}
 				} finally {
@@ -617,6 +673,9 @@ const WORKER_SOURCE =
 	EVALUATOR_SOURCE +
 	String.raw`
 const { parentPort } = require("worker_threads")
+module.exports.onStart = function (job) {
+	parentPort.postMessage({ id: job.__msgId, started: true })
+}
 parentPort.on("message", async (msg) => {
 	try {
 		if (msg.t === "store") {
@@ -629,7 +688,9 @@ parentPort.on("message", async (msg) => {
 			return
 		}
 		if (msg.t === "run") {
-			const outcome = await module.exports.run(msg.job)
+			const outcome = await module.exports.run(
+				Object.assign({}, msg.job, { __msgId: msg.id })
+			)
 			parentPort.postMessage({ id: msg.id, outcome })
 		}
 	} catch (e) {
@@ -647,10 +708,49 @@ parentPort.on("message", async (msg) => {
 
 /* ── The host-side sandbox ───────────────────────────────────────────────── */
 
+/**
+ * The pool's size: half the cores, at least 2, at most 4 — the other half is
+ * left to the main thread, the database and the script worker.
+ */
+export const QUICKJS_POOL_SIZE = Math.min(
+	4,
+	Math.max(2, Math.floor(availableParallelism() / 2))
+)
+
+/**
+ * The worker a plugin's calls always land on: FNV-1a (32-bit) over the id's
+ * UTF-16 code units. Deterministic, no bookkeeping, stable across respawns.
+ */
+export function workerSlotFor(
+	pluginId: string,
+	size = QUICKJS_POOL_SIZE
+): number {
+	let h = 0x811c9dc5
+	for (let i = 0; i < pluginId.length; i++) {
+		h ^= pluginId.charCodeAt(i)
+		h = Math.imul(h, 0x01000193)
+	}
+	return (h >>> 0) % size
+}
+
 interface Pending {
 	resolve: (o: EvalOutcome | { killed: true; reason: string }) => void
-	/** The outer wall-clock backstop. Absent on the inline path, which has none. */
+	/**
+	 * The outer wall-clock backstop. Armed when the worker reports the job
+	 * started (never at post). Absent on the inline path, which has none, and
+	 * until the job starts.
+	 */
 	killer?: NodeJS.Timeout
+	/** The pool slot (worker) this call runs on. */
+	slot: number
+	/** The full job, stop flags included, so a not-yet-started call can be re-posted. */
+	job: Record<string, unknown>
+	/** The call's own budget, which sizes its backstop. */
+	timeoutMs: number
+	/** Whether a worker has begun this job; a started job is never re-run. */
+	started: boolean
+	/** The caller's "this call began" callback, fired once. */
+	onStarted?: () => void
 	/** This call's stop flags, the same slot the evaluator's interrupt reads. */
 	flags: Int32Array
 	/** The caller's handle for this call, when it gave one. */
@@ -662,7 +762,11 @@ export class QuickJsSandbox implements PluginSandbox {
 
 	/** Host-side truth: what is loaded, so a respawned worker is re-hydrated. */
 	private readonly loaded = new Map<string, StoredBundle>()
-	private worker: Worker | null = null
+	/** One worker per slot, spawned lazily; null until first needed. */
+	private readonly workers: (Worker | null)[] = Array.from(
+		{ length: QUICKJS_POOL_SIZE },
+		() => null
+	)
 	private workerBroken = false
 	private jobSeq = 0
 	private readonly pending = new Map<number, Pending>()
@@ -679,9 +783,13 @@ export class QuickJsSandbox implements PluginSandbox {
 	 * store ack that never settles leaves `load` awaiting forever: it strands
 	 * the caller's call, and with it everything the manager gates on that call
 	 * finishing. The bundle stays in `loaded`, so a respawned worker re-hydrates
-	 * it and the settled load is honest about where things stand.
+	 * it and the settled load is honest about where things stand. Each remembers
+	 * its slot, so one worker's break settles only its own waiters.
 	 */
-	private readonly pendingLoads = new Map<number, () => void>()
+	private readonly pendingLoads = new Map<
+		number,
+		{ slot: number; settle: () => void }
+	>()
 	private inlineEval: {
 		store: (p: string, s: string, h: string, c?: SandboxConfig) => void
 		drop: (p: string) => void
@@ -715,10 +823,24 @@ export class QuickJsSandbox implements PluginSandbox {
 			hash: bundleHash,
 			config
 		})
-		const w = this.ensureWorker()
+		const slot = workerSlotFor(pluginId)
+		const w = this.ensureWorker(slot)
 		if (!w) {
 			this.inline().store(pluginId, bundleSource, bundleHash, config)
 			return
+		}
+		// Every worker holds every loaded bundle: the others get the same store,
+		// un-awaited (a worker not yet spawned is hydrated from `loaded`).
+		for (let s = 0; s < this.workers.length; s++) {
+			const other = this.workers[s]
+			if (s !== slot && other)
+				other.postMessage({
+					t: "store",
+					pluginId,
+					source: bundleSource,
+					hash: bundleHash,
+					config
+				})
 		}
 		await new Promise<void>((resolve) => {
 			const id = ++this.jobSeq
@@ -730,7 +852,7 @@ export class QuickJsSandbox implements PluginSandbox {
 				this.pendingLoads.delete(id)
 				resolve()
 			}
-			this.pendingLoads.set(id, settle)
+			this.pendingLoads.set(id, { slot, settle })
 			w.on("message", onMsg)
 			w.postMessage({
 				t: "store",
@@ -750,10 +872,14 @@ export class QuickJsSandbox implements PluginSandbox {
 	unload(pluginId: string): void {
 		this.loaded.delete(pluginId)
 		this.inlineEval?.drop(pluginId)
-		this.worker?.postMessage({ t: "drop", pluginId })
+		for (const w of this.workers) w?.postMessage({ t: "drop", pluginId })
 	}
 
-	async invoke(hook: HookRef, opts: InvokeOptions): Promise<HookRunResult> {
+	async invoke(
+		hook: HookRef,
+		opts: InvokeOptions,
+		onStarted?: () => void
+	): Promise<HookRunResult> {
 		const started = Date.now()
 
 		for (const name of Object.keys(opts.input))
@@ -792,7 +918,12 @@ export class QuickJsSandbox implements PluginSandbox {
 			grants: hookCtxGrants(opts.kind)
 		}
 
-		const outcome = await this.evaluate(job, opts.timeoutMs, opts.jobId)
+		const outcome = await this.evaluate(
+			job,
+			opts.timeoutMs,
+			opts.jobId,
+			onStarted
+		)
 		return this.finish(outcome, started, opts.maxOutputBytes ?? 256 * 1024)
 	}
 
@@ -808,6 +939,7 @@ export class QuickJsSandbox implements PluginSandbox {
 		if (!job) return false
 		// `or`, not `store`: a kill flag already raised must not be lowered.
 		Atomics.or(job.entry.flags, 0, STOP_ABORT)
+		Atomics.notify(job.entry.flags, 0)
 		return true
 	}
 
@@ -829,12 +961,13 @@ export class QuickJsSandbox implements PluginSandbox {
 		const job = this.jobFor(jobId)
 		if (!job) return false
 		Atomics.or(job.entry.flags, 0, STOP_KILL)
+		Atomics.notify(job.entry.flags, 0)
 		this.settle(job.id, { killed: true, reason: "the call was killed" })
 		return true
 	}
 
 	async dispose(): Promise<void> {
-		this.breakWorker("sandbox disposed")
+		this.breakAll("sandbox disposed")
 		this.workerBroken = true
 		this.loaded.clear()
 		this.inlineEval = null
@@ -941,7 +1074,9 @@ export class QuickJsSandbox implements PluginSandbox {
 		const writes = parsed.aw && parsed.aw.length ? parsed.aw : undefined
 		if (
 			Buffer.byteLength(outcome.json, "utf8") -
-				(writes ? Buffer.byteLength(JSON.stringify(writes), "utf8") : 0) >
+				(writes
+					? Buffer.byteLength(JSON.stringify(writes), "utf8")
+					: 0) >
 			maxOutputBytes
 		)
 			return this.mkFail(
@@ -975,40 +1110,75 @@ export class QuickJsSandbox implements PluginSandbox {
 		return this.inlineEval!
 	}
 
-	private breakWorker(reason: string): void {
-		const w = this.worker
-		this.worker = null
-		// Everything this worker was running dies with it, target and bystanders
-		// alike — which is what makes it the backstop rather than a kill.
-		for (const id of [...this.pending.keys()])
-			this.settle(id, { ok: false, reason, kind: "error" })
-		// Store acks are waiters too — an unsettled one hangs `load` forever.
-		for (const settle of [...this.pendingLoads.values()]) settle()
-		this.pendingLoads.clear()
-		if (w) void w.terminate()
+	private breakAll(reason: string): void {
+		for (let slot = 0; slot < this.workers.length; slot++)
+			this.breakWorker(slot, reason)
 	}
 
-	private ensureWorker(): Worker | null {
+	/**
+	 * Terminate one slot's worker and empty the slot — never another's. What it
+	 * was running dies with it, which is what makes this the backstop rather
+	 * than a kill: a job that had started fails (it is never re-run — its
+	 * fetches may already have gone out), the culprit was settled by whoever
+	 * named it, and a job that had *not* started is re-posted to a fresh worker
+	 * of the same slot, because it never ran and owes nothing. With no culprit
+	 * every call on the slot fails.
+	 */
+	private breakWorker(slot: number, reason: string, culprit?: number): void {
+		const w = this.workers[slot]
+		this.workers[slot] = null
+		const requeue: number[] = []
+		for (const [id, entry] of [...this.pending]) {
+			if (entry.slot !== slot || id === culprit) continue
+			if (culprit !== undefined && !entry.started) {
+				if (entry.killer) clearTimeout(entry.killer)
+				entry.killer = undefined
+				requeue.push(id)
+			} else this.settle(id, { ok: false, reason, kind: "error" })
+		}
+		// Store acks are waiters too — an unsettled one hangs `load` forever.
+		for (const [id, load] of [...this.pendingLoads]) {
+			if (load.slot !== slot) continue
+			this.pendingLoads.delete(id)
+			load.settle()
+		}
+		if (w) void w.terminate()
+		for (const id of requeue) this.post(id)
+	}
+
+	private ensureWorker(slot: number): Worker | null {
 		if (this.workerBroken || process.env.SP_PLUGINS_INLINE === "1")
 			return null
-		if (this.worker) return this.worker
+		const existing = this.workers[slot]
+		if (existing) return existing
 		try {
 			const w = new Worker(WORKER_SOURCE, { eval: true })
 			w.unref()
-			w.on("message", (msg: { id: number; outcome?: EvalOutcome }) => {
-				if (!msg || msg.outcome === undefined) return
-				this.settle(msg.id, msg.outcome)
-			})
+			w.on(
+				"message",
+				(msg: {
+					id: number
+					outcome?: EvalOutcome
+					started?: boolean
+				}) => {
+					// A worker other than the slot's current one is dead
+					// to us: nothing it says may touch a job.
+					if (w !== this.workers[slot]) return
+					if (!msg) return
+					if (msg.started) this.arm(msg.id)
+					else if (msg.outcome !== undefined)
+						this.settle(msg.id, msg.outcome)
+				}
+			)
 			w.on("error", () => {
+				if (w !== this.workers[slot]) return
 				this.workerBroken = true
 				console.warn(
 					"[plugins] QuickJS worker failed — falling back to in-process evaluation"
 				)
-				this.breakWorker(
-					"the evaluation worker failed — retried inline"
-				)
+				this.breakAll("the evaluation worker failed — retried inline")
 			})
-			this.worker = w
+			this.workers[slot] = w
 			// re-hydrate bundles into the fresh worker
 			for (const [id, b] of this.loaded)
 				w.postMessage({
@@ -1025,23 +1195,80 @@ export class QuickJsSandbox implements PluginSandbox {
 		}
 	}
 
+	/**
+	 * A worker began this job: only now does the wall-clock backstop start, so
+	 * a call queued behind another on its worker is never killed for the wait.
+	 * The interrupt should fire first; if a gap ever lets a hook run past it,
+	 * the worker dies and the server does not. Grace over the inner clock so a
+	 * healthy near-deadline hook is never killed by the outer one.
+	 */
+	private arm(id: number): void {
+		const entry = this.pending.get(id)
+		if (!entry) return
+		const first = !entry.started
+		entry.started = true
+		if (!entry.killer) {
+			const { timeoutMs, slot } = entry
+			entry.killer = setTimeout(() => {
+				this.settle(id, {
+					killed: true,
+					reason: `timeout after ${timeoutMs}ms (worker killed)`
+				})
+				this.breakWorker(
+					slot,
+					`killed after ${timeoutMs}ms — the hook hung`,
+					id
+				)
+			}, timeoutMs + 1000)
+		}
+		if (first)
+			try {
+				entry.onStarted?.()
+			} catch {
+				// a caller's callback never decides the call's outcome
+			}
+	}
+
+	/** Hand a pending job to its slot's worker (spawning it if need be). */
+	private post(id: number): void {
+		const entry = this.pending.get(id)
+		if (!entry) return
+		const w = this.ensureWorker(entry.slot)
+		if (!w) {
+			this.settle(id, {
+				ok: false,
+				reason: "the evaluation worker failed — retried inline",
+				kind: "error"
+			})
+			return
+		}
+		w.postMessage({ t: "run", id, job: entry.job })
+	}
+
 	private async evaluate(
 		job: Record<string, unknown>,
 		timeoutMs: number,
-		jobId?: string
+		jobId?: string,
+		onStarted?: () => void
 	): Promise<EvalOutcome | { killed: true; reason: string }> {
 		// One slot, allocated per call and handed to the evaluator with the job:
 		// the runtime that runs it is per call too, so a flag can never address
 		// the wrong hook, and there are no slots to recycle or collide.
 		const stopFlags = new SharedArrayBuffer(4)
 		const flags = new Int32Array(stopFlags)
-		const w = this.ensureWorker()
+		const slot = workerSlotFor(String(job.pluginId))
+		const w = this.ensureWorker(slot)
 		return await new Promise((resolve) => {
 			const id = ++this.jobSeq
 			const entry: Pending = {
 				resolve: resolve as Pending["resolve"],
 				flags,
-				jobId
+				jobId,
+				slot,
+				job: { ...job, stopFlags },
+				timeoutMs,
+				started: false,
+				onStarted
 			}
 			this.pending.set(id, entry)
 			if (jobId !== undefined) this.byJobId.set(jobId, id)
@@ -1049,9 +1276,15 @@ export class QuickJsSandbox implements PluginSandbox {
 				// The inline (debug) path has no worker and so no backstop — but
 				// the flags are plain shared memory, so `abort` and `kill` reach
 				// the same drive loop they do in the worker.
+				entry.started = true
+				try {
+					onStarted?.()
+				} catch {
+					// a caller's callback never decides the call's outcome
+				}
 				try {
 					this.inline()
-						.run({ ...job, stopFlags })
+						.run(entry.job)
 						.then(
 							(o) => this.settle(id, o),
 							(e) =>
@@ -1070,18 +1303,8 @@ export class QuickJsSandbox implements PluginSandbox {
 				}
 				return
 			}
-			// The absolute backstop: the interrupt should fire first; if a gap
-			// ever lets a hook run past it, the worker dies and the server does
-			// not. Grace over the inner clock so a healthy near-deadline hook
-			// is never killed by the outer one.
-			entry.killer = setTimeout(() => {
-				this.settle(id, {
-					killed: true,
-					reason: `timeout after ${timeoutMs}ms (worker killed)`
-				})
-				this.breakWorker(`killed after ${timeoutMs}ms — the hook hung`)
-			}, timeoutMs + 1000)
-			w.postMessage({ t: "run", id, job: { ...job, stopFlags } })
+			// The backstop is armed by the worker's `started` ack (`arm`).
+			this.post(id)
 		})
 	}
 }

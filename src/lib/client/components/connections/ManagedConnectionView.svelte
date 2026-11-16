@@ -31,7 +31,28 @@
 	import DownloadsView from "./DownloadsView.svelte"
 	import { getContext, onMount } from "svelte"
 	import type { Snippet } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import {
+		Activity,
+		ArrowLeft,
+		AudioLines,
+		Brain,
+		ChevronDown,
+		ChevronUp,
+		Download as DownloadIcon,
+		ExternalLink,
+		Gauge,
+		Loader2,
+		LogOut,
+		Package,
+		Pencil,
+		Play,
+		RefreshCw,
+		Save as SaveIcon,
+		Settings,
+		Square,
+		Trash2
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { capabilityLabel } from "@serene-pub/sdk"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
@@ -380,11 +401,18 @@
 				(item.state === "in_flight" || item.state === "cancelling")
 		).length
 	)
+	/** The icons `managedTabs` can name (`managedConnectionView.ts`). */
+	const TAB_ICONS: Record<string, Component<any>> = {
+		Package,
+		Activity,
+		Download: DownloadIcon,
+		Settings
+	}
 	const tabStrip = $derived(
 		tabs.map((t) => ({
 			value: t.value,
 			label: t.label,
-			icon: ((Icons as any)[t.icon] as any) ?? Icons.Package,
+			icon: TAB_ICONS[t.icon] ?? Package,
 			hasActivity: t.value === "downloads" && inFlightHere > 0
 		}))
 	)
@@ -878,7 +906,7 @@
 					target="_blank"
 					rel="noopener noreferrer"
 				>
-					<Icons.Download size={13} aria-hidden="true" />
+					<DownloadIcon size={13} aria-hidden="true" />
 					Download update
 				</a>
 			{/if}
@@ -892,9 +920,9 @@
 				disabled={isTesting}
 			>
 				{#if isTesting}
-					<Icons.Loader2 size={13} class="animate-spin" />
+					<Loader2 size={13} class="animate-spin" />
 				{:else}
-					<Icons.RefreshCw size={13} aria-hidden="true" />
+					<RefreshCw size={13} aria-hidden="true" />
 				{/if}
 				Check for updates
 			</button>
@@ -933,9 +961,9 @@
 				disabled={savingAddress}
 			>
 				{#if savingAddress}
-					<Icons.Loader2 size={14} class="animate-spin" />
+					<Loader2 size={14} class="animate-spin" />
 				{:else}
-					<Icons.Save size={14} aria-hidden="true" />
+					<SaveIcon size={14} aria-hidden="true" />
 				{/if}
 				Save
 			</button>
@@ -951,10 +979,10 @@
 		actionsLabel={label}
 		primaryAction={serviceChip}
 		menuItems={[
-			{ label: "Rename", icon: Icons.Pencil, onSelect: rename },
+			{ label: "Rename", icon: Pencil, onSelect: rename },
 			{
 				label: "Refresh models",
-				icon: Icons.RefreshCw,
+				icon: RefreshCw,
 				onSelect: onRefreshModels
 			},
 			{ separator: true },
@@ -962,7 +990,7 @@
 				label: !isOllama
 					? `Remove ${label} from this pub`
 					: "Remove this connection",
-				icon: Icons.Trash2,
+				icon: Trash2,
 				destructive: true,
 				onSelect: () => (confirmRemove = true)
 			}
@@ -997,9 +1025,9 @@
 							disabled={stopping}
 						>
 							{#if stopping}
-								<Icons.Loader2 size={13} class="animate-spin" />
+								<Loader2 size={13} class="animate-spin" />
 							{:else}
-								<Icons.Square size={13} aria-hidden="true" />
+								<Square size={13} aria-hidden="true" />
 							{/if}
 							Stop
 						</button>
@@ -1011,9 +1039,9 @@
 							disabled={starting}
 						>
 							{#if starting}
-								<Icons.Loader2 size={13} class="animate-spin" />
+								<Loader2 size={13} class="animate-spin" />
 							{:else}
-								<Icons.Play size={13} aria-hidden="true" />
+								<Play size={13} aria-hidden="true" />
 							{/if}
 							Start
 						</button>
@@ -1023,7 +1051,7 @@
 					<p class="text-error-600-400 text-xs">{processError}</p>
 				{/if}
 				<div class="flex min-w-0 items-center gap-2">
-					<Icons.Brain
+					<Brain
 						size={14}
 						class="text-surface-500 shrink-0"
 						aria-hidden="true"
@@ -1039,9 +1067,9 @@
 							disabled={unloading}
 						>
 							{#if unloading}
-								<Icons.Loader2 size={12} class="animate-spin" />
+								<Loader2 size={12} class="animate-spin" />
 							{:else}
-								<Icons.LogOut size={12} aria-hidden="true" />
+								<LogOut size={12} aria-hidden="true" />
 							{/if}
 							Unload
 						</button>
@@ -1054,7 +1082,7 @@
 				{/if}
 				{#if perfLine}
 					<div class="flex min-w-0 items-center gap-2">
-						<Icons.Gauge
+						<Gauge
 							size={14}
 							class="text-surface-500 shrink-0"
 							aria-hidden="true"
@@ -1072,12 +1100,9 @@
 						>
 							Details
 							{#if showDetails}
-								<Icons.ChevronUp size={12} aria-hidden="true" />
+								<ChevronUp size={12} aria-hidden="true" />
 							{:else}
-								<Icons.ChevronDown
-									size={12}
-									aria-hidden="true"
-								/>
+								<ChevronDown size={12} aria-hidden="true" />
 							{/if}
 						</button>
 					</div>
@@ -1090,7 +1115,7 @@
 							class="btn btn-sm preset-tonal"
 							onclick={() => (pickerRequested = true)}
 						>
-							<Icons.Download size={13} aria-hidden="true" />
+							<DownloadIcon size={13} aria-hidden="true" />
 							Update
 						</button>
 					</div>
@@ -1125,9 +1150,9 @@
 						disabled={isTesting}
 					>
 						{#if isTesting}
-							<Icons.Loader2 size={13} class="animate-spin" />
+							<Loader2 size={13} class="animate-spin" />
 						{:else}
-							<Icons.RefreshCw size={13} aria-hidden="true" />
+							<RefreshCw size={13} aria-hidden="true" />
 						{/if}
 						Test
 					</button>
@@ -1165,7 +1190,7 @@
 					</p>
 				{/if}
 				<div class="flex min-w-0 items-center gap-2">
-					<Icons.AudioLines
+					<AudioLines
 						size={14}
 						class="text-surface-500 shrink-0"
 						aria-hidden="true"
@@ -1220,9 +1245,9 @@
 							disabled={isTesting}
 						>
 							{#if isTesting}
-								<Icons.Loader2 size={13} class="animate-spin" />
+								<Loader2 size={13} class="animate-spin" />
 							{:else}
-								<Icons.RefreshCw size={13} aria-hidden="true" />
+								<RefreshCw size={13} aria-hidden="true" />
 							{/if}
 							Check again
 						</button>
@@ -1242,7 +1267,7 @@
 							rel="noopener noreferrer"
 						>
 							Get Ollama
-							<Icons.ExternalLink
+							<ExternalLink
 								size={11}
 								class="inline"
 								aria-hidden="true"
@@ -1282,7 +1307,7 @@
 							class="btn btn-sm hover:preset-tonal self-start"
 							onclick={() => (pickerRequested = false)}
 						>
-							<Icons.ArrowLeft size={14} aria-hidden="true" />
+							<ArrowLeft size={14} aria-hidden="true" />
 							Keep the installed build
 						</button>
 						<AudioCppBinaryVariantPicker
@@ -1312,9 +1337,9 @@
 						disabled={isTesting}
 					>
 						{#if isTesting}
-							<Icons.Loader2 size={13} class="animate-spin" />
+							<Loader2 size={13} class="animate-spin" />
 						{:else}
-							<Icons.RefreshCw size={13} aria-hidden="true" />
+							<RefreshCw size={13} aria-hidden="true" />
 						{/if}
 						Test
 					</button>
@@ -1506,10 +1531,7 @@
 										class="btn btn-sm preset-tonal-error shrink-0"
 										onclick={() => (confirmRemove = true)}
 									>
-										<Icons.Trash2
-											size={13}
-											aria-hidden="true"
-										/>
+										<Trash2 size={13} aria-hidden="true" />
 										Remove
 									</button>
 								</div>

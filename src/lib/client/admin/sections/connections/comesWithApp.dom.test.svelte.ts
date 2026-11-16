@@ -135,7 +135,17 @@ const context = (localOnnxAvailability: unknown) =>
 		],
 		["koboldCppSettingsCtx", { settings: undefined }],
 		["panelsCtx", { digest: {}, openPanel: () => {} }],
-		["userCtx", { user: { id: 1, isAdmin: true } }]
+		["userCtx", { user: { id: 1, isAdmin: true } }],
+		// The connections context the Page's requests-at-once card reads (perf-I).
+		[
+			"connectionsCtx",
+			{
+				hold: () => () => {},
+				llmLanes: null,
+				askLlmLanes: () => {},
+				setLlmLaneWidth: () => {}
+			}
+		]
 	])
 
 let target: HTMLElement

@@ -802,9 +802,10 @@ export async function templateScopeDetailFor(
 
 export async function declarations(
 	db: Db,
-	specVersionId: number
+	specVersionId: number,
+	read: { byPin?: Map<string, any>; docOf?: () => Promise<SpecDocument> } = {}
 ): Promise<Decl[]> {
-	return (await declarationsAndVariableKeys(db, specVersionId)).decls
+	return (await declarationsAndVariableKeys(db, specVersionId, read)).decls
 }
 
 /**
@@ -815,7 +816,8 @@ export async function declarations(
  */
 export async function declarationsAndVariableKeys(
 	db: Db,
-	specVersionId: number
+	specVersionId: number,
+	read: { byPin?: Map<string, any>; docOf?: () => Promise<SpecDocument> } = {}
 ): Promise<{ decls: Decl[]; variableKeys: VariableKey[] }> {
 	const variableKeys: VariableKey[] = []
 	const nodes = await db
@@ -848,18 +850,24 @@ export async function declarationsAndVariableKeys(
 		(nodes as any[]).map((n) => [n.nodeKey, n.position as number])
 	)
 
-	const registry = await db.select().from(schema.pipelineDefinitionRegistry)
-	const byPin = new Map<string, any>(
-		(registry as any[]).map((r) => [`${r.definitionId}@${r.version}`, r])
-	)
+	const byPin =
+		read.byPin ??
+		new Map<string, any>(
+			(
+				(await db.select().from(schema.pipelineDefinitionRegistry)) as any[]
+			).map((r) => [`${r.definitionId}@${r.version}`, r])
+		)
 
 	// The stored document, read once and only if a slot needs it — an open
-	// `renders` (typed templates P2) walks its edges.
+	// `renders` (typed templates P2) walks its edges. A caller that already
+	// holds the document passes `read.docOf`.
 	let docPromise: Promise<SpecDocument> | undefined
-	const docOf = () =>
-		(docPromise ??= import("$lib/server/pipelines/boot/store").then((m) =>
-			m.loadDocument(db, specVersionId)
-		))
+	const docOf =
+		read.docOf ??
+		(() =>
+			(docPromise ??= import("$lib/server/pipelines/boot/store").then((m) =>
+				m.loadDocument(db, specVersionId)
+			)))
 
 	const out: Decl[] = []
 	for (const node of nodes as any[]) {

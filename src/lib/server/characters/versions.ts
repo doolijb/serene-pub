@@ -22,6 +22,12 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { NodeState, NodeVisibility } from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
+import {
+	moveVersionRedlines,
+	recordVersionRedline,
+	type RedlineAuthor,
+	type RedlineCause
+} from "$lib/server/lorebooks/redlines"
 import { splitExampleDialogues } from "$lib/server/lorebooks/retold"
 import {
 	CHARACTER_PROFILE_FIELDS,
@@ -48,6 +54,7 @@ import {
 	rowReadsOnLine,
 	versionInForce
 } from "$lib/shared/lorebooks/lineReading"
+import { bookTimelineSql } from "$lib/server/lorebooks/timeline"
 import { ownNameValue } from "$lib/shared/lorebooks/memberIdentity"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import type { LiftNoteV1 } from "./versionsLift"
@@ -528,6 +535,14 @@ export async function newCardVersion(
 	return version
 }
 
+/** Who made a version edit and why; a write given none records nothing. */
+export type VersionRedline = { by: RedlineAuthor; cause: RedlineCause }
+
+const definedKeys = (changes: object): string[] =>
+	Object.entries(changes)
+		.filter(([, v]) => v !== undefined)
+		.map(([k]) => k)
+
 /**
  * Writes `changes` in place on a **card** version — any version of a card, not
  * only the current one (owner: "Card editing → any version, with a picker
@@ -542,7 +557,7 @@ export async function updateCardVersion(
 	tx: Db,
 	versionId: number,
 	changes: Partial<CharacterProfileV1>,
-	opts?: { label?: string | null }
+	opts?: { label?: string | null; redline?: VersionRedline }
 ): Promise<VersionRow> {
 	const [row] = await tx
 		.select()
@@ -566,6 +581,13 @@ export async function updateCardVersion(
 		.set(set)
 		.where(eq(schema.characterVersions.id, versionId))
 		.returning()
+	if (opts?.redline)
+		await recordVersionRedline(tx, {
+			before: row,
+			after: updated,
+			named: definedKeys(changes),
+			...opts.redline
+		})
 	const current = await currentCardVersion(tx, row.cardId)
 	if (current?.id === versionId)
 		await writeCardCopies(tx, row.cardId, profileOf(updated))
@@ -1173,7 +1195,7 @@ export async function reparentCastVersions(
 	return changed
 }
 
-/** The book's present on main: its story clock, else the newest dated history entry; null when it has neither. */
+/** The book's present on main: its story clock, else the newest dated history entry; null when it has neither, or no timeline. */
 export async function bookPresentOf(
 	tx: Db,
 	lorebookId: number
@@ -1185,15 +1207,18 @@ export async function bookPresentOf(
 		.select({
 			storyClockYear: schema.lorebooks.storyClockYear,
 			storyClockMonth: schema.lorebooks.storyClockMonth,
-			storyClockDay: schema.lorebooks.storyClockDay
+			storyClockDay: schema.lorebooks.storyClockDay,
+			timelineEnabled: bookTimelineSql()
 		})
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId))
+	// A book with no timeline has no present.
+	if (book && !book.timelineEnabled) return null
 	const clock = momentOf(book)
 	if (clock) {
 		const dating = await writeDatingAt(
 			tx,
-			await readingOf(tx, lorebookId, { moment: clock })
+			await readingOf(tx, lorebookId, { moment: clock, timelineEnabled: true })
 		)
 		return {
 			date: clock,
@@ -1456,7 +1481,8 @@ async function updateInPlace(
 	tx: Db,
 	row: VersionRow,
 	changes: CastVersionChanges,
-	applied: Applied
+	applied: Applied,
+	redline?: VersionRedline
 ): Promise<VersionRow> {
 	checkFollows({
 		follows: applied.follows,
@@ -1479,6 +1505,13 @@ async function updateInPlace(
 		.set(set)
 		.where(eq(schema.characterVersions.id, row.id))
 		.returning()
+	if (redline)
+		await recordVersionRedline(tx, {
+			before: row,
+			after: updated,
+			named: definedKeys(changes),
+			...redline
+		})
 	return updated
 }
 
@@ -1663,6 +1696,8 @@ export async function writeCastVersion(
 		/** `user:<id>` · `run:<id>` · `script:<id>` · `plugin:<id>`. */
 		writtenBy: string
 		note?: string | null
+		/** Who and why, for the edit history of a version changed in place; absent records nothing. */
+		redline?: VersionRedline
 		/** A story write (a session's). */
 		session?: { id: number; messageId?: number | null; ownAnchor?: boolean }
 		/** An author's write with no session: where on the member's line it lands. */
@@ -1770,7 +1805,8 @@ async function authorWrite(
 				tx,
 				same,
 				input.changes,
-				applyChanges(same, input.changes, member)
+				applyChanges(same, input.changes, member),
+				input.redline
 			),
 			coalesced: true
 		}
@@ -1972,7 +2008,8 @@ async function storyWrite(
 					tx,
 					source,
 					input.changes,
-					applied
+					applied,
+					input.redline
 				),
 				coalesced: true
 			}
@@ -2065,10 +2102,11 @@ async function castVersionOf(tx: Db, versionId: number): Promise<VersionRow> {
 export async function updateCastVersion(
 	tx: Db,
 	versionId: number,
-	edit: Parameters<typeof editCastVersion>[2]
+	edit: Parameters<typeof editCastVersion>[2],
+	opts?: { redline?: VersionRedline }
 ): Promise<VersionRow> {
 	const before = await castVersionOf(tx, versionId)
-	const updated = await editCastVersion(tx, versionId, edit)
+	const updated = await editCastVersion(tx, versionId, edit, opts?.redline)
 	if (
 		(before.branchId == null || updated.branchId == null) &&
 		(edit.place || touchesName(edit.changes))
@@ -2088,7 +2126,8 @@ async function editCastVersion(
 			historyEntryId?: number | null
 			personalPosition: number | null
 		}
-	}
+	},
+	redline?: VersionRedline
 ): Promise<VersionRow> {
 	const row = await castVersionOf(tx, versionId)
 	if (row.retiredOrder != null)
@@ -2201,11 +2240,21 @@ async function editCastVersion(
 			],
 			false
 		)
+		// The copy carries the history of the version it replaces.
+		await moveVersionRedlines(tx, row.id, copy.id)
+		if (redline && changes)
+			await recordVersionRedline(tx, {
+				before: row,
+				after: copy,
+				named: definedKeys(changes),
+				...redline
+			})
 		return copy
 	}
 
 	let updated = row
-	if (changes) updated = await updateInPlace(tx, row, changes, applied)
+	if (changes)
+		updated = await updateInPlace(tx, row, changes, applied, redline)
 	if (placeColumns)
 		[updated] = await tx
 			.update(V)

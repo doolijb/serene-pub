@@ -117,6 +117,26 @@ export interface RunHandle {
 	 */
 	cancelledBy?: string
 	cancelReason?: string
+	/**
+	 * 🚧 What this run has shown the model and may later replace, by kind: the
+	 * keys (stored as strings) of the things it earmarked. Lives and dies with
+	 * the handle: it is cleared by `finish` and by nothing else, so a parked or
+	 * stopped run still answers until it has finished.
+	 */
+	earmarks?: Map<EarmarkKind, Set<string>>
+}
+
+/** 🚧 What a run can earmark; `entry` is a lorebook entry id. */
+export type EarmarkKind = "entry"
+
+/** 🚧 A live run that earmarks something, as `earmarkedBy` reports it. */
+export type EarmarkHolder = {
+	runId: string
+	userId: number
+	sessionId?: number
+	specId?: string
+	kind: RunKind
+	startedAt: number
 }
 
 const runs = new Map<string, RunHandle>()
@@ -379,6 +399,39 @@ export function cancelSession(
 		stopped++
 	}
 	return stopped
+}
+
+/**
+ * 🚧 Earmark keys on a registered run until it finishes. A no-op when no run
+ * is registered under the id (a preview, a test, a dry run).
+ */
+export function earmark(
+	runId: string,
+	kind: EarmarkKind,
+	keys: Iterable<number | string>
+): void {
+	const handle = runs.get(runId)
+	if (!handle) return
+	const marks = (handle.earmarks ??= new Map())
+	let set = marks.get(kind)
+	if (!set) marks.set(kind, (set = new Set()))
+	for (const key of keys) set.add(String(key))
+}
+
+/** 🚧 The live runs that earmark this key, oldest first. */
+export function earmarkedBy(kind: EarmarkKind, key: number | string): EarmarkHolder[] {
+	const k = String(key)
+	return [...runs.values()]
+		.filter((h) => h.earmarks?.get(kind)?.has(k))
+		.sort((a, b) => a.startedAt - b.startedAt)
+		.map((h) => ({
+			runId: h.runId,
+			userId: h.userId,
+			sessionId: h.sessionId,
+			specId: h.specId,
+			kind: h.kind,
+			startedAt: h.startedAt
+		}))
 }
 
 /** Always in a `finally` — a run left registered is a leak and a stale cancel target. */

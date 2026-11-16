@@ -10,7 +10,19 @@
 	 * Two across in the dock, three from 36rem of list, four from 56rem — the
 	 * LIST pane's own container (`@container/list`), never the whole view.
 	 */
-	import * as Icons from "@lucide/svelte"
+	import {
+		AudioLines,
+		Boxes,
+		Clapperboard,
+		FileText,
+		Image,
+		ScanText,
+		SlidersHorizontal,
+		Star,
+		Type,
+		Zap
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import { tileLabel, type LoadoutGroup } from "./loadoutsGrid"
 
 	interface Props {
@@ -18,20 +30,30 @@
 		onOpen: (id: number) => void
 	}
 	let { groups, onOpen }: Props = $props()
+
+	/** The icon per output kind (`OUTPUT_KIND_ICONS` names, in `outputKinds.ts`; `Boxes` for the fallback). */
+	const OUTPUT_KIND_COMPONENTS: Record<string, Component<any>> = {
+		Type,
+		Image,
+		AudioLines,
+		Clapperboard,
+		FileText,
+		Zap,
+		ScanText,
+		Boxes
+	}
 </script>
 
 <div class="flex flex-col gap-4">
 	{#each groups as group (group.kind)}
-		{@const GroupIcon = (Icons as any)[group.icon] ?? Icons.Boxes}
+		{@const GroupIcon = OUTPUT_KIND_COMPONENTS[group.icon] ?? Boxes}
 		<section aria-label={group.label}>
-			<header
-				class="mb-2 flex items-center gap-2"
-			>
+			<header class="mb-2 flex items-center gap-2">
 				<GroupIcon size={14} class="shrink-0" aria-hidden="true" />
 				<h3 class="min-w-0 flex-1 truncate text-xs font-semibold">
 					{group.label}
 				</h3>
-				<span class="text-surface-600-400 shrink-0 text-meta">
+				<span class="text-surface-600-400 text-meta shrink-0">
 					{group.tiles.length}
 				</span>
 			</header>
@@ -42,7 +64,7 @@
 					<button
 						type="button"
 						class="panel-card hover:preset-tonal-primary focus-visible:ring-primary-500 flex min-h-[88px] min-w-0 flex-col gap-1 !p-3 text-left focus-visible:ring-2 focus-visible:outline-none {tile.isDefault
-							? 'border border-primary-500/40!'
+							? 'border-primary-500/40! border'
 							: ''}"
 						data-default={tile.isDefault || undefined}
 						aria-label={tileLabel(tile)}
@@ -50,13 +72,15 @@
 					>
 						<span class="flex min-w-0 items-center gap-1.5">
 							{#if tile.isDefault}
-								<Icons.Star
+								<Star
 									size={12}
 									class="text-primary-500 shrink-0 fill-current"
 									aria-hidden="true"
 								/>
 							{/if}
-							<span class="min-w-0 truncate text-chip font-medium">
+							<span
+								class="text-chip min-w-0 truncate font-medium"
+							>
 								{tile.title}
 							</span>
 						</span>
@@ -69,9 +93,9 @@
 						</span>
 						{#if tile.sampling}
 							<span
-								class="text-surface-600-400 flex min-w-0 items-center gap-1 text-meta"
+								class="text-surface-600-400 text-meta flex min-w-0 items-center gap-1"
 							>
-								<Icons.SlidersHorizontal
+								<SlidersHorizontal
 									size={10}
 									class="shrink-0"
 									aria-hidden="true"
@@ -81,20 +105,23 @@
 						{/if}
 						{#if tile.price}
 							<span
-								class="text-surface-600-400 truncate text-meta"
+								class="text-surface-600-400 text-meta truncate"
 								data-testid="loadout-tile-price"
 							>
 								{tile.price}
 							</span>
 						{/if}
 						{#if tile.chip}
-							<Badge size="sm" class="text-surface-700-300 max-w-full self-start truncate">
+							<Badge
+								size="sm"
+								class="text-surface-700-300 max-w-full self-start truncate"
+							>
 								{tile.chip}
 							</Badge>
 						{/if}
 						{#if tile.consequence}
 							<span
-								class="text-warning-700-300 mt-auto line-clamp-2 text-meta"
+								class="text-warning-700-300 text-meta mt-auto line-clamp-2"
 							>
 								{tile.consequence}
 							</span>

@@ -1,0 +1,474 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/autoApply.int.test.ts (18 tests | 2 failed) 4177ms
+     × close-out applies everything eligible and leaves a conflicted change held 114ms
+     × a change waiting on an earlier change of this session applies with it, in one Apply 71ms
+stdout | src/lib/server/scenes/liveScenes.autoApply.int.test.ts > a scene closes > closed by a person (closeScene): what it covers applies, later items stay held; the record names the scene, not a person
+Using PGlite database at: /tmp/serene-pub-vitest-live-auto-apply-C5BJlR/data/serene-pub.db
+
+ ❯ |int| src/lib/server/state/heldAmendments.undo.int.test.ts (5 tests | 5 failed) 2734ms
+     × a swipe takes only its turn's row; the earlier turn's survives 174ms
+     × a failed re-tell puts the row back, ids and all 40ms
+     × a regenerate (the retake's delete of the turn's rows) takes only its turn's row 28ms
+     × a delete takes only its turn's row 28ms
+     × Back takes only its turn's row; Forward (the record read back from JSON) puts it back with the same id 32ms
+ ❯ |int| src/lib/server/scenes/liveScenes.autoApply.int.test.ts (13 tests | 1 failed) 6208ms
+     × closed by a person (closeScene): what it covers applies, later items stay held; the record names the scene, not a person 2573ms
+ ❯ |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts (21 tests | 4 failed) 4284ms
+     × is not listed, written nothing by a list read, and an Apply drops it; a partly agreeing one applies its other keys 91ms
+     × a later change waiting on an earlier one says so; Apply all folds both, in order 62ms
+     × is the session's last word, not a done row: it waits on the earlier change, and Apply all ends where the story did 55ms
+     × moves the line through the newest applied anchor, never past the message before the oldest still held; Back below it refuses 75ms
+ ❯ |int| src/lib/server/lorebooks/heldApply.int.test.ts (10 tests | 9 failed) 3247ms
+     × lists it with labels, before and after; every item has a kind; the conflict is null while clean 208ms
+     × two sessions hold different changes to one field; the first applies cleanly; the second is then a conflict and stays held 67ms
+     × take-back restores the field and the held row (same id, same anchor); the other session then applies cleanly 79ms
+     × take-back works after the settle line passed the anchor: the records keep before and stand 51ms
+     × take-back refuses, in a sentence and writing nothing, when the field changed in the lorebook since 43ms
+     × an undated change whose key a dated line amendment decides is a conflict, with its own sentence 32ms
+     × Back of the anchor's message after an Apply is refused as settled; the lorebook still reads the applied value 41ms
+     × a member's session on someone else's lorebook: the change is listed, and Apply refuses 54ms
+     × entryIds only applies new entries only; amendmentIds only applies held changes only; one batch per press, in anchor order 72ms
+ ❯ |int| src/lib/server/lorebooks/imprints.int.test.ts (9 tests | 1 failed) 3540ms
+     × its new room and link are in the own book, with own-book imprints, not real-book ones 44ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 22 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > a held change the lorebook already agrees with is done > is not listed, written nothing by a list read, and an Apply drops it; a partly agreeing one applies its other keys
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:604:40
+    602|    .where(eq(schema.lorebookEntries.id, w.vault.id))
+    603|   expect(await overlayItemsOf(asDb(), w.session.id)).toEqual([])
+    604|   expect(await heldRows(w.session.id)).toHaveLength(1)
+       |                                        ^
+    605|   const done = await applyOverlayItems(asDb(), {
+    606|    sessionId: w.session.id,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > a held change the lorebook already agrees with is done > a later change waiting on an earlier one says so; Apply all folds both, in order
+AssertionError: expected [] to deeply equal [ null, …(1) ]
+
+- Expected
++ Received
+
+- [
+-   null,
+-   "An earlier change from this session to content is still waiting; apply it first.",
+- ]
++ []
+
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:697:49
+    695|   const [first, second] = await heldRows(w.session.id)
+    696|   const items = await overlayItemsOf(asDb(), w.session.id)
+    697|   expect(items.map((i) => (i as any).conflict)).toEqual([
+       |                                                 ^
+    698|    null,
+    699|    "An earlier change from this session to content is still waiting; a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > a change back to what the lorebook holds > is the session's last word, not a done row: it waits on the earlier change, and Apply all ends where the story did
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:734:11
+    732|   const items = await overlayItemsOf(asDb(), w.session.id)
+    733|   expect(items.map((i) => (i as any).amendmentId)).toEqual([
+    734|    first!.id,
+       |           ^
+    735|    second!.id
+    736|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/applyTakeBack.int.test.ts > Apply settles > moves the line through the newest applied anchor, never past the message before the oldest still held; Back below it refuses
+TypeError: Cannot read properties of undefined (reading 'id')
+ ❯ src/lib/server/lorebooks/applyTakeBack.int.test.ts:770:22
+    768|    sessionId: w.session.id,
+    769|    userId: w.user.id,
+    770|    amendmentIds: [a!.id, c!.id]
+       |                      ^
+    771|   })
+    772|   expect(first.appliedChanges).toEqual([a!.id, c!.id])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically > close-out applies everything eligible and leaves a conflicted change held
+AssertionError: expected { lorebookId: 13, …(11) } to match object { applied: [ 23, 24, 25 ], …(2) }
+(12 matching properties omitted from actual)
+
+- Expected
++ Received
+
+@@ -2,15 +2,17 @@
+    "applied": [
+      23,
+      24,
+      25,
+    ],
+-   "appliedChanges": [
+-     3,
+-   ],
++   "appliedChanges": [],
+    "stillHeld": [
+      {
+        "amendmentId": 2,
+        "reason": "Content has changed in the lorebook since this session changed it.",
++     },
++     {
++       "amendmentId": 3,
++       "reason": "Fields has changed in the lorebook since this session changed it.",
+      },
+    ],
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:382:16
+    380|    .where(eq(schema.lorebookEntries.id, w.vault.id))
+    381|   const done = await auto(w.session.id, "close-out")
+    382|   expect(done).toMatchObject({
+       |                ^
+    383|    applied: [eA.id, eB.id, eC.id],
+    384|    appliedChanges: [category!.id],
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically folds a chain of changes in order > a change waiting on an earlier change of this session applies with it, in one Apply
+AssertionError: expected { lorebookId: 15, applied: [], …(10) } to match object { appliedChanges: [ 4, 5 ], …(1) }
+(13 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "appliedChanges": [
+      4,
+-     5,
+    ],
+-   "stillHeld": [],
++   "stillHeld": [
++     {
++       "amendmentId": 5,
++       "reason": "Content has changed in the lorebook since this session changed it.",
++     },
++   ],
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:416:16
+    414|   const [first, second] = await heldRows(w.session.id)
+    415|   const done = await auto(w.session.id, "close-out")
+    416|   expect(done).toMatchObject({
+       |                ^
+    417|    appliedChanges: [first!.id, second!.id],
+    418|    stillHeld: []
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > lists it with labels, before and after; every item has a kind; the conflict is null while clean
+AssertionError: expected [ 'entry' ] to deeply equal [ 'entry', 'entry-change' ]
+
+- Expected
++ Received
+
+  [
+    "entry",
+-   "entry-change",
+  ]
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:234:36
+    232|   })
+    233|   const items = await overlayItemsOf(asDb(), w.session.id)
+    234|   expect(items.map((i) => i.kind)).toEqual(["entry", "entry-change"])
+       |                                    ^
+    235|   expect(items[0]).toMatchObject({
+    236|    kind: "entry",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > two sessions hold different changes to one field; the first applies cleanly; the second is then a conflict and stays held
+AssertionError: expected 'Open.' to be 'Sealed.' // Object.is equality
+
+Expected: "Sealed."
+Received: "Open."
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:273:65
+    271|    content: "Open."
+    272|   })
+    273|   expect((await sessionRead(w.session.id, w.vault.id)).content).toBe(
+       |                                                                 ^
+    274|    "Sealed."
+    275|   )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > take-back restores the field and the held row (same id, same anchor); the other session then applies cleanly
+Error: Nothing to take back.
+ ❯ takeBackApply src/lib/server/lorebooks/ownBook.ts:2451:29
+    2449|   .where(and(eq(I.batch, input.batch), eq(I.origin, "apply")))
+    2450|   .orderBy(I.id)) as import("$lib/server/lorebooks/imprints").LoreImpr…
+    2451|  if (!records.length) throw new OwnBookRefusal(TAKE_BACK_REFUSALS.noth…
+       |                             ^
+    2452|  if (input.sessionId != null && records.some((r) => r.sessionId !== in…
+    2453|   throw new OwnBookRefusal(TAKE_BACK_REFUSALS.nothing)
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:352:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > take-back works after the settle line passed the anchor: the records keep before and stand
+AssertionError: expected undefined to match object { status: 'standing', …(1) }
+
+- Expected:
+{
+  "before": {
+    "v": "Locked.",
+  },
+  "status": "standing",
+}
+
++ Received:
+undefined
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:396:18
+    394|   )
+    395|   const [record] = await applyRecords(w.session.id)
+    396|   expect(record).toMatchObject({
+       |                  ^
+    397|    status: "standing",
+    398|    before: { v: "Locked." }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > take-back refuses, in a sentence and writing nothing, when the field changed in the lorebook since
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:428:5
+    426|     fields: ["content"]
+    427|    })
+    428|   ).toBe(0)
+       |     ^
+    429|   expect((await applyRecords(w.session.id))[0]).toMatchObject({ status…
+    430|   expect((await keptImprintsByEntry(asDb(), w.book.id, [w.vault.id])).…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > an undated change whose key a dated line amendment decides is a conflict, with its own sentence
+AssertionError: expected undefined to match object { year: null, …(1) }
+
+- Expected:
+{
+  "base": {
+    "content": {
+      "v": "Dated.",
+    },
+  },
+  "year": null,
+}
+
++ Received:
+undefined
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:547:16
+    545|   await change(w, w.vault.id, { content: "Sealed." })
+    546|   const [held] = await heldRows(w.session.id)
+    547|   expect(held).toMatchObject({
+       |                ^
+    548|    year: null,
+    549|    base: { content: { v: "Dated." } }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > Back of the anchor's message after an Apply is refused as settled; the lorebook still reads the applied value
+AssertionError: expected null to match object { moved: true }
+
+- Expected:
+{
+  "moved": true,
+}
+
++ Received:
+null
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:576:24
+    574|   })
+    575|   // Apply settles: the line stands at the applied change's anchor.
+    576|   expect(done.settled).toMatchObject({ moved: true })
+       |                        ^
+    577|   const { rewindTurn } = await import("$lib/server/sessions/rewind")
+    578|   const { SETTLED_SENTENCE } = await import("$lib/server/sessions/sett…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > a member's session on someone else's lorebook: the change is listed, and Apply refuses
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:615:51
+    613|   const { overlayItemsOf, applyOverlayItems, APPLY_OVERLAY_REFUSALS } =
+    614|    await lore()
+    615|   expect(await overlayItemsOf(asDb(), theirs.id)).toHaveLength(1)
+       |                                                   ^
+    616|   await expect(
+    617|    applyOverlayItems(asDb(), {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/heldApply.int.test.ts > a held change: listed, conflict-checked, applied, taken back > entryIds only applies new entries only; amendmentIds only applies held changes only; one batch per press, in anchor order
+AssertionError: expected [] to have a length of 2 but got +0
+
+- Expected
++ Received
+
+- 2
++ 0
+
+ ❯ src/lib/server/lorebooks/heldApply.int.test.ts:659:40
+    657|   // An applied new entry files its record, so the press has a batch.
+    658|   expect(entriesOnly.batch).toEqual(expect.any(String))
+    659|   expect(await heldRows(w.session.id)).toHaveLength(2)
+       |                                        ^
+    660|   const changesOnly = await applyOverlayItems(asDb(), {
+    661|    sessionId: w.session.id,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/22]⎯
+
+ FAIL  |int| src/lib/server/lorebooks/imprints.int.test.ts > a run's write for a session whose scenes end by themselves > its new room and link are in the own book, with own-book imprints, not real-book ones
+AssertionError: expected { id: 8, lorebookId: 5, …(2) } to match object { route: 'own-book', lorebookId: 6 }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "lorebookId": 6,
+-   "route": "own-book",
++   "lorebookId": 5,
++   "route": "book",
+  }
+
+ ❯ src/lib/server/lorebooks/imprints.int.test.ts:297:15
+    295|    CREATE
+    296|   )
+    297|   expect(out).toMatchObject({ route: "own-book", lorebookId: own.id })
+       |               ^
+    298|   expect((await entry(out.id))!.lorebookId).toBe(own.id)
+    299|   const R = schema.narrativeRelationships
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/22]⎯
+
+ FAIL  |int| src/lib/server/scenes/liveScenes.autoApply.int.test.ts > a scene closes > closed by a person (closeScene): what it covers applies, later items stay held; the record names the scene, not a person
+AssertionError: expected 3 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 3
+
+ ❯ src/lib/server/scenes/liveScenes.autoApply.int.test.ts:252:33
+    250|    .from(schema.sessions)
+    251|    .where(eq(schema.sessions.id, w.session.id))
+    252|   expect(row!.settledMessageId).toBe(w.lines[0]!.id)
+       |                                 ^
+    253|  })
+    254|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/22]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a swipe takes only its turn's row; the earlier turn's survives
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:169:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/22]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a failed re-tell puts the row back, ids and all
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:195:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/22]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a regenerate (the retake's delete of the turn's rows) takes only its turn's row
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:216:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/22]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > a delete takes only its turn's row
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:230:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/22]⎯
+
+ FAIL  |int| src/lib/server/state/heldAmendments.undo.int.test.ts > a turn owns the held amendment it wrote > Back takes only its turn's row; Forward (the record read back from JSON) puts it back with the same id
+TypeError: Cannot read properties of undefined (reading 'sourceMessageId')
+ ❯ hold src/lib/server/state/heldAmendments.undo.int.test.ts:111:20
+    109|   const own = await ownBook()
+    110|   const rows = await heldRows(own.id)
+    111|   expect(rows.at(-1)!.sourceMessageId).toBe(messageId)
+       |                    ^
+    112|  }
+    113|  const ownBook = async () => {
+ ❯ world src/lib/server/state/heldAmendments.undo.int.test.ts:152:2
+ ❯ src/lib/server/state/heldAmendments.undo.int.test.ts:245:13
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/22]⎯
+
+
+ Test Files  6 failed | 4 passed (10)
+      Tests  22 failed | 84 passed (106)
+   Start at  21:58:47
+   Duration  15.49s (transform 5.03s, setup 85ms, import 5.18s, tests 36.32s, environment 2ms)
+

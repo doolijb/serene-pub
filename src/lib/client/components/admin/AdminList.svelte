@@ -529,8 +529,8 @@
 
 <style>
 	/* A clickable card's cue. A card has no border (2026-11-12), so the cue
-	   is the row-hover fill, and keyboard focus gets a primary outline: the
-	   border colour this used to set shows nothing without a border width. */
+	   is the row-hover fill, and keyboard focus gets a primary outline: a
+	   border colour shows nothing without a border width. */
 	.admin-card-link:hover,
 	.admin-card-link:focus-visible {
 		background-color: var(--color-surface-200-800);

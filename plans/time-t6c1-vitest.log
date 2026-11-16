@@ -1,0 +1,64 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts (11 tests | 2 failed) 47ms
+     × no shipped spec leaves a declared slot unwired 4ms
+     × names the node when `params: slot.params()` is removed 34ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no shipped spec leaves a declared slot unwired
+AssertionError: a node type declares this slot, `config/panel/declarations.ts` renders a control for it, and `resolveInput` resolves only the config keys a spec named — so the value a person sets is stored and never read. Wire it (`params: slot.params()`), or delete the declaration.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a connection slot the spec never wires — the control renders and does nothing.",
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a sampling slot the spec never wires — the control renders and does nothing.",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:402:5
+    400|     "and never read. Wire it (`" +
+    401|     "params: slot.params()`), or delete the declaration."
+    402|   ).toEqual([])
+       |     ^
+    403|  })
+    404|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the check fails when a slot goes unwired > names the node when `params: slot.params()` is removed
+AssertionError: expected [ …(3) ] to deeply equal [ Array(1) ]
+
+- Expected
++ Received
+
+  [
+    "core:spec/story-respond node \"gather.history.read\" slot \"params\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"connection\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"sampling\"",
+  ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:600:5
+    598|   expect(
+    599|    broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
+    600|   ).toEqual([
+       |     ^
+    601|    'core:spec/story-respond node "gather.history.read" slot "params"'
+    602|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 7 passed (8)
+      Tests  2 failed | 107 passed (109)
+   Start at  16:33:19
+   Duration  20.16s (transform 9.04s, setup 67ms, import 31.98s, tests 18.61s, environment 2ms)
+

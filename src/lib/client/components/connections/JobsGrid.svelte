@@ -34,7 +34,20 @@
 	 * pair cannot run, and quiet when nothing is registered (`idle` — off is
 	 * an answer, so an unset tile is never gold).
 	 */
-	import * as Icons from "@lucide/svelte"
+	import {
+		AudioLines,
+		Boxes,
+		Clapperboard,
+		Ellipsis,
+		Eye,
+		FileText,
+		Image,
+		ScanText,
+		Sparkles,
+		Type,
+		Zap
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import { CONNECTION_STATE_TEXT } from "./connectionRowStatus"
 	import { jobTileState, type JobTile } from "./jobTile"
 
@@ -101,6 +114,19 @@
 	 * that tile again behind the fold ("6 more · vision, …" beside Vision).
 	 */
 	const folded = $derived(tiles.filter((t) => !ordered.includes(t)))
+
+	/** The icons a job tile can name (`readiness.ts`: the output-kind icons plus the reading icons). */
+	const JOB_ICONS: Record<string, Component<any>> = {
+		Type,
+		Image,
+		AudioLines,
+		Clapperboard,
+		FileText,
+		Zap,
+		ScanText,
+		Boxes,
+		Eye
+	}
 </script>
 
 <section aria-label="Other loadouts">
@@ -122,8 +148,7 @@
 				: 'grid-cols-2'}"
 	>
 		{#each ordered as tile (tile.capability)}
-			{@const TileIcon =
-				((Icons as any)[tile.icon ?? ""] as any) ?? Icons.Sparkles}
+			{@const TileIcon = JOB_ICONS[tile.icon ?? ""] ?? Sparkles}
 			{@const state = jobTileState(tile)}
 			{@const on = state === "ready"}
 			<button
@@ -142,18 +167,20 @@
 							: 'text-surface-600-400'}"
 						aria-hidden="true"
 					/>
-					<span class="min-w-0 truncate text-chip font-medium">
+					<span class="text-chip min-w-0 truncate font-medium">
 						{tile.label}
 					</span>
 				</span>
 				<span
-					class="block truncate text-xs {CONNECTION_STATE_TEXT[state]}"
+					class="block truncate text-xs {CONNECTION_STATE_TEXT[
+						state
+					]}"
 				>
 					{tile.problem ?? tile.modelName ?? "Not set up"}
 				</span>
 				{#if tile.tagline}
 					<span
-						class="text-surface-600-400 mt-auto line-clamp-1 text-meta"
+						class="text-surface-600-400 text-meta mt-auto line-clamp-1"
 					>
 						{tile.tagline}
 					</span>
@@ -168,7 +195,7 @@
 				onclick={() => (expanded = true)}
 			>
 				<span class="flex items-center gap-1.5">
-					<Icons.Ellipsis
+					<Ellipsis
 						size={14}
 						class="text-surface-600-400 shrink-0"
 						aria-hidden="true"

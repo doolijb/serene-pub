@@ -54,7 +54,7 @@
 		provideSessionPageInbox
 	} from "$lib/client/components/sessionPage/sessionPageInbox.svelte"
 	import AppletLoading from "$lib/client/components/AppletLoading.svelte"
-	import { createSessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
+	import { coalescedRead, createSessionPageData } from "$lib/client/components/sessionPage/sessionPageData.svelte"
 	import {
 		headerCastKeyOf,
 		participantForRefIn,
@@ -333,6 +333,7 @@
 					forward: strip.forward,
 					ahead: strip.ahead,
 					aheadText: strip.aheadText,
+					step: strip.step,
 					regenerate
 				})
 			: ""
@@ -463,10 +464,19 @@
 		const id = loadedSessionId
 		void sessionLorebookId
 		if (id == null) return
-		untrack(() => {
-			asks.readStoryClock({ sessionId: id })
-				.then((r) => data.setStoryCalendar(id, r?.calendar ?? null))
+		const reread = coalescedRead(() =>
+			asks
+				.readStoryClock({ sessionId: id })
+				.then((r) => {
+					data.setStoryCalendar(id, r?.calendar ?? null)
+					data.setStoryTimeline(id, r?.timeline)
+				})
 				.catch(() => {})
+		)
+		untrack(reread)
+		// 🚧 The book's timeline switch flipped (or the story moved): read again.
+		return inbox.on("state:changed", (msg) => {
+			if (msg.sessionId === id) reread()
 		})
 	})
 	// 🚧 Live scenes, lane D: the session's scene cues and scene settings,
@@ -1051,6 +1061,7 @@
 		ownBookId={sessionOwnBookId}
 		branchId={sessionLorebookBranchId}
 		storyClock={sessionStoryClock}
+		timeline={data.storyTimeline}
 		selectedMessageIds={[...scenes.selectedMessageIds]}
 		initialLoreType={scenes.summarizeLoreType}
 		onSaved={() => {

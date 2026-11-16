@@ -20,7 +20,7 @@
  * these rows. A row the catalog stopped shipping stays as it is.
  */
 
-import { eq } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_SCRIPTS } from "@serene-pub/core-catalog"
 import {
@@ -40,66 +40,77 @@ const sameList = (a: readonly string[], b: readonly string[]): boolean =>
 /** Seed every script core ships, idempotently, by seed key. */
 export async function seedCoreScripts(db: Db): Promise<ScriptSeedResult> {
 	const result: ScriptSeedResult = { created: [], present: [], refreshed: [] }
-	for (const script of CORE_SCRIPTS) {
-		// The names this script's type already holds, for the yield.
-		const pool = (await db
-			.select({ id: schema.pipelineScripts.id, name: schema.pipelineScripts.name })
-			.from(schema.pipelineScripts)
-			.where(eq(schema.pipelineScripts.typeId, script.typeId))) as Array<{
-			id: number
-			name: string
-		}>
-		const [existing] = await db
+	// One commit for the pass; a failing statement still throws out of the
+	// boot's `pipelines` task, and the transaction leaves no half-seeded set.
+	await db.transaction(async (tx) => {
+		// Every core seed-key row in one read; each script looks its row up here.
+		const seeded = await tx
 			.select()
 			.from(schema.pipelineScripts)
-			.where(eq(schema.pipelineScripts.seedKey, script.seedKey))
-			.limit(1)
-		const varsIn = [...script.varsIn]
-		const varsOut = [...script.varsOut]
+			.where(
+				inArray(
+					schema.pipelineScripts.seedKey,
+					CORE_SCRIPTS.map((s) => s.seedKey)
+				)
+			)
+		const bySeedKey = new Map(seeded.map((row) => [row.seedKey, row]))
+		for (const script of CORE_SCRIPTS) {
+			// The names this script's type already holds, for the yield.
+			const pool = (await tx
+				.select({ id: schema.pipelineScripts.id, name: schema.pipelineScripts.name })
+				.from(schema.pipelineScripts)
+				.where(eq(schema.pipelineScripts.typeId, script.typeId))) as Array<{
+				id: number
+				name: string
+			}>
+			const existing = bySeedKey.get(script.seedKey)
+			const varsIn = [...script.varsIn]
+			const varsOut = [...script.varsOut]
 
-		if (existing) {
-			const name = shippedNameFor(script.name, namesTakenBesides(pool, existing.id))
-			const drifted =
-				!existing.isImmutable ||
-				!existing.enabled ||
-				existing.typeId !== script.typeId ||
-				existing.name !== name ||
-				existing.source !== script.source ||
-				!sameList((existing.varsIn ?? []) as string[], varsIn) ||
-				!sameList((existing.varsOut ?? []) as string[], varsOut)
-			if (!drifted) {
-				result.present.push(script.seedKey)
+			if (existing) {
+				const name = shippedNameFor(script.name, namesTakenBesides(pool, existing.id))
+				const drifted =
+					!existing.isImmutable ||
+					!existing.enabled ||
+					existing.typeId !== script.typeId ||
+					existing.name !== name ||
+					existing.source !== script.source ||
+					!sameList((existing.varsIn ?? []) as string[], varsIn) ||
+					!sameList((existing.varsOut ?? []) as string[], varsOut)
+				if (!drifted) {
+					result.present.push(script.seedKey)
+					continue
+				}
+				await tx
+					.update(schema.pipelineScripts)
+					.set({
+						typeId: script.typeId,
+						name,
+						source: script.source,
+						varsIn,
+						varsOut,
+						isImmutable: true,
+						enabled: true,
+						updatedAt: new Date()
+					})
+					.where(eq(schema.pipelineScripts.id, existing.id))
+				result.refreshed.push(script.seedKey)
 				continue
 			}
-			await db
-				.update(schema.pipelineScripts)
-				.set({
-					typeId: script.typeId,
-					name,
-					source: script.source,
-					varsIn,
-					varsOut,
-					isImmutable: true,
-					enabled: true,
-					updatedAt: new Date()
-				})
-				.where(eq(schema.pipelineScripts.id, existing.id))
-			result.refreshed.push(script.seedKey)
-			continue
-		}
 
-		await db.insert(schema.pipelineScripts).values({
-			typeId: script.typeId,
-			seedKey: script.seedKey,
-			name: shippedNameFor(script.name, namesTakenBesides(pool, null)),
-			source: script.source,
-			varsIn,
-			varsOut,
-			isImmutable: true,
-			enabled: true
-		})
-		result.created.push(script.seedKey)
-	}
+			await tx.insert(schema.pipelineScripts).values({
+				typeId: script.typeId,
+				seedKey: script.seedKey,
+				name: shippedNameFor(script.name, namesTakenBesides(pool, null)),
+				source: script.source,
+				varsIn,
+				varsOut,
+				isImmutable: true,
+				enabled: true
+			})
+			result.created.push(script.seedKey)
+		}
+	})
 	return result
 }
 

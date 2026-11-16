@@ -201,3 +201,72 @@ describe("what an expression reads", () => {
 		expect(expressionReads("owner.hp | nope").ownerKeys).toEqual([])
 	})
 })
+
+describe("one shared engine", () => {
+	// Recorded on the per-evaluation engine before the engine was shared.
+	const TWO_DICE = "'d1000' | roll | prepend: 'd' | roll"
+
+	test("an evaluation that is interrupted by another still answers for its own scope and seed", () => {
+		const scopeA = scope()
+		const scopeB = scope({
+			owner: { id: 2, key: "bryn", name: "Bryn", core_hp: 99, hp: 99 } as ExpressionScope["owner"]
+		})
+		let inner: unknown
+		let innerRoll: unknown
+		// Reading `probe` on A's owner runs whole evaluations on B, on the same
+		// shared engine, while A sits between its variable read and its filter.
+		Object.defineProperty(scopeA.owner, "probe", {
+			enumerable: true,
+			get() {
+				inner = evaluate(`"${HP}" | slot`, scopeB, { seedLabel: "B" })
+				innerRoll = evaluate(TWO_DICE, scopeB, { seedLabel: "B" })
+				return HP
+			}
+		})
+		const a = evaluate("owner.probe | slot", scopeA, { seedLabel: "A" })
+		expect(a).toEqual({ value: 4 })
+		expect(inner).toEqual({ value: 99 })
+		expect(innerRoll).toEqual(evaluate(TWO_DICE, scopeB, { seedLabel: "B" }))
+	})
+
+	test("the interrupted evaluation's dice still use its own seed and its own counter", () => {
+		const scopeA = scope()
+		let innerRoll: unknown
+		Object.defineProperty(scopeA.owner, "probe", {
+			enumerable: true,
+			get() {
+				innerRoll = evaluate(TWO_DICE, scope(), { seedLabel: "B" })
+				return "d1000"
+			}
+		})
+		const interrupted = evaluate("owner.probe | roll | prepend: 'd' | roll", scopeA, {
+			seedLabel: "A"
+		})
+		expect(interrupted).toEqual(evaluate(TWO_DICE, scope(), { seedLabel: "A" }))
+		expect(innerRoll).toEqual(evaluate(TWO_DICE, scope(), { seedLabel: "B" }))
+	})
+
+	test("rolls are deterministic per evaluation, with counters 0 then 1", () => {
+		const r = (label: string) => evaluate(TWO_DICE, scope(), { seedLabel: label })
+		expect(r("run-7:x")).toEqual(r("run-7:x"))
+		// Numbers recorded before the engine was shared: the counters are 0 and 1.
+		expect(r("run-7:x")).toEqual({ value: 114 })
+		expect(r("a")).toEqual({ value: 487 })
+		expect(r("b")).toEqual({ value: 62 })
+		expect(evaluate("'2d6+1' | roll", scope(), { seedLabel: "run-7:x" })).toEqual({ value: 6 })
+	})
+})
+
+describe.skipIf(!process.env.PERF_BENCH)("bench", () => {
+	test("50 evaluations of owner.hp | plus: 1", () => {
+		const s = scope()
+		const times: number[] = []
+		for (let i = 0; i < 50; i++) {
+			const t = performance.now()
+			evaluate("owner.hp | plus: 1", s, { seedLabel: "bench" })
+			times.push(performance.now() - t)
+		}
+		times.sort((a, b) => a - b)
+		console.log(`BENCH p50 ms: ${times[25].toFixed(3)}`)
+	})
+})

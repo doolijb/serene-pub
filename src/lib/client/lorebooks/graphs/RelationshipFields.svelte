@@ -12,6 +12,7 @@
 		type LinkPairing
 	} from "$lib/shared/lorebooks/linkVocabulary"
 	import { pickSuggestion, setBothWays } from "./linkDraft"
+	import { bookTimeline } from "../bookData.svelte"
 
 	/**
 	 * One set of fields for a relationship — the link form after a drag, the
@@ -55,6 +56,7 @@
 	}: Props = $props()
 
 	const uid = $props.id()
+	const timeline = bookTimeline()
 
 	let suggestions = $derived(LINK_SUGGESTIONS[pairing])
 	/** A cast tie's other side is its own perspective row, never a reverse. */
@@ -195,7 +197,8 @@
 		/>
 	{/if}
 
-	{#if whenOptions.length > 1}
+	<!-- 🚧 No timeline: the options are history entries, which are not written. -->
+	{#if timeline.value && whenOptions.length > 1}
 		<Select
 			label="When"
 			class="text-xs"

@@ -122,7 +122,7 @@ Things you'd otherwise patch together with extensions, or do by hand:
 
 - **Places.** Rooms and towns joined by ways, drawn on a map, each holding its own lore. See [Places and maps](./lorebook-places.md).
 - **Time and branches.** Dated history, a story clock per session, and branches of the lorebook that part from the main line. See [Time, history and branches](./lorebook-time.md).
-- **Amendments.** Lore that changes from a date onward, without losing what was true before. See [Amendments](./lorebook-time.md#amendments-changes-that-start-at-a-date).
+- **Versions of an entry.** Lore that changes from a date onward, without losing what was true before. See [Versions of an entry](./lorebook-time.md#versions-of-an-entry).
 - **A cast with private lore.** Each cast member can know things nobody else does, and has relationships to the others. See [Cast and relationships](./lorebook-cast.md).
 - **Real turn order.** Strategies, auto-advance, benching and a narrator on request. See [Group sessions](./group-sessions.md).
 - **Multiplayer.** Accounts, invite links and guests in one shared story. See [Users and accounts](./users-and-accounts.md).

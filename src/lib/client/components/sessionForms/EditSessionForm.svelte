@@ -35,7 +35,11 @@
 		toHash
 	} from "$lib/shared/lorebooks/loreRoute"
 	import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
-	import { stripUnmovedReading } from "./sessionReadingPatch"
+	import { STORY_CLOCK_KEYS, stripUnmovedReading } from "./sessionReadingPatch"
+	import {
+		clockMoveBackAsking,
+		openBranchedSession
+	} from "../sessionPage/clockMoveBackConfirm"
 	import {
 		adoptSavedGenreFields,
 		changedGenreFields
@@ -1409,8 +1413,84 @@
 		}
 		// Participant writes first: their answers are counted, and the
 		// update's answer closes the form only once they are all in.
+		// 🚧 A clock moved here is asked about first: moved back past what the
+		// session wrote, the server names the On revision mode and the person
+		// confirms before anything is saved.
+		if (
+			STORY_CLOCK_KEYS.every((k) => k in sent) &&
+			!("lorebookBranchId" in sent)
+		) {
+			const year = sent.storyClockYear as number | null
+			clockAsk = {
+				token: `clock-${++clockAskCount}-${Date.now()}`,
+				update: updateSession
+			}
+			socket.emit("sessions:storyClock", {
+				sessionId: session.id,
+				request: clockAsk.token,
+				moveTo:
+					year == null
+						? null
+						: {
+								year,
+								month: (sent.storyClockMonth as number | null) ?? null,
+								day: (sent.storyClockDay as number | null) ?? null,
+								hour: (sent.storyClockHour as number | null) ?? null,
+								minute: (sent.storyClockMinute as number | null) ?? null
+							}
+			})
+			return
+		}
+		sendUpdate(updateSession, false)
+	}
+
+	/** 🚧 The save held while the server says whether its clock move needs confirming. */
+	let clockAsk: {
+		token: string
+		update: Sockets.Sessions.Update.Params
+	} | null = null
+	let clockAskCount = 0
+	/** 🚧 The notice the person is asked about; the held save waits on the answer. */
+	let clockMoveBack: Sockets.Sessions.StoryClock.ClockMoveBackNotice | null =
+		$state(null)
+	/** This form sent the confirmed save: a Branch reply takes the person there. */
+	let confirmedSent = false
+
+	/** Participant writes first: their answers are counted (see `save`). */
+	function sendUpdate(
+		update: Sockets.Sessions.Update.Params,
+		confirmed: boolean
+	) {
+		if (!session?.id) return
 		commitParticipantChanges(session.id)
-		socket.emit("sessions:update", updateSession)
+		confirmedSent = confirmed
+		socket.emit(
+			"sessions:update",
+			confirmed ? { ...update, confirmClockMoveBack: true } : update
+		)
+	}
+
+	/** The server's answer to the pre-check: a notice asks; anything else saves as ever. */
+	function handleClockPreCheck(res: Sockets.Sessions.StoryClock.Response) {
+		if (!clockAsk || res.request !== clockAsk.token) return
+		if (res.sessionId !== session?.id) return
+		if (res.clockMoveBack) {
+			clockMoveBack = res.clockMoveBack
+			return
+		}
+		const { update } = clockAsk
+		clockAsk = null
+		sendUpdate(update, false)
+	}
+	function confirmClockMove() {
+		const held = clockAsk
+		clockMoveBack = null
+		clockAsk = null
+		if (held) sendUpdate(held.update, true)
+	}
+	function cancelClockMove() {
+		clockMoveBack = null
+		clockAsk = null
 	}
 
 	// Touch-friendly alternative to the drag handle above — dndzone works fine
@@ -1914,12 +1994,19 @@
 			description: `Session "${res.session.name || "Unnamed session"}" updated successfully.`
 		})
 		// Participant writes still out: the last answer closes the form.
+		const branch =
+			confirmedSent && typeof res.branchedTo === "number"
+				? (res.branchedTo as number)
+				: null
+		confirmedSent = false
 		if (participantWritesInFlight > 0) {
 			closeWhenParticipantsSettle = true
-			return
+		} else {
+			showEditSessionForm = false
+			onClose?.()
 		}
-		showEditSessionForm = false
-		onClose?.()
+		// A confirmed Branch: the person goes to the branch it made.
+		if (branch !== null) openBranchedSession(branch)
 	}
 
 	/**
@@ -1993,6 +2080,14 @@
 		handleSetCastSeatEnabled
 	)
 	useInterest<"sessions:update">("sessions:update", handleSessionsUpdate)
+	useInterest<"sessions:storyClock">(
+		"sessions:storyClock",
+		handleClockPreCheck
+	)
+	useInterest<"sessions:storyClock:error">(
+		"sessions:storyClock:error",
+		handleClockPreCheck
+	)
 	useInterest<"sessions:genreFieldsChanged">(
 		"sessions:genreFieldsChanged",
 		handleGenreFieldsChanged
@@ -3310,6 +3405,9 @@
 									     (#139), so nothing is asked for on their behalf. -->
 									<SessionLorebookReading
 										{lorebookId}
+										timeline={lorebookList.find(
+											(b) => b.id === lorebookId
+										)?.timelineEnabled !== false}
 										bind:branchId={lorebookBranchId}
 										bind:clock={storyClock}
 										readOnly={isGuest || !advanced}
@@ -4024,6 +4122,12 @@
 		: null}
 	onConfirm={shareNotesAsLorebook}
 	onCancel={() => (askingShare = false)}
+/>
+
+<ActionConfirm
+	asking={clockMoveBack ? clockMoveBackAsking(clockMoveBack) : null}
+	onConfirm={confirmClockMove}
+	onCancel={cancelClockMove}
 />
 
 <RemoveFromSessionModal

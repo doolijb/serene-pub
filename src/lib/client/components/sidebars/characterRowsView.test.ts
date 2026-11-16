@@ -87,6 +87,33 @@ describe("reachLine", () => {
 		})
 		expect(reachLine(r)).toBe("In a session's notes")
 	})
+	test("no lorebook, one session's notes: the notes line", () => {
+		const r = row({
+			reach: {
+				lorebookCount: 0,
+				notesCount: 1,
+				lorebook: {
+					id: 4,
+					name: "x",
+					sessionId: 2,
+					sessionName: "Rainy night"
+				}
+			}
+		})
+		expect(reachLine(r)).toBe("In Rainy night's notes")
+	})
+	test("no lorebook, notes of two sessions", () => {
+		const r = row({
+			reach: { lorebookCount: 0, notesCount: 2, lorebook: null }
+		})
+		expect(reachLine(r)).toBe("In the notes of 2 sessions")
+	})
+	test("no lorebook and no notes", () => {
+		const r = row({
+			reach: { lorebookCount: 0, notesCount: 0, lorebook: null }
+		})
+		expect(reachLine(r)).toBe("Not in a lorebook yet")
+	})
 	test("one with the lorebook missing", () => {
 		expect(
 			reachLine(row({ reach: { lorebookCount: 1, lorebook: null } }))

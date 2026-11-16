@@ -124,6 +124,11 @@ async function runGeneration(
 		adapter,
 		taskType: opts.taskType,
 		connectionName: opts.connection.name,
+		connection: {
+			id: opts.connection.id,
+			type: opts.connection.type,
+			baseUrl: opts.connection.baseUrl
+		},
 		samplingName: opts.sampling.name,
 		label: opts.label,
 		signal: opts.signal

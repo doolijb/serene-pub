@@ -1,0 +1,588 @@
+{
+ "model": "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf:q4_0",
+ "n": 3,
+ "cases": [
+  {
+   "case": "tea run in one message",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "errand, not back yet",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "storms out",
+   "want": {
+    "left": [
+     "Bren"
+    ],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "called from upstairs",
+   "want": {
+    "left": [],
+    "arrived": [
+     "Corin"
+    ]
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": false
+    }
+   ]
+  },
+  {
+   "case": "mentioned only",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "called but far away",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "narrated arrival",
+   "want": {
+    "left": [],
+    "arrived": [
+     "Dessa"
+    ]
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [
+      "Dessa"
+     ],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [
+      "Dessa"
+     ],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [
+      "Dessa"
+     ],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "whole group moves",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Aldric",
+      "Bren",
+      "Mira"
+     ],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [
+      "Aldric",
+      "Bren",
+      "Mira"
+     ],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [
+      "Aldric",
+      "Bren",
+      "Mira"
+     ],
+     "arrived": [],
+     "ok": false
+    }
+   ]
+  },
+  {
+   "case": "goes home for the night",
+   "want": {
+    "left": [
+     "Mira"
+    ],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Mira"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Mira"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Mira"
+     ],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "taken away",
+   "want": {
+    "left": [
+     "Bren"
+    ],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "steps outside for air",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": false
+    }
+   ]
+  },
+  {
+   "case": "falls asleep in the room",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Aldric"
+     ],
+     "arrived": [],
+     "ok": false
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Aldric"
+     ],
+     "arrived": [],
+     "ok": false
+    }
+   ]
+  },
+  {
+   "case": "says he will go, stays",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "one leaves as one arrives",
+   "want": {
+    "left": [
+     "Bren"
+    ],
+    "arrived": [
+     "Dessa"
+    ]
+   },
+   "got": [
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [
+      "Dessa"
+     ],
+     "ok": true
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [
+      "Dessa"
+     ],
+     "ok": true
+    },
+    {
+     "left": [
+      "Bren"
+     ],
+     "arrived": [
+      "Dessa"
+     ],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "writes a letter",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "sent for, not here yet",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "imagined",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "the group splits",
+   "want": {
+    "left": [
+     "Aldric",
+     "Bren"
+    ],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [
+      "Aldric",
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Aldric",
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [
+      "Aldric",
+      "Bren"
+     ],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "heard through the ceiling",
+   "want": {
+    "left": [],
+    "arrived": []
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [],
+     "ok": true
+    }
+   ]
+  },
+  {
+   "case": "comes back after leaving",
+   "want": {
+    "left": [],
+    "arrived": [
+     "Bren"
+    ]
+   },
+   "got": [
+    {
+     "left": [],
+     "arrived": [
+      "Bren"
+     ],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [
+      "Bren"
+     ],
+     "ok": true
+    },
+    {
+     "left": [],
+     "arrived": [
+      "Bren"
+     ],
+     "ok": true
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "total": 60,
+  "right": 49,
+  "wrong_exit": 8,
+  "wrong_entrance": 0,
+  "missed_exit": 0,
+  "missed_entrance": 3,
+  "unparsed": 0,
+  "seconds": 51
+ }
+}

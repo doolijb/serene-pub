@@ -24,8 +24,10 @@ import {
 	formatStoryTime,
 	nextStoryTime,
 	parseStoryCalendar,
+	storyDayIndex,
 	storyTimeProblem,
 	type StoryCalendar,
+	type StoryDateValue,
 	type StoryTimeUnit
 } from "@serene-pub/sdk"
 
@@ -262,4 +264,41 @@ export function datesThatDoNotLand<T extends DatedRow>(
 		if (problem) out.push({ ...row, problem })
 	}
 	return out
+}
+
+/**
+ * A clock reading as the value a pipeline template receives: each part a
+ * `{ number, name? }`, an absent part `null`. Names exist only under a declared
+ * calendar and only when the date lands in it: the year as the calendar spells
+ * it (label and era), the month's name, the weekday for a full date. A
+ * free-form book, or a date the calendar cannot place, carries numbers alone.
+ */
+export function storyDateValueOf(
+	time: StoryClock,
+	calendar: StoryCalendar | null
+): StoryDateValue {
+	const named = !!calendar && storyTimeProblem(time, calendar) === null
+	const month = time.month ?? null
+	const day = month != null ? (time.day ?? null) : null
+	const value: StoryDateValue = {
+		year: { number: time.year },
+		month: month != null ? { number: month } : null,
+		day: day != null ? { number: day } : null,
+		time:
+			time.hour != null
+				? { hour: time.hour, minute: time.minute ?? 0 }
+				: null
+	}
+	if (!named || !calendar) return value
+	value.year.name = formatStoryTime({ year: time.year }, calendar)
+	if (month != null && value.month) value.month.name = calendar.months[month - 1].name
+	if (day != null && value.day) {
+		const week = calendar.weekdays ?? []
+		const index = storyDayIndex(time, calendar)
+		if (week.length && index !== null) {
+			const at = (index + (calendar.firstWeekday ?? 0)) % week.length
+			value.day.name = week[(at + week.length) % week.length]
+		}
+	}
+	return value
 }

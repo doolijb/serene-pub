@@ -5,7 +5,7 @@
  * A swipe, a regenerate or a delete takes back what the replaced reply wrote
  * on the lorebook — unless someone changed it since, and then it stays and
  * the entry says so (`LorebookEntry.keptImprints`). **Revert** puts back what
- * the field held before that reply (an entry the reply added is removed);
+ * the field held before that reply (an entry or a version the reply added is removed);
  * **Keep** keeps it. The server re-sends the book's list, so the note leaves
  * the row once either is pressed.
  */
@@ -28,15 +28,26 @@ export function keptValueWords(v: unknown): string {
 	return json.length > 80 ? `${json.slice(0, 79)}…` : json
 }
 
-/** One kept write, said: what the reply set, and what Revert does. */
+/**
+ * 🚧 One kept write, said: what the reply set, and what Revert does. With no
+ * `versionDate` it is an entry's: "The reply added this entry. Revert removes
+ * it." or the field's sentence. With one it is a version's: "The reply added
+ * the version dated …" (Revert removes that version and its later edits), or
+ * the field's sentence ending "in the version dated …".
+ */
 export function keptImprintLine(k: KeptImprint): string {
-	if (k.field === null) return "The reply added this entry. Revert removes it."
+	if (k.field === null) {
+		return k.versionDate
+			? `The reply added the version dated ${k.versionDate}. Revert removes that version, with any later edits to it; the entry and its other dates stay.`
+			: "The reply added this entry. Revert removes it."
+	}
 	const label = k.label ?? k.field
+	const where = k.versionDate ? ` in the version dated ${k.versionDate}` : ""
 	const back =
 		k.before === undefined || k.before === null || k.before === ""
 			? "Revert clears it."
 			: `Revert puts back ${keptValueWords(k.before)}.`
-	return `${label}: the reply set ${keptValueWords(k.after)}. ${back}`
+	return `${label}: the reply set ${keptValueWords(k.after)}${where}. ${back}`
 }
 
 /** Revert or keep one kept write, and wait for this ask's answer. Rejects with the server's sentence. */

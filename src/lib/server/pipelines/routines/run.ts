@@ -26,6 +26,10 @@
  *    the session's state is announced at its end (`state:changed`), as a
  *    reply's and an action's are.
  *
+ * A routine run shows as running (`sessions:runStatus`, with its name) once it
+ * has lasted past `QUEUE_STATUS_DELAY_MS`, and stops showing at its end or
+ * when it parks; the session list's row status is never touched.
+ *
  * A system-clock routine checks the cron caps (R11) as it starts, and counts
  * as one run in a row. A run that parks at a review gate frees the queue: the
  * next routine does not wait on a person.
@@ -38,7 +42,8 @@ import {
 	minAgeOf,
 	type EffectiveRegistration,
 	type Receipt,
-	type RoutineFiring
+	type RoutineFiring,
+	type StatusText
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
@@ -50,7 +55,14 @@ import {
 	sessionEventsPending
 } from "$lib/server/pipelines/runtime/sessionEvents"
 import { RoutineQueue, type RoutineFiringEntry } from "$lib/server/pipelines/routines/queue"
-import { forgetRoutineRun, noteRoutineRun } from "$lib/server/pipelines/routines/runs"
+import {
+	forgetRoutineRun,
+	noteRoutineRun,
+	routineRunOf,
+	type RoutineRunFact
+} from "$lib/server/pipelines/routines/runs"
+import { QUEUE_STATUS_DELAY_MS, type RunStatusFrame } from "$lib/server/pipelines/runtime/runStatus"
+import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import {
 	capsOf,
 	capsPause,
@@ -130,6 +142,80 @@ export const routineQueue: RoutineQueue = ((globalThis as Record<symbol, unknown
 // A settle (`settleSessionEvents`) waits for the routines a session's events
 // set off, as it waits for the events — a test reads what the turn did.
 addSettleProbe((sessionId) => routineQueue.settling(sessionId))
+
+/** A routine run's frame status; nothing displays it, the name rides in `routine`. */
+export function routineRunStatus(name: string): StatusText {
+	return { i18n: { en: `${name} is running` } }
+}
+
+async function sendRoutineFrame(io: SessionIo, frame: RunStatusFrame): Promise<void> {
+	try {
+		const { broadcastToSessionUsers } = await import("$lib/server/sockets/utils/broadcastHelpers")
+		await broadcastToSessionUsers(io, frame.sessionId, "sessions:runStatus", frame)
+	} catch {
+		// A frame that did not go out is not the run's failure.
+	}
+}
+
+/**
+ * 🚧 Show a routine run as running once it has lasted past
+ * `QUEUE_STATUS_DELAY_MS`; `clear()` stops showing it (idempotent). Never sets
+ * the registry status: the session list's row status stays as it is.
+ */
+export function showRoutineRun(opts: {
+	io?: SessionIo
+	sessionId: number
+	runId: string
+	name: string
+	fact: RoutineRunFact
+}): { clear(): void } {
+	const { io, sessionId, runId, name, fact } = opts
+	// With nothing to send on, nothing is shown: a run marked as shown would
+	// reach a page's first load and no end frame could ever clear it there.
+	if (!io) return { clear() {} }
+	/** The end frame leaves after the start frame, never before it. */
+	let chain: Promise<void> = Promise.resolve()
+	const send = (frame: RunStatusFrame) => {
+		if (io) chain = chain.then(() => sendRoutineFrame(io, frame))
+	}
+	const timer = setTimeout(() => {
+		fact.shownAs = { name }
+		send({
+			sessionId,
+			runId,
+			status: routineRunStatus(name),
+			kind: "routine",
+			routine: { name }
+		})
+	}, QUEUE_STATUS_DELAY_MS)
+	;(timer as { unref?: () => void }).unref?.()
+	return {
+		clear() {
+			clearTimeout(timer)
+			if (!fact.shownAs) return
+			delete fact.shownAs
+			send({ sessionId, runId, status: null, kind: "routine", routine: { name } })
+		}
+	}
+}
+
+/** The session's routine runs showing as running now, each as its start frame (the first load). */
+export function routineRunFramesOf(sessionId: number): RunStatusFrame[] {
+	const frames: RunStatusFrame[] = []
+	for (const handle of runRegistry.active()) {
+		if (handle.kind !== "routine" || handle.sessionId !== sessionId) continue
+		const shownAs = routineRunOf(handle.runId)?.shownAs
+		if (!shownAs) continue
+		frames.push({
+			sessionId,
+			runId: handle.runId,
+			status: routineRunStatus(shownAs.name),
+			kind: "routine",
+			routine: { name: shownAs.name }
+		})
+	}
+	return frames
+}
 
 /** A registration's label: its own, else the pipeline's name, else its id. */
 async function labelOf(db: Db, reg: EffectiveRegistration): Promise<string> {
@@ -316,7 +402,9 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 			: []
 	const runId = uuidv4()
 	const handle = runRegistry.start({ runId, userId: owner, sessionId: f.sessionId, specId: reg.pipeline, kind: "routine" })
-	noteRoutineRun(runId, { sessionId: f.sessionId, registrationKey: reg.key, depth: f.depth })
+	const fact: RoutineRunFact = { sessionId: f.sessionId, registrationKey: reg.key, depth: f.depth }
+	noteRoutineRun(runId, fact)
+	const shown = showRoutineRun({ io: f.io, sessionId: f.sessionId, runId, name, fact })
 	let parked!: () => void
 	const parkedAt = new Promise<void>((resolve) => (parked = resolve))
 	const run = runSpec({
@@ -342,7 +430,10 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 			}
 		},
 		...(overrides.length ? { overrides } : {}),
-		onParked: () => parked()
+		onParked: () => {
+			shown.clear()
+			parked()
+		}
 	})
 		.then(
 			async (receipt) => {
@@ -360,6 +451,7 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 			}
 		)
 		.finally(() => {
+			shown.clear()
 			runRegistry.finish(runId)
 			forgetRoutineRun(runId)
 		})

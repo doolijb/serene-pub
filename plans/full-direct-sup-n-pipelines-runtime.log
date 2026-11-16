@@ -1,0 +1,192 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-FP6qMP/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts (5 tests | 1 failed) 8036ms
+     × routes each provider the specs use, with none falling through 7ms
+stdout | src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-q23i9u/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts (5 tests | 1 failed) 9589ms
+     × keeps the lower-scoring entry off, and the higher-scoring one on 674ms
+stdout | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+Using PGlite database at: /tmp/serene-pub-guide-grounding-int-test-JzwkUi/data/serene-pub.db
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ❯ |int| src/lib/server/pipelines/runtime/guideGrounding.int.test.ts (5 tests | 1 failed) 21442ms
+     × 'how do I write a plugin' retrieves the SDK's your-first-plugin guide, and the prompt carries its excerpt and path 2630ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > every provider has a dispatch path > routes each provider the specs use, with none falling through
+AssertionError: providers with no dispatch path: core:oracle/speak: expected [ 'core:oracle/speak' ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:oracle/speak",
++ ]
+
+ ❯ src/lib/server/pipelines/runtime/allPipelines.int.test.ts:150:5
+    148|    missing,
+    149|    `providers with no dispatch path: ${missing.join(", ")}`
+    150|   ).toEqual([])
+       |     ^
+    151|  })
+    152| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/guideGrounding.int.test.ts > a guide turn with the docs compiled > 'how do I write a plugin' retrieves the SDK's your-first-plugin guide, and the prompt carries its excerpt and path
+AssertionError: ["/docs/sdk/guides/plugin-permissions#widget-writes","/docs/sdk/guides/plugin-permissions#events","/docs/sdk/guides/plugin-permissions#kind-outlet","/docs/genres#genres-from-plugins","/docs/sdk/guides/rulesets#shipping-a-ruleset-in-a-plugin-package","/docs/pipelines#for-plugin-authors"]: expected undefined to be defined
+ ❯ src/lib/server/pipelines/runtime/guideGrounding.int.test.ts:206:67
+    204|    String(h.payload?.link).startsWith("/docs/sdk/guides/your-first-plu…
+    205|   )
+    206|   expect(first, JSON.stringify(hits.map((h) => h.payload?.link))).toBe…
+       |                                                                   ^
+    207|
+    208|   // On the wire: framed as the only documentation, with the path and
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts > a stored switch reaches the selection > keeps the lower-scoring entry off, and the higher-scoring one on
+AssertionError: the shipped sampling window moved, so the two entries below are no longer sized to disagree — resize them rather than relaxing the assertion: expected 6809 to be 7296 // Object.is equality
+
+- Expected
++ Received
+
+- 7296
++ 6809
+
+ ❯ src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts:409:5
+    407|     "no longer sized to disagree — resize them rather than " +
+    408|     "relaxing the assertion"
+    409|   ).toBe(BUDGET)
+       |     ^
+    410|
+    411|   // Share-first: worldLore's band is a sixth of the window, the big
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  3 failed | 160 passed (163)
+      Tests  3 failed | 1549 passed | 2 skipped (1554)
+   Start at  22:13:39
+   Duration  567.29s (transform 13.09s, setup 935ms, import 648.76s, tests 1031.60s, environment 38ms)
+

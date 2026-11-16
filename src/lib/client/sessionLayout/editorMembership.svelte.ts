@@ -15,7 +15,8 @@
  *
  * Call it during the editor's initialisation: its effect belongs to it.
  */
-import * as Icons from "@lucide/svelte"
+import { LayoutPanelTop } from "@lucide/svelte"
+import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
 import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 import {
 	addTab,
@@ -112,7 +113,7 @@ export function createEditorMembership(input: EditorMembershipInput) {
 	let trayWidgets = $derived<TrayWidget[]>(trayWidgetsOf(offers, placedNow))
 	/** A tray chip's icon, as a component to draw with. */
 	function trayIcon(t: { icon?: string }) {
-		return (t.icon && (Icons as any)[t.icon]) || Icons.LayoutPanelTop
+		return declaredIconOf(t.icon, LayoutPanelTop)
 	}
 	/** Why one more instance of this placed widget cannot be added, else null. */
 	function copyRefusalOf(id: string): string | null {

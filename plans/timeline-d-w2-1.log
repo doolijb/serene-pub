@@ -1,0 +1,35 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts (19 tests | 1 failed) 180ms
+     × the prompt's buttons: Cancel, Switch off here, Make a timeless copy, and only the copy is gold 10ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts > Timeline card > the prompt's buttons: Cancel, Switch off here, Make a timeless copy, and only the copy is gold
+AssertionError: expected 'This lorebook has 3 dated versions. W…' to contain 'read the lorebook as it stands now. A…'
+
+Expected: "read the lorebook as it stands now. A timeless copy keeps this one as it is."
+Received: "This lorebook has 3 dated versions. With the timeline off that is hidden, not deleted, and sessions read the lorebook as it stands now.A timeless copy keeps this one as it is. Cancel Switch off here Make a timeless copy"
+
+ ❯ src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts:223:37
+    221|   expect(classOf("Cancel")).not.toContain("preset-filled-primary-500")
+    222|   const text = q("[data-lore-book-timeline-confirm]")?.textContent ?? …
+    223|   expect(text.replace(/\s+/g, " ")).toContain(
+       |                                     ^
+    224|    "read the lorebook as it stands now. A timeless copy keeps this one…
+    225|   )
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 25 passed (26)
+   Start at  13:36:04
+   Duration  8.26s (transform 5.96s, setup 30ms, import 7.82s, tests 193ms, environment 143ms)
+

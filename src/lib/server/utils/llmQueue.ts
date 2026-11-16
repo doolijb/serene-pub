@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { v4 as uuidv4 } from "uuid"
 import type { TaskType } from "./resolveTaskConfig"
+import { llmLaneWidthOf, type LlmLaneHost } from "$lib/server/connections/llmLanes"
 
 export type LLMQueueStatus =
 	| "queued"
@@ -13,6 +14,11 @@ export type LLMQueueStatus =
 export interface LLMQueueItemInput<T> {
 	taskType: TaskType
 	connectionName: string
+	/**
+	 * The host this call's LLM lane is keyed by (`resolveLlmLaneHost`). Absent:
+	 * the LLM lane of `connectionName` alone (`connection:<name>`), width 1.
+	 */
+	lane?: LlmLaneHost
 	samplingName: string
 	sessionId?: number
 	messageId?: number
@@ -29,9 +35,9 @@ export interface LLMQueueItemInput<T> {
 	/**
 	 * 🚧 Where the call waits among the queued ones (A13, R26): lower goes
 	 * first — `LLM_PRIORITY.interactive` (session creation, a person's
-	 * action), `event`, then `routine`; first-in-first-out within one. The
-	 * lane itself is unchanged: one call at a time, and the running call is
-	 * never pre-empted. Absent: the priority of the run whose work is
+	 * action), `event`, then `routine`; first-in-first-out within one. A
+	 * running call is never pre-empted; priority orders the waiting calls
+	 * within one LLM lane. Absent: the priority of the run whose work is
 	 * calling (`currentLlmPriority`).
 	 */
 	priority?: number
@@ -41,6 +47,8 @@ export interface LLMQueueSnapshotItem {
 	id: string
 	taskType: TaskType
 	connectionName: string
+	/** Server-side only: the LLM lane key the item runs on. Never forwarded to clients. */
+	laneKey: string
 	samplingName: string
 	status: LLMQueueStatus
 	startedAt: string
@@ -131,49 +139,51 @@ interface Run<T> {
 	reject: (reason: unknown) => void
 	settled: boolean
 	forceDetachTimer: ReturnType<typeof setTimeout> | null
+	/**
+	 * The LLM lanes held by the causal chain that called enqueue(), captured
+	 * there (never in pump, whose own async context belongs to whatever run
+	 * happened to finish last).
+	 */
+	heldLanes: ReadonlySet<string>
 }
 
 interface Lane {
 	queue: Run<any>[]
-	running: Run<any> | null
+	running: Set<Run<any>>
+	host?: LlmLaneHost
 }
 
 const FORCE_DETACH_MS = 10_000
 
-// The queue has a single global lane (see getConcurrencyKey below) — only one
-// LLM call executes at a time across the whole application, regardless of
-// who queued it. There is deliberately no per-user depth cap on top of that;
-// `userId` on a queued item is used only for display (see snapshot()) and
-// isn't a throttle. runQueuedLLMCall.ts (the shared wrapper used by
-// summarization/graph-building/title-generation/field-generation) doesn't
-// even thread userId into the queue item today, so a real per-user cap
-// would need that added first. A flat global depth ceiling is the smaller
-// fix for the resource-exhaustion half of the problem: without it, any
-// authenticated user able to trigger repeated LLM calls could queue
-// unbounded items (each a Run<T> holding closures over full session/adapter
-// state) with no cap at all.
+// The queue has one LLM lane per host (see getConcurrencyKey below): a host is
+// the URL origin of the connection's resolved base URL, and an LLM lane runs up
+// to `llmLaneWidthOf` calls at once (1 for every local or managed host, so two
+// generations never share a GPU; wider for a known cloud host). There is
+// deliberately no per-user depth cap on top of that; `userId` on a queued item
+// is used only for display (see snapshot()) and isn't a throttle. A flat depth
+// ceiling, MAX_QUEUE_DEPTH per LLM lane, is the smaller fix for the
+// resource-exhaustion half of the problem: without it, any authenticated user
+// able to trigger repeated LLM calls could queue unbounded items (each a
+// Run<T> holding closures over full session/adapter state) with no cap at all.
 export const MAX_QUEUE_DEPTH = 20
 
-// Concurrency grouping. Hardcoded to a single global lane today; swap this out
-// for a per-connection/per-connection-type key once that's needed — nothing
-// else in this module or its callers needs to change.
-function getConcurrencyKey(_item: LLMQueueItemInput<any>): string {
-	return "global"
+// Concurrency grouping: one LLM lane per host. The key is the item's host
+// origin (`llmLaneHostOf`); an item that names no host gets the LLM lane of its
+// connection alone. A pure function of the item — same item, same LLM lane.
+function getConcurrencyKey(item: LLMQueueItemInput<any>): string {
+	return item.lane?.laneKey ?? `connection:${item.connectionName}`
 }
 
 type SnapshotListener = () => void
 
-// Tracks which lane keys are currently "held" by the causal chain of an
-// in-flight run's execution — set around runIt() in pump() below, and
-// inherited automatically by anything that run awaits (including further
-// enqueue() calls made from deep within it). Exists to detect and fix a
-// specific deadlock: field-generation and similar helpers call
-// runQueuedLLMCall() -> enqueue() on the same "global" lane from *inside*
-// an already-enqueued outer call's execute() (eg. the assistant tool-
-// calling turn). Without this, the inner enqueue() would sit in the lane's
-// queue forever, since the lane never frees up while the outer call is
-// still awaiting it — a permanent deadlock that also freezes every other
-// queued LLM call in the app (the lane is process-global).
+// Tracks which LLM lane keys are currently "held" by the causal chain of an
+// in-flight run's execution — set around runIt() in pump() below (from the
+// `heldLanes` captured at enqueue time), and inherited automatically by
+// anything that run awaits (including further enqueue() calls made from deep
+// within it). Exists to avoid a deadlock: an enqueue() onto an LLM lane the
+// calling chain already holds would wait for a run that is itself waiting for
+// it, so that case runs inline instead. No production caller does this today
+// (every execute() is a leaf adapter call); the guard stays as a safety net.
 const activeLanes = new AsyncLocalStorage<Set<string>>()
 
 class LLMQueue {
@@ -200,7 +210,7 @@ class LLMQueue {
 	private getLane(key: string): Lane {
 		let lane = this.lanes.get(key)
 		if (!lane) {
-			lane = { queue: [], running: null }
+			lane = { queue: [], running: new Set() }
 			this.lanes.set(key, lane)
 		}
 		return lane
@@ -218,17 +228,17 @@ class LLMQueue {
 	): { id: string; done: Promise<T> } {
 		const laneKey = getConcurrencyKey(item)
 
-		// Re-entrant call: the caller is already executing inside this exact
-		// lane's currently-running item (eg. field generation called from
-		// within the assistant's tool-calling turn). The lane is already
-		// legitimately held by that calling chain, so queuing here would
-		// deadlock — run it immediately instead. See the activeLanes comment
-		// above for the full failure mode this avoids.
-		if (activeLanes.getStore()?.has(laneKey)) {
+		// Re-entrant call: the caller is already executing inside a running
+		// item of this exact LLM lane. The chain legitimately holds it, so
+		// queuing here would deadlock — run it immediately instead. A nested
+		// enqueue onto an LLM lane the chain does not hold queues normally.
+		const heldLanes: ReadonlySet<string> = activeLanes.getStore() ?? new Set<string>()
+		if (heldLanes.has(laneKey)) {
 			return this.runInline(item, laneKey, presetId)
 		}
 
 		const lane = this.getLane(laneKey)
+		if (item.lane) lane.host = item.lane
 		if (lane.queue.length >= MAX_QUEUE_DEPTH) {
 			throw new Error(
 				"Too many LLM requests are queued right now. Please try again shortly."
@@ -253,7 +263,8 @@ class LLMQueue {
 			resolve,
 			reject,
 			settled: false,
-			forceDetachTimer: null
+			forceDetachTimer: null,
+			heldLanes
 		}
 
 		this.runsById.set(id, run)
@@ -274,11 +285,11 @@ class LLMQueue {
 	/**
 	 * Runs an item immediately, bypassing the lane's queue/running slot
 	 * entirely — used only for the re-entrant case above. Deliberately
-	 * doesn't touch `lane.queue`/`lane.running`: the lane is already held by
-	 * the outer run for the whole duration of this call (runIt() itself
+	 * doesn't touch `lane.queue`/`lane.running`: the LLM lane is already held
+	 * by the outer run for the whole duration of this call (runIt() itself
 	 * never touches `lane.running` — only pump()'s wrapping .finally() does,
 	 * and that's bypassed here), so a genuinely queued third item on the
-	 * same lane still correctly waits for the outer run to finish rather
+	 * same LLM lane still correctly waits for the outer run to finish rather
 	 * than starting concurrently with it.
 	 */
 	private runInline<T>(
@@ -304,7 +315,8 @@ class LLMQueue {
 			resolve,
 			reject,
 			settled: false,
-			forceDetachTimer: null
+			forceDetachTimer: null,
+			heldLanes: activeLanes.getStore() ?? new Set<string>()
 		}
 
 		this.runsById.set(id, run)
@@ -336,19 +348,25 @@ class LLMQueue {
 
 	private pump(laneKey: string) {
 		const lane = this.getLane(laneKey)
-		if (lane.running) return
-		const run = lane.queue.shift()
-		if (!run) return
-
-		lane.running = run
-		const nextActiveLanes = new Set(activeLanes.getStore() ?? [])
-		nextActiveLanes.add(laneKey)
-		activeLanes.run(nextActiveLanes, () => {
-			this.runIt(laneKey, run).finally(() => {
-				if (lane.running === run) lane.running = null
-				this.pump(laneKey)
+		while (lane.running.size < llmLaneWidthOf(lane.host, laneKey)) {
+			const run = lane.queue.shift()
+			if (!run) return
+			lane.running.add(run)
+			// The run's own chain: what its enqueuer held plus this LLM lane —
+			// never the async context pump happens to be called from.
+			const held = new Set([...run.heldLanes, laneKey])
+			activeLanes.run(held, () => {
+				this.runIt(laneKey, run).finally(() => {
+					lane.running.delete(run)
+					this.pump(laneKey)
+				})
 			})
-		})
+		}
+	}
+
+	/** Re-reads every LLM lane's width and starts waiting items a raised width now allows. */
+	widthsChanged(): void {
+		for (const laneKey of [...this.lanes.keys()]) this.pump(laneKey)
 	}
 
 	private async runIt(laneKey: string, run: Run<any>) {
@@ -427,10 +445,7 @@ class LLMQueue {
 					run.reject(new ForceDetachedError())
 				)
 				this.removeRun(run.id)
-				if (lane.running === run) {
-					lane.running = null
-					this.pump(laneKey)
-				}
+				if (lane.running.delete(run)) this.pump(laneKey)
 			}, FORCE_DETACH_MS)
 		}
 	}
@@ -442,6 +457,7 @@ class LLMQueue {
 				id: run.id,
 				taskType: run.item.taskType,
 				connectionName: run.item.connectionName,
+				laneKey: getConcurrencyKey(run.item),
 				samplingName: run.item.samplingName,
 				status: run.status,
 				startedAt: run.startedAt,

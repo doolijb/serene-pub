@@ -24,6 +24,8 @@
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { appletLauncher } from "$lib/client/sessions/appletRows"
 	import type { SessionCreationMode } from "@serene-pub/sdk"
 	import CreationModePicker from "./CreationModePicker.svelte"
@@ -936,9 +938,69 @@
 		releaseLorebookCreate = null
 	}
 
+	/**
+	 * 🚧 The timeline offer under the chosen lorebook's row: shown when the chosen
+	 * preset starts a session's lorebook with a timeline (`timelineDefault`, resolved
+	 * by the server) and that lorebook keeps none. Copy mode never touches the
+	 * original; an own lorebook attached directly may be switched here; a provided
+	 * or read-only one stays as it is.
+	 */
+	function timelineOfferFor(
+		l: LorebookOption
+	): "copy" | "switch" | "fixed" | null {
+		if (flow.preset?.timelineDefault !== true) return null
+		if (flow.fields.lorebookId !== l.id) return null
+		if (l.timelineEnabled !== false) return null
+		if (flow.mode === "new-world") return "copy"
+		const row = l as { provided?: unknown; readOnly?: unknown }
+		return l.bookAccess === "owner" && !row.readOnly && !row.provided
+			? "switch"
+			: "fixed"
+	}
+	const timelineSocket = useTypedSocket()
+	let timelineSavingId = $state<number | null>(null)
+	let timelineError = $state<{ id: number; text: string } | null>(null)
+	async function switchTimelineOn(lorebookId: number) {
+		const requestId = uuid()
+		timelineSavingId = lorebookId
+		timelineError = null
+		try {
+			await awaitReply({
+				socket: timelineSocket,
+				event: "lorebooks:update",
+				params: {
+					lorebook: { id: lorebookId },
+					timelineEnabled: true,
+					requestId
+				},
+				errorEvent: "lorebooks:update:error",
+				fallbackError: "The timeline could not be changed.",
+				match: (data) => data?.requestId === requestId,
+				matchError: (data) =>
+					(data as { requestId?: string } | undefined)?.requestId ===
+					requestId
+			})
+			// The reply is the proof: the held row follows it at once.
+			lorebookList = lorebookList.map((b) =>
+				b.id === lorebookId ? { ...b, timelineEnabled: true } : b
+			)
+		} catch (err) {
+			timelineError = {
+				id: lorebookId,
+				text:
+					err instanceof Error && err.message
+						? err.message
+						: "The timeline could not be changed."
+			}
+		} finally {
+			timelineSavingId = null
+		}
+	}
+
 	function createLorebook(details: {
 		name: string
 		primaryRuleset?: string
+		timelineEnabled?: boolean
 		starterKit?: Sockets.StarterKits.Ref
 	}) {
 		const name = details.name.trim()
@@ -958,6 +1020,9 @@
 			{
 				name,
 				requestId,
+				...(details.timelineEnabled !== undefined
+					? { timelineEnabled: details.timelineEnabled }
+					: {}),
 				...(details.starterKit
 					? { starterKit: details.starterKit }
 					: details.primaryRuleset
@@ -2341,6 +2406,42 @@
 				</section>
 			{/if}
 
+			<!-- 🚧 The timeline offer under the chosen lorebook (see `timelineOfferFor`). -->
+			{#snippet timelineOffer(l: LorebookOption)}
+				{@const kind = timelineOfferFor(l)}
+				{#if kind}
+					<div
+						class="text-surface-600-400 mt-1 mb-1 ml-9 text-xs"
+						data-timeline-offer={kind}
+					>
+						<p>
+							This lorebook keeps no timeline. {flow.preset?.name} plays
+							best with one.
+						</p>
+						{#if kind === "copy"}
+							<p>You can switch it on in the copy's Book settings.</p>
+						{:else if kind === "fixed"}
+							<p>Story time won't move in this session.</p>
+						{:else}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-surface mt-1"
+								data-timeline-switch
+								disabled={timelineSavingId === l.id}
+								onclick={() => switchTimelineOn(l.id)}
+							>
+								Switch the timeline on
+							</button>
+							{#if timelineError?.id === l.id}
+								<p class="text-error-600-400" role="alert">
+									{timelineError.text}
+								</p>
+							{/if}
+						{/if}
+					</div>
+				{/if}
+			{/snippet}
+
 			{#snippet surfacedStartChoice(bookId: number)}
 				{#if ownSurfacedChosen?.id === bookId}
 					<div class="mt-1 mb-1 ml-9" data-surfaced-start>
@@ -2397,6 +2498,8 @@
 						{#if surfacedStart === "branch-off"}
 							<SessionLorebookReading
 								lorebookId={bookId}
+								timeline={lorebookList.find((b) => b.id === bookId)
+									?.timelineEnabled !== false}
 								bind:branchId={surfacedBranchId}
 								bind:clock={surfacedClock}
 							/>
@@ -2467,6 +2570,7 @@
 													/>
 												{/if}
 											</button>
+											{@render timelineOffer(l)}
 										</li>
 									{/each}
 								</ul>
@@ -2712,6 +2816,7 @@
 								)}
 							</div>
 						{/if}
+						{@render timelineOffer(l)}
 						{@render surfacedStartChoice(l.id)}
 					</li>
 				{/snippet}
@@ -2978,6 +3083,7 @@
 							/>
 						{/if}
 					</button>
+					{@render timelineOffer(l)}
 					{@render surfacedStartChoice(l.id)}
 				</li>
 			{/snippet}
@@ -3401,6 +3507,7 @@
 	bind:open={newLorebookOpen}
 	onOpenChange={(e) => (newLorebookOpen = e.open)}
 	onConfirm={createLorebook}
+	asksTimeline
 	onCancel={() => (newLorebookOpen = false)}
 />
 

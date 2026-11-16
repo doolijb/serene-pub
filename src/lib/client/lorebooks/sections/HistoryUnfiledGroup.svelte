@@ -72,7 +72,8 @@
 	}
 </script>
 
-{#if total > 0}
+<!-- 🚧 No timeline: a compile is refused, so there is nothing to compile. -->
+{#if book.timelineEnabled && total > 0}
 	<div data-unfiled-group>
 		<ListGroupLabel label="Not yet compiled" trailing={String(total)} />
 		{#each days as day (day.key)}
@@ -129,7 +130,7 @@
 	</div>
 {/if}
 
-{#if compiling && book.lorebookId != null}
+{#if book.timelineEnabled && compiling && book.lorebookId != null}
 	<CompileHistoryEntryModal
 		open={compileOpen}
 		onOpenChange={(e) => {

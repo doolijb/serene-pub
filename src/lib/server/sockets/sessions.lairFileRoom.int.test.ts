@@ -454,17 +454,14 @@ describe("R11 · File as a room is offered on the person's rows and the Castella
 		expect((await rowsOf(w.session.id)).map((r) => r.id)).toEqual([row])
 	})
 
-	test("a filed room is in the session's own book until a scene closes, then in the lorebook with its links", async () => {
+	test("a filed room is in the lorebook at once with its links, and Back past the newest message leaves it (a press, no imprint)", async () => {
 		const schema = await import("$lib/server/db/schema")
-		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
-		const { openScene, closeScene } = await import("$lib/server/scenes/liveScenes")
 		const w = await lair()
 		reset()
 		const row = await line(w, { content: DESCRIBED, by: "castellan" })
 		const ack = await file(w, row, "The Drowned Hall")
 		expect(ack?.parked).toBe(true)
 		await approve(w, (await parkedReview(w.owner.id)).id)
-		const own = (await ownBookOf(testDb as unknown as Db, w.session.id))!
 		const inBook = async (lorebookId: number) => ({
 			rooms: await testDb
 				.select()
@@ -480,28 +477,35 @@ describe("R11 · File as a room is offered on the person's rows and the Castella
 				.from(schema.narrativeRelationships)
 				.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
 		})
-		// Before: the own book holds the room and its link to The Stair; the lorebook holds neither.
-		const before = await inBook(own.id)
-		expect(before.rooms).toHaveLength(1)
-		expect(before.links).toHaveLength(1)
-		expect(await inBook(w.lorebookId)).toEqual({ rooms: [], links: [] })
-		// A scene covering the room's row closes: Apply runs by itself.
-		const open = await openScene(testDb as unknown as Db, {
-			sessionId: w.session.id,
-			userId: w.owner.id,
-			channel: "main",
-			atMessageId: row
-		})
-		await closeScene(testDb as unknown as Db, {
-			sceneId: open.scene.id,
-			userId: w.owner.id,
-			atMessageId: row
-		})
+		// Under Full on the owner's own lorebook the room and its link to The Stair land in the lorebook at once.
 		const after = await inBook(w.lorebookId)
 		expect(after.rooms).toHaveLength(1)
 		expect(after.rooms[0]!.content).toBe(FILED)
 		expect(after.links).toHaveLength(1)
-		expect(await inBook(own.id)).toEqual({ rooms: [], links: [] })
+		// A press with no turn leaves no imprint, so nothing waits in the session's notes either.
+		const { ownBookOf } = await import("$lib/server/lorebooks/ownBook")
+		const own = await ownBookOf(testDb as unknown as Db, w.session.id)
+		if (own) expect(await inBook(own.id)).toEqual({ rooms: [], links: [] })
+		expect(
+			await testDb
+				.select()
+				.from(schema.loreImprints)
+				.where(
+					and(
+						eq(schema.loreImprints.subjectKind, "entry"),
+						eq(schema.loreImprints.subjectId, after.rooms[0]!.id)
+					)
+				)
+		).toEqual([])
+		// Back past the newest message does not take the room.
+		const newest = (await rowsOf(w.session.id)).at(-1)!.id
+		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+		await testDb.transaction(async (tx) =>
+			retractStateAnchoredTo(tx as unknown as Db, newest, "leaves", { leavingWith: [newest] })
+		)
+		const kept = await inBook(w.lorebookId)
+		expect(kept.rooms.map((r) => r.id)).toEqual(after.rooms.map((r) => r.id))
+		expect(kept.links).toHaveLength(1)
 	})
 
 	test("the same from the person's own narration on main — still reviewed: the row may say more than the room", async () => {

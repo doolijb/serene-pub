@@ -5,7 +5,7 @@
  * The reading becomes the widget's `StoryClockV1`: dates spelled through the
  * book's calendar, and `behind` when the own clock stands before the line.
  */
-import { describe, expect, test } from "vitest"
+import { describe, expect, test, vi } from "vitest"
 import { WIDGET_REQUEST_ASKERS } from "@serene-pub/sdk"
 import {
 	answerSetStoryClock,
@@ -147,5 +147,79 @@ describe("answerSetStoryClock", () => {
 
 	test("core's widgets only", () => {
 		expect(WIDGET_REQUEST_ASKERS["set-story-clock"]).toBe("core")
+	})
+})
+
+describe("answerSetStoryClock — a move back past the session's dated writes", () => {
+	const NOTICE = {
+		mode: "overwrite" as const,
+		count: 2,
+		latestLabel: "Year 412",
+		toLabel: "Year 400",
+		sentence: "This passes 2 dated writes."
+	}
+	function refusing(then: Partial<Response> = READING) {
+		const asked: Array<Record<string, unknown>> = []
+		const write: StoryClockWrite = async (ask) => {
+			asked.push(ask)
+			return ask.confirmClockMoveBack
+				? ({ sessionId: ask.sessionId, ...then } as Response)
+				: ({
+						sessionId: ask.sessionId,
+						error: NOTICE.sentence,
+						clockMoveBack: NOTICE
+					} as Response)
+		}
+		return { asked, write }
+	}
+
+	test("confirmed: asked again with confirmClockMoveBack, and the reading comes back", async () => {
+		const { asked, write } = refusing()
+		const confirm = vi.fn(async () => true)
+		const out = await answerSetStoryClock(
+			{ to: { year: 400 } },
+			7,
+			write,
+			undefined,
+			{ confirm, open: vi.fn() }
+		)
+		expect(confirm).toHaveBeenCalledWith(NOTICE)
+		expect(asked).toHaveLength(2)
+		expect(asked[1]).toEqual({ ...asked[0], confirmClockMoveBack: true })
+		expect(out.label).toBe("Year 410")
+	})
+
+	test("declined: rejects in words and writes nothing more", async () => {
+		const { asked, write } = refusing()
+		await expect(
+			answerSetStoryClock({ to: { year: 400 } }, 7, write, undefined, {
+				confirm: async () => false,
+				open: vi.fn()
+			})
+		).rejects.toThrow("The story clock was not moved.")
+		expect(asked).toHaveLength(1)
+	})
+
+	test("a refusal without a notice rejects as before, asking nobody", async () => {
+		const confirm = vi.fn(async () => true)
+		const write: StoryClockWrite = async (ask) =>
+			({ sessionId: ask.sessionId, error: "Not yours." }) as Response
+		await expect(
+			answerSetStoryClock({ follow: true }, 7, write, undefined, {
+				confirm,
+				open: vi.fn()
+			})
+		).rejects.toThrow("Not yours.")
+		expect(confirm).not.toHaveBeenCalled()
+	})
+
+	test("a branch the confirmed move made is opened", async () => {
+		const { write } = refusing({ ...READING, branchedTo: 31 })
+		const open = vi.fn()
+		await answerSetStoryClock({ to: { year: 400 } }, 7, write, undefined, {
+			confirm: async () => true,
+			open
+		})
+		expect(open).toHaveBeenCalledWith(31)
 	})
 })

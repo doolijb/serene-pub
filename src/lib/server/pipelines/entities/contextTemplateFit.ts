@@ -31,7 +31,7 @@ import {
 	type TemplateFit
 } from "@serene-pub/sdk"
 import { checkTemplateSourceReport } from "@serene-pub/sdk/template-check"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { rowSource } from "$lib/server/pipelines/config/panel/declarations"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
@@ -80,20 +80,35 @@ export const CONTEXT_TEMPLATE_CHECKING: TemplateChecking = {
  */
 export async function variableLayoutOffersOf(
 	db: Db,
-	variableIds: readonly string[]
+	variableIds: readonly string[],
+	/** Variables already read this pass; the ones read here are added. */
+	into: Map<string, Array<{ reference: string; label: string }>> = new Map()
 ): Promise<Record<string, Array<{ reference: string; label: string }>>> {
-	const { listVariableTemplates, layoutByReference } = await import(
-		"$lib/server/pipelines/entities/variableTemplates"
-	)
 	const out: Record<string, Array<{ reference: string; label: string }>> = {}
 	for (const variableId of new Set(variableIds)) {
-		const offered: Array<{ reference: string; label: string }> = []
-		for (const row of await listVariableTemplates(db, variableId))
-			if (
-				row.reference &&
-				(await layoutByReference(db, variableId, row.reference)) === row.id
-			)
-				offered.push({ reference: row.reference, label: row.name })
+		let offered = into.get(variableId)
+		if (!offered) {
+			// `(variableId, reference)` is unique, so a row with a reference and no
+			// `withdrawnAt` is the one `layoutByReference` would find.
+			const rows = await db
+				.select({
+					id: schema.pipelineVariableTemplates.id,
+					name: schema.pipelineVariableTemplates.name,
+					reference: schema.pipelineVariableTemplates.reference,
+					isImmutable: schema.pipelineVariableTemplates.isImmutable,
+					withdrawnAt: schema.pipelineVariableTemplates.withdrawnAt
+				})
+				.from(schema.pipelineVariableTemplates)
+				.where(eq(schema.pipelineVariableTemplates.variableId, variableId))
+				.orderBy(asc(schema.pipelineVariableTemplates.id))
+			offered = []
+			for (const row of [...rows].sort(
+				(x, y) => Number(!!y.isImmutable) - Number(!!x.isImmutable)
+			))
+				if (row.reference && row.withdrawnAt == null)
+					offered.push({ reference: row.reference, label: row.name })
+			into.set(variableId, offered)
+		}
 		out[variableId] = offered
 	}
 	return out
@@ -110,7 +125,8 @@ export async function contextTemplateChecking(
 	db: Db,
 	doc: SpecDocument,
 	nodeKey: string,
-	describe: ReturnType<typeof rowSource>
+	describe: ReturnType<typeof rowSource>,
+	offers?: Map<string, Array<{ reference: string; label: string }>>
 ): Promise<TemplateChecking> {
 	// Every key a `variables` slot renders anywhere in the document, not only
 	// this node's: the context builder lays out `characters`, `scenario` and
@@ -133,7 +149,8 @@ export async function contextTemplateChecking(
 	Object.assign(renders, rendersOfNode(nodeKey))
 	const variableLayoutOffers = await variableLayoutOffersOf(
 		db,
-		Object.values(renders)
+		Object.values(renders),
+		offers
 	)
 	return {
 		...CONTEXT_TEMPLATE_CHECKING,
@@ -173,7 +190,11 @@ export async function contextTemplateFitAt(
 	at: TemplateAddress,
 	template: { engine: string | null; source: string },
 	/** What a walk over many templates has already read. */
-	read: { byPin?: Map<string, any>; doc?: SpecDocument } = {}
+	read: {
+		byPin?: Map<string, any>
+		doc?: SpecDocument
+		offers?: Map<string, Array<{ reference: string; label: string }>>
+	} = {}
 ): Promise<TemplateFit | null> {
 	const doc =
 		read.doc ??
@@ -189,7 +210,13 @@ export async function contextTemplateFitAt(
 				engine: template.engine ?? CORE_TEMPLATE_ENGINE,
 				source: template.source
 			},
-			await contextTemplateChecking(db, doc, at.nodeKey, describe),
+			await contextTemplateChecking(
+				db,
+				doc,
+				at.nodeKey,
+				describe,
+				read.offers
+			),
 			{ slot: at.slot, describe }
 		)
 	} catch (e) {
@@ -329,7 +356,8 @@ export interface TemplateFitScanReport {
  * thing twice.
  */
 export async function scanContextTemplateFits(
-	db: Db
+	db: Db,
+	docs: Map<string, SpecDocument | null> = new Map<string, SpecDocument | null>()
 ): Promise<TemplateFitScanReport> {
 	const report: TemplateFitScanReport = {
 		checked: 0,
@@ -342,6 +370,11 @@ export async function scanContextTemplateFits(
 	const unfinished = new Set<number>()
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
 	const byPin = await registryByPin(db)
+	// One map per scan: each variable's offers are read once.
+	const offers = new Map<
+		string,
+		Array<{ reference: string; label: string }>
+	>()
 	const specs = await db
 		.select({
 			id: schema.pipelineSpecs.id,
@@ -353,14 +386,23 @@ export async function scanContextTemplateFits(
 	for (const spec of specs) {
 		if (spec.activeVersionId == null) continue
 		try {
-			const slots = (await declarations(db, spec.activeVersionId)).filter(
-				(d) => d.control === "context-template-ref"
-			)
-			if (!slots.length) continue
 			const { loadDocument } = await import(
 				"$lib/server/pipelines/boot/store"
 			)
-			const doc = await loadDocument(db, spec.activeVersionId)
+			const { publishedDocuments } = await import(
+				"$lib/server/pipelines/registrations/door"
+			)
+			const versionId = spec.activeVersionId
+			let docPromise: Promise<SpecDocument> | undefined
+			const docOf = () =>
+				(docPromise ??= publishedDocuments(db, [spec.slug], docs).then(
+					(m) => m.get(spec.slug) ?? loadDocument(db, versionId)
+				))
+			const slots = (
+				await declarations(db, versionId, { byPin, docOf })
+			).filter((d) => d.control === "context-template-ref")
+			if (!slots.length) continue
+			const doc = await docOf()
 			const configs = await db
 				.select({ id: schema.pipelineConfigs.id })
 				.from(schema.pipelineConfigs)
@@ -443,7 +485,7 @@ export async function scanContextTemplateFits(
 						db,
 						at,
 						{ engine: row.engine, source: row.source ?? "" },
-						{ byPin, doc }
+						{ byPin, doc, offers }
 					)
 					if (!fit?.refusals.length) continue
 					report.misfits.push({

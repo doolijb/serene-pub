@@ -6,21 +6,32 @@
  */
 import type { CharacterRow } from "$lib/shared/characters/characterRows"
 import { sharedFromLine } from "$lib/shared/utils/sharedRows"
+import { sessionNotesName } from "$lib/shared/lorebooks/sessionNotes"
 
 /** The row's reach line: where this character lives, as the asker may see it. */
 export function reachLine(row: CharacterRow): string {
-	const { lorebookCount, lorebook } = row.reach
-	if (lorebookCount === 0) return "Not in a lorebook yet"
+	const { lorebookCount, lorebook, notesCount } = row.reach
+	if (lorebookCount === 0) {
+		if (lorebook?.sessionId == null) {
+			return (notesCount ?? 0) >= 2
+				? `In the notes of ${notesCount} sessions`
+				: "Not in a lorebook yet"
+		}
+		return notesLine(lorebook)
+	}
 	if (lorebookCount === 1) {
 		if (!lorebook) return "In 1 lorebook"
-		if (lorebook.sessionId != null) {
-			return lorebook.sessionName
-				? `In ${lorebook.sessionName}'s notes`
-				: "In a session's notes"
-		}
+		if (lorebook.sessionId != null) return notesLine(lorebook)
 		return `In ${lorebook.name}`
 	}
 	return `In ${lorebookCount} lorebooks`
+}
+
+/** A notes book is named by its session's current name, never its stored one. */
+function notesLine(book: { sessionName?: string | null }): string {
+	return book.sessionName?.trim()
+		? `In ${sessionNotesName(book.sessionName)}`
+		: "In a session's notes"
 }
 
 /** The meta line's lead: who shared a shared card, else the row's summary. */

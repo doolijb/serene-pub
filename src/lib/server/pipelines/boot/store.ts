@@ -296,11 +296,14 @@ export async function saveDocument(
 				}))
 			)
 
-		for (const p of doc.presets ?? []) {
-			const preset = (
-				await tx
-					.insert(schema.pipelinePresets)
-					.values({
+		const presetDocs = doc.presets ?? []
+		if (presetDocs.length) {
+			// One statement for every preset; ids come back mapped by slug,
+			// which `(spec_version_id, slug)` makes unique.
+			const made = await tx
+				.insert(schema.pipelinePresets)
+				.values(
+					presetDocs.map((p) => ({
 						specVersionId: version.id,
 						slug: p.slug,
 						// Text columns: the document's display text resolved to
@@ -310,18 +313,24 @@ export async function saveDocument(
 						description: i18nText(p.description) ?? null,
 						ownerSlug: p.owner ?? null,
 						isDefault: p.default ?? false
-					})
-					.returning()
-			)[0]
-			if (p.values.length)
-				await tx.insert(schema.pipelinePresetValues).values(
-					p.values.map((v) => ({
-						presetId: preset.id,
-						nodeKey: v.nodeKey,
-						slot: v.slot,
-						value: v.value as any
 					}))
 				)
+				.returning({
+					id: schema.pipelinePresets.id,
+					slug: schema.pipelinePresets.slug
+				})
+			const presetIdBySlug = new Map(made.map((r) => [r.slug, r.id]))
+			for (const p of presetDocs) {
+				if (p.values.length)
+					await tx.insert(schema.pipelinePresetValues).values(
+						p.values.map((v) => ({
+							presetId: presetIdBySlug.get(p.slug)!,
+							nodeKey: v.nodeKey,
+							slot: v.slot,
+							value: v.value as any
+						}))
+					)
+			}
 		}
 
 		if (opts.publish) {

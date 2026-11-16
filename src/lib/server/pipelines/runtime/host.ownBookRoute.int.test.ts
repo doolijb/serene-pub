@@ -738,8 +738,8 @@ describe("9 · Full", () => {
 		expect(await linksOf(w.own.id)).toHaveLength(0)
 	})
 
-	it("a session whose scenes end by themselves writes a cross-book link to the own book, and words an id in neither book as the own-book route does", async () => {
-		const w = await setup("review", { ownMode: "full" })
+	it("under Review changes, a session whose scenes end by themselves writes a cross-book link to the own book, and words an id in neither book as the own-book route does", async () => {
+		const w = await setup("review")
 		scenesEnd.add(w.session.id)
 		const hall = await place(w.book.id, "The Hall")
 		const mine = await place(w.own.id, "My Den")

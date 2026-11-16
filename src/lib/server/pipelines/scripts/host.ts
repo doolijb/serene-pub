@@ -5,7 +5,8 @@
  * only corrupt its own sandbox, and nothing host-side is reachable unless
  * explicitly bridged. Since the pool landed, nothing is bridged at all: the
  * evaluation is **zero-callback** — the seeded RNG and the `ctx.log` collector
- * live *inside* the sandbox program, and the whole job crosses as strings.
+ * live *inside* the sandbox program, and the whole job crosses as strings (the
+ * input as two global strings the program parses and deletes before user code).
  * That is what makes the worker pool trivial rather than an RPC protocol, and
  * it removes the last host functions the escape analysis had to reason about.
  *
@@ -88,6 +89,8 @@ interface EvalJob {
 	program: string
 	timeoutMs: number
 	memoryLimitBytes: number
+	/** Strings handed to the guest as globals before the program runs. */
+	globals: Record<string, string>
 }
 
 type EvalOutcome = { ok: true; json: string } | { ok: false; reason: string }
@@ -112,6 +115,15 @@ module.exports = async function evaluate(job) {
 		runtime.setInterruptHandler(() => Date.now() > deadline)
 		const context = runtime.newContext()
 		try {
+			try {
+				for (const name of Object.keys(job.globals)) {
+					const h = context.newString(job.globals[name])
+					context.setProp(context.global, name, h)
+					h.dispose()
+				}
+			} catch (e) {
+				return { ok: false, reason: String((e && e.message) || e) }
+			}
 			const result = context.evalCode(job.program)
 			if (result.error) {
 				const detail = context.dump(result.error)
@@ -224,7 +236,10 @@ function arm(id: number): void {
 	// never killed by the outer one.
 	entry.killer = setTimeout(() => {
 		pending.delete(id)
-		breakWorker(`killed after ${entry.job.timeoutMs}ms — the evaluation hung`, id)
+		breakWorker(
+			`killed after ${entry.job.timeoutMs}ms — the evaluation hung`,
+			id
+		)
 		entry.resolve({
 			ok: false,
 			reason: `timeout after ${entry.job.timeoutMs}ms (worker killed)`
@@ -238,15 +253,18 @@ function ensureWorker(): Worker | null {
 	try {
 		const w = new Worker(WORKER_SOURCE, { eval: true })
 		w.unref()
-		w.on("message", (msg: { id: number; started?: true; outcome?: EvalOutcome }) => {
-			if (w !== worker) return
-			if (msg.started) return arm(msg.id)
-			const entry = pending.get(msg.id)
-			if (!entry) return
-			pending.delete(msg.id)
-			if (entry.killer) clearTimeout(entry.killer)
-			entry.resolve(msg.outcome!)
-		})
+		w.on(
+			"message",
+			(msg: { id: number; started?: true; outcome?: EvalOutcome }) => {
+				if (w !== worker) return
+				if (msg.started) return arm(msg.id)
+				const entry = pending.get(msg.id)
+				if (!entry) return
+				pending.delete(msg.id)
+				if (entry.killer) clearTimeout(entry.killer)
+				entry.resolve(msg.outcome!)
+			}
+		)
 		w.on("error", () => {
 			if (w !== worker) return
 			// A worker that cannot even start is an environment problem, not a
@@ -274,7 +292,10 @@ function post(id: number, entry: PendingJob): void {
 	const w = ensureWorker()
 	if (!w) {
 		void inline()(entry.job).then(entry.resolve, (e) =>
-			entry.resolve({ ok: false, reason: String((e as Error)?.message ?? e) })
+			entry.resolve({
+				ok: false,
+				reason: String((e as Error)?.message ?? e)
+			})
 		)
 		return
 	}
@@ -319,17 +340,36 @@ function buildProgram(opts: RunScriptOptions): string {
 					return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 				};
 			})(${JSON.stringify(opts.seedLabel)});
-			var __parsed = JSON.parse(${JSON.stringify(JSON.stringify(opts.vars))});
-			var __extras = JSON.parse(${JSON.stringify(JSON.stringify(opts.extras ?? {}))});
+			// The job's input arrives as two guest globals (strings); parse once,
+			// then delete them before any user code can look.
+			var __parsed = JSON.parse(__spVarsJson);
+			var __extras = JSON.parse(__spExtrasJson);
+			delete globalThis.__spVarsJson;
+			delete globalThis.__spExtrasJson;
 			var ctx = Object.assign(
 				{
 					random: __rng,
-					log: function (m) { __logs.push(String(m)); }
+					log: function (m) { __logs.push(String(m).slice(0, ${SCRIPT_LOG_LINE_MAX})); }
 				},
 				__extras
 			);
 			Math.random = __rng;
-			Date.now = function () { return ${Math.floor(opts.nowMs)}; };
+			// The ambient clock is the run's start, so a replay reads the same
+			// time: Date.now, and a bare new Date() / Date() (★K-3). A Date
+			// built from an explicit value is left alone.
+			var __now = ${Math.floor(opts.nowMs)};
+			var __Date = globalThis.Date;
+			var __PinnedDate = function Date() {
+				if (!(this instanceof __PinnedDate)) return new __Date(__now).toString();
+				if (arguments.length === 0) return new __Date(__now);
+				return new (Function.prototype.bind.apply(__Date, [null].concat(Array.prototype.slice.call(arguments))))();
+			};
+			__PinnedDate.prototype = __Date.prototype;
+			__PinnedDate.parse = __Date.parse;
+			__PinnedDate.UTC = __Date.UTC;
+			__PinnedDate.now = function () { return __now; };
+			__Date.now = __PinnedDate.now;
+			globalThis.Date = __PinnedDate;
 			var __fn = function (__vars) {
 				${bindings}
 				${opts.source}
@@ -343,6 +383,13 @@ function buildProgram(opts: RunScriptOptions): string {
 		})()
 	`
 }
+
+/**
+ * The most a script's log line keeps (★K-3, owner 2026-11-14): a line lands
+ * whole in a receipt row, so one is cut here, in the guest, before it
+ * crosses. Not a count cap — the output ceiling bounds the whole result.
+ */
+export const SCRIPT_LOG_LINE_MAX = 1024
 
 export async function runScriptSource(
 	opts: RunScriptOptions
@@ -366,7 +413,11 @@ export async function runScriptSource(
 	const outcome = await evaluate({
 		program: buildProgram(opts),
 		timeoutMs,
-		memoryLimitBytes: opts.memoryLimitBytes ?? 64 * 1024 * 1024
+		memoryLimitBytes: opts.memoryLimitBytes ?? 64 * 1024 * 1024,
+		globals: {
+			__spVarsJson: JSON.stringify(opts.vars),
+			__spExtrasJson: JSON.stringify(opts.extras ?? {})
+		}
 	})
 
 	if (!outcome.ok) return fail(outcome.reason)

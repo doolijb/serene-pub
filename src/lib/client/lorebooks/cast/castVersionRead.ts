@@ -6,6 +6,7 @@ import {
 } from "$lib/shared/lorebooks/amendments"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 import type { Line } from "$lib/shared/lorebooks/lineReading"
+import { UNDATED_MEMBER_KEYS, type CastVersion } from "./castVersions"
 
 /**
  * Reading a cast member at a moment, from their VERSIONS (lane cv-member2, B2).
@@ -100,6 +101,32 @@ export function asVersionAmendments(
 			...rowOwnedChanges(o.fields)
 		}
 	}))
+}
+
+/**
+ * The member as the form shows version `v`: the base put back, then every
+ * node from the first dated one up to and including `v` folded over it, in
+ * rail order. The undated keys stay the row's own (the form shows and saves
+ * them as the book's present has them); `castVersionId` is `v`'s.
+ */
+export function rowAtVersion<
+	T extends { baseColumns?: object | null; castVersionId?: number | null }
+>(row: T, versions: readonly CastVersion[], v: CastVersion): T {
+	let out: Record<string, unknown> = { ...withBaseVersion(row) }
+	const at = versions.findIndex((x) => x.key === v.key)
+	if (v.kind === "dated" && at >= 0)
+		for (const node of versions.slice(0, at + 1)) {
+			if (node.kind !== "dated" || !node.row) continue
+			out = {
+				...out,
+				...versionColumns(node.row.columns ?? {}),
+				...rowOwnedChanges(node.row.fields)
+			}
+		}
+	const own = row as Record<string, unknown>
+	for (const key of UNDATED_MEMBER_KEYS) out[key] = own[key]
+	out.castVersionId = v.versionId
+	return out as T
 }
 
 /** Keys the binding row owns: never taken whole from a version. */

@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import { formatDate } from "../sections/historyDates"
+	import { bookTimeline } from "../bookData.svelte"
 	import type { MemberScene } from "./memberScenes"
 
 	/**
@@ -18,7 +19,13 @@
 
 	let { rows, memberName, onOpenScene }: Props = $props()
 
+	const timeline = bookTimeline()
+
 	function lineOf(row: MemberScene): string {
+		// 🚧 No timeline: no date and nothing "later"; only what the scene holds,
+		// and not "not yet compiled" (a compile is refused).
+		if (!timeline.value)
+			return row.note === "not yet compiled" ? "" : row.note
 		const parts = [row.date ? formatDate(row.date) : "Undated"]
 		if (row.note) parts.push(row.note)
 		if (row.later) parts.push("later")
@@ -38,7 +45,7 @@
 				<button
 					type="button"
 					class="preset-filled-surface-100-900 hover:bg-surface-200-800 flex w-full items-center gap-3 rounded-lg p-2 text-left transition-colors"
-					class:opacity-50={row.later}
+					class:opacity-50={timeline.value && row.later}
 					data-cast-scene={row.id}
 					title="Open {row.label} in Scenes"
 					onclick={() => onOpenScene(row)}

@@ -14,9 +14,9 @@
  * rule, `replayStoryLane`): when the newest round holds more than one
  * person's line, the turn is that whole round. With it go the rows the
  * turn's runs wrote on other channels (their turn yield: a roll line, a
- * journal line) and every table row anchored to one of them. Never a row
- * before the session's first person line on the story lane: the greetings
- * and the opening stay.
+ * journal line) and every table row anchored to one of them. In a genre that
+ * takes a whole turn, never a row before the session's first person line on
+ * the story lane: the greetings and the opening stay.
  *
  * Each row is taken **out of the history**, never deleted: `rewind_ordinal`
  * says which Back took it (1 = the first, the newest turn) and the row is
@@ -30,9 +30,14 @@
  * the history that is left. What was taken is kept on the row
  * (`rewind_taken`), so the forward stack survives a reload.
  *
- * A genre whose shape says `history.back: 'message'` (Story) takes the newest
+ * A genre that declares `history.back: 'message'` (Story) takes the newest
  * message instead — with the rows after it on the story's lane (Time passes,
  * notes) and what its run wrote — and Regenerate still takes the whole turn.
+ * It has no floor: the newest live line whatever it is, a greeting and a
+ * character's first reply before anybody has written included, down to a
+ * session with no messages (owner 2026-11-13: "Back takes any intro"). A
+ * create run is never a unit's run: what creating the session wrote stays
+ * when one of its rows (a greeting) is taken back.
  *
  * ## Forward restores it
  *
@@ -133,11 +138,13 @@ export async function forwardStackHeight(db: Db, sessionId: number): Promise<num
  * Read on every page load; Back's reason is the refusal `turnUnitOf` gives.
  */
 export async function rewindStateOf(db: Db, sessionId: number): Promise<RewindState> {
+	// What one press takes here, whether or not it may be pressed or even read: the words follow it.
+	const step = await backStepOf(db, sessionId).catch(() => undefined)
 	try {
 		const ahead = await forwardStackHeight(db, sessionId)
 		// 🚧 pr-6 R-k: an archived session is read-only — Back, Forward and Regenerate greyed with its sentence.
 		const archived = await sessionArchivedRefusal(db, sessionId)
-		if (archived) return { ahead, back: archived, forward: archived, regenerate: archived }
+		if (archived) return { ahead, back: archived, forward: archived, regenerate: archived, ...(step ? { step } : {}) }
 		const verdict = await turnUnitOf(db, sessionId, { includePersonLines: true })
 		const redo = await turnUnitOf(db, sessionId, { includePersonLines: false })
 		// What the title calls replies: the story lane's rows. A roll or a
@@ -173,7 +180,7 @@ export async function rewindStateOf(db: Db, sessionId: number): Promise<RewindSt
 					...r,
 					personaName: r.personaId != null ? (personaCards.get(r.personaId)?.name ?? null) : null
 				}))
-			if ((await backStepOf(db, sessionId)) === "message") {
+			if (step === "message") {
 				// The unit's first story row is the message; the rows after it are filed on it.
 				const first = onStory[0]
 				if (first) {
@@ -201,7 +208,8 @@ export async function rewindStateOf(db: Db, sessionId: number): Promise<RewindSt
 			back: verdict.ok ? null : verdict.refusal,
 			forward: ahead > 0 ? null : REWIND_REFUSALS.noneAhead,
 			regenerate: redo.ok ? null : redo.refusal,
-			...(backTakes ? { backTakes } : {})
+			...(backTakes ? { backTakes } : {}),
+			...(step ? { step } : {})
 		}
 	} catch (e) {
 		console.warn("[rewind] the strip's state could not be read:", e)
@@ -209,7 +217,8 @@ export async function rewindStateOf(db: Db, sessionId: number): Promise<RewindSt
 			ahead: 0,
 			back: REWIND_REFUSALS.nothing,
 			forward: REWIND_REFUSALS.noneAhead,
-			regenerate: REWIND_REFUSALS.nothing
+			regenerate: REWIND_REFUSALS.nothing,
+			...(step ? { step } : {})
 		}
 	}
 }
@@ -318,7 +327,31 @@ async function buildTurnUnit(
 	let floor: number
 	let oneMessage = false
 
-	if (opts.includePersonLines) {
+	if (opts.includePersonLines && at === null && (await backStepOf(db, sessionId)) === "message") {
+		// One message per press (`history.back: 'message'`), and no floor: the
+		// newest live line on the story lane whatever it is, with the rows
+		// after it. A greeting takes no turn, so the replay leaves it out and
+		// it is found among the rows themselves; a character's first reply
+		// before anybody has written is a line like any other.
+		const [greeting] = await db
+			.select({ id: m.id })
+			.from(m)
+			.where(and(story, sql`${m.metadata} ->> 'isGreeting' = 'true'`))
+			.orderBy(desc(m.id))
+			.limit(1)
+		const newestLine = lines[lines.length - 1]
+		let start = Math.max(newestLine?.id ?? 0, greeting?.id ?? 0)
+		if (!start) {
+			// No line and no greeting is left: a row that takes no turn (a system
+			// line a routine wrote) is still a row of the story, and goes last.
+			const [any] = await db.select({ id: m.id }).from(m).where(story).orderBy(desc(m.id)).limit(1)
+			start = any?.id ?? 0
+		}
+		if (!start) return refuse("nothing", REWIND_REFUSALS.nothing)
+		oneMessage = true
+		floor = start
+		storyIds = (await db.select({ id: m.id }).from(m).where(and(story, gte(m.id, start)))).map((r) => r.id)
+	} else if (opts.includePersonLines) {
 		// The floor: the session's first person line on the story lane.
 		const [firstPerson] = await db
 			.select({ id: m.id })
@@ -331,11 +364,7 @@ async function buildTurnUnit(
 		if (!newest) return refuse(at === null ? "nothing" : "not-a-turn", at === null ? REWIND_REFUSALS.nothing : NOT_A_TURN)
 		if (newest.id < firstPerson.id) return refuse("nothing", REWIND_REFUSALS.nothing)
 		let start = newest.turnOf
-		oneMessage = at === null && (await backStepOf(db, sessionId)) === "message"
-		if (oneMessage) {
-			// One message per press (`history.back: 'message'`): the newest line, and the rows after it.
-			start = newest.id
-		} else if (at === null) {
+		if (at === null) {
 			// A table of players: the newest round holding the lines of more
 			// than one person (counting only those that open a turn) is one
 			// turn of the table — it starts at the round's first line. A person
@@ -553,7 +582,26 @@ async function unitRuns(
 		const prior = out.get(r.runId)
 		out.set(r.runId, { runId: r.runId, runUuid: r.runUuid, created: (prior?.created ?? false) || r.action === "created" })
 	}
-	return [...out.values()]
+	// A create run is never a unit's run: what creating the session wrote (the
+	// seats, the opening state) is the session's own and stays when a row the
+	// create run wrote (a greeting, an opening line) is taken back. The row
+	// itself, and what is anchored to it, still goes by the per-row retraction.
+	const kept: Array<{ runId: number; runUuid: string; created: boolean }> = []
+	for (const run of out.values()) if (!(await isCreateRun(db, run.runId))) kept.push(run)
+	return kept
+}
+
+/** Is this run a create pipeline's (`taxonomy.role: 'create'`), the test `replyRunOf` makes? */
+async function isCreateRun(db: Db, runId: number): Promise<boolean> {
+	const [run] = await db
+		.select({ specSlug: schema.pipelineRuns.specSlug })
+		.from(schema.pipelineRuns)
+		.where(eq(schema.pipelineRuns.id, runId))
+		.limit(1)
+	if (!run?.specSlug) return false
+	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+	const doc = await loadPublished(db, run.specSlug).catch(() => null)
+	return ((doc as { taxonomy?: { role?: unknown } } | null)?.taxonomy ?? {}).role === "create"
 }
 
 /** Is anything running in this session — a row being written, or a run in flight? */

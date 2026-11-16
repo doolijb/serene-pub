@@ -1,0 +1,226 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-AnxqDB/data/serene-pub.db
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts (4 tests | 3 failed) 17724ms
+     × a Lair session created with no preset has its declared defaults 17ms
+     × an explicit value wins over the declared default 5ms
+     × a stored value under a retired key is inert (R12: the Lair's turnStyle; the rewrite's partySpeech, trustNarrator) 4ms
+tar: Removing leading `/' from member names
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts > genre field defaults (B16x) > a Lair session created with no preset has its declared defaults
+AssertionError: expected { tone: 'grounded', …(10) } to deeply equal { tone: 'grounded', …(6) }
+
+- Expected
++ Received
+
+  {
+    "askBeforeRolling": true,
+    "autoRoll": false,
++   "ownerSheetLatitude": "all-any",
+    "roomsLayer": true,
+    "roundWorth": 5,
+    "sanctumSteers": true,
++   "sessionLanguage": "",
+    "showDice": true,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grounded",
+  }
+
+ ❯ src/lib/server/sessions/genreFieldDefaults.int.test.ts:73:48
+     71|   }
+     72|   // The run's read (the inlet's `fields`) and the settings document a…
+     73|   expect(await genreFieldsFor(db, session.id)).toEqual(expected)
+       |                                                ^
+     74|   expect((await resolveSessionSettings(db, session.id))!.fields).toEqu…
+     75|    expected
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts > genre field defaults (B16x) > an explicit value wins over the declared default
+AssertionError: expected { tone: 'grim', roundWorth: 5, …(9) } to deeply equal { tone: 'grim', roundWorth: 5, …(5) }
+
+- Expected
++ Received
+
+  {
+    "askBeforeRolling": true,
+    "autoRoll": false,
++   "ownerSheetLatitude": "all-any",
+    "roomsLayer": true,
+    "roundWorth": 5,
+    "sanctumSteers": true,
++   "sessionLanguage": "",
+    "showDice": false,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grim",
+  }
+
+ ❯ src/lib/server/sessions/genreFieldDefaults.int.test.ts:84:48
+     82|    showDice: false
+     83|   })
+     84|   expect(await genreFieldsFor(db, session.id)).toEqual({
+       |                                                ^
+     85|    tone: "grim",
+     86|    roundWorth: 5,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts > genre field defaults (B16x) > a stored value under a retired key is inert (R12: the Lair's turnStyle; the rewrite's partySpeech, trustNarrator)
+AssertionError: expected { tone: 'grounded', …(10) } to deeply equal { tone: 'grounded', …(6) }
+
+- Expected
++ Received
+
+  {
+    "askBeforeRolling": true,
+    "autoRoll": false,
++   "ownerSheetLatitude": "all-any",
+    "roomsLayer": true,
+    "roundWorth": 5,
+    "sanctumSteers": true,
++   "sessionLanguage": "",
+    "showDice": true,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grounded",
+  }
+
+ ❯ src/lib/server/sessions/genreFieldDefaults.int.test.ts:121:48
+    119|    showDice: true
+    120|   }
+    121|   expect(await genreFieldsFor(db, session.id)).toEqual(expected)
+       |                                                ^
+    122|   expect((await resolveSessionSettings(db, session.id))!.fields).toEqu…
+    123|    expected
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed | 105 passed (106)
+      Tests  3 failed | 818 passed (821)
+   Start at  16:50:37
+   Duration  405.61s (transform 10.49s, setup 565ms, import 63.43s, tests 1130.31s, environment 23ms)
+

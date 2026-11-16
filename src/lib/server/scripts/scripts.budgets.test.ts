@@ -17,6 +17,16 @@
  * | cold instantiation | ≤ 5 ms | ~0.9 ms |
  * | stop evaluation, 2 KB tail | ≤ 1 ms | ~0.5 ms |
  *
+ * Second measurement, 2026-11-13, against the **production host**
+ * (`runScriptSource`: a QuickJS worker, so a worker round trip is now included
+ * in every sample); p95 over three runs, same thresholds:
+ *
+ * | measure | budget | measured p95 |
+ * |---|---|---|
+ * | cold instantiation (incl. round trip) | ≤ 5 ms | ~0.8–1.0 ms |
+ * | stop evaluation, 2 KB tail | ≤ 1 ms | ~0.6–0.7 ms |
+ * | five-link chain | ≤ 10 ms | ~3.3–4.1 ms |
+ *
  * That is worth more than the headroom itself. §7 item 1 allows a **warm
  * context per stream** for `text/stop` as a deliberate exception to
  * fresh-instance-per-evaluation, and notes that pooled reuse beyond that should
@@ -33,8 +43,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest"
-import { runScript } from "$lib/server/scripts/run"
-import { scriptEngine } from "$lib/server/scripts/engine"
+import { runScriptSource } from "$lib/server/pipelines/scripts/host"
 
 const p95 = (xs: number[]): number =>
 	[...xs].sort((a, b) => a - b)[
@@ -42,11 +51,15 @@ const p95 = (xs: number[]): number =>
 	]!
 
 beforeAll(async () => {
-	// Module compile is the expensive half and is cached process-wide, so it is
-	// paid here rather than inside the first sample. Measuring it as if it were
-	// per-evaluation would report a number the runtime never actually sees.
-	await scriptEngine()
-	await runScript({ source: "return", input: {}, declaredOut: [] })
+	// Spawning the worker and compiling the engine are paid once per process, so
+	// they are paid here rather than inside the first sample. Measuring them as
+	// if they were per-evaluation would report a number the runtime never sees.
+	await runScriptSource({
+		source: "return",
+		vars: {},
+		seedLabel: "budget",
+		nowMs: 0
+	})
 }, 60_000)
 
 describe("§9 budgets", () => {
@@ -54,7 +67,12 @@ describe("§9 budgets", () => {
 		const samples: number[] = []
 		for (let i = 0; i < 40; i++) {
 			const t = performance.now()
-			await runScript({ source: "return", input: {}, declaredOut: [] })
+			await runScriptSource({
+				source: "return",
+				vars: {},
+				seedLabel: "budget",
+				nowMs: 0
+			})
 			samples.push(performance.now() - t)
 		}
 		expect(p95(samples)).toBeLessThan(5)
@@ -68,14 +86,14 @@ describe("§9 budgets", () => {
 		const samples: number[] = []
 		for (let i = 0; i < 60; i++) {
 			const t = performance.now()
-			const r = await runScript({
+			const r = await runScriptSource({
 				source: `var i = text.indexOf("<|im_end|>"); return i < 0 ? undefined : i`,
-				input: { text: tail },
-				semantics: "verdict",
-				declaredOut: []
+				vars: { text: tail },
+				seedLabel: "budget",
+				nowMs: 0
 			})
 			samples.push(performance.now() - t)
-			expect(r.result).toBe("ok")
+			expect(r.ok).toBe(true)
 		}
 		expect(p95(samples)).toBeLessThan(1)
 	}, 60_000)
@@ -96,14 +114,17 @@ describe("§9 budgets", () => {
 			const t = performance.now()
 			let text = "the slop  ashguard rode  north".repeat(20)
 			for (const source of links) {
-				const r = await runScript({
+				const r = await runScriptSource({
 					source,
-					input: { text },
-					declaredOut: ["text"]
+					vars: { text },
+					seedLabel: "budget",
+					nowMs: 0
 				})
-				expect(r.result).toBe("ok")
-				if (!r.passthrough && typeof r.value.text === "string")
-					text = r.value.text
+				expect(r.ok).toBe(true)
+				const out = r.ok
+					? (r.value as { text?: unknown } | undefined)?.text
+					: undefined
+				if (typeof out === "string") text = out
 			}
 			samples.push(performance.now() - t)
 		}

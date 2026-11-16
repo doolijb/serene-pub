@@ -4,12 +4,14 @@
  * disk. Its wiring — that a production boot refuses BEFORE any write — is
  * asserted in `staleBuildBoot.int.test.ts`.
  */
-import { afterEach, describe, expect, test } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
+import { readMigrationFiles } from "drizzle-orm/migrator"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import {
 	assertBuildMatchesMigrations,
+	readMigrationFilesMemo,
 	readMigrationSet,
 	STALE_BUILD_MESSAGE,
 	StaleBuildError
@@ -17,6 +19,7 @@ import {
 
 const made: string[] = []
 afterEach(() => {
+	vi.restoreAllMocks()
 	while (made.length) fs.rmSync(made.pop()!, { recursive: true, force: true })
 })
 
@@ -78,16 +81,23 @@ describe("assertBuildMatchesMigrations", () => {
 	test("an edited migration is a different set; a CRLF checkout of it is not", () => {
 		const dir = folderWith(["0000_a"])
 		const built = readMigrationSet(dir)
-		fs.writeFileSync(path.join(dir, "0000_a.sql"), "-- 0000_a\r\nSELECT 1;\r\n")
+		fs.writeFileSync(
+			path.join(dir, "0000_a.sql"),
+			"-- 0000_a\r\nSELECT 1;\r\n"
+		)
 		expect(() => assertBuildMatchesMigrations(built, dir)).not.toThrow()
 		fs.writeFileSync(path.join(dir, "0000_a.sql"), "-- 0000_a\nSELECT 2;\n")
-		expect(() => assertBuildMatchesMigrations(built, dir)).toThrow(StaleBuildError)
+		expect(() => assertBuildMatchesMigrations(built, dir)).toThrow(
+			StaleBuildError
+		)
 	})
 
 	test("unreadable migrations are refused, not waved through", () => {
 		const built = readMigrationSet(folderWith(["0000_a"]))
 		const missing = path.join(os.tmpdir(), "sp-migration-set-missing-x")
-		expect(() => assertBuildMatchesMigrations(built, missing)).toThrow(StaleBuildError)
+		expect(() => assertBuildMatchesMigrations(built, missing)).toThrow(
+			StaleBuildError
+		)
 	})
 
 	test("nothing to compare (no build-time define, as under vitest) passes", () => {
@@ -100,5 +110,71 @@ describe("assertBuildMatchesMigrations", () => {
 		const set = readMigrationSet("./drizzle")
 		expect(set.count).toBeGreaterThan(0)
 		expect(set.fingerprint).toMatch(/^[0-9a-f]{64}$/)
+	})
+})
+
+/** SQL files read through `fs.readFileSync` while `fn` runs. */
+function sqlReads(fn: () => void): number {
+	const spy = vi.spyOn(fs, "readFileSync")
+	try {
+		fn()
+		return spy.mock.calls.filter(([p]) => String(p).endsWith(".sql")).length
+	} finally {
+		spy.mockRestore()
+	}
+}
+
+/** Rewrite one file with different content (and size), then bump its mtime. */
+function rewrite(dir: string, tag: string) {
+	const file = path.join(dir, `${tag}.sql`)
+	fs.writeFileSync(file, `-- ${tag} changed\nSELECT 2, 3;\n`)
+	const later = new Date(Date.now() + 5000)
+	fs.utimesSync(file, later, later)
+}
+
+describe("readMigrationFilesMemo", () => {
+	const real = path.resolve("drizzle")
+
+	test("returns exactly what drizzle's reader returns for the real folder", () => {
+		expect(readMigrationFilesMemo(real)).toEqual(
+			readMigrationFiles({ migrationsFolder: real })
+		)
+	})
+
+	test("a second call does not read the SQL again", () => {
+		readMigrationFilesMemo(real)
+		expect(sqlReads(() => void readMigrationFilesMemo(real))).toBe(0)
+	})
+
+	test("a changed file yields its new hash on the next call", () => {
+		const dir = folderWith(["0000_a", "0001_b"])
+		const before = readMigrationFilesMemo(dir)
+		rewrite(dir, "0001_b")
+		const after = readMigrationFilesMemo(dir)
+		expect(after[0].hash).toBe(before[0].hash)
+		expect(after[1].hash).not.toBe(before[1].hash)
+		expect(after).toEqual(readMigrationFiles({ migrationsFolder: dir }))
+	})
+
+	test("a caller cannot reorder the cache", () => {
+		const dir = folderWith(["0000_a", "0001_b"])
+		readMigrationFilesMemo(dir).reverse()
+		expect(readMigrationFilesMemo(dir)[0].folderMillis).toBeLessThan(
+			readMigrationFilesMemo(dir)[1].folderMillis
+		)
+	})
+})
+
+describe("readMigrationSet memo", () => {
+	test("same fingerprint without a re-read, a new one after a change", () => {
+		const dir = folderWith(["0000_a", "0001_b"])
+		const first = readMigrationSet(dir)
+		let again!: ReturnType<typeof readMigrationSet>
+		expect(sqlReads(() => (again = readMigrationSet(dir)))).toBe(0)
+		expect(again).toEqual(first)
+		rewrite(dir, "0000_a")
+		const changed = readMigrationSet(dir)
+		expect(changed.fingerprint).not.toBe(first.fingerprint)
+		expect(changed.count).toBe(2)
 	})
 })

@@ -30,7 +30,8 @@
  * model never writes `sessionZones` — the render publishes it.
  */
 import type { ConversationDossierV1 } from "$lib/shared/widgets/conversation"
-import * as Icons from "@lucide/svelte"
+import { LayoutPanelTop, MessagesSquare } from "@lucide/svelte"
+import { declaredIconOf } from "$lib/client/components/icons/declaredIcon.svelte"
 import { untrack } from "svelte"
 import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 import type { PanelInstance } from "$lib/client/surfaces/types"
@@ -344,10 +345,10 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 		return isInstanceOf(id, "messages") ? "Messages" : id
 	}
 	function middleWidgetIcon(_id: string) {
-		return Icons.MessagesSquare
+		return MessagesSquare
 	}
 	function iconOf(p: PanelInstance) {
-		return (p.icon && (Icons as any)[p.icon]) || Icons.LayoutPanelTop
+		return declaredIconOf(p.icon, LayoutPanelTop)
 	}
 	/** Each zone's panels, as this session draws them — a plain stack, top to bottom. */
 	let zones = $derived({

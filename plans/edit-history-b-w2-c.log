@@ -1,0 +1,50 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+stderr | src/lib/client/components/characterForms/cardVersions.dom.test.svelte.ts > Save as new version > staying members keep the form open on the new version, each a link
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/characterForms/cardVersions.dom.test.svelte.ts (16 tests | 1 failed) 1258ms
+     × staying members keep the form open on the new version, each a link 68ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/components/characterForms/cardVersions.dom.test.svelte.ts > Save as new version > staying members keep the form open on the new version, each a link
+AssertionError: expected [ 'characterVersions:redlines', …(1) ] to deeply equal [ 'characters:get', …(1) ]
+
+- Expected
++ Received
+
+  [
+-   "characters:get",
++   "characterVersions:redlines",
+    {
+-     "cardVersionId": 12,
+-     "id": 7,
++     "characterVersionId": 12,
+    },
+  ]
+
+ ❯ src/lib/client/components/characterForms/cardVersions.dom.test.svelte.ts:310:26
+    308|   await settle()
+    309|   expect(closeForm).not.toHaveBeenCalled()
+    310|   expect(emitted.at(-1)).toEqual([
+       |                          ^
+    311|    "characters:get",
+    312|    { id: 7, cardVersionId: 12 }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 26 passed (27)
+   Start at  17:41:37
+   Duration  9.62s (transform 17.55s, setup 45ms, import 24.33s, tests 2.26s, environment 384ms)
+

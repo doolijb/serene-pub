@@ -31,6 +31,13 @@ export function generatingOf(
 	return !!rows.at(-1)?.isGenerating || runs.some((r) => r.kind === "reply" || r.kind === "action")
 }
 
+/** 🚧 The names of the routine runs showing as running, in the store's order — names only, never a run id. */
+export function runningRoutineNamesOf(runs: readonly SessionRunRecord[]): string[] {
+	const names: string[] = []
+	for (const r of runs) if (r.kind === "routine" && r.routine) names.push(r.routine.name)
+	return names
+}
+
 /** 🚧 The book lock as the page reads it: the server's word (`lorebookFixed`), or a held line that is not a greeting. */
 export function lorebookFixedOf(
 	record: SessionRecord | undefined,

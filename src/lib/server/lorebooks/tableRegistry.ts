@@ -64,6 +64,8 @@ export interface IdMaps {
 	entries: IdMap
 	historyEntries: IdMap
 	scenes: IdMap
+	/** Source amendment id → copy id, filled by the dated-changes copy. */
+	amendments: IdMap
 	/** A cast member's own sprite sets (a card's sets are the card's, never the book's). */
 	spriteSets: IdMap
 	/**
@@ -661,6 +663,22 @@ export const LOREBOOK_TABLES: readonly LorebookTableSpec[] = [
 			)
 	},
 
+	// Entry edit history — through its entry; it never travels.
+	{
+		table: schema.loreRedlines,
+		scope: "entry",
+		lineScoped: false,
+		notCopied: "an entry's edit history never travels",
+		copy: async () => {},
+		purge: async (tx, lorebookId) => {
+			await tx
+				.delete(schema.loreRedlines)
+				.where(sql`${schema.loreRedlines.entryId} IN ${entryIdsOf(lorebookId)}`)
+		},
+		count: (tx, lorebookId) =>
+			countWhere(tx, schema.loreRedlines, sql`${schema.loreRedlines.entryId} IN ${entryIdsOf(lorebookId)}`)
+	},
+
 	// Scenes. The session capture (`sessionId`, `selectedMessageIds`) stays
 	// with the original: it names messages in a session that reads the
 	// ORIGINAL book, so a copy that kept it would show every captured scene
@@ -776,22 +794,28 @@ export const LOREBOOK_TABLES: readonly LorebookTableSpec[] = [
 				.from(schema.entryAmendments)
 				// A held amendment is one session's own change on another book's entry: a copy never carries it.
 				.where(and(eq(schema.entryAmendments.lorebookId, from), isNull(schema.entryAmendments.base)))
-			const copies = rows.flatMap(({ id: _id, ...a }) => {
+			const sources: number[] = []
+			const copies: (typeof schema.entryAmendments.$inferInsert)[] = []
+			for (const { id, ...a } of rows) {
 				const entryId = via(maps.entries, a.entryId)
-				return entryId == null
-					? []
-					: [
-							{
-								...a,
-								lorebookId: to,
-								entryId,
-								branchId: via(maps.branches, a.branchId),
-								historyEntryId: via(maps.historyEntries, a.historyEntryId),
-								fields: retag({ fields: remapAmendedFields(a.fields, maps) }, ["fields"], maps).fields
-							}
-						]
-			})
-			if (copies.length > 0) await tx.insert(schema.entryAmendments).values(copies)
+				if (entryId == null) continue
+				sources.push(id)
+				copies.push({
+					...a,
+					lorebookId: to,
+					entryId,
+					branchId: via(maps.branches, a.branchId),
+					historyEntryId: via(maps.historyEntries, a.historyEntryId),
+					fields: retag({ fields: remapAmendedFields(a.fields, maps) }, ["fields"], maps).fields
+				})
+			}
+			if (copies.length === 0) return
+			// One insert: the returned rows come back in the order of the values, which pairs each copy with its source.
+			const inserted = await tx
+				.insert(schema.entryAmendments)
+				.values(copies)
+				.returning({ id: schema.entryAmendments.id })
+			inserted.forEach((row, i) => maps.amendments.set(sources[i], row.id))
 		}
 	}),
 
@@ -1131,6 +1155,7 @@ export async function copyLorebookTables(
 		entries,
 		historyEntries: entries,
 		scenes: new Map(),
+		amendments: new Map(),
 		spriteSets: new Map(),
 		tags: new Map()
 	}

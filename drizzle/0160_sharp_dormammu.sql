@@ -1,0 +1,1 @@
+ALTER TABLE "lorebooks" ADD COLUMN "timeline_enabled" boolean DEFAULT true NOT NULL;

@@ -232,6 +232,8 @@ describe("recording what a run did", () => {
 			// by which finished first, so a parallel block does not make the
 			// trail nondeterministic.
 			"gather.history.read",
+			// 2026-11-12 (sense-prm): the summaries of earlier scenes.
+			"gather.earlierScenes.read",
 			// Spec 1.8.0: world and character lore are their own lanes, so each
 			// can carry its own weight, floor and share. `lore` below is the
 			// merge that puts them back together for the ranker — wiring the

@@ -28,6 +28,7 @@ const UPDATE = {
 	key: "change",
 	definitionId: "core:outlet/update-lore-entry"
 } as any
+const DAY = { year: 4, month: 2, day: 9 }
 const asDb = () => db as unknown as Db
 const lore = () => import("$lib/server/lorebooks/ownBook")
 
@@ -140,20 +141,48 @@ async function scene(
 	return row!
 }
 
-/** A session's turn changes the entry through the real outlet; returns the turn's message. */
+/**
+ * A session's turn changes the entry through the real outlet; returns the
+ * turn's message. Under Full on the owner's lorebook a change is written into
+ * the lorebook (in place, or as a dated version for a dated session), so the
+ * change is made under Review changes, with the session's reading at `DAY`:
+ * the writer holds it in the notes, dated at that day. Full is back in force
+ * for the Apply that follows.
+ */
 async function change(
 	w: { user: { id: number }; session: { id: number } },
 	entryId: number,
 	data: Record<string, unknown>
 ) {
 	const m = await messageIn(w.session.id)
-	const { createHost } = await import("$lib/server/pipelines/runtime/host")
-	const host = createHost(asDb(), {
-		sessionId: w.session.id,
-		userId: w.user.id,
-		runId: `run-${++n}`
-	})
-	await host.commit!({ entry: entryId, ...data }, UPDATE)
+	const clock = (day: number | null) =>
+		db
+			.update(schema.sessions)
+			.set({
+				storyClockYear: day == null ? null : DAY.year,
+				storyClockMonth: day == null ? null : DAY.month,
+				storyClockDay: day
+			})
+			.where(eq(schema.sessions.id, w.session.id))
+	const mode = (loreWriteMode: "full" | "review") =>
+		db
+			.update(schema.userSettings)
+			.set({ loreWriteMode })
+			.where(eq(schema.userSettings.userId, w.user.id))
+	await clock(DAY.day)
+	await mode("review")
+	try {
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const host = createHost(asDb(), {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			runId: `run-${++n}`
+		})
+		await host.commit!({ entry: entryId, ...data }, UPDATE)
+	} finally {
+		await clock(null)
+		await mode("full")
+	}
 	return m
 }
 
@@ -248,7 +277,7 @@ describe("applyHeldAutomatically", () => {
 			}
 		})
 		expect((record!.cause as any).by).toBeUndefined()
-		// Apply settles through what it applied; a held item behind it caps nothing here (m[0] < m[2]).
+		// Apply settles through the newest applied turn (m[0]); the scene-close settle is one scene behind.
 		expect(done!.settled).toMatchObject({
 			moved: true,
 			settledMessageId: m[0]!.id
@@ -317,8 +346,10 @@ describe("applyHeldAutomatically", () => {
 		const done = await auto(w.session.id, "scene-close", s1.id)
 		expect(done!.applied).toEqual([eA.id])
 		expect(await inNotes(w.session.id)).toEqual([eB.id, eC.id])
-		// Items from the waiting start on stay held; close-out is held back the same way.
-		expect(await auto(w.session.id, "close-out")).toBeNull()
+		// Items from the waiting start on stay held; close-out applies nothing either.
+		const out = await auto(w.session.id, "close-out")
+		expect(out?.applied ?? []).toEqual([])
+		expect(await inNotes(w.session.id)).toEqual([eB.id, eC.id])
 	})
 
 	it("nothing applies while a turn is taken back (an Apply would discard Forward); `before` leaves the closing stretch held", async () => {

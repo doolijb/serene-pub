@@ -205,7 +205,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the reply's last steps — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed hashes back to the old pin. (was 'e396fa6e5ffb8')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1ba28f5858a4c3')
 	// Moved 2026-11-11 (sense-clk2, owner ruling "Remove it"): the per-reply tick is gone — no `tick` node, no `clock` junction, no `clock.moves.advance`; Story's clock is moved by the round tick (one default owner). Edited in place. (was "e396fa6e5ffb8")
-	"core:spec/story-respond@1.21.0": "12007bbfaccef3" /* (was "757e3c34b4284") — lead, sense-prm 2026-11-12: the earlier-scenes query and block */,
+	// Moved 2026-11-15 (time-t6f): `gather.unknownEntries.read` (`core:query/unknown-entries@1`) placed, its exclusions wired into the `on` branch's `eligible`. Edited in place. (was "12007bbfaccef3")
+	"core:spec/story-respond@1.21.0": "132e6d51cab887",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -286,7 +287,7 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-11-04 (playtest build 3, ★T-2): the narrator field's label *Narrator's turn*. (was "184ecbc0022b8e")
 		// Moved 2026-11-08 (image-gen playtest Q2, owner ruling): a `seats` junction after `seed` closes the main composer at create when no character or persona seat exists; the turn order lifts it on the first seat. (was 'e5c4687fcf3f9')
 		// Moved again 2026-11-08 (same build): the create gate's empty `otherwise` branches removed — not stored on publish. (was '1c1d6ac033a3c4')
-		"2ccd9cc23d00f" /* (was "1ad4d7a73cdeca") — lead, sense-scn 2026-11-12: the genre declares `scenes.mode: automatic`. Earlier: (was "114c6a3e91a4d9") — lead, sense-clk2 2026-11-11: the create spec's `meta.genre` carries the genre's `fields`, which gain `roundWorth`. Earlier: (was "1251225374524a") — lead, ed B1 2026-11-05: the create spec's `meta.genre` carries the genre's pinned `settings` (Story pins ownerSheetLatitude all-any). Earlier: (was "3523048ab5223", already stale: the code hashed "12c47aecb2baa0" before this rename) — m2e-F-D 2026-11-04: field-group headings Reply → Writing, the Lair's Story → Lair (★M2e-D-2); only the group strings */,
+		"1ceb1bd52f96e9" /* (was "2ccd9cc23d00f") — lead, 2026-11-13: Story's `history` (Back one message per press) moved out of `shape`, where `genre()` never read it, to the genre itself. */,
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -1883,7 +1884,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-23 (RF fix 2, Lair voice): the voice's `prompt` step places its reminder at no token trigger, so a delver's turn reads whose turn it is after the GM's first line. Edited in place. (was "ee12352ed2052")
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the delver branch's last steps (nested, so only a line a delver spoke is read) — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed and the later nodes' and clauses' positions shifted back, hashes back to the old pin. (was 'c4fe814f1e089')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '73fa4f3b363fb')
-	"core:spec/lair-reply@1.0.0": "c4fe814f1e089",
+	// Moved 2026-11-15 (time-t6f): the delver voice places `unknownEntries` (`core:query/unknown-entries@1`) and wires its exclusions into its `eligible`. Edited in place. (was "c4fe814f1e089")
+	"core:spec/lair-reply@1.0.0": "14fa075cce73ab",
 	// NEW 2026-10-21 (Lair rewrite L3, D5): a seat taken, told to the GM in the Sanctum.
 	"core:spec/lair-welcome@1.0.0": "1bf873c4b48d0b",
 	// NEW 2026-10-21 (Lair rewrite L3, D7): routines — the keeper (Story's
@@ -1911,11 +1913,11 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-25 (pr-6 lane C3, supervisor C): the lore writes are `fileLore` / `rememberNote`; only the ORDER of the `entryType` preset values moved — nodes, edges and values identical (diffed against HEAD). (was "1baa5f325cd667")
 	// Moved 2026-10-25 (sprint 2 lane I2, pass 7 / R-i): the crib and the sort read the duties step's `sceneCheck` (and the crib the history), and a `sceneCue` junction offers `propose-scene-cue@1` — Full as the scene mode decides, Review with `ask`. Edited in place. (was "131df6899cf85d")
 	// Moved 2026-11-04 (playtest2-S, §0-B): *Summarize the story* retired — `summary` out of the sweep schema, crib and sorter; the `summarized` junction gone, lore chains from `sorted`. Edited in place. (was "2f4aae4332c2b")
-	"core:spec/story-sweep@1.0.0": "1bb283916d78e1",
+	"core:spec/story-sweep@1.0.0": "13928b1544e250",
 	// Moved 2026-10-21 (PLAN-layering lane 8, omni O7): every `generate-text` node names its speech sampling (`speechSampling: slot.speechSampling()`). Edited in place. (was '1989d733a38b8')
 	// Moved 2026-11-08 (image-gen playtest Q5, owner ruling): a second quiet call `caption` (its own `assemble` on the "Scene caption" row, on the Scene prompt loadout) writes the one sentence the picture is posted with; `post` reads `caption.text` instead of the picture's tag line. (was '9b8440cff74d8')
 	"core:spec/story-illustrate-new-scene@1.0.0": "15d6c6538e3d31",
-	"core:spec/assistant-memory@1.0.0": "1811e7b16e1c3",
+	"core:spec/assistant-memory@1.0.0": "1ec5139e1a04e6",
 	// NEW 2026-10-23 (rulesets as functions D6): a ruleset's action — the one generic pipeline every invokable function runs, Full or Review by its registration's mode.
 	// Moved 2026-10-23 (rulesets as functions, repair 1): every `ruleset-resolve` step names its params slot (`params: slot.params()`), so its `emits` switch is read. Edited in place. (was "47e5217d6d257")
 	"core:spec/rules-action@1.0.0": "988b95d02e6db",

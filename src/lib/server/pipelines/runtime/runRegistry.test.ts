@@ -37,6 +37,8 @@ import {
 	setRunStopObserver,
 	runKindOf,
 	runSessionOf,
+	earmark,
+	earmarkedBy,
 	runKindOfFamily,
 	_reset,
 	type RunStop
@@ -436,5 +438,34 @@ describe("an action on its way, and who may stop it by id", () => {
 		expect(runSessionOf("ask")).toBe(SESSION)
 		expect(runSessionOf("bare")).toBeUndefined()
 		expect(runSessionOf("nope")).toBeUndefined()
+	})
+})
+
+describe("an earmark on a live run", () => {
+	it("is recorded on the registered run and answered with who holds it, oldest first", () => {
+		start({ runId: "a", userId: USER, sessionId: 3, specId: "s/a", kind: "routine" })
+		start({ runId: "b", userId: OTHER_USER, kind: "routine" })
+		earmark("a", "entry", [10, 11])
+		earmark("b", "entry", ["11"])
+		expect(earmarkedBy("entry", 10).map((h) => h.runId)).toEqual(["a"])
+		expect(earmarkedBy("entry", 11).map((h) => h.runId)).toEqual(["a", "b"])
+		expect(earmarkedBy("entry", 12)).toEqual([])
+		const [holder] = earmarkedBy("entry", 10)
+		expect(holder).toMatchObject({ userId: USER, sessionId: 3, specId: "s/a", kind: "routine" })
+	})
+
+	it("records nothing for an id no run is registered under (a preview, a dry run)", () => {
+		earmark("dry", "entry", [10])
+		expect(earmarkedBy("entry", 10)).toEqual([])
+	})
+
+	it("still answers after the run is stopped, and clears when it finishes", () => {
+		const handle = start({ runId: "a", userId: USER, kind: "routine" })
+		earmark("a", "entry", [10])
+		cancel("a", USER)
+		expect(handle.controller.signal.aborted).toBe(true)
+		expect(earmarkedBy("entry", 10)).toHaveLength(1)
+		finish("a")
+		expect(earmarkedBy("entry", 10)).toEqual([])
 	})
 })

@@ -51,7 +51,7 @@ export function variableShelfOf(
 		return "characters"
 	if (/history|message|injection|recalled|lines/.test(n)) return "history"
 	if (
-		/^(state|annex|budget)$|date|time/.test(n) ||
+		/^(state|annex|budget)$|date|time|calendar/.test(n) ||
 		declarer?.group === "annex"
 	)
 		return "session"

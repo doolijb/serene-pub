@@ -64,6 +64,11 @@
 		 * where its story stands. History dated after that is not offered.
 		 */
 		storyClock?: StoryDate | null
+		/**
+		 * 🚧 Whether the lorebook keeps a timeline. Off: a scene summary files
+		 * under no history entry, and the history entry choice is not drawn.
+		 */
+		timeline?: boolean
 		selectedMessageIds: number[]
 		initialLoreType?: "world" | "character" | "scene"
 		onSaved: () => void
@@ -92,6 +97,7 @@
 		ownBookId = null,
 		branchId = null,
 		storyClock = null,
+		timeline = true,
 		selectedMessageIds,
 		initialLoreType = "world",
 		onSaved,
@@ -306,7 +312,7 @@
 			!!lorebookId &&
 			selectedMessageIds.length > 0 &&
 			(loreType !== "character" || topic.trim().length > 0) &&
-			(loreType !== "scene" || !!selectedHistoryEntryId) &&
+			(loreType !== "scene" || !timeline || !!selectedHistoryEntryId) &&
 			(loreType !== "scene" || !hasSceneMessageGap)
 	)
 	let canSave = $derived(
@@ -721,7 +727,7 @@
 	 * messages linked, from the moment the run starts.
 	 */
 	function generateScene() {
-		if (!lorebookId || !selectedHistoryEntryId) return
+		if (!lorebookId || (timeline && !selectedHistoryEntryId)) return
 
 		let releaseCreated: (() => void) | null = null
 		let releaseCreateError: (() => void) | null = null
@@ -793,7 +799,9 @@
 				scene: {
 					lorebookId,
 					sessionId,
-					historyEntryId: Number(selectedHistoryEntryId),
+					historyEntryId: timeline
+						? Number(selectedHistoryEntryId)
+						: null,
 					selectedMessageIds,
 					name: null
 				},
@@ -1092,7 +1100,7 @@
 		{/if}
 
 		<!-- History entry binding (scene only) -->
-		{#if loreType === "scene"}
+		{#if loreType === "scene" && timeline}
 			<div class="space-y-1">
 				<!-- A heading for both branches; the Select carries its own
 				     (visually hidden) label. -->

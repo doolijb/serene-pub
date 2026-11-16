@@ -1,6 +1,7 @@
 <script lang="ts">
 	import EntryFireTest from "$lib/client/components/lorebookForms/EntryFireTest.svelte"
 	import { loreRoute } from "../loreRoute.svelte"
+	import { bookTimeline } from "../bookData.svelte"
 	import { containedBy } from "../editor/partOf"
 	import { entryRefs, type RefLink } from "../editor/refs"
 	import { inspectorTabsFor } from "../editor/inspectorTabs"
@@ -69,14 +70,17 @@
 
 	const uid = $props.id()
 	const poolCtx = getLorePoolCtx()
+	const timeline = bookTimeline()
 
 	let refs = $derived(entryRefs(item, pool, links))
 	let children = $derived(containedBy(item.key, pool))
+	// 🚧 No timeline: the Scenes tab holds compiling, which is refused, so it
+	// is not offered.
 	let tabs = $derived(
 		inspectorTabsFor(door.inspector, {
 			references: refs.length,
 			contains: children.length
-		})
+		}).filter((t) => timeline.value || t.id !== "scenes")
 	)
 	/** The route's tab when the door has it, and the door's first otherwise. */
 	let selected = $derived(

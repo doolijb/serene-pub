@@ -20,7 +20,8 @@
  * rather than into a new set that happens to share the name.
  */
 
-import { zipSync, strToU8 } from "fflate"
+import { zip, strToU8, type AsyncZippable } from "fflate"
+import { promisify } from "node:util"
 import { readMedia } from "$lib/server/media"
 import { MediaVariant } from "$lib/shared/constants/MediaVisibility"
 import { listSpriteSets } from "$lib/server/sprites"
@@ -50,7 +51,10 @@ async function bytesOf(
 ): Promise<{ bytes: Buffer; ext: string } | null> {
 	const read = await readMedia(db, fileId, MediaVariant.ORIGINAL)
 	if (!read) return null
-	return { bytes: Buffer.from(read.bytes), ext: EXT_BY_MIME[read.mime] ?? "png" }
+	return {
+		bytes: Buffer.from(read.bytes),
+		ext: EXT_BY_MIME[read.mime] ?? "png"
+	}
 }
 
 export async function buildCharx(
@@ -62,7 +66,7 @@ export async function buildCharx(
 		card: any
 	}
 ): Promise<Buffer> {
-	const files: Record<string, Uint8Array> = {}
+	const files: AsyncZippable = {}
 	const assets: Asset[] = []
 
 	if (params.avatarMediaId) {
@@ -70,7 +74,12 @@ export async function buildCharx(
 		if (avatar) {
 			const path = `assets/icon/images/main.${avatar.ext}`
 			files[path] = avatar.bytes
-			assets.push({ type: "icon", uri: `embeded://${path}`, name: "main", ext: avatar.ext })
+			assets.push({
+				type: "icon",
+				uri: `embeded://${path}`,
+				name: "main",
+				ext: avatar.ext
+			})
 		}
 	}
 
@@ -86,12 +95,18 @@ export async function buildCharx(
 			if (!sprite.media) continue
 			const file = await bytesOf(db, sprite.media.id)
 			if (!file) continue
-			const interop = set === defaultSet && !firstOfLabel.has(sprite.label)
+			const interop =
+				set === defaultSet && !firstOfLabel.has(sprite.label)
 			firstOfLabel.add(sprite.label)
 			if (interop) {
 				const path = `assets/emotion/images/${emotionN++}.${file.ext}`
 				files[path] = file.bytes
-				assets.push({ type: "emotion", uri: `embeded://${path}`, name: sprite.label, ext: file.ext })
+				assets.push({
+					type: "emotion",
+					uri: `embeded://${path}`,
+					name: sprite.label,
+					ext: file.ext
+				})
 			} else {
 				const path = `assets/${SP_SPRITE_ASSET_TYPE}/images/${otherN++}.${file.ext}`
 				files[path] = file.bytes
@@ -116,5 +131,12 @@ export async function buildCharx(
 		}
 	}
 	files["card.json"] = strToU8(JSON.stringify(card, null, 2))
-	return Buffer.from(zipSync(files))
+	// Images are already compressed: store them (level 0); card.json keeps
+	// fflate's default level. Same names, same bytes, same order.
+	const entries: AsyncZippable = {}
+	for (const [name, bytes] of Object.entries(files))
+		entries[name] = name.startsWith("assets/")
+			? [bytes as Uint8Array, { level: 0 }]
+			: (bytes as Uint8Array)
+	return Buffer.from(await promisify(zip)(entries))
 }

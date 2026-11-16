@@ -274,20 +274,27 @@ describe("the mode decides what an automatic write does", () => {
 		const w = await world()
 		await setOwnMode(w.user.id, "full")
 		scenesEnd.add(w.session.id)
-		// Year 20: after every history day the lorebook holds on this line (newest is the Fork's Year 9).
-		const { createHost } = await import("$lib/server/pipelines/runtime/host")
-		const h = await createHost(testDb as any, { sessionId: w.session.id })
-		const filed: any = await h.commit!(
-			{ content: "A new day.", params: { entryType: HISTORY_TYPE_ID }, fields: { year: 20, month: 1, day: 1 } },
-			{ key: "day", definitionId: "core:outlet/create-lore-entry" } as any
-		)
-		expect(filed.route).toBe("own-book")
+		// Year 20, a day waiting in the session's own notes (a row from before a day went straight into the book), after every history day the lorebook holds on this line (newest is the Fork's Year 9).
+		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+		const own = await ownBookFor(testDb as unknown as Db, w.session.id)
+		const [filed] = await testDb
+			.insert(schema.lorebookEntries)
+			.values({
+				lorebookId: own.id,
+				typeId: HISTORY_TYPE_ID,
+				typeVersion: 1,
+				position: 0,
+				title: "Year 20",
+				content: "A new day.",
+				fields: { year: 20, month: 1, day: 1 }
+			})
+			.returning()
 
 		const out = await run(w)
 		const row = (await bookRows(w)).find((r) => r.id === out.value.applied[0])!
 		expect(controlRow.historyEntryId).toBe(control.forkY3.id)
 		expect(row.historyEntryId).toBe(w.forkY3.id)
-		expect(row.historyEntryId).not.toBe(filed.id)
+		expect(row.historyEntryId).not.toBe(filed!.id)
 	})
 
 	test("Review changes files a proposal carrying the line and the dating, and writes nothing", async () => {
@@ -699,7 +706,7 @@ describe("the review round", () => {
 		expect(row).toMatchObject({ branchId: w.fork.id, historyEntryId: w.forkY3.id })
 	})
 
-	test("a lore link a session whose scenes end by themselves draws goes to its own book; no line is forked", async () => {
+	test("a lore link a session whose scenes end by themselves draws goes straight into the lorebook; no line is forked", async () => {
 		const w = await world()
 		await setOwnMode(w.user.id, "full")
 		scenesEnd.add(w.session.id)
@@ -722,8 +729,8 @@ describe("the review round", () => {
 		)) as { id: number }
 		const R = schema.narrativeRelationships
 		const [row] = await testDb.select().from(R).where(eq(R.id, res.id))
-		expect(row!.lorebookId).toBe(own.id)
-		expect(await testDb.select().from(R).where(eq(R.lorebookId, w.book.id))).toEqual([])
+		expect(row!.lorebookId).toBe(w.book.id)
+		expect(await testDb.select().from(R).where(eq(R.lorebookId, own.id))).toEqual([])
 		const [s] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, w.session.id))
 		expect(s!.lorebookBranchId).toBe(w.fork.id)
 		expect(

@@ -9,7 +9,9 @@
  *
  * ## The guarantees, and why each exists
  *
- * - **Call order is delivery order.** Pushes are chained: a gate pushes
+ * - **Call order is delivery order, per recipient.** Each user has their own
+ *   chain, so one user's slow payload never holds up another's push; the order
+ *   guarantee is between pushes to the SAME user. Pushes are chained: a gate pushes
  *   `reviewRequested` then, on cancel, `reviewClosed` for the same card, and a
  *   client that received them out of order would keep a card nothing can
  *   decide. A raise followed by a clear has the same shape.
@@ -43,27 +45,52 @@ export type UserPush = (
 
 type PushIo = InterestIo & { to: (room: string) => any }
 
+type UserSocket = { user?: { isAdmin?: boolean } | null }
+
 const PUSH_KEY = Symbol.for("serene-pub.userPush")
 
-let chain: Promise<unknown> = Promise.resolve()
+/**
+ * One chain per recipient. A user's entry is removed once its tail settles and
+ * is still the map's value, so the map cannot grow without bound.
+ */
+const chains = new Map<number, Promise<unknown>>()
 
 export function installUserPush(io: PushIo): void {
 	const push: UserPush = (userId, event, data) => {
-		chain = chain
+		const tail = (chains.get(userId) ?? Promise.resolve())
 			.then(async () => {
+				// Nobody connected: no query, no payload build.
+				const room = io.sockets.adapter.rooms.get(`user_${userId}`)
+				if (!room || room.size === 0) return
 				const gated = isGatedEvent(event)
 				if (gated && interestedSockets(io, userId, event).length === 0)
 					return
-				const [row] = await db
-					.select({ isAdmin: schema.users.isAdmin })
-					.from(schema.users)
-					.where(eq(schema.users.id, userId))
-					.limit(1)
+				// The admin flag comes from a connected socket of the user
+				// (a demotion force-disconnects their sockets, so it cannot go
+				// stale); the row is read only when no socket carries a user.
+				let recipient: { isAdmin?: boolean } | undefined
+				for (const id of room) {
+					const user = (
+						io.sockets.sockets.get(id) as UserSocket | undefined
+					)?.user
+					if (user) {
+						recipient = { isAdmin: user.isAdmin }
+						break
+					}
+				}
+				if (!recipient) {
+					const [row] = await db
+						.select({ isAdmin: schema.users.isAdmin })
+						.from(schema.users)
+						.where(eq(schema.users.id, userId))
+						.limit(1)
+					recipient = row
+				}
 				const raw =
 					typeof data === "function"
 						? await (data as () => unknown | Promise<unknown>)()
 						: data
-				const payload = redactConnections(raw, row)
+				const payload = redactConnections(raw, recipient)
 				if (!gated) {
 					io.to(`user_${userId}`).emit(event, payload)
 					return
@@ -76,6 +103,10 @@ export function installUserPush(io: PushIo): void {
 			.catch((err) => {
 				console.warn(`[userPush] could not deliver ${event}:`, err)
 			})
+		chains.set(userId, tail)
+		void tail.then(() => {
+			if (chains.get(userId) === tail) chains.delete(userId)
+		})
 	}
 	;(globalThis as Record<symbol, unknown>)[PUSH_KEY] = push
 	;(globalThis as Record<symbol, unknown>)[ADMINS_KEY] = (): number[] => {
@@ -107,8 +138,8 @@ export function pushToConnectedAdmins(event: string, data: unknown): void {
 
 /** Push to every socket of `userId` (gated events: only the interested ones). */
 export const pushToUser: UserPush = (userId, event, data) =>
-	((globalThis as Record<symbol, unknown>)[PUSH_KEY] as UserPush | undefined)?.(
-		userId,
-		event,
-		data
-	)
+	(
+		(globalThis as Record<symbol, unknown>)[PUSH_KEY] as
+			| UserPush
+			| undefined
+	)?.(userId, event, data)

@@ -38,7 +38,11 @@ describe("LensTrack under advanced controls", () => {
 	test("desk track: off is five lenses, on is all seven", async () => {
 		app = mount(LensTrack, {
 			target: document.body,
-			props: { value: "list", advancedControls: false, onselect: () => {} }
+			props: {
+				value: "list",
+				advancedControls: false,
+				onselect: () => {}
+			}
 		})
 		await settle()
 		expect(lenses()).toEqual(OFF)
@@ -85,6 +89,58 @@ describe("LensTrack under advanced controls", () => {
 				props: {
 					value: "list",
 					advancedControls: advanced,
+					compact: true,
+					onselect: () => {}
+				}
+			})
+			await settle()
+			expect(lenses()).toEqual(want)
+			unmount(app)
+			app = null
+			document.body.innerHTML = ""
+		}
+	})
+})
+
+describe("🚧 LensTrack with the book's Timeline switch off", () => {
+	const NO_TIME = ["list", "cards", "tree", "places"]
+	const ALL_NO_TIME = ["list", "cards", "tree", "graph", "places"]
+
+	test("desk track: off leaves Time and Lives out; on (or absent) is as ever", async () => {
+		for (const [timelineEnabled, advanced, want] of [
+			[false, false, NO_TIME],
+			[false, true, ALL_NO_TIME],
+			[true, true, ALL],
+			[undefined, false, OFF]
+		] as const) {
+			app = mount(LensTrack, {
+				target: document.body,
+				props: {
+					value: "list",
+					advancedControls: advanced,
+					timelineEnabled,
+					onselect: () => {}
+				}
+			})
+			await settle()
+			expect(lenses()).toEqual(want)
+			unmount(app)
+			app = null
+			document.body.innerHTML = ""
+		}
+	})
+
+	test("compact popout follows the switch", async () => {
+		for (const [timelineEnabled, want] of [
+			[false, ALL_NO_TIME],
+			[true, ALL]
+		] as const) {
+			app = mount(LensTrack, {
+				target: document.body,
+				props: {
+					value: "list",
+					advancedControls: true,
+					timelineEnabled,
 					compact: true,
 					onselect: () => {}
 				}

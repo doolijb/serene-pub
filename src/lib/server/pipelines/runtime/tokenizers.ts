@@ -57,6 +57,7 @@ import {
 	type SpecDocument
 } from "@serene-pub/sdk"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+import { CACHE_LIMIT, keyOf } from "$lib/server/connections/backendTokenCount"
 import { budgetedProviderOf } from "$lib/server/pipelines/runtime/specShape"
 
 /**
@@ -69,11 +70,42 @@ import { budgetedProviderOf } from "$lib/server/pipelines/runtime/specShape"
 const text = (v: unknown): string =>
 	typeof v === "string" ? v : JSON.stringify(v ?? "")
 
+/**
+ * Memoise a local counter by content — llama, llama3, mistral and the four
+ * GPT counters, which encode every call (review row C5).
+ *
+ * The same shape as the remote counter's cache in `backendTokenCount.ts`: key
+ * is `keyOf(text)` (a hash of the text, so a long card is not held twice),
+ * limit `CACHE_LIMIT`, refreshed on hit and evicting the oldest past it. One
+ * map PER counter — two tokenizers never share an answer — and the key is the
+ * content, so an edited text is a different key and a stale count is
+ * impossible. Cohere and the id encoders below are not wrapped.
+ */
+const memoised = (count: (v: unknown) => number) => {
+	const cache = new Map<string, number>()
+	return (v: unknown): number => {
+		const key = keyOf(text(v))
+		const hit = cache.get(key)
+		if (hit !== undefined) {
+			cache.delete(key)
+			cache.set(key, hit)
+			return hit
+		}
+		const n = count(v)
+		cache.set(key, n)
+		if (cache.size > CACHE_LIMIT) {
+			const oldest = cache.keys().next().value
+			if (oldest !== undefined) cache.delete(oldest)
+		}
+		return n
+	}
+}
+
 defineTokenizer({
 	id: TokenCounterOptions.OPENAI_GPT2,
 	load: async () => {
 		const { countTokens } = await import("gpt-tokenizer/encoding/r50k_base")
-		return (v) => countTokens(text(v))
+		return memoised((v) => countTokens(text(v)))
 	}
 })
 
@@ -83,7 +115,7 @@ defineTokenizer({
 		const { countTokens } = await import(
 			"gpt-tokenizer/encoding/cl100k_base"
 		)
-		return (v) => countTokens(text(v))
+		return memoised((v) => countTokens(text(v)))
 	}
 })
 
@@ -93,7 +125,7 @@ defineTokenizer({
 		const { countTokens } = await import(
 			"gpt-tokenizer/encoding/cl100k_base"
 		)
-		return (v) => countTokens(text(v))
+		return memoised((v) => countTokens(text(v)))
 	}
 })
 
@@ -103,7 +135,7 @@ defineTokenizer({
 		const { countTokens } = await import(
 			"gpt-tokenizer/encoding/o200k_base"
 		)
-		return (v) => countTokens(text(v))
+		return memoised((v) => countTokens(text(v)))
 	}
 })
 
@@ -111,7 +143,7 @@ defineTokenizer({
 	id: TokenCounterOptions.LLAMA,
 	load: async () => {
 		const { default: llamaTokenizer } = await import("llama-tokenizer-js")
-		return (v) => llamaTokenizer.encode(text(v)).length
+		return memoised((v) => llamaTokenizer.encode(text(v)).length)
 	}
 })
 
@@ -119,7 +151,7 @@ defineTokenizer({
 	id: TokenCounterOptions.LLAMA3,
 	load: async () => {
 		const { default: llama3Tokenizer } = await import("llama3-tokenizer-js")
-		return (v) => llama3Tokenizer.encode(text(v)).length
+		return memoised((v) => llama3Tokenizer.encode(text(v)).length)
 	}
 })
 
@@ -129,7 +161,7 @@ defineTokenizer({
 		const { default: mistralTokenizer } = await import(
 			"mistral-tokenizer-js"
 		)
-		return (v) => mistralTokenizer.encode(text(v)).length
+		return memoised((v) => mistralTokenizer.encode(text(v)).length)
 	}
 })
 

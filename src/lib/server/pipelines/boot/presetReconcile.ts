@@ -33,6 +33,7 @@
 import { and, eq, isNull, notInArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { driverReasonOf } from "$lib/server/db/errors"
+import type { SpecDocument } from "@serene-pub/sdk"
 import { onEvent, presetRegistrations } from "$lib/server/pipelines/registrations/resolve"
 
 export interface PresetReconcileReport {
@@ -56,7 +57,8 @@ export interface PresetReconcileReport {
  * administrator can hide from themselves while sessions keep substituting.
  */
 export async function reconcilePresetBindings(
-	db: Db
+	db: Db,
+	docs: Map<string, SpecDocument | null> = new Map<string, SpecDocument | null>()
 ): Promise<PresetReconcileReport> {
 	const report: PresetReconcileReport = {
 		presets: 0,
@@ -94,6 +96,10 @@ export async function reconcilePresetBindings(
 				isNull(schema.sessionPresets.withdrawnAt)
 			)
 		)) as Array<typeof schema.sessionPresets.$inferSelect>
+
+	// `docs` is the document map of this run. The boot passes the task's map,
+	// created in `bootstrapPipelines` before `seedCoreSpecs` and first filled
+	// after pass 1 (see the comment there); a caller passing none gets a map for this run only.
 
 	for (const preset of presets) {
 		report.presets++
@@ -160,7 +166,7 @@ export async function reconcilePresetBindings(
 					"$lib/server/pipelines/registrations/unserved"
 				)
 				const regs = (resolved?.offered ?? []).filter((r) => disabledWhenUnserved(r) && (r.mode ?? "full") !== "off")
-				const unserved = await unservedPipelines(db, regs.map((r) => r.pipeline))
+				const unserved = await unservedPipelines(db, regs.map((r) => r.pipeline), docs)
 				for (const r of regs) {
 					const missing = unserved.get(r.pipeline)
 					if (!missing || staleEvents.includes(r.key)) continue

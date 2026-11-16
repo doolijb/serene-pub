@@ -1,0 +1,30 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+[dom] src/lib/client/lorebooks/bookSettingsAdvanced.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/entryWorkspace.timeline.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/lensTrackAdvanced.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/lorebooksWorkspace.hiddenLens.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/lorebooksWorkspace.timelineOff.dom.test.svelte.ts
+[dom] src/lib/client/components/lorebookForms/newLorebookKits.dom.test.svelte.ts
+[dom] src/lib/client/components/lorebookForms/newLorebookTimeline.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/graphs/RelationshipFields.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/cast/castMemberFormTimelineOff.dom.test.ts
+[dom] src/lib/client/lorebooks/cast/castWorkspace.timelineOff.dom.test.ts
+[dom] src/lib/client/lorebooks/cast/memberTimelineOff.dom.test.ts
+[dom] src/lib/client/lorebooks/places/PlaceLinks.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/time/timelineCard.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/sections/historyTimelineOff.dom.test.svelte.ts
+[dom] src/lib/client/lorebooks/sections/historyUnfiledGroup.dom.test.svelte.ts
+[unit] src/lib/client/lorebooks/looseEnds.test.ts
+[unit] src/lib/client/lorebooks/scopes.test.ts
+[int] src/lib/server/lorebooks/ownBook.timeline.int.test.ts
+[int] src/lib/server/lorebooks/timelinePass.int.test.ts
+[int] src/lib/server/state/clockProposal.timelineOff.int.test.ts
+[int] src/lib/server/sockets/entries.timelineOff.int.test.ts
+[int] src/lib/server/sockets/lorebookStoryTime.timelineOff.int.test.ts
+[int] src/lib/server/sockets/lorebooks.timeline.int.test.ts
+[int] src/lib/server/sockets/lorebooks.timelineB.int.test.ts
+[int] src/lib/server/pipelines/runtime/host.timelineOff.int.test.ts

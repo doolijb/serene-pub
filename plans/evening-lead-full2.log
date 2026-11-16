@@ -1,0 +1,3218 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |dom| src/lib/client/components/sessionPage/narrateDraft.dom.test.ts (5 tests | 1 failed) 4538ms
+     × the page declares both keys bare and wires them, and its press, to createNarrations as this test does 5ms
+10:45:33 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.identity.dom.test.svelte.ts:172:4 This reference only captures the initial value of `held`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+(node:101190) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:101226) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:101564) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:101642) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:59:11 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:81:9 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:141:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:143:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:159:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:160:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:166:12 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:166:26 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:166:54 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:179:9 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:192:11 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:217:18 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:231:18 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:245:18 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+10:46:08 PM [vite-plugin-svelte] src/lib/client/components/frames/widgetWire.oneMessage.dom.test.svelte.ts:262:6 This reference only captures the initial value of `msgs`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+stderr | src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts (25 tests | 1 failed) 1044ms
+     × has no Bench, and keeps Ready to add and its X 35ms
+(node:102157) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts > Start a session › Who is in it > ⏳ a genre still saying 'required' (RF fix 2): Start is offered with no book; with none to pick, Create a lorebook, and the new book is chosen
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts (14 tests | 3 failed) 607ms
+     × a grey Start says why under it, and the reason goes once the cast is in 42ms
+     × ⏳ a genre still saying 'required' (RF fix 2): Start is offered with no book; with none to pick, Create a lorebook, and the new book is chosen 30ms
+     × Add characters opens the picker; two picked are added in the order ticked 25ms
+10:46:17 PM [vite-plugin-svelte] src/lib/client/components/connections/QuantPicker.svelte:184:0 Non-interactive element `<section>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions
+(node:102307) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102331) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102401) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102450) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+10:46:27 PM [vite-plugin-svelte] src/lib/client/components/modals/NewNameModal.svelte:48:22 This reference only captures the initial value of `checkboxChecked`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+(node:102565) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102660) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102787) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102859) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:102965) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:103102) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:103291) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:103423) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:103608) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:103715) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts (6 tests | 1 failed) 245ms
+     × a session whose lorebook is its own notes reads those notes' members 30ms
+ ❯ |dom| src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts (4 tests | 1 failed) 221ms
+     × an unsaved card row and an unsaved card-less row have no Bench, and both ask before they go 46ms
+(node:104192) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+DOMException [NetworkError]: Failed to execute "fetch()" on "Window" with URL "http://localhost:3000/plugin-ui/acme.worlds/ui/view.html": connect ECONNREFUSED 127.0.0.1:3000
+    at Fetch.onError (file:///home/jody/github/serene-pub/node_modules/happy-dom/lib/fetch/Fetch.js:540:21)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at processTicksAndRejections (node:internal/process/task_queues:89:21)
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+DOMException [NetworkError]: Failed to execute "fetch()" on "Window" with URL "http://localhost:3000/plugin-ui/acme.worlds/ui/view.html": connect ECONNREFUSED 127.0.0.1:3000
+    at Fetch.onError (file:///home/jody/github/serene-pub/node_modules/happy-dom/lib/fetch/Fetch.js:540:21)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at processTicksAndRejections (node:internal/process/task_queues:89:21)
+stderr | src/lib/client/components/media/avatarPicker.dom.test.svelte.ts
+[svelte] derived_inert
+Reading a derived belonging to a now-destroyed effect may result in stale values
+https://svelte.dev/e/derived_inert
+
+ ❯ |dom| src/lib/client/components/media/avatarPicker.dom.test.svelte.ts (5 tests | 1 failed) 168ms
+     × a picked file is held and previewed, and opens the crop editor first 43ms
+(node:104934) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+10:47:52 PM [vite-plugin-svelte] src/lib/client/components/modals/SummarizeLoreModal.svelte:141:56 This reference only captures the initial value of `initialLoreType`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+(node:105364) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:105478) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:105500) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:105965) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:106811) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+10:48:36 PM [vite-plugin-svelte] src/lib/client/components/pipelines/RunProgressCard.svelte:324:3 Screenreaders already announce `<img>` elements as an image
+https://svelte.dev/e/a11y_img_redundant_alt
+(node:107227) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+10:49:04 PM [vite-plugin-svelte] src/lib/client/lorebooks/bookTimelineProbe.svelte:5:1 This reference only captures the initial value of `out`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-whpf9L/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/entities/sessionGenres.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/pipelines/entities/sessionGenres.int.test.ts (36 tests | 1 failed) 21803ms
+     × a standard-mode session supplies only its own fields' defaults — never a stored stray 10ms
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-k0aZ3M/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/config/panel/groups.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/config/panel/groups.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/pipelines/config/panel/groups.int.test.ts (19 tests | 1 failed) 32268ms
+     × gives no two groups of one spec the same heading, and no two steps of one group the same heading 5173ms
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-QuFNKv/data/serene-pub.db
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/sessions/genreFieldDefaults.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts (4 tests | 3 failed) 15956ms
+     × a Lair session created with no preset has its declared defaults 14ms
+     × an explicit value wins over the declared default 6ms
+     × a stored value under a retired key is inert (R12: the Lair's turnStyle; the rewrite's partySpeech, trustNarrator) 5ms
+stdout | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+Using PGlite database at: /tmp/serene-pub-guide-grounding-int-test-8iaXC5/data/serene-pub.db
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/runtime/guideGrounding.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ❯ |int| src/lib/server/pipelines/runtime/guideGrounding.int.test.ts (5 tests | 1 failed) 16714ms
+     × 'how do I write a plugin' retrieves the SDK's your-first-plugin guide, and the prompt carries its excerpt and path 1850ms
+stdout | src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts
+Using PGlite database at: /tmp/serene-pub-preset-actions-Yfuxfg/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts (4 tests | 1 failed) 11750ms
+     × the shipped Lair presets (included set null) carry their companion actions 804ms
+stdout | src/lib/server/sockets/presetFallback.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-SHzGBm/data/serene-pub.db
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/sockets/presetFallback.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+ ❯ |int| src/lib/server/sockets/presetFallback.int.test.ts (6 tests | 1 failed) 10192ms
+     × the boot reconcile records one notice, and republishing clears it 272ms
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-2Vbjcs/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-reckoning: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/story-sweep: no sampling config is seeded as "sampling-background", so sweep.due.sweepWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/assistant-memory: no sampling config is seeded as "sampling-background", so memory.due.memoryWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-reply: no sampling config is seeded as "sampling-background", so via.turn.channel.story.pick.planned.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-keeper: no sampling config is seeded as "sampling-background", so reckon.on.reckonWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-scratchpad: no sampling config is seeded as "sampling-background", so notesWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/lair-file-current-room: no sampling config is seeded as "sampling-background", so described.prose.draftWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.fresh.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.planWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.story.plan.words.again.retry.replanWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-respond: no sampling config is seeded as "sampling-background", so channel.parley.editsWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.classes.classWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.sheetWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-interview: no sampling config is seeded as "sampling-background", so route.sheet.after.begin.genesisWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stderr | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+[pipelines] core:spec/dungeon-crawler-goal: no sampling config is seeded as "sampling-background", so route.renew.goalWrite's Sampling slot ships unset
+
+stdout | src/lib/server/pipelines/entities/publishedValues.int.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |int| src/lib/server/pipelines/entities/publishedValues.int.test.ts (6 tests | 1 failed) 7042ms
+     × is the stored value of a declared key, else its default, and nothing else 27ms
+stdout | src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-QnSc6x/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts (5 tests | 1 failed) 6442ms
+     × keeps the lower-scoring entry off, and the higher-scoring one on 709ms
+stdout | src/lib/server/plugins/coreRow.int.test.ts > a stored 'core' plugin row > offers no widget, frame or page
+Using PGlite database at: /tmp/serene-pub-vitest-nkfv5g/data/serene-pub.db
+
+ ❯ |int| src/lib/server/plugins/coreRow.int.test.ts (12 tests | 2 failed) 3396ms
+     × offers no widget, frame or page 406ms
+     × is never served as a frame document or a plugin page 17ms
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-rD2YWs/data/serene-pub.db
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/pipelines/runtime/allPipelines.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts (5 tests | 1 failed) 4975ms
+     × routes each provider the specs use, with none falling through 7ms
+ ❯ |int| src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts (4 tests | 4 skipped) 2223ms
+tar: Removing leading `/' from member names
+stdout | src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+[data-upgrade 0108] pub binding core:genre/story core:event/message-respond@1 → acme:spec/alt-reply dropped (R33: pub-level bindings retired)
+
+stdout | src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+[data-upgrade 0108] registrations: 9 session, 18 preset, 6 genre row(s); 1 configuration(s) kept as disabled presets; 1 pub binding(s) dropped; not carried: session #100 tasks.groups.sweep
+
+ ❯ |int| src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts (2 tests | 1 failed) 1475ms
+     × moves bindings, toggles, configurations and tasks into registration rows 906ms
+tar: Removing leading `/' from member names
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+Using PGlite database at: /tmp/serene-pub-forms-int-test-Rgymo2/data/serene-pub.db
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/sockets/sessions.forms.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/sockets/sessions.forms.int.test.ts (46 tests | 1 failed) 107844ms
+     × a pressed action that parks at its own write answers parked at once, and its outcome arrives as pushes once the owner decides (R-b) 1196ms
+tar: Removing leading `/' from member names
+tar: Removing leading `/' from member names
+tar: Removing leading `/' from member names
+tar: Removing leading `/' from member names
+tar: Removing leading `/' from member names
+Warning: could not read /tmp/serene-pub-lock-test-KJ8kGS/data/meta.json to refresh the database lock; skipping this refresh.
+timeless copy: 3483 ms
+stdout | src/lib/server/audiocpp/packages.v.int.test.ts
+Using PGlite database at: /tmp/serene-pub-vitest-4OVb4p/data/serene-pub.db
+
+stdout | src/lib/server/audiocpp/packages.v.int.test.ts
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/audiocpp/packages.v.int.test.ts
+Migrations applied.
+
+stdout | src/lib/server/audiocpp/packages.v.int.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/audiocpp/packages.v.int.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+ ❯ |int| src/lib/server/audiocpp/packages.v.int.test.ts (10 tests | 10 skipped) 2ms
+stdout | src/lib/shared/conformance/commentHistory.test.ts > comment history ratchet — comments state the rule, not the story > no file's phrase-hit count exceeds its recorded ratchet
+9 file(s) have fewer phrase-list hits than the ratchet records. Run `npm run comments:ratchet` to lower it:
+  • src/lib/client/components/koboldcppManager/availableTab.ts: 1 → 0
+  • src/lib/client/sessionLayout/mobileSidePanels.svelte.ts: 1 → 0
+  • src/lib/client/sessionLayout/sideRail.ts: 1 → 0
+  • src/lib/client/sessionLayout/sideSlot.ts: 3 → 2
+  • src/lib/server/embedding/vectorizationQueue.ts: 3 → 2
+  • src/lib/server/koboldcpp/subprocessManager.ts: 1 → 0
+  • src/lib/server/pipelines/prompt/renderers.ts: 4 → 3
+  • src/lib/server/sockets/pipelines.ts: 8 → 7
+  • src/lib/server/utils/index.ts: 5 → 4
+
+ ❯ |unit| src/lib/shared/conformance/commentHistory.test.ts (1 test | 1 failed) 388ms
+     × no file's phrase-hit count exceeds its recorded ratchet 386ms
+ ❯ |unit| src/lib/server/adapters/importBoundary.test.ts (13 tests | 4 failed) 96ms
+     × nothing under shared/, client/ or routes/ imports a server adapter module 15ms
+     × every non-test module that loads an adapter is on the allowlist 24ms
+     × only the one legacy sockets file loads an adapter STATICALLY 20ms
+     × registry consumers are enumerated 3ms
+ ❯ |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts (11 tests | 2 failed) 56ms
+     × no shipped spec leaves a declared slot unwired 4ms
+     × names the node when `params: slot.params()` is removed 40ms
+ ❯ |unit| src/lib/shared/conformance/wiring.test.ts (15 tests | 2 failed) 115ms
+     × every out-port shape is one some node can consume 10ms
+     × every in-port on a node core ships is filled by some core spec 1ms
+stdout | src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+Using PGlite database at: /tmp/serene-pub-vitest-qYS5bU/data/serene-pub.db
+
+stdout | src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+[db] previous shutdown: unknown
+
+stdout | src/lib/server/adapters/registry.test.ts
+Migrations applied.
+
+stdout | src/lib/server/adapters/registry.test.ts
+Syncing database defaults...
+
+stdout | src/lib/server/adapters/registry.test.ts
+[connections] Local ONNX connections: created 2, folded 0, renamed 0.
+
+stdout | src/lib/server/adapters/registry.test.ts
+Database closed and flushed; shutdown marked clean.
+
+ ❯ |unit| src/lib/server/adapters/registry.test.ts (5 tests | 1 failed) 11586ms
+     × route exactly what the registry says, all four families 6136ms
+(node:180830) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 exit listeners added to [process]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ❯ |unit| src/lib/server/net/hfDownload.v.test.ts (2 tests | 2 skipped) 3ms
+✘ [ERROR] 'fs' is not available to plugins — the sandbox withholds OS/IO by design. Use the SDK's ctx (ctx.storage, ctx.fetch) instead. [plugin sp-capability-guard]
+
+    <stdin>:1:19:
+      1 │ const fs = require("fs"); module.exports = { hooks: {} };
+        ╵                    ~~~~
+
+12:05:45 AM [vite-plugin-svelte] src/lib/client/components/connections/QuantPicker.svelte:184:0 Non-interactive element `<section>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions
+(node:189521) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:190330) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:191579) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:192430) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/net/hfDownload.v.test.ts [ src/lib/server/net/hfDownload.v.test.ts ]
+Error: ENOENT: no such file or directory, mkdtemp '/tmp/claude-1000/-home-jody-github-serene-pub/564efcec-663a-419e-8efc-7e445249445f/scratchpad/vacpp/w3/hfv-XXXXXX'
+ ❯ src/lib/server/net/hfDownload.v.test.ts:19:11
+     17|
+     18| beforeAll(async () => {
+     19|  tmp = fs.mkdtempSync(path.join(SCRATCH, "hfv-"))
+       |           ^
+     20|  server = http.createServer((req, res) => {
+     21|   requests++
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/38]⎯
+
+ FAIL  |unit| src/lib/server/net/hfDownload.v.test.ts [ src/lib/server/net/hfDownload.v.test.ts ]
+TypeError: Cannot read properties of undefined (reading 'closeAllConnections')
+ ❯ src/lib/server/net/hfDownload.v.test.ts:41:9
+     39| })
+     40| afterAll(async () => {
+     41|  server.closeAllConnections()
+       |         ^
+     42|  await new Promise((r) => server.close(r))
+     43|  fs.rmSync(tmp, { recursive: true, force: true })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/38]⎯
+
+ FAIL  |int| src/lib/server/audiocpp/packages.v.int.test.ts [ src/lib/server/audiocpp/packages.v.int.test.ts ]
+Error: ENOENT: no such file or directory, mkdtemp '/tmp/claude-1000/-home-jody-github-serene-pub/564efcec-663a-419e-8efc-7e445249445f/scratchpad/vacpp/w3/pkgs-v-XXXXXX'
+ ❯ src/lib/server/audiocpp/packages.v.int.test.ts:66:11
+     64|
+     65| beforeAll(async () => {
+     66|  tmp = fs.mkdtempSync(path.join(SCRATCH, "pkgs-v-"))
+       |           ^
+     67|  root = path.join(tmp, "audio")
+     68|  db = await createTestDb()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/38]⎯
+
+ FAIL  |int| src/lib/server/audiocpp/packages.v.int.test.ts [ src/lib/server/audiocpp/packages.v.int.test.ts ]
+TypeError: Cannot read properties of undefined (reading '$client')
+ ❯ src/lib/server/audiocpp/packages.v.int.test.ts:74:67
+     72|
+     73| afterAll(async () => {
+     74|  await (db as unknown as { $client: { close(): Promise<void> } }).$cli…
+       |                                                                   ^
+     75|  fs.rmSync(tmp, { recursive: true, force: true })
+     76| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts [ src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts ]
+AssertionError: promise resolved "{ specId: 3, specVersionId: 3, …(2) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "canonicalHash": "193741e8cd2092",
++   "specId": 3,
++   "specVersionId": 3,
++   "written": true,
+  }
+
+ ❯ src/lib/server/pipelines/boot/placedNodeReconcile.int.test.ts:80:58
+     78|    .build()
+     79|  )
+     80|  await expect(saveDocument(db, spoken, { publish: true })).rejects.toT…
+       |                                                          ^
+     81|  const [s2] = await db
+     82|   .insert(schema.pipelineSpecs)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/38]⎯
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 33 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |dom| src/lib/client/components/media/avatarPicker.dom.test.svelte.ts > AvatarPicker > a picked file is held and previewed, and opens the crop editor first
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/lib/client/components/media/avatarPicker.dom.test.svelte.ts:112:45
+    110|   const file = await pickFile()
+    111|   expect(props.file === file).toBe(true)
+    112|   expect(props.preview.startsWith("data:")).toBe(true)
+       |                                             ^
+    113|   expect(
+    114|    (document.body.textContent ?? "").includes("Crop Atlas's cover")
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts > Edit Session — an unsaved row > has no Bench, and keeps Ready to add and its X
+TypeError: Cannot read properties of undefined (reading 'click')
+ ❯ src/lib/client/components/sessionForms/editSessionBench.dom.test.svelte.ts:614:7
+    612|    b.textContent?.includes("Dov")
+    613|   ) as HTMLButtonElement
+    614|   dov.click()
+       |       ^
+    615|   flushSync()
+    616|   await tick()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts > Edit Session — members of the session's lorebook > a session whose lorebook is its own notes reads those notes' members
+AssertionError: expected 'This is a disabled drag and drop list…' to contain 'Session notes'
+
+- Expected
++ Received
+
+- Session notes
++ This is a disabled drag and drop listTab to one the items and press space-bar or enter to start dragging it  The crawl  Save    Name Session name     Participants   Settings   Privacy   Changes here wait for Save — adding, benching, bringing
++ 						back and reordering. Reassigning a benched seat's lines
++ 						happens at once.  Characters  M  Mira    Add a character  Personas    Add a persona Benched In the session, out of the turns. Their lines stay
++ 								theirs.        The story, what your lines are called and the tags wait
++ 						for Save. Everything marked “Applies at once” — the
++ 						genre's settings, each pipeline's and the routines —
++ 						changes the session as you set it. The story Scenario    Attributes Loading…         Tags       Some controls are hidden. Show advanced controls  What this session sees of your data Anything you own and add here becomes
++ 									visible to this session's other
++ 									participants, and is read by the pipelines
++ 									that generate its replies. This shows only
++ 									your own data — never what anyone else has
++ 									shared. Loading…          Add characters    Loading… Select persona    Show all characters    No personas yet — turn on Show all characters, or flag a character as a persona in the Characters view. New persona  Select character      Cancel Continue Remove character? Are you sure you want to remove this character from the session? It takes effect when you save
++ 						the session. Cancel Remove Discard unsaved changes? Your session has unsaved changes. Are you sure you want
++ 						to discard them? Cancel Discard
+
+ ❯ src/lib/client/components/sessionForms/editSessionCastMembers.dom.test.svelte.ts:239:37
+    237|   await tick()
+    238|   flushSync()
+    239|   expect(document.body.textContent).toContain("Session notes")
+       |                                     ^
+    240|   expect(document.body.textContent).toContain("Tess")
+    241|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts > Edit Session — card and card-less seats save alike > an unsaved card row and an unsaved card-less row have no Bench, and both ask before they go
+TypeError: Cannot read properties of undefined (reading 'click')
+ ❯ addUnsavedRows src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts:197:12
+    195|      ?.textContent?.trim() === name
+    196|   ) as HTMLInputElement
+    197|  pick("Dov").click()
+       |            ^
+    198|  pick("Tess").click()
+    199|  flushSync()
+ ❯ Module.track_reactivity_loss node_modules/svelte/src/internal/client/reactivity/async.js:213:14
+ ❯ src/lib/client/components/sessionForms/editSessionSaveParity.dom.test.svelte.ts:244:4
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts > Start a session › Who is in it > a grey Start says why under it, and the reason goes once the cast is in
+Error: no checkbox named Corin
+ ❯ checkbox src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:186:18
+    184|     ?.textContent?.trim() === name
+    185|  )
+    186|  if (!box) throw new Error(`no checkbox named ${name}`)
+       |                  ^
+    187|  return box
+    188| }
+ ❯ addCharacters src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:194:3
+ ❯ Module.track_reactivity_loss node_modules/svelte/src/internal/client/reactivity/async.js:213:14
+ ❯ src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:201:4
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts > Start a session › Who is in it > ⏳ a genre still saying 'required' (RF fix 2): Start is offered with no book; with none to pick, Create a lorebook, and the new book is chosen
+Error: no checkbox named Corin
+ ❯ checkbox src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:186:18
+    184|     ?.textContent?.trim() === name
+    185|  )
+    186|  if (!box) throw new Error(`no checkbox named ${name}`)
+       |                  ^
+    187|  return box
+    188| }
+ ❯ addCharacters src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:194:3
+ ❯ Module.track_reactivity_loss node_modules/svelte/src/internal/client/reactivity/async.js:213:14
+ ❯ src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:208:4
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts > Start a session › Who is in it > Add characters opens the picker; two picked are added in the order ticked
+AssertionError: expected [] to include 'Wren'
+ ❯ src/lib/client/components/sessionForms/startSessionCast.dom.test.svelte.ts:294:19
+    292|   )
+    293|   expect(offered).not.toContain("You")
+    294|   expect(offered).toContain("Wren")
+       |                   ^
+    295|
+    296|   checkbox("Corin").click()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/38]⎯
+
+ FAIL  |dom| src/lib/client/components/sessionPage/narrateDraft.dom.test.ts > C2 · /narrate <text> from the composer > the page declares both keys bare and wires them, and its press, to createNarrations as this test does
+AssertionError: expected '<script lang="ts">\n\t// The session …' to match /if \(direction !== null\) narrations\…/
+
+- Expected:
+/if \(direction !== null\) narrations\.directed\(direction, !!supplied\?\.fromDraft\)/
+
++ Received:
+"<script lang=\"ts\">
+	// The session page: a composition root. Its stores live beside it in
+	// `sessionPage/` — the inbox every reply arrives in (`sessionPageInbox`),
+	// the loaded session (`sessionPageData`), the action list, the turns, a
+	// message's controls, the presses (`pressRouting`), the composer's half,
+	// the scenes, the session layout and the ask tables — and its views are
+	// mounted below: the session layout (or a genre's session view), the host
+	// views core's composer places, and the modals.
+	import { v4 as uuid } from \"uuid\"
+	import { rememberFiredAction } from \"$lib/client/components/pipelines/actionRetry\"
+	import {
+		castNameOf,
+		seatCardAsShown
+	} from \"$lib/client/components/sessionPage/projections/characters\"
+	import {
+		hostElementContext,
+		setHostParticipants
+	} from \"$lib/client/components/hostElements/context.svelte\"
+	import ChangeSpriteDialog from \"$lib/client/components/sprites/ChangeSpriteDialog.svelte\"
+	import { asShownSprite } from \"$lib/shared/sprites\"
+	import {
+		openSessionState,
+		sessionState
+	} from \"$lib/client/state/sessionState.svelte\"
+	import {
+		SESSION_VIEWER_KEY,
+		SESSION_TURN_ORDER_KEY,
+		SESSION_ATTENDANCE_KEY,
+		SESSION_DOSSIER_KEY,
+		SESSION_STATE_KEY,
+		SESSION_CHARACTERS_KEY,
+		SESSION_LORE_ANNEX_KEY,
+		WIDGET_REQUESTS_KEY,
+		projectScopedSections
+	} from \"$lib/shared/widgets/context\"
+	import { guardWidgetRequests } from \"$lib/client/components/sessionPage/requests/askers\"
+	import { seatRefOf } from \"$lib/client/components/sessionPage/projections/seatIdentity\"
+	import { seatMemberOf } from \"$lib/client/components/sessionPage/requests/seatMemberOf\"
+	import { askSeatMemberSheet } from \"$lib/client/components/sessionForms/seatMemberSheet.svelte\"
+	import {
+		buildWidgetRequestAnswerer,
+		type WidgetRequestDeps
+	} from \"$lib/client/components/sessionPage/requests\"
+	import {
+		createNarrations,
+		narrateDirectly,
+		nextDraftWrite,
+		type DraftWrite,
+		type NarratorRequest
+	} from \"$lib/client/components/sessionPage/collects\"
+	import { ScenePins } from \"$lib/client/components/sessionPage/scenePins.svelte\"
+	import {
+		createSessionPageInbox,
+		provideSessionPageInbox
+	} from \"$lib/client/components/sessionPage/sessionPageInbox.svelte\"
+	import AppletLoading from \"$lib/client/components/AppletLoading.svelte\"
+	import { coalescedRead, createSessionPageData } from \"$lib/client/components/sessionPage/sessionPageData.svelte\"
+	import {
+		headerCastKeyOf,
+		participantForRefIn,
+		seatCardIdOfRef
+	} from \"$lib/client/components/sessionPage/sessionPageProjections\"
+	import { presetHeaderNotice } from \"$lib/client/components/sessionPage/presetNotice\"
+	import { catchUpHeaderNotice } from \"$lib/client/components/sessionPage/catchUpNotice\"
+	import { rulesetConvertedHeaderNotice } from \"$lib/client/components/sessionPage/rulesetConvertedNotice\"
+	import type { CatchUpOffer } from \"$lib/shared/sessions/archive\"
+	import { rewindStripState } from \"@serene-pub/core-catalog/conversation\"
+	import { regeneratePress } from \"$lib/shared/sessions/rewind\"
+	import { rewindPresses } from \"$lib/client/components/sessionPage/requests/rewindTurn\"
+	import { createEnvelopeSections } from \"$lib/client/components/sessionPage/envelopeSections.svelte\"
+	import { createActionList } from \"$lib/client/components/sessionPage/actionList.svelte\"
+	import { showsAdvancedControls } from \"$lib/client/advancedControls\"
+	import {
+		createTurnFlow,
+		type FiredPress
+	} from \"$lib/client/components/sessionPage/turnFlow.svelte\"
+	import { createMessageControls } from \"$lib/client/components/sessionPage/messageControls.svelte\"
+	import { createPressRouting } from \"$lib/client/components/sessionPage/pressRouting.svelte\"
+	import { createComposerFlow } from \"$lib/client/components/sessionPage/composerFlow.svelte\"
+	import { createScenesFlow } from \"$lib/client/components/sessionPage/scenesFlow.svelte\"
+	import { createSessionLayoutData } from \"$lib/client/components/sessionPage/sessionLayoutData.svelte\"
+	import { createPageAsks } from \"$lib/client/components/sessionPage/pageAsks\"
+	import { createSceneCuesFlow } from \"$lib/client/components/sessionPage/sceneCuesFlow.svelte\"
+	import SessionHostViews from \"$lib/client/components/sessionPage/SessionHostViews.svelte\"
+	import PromptDetailsModal from \"$lib/client/components/sessionPage/PromptDetailsModal.svelte\"
+	import PickSpeakerModal from \"$lib/client/components/sessionPage/PickSpeakerModal.svelte\"
+	import DeleteMessageDialog from \"$lib/client/components/sessionPage/DeleteMessageDialog.svelte\"
+	import { page } from \"$app/state\"
+	import { useTypedSocket } from \"$lib/client/sockets/loadSockets.client\"
+	import { useInterest } from \"$lib/client/sockets/interest.svelte\"
+	import { useSessionFullscreen } from \"$lib/client/sessions/fullscreen.svelte\"
+	import * as Icons from \"@lucide/svelte\"
+	import { sessionViewMount } from \"$lib/shared/plugins/sessionViewMount\"
+	import PluginFrame from \"$lib/client/components/frames/PluginFrame.svelte\"
+	import { sessionViewHanded } from \"$lib/client/components/frames/sessionViewHanded\"
+	import TurnPicker from \"$lib/client/components/sessionPage/TurnPicker.svelte\"
+	import ProcessSceneModal from \"$lib/client/components/modals/ProcessSceneModal.svelte\"
+	import ConfirmDialog from \"$lib/client/components/loadouts/sheet/ConfirmDialog.svelte\"
+	import { removeSceneBody } from \"$lib/client/components/sessionPage/liveSceneProjection\"
+	import { getContext, onDestroy, setContext, untrack } from \"svelte\"
+	import PersonaSelectModal from \"$lib/client/components/modals/PersonaSelectModal.svelte\"
+	import BranchSessionModal from \"$lib/client/components/modals/BranchSessionModal.svelte\"
+	import SummarizeLoreModal from \"$lib/client/components/modals/SummarizeLoreModal.svelte\"
+	import NarratorResponseModal from \"$lib/client/components/modals/NarratorResponseModal.svelte\"
+	import RetakeConfirm from \"$lib/client/components/sessionPage/RetakeConfirm.svelte\"
+	import ActionConfirm from \"$lib/client/components/sessionPage/ActionConfirm.svelte\"
+	import CollectModal from \"$lib/client/components/sessionPage/CollectModal.svelte\"
+	import EntityGalleryViewModal from \"$lib/client/components/gallery/EntityGalleryViewModal.svelte\"
+	import MediaLightbox from \"$lib/client/components/sessionPage/MediaLightbox.svelte\"
+	import { runInspector } from \"$lib/client/stores/runInspector.svelte\"
+	import { terminateAllWorkers } from \"$lib/client/components/host/uiWorkers\"
+	import { sceneImages } from \"$lib/client/stores/sceneImages\"
+	import { notify } from \"$lib/client/utils/notify\"
+	import { sessionBookOf } from \"$lib/client/sessions/store/derive\"
+	import SessionLayout from \"$lib/client/sessionLayout/SessionLayout.svelte\"
+	import { NARRATE_ACTION } from \"$lib/shared/actions/identity\"
+	import { SurfaceManager } from \"$lib/client/surfaces/panelManager.svelte\"
+
+	const socket = useTypedSocket()
+	let userCtx: UserCtx = getContext(\"userCtx\")
+	let panelsCtx: PanelsCtx = getContext(\"panelsCtx\")
+	let systemSettingsCtx: SystemSettingsCtx = getContext(\"systemSettingsCtx\")
+	let userSettingsCtx: UserSettingsCtx = getContext(\"userSettingsCtx\")
+	let openSessionCtx: OpenSessionCtx = getContext(\"openSessionCtx\")
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state(
+		getContext(\"sceneSummarizesCtx\")
+	)
+	let sessionSummarizesCtx: SessionSummarizesCtx = $state(
+		getContext(\"sessionSummarizesCtx\")
+	)
+
+	// Get session id from route params
+	let sessionId: number = $derived.by(() => Number(page.params.id))
+	// 🚧 M2d: the applet loading screen's flags for a session-mounted applet frame. They reset when the frame's
+	// document changes (a new `src` reloads it and it says `ready` again); a session switch on the same document
+	// keeps the booted frame, as before, so the screen does not come back over it.
+	let sessionFrameReady = $state(false)
+	let sessionFrameFatal = $state(false)
+	$effect(() => {
+		void data.sessionViewFrame?.src
+		sessionFrameReady = false
+		sessionFrameFatal = false
+	})
+
+	/**
+	 * The composer's draft as the page knows it, and the page's last write to
+	 * core's composer draft (C0b, D1): the kept draft when the session opens,
+	 * an empty one when a session switch or a spent action clears it. The
+	 * composer owns the draft between writes and reports it (`draft`), which
+	 * keeps `newMessage` — the token count, the save — in step; `writeDraft`
+	 * is the one way the page changes it.
+	 */
+	let newMessage = $state(\"\")
+	let composerDraft = $state<DraftWrite>({ content: \"\", write: 0 })
+	function writeDraft(content: string) {
+		newMessage = content
+		composerDraft = nextDraftWrite(
+			untrack(() => composerDraft),
+			content
+		)
+	}
+
+	/**
+	 * What the narrator modal held when its press did not land — refused
+	 * before its run, stopped, or failed (C2 follow-up): kept as a refused
+	 * `/narrate <text>` keeps its draft, and the modal opens with it until it
+	 * fires again. This session's only: cleared on a switch of session with
+	 * the draft.
+	 */
+	let narratorUnlandedPress = $state<NarratorRequest | null>(null)
+
+	// ── Surface grid (plan 21) ──────────────────────────────────────
+	// The modular session layout: the conversation is the primary panel, and
+	// scene portraits / sample widgets flow into container-responsive tracks
+	// beside it. Availability = the mode's declared panels (from sessions:view)
+	// merged with core's defaults; placement is this user's, persisted.
+	const surfaceManager = new SurfaceManager()
+	// Full screen (SHAPES L1): this viewer's choice for this session.
+	const fullscreen = $derived(useSessionFullscreen(sessionId))
+
+	// The ONE subscriber to every reply and push the page reads, declared
+	// ahead of every store that registers on it and of the session-load
+	// effect below: effects run in declaration order, so the keys are held
+	// before the first request group goes out (plan ruling 3).
+	const inbox = createSessionPageInbox({
+		sessionId: () => sessionId,
+		lorebookId: () => sessionLorebookId,
+		ownLorebookId: () => ownLorebookId,
+		authoredOwners: () => layout.authoredOwnersKey,
+		widgets: surfaceManager
+	})
+	provideSessionPageInbox(inbox)
+
+	/** What every store of the page is handed: the socket, the inbox, the session in the route. */
+	const base = { socket, inbox, sessionId: () => sessionId }
+	const data = createSessionPageData({
+		...base,
+		loadedSessionId: () => loadedSessionId,
+		userCtx,
+		widgets: surfaceManager,
+		draft: () => newMessage,
+		writeDraft
+	})
+	const session = $derived(data.session)
+
+	/**
+	 * The loaded session's ids and scalars as PRIMITIVES — what this page's
+	 * effects and its children's props read, never `session` itself.
+	 *
+	 * `session` is REPLACED on every streamed chunk (`handleSessionMessage`
+	 * builds a new object around the new message array). An effect reading
+	 * through it re-runs per token, and a prop written `{session.id}` — a bare
+	 * member chain, which compiles to a getter over `session` rather than a
+	 * memoised `$derived` — re-runs the child's effects the same way: six
+	 * keys re-declared and `storyTime` + `entries:list` re-asked per token in
+	 * SessionWorkflowTab, `bindingList` and `getNarratorName` re-asked here,
+	 * the persona pick reset (B8's request storm). A `$derived` compares its
+	 * value, so what reads these re-runs only when it moves.
+	 * Pinned by `sessionPage/streamedSessionReads.test.ts`.
+	 */
+	const loadedSessionId = $derived(session?.id ?? null)
+	const sessionName = $derived(session?.name ?? null)
+	const sessionUserId = $derived(session?.userId ?? null)
+	// pr-6 (pass 9 S4): a primitive off the streamed session — the catch-up offer as a key.
+	const sessionCatchUpKey: string = $derived(
+		(session as { catchUp?: unknown } | undefined)?.catchUp
+			? JSON.stringify((session as { catchUp: unknown }).catchUp)
+			: \"\"
+	)
+	let catchUpDismissedFor = $state<number | null>(null)
+	let rulesetNoticeDismissedFor = $state<number | null>(null)
+	const sessionLorebookId = $derived(session?.lorebookId ?? null)
+	// 🚧 pr-6 (B §B-3): the session's own book — its Session notes.
+	const sessionOwnBookId: number | null = $derived(
+		(session as { ownBookId?: number | null } | undefined)?.ownBookId ??
+			null
+	)
+	/**
+	 * The book a scene review (Process scene window) resolves its cast in: the
+	 * lorebook the session reads, else its own book — every session has one,
+	 * so the review opens for a session with only its Session notes too.
+	 */
+	const sceneBookId: number | null = $derived(
+		sessionBookOf({ lorebookId: sessionLorebookId, ownBookId: sessionOwnBookId })
+	)
+	const sessionLorebookBranchId = $derived(session?.lorebookBranchId ?? null)
+	const loadedGenreId: string | null = $derived(
+		typeof (session as any)?.genreId === \"string\"
+			? (session as any).genreId
+			: null
+	)
+	const storyClockYear = $derived(session?.storyClockYear ?? null)
+	const storyClockMonth = $derived(session?.storyClockMonth ?? null)
+	const storyClockDay = $derived(session?.storyClockDay ?? null)
+	/** A new object only when the clock moves, so readers of it re-derive only then. */
+	const sessionStoryClock = $derived(
+		storyClockYear != null
+			? {
+					year: storyClockYear,
+					month: storyClockMonth,
+					day: storyClockDay
+				}
+			: null
+	)
+
+	// Lets globally-rendered sidebars (e.g. LorebooksSidebar) know which session
+	// is open and whether it already has a lorebook, without a fetch of their own,
+	// and carries the session's identity — name, cast, genre — to the header,
+	// which renders beside this page rather than inside it.
+	//
+	// The two OBJECT fields each get an effect of their own: `openSessionCtx`
+	// is a `$state` proxy, so assigning an object re-proxies it and re-runs
+	// every reader of the field, even when it is the same object. Shared with
+	// `isGenerating`, which flips as a reply starts and ends, the clock and the
+	// cast were re-sent to the lorebooks rail and the header with it.
+	// Pinned by `sessionPage/streamedSessionReads.test.ts`.
+	$effect(() => {
+		openSessionCtx.cast = headerCast
+	})
+	// The stale-preset notice is the header's one line now (§3.16).
+	const headerNotice = $derived(
+		catchUpHeaderNotice(
+			sessionCatchUpKey
+				? (JSON.parse(sessionCatchUpKey) as CatchUpOffer)
+				: null,
+			{
+				dismissed: catchUpDismissedFor === loadedSessionId,
+				dismiss: () => (catchUpDismissedFor = loadedSessionId),
+				press: (id) =>
+					socket.emit(\"sessions:closeOut\", { sessionId: id })
+			}
+		) ??
+			rulesetConvertedHeaderNotice(data.rulesetConverted, {
+				dismissed: rulesetNoticeDismissedFor === loadedSessionId,
+				dismiss: () => (rulesetNoticeDismissedFor = loadedSessionId)
+			}) ??
+			presetHeaderNotice(data, !!userCtx.user?.isAdmin)
+	)
+	$effect(() => {
+		openSessionCtx.headerNotice = headerNotice
+	})
+	/**
+	 * 🚧 Back · Forward (RF fix 5) in the header's right cluster (polish
+	 * parity L1, 2026-10-24): the owner's three presses, Back, Forward and the
+	 * turn's Regenerate (pr-6 D2), read by the widget's own rule
+	 * (`rewindStripState`) off the ONE rewind state (`data.rewind`) the
+	 * conversation's note reads, and busy as the host's door is
+	 * (`data.generating`). Kept as a STRING, so the header moves only
+	 * when a press's state does, never per streamed chunk.
+	 */
+	const rewindPress = rewindPresses(socket, () => sessionId)
+	const headerRewindKey: string = $derived.by(() => {
+		const strip = rewindStripState({
+			rewind: data.rewind,
+			isOwner:
+				sessionUserId !== null && sessionUserId === userCtx.user?.id,
+			generating: data.generating,
+			story: true
+		})
+		const retakeAction = actions.extraActionOn(\"retake\")
+		const retakeChip = retakeAction ? actions.extraChip(retakeAction) : null
+		const regenerate = regeneratePress({
+			offered: !!retakeAction,
+			generating: data.generating,
+			listedReason: retakeChip?.disabled
+				? (retakeChip.reason ?? null)
+				: null,
+			rewind: data.rewind
+		})
+		return strip.shown
+			? JSON.stringify({
+					back: strip.back,
+					forward: strip.forward,
+					ahead: strip.ahead,
+					aheadText: strip.aheadText,
+					step: strip.step,
+					regenerate
+				})
+			: \"\"
+	})
+	const headerRewind: SessionHeaderRewind | null = $derived(
+		headerRewindKey
+			? (() => {
+					const parsed = JSON.parse(headerRewindKey) as Omit<
+						SessionHeaderRewind,
+						\"goBack\" | \"goForward\" | \"regenerate\"
+					> & {
+						regenerate: {
+							disabled: boolean
+							reason?: string
+						} | null
+					}
+					return {
+						...parsed,
+						goBack: rewindPress.rewindTurn,
+						goForward: rewindPress.forwardTurn,
+						regenerate: parsed.regenerate
+							? {
+									...parsed.regenerate,
+									press: () => turns.retake.press()
+								}
+							: null
+					}
+				})()
+			: null
+	)
+	$effect(() => {
+		openSessionCtx.rewind = headerRewind
+	})
+	/**
+	 * The session's book for its OWNER only — the lorebook it reads, else its own book (`sessionBookOf`) — whose cast (`lorebooks:bindingList`) the page reads. The book is the host's: the
+	 * server refuses anyone else's ask (\"Lorebook not found.\"), which a guest
+	 * was shown on every visit for something they never did. Read through the
+	 * primitives, never `session`: a streamed chunk replaces the object, and
+	 * reading through it would re-ask per token.
+	 */
+	const ownLorebookId = $derived(
+		sessionUserId !== null && sessionUserId === userCtx.user?.id
+			? sessionBookOf({
+					lorebookId: sessionLorebookId,
+					ownBookId: sessionOwnBookId
+				})
+			: null
+	)
+
+	const actions = createActionList({
+		...base,
+		data,
+		// Advanced controls off hides Branch from here (a preference, never a permission).
+		advancedControls: () => showsAdvancedControls(userSettingsCtx.settings)
+	})
+	/** The narrator's presses and answers (C2) — `createNarrations`. */
+	const narrations = createNarrations({
+		sessionId: () => sessionId,
+		draft: () => newMessage,
+		writeDraft: (content) => writeDraft(content),
+		keepUnlanded: (press) => (narratorUnlandedPress = press),
+		say: (error) =>
+			notify.error({
+				title: actions.listedAction(NARRATE_ACTION)?.name ?? \"Narrate\",
+				description: error,
+				source: \"socket:sessions:fireNarratorResponse:error\"
+			}),
+		send: (params) => socket.emit(\"sessions:fireNarratorResponse\", params)
+	})
+	// How a narration went (genre uplift C2): spends a `/narrate <text>`
+	// draft, keeps the modal's press that did not land.
+	useInterest<\"sessions:fireNarratorResponse\">(
+		\"sessions:fireNarratorResponse\",
+		narrations.answered
+	)
+	// Why one was refused or failed — never gated (plan ruling 2); toasted
+	// here, under the action's name, rather than by Layout's catch-all.
+	useInterest<\"sessions:fireNarratorResponse:error\">(
+		\"sessions:fireNarratorResponse:error\",
+		narrations.error
+	)
+
+	const turns = createTurnFlow({
+		...base,
+		data,
+		actions,
+		draft: () => newMessage,
+		narrations,
+		emitFireAction
+	})
+	const controls = createMessageControls({ ...base, data, actions })
+	const composer = createComposerFlow({
+		...base,
+		loadedSessionId: () => loadedSessionId,
+		loadedGenreId: () => loadedGenreId,
+		data,
+		turns,
+		systemSettingsCtx,
+		draft: () => newMessage,
+		setNewMessage: (content) => (newMessage = content),
+		restoreDraft: (content) => writeDraft(content),
+		userId: () => userCtx.user?.id ?? null
+	})
+	const scenes = createScenesFlow({
+		...base,
+		ownLorebookId: () => ownLorebookId,
+		data,
+		sceneSummarizesCtx,
+		sessionSummarizesCtx
+	})
+	const layout = createSessionLayoutData({
+		...base,
+		surfaceManager,
+		data,
+		isAdmin: () => !!userCtx.user?.isAdmin
+	})
+	const asks = createPageAsks(base)
+	onDestroy(() =>
+		asks.drop(\"the session page closed before the server answered\")
+	)
+	/**
+	 * 🚧 The calendar of the book the session reads (PROPOSAL-live-scenes
+	 * §15 G9), for the conversation's dates: read once per session and book
+	 * (`sessions:storyClock`, anyone in the session may), and kept fresh by
+	 * every later clock reading the Chronicle makes (`noteStoryCalendar`).
+	 */
+	$effect(() => {
+		const id = loadedSessionId
+		void sessionLorebookId
+		if (id == null) return
+		const reread = coalescedRead(() =>
+			asks
+				.readStoryClock({ sessionId: id })
+				.then((r) => {
+					data.setStoryCalendar(id, r?.calendar ?? null)
+					data.setStoryTimeline(id, r?.timeline)
+				})
+				.catch(() => {})
+		)
+		untrack(reread)
+		// 🚧 The book's timeline switch flipped (or the story moved): read again.
+		return inbox.on(\"state:changed\", (msg) => {
+			if (msg.sessionId === id) reread()
+		})
+	})
+	// 🚧 Live scenes, lane D: the session's scene cues and scene settings,
+	// and the asks Chronicle and the cue chip make about them.
+	const sceneCues = createSceneCuesFlow(base)
+
+	// The session state's ledger, projected for core's conversation (C0b):
+	// the page holds the store, the widget draws what it is told.
+	const stateStore = sessionState()
+	$effect(() => openSessionState(sessionId ?? null))
+	// ⏳ Scene image pins: this browser's old pins, given once to the Scene
+	// Portraits that drew them, then cleared (`sessionPage/scenePins.svelte.ts`, W6).
+	const scenePins = new ScenePins(() => sessionId, undefined, {
+		surfaces: surfaceManager,
+		characters: () => envelope.characters.current,
+		readGallery: (characterId) => asks.readCharacterGallery(characterId)
+	})
+
+	/**
+	 * THE `sessions:fireAction` emit. There is no other on this page: every
+	 * press — a chip, the `/` palette, a message's ⋮ menu, a widget's
+	 * `invoke(key)`, a frame's `{ t: \"invoke\" }`, a bare frame action, a form
+	 * answered on the row — is named as a run here, so Cancel reaches it
+	 * between the press and the first progress event. Below the bespoke
+	 * client flows (`pressRouting`): the narrator's divert comes first, and a
+	 * form's answer comes straight here (`FiredPress` says what rides).
+	 */
+	function emitFireAction(p: FiredPress) {
+		const params: Sockets.Sessions.FireAction.Params = {
+			sessionId,
+			...(p.identity ? { action: p.identity } : { key: p.fn }),
+			...(p.messageId != null ? { messageId: p.messageId } : {}),
+			...(p.blockId ? { blockId: p.blockId } : {}),
+			...(p.text ? { text: p.text } : {}),
+			...(p.recipients ? { recipients: p.recipients } : {}),
+			...(p.clockStep ? { clockStep: p.clockStep } : {}),
+			...(p.payload && Object.keys(p.payload).length
+				? { payload: p.payload }
+				: {}),
+			runId: uuid()
+		}
+		// 🚧 Kept by its run id, so a halted run's card can offer Retry.
+		rememberFiredAction(params)
+		socket.emit(\"sessions:fireAction\", params)
+		// 🚧 M2a a6: the run's name, so the press's answer finds whoever is waiting on it.
+		return params.runId
+	}
+
+	const press = createPressRouting({
+		...base,
+		data,
+		actions,
+		turns,
+		controls,
+		stateStore,
+		draft: () => newMessage,
+		writeDraft,
+		emitFireAction,
+		narrate: (identity, route, supplied) => {
+			// `/narrate the storm breaks` (C2): who speaks is answered — the
+			// narrator — and what happens is the argument, so it fires. The
+			// draft the argument came from is spent when the narration lands,
+			// and kept when it is refused or fails.
+			const direction = narrateDirectly(identity, route, supplied)
+			if (direction !== null)
+				narrations.directed(direction, !!supplied?.fromDraft)
+			else turns.openNarrateModal()
+		}
+	})
+
+	/**
+	 * The page's sections of the widget envelope (`envelopeSections`), each
+	 * set as the context every widget on the page reads it from.
+	 */
+	const envelope = createEnvelopeSections({
+		...base,
+		data,
+		actions,
+		turns,
+		controls,
+		composer,
+		scenes,
+		sceneCues,
+		stateStore,
+		scenePins,
+		userCtx,
+		systemSettingsCtx,
+		userSettingsCtx,
+		composerDraft: () => composerDraft
+	})
+	setContext(SESSION_VIEWER_KEY, envelope.viewer)
+	setContext(SESSION_TURN_ORDER_KEY, envelope.turnOrder)
+	setContext(SESSION_ATTENDANCE_KEY, envelope.attendance)
+	setContext(\"sessionLocale\", envelope.locale)
+	setContext(\"sessionAnnex\", envelope.annex)
+	setContext(SESSION_LORE_ANNEX_KEY, envelope.loreAnnex)
+	// 🚧 M0 (L8): the session-view frame of a genre that declares a lorebook is
+	// posted `lore.v1` without an admin grant — through the ONE supplier.
+	const sessionViewScoped = $derived(
+		data.declaresLorebook
+			? {
+					lore: projectScopedSections(
+						[\"lore\"],
+						() => data.lorebookAnnex
+					)?.lore
+				}
+			: undefined
+	)
+	// 🚧 M1 fix: the session-view frame also writes its own lines (`send`) on the
+	// session's channels, as the viewer — core's composer is absent there.
+	const sessionViewGrants = $derived(
+		sessionViewHanded({
+			declaresLorebook: data.declaresLorebook,
+			channels: data.sessionChannels
+		})
+	)
+	// 🚧 m3-core: an applet genre's session view also holds `applet` (plan §9).
+	const sessionViewMountOf = $derived(
+		sessionViewMount({
+			applet: !!data.modeShape?.applet,
+			sessionGrants: sessionViewGrants.grants,
+			appletGrants: data.sessionViewFrame?.appletGrants
+		})
+	)
+	setContext(SESSION_DOSSIER_KEY, envelope.dossier)
+	setContext(SESSION_STATE_KEY, envelope.state)
+	setContext(SESSION_CHARACTERS_KEY, envelope.characters)
+
+	/**
+	 * What a widget may ask this page for (C0b) — one handler for a frame and
+	 * a remote, answered off ONE table (`sessionPage/requests/index.ts`, C1):
+	 * a `WidgetRequests` kind with no answer there does not compile. Each kind
+	 * opens something of the page's own; the widget sees only that it was
+	 * done (or why not). WHO may ask each kind is the SDK's askers table,
+	 * enforced in front of it by `guardWidgetRequests` (F9). Every dep below
+	 * is a function, read when a request arrives — never when this is built,
+	 * so it may name locals declared further down.
+	 */
+	/**
+	 * The ref of the seat that holds a card — a character seat, else a player
+	 * seat voicing it, a live one first (`open-character` names a card, and
+	 * stays a card until S5). ⏳ Else `character:<card>`, a card-form payload's.
+	 */
+	function seatRefOfCard(characterId: number): string {
+		const held = [
+			...(session?.sessionCharacters ?? [])
+				.filter((s) => s.characterId === characterId)
+				.map((seat) => ({ seat, form: \"character\" as const })),
+			...(session?.sessionPersonas ?? [])
+				.filter((s) => s.personaId === characterId)
+				.map((seat) => ({ seat, form: \"player\" as const }))
+		]
+		const found = held.find((h) => !h.seat.removedAt) ?? held[0]
+		return (
+			(found && seatRefOf(found.seat, found.form)) ??
+			`character:${characterId}`
+		)
+	}
+
+	const widgetRequestDeps: WidgetRequestDeps = {
+		sessionId: () => sessionId ?? null,
+		findMessage: (id) => session?.sessionMessages.find((m) => m.id === id),
+		messagesPage: (ask) => data.messagesPage(ask),
+		loadOlderIn: (channels) => data.loadOlderIn(channels),
+		channelLanes: (ask) => data.channelLanes(ask),
+		characters: () => envelope.characters.current,
+		characterForRef: (ref) => data.characterForRef(ref),
+		isAdmin: () => !!userCtx.user?.isAdmin,
+		panelsCtx: () => panelsCtx,
+		viewerId: () => userCtx.user?.id ?? null,
+		// The Author's note widget's Scenario field (PLAN-session-layout-simplify
+		// D13): read from the page's session; the write goes through the
+		// existing `sessions:update` (owner-only there).
+		readScenario: () =>
+			session
+				? {
+						scenario:
+							(session as { scenario?: string | null })
+								.scenario ?? \"\",
+						canEdit:
+							sessionUserId != null &&
+							sessionUserId === (userCtx.user?.id ?? null)
+					}
+				: null,
+		contextDebugging: () =>
+			!!systemSettingsCtx.settings?.contextDebuggingEnabled,
+		canControlMessage: (msg) => data.canControlMessage(msg),
+		// A name opens the person as this story knows them: the cast member
+		// their seat holds, wherever its book lives, for a guest as for the
+		// owner — the server says whether the viewer can open that book
+		// (the member's page) or only read its sheet; a seat with no member
+		// yet opens the card.
+		castMemberOf: (characterId) =>
+			seatMemberOf(socket, sessionId, seatRefOfCard(characterId)),
+		openSeatMemberSheet: (characterId) => {
+			if (sessionId == null) return
+			askSeatMemberSheet({ sessionId, ref: seatRefOfCard(characterId) })
+			panelsCtx.openPanel({ key: \"sessions\", toggle: false })
+		},
+		openCastMember: ({ lorebookId, castId }) => {
+			// Address first, then open (openJumpHit's rule).
+			panelsCtx.digest.lore = { lorebookId, scope: \"cast\", castId }
+			panelsCtx.openPanel({ key: \"lorebooks\", toggle: false })
+		},
+		openCharactersPanel: () =>
+			panelsCtx.openPanel({ key: \"characters\", toggle: false }),
+		viewCharacter: (id) => (panelsCtx.digest.viewCharacterId = id),
+		showLore: (target) => (panelsCtx.digest.lore = target as any),
+		openLorebooksPanel: () =>
+			panelsCtx.openPanel({ key: \"lorebooks\", toggle: false }),
+		viewAvatar: (who) => controls.handleAvatarClick(who),
+		viewImage: (src, gallery) => controls.handleImageClick(src, gallery),
+		showReport: (report) => {
+			composer.messageReport = report
+			composer.showDraftCompiledPromptModal = true
+		},
+		runOfMessage: (messageId) => asks.runOfMessage(messageId),
+		openRun: (runId) => runInspector.open(runId),
+		showTurnPicker: () => (turns.showTurnPicker = true),
+		showSpritePicker: (msg) => (controls.spriteLine = msg),
+		showAddPersona: () => (turns.showAddPersonaModal = true),
+		takeSeat: (name) => turns.takeSeat(name),
+		markActionsSeen: (keys) => actions.markActionsSeen(keys),
+		// What a tick selection may not take: captured lines and live ranges.
+		scened: () => scenes.captured,
+		opensScenes: () => data.offersWrite(\"scenes\"),
+		select: (ids) => (scenes.selectedMessageIds = new Set(ids)),
+		openSummarize: (loreType) => scenes.openSummarizeModal(loreType),
+		summarizeOpen: () => scenes.showSummarizeModal,
+		startSummarySelection: () => scenes.enterSummarizationModeEmpty(),
+		processScene: (sceneId) => scenes.processScene(sceneId),
+		// 🚧 Live scenes (§14 C): the conversation's scene boundaries. The
+		// verdict is the dossier's, so the page and the widget read one.
+		sceneBoundaries: () => !!envelope.dossier.current?.sceneBoundaries,
+		openScene: asks.openScene,
+		closeScene: asks.closeScene,
+		moveSceneBoundary: asks.moveSceneBoundary,
+		renameScene: asks.renameScene,
+		confirmRemoveScene: (scene, into) =>
+			scenes.confirmRemoveScene(scene, into),
+		deleteScene: asks.deleteScene,
+		mergeScene: asks.mergeScene,
+		sceneList: () => scenes.sceneList,
+		ownBookId: () => sessionOwnBookId,
+		ungraphedScenes: () => scenes.ungraphedSceneCount,
+		openExtendGraph: () => scenes.openExtendGraph(),
+		noteStoryClock: (own) => data.setStoryClock(own),
+		noteStoryCalendar: (calendar) => {
+			if (loadedSessionId != null)
+				data.setStoryCalendar(loadedSessionId, calendar)
+		},
+		readOpenScenes: () => sceneCues.readOpenScenes(),
+		summarizeScenes: (sceneIds) => sceneCues.summarize(sceneIds),
+		decideSceneCue: (cueId, accept) => sceneCues.decide(cueId, accept),
+		setDraft: (content) => (newMessage = content),
+		composerChannel: () => data.composerChannel,
+		channels: () => data.sessionChannels,
+		setChannel: (channel) => (data.composerChannel = channel),
+		switchPersona: (personaId) => data.switchPersona(personaId),
+		send: (trayItemIds) => composer.handleSend(trayItemIds),
+		composerTray: () => composer.composerTray,
+		fireTurn: (channel) => turns.handleContinueWithNextCharacter(channel),
+		// 🚧 Back · Forward (RF fix 5): a refusal is the central toast's.
+		rewindTurn: rewindPress.rewindTurn,
+		forwardTurn: rewindPress.forwardTurn,
+		stateStore: () => stateStore,
+		scenePins: () => scenePins,
+		writeSpriteSet: asks.writeSpriteSet,
+		readSessionEntries: asks.readSessionEntries,
+		writeEntryMarks: asks.writeEntryMarks,
+		readAuthorsNote: asks.readAuthorsNote,
+		writeAuthorsNote: asks.writeAuthorsNote,
+		readStoryClock: asks.readStoryClock,
+		writeStoryClock: asks.writeStoryClock,
+		readHistory: asks.readHistory,
+		readLines: asks.readLines,
+		startNextEntry: asks.startNextEntry,
+		readSessionPlaces: asks.readSessionPlaces,
+		readCharacterGallery: asks.readCharacterGallery,
+		readStatTrail: asks.readStatTrail,
+		readRoutineLog: asks.readRoutineLog,
+		readSessionRuns: asks.readSessionRuns,
+		readRunReceipt: asks.readRunReceipt,
+		writeBackdrop: asks.writeBackdrop,
+		// 🚧 A seat's portrait (PLAN-sheet-widget §12, 2026-10-18).
+		writeOwnerFace: asks.writeOwnerFace,
+		// 🚧 Give to… (PLAN-dc-after-walk2 Q0-4, ★4).
+		writeGive: asks.writeGive,
+		// 🚧 A tie side shown or hidden (ties on the graph, screen 2).
+		writeTieShown: asks.writeTieShown,
+		// A carry switch flipped from the Stats widget (RF fix 8).
+		writeCarry: asks.writeCarry,
+		// 🚧 The open session's full screen (SHAPES L1), for `session-fullscreen`.
+		fullscreen: () => (sessionId ? fullscreen : null)
+	}
+	setContext(
+		WIDGET_REQUESTS_KEY,
+		guardWidgetRequests(buildWidgetRequestAnswerer(widgetRequestDeps))
+	)
+
+	// A genre that proposes full screen (`shape.fullscreen: 'propose'`) opens
+	// it on this viewer's FIRST open of the session (no stored choice); the
+	// viewer's choice wins afterwards. Once per session id: a plain `let`.
+	let proposedFor: number | null = null
+	$effect(() => {
+		if (!data.proposesFullscreen) return
+		const id = sessionId
+		untrack(() => {
+			if (proposedFor === id) return
+			proposedFor = id
+			fullscreen.propose()
+		})
+	})
+
+	// Every widget and frame hears `fullscreen` when it CHANGES (never at
+	// mount): the first run for a session id only records the state.
+	let announcedFor: number | null = null
+	$effect(() => {
+		const on = fullscreen.on
+		const id = sessionId
+		untrack(() => {
+			if (announcedFor !== id) {
+				announcedFor = id
+				return
+			}
+			surfaceManager.announceFullscreen(on)
+		})
+	})
+
+	/**
+	 * Another session opened in this page (the route keeps the component):
+	 * nothing waiting on the LAST session's answers may land in this one
+	 * (plan B8). Its widget asks are rejected rather than settled by a reply
+	 * about a session that has left the screen, and an open Process scene window
+	 * closes — it would otherwise apply the old scene's cast into the new
+	 * session's book. Untracked bookkeeping: only the id moving re-runs it,
+	 * and the first load drops nothing.
+	 */
+	let switchedFrom: number | null = null
+	$effect(() => {
+		const id = loadedSessionId
+		untrack(() => {
+			const before = switchedFrom
+			if (id !== null) switchedFrom = id
+			if (before === null || id === null || id === before) return
+			asks.drop(\"another session opened before the server answered\")
+			scenes.closeProcess()
+		})
+	})
+
+	$effect(() => {
+		// React to sessionId changes (which is derived from page.params.id)
+		if (sessionId) {
+			// Reset state when switching sessions
+			data.reset()
+			turns.reset()
+			composer.reset()
+			writeDraft(\"\")
+			// The narrator modal's unlanded press is the draft's other half:
+			// the session left behind's text and speaker (a side character of
+			// its own, perhaps), never this one's.
+			narratorUnlandedPress = null
+			// Surface grid re-seeds for the new session (plan 21): re-fetch its
+			// panel set + this user's saved layout, and re-init once both land.
+			layout.reset()
+			// The interest keys for these four replies are held by the inbox
+			// (including the ones re-scoped to this very id, whose effects run
+			// before this one); the first typed `emit` puts their sync packet
+			// ahead of the request group on the same socket — plan ruling 3.
+			socket.emit(\"sessions:get\", { id: sessionId, limit: 25 })
+			socket.emit(\"sessions:presetStatus\", { sessionId })
+			socket.emit(\"sessions:view\", { sessionId })
+			socket.emit(\"sessions:panelLayout:get\", { sessionId })
+			socket.emit(\"sessions:genreOf\", { sessionId })
+			// Asked once per session open, a switch included: the scenes, and the
+			// action list (R-15) — the buttons are rows — whose shape gates what
+			// the view renders at all (19 §2).
+			scenes.refreshScenes()
+			socket.emit(\"sessions:actions\", { sessionId })
+		}
+	})
+
+	/**
+	 * The session header's cast stack (`headerCastKeyOf`), carried up by
+	 * `openSessionCtx`: kept as a STRING, which a `$derived` compares by
+	 * value, so the header moves only when a face, a name or the next
+	 * speaker does — never per streamed chunk.
+	 */
+
+	const headerCastKey: string = $derived(
+		headerCastKeyOf(
+			session,
+			turns.shouldShowNextCharacterBlock
+				? (turns.turnOrder?.order[0]?.ref ?? null)
+				: null
+		)
+	)
+	let headerCast: OpenSessionCastMember[] = $derived(
+		JSON.parse(headerCastKey)
+	)
+
+	onDestroy(() => terminateAllWorkers())
+
+	// `sp-avatar` asks the page who a participant reference is (C0b): the
+	// session's characters and the personas people speak as, one lookup.
+	// Set in an effect, not at init: a session page that replaces this one
+	// (another session opened) is made before this one is destroyed, and a
+	// clear at destroy wiped the new page's lookup — every avatar fell back
+	// to \"?\" (H's walk, 2026-10-25). Effects run after the old page's teardown.
+	const participantOf = (ref: string) => participantForRefIn(session, ref)
+	$effect(() => {
+		setHostParticipants(participantOf)
+		return () => {
+			if (hostElementContext.participant === participantOf)
+				setHostParticipants(undefined)
+		}
+	})
+
+	onDestroy(() => {
+		sceneImages.set({ left: null, right: null })
+		openSessionCtx.cast = []
+		openSessionCtx.headerNotice = null
+		openSessionCtx.rewind = null
+	})
+</script>
+
+<svelte:head>
+	<title>
+		Serene Pub - {data.sessionNotFound
+			? \"Not Found\"
+			: (session?.name ?? \"Loading...\")}
+	</title>
+	<meta name=\"description\" content=\"Serene Pub\" />
+</svelte:head>
+
+{#if data.sessionNotFound}
+	<div
+		class=\"flex h-full flex-col items-center justify-center gap-4 opacity-60\"
+	>
+		<Icons.MessageSquareOff size={48} />
+		<p class=\"text-lg font-semibold\">Session not found</p>
+		<p class=\"text-sm\">
+			This session may have been deleted or you don't have access to it.
+		</p>
+	</div>
+{:else}
+	<div class=\"relative flex h-full flex-col\">
+		{#if data.sessionViewFrame}
+			<!-- The mode's declared session view (20 §12): one opaque-origin
+			     frame owning the whole message section, layout-sized, fed
+			     over its channel. Core's chrome deliberately absent — this is
+			     the total-conversion lane. -->
+			<!-- 🚧 M2d: an applet genre's frame gets the applet loading screen until its `ready`. -->
+			<div class=\"relative min-h-0 flex-1\">
+				<PluginFrame
+					src={data.sessionViewFrame.src}
+					title={data.sessionViewFrame.title ?? \"Session view\"}
+					surface=\"session-view\"
+					session={loadedSessionId !== null
+						? { id: loadedSessionId, name: sessionName }
+						: undefined}
+					messages={session?.sessionMessages ?? []}
+					actions={actions.actionVenues}
+					actionDispatch={press.actionDispatch}
+					onAction={press.handleFrameAction}
+					source={surfaceManager}
+					scoped={sessionViewScoped}
+					apis={sessionViewMountOf.apis}
+					grants={sessionViewMountOf.grants as never}
+					inSession={true}
+					writeChannels={sessionViewGrants.writeChannels}
+					onready={() => (sessionFrameReady = true)}
+					onfatal={() => (sessionFrameFatal = true)}
+				/>
+				{#if data.modeShape?.applet}
+					<AppletLoading
+						title={data.sessionViewFrame.title ?? \"App\"}
+						ready={sessionFrameReady}
+						fatal={sessionFrameFatal}
+					/>
+				{/if}
+			</div>
+		{:else}
+			<!-- The modular session layout (mockup 2026-08-28): the conversation
+		     is the fixed chat core; widgets live in the free-form zones the
+		     user's layout template declares — pinned rails, icon strips with
+		     pop-overs, and top/bottom strips, all by measured width. -->
+			<SessionLayout
+				manager={surfaceManager}
+				{sessionId}
+				{session}
+				conversationDossier={envelope.dossier.current}
+				viewerId={userCtx.user?.id ?? null}
+				annex={envelope.annex.current}
+				presets={layout.layoutPresets}
+				startedFromLayoutPresetId={layout.startedFromLayoutPresetId}
+				startedFromUpdated={layout.startedFromUpdated}
+				onStartFrom={layout.startLayoutFrom}
+				onSavePreset={layout.saveLayoutPreset}
+				onRenamePreset={layout.renameLayoutPreset}
+				onDeletePreset={layout.deleteLayoutPreset}
+				onPresetUsage={layout.askLayoutPresetUsage}
+				presetUsage={layout.layoutPresetUsage}
+				onSaveChanges={layout.saveLayoutChanges}
+				onShareLayout={layout.shareLayout}
+				onCloneLayout={layout.cloneLayout}
+				onSetNewSessionLayout={layout.setNewSessionLayout}
+				genreName={data.genreName}
+				isGuest={data.isGuest}
+				isAdmin={!!userCtx.user?.isAdmin}
+				layoutSettings={layout.layoutSettings}
+				onLayoutSettings={layout.persistLayoutSettings}
+				actions={actions.actionVenues}
+				actionDispatch={press.actionDispatch}
+				onFrameAction={press.handleFrameAction}
+			/>
+		{/if}
+	</div>
+
+	<!-- The page's own views core's composer places (`sp-host-view`, C0b). -->
+	<SessionHostViews
+		{data}
+		{actions}
+		{turns}
+		{composer}
+		{scenes}
+		{press}
+		draft={newMessage}
+		{loadedSessionId}
+		{sessionUserId}
+		{sessionLorebookId}
+		{sessionLorebookBranchId}
+	/>
+
+	{#if scenes.showProcessSceneModal && scenes.processSceneId !== null && sceneBookId}
+		<ProcessSceneModal
+			open={scenes.showProcessSceneModal}
+			onOpenChange={(e) => (scenes.showProcessSceneModal = e.open)}
+			sceneId={scenes.processSceneId}
+			activityId={scenes.processActivityId}
+			pendingResult={scenes.processPendingResult}
+			lorebookId={sceneBookId}
+			lorebookBindingList={scenes.lorebookBindingList}
+			onApplied={() => scenes.refreshScenes()}
+			onDiscarded={() => {
+				// The server deletes the scene on dismiss when it was created
+				// for this run, so refresh what the session shows as \"scened\".
+				scenes.refreshScenes()
+			}}
+		/>
+	{/if}
+
+	<!-- 🚧 *Remove boundary* (a scene divider's): what goes and what stays,
+	     asked before the scene is removed (STYLE-GUIDE §6.6). -->
+	<ConfirmDialog
+		open={!!scenes.removeAsk}
+		title=\"Remove this scene's boundary?\"
+		body={removeSceneBody(
+			scenes.removeAsk?.scene ?? null,
+			scenes.removeAsk?.into ?? null
+		)}
+		keepLabel=\"Keep the scene\"
+		confirmLabel=\"Remove boundary\"
+		onKeep={() => scenes.removeAsk?.answer(false)}
+		onConfirm={() => scenes.removeAsk?.answer(true)}
+	/>
+
+	<SummarizeLoreModal
+		bind:open={scenes.showSummarizeModal}
+		onOpenChange={(e) => {
+			scenes.showSummarizeModal = e.open
+			// Drop the resume payload on close so the next manual open starts
+			// from configure rather than rehydrating a stale review.
+			if (!e.open) scenes.resumeSummarizeActivity = null
+		}}
+		resumeActivity={scenes.resumeSummarizeActivity}
+		{sessionId}
+		lorebookId={sessionBookOf({
+			lorebookId: sessionLorebookId,
+			ownBookId: sessionOwnBookId
+		})}
+		ownBookId={sessionOwnBookId}
+		branchId={sessionLorebookBranchId}
+		storyClock={sessionStoryClock}
+		timeline={data.storyTimeline}
+		selectedMessageIds={[...scenes.selectedMessageIds]}
+		initialLoreType={scenes.summarizeLoreType}
+		onSaved={() => {
+			scenes.refreshScenes()
+			scenes.exitSummarizationMode()
+		}}
+		onSceneProcessStarted={(sceneId) => scenes.sceneProcessStarted(sceneId)}
+		sessionCharacters={(session?.sessionCharacters ?? []).map((cc) => ({
+			id: cc.character.id,
+			name: castNameOf(
+				session ?? {},
+				cc.character.id,
+				cc.character,
+				cc.character.name
+			)
+		}))}
+		sessionPersonas={(session?.sessionPersonas ?? []).map((cp) => ({
+			id: cp.persona.id,
+			name: session?.castNames?.[cp.persona.id]
+				? castNameOf(
+						session,
+						cp.persona.id,
+						cp.persona,
+						cp.persona.name
+					)
+				: cp.persona.name
+		}))}
+		hasSceneMessageGap={scenes.hasSceneGap}
+	/>
+
+	<DeleteMessageDialog
+		open={controls.showDeleteMessageModal}
+		onOpenChange={controls.onOpenMessageDeleteChange}
+		onConfirm={controls.onDeleteMessageConfirm}
+		onCancel={controls.onDeleteMessageCancel}
+		revision={controls.deleteRevision}
+	/>
+
+	<PromptDetailsModal
+		open={composer.showDraftCompiledPromptModal}
+		onOpenChange={(open) => (composer.showDraftCompiledPromptModal = open)}
+		promptDetails={composer.promptDetails}
+		detailsExceeded={composer.detailsExceeded}
+		reportMessageId={composer.messageReport?.messageId}
+		isAdmin={!!userCtx.user?.isAdmin}
+	/>
+
+	<!-- \"Someone else\" (§4.9): at the page's top level, not inside the nudge,
+	     which unmounts the moment a turn is fired. -->
+	<TurnPicker
+		open={turns.showTurnPicker}
+		candidates={(turns.turnOrder?.candidates ?? []).map((c) => {
+			const id = seatCardIdOfRef(session, c.ref)
+			return session != null && c.kind !== \"persona\" && id != null
+				? {
+						...c,
+						name: castNameOf(
+							session,
+							id,
+							{ name: c.name, nickname: c.nickname },
+							c.name
+						),
+						nickname: undefined
+					}
+				: c
+		})}
+		headRef={turns.turnOrder?.order[0]?.ref}
+		avatarFor={data.characterForRef}
+		offerNarrator={!!turns.narratorTurn || turns.narratorFunction}
+		ownVoiceName={turns.narratorTurn ? data.ownVoice : data.narratorName}
+		onPick={turns.handlePickTurn}
+		onClose={() => (turns.showTurnPicker = false)}
+	/>
+
+	<!-- The sprite picker a message's controls ask for (`change-sprite`, C0b). -->
+	{#if controls.spriteLine?.characterId}
+		<ChangeSpriteDialog
+			open
+			messageId={controls.spriteLine.id}
+			characterId={controls.spriteLine.characterId}
+			characterName={data.getMessageCharacter(controls.spriteLine)?.name}
+			current={asShownSprite(
+				(controls.spriteLine.metadata as any)?.sprite
+			)}
+			onClose={() => (controls.spriteLine = null)}
+		/>
+	{/if}
+
+	<PickSpeakerModal
+		open={turns.showPickSpeakerModal}
+		onOpenChange={(open) => (turns.showPickSpeakerModal = open)}
+		sessionCharacters={session?.sessionCharacters?.map((cc) =>
+			cc.character
+				? { ...cc, character: seatCardAsShown(session, cc.character) }
+				: cc
+		)}
+		cardlessSeatShown={session?.cardlessSeatShown}
+		bind:pickSpeakerSearch={turns.pickSpeakerSearch}
+		narratorTurn={!!turns.narratorTurn}
+		narratorFunction={turns.narratorFunction}
+		narratorRowChip={turns.narratorRowChip}
+		ownVoice={data.ownVoice}
+		narratorName={data.narratorName}
+		onNarratorRow={turns.handleNarratorRow}
+		onPickSpeaker={turns.onPickSpeaker}
+	/>
+
+	<CollectModal
+		open={!!press.collecting}
+		action={press.collecting?.action.collects
+			? {
+					name: press.collecting.action.name,
+					description: press.collecting.action.description,
+					collects: press.collecting.action.collects
+				}
+			: null}
+		cast={press.collectCast}
+		ownVoice={data.ownVoice}
+		initialText={press.collecting?.initialText ?? \"\"}
+		subject={press.collectSubject}
+		rememberKey={press.collectRememberKey}
+		onSubmit={press.submitCollected}
+		onCancel={() => (press.collecting = null)}
+	/>
+
+	<!-- 🚧 An action's question before it fires (`ActionDecl.confirm`). -->
+	<ActionConfirm
+		asking={press.confirming?.asking ?? null}
+		onConfirm={() => press.confirmPress()}
+		onCancel={() => press.cancelPress()}
+	/>
+
+	<RetakeConfirm
+		open={turns.showRetakeConfirm}
+		rows={turns.retakeRows}
+		revision={turns.retakeRevision}
+		channelLabels={data.sessionFrames?.channelLabels ?? {}}
+		onConfirm={(quietly) => {
+			turns.showRetakeConfirm = false
+			turns.retake.confirm(quietly)
+		}}
+		onCancel={() => {
+			turns.showRetakeConfirm = false
+			turns.retake.cancel()
+		}}
+	/>
+
+	<NarratorResponseModal
+		open={turns.showNarratorResponseModal}
+		onOpenChange={(e) => (turns.showNarratorResponseModal = e.open)}
+		onFire={turns.handleConfirmNarratorResponse}
+		onCancel={turns.handleCancelNarratorResponse}
+		narratorName={data.narratorName}
+		sideCharacters={turns.sideCharacterOptions}
+		collectsText={actions.listedAction(NARRATE_ACTION)?.collects?.text}
+		unlandedPress={narratorUnlandedPress}
+	/>
+
+	<EntityGalleryViewModal
+		bind:open={controls.showAvatarModal}
+		onOpenChange={(e) => (controls.showAvatarModal = e.open)}
+		entity={controls.avatarModalEntity}
+	/>
+
+	<MediaLightbox
+		bind:open={controls.showImageModal}
+		onOpenChange={(e) => (controls.showImageModal = e.open)}
+		state={controls.lightboxState}
+	/>
+
+	<!-- Not mounted where the genre has no personas (`personas.max: 0`): the
+	     picker holds a standing `characters:list` interest and its empty
+	     state would speak of a system the session does not have. -->
+	{#if data.personasInMode}
+		<PersonaSelectModal
+			open={turns.showAddPersonaModal}
+			onclose={() => (turns.showAddPersonaModal = false)}
+			onSelect={turns.handleAddPersona}
+			excludeIds={(session?.sessionPersonas ?? [])
+				.filter((cp) => !cp.removedAt)
+				.map((cp) => cp.personaId)
+				.filter((id): id is number => id != null)}
+			title=\"Choose who you play as\"
+			description={composer.personaAskedBySend
+				? \"Choose who you play as before you send. Your message stays in the box.\"
+				: \"Pick a character to play in this session. Your messages are sent as them.\"}
+		/>
+	{/if}
+
+	<BranchSessionModal
+		open={controls.showBranchSessionModal}
+		onOpenChange={(e) => (controls.showBranchSessionModal = e.open)}
+		onConfirm={controls.onBranchSessionConfirm}
+		onCancel={controls.onBranchSessionCancel}
+		initialTitle={session?.name ?? undefined}
+	/>
+{/if}
+"
+
+ ❯ src/lib/client/components/sessionPage/narrateDraft.dom.test.ts:246:16
+    244|   expect(page).toMatch(/useInterest<"sessions:fireNarratorResponse">\(…
+    245|   expect(page).toMatch(/useInterest<"sessions:fireNarratorResponse:err…
+    246|   expect(page).toMatch(/if \(direction !== null\) narrations\.directed…
+       |                ^
+    247|   // What the page lends it: its session, its draft, the modal's unlan…
+    248|   const wiring = page.match(/const narrations = createNarrations\(\{([…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/38]⎯
+
+ FAIL  |unit| src/lib/shared/conformance/commentHistory.test.ts > comment history ratchet — comments state the rule, not the story > no file's phrase-hit count exceeds its recorded ratchet
+AssertionError: 9 file(s) exceed their comment-history ratchet:
+
+src/lib/client/components/connections/modelsList.ts: 1 (ratchet allows 0)
+    194: [no longer] * already says it (the "No longer listed" badge, the download line).
+
+src/lib/client/shell/leaveDestination.ts: 1 (ratchet allows 0)
+    21: [no longer] // A cold load (`page.state` is `{}`), junk, or Apps no longer registered.
+
+src/lib/server/db/dataUpgrades/0137_loadout_voices.ts: 1 (ratchet allows 0)
+    11: [no longer] * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids
+
+src/lib/server/embedding/indexingActivity.ts: 1 (ratchet allows 0)
+    4: [used to] * The composer's notice used to carry "Indexing 12 of 40 lorebook entries".
+
+src/lib/server/sessions/honorModeRetired.ts: 1 (ratchet allows 0)
+    35: [no longer] * (the 0.7 squash, or the importer no longer accepting older files).
+
+src/lib/server/sessions/settings.ts: 1 (ratchet allows 0)
+    335: [no longer] * are no longer its business — that is sheet latitude (`state/handEdits.ts`).
+
+src/lib/server/sockets/localOnnxModels.ts: 1 (ratchet allows 0)
+    1125: [no longer] * exist (`ensureLocalOnnxConnections`), so their existence no longer says
+
+src/lib/server/utils/activityStore.ts: 2 (ratchet allows 1)
+    290: [used to] * the progress the composer's notice used to carry. Written only by
+    630: [deliberately not] // Deliberately NOT startScene's abort-and-evict, for two different
+
+src/lib/server/utils/androidWrapper.ts: 1 (ratchet allows 0)
+    3: [used to] * this env var before spawning the server). Used to hide features that don't
+
+Rewrite each flagged comment as the present-tense rule, move rationale that needs a paragraph to docs/ with a one-line pointer, or delete it if it is pure history. Then run `npm run comments:ratchet` to record the lower count. Do not weaken the phrase list to pass this.: expected [ …(9) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/client/components/connections/modelsList.ts: 1 (ratchet allows 0)
++     194: [no longer] * already says it (the \"No longer listed\" badge, the download line).",
++   "src/lib/client/shell/leaveDestination.ts: 1 (ratchet allows 0)
++     21: [no longer] // A cold load (`page.state` is `{}`), junk, or Apps no longer registered.",
++   "src/lib/server/db/dataUpgrades/0137_loadout_voices.ts: 1 (ratchet allows 0)
++     11: [no longer] * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids",
++   "src/lib/server/embedding/indexingActivity.ts: 1 (ratchet allows 0)
++     4: [used to] * The composer's notice used to carry \"Indexing 12 of 40 lorebook entries\".",
++   "src/lib/server/sessions/honorModeRetired.ts: 1 (ratchet allows 0)
++     35: [no longer] * (the 0.7 squash, or the importer no longer accepting older files).",
++   "src/lib/server/sessions/settings.ts: 1 (ratchet allows 0)
++     335: [no longer] * are no longer its business — that is sheet latitude (`state/handEdits.ts`).",
++   "src/lib/server/sockets/localOnnxModels.ts: 1 (ratchet allows 0)
++     1125: [no longer] * exist (`ensureLocalOnnxConnections`), so their existence no longer says",
++   "src/lib/server/utils/activityStore.ts: 2 (ratchet allows 1)
++     290: [used to] * the progress the composer's notice used to carry. Written only by
++     630: [deliberately not] // Deliberately NOT startScene's abort-and-evict, for two different",
++   "src/lib/server/utils/androidWrapper.ts: 1 (ratchet allows 0)
++     3: [used to] * this env var before spawning the server). Used to hide features that don't",
++ ]
+
+ ❯ src/lib/shared/conformance/commentHistory.test.ts:79:5
+     77|       `lower count. Do not weaken the phrase list to pass this.`
+     78|     : undefined
+     79|   ).toEqual([])
+       |     ^
+     80|  })
+     81| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/38]⎯
+
+ FAIL  |unit| src/lib/shared/conformance/wiring.test.ts > §1 node ports — every port has something on the other end > every out-port shape is one some node can consume
+AssertionError: 2 out-port shape(s) no port anywhere accepts — a value with nowhere to go:
+  • core:shape/cue-map@1 :: core:oracle/speak@1.cueMap
+  • core:shape/spoken-as@1 :: core:oracle/speak@1.spokenAs
+
+Declare an in-port that takes it — or add it to UNCONSUMED_OUT_SHAPES with the reason it is declared ahead of its other end. Do not weaken the check.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:shape/cue-map@1 :: core:oracle/speak@1.cueMap",
++   "core:shape/spoken-as@1 :: core:oracle/speak@1.spokenAs",
++ ]
+
+ ❯ expectExactlyExcused src/lib/shared/conformance/wiring.test.ts:148:4
+    146|      `declared ahead of its other end. Do not weaken the check.`
+    147|    : undefined
+    148|  ).toEqual([])
+       |    ^
+    149|
+    150|  const seen = new Set(found)
+ ❯ src/lib/shared/conformance/wiring.test.ts:776:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/38]⎯
+
+ FAIL  |unit| src/lib/shared/conformance/wiring.test.ts > §1 node ports — every port has something on the other end > every in-port on a node core ships is filled by some core spec
+AssertionError: 3 in-port(s) on node types core ships in a pipeline that no shipped pipeline ever supplies:
+  • core:oracle/speak@1.language
+  • core:oracle/speak@1.text
+  • core:task/clock-step@1.unless
+
+Wire it in the spec that needs it — or add it to UNFILLED_IN_PORTS with the reason it is declared ahead of its other end. Do not weaken the check.: expected [ Array(3) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:oracle/speak@1.language",
++   "core:oracle/speak@1.text",
++   "core:task/clock-step@1.unless",
++ ]
+
+ ❯ expectExactlyExcused src/lib/shared/conformance/wiring.test.ts:148:4
+    146|      `declared ahead of its other end. Do not weaken the check.`
+    147|    : undefined
+    148|  ).toEqual([])
+       |    ^
+    149|
+    150|  const seen = new Set(found)
+ ❯ src/lib/shared/conformance/wiring.test.ts:786:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/38]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > no client-reachable module may touch an adapter > nothing under shared/, client/ or routes/ imports a server adapter module
+AssertionError: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/shared/speech/voicebank.ts imports \"../connectionAdapters/speechFacts\". Adapter modules are server-only and must stay lazily loaded; if this is a type both sides need, move the type to $lib/shared.",
++ ]
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:158:22
+    156|     `if this is a type both sides need, move the type to $lib/shared.`
+    157|   )
+    158|   expect(violations).toEqual([])
+       |                      ^
+    159|  })
+    160| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/38]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > who may load a concrete adapter module > every non-test module that loads an adapter is on the allowlist
+AssertionError: expected [ …(3) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/server/connections/modelSync.ts loads \"../connectionAdapters/speech/getSpeechAdapter\" directly. Go through getConnectionAdapter()/getImageAdapter(), which look the module up in ADAPTER_REGISTRY and keep the import lazy. If this genuinely cannot, add the file to ALLOWED in this test with the reason.",
++   "src/lib/server/speech/speechTarget.ts loads \"$lib/server/connectionAdapters/speech/getSpeechAdapter\" directly. Go through getConnectionAdapter()/getImageAdapter(), which look the module up in ADAPTER_REGISTRY and keep the import lazy. If this genuinely cannot, add the file to ALLOWED in this test with the reason.",
++   "src/lib/server/speech/speechTarget.ts loads \"$lib/server/connectionAdapters/speech/getSpeechAdapter\" directly. Go through getConnectionAdapter()/getImageAdapter(), which look the module up in ADAPTER_REGISTRY and keep the import lazy. If this genuinely cannot, add the file to ALLOWED in this test with the reason.",
++ ]
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:196:22
+    194|     `If this genuinely cannot, add the file to ALLOWED in this test wi…
+    195|   )
+    196|   expect(violations).toEqual([])
+       |                      ^
+    197|  })
+    198|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/38]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > who may load a concrete adapter module > only the one legacy sockets file loads an adapter STATICALLY
+AssertionError: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/server/connections/modelSync.ts statically imports \"../connectionAdapters/speech/getSpeechAdapter\". Use a lazy import() (or the loader) — a top-level import puts the backend's SDK in this module's graph whether or not anyone uses that backend.",
++ ]
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:235:21
+    233|     `a top-level import puts the backend's SDK in this module's graph …
+    234|   )
+    235|   expect(offenders).toEqual([])
+       |                     ^
+    236|  })
+    237| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/38]⎯
+
+ FAIL  |unit| src/lib/server/adapters/importBoundary.test.ts > the eager load stays in one place > registry consumers are enumerated
+AssertionError: expected [ …(11) ] to deeply equal [ …(9) ]
+
+- Expected
++ Received
+
+@@ -1,7 +1,9 @@
+  [
+    "src/lib/server/connectionAdapters/manifest.conformance.test.ts",
++   "src/lib/server/connectionAdapters/speech.conformance.test.ts",
++   "src/lib/server/connectionAdapters/speech/getSpeechAdapter.ts",
+    "src/lib/server/connections/modelSync.ts",
+    "src/lib/server/embeddingAdapters/adapters.test.ts",
+    "src/lib/server/nerAdapters/adapters.test.ts",
+    "src/lib/server/utils/getConnectionAdapter.ts",
+    "src/lib/server/utils/getEmbeddingAdapter.ts",
+
+ ❯ src/lib/server/adapters/importBoundary.test.ts:390:17
+    388|    )
+    389|   ].sort()
+    390|   expect(found).toEqual(CONSUMERS.sort())
+       |                 ^
+    391|  })
+    392| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/38]⎯
+
+ FAIL  |unit| src/lib/server/adapters/registry.test.ts > the loaders > route exactly what the registry says, all four families
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/lib/server/adapters/registry.test.ts:155:2
+    153|
+    154| describe("the loaders", () => {
+    155|  it("route exactly what the registry says, all four families", async (…
+       |  ^
+    156|   const { ADAPTER_REGISTRY } = await import("./registry")
+    157|   const { getConnectionAdapter } = await import(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/38]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > every declared slot is named by the spec that uses it > no shipped spec leaves a declared slot unwired
+AssertionError: a node type declares this slot, `config/panel/declarations.ts` renders a control for it, and `resolveInput` resolves only the config keys a spec named — so the value a person sets is stored and never read. Wire it (`params: slot.params()`), or delete the declaration.: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a connection slot the spec never wires — the control renders and does nothing.",
++   "core:spec/speak-message@1.0.0 node \"spoken.words.speak\" (core:oracle/speak@1) declares a sampling slot the spec never wires — the control renders and does nothing.",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:402:5
+    400|     "and never read. Wire it (`" +
+    401|     "params: slot.params()`), or delete the declaration."
+    402|   ).toEqual([])
+       |     ^
+    403|  })
+    404|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/38]⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/paramsSlotWiring.test.ts > the check fails when a slot goes unwired > names the node when `params: slot.params()` is removed
+AssertionError: expected [ …(3) ] to deeply equal [ Array(1) ]
+
+- Expected
++ Received
+
+  [
+    "core:spec/story-respond node \"gather.history.read\" slot \"params\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"connection\"",
++   "core:spec/speak-message node \"spoken.words.speak\" slot \"sampling\"",
+  ]
+
+ ❯ src/lib/server/pipelines/boot/paramsSlotWiring.test.ts:600:5
+    598|   expect(
+    599|    broken.findings.filter((f) => !LEDGER.has(f.key)).map((f) => f.key)
+    600|   ).toEqual([
+       |     ^
+    601|    'core:spec/story-respond node "gather.history.read" slot "params"'
+    602|   ])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/38]⎯
+
+ FAIL  |int| src/lib/server/plugins/coreRow.int.test.ts > a stored 'core' plugin row > offers no widget, frame or page
+AssertionError: expected [ Array(1) ] to include '/plugin-ui/acme.twin/ui/widget.mjs'
+ ❯ src/lib/server/plugins/coreRow.int.test.ts:198:16
+    196|   const srcs = res.modePanels.map((p) => p.src ?? "")
+    197|   // The twin's remote widget.
+    198|   expect(srcs).toContain(`/plugin-ui/${TWIN}/ui/widget.mjs`)
+       |                ^
+    199|   expect(srcs.some((s) => s.startsWith("/plugin-ui/core/"))).toBe(fals…
+    200|   expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/38]⎯
+
+ FAIL  |int| src/lib/server/plugins/coreRow.int.test.ts > a stored 'core' plugin row > is never served as a frame document or a plugin page
+TypeError: Cannot read properties of undefined (reading 'host')
+ ❯ GET src/routes/plugin-ui/[...rest]/+server.ts:63:78
+     61|  // module, a document inside `sp-frame`). The tag covers the policy t…
+     62|  // a grant an admin withdrew must reach a frame whose bytes did not c…
+     63|  const csp = frameCsp(plugin.manifest, plugin.adminDenied, { host: eve…
+       |                                                                              ^
+     64|  const policy = framePermissionsPolicy(plugin.manifest, plugin.adminDe…
+     65|  const etag = `"${createHash("sha256").update(`${file.hash}\n${file.mi…
+ ❯ src/lib/server/plugins/coreRow.int.test.ts:218:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/38]⎯
+
+ FAIL  |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts > genre field defaults (B16x) > a Lair session created with no preset has its declared defaults
+AssertionError: expected { tone: 'grounded', …(10) } to deeply equal { tone: 'grounded', …(6) }
+
+- Expected
++ Received
+
+  {
+    "askBeforeRolling": true,
+    "autoRoll": false,
++   "ownerSheetLatitude": "all-any",
+    "roomsLayer": true,
+    "roundWorth": 5,
+    "sanctumSteers": true,
++   "sessionLanguage": "",
+    "showDice": true,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grounded",
+  }
+
+ ❯ src/lib/server/sessions/genreFieldDefaults.int.test.ts:73:48
+     71|   }
+     72|   // The run's read (the inlet's `fields`) and the settings document a…
+     73|   expect(await genreFieldsFor(db, session.id)).toEqual(expected)
+       |                                                ^
+     74|   expect((await resolveSessionSettings(db, session.id))!.fields).toEqu…
+     75|    expected
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/38]⎯
+
+ FAIL  |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts > genre field defaults (B16x) > an explicit value wins over the declared default
+AssertionError: expected { tone: 'grim', roundWorth: 5, …(9) } to deeply equal { tone: 'grim', roundWorth: 5, …(5) }
+
+- Expected
++ Received
+
+  {
+    "askBeforeRolling": true,
+    "autoRoll": false,
++   "ownerSheetLatitude": "all-any",
+    "roomsLayer": true,
+    "roundWorth": 5,
+    "sanctumSteers": true,
++   "sessionLanguage": "",
+    "showDice": false,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grim",
+  }
+
+ ❯ src/lib/server/sessions/genreFieldDefaults.int.test.ts:84:48
+     82|    showDice: false
+     83|   })
+     84|   expect(await genreFieldsFor(db, session.id)).toEqual({
+       |                                                ^
+     85|    tone: "grim",
+     86|    roundWorth: 5,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/38]⎯
+
+ FAIL  |int| src/lib/server/sessions/genreFieldDefaults.int.test.ts > genre field defaults (B16x) > a stored value under a retired key is inert (R12: the Lair's turnStyle; the rewrite's partySpeech, trustNarrator)
+AssertionError: expected { tone: 'grounded', …(10) } to deeply equal { tone: 'grounded', …(6) }
+
+- Expected
++ Received
+
+  {
+    "askBeforeRolling": true,
+    "autoRoll": false,
++   "ownerSheetLatitude": "all-any",
+    "roomsLayer": true,
+    "roundWorth": 5,
+    "sanctumSteers": true,
++   "sessionLanguage": "",
+    "showDice": true,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grounded",
+  }
+
+ ❯ src/lib/server/sessions/genreFieldDefaults.int.test.ts:121:48
+    119|    showDice: true
+    120|   }
+    121|   expect(await genreFieldsFor(db, session.id)).toEqual(expected)
+       |                                                ^
+    122|   expect((await resolveSessionSettings(db, session.id))!.fields).toEqu…
+    123|    expected
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[28/38]⎯
+
+ FAIL  |int| src/lib/server/sockets/presetFallback.int.test.ts > a binding that stopped resolving > the boot reconcile records one notice, and republishing clears it
+AssertionError: expected 'Unavailable: needs a model that can s…' to match /^Unavailable: needs a model that can …/
+
+- Expected:
+/^Unavailable: needs a model that can .*draw pictures/
+
++ Received:
+"Unavailable: needs a model that can speak."
+
+ ❯ src/lib/server/sockets/presetFallback.int.test.ts:260:21
+    258|   const stale = all.filter((n) => n.event.startsWith("core:event/"))
+    259|   for (const n of all.filter((x) => !x.event.startsWith("core:event/")…
+    260|    expect(n.reason).toMatch(/^Unavailable: needs a model that can .*dr…
+       |                     ^
+    261|   expect(stale.length).toBe(1)
+    262|   expect(stale[0]).toMatchObject({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[29/38]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts > sessionPresets:list — effective included actions > the shipped Lair presets (included set null) carry their companion actions
+AssertionError: expected [ 'nudge', 'read-aloud', …(4) ] to deeply equal [ Array(4) ]
+
+- Expected
++ Received
+
+  [
+    "nudge",
++   "read-aloud",
+    "reveal",
++   "say-it-as",
+    "trap",
+    "whisper",
+  ]
+
+ ❯ src/lib/server/sockets/sessionAdmin.presetActions.int.test.ts:87:29
+     85|   expect(wordsOnly).toBeDefined()
+     86|   expect(wordsOnly.includedActions).toBeNull()
+     87|   expect(keysOf(wordsOnly)).toEqual(["nudge", "reveal", "trap", "whisp…
+       |                             ^
+     88|  }, 60_000)
+     89|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[30/38]⎯
+
+ FAIL  |int| src/lib/server/sockets/sessions.forms.int.test.ts > R-15 · Elara asks Tom, and the AI answers as Tom > a pressed action that parks at its own write answers parked at once, and its outcome arrives as pushes once the owner decides (R-b)
+AssertionError: expected { sessionId: 13, …(3) } to deeply equal { sessionId: 13, …(2) }
+
+- Expected
++ Received
+
+  {
+    "action": "core:spec/test-parked-press-answer#parked-press-answer",
++   "askedRunId": "parked-press-run",
+    "parked": true,
+    "sessionId": 13,
+  }
+
+ ❯ src/lib/server/sockets/sessions.forms.int.test.ts:1120:15
+    1118|   // Parked, and nothing else: no success, no error, no terminal frame…
+    1119|   // the run has not ended.
+    1120|   expect(ack).toEqual({ sessionId: session.id, action: `${answerId}#${…
+       |               ^
+    1121|   expect(pushes.filter((p) => p.event === "pipelines:progress" && p.da…
+    1122|   expect((await runsOf(session.id)).map((r) => r.specSlug)).toEqual([a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[31/38]⎯
+
+ FAIL  |int| src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts > 0108 layering registrations > moves bindings, toggles, configurations and tasks into registration rows
+AssertionError: expected [ …(14) ] to deeply equal [ …(12) ]
+
+- Expected
++ Received
+
+@@ -1,6 +1,8 @@
+  [
++   "speak-message#read-aloud→speak-message",
++   "speak-message#say-it-as→speak-message",
+    "story-advance-time#advance-time→story-advance-time",
+    "story-answer#answer→story-answer",
+    "story-generate-image#generate-image→story-generate-image",
+    "story-illustrate-scene#illustrate-scene→story-illustrate-scene",
+    "story-look#look→story-look",
+
+ ❯ src/lib/server/db/dataUpgrades/0108_layering_registrations.int.test.ts:192:87
+    190|    values: { generate: { params: { maxTokens: 900 } } }
+    191|   })
+    192|   expect(p3.filter((r) => r.dropped && r.key.includes("#")).map((r) =>…
+       |                                                                                       ^
+    193|    [
+    194|     "story-advance-time#advance-time→story-advance-time",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[32/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/entities/publishedValues.int.test.ts > session.fields > is the stored value of a declared key, else its default, and nothing else
+AssertionError: expected { autoAdvance: 'round', …(12) } to deeply equal { tone: 'grim', roundWorth: 5, …(7) }
+
+- Expected
++ Received
+
+@@ -7,10 +7,14 @@
+    },
+    "autoAdvance": "round",
+    "characterDetail": "full",
+    "difficulty": "normal",
+    "narratorInterjections": "off",
++   "ownerSheetLatitude": "all-any",
+    "roundWorth": 5,
++   "sessionLanguage": "",
+    "sideCast": false,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grim",
+    "turnMode": "rules",
+  }
+
+ ❯ src/lib/server/pipelines/entities/publishedValues.int.test.ts:182:30
+    180|   // Stored wins; unstored declared keys resolve to their defaults
+    181|   // (B16x); the undeclared key never arrives.
+    182|   expect(doc.session.fields).toEqual({
+       |                              ^
+    183|    tone: "grim",
+    184|    roundWorth: 5,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[33/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/entities/sessionGenres.int.test.ts > the fields round-trip (19 §1, U-C2) > a standard-mode session supplies only its own fields' defaults — never a stored stray
+AssertionError: expected { autoAdvance: 'round', …(12) } to deeply equal { …(9) }
+
+- Expected
++ Received
+
+@@ -7,10 +7,14 @@
+    },
+    "autoAdvance": "round",
+    "characterDetail": "full",
+    "difficulty": "normal",
+    "narratorInterjections": "off",
++   "ownerSheetLatitude": "all-any",
+    "roundWorth": 5,
++   "sessionLanguage": "",
+    "sideCast": false,
++   "speechNarratorVoice": "",
++   "speechReadAloud": "off",
+    "tone": "grounded",
+    "turnMode": "rules",
+  }
+
+ ❯ src/lib/server/pipelines/entities/sessionGenres.int.test.ts:289:48
+    287|   // The standard mode is Story, and Story declares the author's note
+    288|   // and, from Adventure, its tone and difficulty.
+    289|   expect(await genreFieldsFor(db, session.id)).toEqual({
+       |                                                ^
+    290|    // The note goes at the end unless moved (owner ruling 2026-10-03).
+    291|    authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[34/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/allPipelines.int.test.ts > every provider has a dispatch path > routes each provider the specs use, with none falling through
+AssertionError: providers with no dispatch path: core:oracle/speak: expected [ 'core:oracle/speak' ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:oracle/speak",
++ ]
+
+ ❯ src/lib/server/pipelines/runtime/allPipelines.int.test.ts:150:5
+    148|    missing,
+    149|    `providers with no dispatch path: ${missing.join(", ")}`
+    150|   ).toEqual([])
+       |     ^
+    151|  })
+    152| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[35/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/guideGrounding.int.test.ts > a guide turn with the docs compiled > 'how do I write a plugin' retrieves the SDK's your-first-plugin guide, and the prompt carries its excerpt and path
+AssertionError: ["/docs/sdk/guides/plugin-permissions#widget-writes","/docs/sdk/guides/plugin-permissions#events","/docs/sdk/guides/plugin-permissions#kind-outlet","/docs/genres#genres-from-plugins","/docs/sdk/guides/rulesets#shipping-a-ruleset-in-a-plugin-package","/docs/pipelines#for-plugin-authors"]: expected undefined to be defined
+ ❯ src/lib/server/pipelines/runtime/guideGrounding.int.test.ts:206:67
+    204|    String(h.payload?.link).startsWith("/docs/sdk/guides/your-first-plu…
+    205|   )
+    206|   expect(first, JSON.stringify(hits.map((h) => h.payload?.link))).toBe…
+       |                                                                   ^
+    207|
+    208|   // On the wire: framed as the only documentation, with the path and
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[36/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts > a stored switch reaches the selection > keeps the lower-scoring entry off, and the higher-scoring one on
+AssertionError: the shipped sampling window moved, so the two entries below are no longer sized to disagree — resize them rather than relaxing the assertion: expected 6809 to be 7296 // Object.is equality
+
+- Expected
++ Received
+
+- 7296
++ 6809
+
+ ❯ src/lib/server/pipelines/runtime/scoreLedAllocation.int.test.ts:409:5
+    407|     "no longer sized to disagree — resize them rather than " +
+    408|     "relaxing the assertion"
+    409|   ).toBe(BUDGET)
+       |     ^
+    410|
+    411|   // Share-first: worldLore's band is a sixth of the window, the big
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[37/38]⎯
+
+ FAIL  |int| src/lib/server/pipelines/config/panel/groups.int.test.ts > every shipped spec reads without two headings alike > gives no two groups of one spec the same heading, and no two steps of one group the same heading
+AssertionError: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:spec/assistant-memory › (one group): two steps headed \"What to look for, and what is kept · due\"",
++   "core:spec/story-sweep › (one group): two steps headed \"What to look for, and what is kept · due\"",
++ ]
+
+ ❯ src/lib/server/pipelines/config/panel/groups.int.test.ts:397:19
+    395|      clashes.push(`${slug} › ${g.heading ?? "(one group)"}: two steps …
+    396|   }
+    397|   expect(clashes).toEqual([])
+       |                   ^
+    398|  }, 120_000)
+    399|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[38/38]⎯
+
+
+ Test Files  26 failed | 2440 passed | 1 skipped (2467)
+      Tests  33 failed | 25926 passed | 33 skipped | 4 todo (25996)
+   Start at  22:45:18
+   Duration  5011.91s (transform 95.50s, setup 14.36s, import 2442.04s, tests 12111.63s, environment 44.84s)
+

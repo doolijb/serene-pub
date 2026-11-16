@@ -34,6 +34,11 @@ import {
 	type NewLorebookEntry
 } from "$lib/shared/entries/types"
 import {
+	ENTRY_DATE_PARTS,
+	clampDecayRate,
+	type EntryTimeWire
+} from "$lib/shared/lorebooks/amendments"
+import {
 	readsAsRegex,
 	runawayPatternOf,
 	runawayRefusal
@@ -269,7 +274,7 @@ const toDateString = (value: Date | string): string =>
 export function toEntryRow(
 	row: SelectLorebookEntry,
 	vec: EntryVector = NO_VECTOR
-): LorebookEntry {
+): LorebookEntry & EntryTimeWire {
 	const decl = entryDeclaration(row.typeId)
 	const titleColumn = decl?.roles.title
 	const anchorColumn = decl?.roles.anchor?.column
@@ -315,11 +320,50 @@ export function toEntryRow(
 		embedding: vec.embedding,
 		embeddingModel: vec.embeddingModel,
 		vectorizedAt: vec.vectorizedAt,
+		decayRate: row.decayRate ?? 0,
+		...(takesBeginning(row.typeId)
+			? {
+					year: typeof stored.year === "number" ? stored.year : null,
+					month: typeof stored.month === "number" ? stored.month : null,
+					day: typeof stored.day === "number" ? stored.day : null
+				}
+			: {}),
 		...(anchorColumn
 			? { lorebookBindingId: (row as any)[anchorColumn] ?? null }
 			: {}),
 		...declared
-	} as LorebookEntry
+	} as unknown as LorebookEntry & EntryTimeWire
+}
+
+/**
+ * Whether an entry type takes a Beginning: its own date parts `year`, `month`
+ * and `day` in `fields`. A type that declares those parts itself (history,
+ * where the date is the entry) keeps its own rules and takes none.
+ */
+export function takesBeginning(typeId: string): boolean {
+	const declared = declaredFields(typeId)
+	return !ENTRY_DATE_PARTS.some((part) => declared.includes(part))
+}
+
+/**
+ * Why these date parts are not a Beginning, or null when they are one (or none:
+ * all three null or absent is Perpetual). Judged on the merged result, the
+ * payload over what is stored.
+ */
+export function beginningProblem(parts: {
+	year?: unknown
+	month?: unknown
+	day?: unknown
+}): string | null {
+	const { year, month, day } = parts
+	if (year == null && month == null && day == null) return null
+	if (year == null) return "A beginning needs a year."
+	const whole = (v: unknown, min: number | null) =>
+		typeof v === "number" && Number.isInteger(v) && (min === null || v >= min)
+	if (!whole(year, null) || (month != null && !whole(month, 1)) || (day != null && !whole(day, 1)))
+		return "A beginning's year, month and day are whole numbers, and the month and day start at 1."
+	if (day != null && month == null) return "A beginning with a day needs a month too."
+	return null
 }
 
 /**
@@ -374,6 +418,10 @@ export function entryInsert(
 	const fields: Record<string, unknown> = {}
 	for (const field of declaredFields(typeId))
 		fields[field] = source[field] ?? fieldDefault(typeId, field)
+	if (takesBeginning(typeId))
+		for (const part of ENTRY_DATE_PARTS)
+			if (typeof source[part] === "number") fields[part] = source[part]
+	const decayRate = Number(source.decayRate)
 
 	return {
 		lorebookId: data.lorebookId,
@@ -408,6 +456,7 @@ export function entryInsert(
 		enabled: data.enabled ?? true,
 		archived: data.archived ?? false,
 		extraJson: data.extraJson ?? {},
+		decayRate: Number.isFinite(decayRate) ? clampDecayRate(decayRate) : 0,
 		...(written.provenance ? { provenance: written.provenance } : {})
 	}
 }
@@ -664,8 +713,10 @@ export const touchesPatterns = (data: object): boolean =>
  * `fields` half goes through `mergeFields` so a writer touching `graphed` never
  * lands on top of a writer touching `content`. A key the payload did not
  * mention appears in neither half and is therefore not written at all — and a
- * key this *type* does not declare appears in neither either, so a `year` sent
- * to a world lore row is ignored rather than stored where nothing reads it.
+ * key this *type* does not declare appears in neither either, except the
+ * Beginning: a type that takes one (`takesBeginning`) sends `year`, `month` and
+ * `day` to the `fields` half (null clears), and `decayRate` goes to its column
+ * for every type, held to 0 to 1.
  *
  * ⚠ `anchorEntryId` is emitted, and the handler must have validated it first:
  * this splits a payload, it does not judge one. See `assertAnchorEntry`.
@@ -707,6 +758,10 @@ export function splitUpdate(
 
 	for (const field of declaredFields(typeId))
 		if (has(field)) fields[field] = data[field]
+	if (takesBeginning(typeId))
+		for (const part of ENTRY_DATE_PARTS) if (has(part)) fields[part] = data[part]
+	if (has("decayRate") && Number.isFinite(Number(data.decayRate)))
+		columns.decayRate = clampDecayRate(Number(data.decayRate))
 
 	return { columns, fields }
 }

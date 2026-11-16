@@ -16,7 +16,7 @@
 	import { fly, fade } from "svelte/transition"
 	import { MOTION, motionDuration } from "$lib/client/utils/motion"
 	import { onMount, setContext, onDestroy, untrack, tick } from "svelte"
-	import AdminView from "$lib/client/admin/AdminView.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
 	import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
 	import {
@@ -25,20 +25,7 @@
 		viewLinkFor
 	} from "$lib/client/shell/viewLinks"
 	import { applyMessagesDigest } from "$lib/client/shell/openHref"
-	import { getDocMeta } from "$lib/shared/utils/docsIndex"
-	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
-	import ModelsSidebar from "./sidebars/ModelsSidebar.svelte"
-	import LoadoutsSidebar from "./sidebars/LoadoutsSidebar.svelte"
-	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
-	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
-	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
-	import SessionsSidebar from "./sidebars/SessionsSidebar.svelte"
-	import AppsSidebar from "./sidebars/AppsSidebar.svelte"
-	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
-	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
-	import HelpSidebar from "./sidebars/HelpSidebar.svelte"
-	import ConversationsSidebar from "$lib/client/components/sidebars/ConversationsSidebar.svelte"
-	import LibraryView from "./library/LibraryView.svelte"
+	import { hasDocPage } from "$lib/shared/utils/docsPages"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getSocket } from "$lib/client/sockets/socketInstance"
 	import {
@@ -58,8 +45,6 @@
 	import { sayUnshownSceneRunFailure } from "$lib/client/components/modals/sceneRunShown"
 	import { compileEntryStateOf } from "$lib/client/components/modals/compileEntryState"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
-	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
-	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import PipelineReviewModal from "$lib/client/components/pipelines/PipelineReviewModal.svelte"
 	import CapPauseDialog from "$lib/client/components/pipelines/CapPauseDialog.svelte"
@@ -96,7 +81,6 @@
 	import JumpPill from "$lib/client/components/shell/JumpPill.svelte"
 	import FullscreenExit from "./FullscreenExit.svelte"
 	import { useSessionFullscreen } from "$lib/client/sessions/fullscreen.svelte"
-	import JumpOverlay from "$lib/client/components/shell/JumpOverlay.svelte"
 	import ShellLoading from "$lib/client/components/shell/ShellLoading.svelte"
 	import {
 		ADMIN_DOT_WORDS,
@@ -135,6 +119,7 @@
 		// and the Data and backups card say these refusals inline, under the
 		// button that asked.
 		"lorebooks:updateMemberToCardVersion:error",
+		"amendments:moveDownTheTree:error",
 		"admin:castLiftNotes:error",
 		"admin:castLiftFollowGreetings:error",
 		// Messages (PLAN-private-messages-2026-10-12): the conversations
@@ -194,6 +179,11 @@
 		// server's words (PLAN-dc-after-walk2 Q1-4: it arrived twice, once as
 		// "Sessions Retake Turn failed").
 		"sessions:retakeTurn:error",
+		// The session page toasts a refused Continue, Pick who speaks or
+		// narrator's turn itself, in the server's words (`turnFlow`'s
+		// `handleFireTurnError`, the same toast source): raised here as well,
+		// the two merged and the sentence showed as title and text.
+		"sessions:fireTurn:error",
 		// 🚧 Stats says a refused Give to… in the piece's popover (★4, R77).
 		"state:givePiece:error",
 		// 🚧 The session's Attributes card says a refused carry switch under
@@ -256,6 +246,18 @@
 		// the day-one composer as their own toast under the action's name; a
 		// toast here as well was the same sentence twice.
 		"entries:create:error",
+		// The Edit history fold, its clear dialogs and the admin row each say
+		// their own refusal in place; a toast here as well was the same
+		// sentence twice.
+		"entries:redlines:error",
+		"characterVersions:redlines:error",
+		"characterVersions:restoreRedline:error",
+		"characterVersions:clearRedlines:error",
+		"entries:restoreRedline:error",
+		"entries:clearRedlines:error",
+		"entries:redlineCount:error",
+		"admin:redlineSummary:error",
+		"admin:clearRedlines:error",
 		// The absorb window says a refused merge in place (as its own toast
 		// once closed), the duplicates list as its own toast (and reads the
 		// list again); each only the refusal naming its pair.
@@ -368,11 +370,16 @@
 	 * *Remove boundary* (lane E, `sessionPage/pageAsks.ts`) send a request id
 	 * and say their refusal under the divider; the lorebook's own scene edit
 	 * and delete send none and rely on this catch-all, so the events cannot
-	 * join `HANDLED_ERROR_EVENTS` whole.
+	 * join `HANDLED_ERROR_EVENTS` whole. Book settings' timeless copy sends
+	 * one on `lorebooks:duplicate` and says its refusal in the Timeline card;
+	 * a plain Duplicate sends none and keeps its toast.
 	 */
 	const HANDLED_WHEN_ASKED_ERROR_EVENTS = new Set<string>([
 		"scenes:update:error",
-		"scenes:delete:error"
+		"scenes:delete:error",
+		"lorebooks:duplicate:error",
+		"entries:update:error",
+		"entries:delete:error"
 	])
 
 	/**
@@ -540,7 +547,7 @@
 			if (
 				link.view === "help" &&
 				link.slug !== null &&
-				!getDocMeta(link.slug)
+				!hasDocPage(link.slug)
 			)
 				return
 			event.preventDefault()
@@ -3525,7 +3532,23 @@
 			<JumpPill {jumpCtx} />
 		{/if}
 		{#if jumpCtx.isOpen}
-			<JumpOverlay {jumpCtx} />
+			<!-- The overlay's code loads on its first open: one chunk fetch,
+			     nothing drawn until it lands. Only the overlay itself can close
+			     `jumpCtx`, so a failed load shows the reload notice over the
+			     page — Reload is the way out. -->
+			{#await import("$lib/client/components/shell/JumpOverlay.svelte") then {
+				default: JumpOverlay
+			}}
+				<JumpOverlay {jumpCtx} />
+			{:catch}
+				<div
+					class="bg-surface-950/60 fixed inset-0 z-50 flex items-center justify-center p-4"
+				>
+					<div class="bg-surface-100-900 rounded-xl shadow-xl">
+						{@render viewLoadFailed()}
+					</div>
+				</div>
+			{/await}
 		{/if}
 
 		<!-- ══ the Views sheet ═══════════════════════════════════════════
@@ -3647,45 +3670,159 @@
 		{#if key === "admin"}
 			<!-- The gate asks when the section on screen holds unsaved edits
 			     (`adminUnsavedEdits`). -->
-			<AdminView bind:onclose={viewCloseGates[key]} bind:onescape={viewEscapeGates[key]} />
+			{#await import("$lib/client/admin/AdminView.svelte")}
+				<LoadingState />
+			{:then { default: AdminView }}
+				<AdminView bind:onclose={viewCloseGates[key]} bind:onescape={viewEscapeGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "sampling"}
-			<SamplingSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/SamplingSidebar.svelte")}
+				<LoadingState />
+			{:then { default: SamplingSidebar }}
+				<SamplingSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "models"}
-			<ModelsSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/ModelsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: ModelsSidebar }}
+				<ModelsSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "loadouts"}
-			<LoadoutsSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/LoadoutsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: LoadoutsSidebar }}
+				<LoadoutsSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "connections"}
-			<ConnectionsSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/ConnectionsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: ConnectionsSidebar }}
+				<ConnectionsSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "users"}
-			<UsersSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/UsersSidebar.svelte")}
+				<LoadingState />
+			{:then { default: UsersSidebar }}
+				<UsersSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "help"}
 			<!-- No `bind:onclose`: the documentation holds no unsaved work, so
 			     there is no gate for it to register. -->
-			<HelpSidebar />
+			{#await import("./sidebars/HelpSidebar.svelte")}
+				<LoadingState />
+			{:then { default: HelpSidebar }}
+				<HelpSidebar />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "settings"}
-			<SettingsSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("$lib/client/components/sidebars/SettingsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: SettingsSidebar }}
+				<SettingsSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "activity"}
-			<ActivitySidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("$lib/client/components/sidebars/ActivitySidebar.svelte")}
+				<LoadingState />
+			{:then { default: ActivitySidebar }}
+				<ActivitySidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "characters"}
-			<CharactersSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/CharactersSidebar.svelte")}
+				<LoadingState />
+			{:then { default: CharactersSidebar }}
+				<CharactersSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "library"}
 			<!-- No `bind:onclose`: browsing holds no unsaved work. -->
-			<LibraryView />
+			{#await import("./library/LibraryView.svelte")}
+				<LoadingState />
+			{:then { default: LibraryView }}
+				<LibraryView />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "sessions"}
-			<SessionsSidebar
-				bind:onclose={viewCloseGates[key]}
-				sessionId={sessionIdInView}
-			/>
+			{#await import("./sidebars/SessionsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: SessionsSidebar }}
+				<SessionsSidebar
+					bind:onclose={viewCloseGates[key]}
+					sessionId={sessionIdInView}
+				/>
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "apps"}
 			<!-- 🚧 M2d: no `bind:onclose`: the list holds no unsaved work. -->
-			<AppsSidebar cards={appletCards} />
+			{#await import("./sidebars/AppsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: AppsSidebar }}
+				<AppsSidebar cards={appletCards} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "lorebooks"}
-			<LorebooksSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/LorebooksSidebar.svelte")}
+				<LoadingState />
+			{:then { default: LorebooksSidebar }}
+				<LorebooksSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "tags"}
-			<TagsSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("./sidebars/TagsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: TagsSidebar }}
+				<TagsSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{:else if key === "conversations"}
-			<ConversationsSidebar bind:onclose={viewCloseGates[key]} />
+			{#await import("$lib/client/components/sidebars/ConversationsSidebar.svelte")}
+				<LoadingState />
+			{:then { default: ConversationsSidebar }}
+				<ConversationsSidebar bind:onclose={viewCloseGates[key]} />
+			{:catch}
+				{@render viewLoadFailed()}
+			{/await}
 		{/if}
+	{/snippet}
+	{#snippet viewLoadFailed()}
+		<div
+			class="m-auto flex flex-col items-center gap-3 p-4 text-center"
+			role="alert"
+		>
+			<p class="text-surface-600-400 text-sm">
+				This page did not load. If Serene Pub was just updated, reload
+				to get the new version.
+			</p>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={() => location.reload()}
+			>
+				Reload
+			</button>
+		</div>
 	{/snippet}
 {:else}
 	<!-- Settings or the user not here yet. The gate above stays (pages must

@@ -31,7 +31,7 @@
  * orphans on every existing install.
  */
 
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_PROMPTS } from "@serene-pub/core-catalog"
 import {
@@ -85,7 +85,25 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 		(specs as any[]).map((s) => [s.slug, s.id])
 	)
 
+	// One read of the shipped rows for the whole pass, mapped by `seedKey`.
+	const existingByKey = new Map<
+		string,
+		typeof schema.pipelinePrompts.$inferSelect
+	>()
+	const allKeys = CORE_PROMPTS.map((p) => p.seedKey)
+	if (allKeys.length)
+		for (const row of await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(inArray(schema.pipelinePrompts.seedKey, allKeys)))
+			if (row.seedKey != null) existingByKey.set(row.seedKey, row)
+
 	const out: PromptSeedResult[] = []
+	// Placeholder ids for rows planned but not yet written; negative, so they
+	// never equal a real row id.
+	let plannedId = 0
+	// Every pool's new rows, in the order they were planned.
+	const planned: Array<typeof schema.pipelinePrompts.$inferInsert> = []
 	for (const [pool, prompts] of byPool) {
 		const result: PromptSeedResult = {
 			pool,
@@ -94,9 +112,10 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 			refreshed: []
 		}
 
-		// Every name the pool holds, kept current as this pass writes, so a
-		// shipped row yields to a person's row of the same name instead of
-		// hitting the pool's unique name index (`shippedName.ts`).
+		// Every name the pool holds, kept current as this pass plans its rows
+		// (they are written in one insert at the end), so a shipped row yields
+		// to a person's row of the same name instead of hitting the pool's
+		// unique name index (`shippedName.ts`).
 		const poolNames = (await db
 			.select({
 				id: schema.pipelinePrompts.id,
@@ -119,11 +138,7 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 					? specIdBySlug.get(prompt.createdForSpec)
 					: null) ?? null
 
-			const [existing] = await db
-				.select()
-				.from(schema.pipelinePrompts)
-				.where(eq(schema.pipelinePrompts.seedKey, prompt.seedKey))
-				.limit(1)
+			const existing = existingByKey.get(prompt.seedKey)
 
 			if (existing) {
 				// Corrected rather than left alone — see the header. Only the
@@ -184,25 +199,28 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 				prompt.name,
 				namesTakenBesides(poolNames, null)
 			)
-			const [made] = await db
-				.insert(schema.pipelinePrompts)
-				.values({
-					nodeDefinitionId: poolKeyFor(prompt.nodeType),
-					slot: prompt.slot,
-					seedKey: prompt.seedKey,
-					templateId: coreTemplateIdFor(prompt.seedKey),
-					name,
-					isImmutable: true,
-					fields: prompt.fields,
-					defaultForSpecs: prompt.defaultForSpecs,
-					createdForSpecId
-				})
-				.returning({ id: schema.pipelinePrompts.id })
-			poolNames.push({ id: made!.id, name })
+			planned.push({
+				nodeDefinitionId: poolKeyFor(prompt.nodeType),
+				slot: prompt.slot,
+				seedKey: prompt.seedKey,
+				templateId: coreTemplateIdFor(prompt.seedKey),
+				name,
+				isImmutable: true,
+				fields: prompt.fields,
+				defaultForSpecs: prompt.defaultForSpecs,
+				createdForSpecId
+			})
+			poolNames.push({ id: --plannedId, name })
 			result.created.push(prompt.seedKey)
 		}
 		out.push(result)
 	}
+	// The pass's new rows in one statement per hundred, in the order they were
+	// planned. Nothing reads the new ids afterwards, so no `returning`.
+	for (let i = 0; i < planned.length; i += 100)
+		await db
+			.insert(schema.pipelinePrompts)
+			.values(planned.slice(i, i + 100))
 	return out
 }
 

@@ -1,7 +1,9 @@
 import fs from "fs"
+import { Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import path from "path"
 import { sql } from "drizzle-orm"
-import { readMigrationFiles } from "drizzle-orm/migrator"
+import { readMigrationFilesMemo } from "./migrationSet"
 import type { BackupSummary } from "./errors"
 import { rawRows } from "./rawRows"
 
@@ -161,7 +163,7 @@ export async function hasPendingMigrations(
 	db: MigrationDb,
 	migrationsFolder: string
 ): Promise<boolean> {
-	const files = readMigrationFiles({ migrationsFolder })
+	const files = readMigrationFilesMemo(migrationsFolder)
 	if (!files.length) return false
 
 	let applied: number
@@ -237,12 +239,16 @@ export async function backupDatabase(
 	await client.waitReady
 
 	const blob: Blob = await client.dumpDataDir("gzip")
-	const bytes = Buffer.from(await blob.arrayBuffer())
 
 	// Written to a temp name and renamed, so an interrupted dump can never be
 	// mistaken for a usable backup — rename is atomic within a filesystem.
 	const tmp = `${file}.partial`
-	fs.writeFileSync(tmp, bytes)
+	await pipeline(
+		Readable.fromWeb(
+			blob.stream() as import("node:stream/web").ReadableStream
+		),
+		fs.createWriteStream(tmp)
+	)
 	fs.renameSync(tmp, file)
 
 	archiveMetaFile(dataDir, file)
@@ -252,7 +258,7 @@ export async function backupDatabase(
 
 	return {
 		path: file,
-		bytes: bytes.length,
+		bytes: blob.size,
 		usersPath: users?.path ?? null,
 		usersBytes: users?.bytes ?? 0
 	}

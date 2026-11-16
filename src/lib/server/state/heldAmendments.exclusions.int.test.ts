@@ -1,9 +1,10 @@
 /**
  * 🚧 A held amendment is one session's own change (`base` set), never a line's.
  * Every reader that asks for amendments by entry id, or copies a book, leaves
- * it out: the pattern layers of an entry, the retraction of an entry a run
- * made, a book copy, the fork-history queries, and the lorebook's amendment
- * screen (edit and delete).
+ * it out: the pattern layers of an entry, a book copy, the fork-history
+ * queries, and the lorebook's amendment screen (edit and delete). The one
+ * reader that counts it is the retraction of an entry a run made: a held
+ * change stands on the entry, so the entry stays.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -118,7 +119,7 @@ describe("a held amendment is never an amendment of the lorebook's line", () => 
 		expect(layers.has(heldRow.id)).toBe(false)
 	})
 
-	test("a made entry another session holds a change to is still taken back by its run's retraction", async () => {
+	test("a made entry another session holds a change to stays when its run's retraction runs; the held row stays", async () => {
 		const w = await world()
 		const [message] = await testDb
 			.insert(schema.sessionMessages)
@@ -131,25 +132,25 @@ describe("a held amendment is never an amendment of the lorebook's line", () => 
 				sessionId: w.holder.id,
 				role: "assistant"
 			})
-		const { createHost } = await import(
-			"$lib/server/pipelines/runtime/host"
-		)
-		const made: any = await (
-			await createHost(db(), {
-				sessionId: w.holder.id,
-				userId: w.user.id,
-				runId: "run-held"
+		// A run of the holder's session made an entry straight in the lorebook.
+		const [made] = await testDb
+			.insert(schema.lorebookEntries)
+			.values({
+				lorebookId: w.book.id,
+				typeId: "core:entry/location",
+				typeVersion: 1,
+				position: 7,
+				title: "The Shaft",
+				content: "Wet rock."
 			})
-		).commit!(
-			{
-				name: "The Shaft",
-				content: "Wet rock.",
-				params: { entryType: "core:entry/location" }
-			},
-			{
-				key: "file",
-				definitionId: "core:outlet/create-lore-entry"
-			} as any
+			.returning()
+		const { imprintMade, imprintsOf } = await import(
+			"$lib/server/lorebooks/imprints"
+		)
+		await imprintMade(
+			db(),
+			{ sessionId: w.holder.id, messageId: message!.id, runId: "run-held" },
+			{ lorebookId: w.book.id, subject: "entry", subjectId: made!.id }
 		)
 		// Another session holds a change to the entry the run made.
 		const other = await w.session()
@@ -157,7 +158,7 @@ describe("a held amendment is never an amendment of the lorebook's line", () => 
 			.insert(schema.entryAmendments)
 			.values({
 				lorebookId: other.own,
-				entryId: made.id,
+				entryId: made!.id,
 				year: null,
 				fields: { name: "The Held Shaft" },
 				base: { name: { v: "The Shaft" } },
@@ -169,18 +170,22 @@ describe("a held amendment is never an amendment of the lorebook's line", () => 
 		)
 		await retractStateAnchoredTo(db(), message!.id, "replaced")
 		expect(
-			await testDb
-				.select()
-				.from(schema.lorebookEntries)
-				.where(eq(schema.lorebookEntries.id, made.id))
-		).toEqual([])
-		// The entry's delete took its dependants with it, as it always did.
+			(
+				await testDb
+					.select()
+					.from(schema.lorebookEntries)
+					.where(eq(schema.lorebookEntries.id, made!.id))
+			).length
+		).toBe(1)
 		expect(
-			await testDb
-				.select()
-				.from(schema.entryAmendments)
-				.where(eq(schema.entryAmendments.id, heldRow!.id))
-		).toEqual([])
+			(
+				await testDb
+					.select()
+					.from(schema.entryAmendments)
+					.where(eq(schema.entryAmendments.id, heldRow!.id))
+			).length
+		).toBe(1)
+		expect((await imprintsOf(db(), w.holder.id)).map((i) => i.status)).toEqual(["kept"])
 	})
 
 	test("copying an own book carries no held row", async () => {

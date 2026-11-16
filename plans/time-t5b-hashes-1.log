@@ -1,0 +1,46 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |unit| src/lib/server/pipelines/boot/registryHashes.test.ts (8 tests | 1 failed) 36ms
+     × resolves every recorded pin to the hash recorded for it 6ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/lib/server/pipelines/boot/registryHashes.test.ts > published type content hashes > resolves every recorded pin to the hash recorded for it
+AssertionError: 
+
+A pin now means something different from what it meant at this commit. That is shippable — the slug's pointer moves at the next boot and no migration is involved — but it must be deliberate: either bump the version (the honest answer when the change breaks the specs pinning it), or record the new hash here in the same commit as the edit. Read the comment above PUBLISHED_HASHES before editing it.: expected [ …(5) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "core:outlet/create-lore-entry@1: recorded 17b54c04c534e9, code 172474c373854e",
++   "core:entry/world-lore@1: recorded 100f8933de881b, code 4dc31b709358e",
++   "core:entry/character-lore@1: recorded 16fb98fc8626a4, code 999e2ea3c174f",
++   "core:entry/location@1: recorded 98ba6f0d87011, code ed97be0eba767",
++   "core:entry/item@1: recorded 12c63b4101539c, code 95957352e862f",
++ ]
+
+ ❯ src/lib/server/pipelines/boot/registryHashes.test.ts:2029:60
+    2027|    .map(([pin, hash]) => `${pin}: recorded ${hash}, code ${now[pin]}`)
+    2028|
+    2029|   expect(drifted, drifted.length ? WHAT_TO_DO : undefined).toEqual([])
+       |                                                            ^
+    2030|  })
+    2031|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 7 passed (8)
+   Start at  11:26:42
+   Duration  1.89s (transform 1.16s, setup 12ms, import 1.74s, tests 36ms, environment 0ms)
+

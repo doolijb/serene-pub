@@ -243,12 +243,20 @@ describe("the scene due a summary", () => {
 		expect(r.why).toBe("a scene's summary is being written")
 	})
 
-	it("Summaries Never: none", async () => {
+	it("Summaries Never on a session that has the routine: the routine's mode alone decides, so the scene is due", async () => {
 		const w = await seven({ summary: "never" })
-		await scene(w, w.ids[0]!, w.ids[1]!)
-		const r = await due(w.session.id)
-		expect(r.sceneId).toBeNull()
-		expect(r.why).toMatch(/Never/)
+		const { sessionRoutineMode } = await import(
+			"$lib/server/pipelines/routines/sessionRoutines"
+		)
+		expect(
+			await sessionRoutineMode(
+				testDb as any,
+				w.session.id,
+				"core:spec/scene-summaries"
+			)
+		).not.toBeNull()
+		const id = await scene(w, w.ids[0]!, w.ids[1]!)
+		expect((await due(w.session.id)).sceneId).toBe(id)
 	})
 
 	it("a rewound turn: none", async () => {

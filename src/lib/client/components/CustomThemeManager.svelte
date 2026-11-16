@@ -11,7 +11,7 @@
 	import { Theme } from "$lib/client/consts/Theme"
 	import { notify } from "$lib/client/utils/notify"
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
-	import CustomThemeEditor from "./CustomThemeEditor.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import SettingCard from "./settingsTabs/SettingCard.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 
@@ -198,12 +198,33 @@
 
 {#if editing !== null}
 	<div class="flex h-full flex-col gap-0">
-		<CustomThemeEditor
-			theme={editing === "new" ? null : editing}
-			{onSaved}
-			{onDeleted}
-			onCancel={() => (editing = null)}
-		/>
+		{#await import("./CustomThemeEditor.svelte")}
+			<LoadingState />
+		{:then { default: CustomThemeEditor }}
+			<CustomThemeEditor
+				theme={editing === "new" ? null : editing}
+				{onSaved}
+				{onDeleted}
+				onCancel={() => (editing = null)}
+			/>
+		{:catch}
+			<div
+				class="m-auto flex flex-col items-center gap-3 p-4 text-center"
+				role="alert"
+			>
+				<p class="text-surface-600-400 text-sm">
+					This page did not load. If Serene Pub was just updated,
+					reload to get the new version.
+				</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => location.reload()}
+				>
+					Reload
+				</button>
+			</div>
+		{/await}
 	</div>
 {:else}
 	<div class="flex max-w-[760px] flex-col gap-3 p-4">

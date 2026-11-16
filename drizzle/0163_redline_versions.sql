@@ -1,0 +1,5 @@
+ALTER TABLE "lore_redlines" ALTER COLUMN "entry_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "lore_redlines" ADD COLUMN "character_version_id" integer;--> statement-breakpoint
+ALTER TABLE "lore_redlines" ADD CONSTRAINT "lore_redlines_character_version_id_character_versions_id_fk" FOREIGN KEY ("character_version_id") REFERENCES "public"."character_versions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "lore_redlines_character_version_idx" ON "lore_redlines" USING btree ("character_version_id","id") WHERE "lore_redlines"."character_version_id" IS NOT NULL;--> statement-breakpoint
+ALTER TABLE "lore_redlines" ADD CONSTRAINT "lore_redlines_subject_check" CHECK (("lore_redlines"."entry_id" IS NULL) <> ("lore_redlines"."character_version_id" IS NULL) AND ("lore_redlines"."amendment_id" IS NULL OR "lore_redlines"."entry_id" IS NOT NULL));

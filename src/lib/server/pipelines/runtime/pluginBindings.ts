@@ -5,7 +5,7 @@
  * A registry row with `transport: 'process'` is a type whose implementation
  * lives in a sandboxed plugin, not in `coreBindings()`. This module projects
  * those rows into executor bindings: each one a wrapper that calls the
- * plugin's exported hook through the `RuntimeManager` — permission-checked
+ * plugin's exported hook through the `SandboxManager` — permission-checked
  * capabilities, settings on the reserved input key, the invocation log — and
  * hands the hook's own `Result` back to the executor, unwrapped. The executor
  * never learns which side implemented a node, which is the same law the
@@ -55,7 +55,7 @@ import { and, eq, isNotNull, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Bindings, Result } from "@serene-pub/sdk"
 import { ok, err, halt, cancelled } from "@serene-pub/sdk"
-import type { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
+import type { SandboxManager } from "$lib/server/plugins/SandboxManager"
 import type { HandlerRequires } from "@serene-pub/sdk"
 import { structuralCompat } from "$lib/server/pipelines/runtime/structuralCompat"
 import { isHookCtxKind } from "$lib/server/plugins/hookCtx"
@@ -200,7 +200,7 @@ export interface PluginBindingOptions {
 
 export async function pluginNodeBindings(
 	db: Db,
-	manager: RuntimeManager,
+	manager: SandboxManager,
 	opts: PluginBindingOptions
 ): Promise<Bindings> {
 	const bindings: Bindings = {}

@@ -26,7 +26,11 @@
 	} = $props()
 
 	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
-	const castBanner = $derived(castBannerWords(members))
+	// A member in a session's notes is not in a lorebook: no link, no offer.
+	const bookMembers = $derived(
+		members.filter((m) => m.ownBookSessionId == null)
+	)
+	const castBanner = $derived(castBannerWords(bookMembers))
 </script>
 
 {#if castBanner}
@@ -38,7 +42,7 @@
 		data-cast-line
 	>
 		{castBanner.lead}
-		{#each members as member, i (member.castId)}
+		{#each bookMembers as member, i (member.castId)}
 			{@const retold = retoldFieldList(member.retold)}
 			{#if i > 0},{" "}{/if}{#if panelsCtx}<button
 					type="button"
@@ -52,7 +56,7 @@
 				</span>{/if}{#if retold}{" "}(retells {retold}){/if}
 		{/each}
 	</p>
-	{#each members as member (member.castId)}
+	{#each bookMembers as member (member.castId)}
 		{#if member.behindCard && member.cardVersion && member.cardCurrentVersion}
 			<CardUpdateOffer
 				castId={member.castId}

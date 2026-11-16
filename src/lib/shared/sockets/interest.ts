@@ -84,6 +84,9 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// a full `sessionMessages` row for.
 		["sessionMessage", (payload) => payload?.sessionMessage?.sessionId],
 
+		// `{ sessionId, id, content, reasoning }` — a mid-stream frame of one row.
+		["sessionMessageDelta", (payload) => payload?.sessionId],
+
 		// `{ sessionId }` and nothing else — the signal to re-read state.
 		["state:changed", (payload) => payload?.sessionId],
 
@@ -272,6 +275,7 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// eight verbs sat here and in `GATED_EVENTS` until 2026-09-28: names
 		// nothing emits.)
 		["amendments:list", (payload) => payload?.lorebookId],
+		["amendments:moveDownTheTree", (payload) => payload?.lorebookId],
 		// 🚧 Update ‹member› to card ‹label› (lane cv-member2): `lorebookId` top-level.
 		[
 			"lorebooks:updateMemberToCardVersion",
@@ -287,6 +291,17 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["entries:delete", (payload) => payload?.lorebookId],
 		["entries:create", (payload) => payload?.entry?.lorebookId],
 		["entries:update", (payload) => payload?.entry?.lorebookId],
+		// 🚧 Whether a run in progress may update an entry: `lorebookId` top-level.
+		["entries:earmark", (payload) => payload?.lorebookId],
+		// 🚧 The Edit history's four replies: `lorebookId` top-level.
+		["entries:redlines", (payload) => payload?.lorebookId],
+		["entries:restoreRedline", (payload) => payload?.lorebookId],
+		["entries:clearRedlines", (payload) => payload?.lorebookId],
+		["entries:redlineCount", (payload) => payload?.lorebookId],
+		// 🚧 A card version's or a cast version's Edit history: `characterVersionId` top-level.
+		["characterVersions:redlines", (payload) => payload?.characterVersionId],
+		["characterVersions:restoreRedline", (payload) => payload?.characterVersionId],
+		["characterVersions:clearRedlines", (payload) => payload?.characterVersionId],
 		["entries:iterateNext", (payload) => payload?.entry?.lorebookId],
 		// `{ success, lorebookId, typeId }` — the reorder reply (E-6). The
 		// entry channel declares its book's scope and filters on the type.
@@ -949,12 +964,24 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// (`entries:testRetrieval` was retired 2026-09-28; previewRetrieval
 	// serves that surface.)
 	"amendments:list",
+	"amendments:moveDownTheTree",
 	"bindingCheck:result",
 	"bindingSuggestions:list",
 	"entries:copyFromLibrary",
 	"entries:counts",
 	"entries:create",
 	"entries:delete",
+	// 🚧 Consumer: client/lorebooks/EntryWorkspace.svelte and CastWorkspace.svelte (through `awaitReply`).
+	"entries:earmark",
+	// 🚧 Consumer: client/lorebooks/ (the entry's Edit history panel, through `awaitReply`).
+	"entries:redlines",
+	"entries:restoreRedline",
+	"entries:clearRedlines",
+	"entries:redlineCount",
+	// 🚧 Consumer: client/ (the version's Edit history panel, through `awaitReply`).
+	"characterVersions:redlines",
+	"characterVersions:restoreRedline",
+	"characterVersions:clearRedlines",
 	"entries:iterateNext",
 	"entries:list",
 	"entries:recentDecisions",
@@ -1240,6 +1267,13 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// this one's chunks. No family prefix and no `:error` sibling in here:
 	// `sessionMessage:error` stays ungated like every other error event.
 	//
+	// sessionMessageDelta — a mid-stream frame of one row, `{ sessionId, id,
+	// content, reasoning }`; the settled row still arrives as `sessionMessage`.
+	// One consumer: the session page's inbox (client/components/sessionPage/
+	// sessionPageInbox.svelte.ts, handler in sessionPageData.svelte.ts). Gated
+	// AND scoped: a gated event no client subscribes to receives nothing at all,
+	// and ungated it would go to every socket of every session user.
+	//
 	// It is also the one gated event whose cost is a broadcast rather than a
 	// reply: `broadcastToSessionUsers` reads the owner and the guest roster —
 	// two queries — for every chunk, so the gate is applied BEFORE them.
@@ -1250,6 +1284,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// model page), on the registry from its first line.
 	"models:hubCard",
 	"sessionMessage",
+	"sessionMessageDelta",
 
 	// Slice 8 (2026-09-15): the connections group, deferred until the
 	// model-column work settled. Every consumer below is on the registry.
@@ -1259,7 +1294,8 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// client/connectionForms/*.svelte, client/stores/connectionWireMode.svelte.ts,
 	// sidebars/ConnectionsSidebar, sessionForms/EditSessionForm,
 	// connections/ManagedModelsTab,
-	// routes/+page.svelte, routes/admin/connections, routes/document-view/connections/**.
+	// routes/+page.svelte, routes/admin/connections, routes/document-view/connections/**,
+	// client/contexts/connections.svelte.ts (the LLM lane widths).
 	// `connections:get` is scoped (above); the rest are bare.
 	"connections:addHubModel",
 	"connections:attachScript",
@@ -1275,6 +1311,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"connections:get",
 	"connections:importModels",
 	"connections:list",
+	"connections:llmLanes",
 	"connections:modelDownloadProgress",
 	"connections:models",
 	"connections:refreshModels",
@@ -1282,6 +1319,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"connections:scripts",
 	"connections:setCapability",
 	"connections:setDefault",
+	"connections:setLlmLaneWidth",
 	"connections:syncModels",
 	"connections:test",
 	"connections:update",
@@ -1306,6 +1344,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// cast members). Restricted prefix; both handlers admin-only.
 	"admin:castLiftNotes",
 	"admin:castLiftFollowGreetings",
+	// 🚧 Admin → Data (the edit history's size and clear). Restricted prefix; both handlers admin-only.
+	"admin:redlineSummary",
+	"admin:clearRedlines",
 	// `audiocpp:` — 🚧 audio.cpp, run by Serene Pub; every handler admin-only.
 	// The three pushes (`binaryDownloadProgress`, `packageDownloadProgress`,
 	// `subprocessStatus`) leave through per-user closures that call the gated

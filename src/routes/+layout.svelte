@@ -5,11 +5,11 @@
 	import { loadSocketsClient } from "$lib/client/sockets/loadSockets.client"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { untrack, type Snippet } from "svelte"
-	import HelpSidebar from "$lib/client/components/sidebars/HelpSidebar.svelte"
+	import LoadingState from "$lib/client/components/LoadingState.svelte"
 	import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
 	import { isDocsPath } from "$lib/client/shell/jump.svelte"
 	import { page } from "$app/state"
-	import * as Icons from "@lucide/svelte"
+	import { X } from "@lucide/svelte"
 	import { Toast } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LoginForm from "$lib/client/components/LoginForm.svelte"
@@ -381,7 +381,28 @@
 	<!-- The Help view on its own, with no shell around it: `/docs/...` are
 	     its addresses, and there is no shell to focus it in. -->
 	<div class="bg-surface-50-950 flex h-screen flex-col p-4">
-		<HelpSidebar />
+		{#await import("$lib/client/components/sidebars/HelpSidebar.svelte")}
+			<LoadingState />
+		{:then { default: HelpSidebar }}
+			<HelpSidebar />
+		{:catch}
+			<div
+				class="m-auto flex flex-col items-center gap-3 p-4 text-center"
+				role="alert"
+			>
+				<p class="text-surface-600-400 text-sm">
+					This page did not load. If Serene Pub was just updated,
+					reload to get the new version.
+				</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => location.reload()}
+				>
+					Reload
+				</button>
+			</div>
+		{/await}
 	</div>
 {:else if startupError}
 	<!-- Deliberately plain markup with inline colors: this renders before the
@@ -479,7 +500,7 @@
 			</Toast.Message>
 			{#if toast.closable}
 				<Toast.CloseTrigger class="btn btn-sm">
-					<Icons.X size={16} />
+					<X size={16} />
 				</Toast.CloseTrigger>
 			{/if}
 		</Toast>

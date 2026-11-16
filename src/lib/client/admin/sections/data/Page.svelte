@@ -11,6 +11,11 @@
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import BackupPolicyCard from "$lib/client/components/admin/pub/BackupPolicyCard.svelte"
 	import SpokenLinesRow from "$lib/client/components/media/SpokenLinesRow.svelte"
+	import EditHistoryAdminRow from "$lib/client/lorebooks/editHistory/EditHistoryAdminRow.svelte"
+	import {
+		ADMIN_CARD_HELP,
+		ADMIN_CARD_TITLE
+	} from "$lib/client/lorebooks/editHistory/editHistoryCopy"
 	import SettingCard from "$lib/client/components/settingsTabs/SettingCard.svelte"
 	import DataSettingsTab from "$lib/client/components/settingsTabs/DataSettingsTab.svelte"
 	import CastUpgradeCard from "./CastUpgradeCard.svelte"
@@ -38,6 +43,15 @@
 				layout="stack"
 			>
 				<SpokenLinesRow />
+			</SettingCard>
+			<SettingCard
+				title={ADMIN_CARD_TITLE}
+				titleId="edit-history-heading"
+				headingLevel={2}
+				help={ADMIN_CARD_HELP}
+				layout="stack"
+			>
+				<EditHistoryAdminRow />
 			</SettingCard>
 			<DataSettingsTab />
 			<CastUpgradeCard />

@@ -999,6 +999,23 @@ export type SocketEventMap = {
 		params: Sockets.Admin.Logbook.Params
 		response: Sockets.Admin.Logbook.Response
 	}
+	// 🚧 Admin → Data: the edit history's size, and clearing all of it.
+	"admin:redlineSummary": {
+		params: Sockets.Admin.RedlineSummary.Params
+		response: Sockets.Admin.RedlineSummary.Response
+	}
+	"admin:redlineSummary:error": {
+		params: never
+		response: { error?: string }
+	}
+	"admin:clearRedlines": {
+		params: Sockets.Admin.ClearRedlines.Params
+		response: Sockets.Admin.ClearRedlines.Response
+	}
+	"admin:clearRedlines:error": {
+		params: never
+		response: { error?: string }
+	}
 	// Admin → Diagnostics: the redacted support report, built on request.
 	"admin:supportReport": {
 		params: Sockets.Admin.SupportReport.Params
@@ -1140,6 +1157,27 @@ export type SocketEventMap = {
 		response: Sockets.Connections.SetCapability.Response
 	}
 	"connections:setCapability:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// Requests at once (perf-I, 2026-11-13): the hosts in use with their LLM
+	// lane widths, admin-only. The read answers the asker, and again after
+	// every successful write. Neither :error is in HANDLED_ERROR_EVENTS:
+	// Layout's onAny catch-all toasts a failure.
+	"connections:llmLanes": {
+		params: Sockets.Connections.LlmLanes.Params
+		response: Sockets.Connections.LlmLanes.Response
+	}
+	"connections:llmLanes:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"connections:setLlmLaneWidth": {
+		params: Sockets.Connections.SetLlmLaneWidth.Params
+		response: Sockets.Connections.SetLlmLaneWidth.Response
+	}
+	"connections:setLlmLaneWidth:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
@@ -2227,6 +2265,11 @@ export type SocketEventMap = {
 	"sessionMessage:error": {
 		params: never
 		response: Sockets.SessionMessage.Response
+	}
+	// A mid-stream frame of one row (pushed, never asked); the row settles as `sessionMessage`.
+	sessionMessageDelta: {
+		params: never
+		response: Sockets.SessionMessageDelta.Response
 	}
 	lorebookBindingList: {
 		params: any
@@ -4272,6 +4315,15 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
+	// The refusal is said inside the move dialog (Layout's `HANDLED_ERROR_EVENTS`).
+	"amendments:moveDownTheTree": {
+		params: Sockets.Amendments.MoveDownTheTree.Params
+		response: Sockets.Amendments.MoveDownTheTree.Response
+	}
+	"amendments:moveDownTheTree:error": {
+		params: never
+		response: { error?: string; lorebookId?: number }
+	}
 	"amendments:place": {
 		params: Sockets.Amendments.Place.Params
 		response: Sockets.Amendments.Place.Response
@@ -4332,11 +4384,84 @@ export type SocketEventMap = {
 	// else to learn the write was refused.
 	"entries:update:error": {
 		params: never
-		response: { error?: string }
+		response: { error?: string; requestId?: string }
+	}
+	// 🚧 Whether a run in progress may update this entry; asked, never pushed.
+	"entries:earmark": {
+		params: Sockets.Entries.Earmark.Params
+		response: Sockets.Entries.Earmark.Response
+	}
+	"entries:earmark:error": {
+		params: never
+		response: Sockets.Entries.Earmark.ErrorResponse
+	}
+	// 🚧 An entry's Edit history: asked, restored, cleared, counted; never pushed.
+	"entries:redlines": {
+		params: Sockets.Entries.Redlines.Params
+		response: Sockets.Entries.Redlines.Response
+	}
+	"entries:redlines:error": {
+		params: never
+		response: Sockets.Entries.Redlines.ErrorResponse
+	}
+	"entries:restoreRedline": {
+		params: Sockets.Entries.RestoreRedline.Params
+		response: Sockets.Entries.RestoreRedline.Response
+	}
+	"entries:restoreRedline:error": {
+		params: never
+		response: Sockets.Entries.RestoreRedline.ErrorResponse
+	}
+	"entries:clearRedlines": {
+		params: Sockets.Entries.ClearRedlines.Params
+		response: Sockets.Entries.ClearRedlines.Response
+	}
+	"entries:clearRedlines:error": {
+		params: never
+		response: Sockets.Entries.ClearRedlines.ErrorResponse
+	}
+	"entries:redlineCount": {
+		params: Sockets.Entries.RedlineCount.Params
+		response: Sockets.Entries.RedlineCount.Response
+	}
+	"entries:redlineCount:error": {
+		params: never
+		response: Sockets.Entries.RedlineCount.ErrorResponse
+	}
+	// 🚧 A card version's or a cast version's Edit history: asked, restored, cleared; never pushed.
+	"characterVersions:redlines": {
+		params: Sockets.CharacterVersions.Redlines.Params
+		response: Sockets.CharacterVersions.Redlines.Response
+	}
+	"characterVersions:redlines:error": {
+		params: never
+		response: Sockets.CharacterVersions.Redlines.ErrorResponse
+	}
+	"characterVersions:restoreRedline": {
+		params: Sockets.CharacterVersions.RestoreRedline.Params
+		response: Sockets.CharacterVersions.RestoreRedline.Response
+	}
+	"characterVersions:restoreRedline:error": {
+		params: never
+		response: Sockets.CharacterVersions.RestoreRedline.ErrorResponse
+	}
+	"characterVersions:clearRedlines": {
+		params: Sockets.CharacterVersions.ClearRedlines.Params
+		response: Sockets.CharacterVersions.ClearRedlines.Response
+	}
+	"characterVersions:clearRedlines:error": {
+		params: never
+		response: Sockets.CharacterVersions.ClearRedlines.ErrorResponse
 	}
 	"entries:delete": {
 		params: Sockets.Entries.Delete.Params
 		response: Sockets.Entries.Delete.Response
+	}
+	// `refusable()`'s refusal, sent to the asking tab alone; echoes the
+	// asker's `requestId` so the surface that sent one can claim it.
+	"entries:delete:error": {
+		params: never
+		response: { error?: string; requestId?: string }
 	}
 	"entries:updatePositions": {
 		params: Sockets.Entries.UpdatePositions.Params

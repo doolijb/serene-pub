@@ -237,10 +237,21 @@ describe("the §5f decisions are what the code says", () => {
 			expect(declared(id).ports.sort(), id).toEqual(["scope", "speaker"])
 		for (const id of [
 			"core:query/world-lore@1",
-			"core:query/history-entries@1",
 			"core:query/lorebook-entries@1"
 		])
 			expect(declared(id).ports, id).toEqual(["scope"])
+		// 🚧 2026-11-15 time-t6c1: history entries also read the firsthand
+		// option (`firsthandFor`, `firsthandBy`), and still no `speaker`.
+		expect(declared("core:query/history-entries@1").ports.sort()).toEqual([
+			"firsthandBy",
+			"firsthandFor",
+			"scope"
+		])
+		// 🚧 2026-11-15 time-t6c2: the knowledge query reads exactly the scope and the speaker.
+		expect(declared("core:query/unknown-entries@1").ports.sort()).toEqual([
+			"scope",
+			"speaker"
+		])
 	})
 
 	it("assemble@2: `truncation` culled — assemble drops nothing, the ranker does", () => {

@@ -1,17 +1,23 @@
 <script lang="ts">
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { Snippet } from "svelte"
+	import { onMount, tick, type Snippet } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { dndzone } from "svelte-dnd-action"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
-	import type { LoreLens } from "$lib/shared/lorebooks/loreRoute"
+	import {
+		momentKey,
+		reduce,
+		type LoreLens
+	} from "$lib/shared/lorebooks/loreRoute"
 	import {
 		activeFilterCount,
 		buildTree,
+		comparePoolBy,
 		emptyFilters,
+		filterPool,
 		flattenTree,
 		hasNesting,
 		SCENE_KIND,
@@ -26,8 +32,18 @@
 	import { nothingMatchesLine, POOL_SORTS } from "./scopes"
 	import { kindLabel } from "./sections/kinds"
 	import { getLorePoolCtx } from "./sections/poolContext"
-	import { bookReadOnly } from "./bookData.svelte"
+	import { bookReadOnly, getBookData } from "./bookData.svelte"
+	import { loreRoute } from "./loreRoute.svelte"
 	import type { PoolSource, SectionDescriptor } from "./sections/types"
+	import { descriptorForKind } from "./sections"
+	import { openBookTime } from "./time/bookTime.svelte"
+	import { couldExistWhy, forkedLineRows } from "./couldExistHere"
+	import { formatDate } from "./sections/historyDates"
+	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+	import type { BulkRow } from "./bulkEdit"
+	import CouldExistHereGroup from "./CouldExistHereGroup.svelte"
+	import BulkEditBar from "./BulkEditBar.svelte"
 
 	/**
 	 * The one list, under its header.
@@ -88,6 +104,11 @@
 		toolbarExtra?: Snippet
 		/** A door's own head of the list, above the rows and the empty state (the History door's *Not yet compiled* group). */
 		listHead?: Snippet
+		/**
+		 * 🚧 The Scenes list's *History* divider (a timeline book only): the
+		 * history entries' count, or null where no divider is drawn.
+		 */
+		historyCount?: number | null
 		onSelect: (item: PoolItem) => void
 		onDelete: (item: PoolItem) => void
 		/** Starts the door's default create, for the empty state's one button. */
@@ -119,6 +140,7 @@
 		newControl,
 		toolbarExtra,
 		listHead,
+		historyCount = null,
 		onSelect,
 		onDelete,
 		onNew,
@@ -163,6 +185,148 @@
 	let reorderDraft = $state<PoolItem[]>([])
 	/** Which rows are folded shut in the tree, by key. */
 	const collapsed = new SvelteSet<string>()
+
+	const book = getBookData()
+	const COULD_EXIST_KEY = "serene.lore.couldExistHere"
+	/** The line being read; null = main. */
+	let line = $derived(loreRoute.route.branch ?? null)
+	/** Both toggles belong to the lorebook's owner, on a list of entries. */
+	let offered = $derived(!readOnly && descriptor.store !== "scenes")
+	/** Remembered per browser; read once on mount. */
+	let couldExist = $state(false)
+	/** Off each time the list opens. */
+	let bulk = $state(false)
+	const checked = new SvelteSet<string>()
+	let scroller = $state<HTMLDivElement | null>(null)
+
+	onMount(() => {
+		try {
+			couldExist = localStorage.getItem(COULD_EXIST_KEY) === "on"
+		} catch {
+			couldExist = false
+		}
+	})
+
+	function toggleCouldExist() {
+		couldExist = !couldExist
+		try {
+			if (couldExist) localStorage.setItem(COULD_EXIST_KEY, "on")
+			else localStorage.removeItem(COULD_EXIST_KEY)
+		} catch {
+			// Storage can be absent or full; the toggle still works this visit.
+		}
+	}
+
+	function toggleBulk() {
+		bulk = !bulk
+		if (!bulk) checked.clear()
+	}
+
+	/** A scene, a cast member and a rules-library piece are never bulk-edited. */
+	const selectable = (item: PoolItem) =>
+		!item.fromLibrary && item.kind !== SCENE_KIND && item.kind !== CAST_KIND
+
+	function check(item: PoolItem, on: boolean) {
+		if (on) checked.add(item.key)
+		else checked.delete(item.key)
+	}
+
+	/** The date a listed row begins on, for its "Begins in" line; null for a History entry (its date is its own) or a row with no year. */
+	function laterDate(item: PoolItem): StoryDate | null {
+		if (!couldExist || !offered || !dimmedKeys?.has(item.key)) return null
+		if (item.kind === HISTORY_TYPE_ID) return null
+		const row = sourceOf(item)
+		if (!row || typeof row.year !== "number") return null
+		return {
+			year: row.year,
+			month: row.month ?? null,
+			day: row.day ?? null
+		}
+	}
+
+	function readFrom(date: StoryDate) {
+		loreRoute.set(
+			reduce(loreRoute.route, {
+				type: "setMoment",
+				moment: momentKey(date)
+			})
+		)
+	}
+
+	const laterWords = {
+		lineName: (id: number | null) => openBookTime.lineName(id),
+		date: (d: StoryDate) => formatDate(d)
+	}
+
+	/** Stored rows of lines forked from the line being read, with their pool rows, by pool key. */
+	let forkedPairs = $derived.by(() => {
+		const out: { item: PoolItem; row: PoolSource }[] = []
+		if (!couldExist || !offered) return out
+		for (const row of forkedLineRows({
+			rawRows: book.rawRows as Readonly<
+				Record<string, { typeId: string; branchId?: number | null }[]>
+			>,
+			kinds: descriptor.kind ? [descriptor.kind] : null,
+			line,
+			branches: openBookTime.branches
+		})) {
+			const item = descriptorForKind(row.typeId)?.toPoolItem(row)
+			if (item) out.push({ item, row })
+		}
+		return out
+	})
+	let forkedSource = $derived(
+		new Map(forkedPairs.map((p) => [p.item.key, p.row] as const))
+	)
+	let forkedItems = $derived(
+		filterPool(
+			forkedPairs.map((p) => p.item),
+			filters
+		).sort(comparePoolBy(orderBy))
+	)
+
+	/** The selection as the bar reads it: listed rows, and rows of another line. */
+	let selectedRows = $derived.by(() => {
+		const out: BulkRow[] = []
+		for (const key of checked) {
+			const listed = items.find((i) => i.key === key)
+			const forked = forkedPairs.find((p) => p.item.key === key)
+			const item = listed ?? forked?.item
+			if (!item) continue
+			out.push({
+				id: item.id,
+				typeId: item.kind,
+				name: item.name,
+				pinned: item.pinned,
+				off: item.off,
+				archived: item.archived,
+				branchId: item.branchId ?? forked?.row.branchId ?? null,
+				listed: !!listed
+			})
+		}
+		return out
+	})
+	let selectableBody = $derived(items.filter(selectable))
+	let allSelected = $derived(
+		selectableBody.length > 0 &&
+			selectableBody.every((i) => checked.has(i.key))
+	)
+	let openEntryId = $derived.by(() => {
+		const m = /^entry#(\d+)$/.exec(selectedKey ?? "")
+		return m ? Number(m[1]) : null
+	})
+
+	function selectAll(next: boolean) {
+		for (const i of selectableBody) check(i, next)
+	}
+
+	/** After an action focus returns to the list, with the entries left as they were still selected. */
+	async function done(keep: number[]) {
+		checked.clear()
+		for (const id of keep) checked.add(`entry#${id}`)
+		await tick()
+		scroller?.focus()
+	}
 
 	let treeOffered = $derived(hasNesting(items))
 	let effectiveLens = $derived<LoreLens>(
@@ -304,6 +468,50 @@
 				})
 		)}
 	</div>
+{/snippet}
+
+{#snippet modeToggles()}
+	{#if offered}
+		<button
+			class="btn btn-sm shrink-0 {couldExist
+				? 'preset-pressed'
+				: 'preset-tonal-surface'}"
+			type="button"
+			data-toggle-could-exist
+			aria-pressed={couldExist}
+			title="Could exist here"
+			aria-label="Could exist here"
+			onclick={toggleCouldExist}
+		>
+			<Icons.SquareDashed size={14} />
+		</button>
+		<button
+			class="btn btn-sm shrink-0 {bulk
+				? 'preset-pressed'
+				: 'preset-tonal-surface'}"
+			type="button"
+			data-toggle-bulk
+			aria-pressed={bulk}
+			title="Bulk edit"
+			aria-label="Bulk edit"
+			onclick={toggleBulk}
+		>
+			<Icons.ListChecks size={14} />
+		</button>
+	{/if}
+{/snippet}
+
+{#snippet bulkCheck(item: PoolItem)}
+	{#if bulk && selectable(item)}
+		<input
+			type="checkbox"
+			class="checkbox mt-4 ml-3 shrink-0 pointer-coarse:size-6"
+			aria-label="Select {item.name}"
+			data-bulk-check
+			checked={checked.has(item.key)}
+			onchange={(e) => check(item, e.currentTarget.checked)}
+		/>
+	{/if}
 {/snippet}
 
 {#snippet sortControl()}
@@ -454,6 +662,7 @@
 					></span>
 				{/if}
 			{/if}
+			{@render bulkCheck(item)}
 			<div
 				role="button"
 				tabindex="0"
@@ -465,14 +674,39 @@
 				onkeydown={(e) => activate(e, item)}
 			>
 				<Row {item} {source} {bindings} {vectorizationEnabled} />
+				{@render laterWhy(item)}
 			</div>
 			<div class="flex shrink-0 items-start gap-2 py-3 pr-3">
+				{@render readFromButton(item)}
 				{@render retrievalMark(item)}
 				{#if !item.fromLibrary}
 					{@render rowMenu(item, source)}
 				{/if}
 			</div>
 		</div>
+	{/if}
+{/snippet}
+
+{#snippet laterWhy(item: PoolItem)}
+	{@const date = laterDate(item)}
+	{#if date}
+		<p class="text-surface-700-300 mt-1 text-xs" data-could-exist-why>
+			{couldExistWhy({ kind: "later", date }, laterWords)}
+		</p>
+	{/if}
+{/snippet}
+
+{#snippet readFromButton(item: PoolItem)}
+	{@const date = laterDate(item)}
+	{#if date}
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface pointer-coarse:min-h-11"
+			data-could-exist-read-from
+			onclick={() => readFrom(date)}
+		>
+			Read from {formatDate(date)}
+		</button>
 	{/if}
 {/snippet}
 
@@ -490,6 +724,7 @@
 			class:opacity-50={!item.archived && dimmedKeys?.has(item.key)}
 			use:rowDrag={dragOptions(item)}
 		>
+			{@render bulkCheck(item)}
 			<div
 				role="button"
 				tabindex="0"
@@ -529,8 +764,10 @@
 						</span>
 					{/if}
 				</div>
+				{@render laterWhy(item)}
 			</div>
 			<div class="shrink-0 pt-3 pr-3 empty:hidden">
+				{@render readFromButton(item)}
 				{@render retrievalMark(item)}
 			</div>
 		</div>
@@ -568,6 +805,7 @@
 						<Icons.SortAsc size={14} />
 					</button>
 				{/if}
+				{@render modeToggles()}
 			</div>
 			{@render filterChips()}
 		{:else}
@@ -615,11 +853,16 @@
 						<Icons.SortAsc size={14} />
 					</button>
 				{/if}
+				{@render modeToggles()}
 			</div>
 		{/if}
 	</div>
 
-	<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+	<div
+		bind:this={scroller}
+		tabindex="-1"
+		class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto focus:outline-none"
+	>
 		{#if !loading && !isReordering}{@render listHead?.()}{/if}
 		{#if loading}
 			<div class="flex items-center justify-center py-8">
@@ -733,5 +976,46 @@
 				{@render listRow(item, 0)}
 			{/each}
 		{/if}
+		{#if couldExist && offered && !loading && !isReordering}
+			<CouldExistHereGroup
+				forked={forkedItems}
+				sourceOf={(item) => forkedSource.get(item.key)}
+				{descriptorOf}
+				{bindings}
+				{vectorizationEnabled}
+				{line}
+				{bulk}
+				isChecked={(item) => checked.has(item.key)}
+				onCheck={check}
+			/>
+		{/if}
+		{#if historyCount != null && !loading && !isReordering}
+			<button
+				type="button"
+				class="text-surface-600-400 hover:text-surface-900-100 flex w-full min-w-0 items-baseline gap-2 px-3 pt-4 pb-1 text-left text-xs"
+				data-history-divider
+				title="Open History"
+				onclick={() =>
+					void loreRoute.navigate({
+						type: "openScope",
+						scope: "history"
+					})}
+			>
+				<span class="max-w-full min-w-0 shrink-0 truncate">History</span>
+				<span class="min-w-0 truncate text-meta">{historyCount}</span>
+			</button>
+		{/if}
 	</div>
+	{#if bulk && offered}
+		<BulkEditBar
+			lorebookId={book.lorebookId as number}
+			selected={selectedRows}
+			selectableCount={selectableBody.length}
+			{allSelected}
+			onSelectAll={selectAll}
+			{line}
+			{openEntryId}
+			onDone={done}
+		/>
+	{/if}
 </div>

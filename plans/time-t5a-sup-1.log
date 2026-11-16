@@ -1,0 +1,50 @@
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+`config.kit.csrf.checkOrigin` has been deprecated in favour of `csrf.trustedOrigins`. It will be removed in a future version
+
+ RUN  v4.1.11 /home/jody/github/serene-pub
+
+ ❯ |int| src/lib/server/lorebooks/autoApply.int.test.ts (18 tests | 1 failed) 5557ms
+     × a change waiting on an earlier change of this session applies with it, in one Apply 132ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |int| src/lib/server/lorebooks/autoApply.int.test.ts > applyHeldAutomatically folds a chain of changes in order > a change waiting on an earlier change of this session applies with it, in one Apply
+AssertionError: expected { lorebookId: 15, applied: [], …(10) } to match object { appliedChanges: [ 4, 5 ], …(1) }
+(13 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "appliedChanges": [
+      4,
+-     5,
+    ],
+-   "stillHeld": [],
++   "stillHeld": [
++     {
++       "amendmentId": 5,
++       "reason": "The lorebook already has a version of this entry dated Year 4, Mo. 2, Day 9 on this line; change that version there instead.",
++     },
++   ],
+  }
+
+ ❯ src/lib/server/lorebooks/autoApply.int.test.ts:436:16
+    434|   const [first, second] = await heldRows(w.session.id)
+    435|   const done = await auto(w.session.id, "close-out")
+    436|   expect(done).toMatchObject({
+       |                ^
+    437|    appliedChanges: [first!.id, second!.id],
+    438|    stillHeld: []
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 6 passed (7)
+      Tests  1 failed | 65 passed (66)
+   Start at  04:16:01
+   Duration  11.39s (transform 6.03s, setup 50ms, import 2.71s, tests 26.53s, environment 2ms)
+

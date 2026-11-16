@@ -20,7 +20,7 @@
  * uploaded file that has never been requested has exactly ONE representation
  * and it is both the original and the display target.
  */
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, sql } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -95,7 +95,23 @@ export async function cullVariant(
 		}
 	}
 
-	const siblings = await variantsFor(db, row.fileId)
+	// A same-as variant owns no bytes, so culling one is always safe and frees
+	// nothing; the invariants below protect bytes.
+	if (row.path === null) {
+		await removeVariant(db, row)
+		return {
+			ok: true,
+			variant: row.variant as MediaVariantName,
+			freedBytes: 0,
+			repointed: false
+		}
+	}
+
+	// Only rows that own a path are representations that can be served if this
+	// one goes: a same-as variant would be dropped with its source.
+	const siblings = (await variantsFor(db, row.fileId)).filter(
+		(s) => s.path !== null
+	)
 
 	// ---- Precondition 1: NEVER the last surviving representation.
 	// This is what makes "cull derived, then cull originals" safe in either
@@ -168,7 +184,8 @@ export async function cullableDerived(
 		.where(
 			and(
 				eq(schema.files.userId, userId),
-				eq(schema.variants.cache, true)
+				eq(schema.variants.cache, true),
+				isNull(schema.variants.sameAsVariantId)
 			)
 		)
 	// Spoken audio is derived class: reproducible, never an original.
@@ -282,7 +299,13 @@ export async function storedBytesByFile(
 			bytes: sql<number>`COALESCE(SUM(${schema.variants.bytes}), 0)::int`
 		})
 		.from(schema.variants)
-		.where(inArray(schema.variants.fileId, fileIds))
+		.where(
+			and(
+				inArray(schema.variants.fileId, fileIds),
+				// A same-as variant's bytes are its source's, already counted.
+				isNull(schema.variants.sameAsVariantId)
+			)
+		)
 		.groupBy(schema.variants.fileId)
 	for (const row of rows) out.set(row.fileId, Number(row.bytes))
 	return out

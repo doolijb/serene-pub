@@ -20,7 +20,16 @@
 	 * `rowStatusClasses`): a 6px dot and 13px muted words, red with a 3px error
 	 * edge only when a loadout runs on a broken connection (`status.blocked`).
 	 */
-	import * as Icons from "@lucide/svelte"
+	import {
+		ArrowRight,
+		Boxes,
+		Play,
+		RefreshCw,
+		Square,
+		Star,
+		TriangleAlert
+	} from "@lucide/svelte"
+	import type { Component } from "svelte"
 	import {
 		rowActionClass,
 		rowStatusClasses,
@@ -68,11 +77,21 @@
 		onAction
 	}: Props = $props()
 
+	/** The icon per row action (the actions in `connectionRowStatus.ts`). */
+	const ACTION_ICONS = {
+		Square,
+		Play,
+		TriangleAlert,
+		RefreshCw,
+		ArrowRight
+	}
+
 	/** The kind tile's glyph — `ConnectionRow`'s, so a row and a card agree. */
 	const KindIcon = $derived(connectionTypeIcon(type, kindIconComponent(kind)))
 	const ActionIcon = $derived(
 		status.action
-			? (((Icons as any)[status.action.icon] as any) ?? Icons.Play)
+			? (ACTION_ICONS[status.action.icon as keyof typeof ACTION_ICONS] ??
+					Play)
 			: null
 	)
 	const marks = $derived(rowStatusClasses(status))
@@ -107,7 +126,7 @@
 >
 	<button
 		type="button"
-		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 flex-col gap-2 rounded-container p-3 text-left focus-visible:ring-2 focus-visible:outline-none {selected
+		class="focus-visible:ring-primary-500 rounded-container flex min-w-0 flex-1 flex-col gap-2 p-3 text-left focus-visible:ring-2 focus-visible:outline-none {selected
 			? ''
 			: 'hover:bg-surface-200-800'}"
 		aria-current={selected ? "true" : undefined}
@@ -121,12 +140,12 @@
 				<KindIcon size={16} />
 			</span>
 			<span class="min-w-0 flex-1">
-				<span class="block truncate text-lead font-medium">
+				<span class="text-lead block truncate font-medium">
 					{title}
 				</span>
 				{#if showChip}
 					<span
-						class="mt-0.5 inline-block max-w-full truncate rounded-full px-1.5 py-0.5 align-middle text-meta {managed
+						class="text-meta mt-0.5 inline-block max-w-full truncate rounded-full px-1.5 py-0.5 align-middle {managed
 							? 'preset-tonal-tertiary'
 							: 'border-surface-300-700 text-surface-600-400 border'}"
 					>
@@ -138,7 +157,7 @@
 
 		<span class="flex min-w-0 items-center gap-2">
 			<span
-				class="flex min-w-0 items-center gap-1.5 text-chip {marks.text}"
+				class="text-chip flex min-w-0 items-center gap-1.5 {marks.text}"
 			>
 				<span
 					class="size-1.5 shrink-0 rounded-full {marks.dot}"
@@ -151,7 +170,7 @@
 			<span
 				class="text-surface-600-400 flex shrink-0 items-center gap-1 text-xs"
 			>
-				<Icons.Boxes size={12} aria-hidden="true" />
+				<Boxes size={12} aria-hidden="true" />
 				{countLabel}
 			</span>
 		</span>
@@ -169,13 +188,9 @@
 			<span class="flex min-w-0 flex-wrap items-center gap-1">
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-ink flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-meta font-bold"
+						class="preset-tonal-primary text-primary-ink text-meta flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 font-bold"
 					>
-						<Icons.Star
-							size={8}
-							fill="currentColor"
-							aria-hidden="true"
-						/>
+						<Star size={8} fill="currentColor" aria-hidden="true" />
 						{capability}
 					</span>
 				{/each}
@@ -187,7 +202,9 @@
 		<div class="flex px-3 pb-3">
 			<button
 				type="button"
-				class="btn btn-sm text-xs {rowActionClass(status.action.emphasis)}"
+				class="btn btn-sm text-xs {rowActionClass(
+					status.action.emphasis
+				)}"
 				onclick={() => onAction(status.action!.verb)}
 				aria-label={`${status.action.label} — ${title}`}
 			>

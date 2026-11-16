@@ -344,6 +344,8 @@ export interface KeptImprint {
 	after?: unknown
 	/** When the reply wrote it (ISO). */
 	at: string
+	/** The version's date in words through the lorebook's calendar, on a record whose subject is an entry version. */
+	versionDate?: string
 }
 
 /**
