@@ -19,12 +19,17 @@ export const LANDED_EVENT = "sp-landed"
 const RING_MS = 2600
 
 /**
- * Land on `el`: centre it, tell its scroll region, ring it once, and give
+ * Land on `el`: bring it into view (centred, unless `block` says otherwise),
+ * tell its scroll region, ring it once unless `ring` is false, and give
  * `focus` the keyboard (without scrolling again) when one is named.
  */
-export function landOn(el: HTMLElement, opts: { focus?: HTMLElement | null } = {}): void {
-	el.scrollIntoView({ block: "center", behavior: "auto" })
+export function landOn(
+	el: HTMLElement,
+	opts: { focus?: HTMLElement | null; block?: ScrollLogicalPosition; ring?: boolean } = {}
+): void {
+	el.scrollIntoView({ block: opts.block ?? "center", behavior: "auto" })
 	el.dispatchEvent(new CustomEvent(LANDED_EVENT, { bubbles: true }))
+	if (opts.ring === false) return void opts.focus?.focus({ preventScroll: true })
 	el.classList.remove("sp-landed")
 	// A reflow between, so a second landing on the same element rings again.
 	void el.offsetWidth
