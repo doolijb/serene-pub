@@ -35,6 +35,7 @@
 	import { frameStateKey } from "$lib/client/components/frames/framePort"
 	import { frameVersionOf } from "$lib/client/components/frames/frameOwner"
 	import { createGuardedReceiver, interactionAfter, shouldForward, summarize, TIMEUPDATE_MIN_MS } from "./receiverPolicy"
+	import { followFragmentLink } from "./fragmentLinks"
 	import {
 		acquireWorker,
 		currentEvent,
@@ -254,6 +255,9 @@
 			"invoke"
 		]
 		for (const type of boxEvents) box.addEventListener(type, stopAtBox)
+		const onClick = (e: MouseEvent) =>
+			void followFragmentLink(e, e.currentTarget as HTMLElement)
+		box.addEventListener("click", onClick)
 		const mountId = uuid()
 		// Named by its module, so a worker that has imported too many is
 		// recycled (`uiWorkers.ts`, C6 P5); released by the worker it took.
@@ -363,6 +367,7 @@
 		return () => {
 			for (const type of boxEvents)
 				boxEl.removeEventListener(type, stopAtBox)
+			boxEl.removeEventListener("click", onClick)
 			tearDown()
 		}
 	})

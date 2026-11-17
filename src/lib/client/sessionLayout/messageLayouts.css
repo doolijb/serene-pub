@@ -430,6 +430,18 @@ button[data-widget-part~="messages.message-name"]:hover {
 	}
 }
 
+/* Back to the start of a line: at the content's foot, on its trailing edge,
+   faint until it is wanted. */
+[data-widget-part~="messages.message-jump"] {
+	display: flex;
+	margin-inline-start: auto;
+	opacity: 0.5;
+	transition: opacity 150ms ease;
+}
+[data-widget-part~="messages.message-jump"]:is(:hover, :focus-visible) {
+	opacity: 1;
+}
+
 /* Quiet text action (Cancel, beside Save). */
 [data-widget-part~="messages.message-cancel"] {
 	flex: none;
